@@ -2128,13 +2128,16 @@ struct RuntimeForInState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimeForOfState {
     values: Vec<Value>,
-    /// Actual iterator object returned by `Symbol.iterator`. Indexed fallback
-    /// carriers leave this empty so an unrelated property named `return` on
-    /// the iterable is never mistaken for an iterator-close hook.
+    /// Read array length and properties at each step, preserving holes,
+    /// inherited getters, and mutations made while processing prior values.
+    array_object: Option<ObjectId>,
+    /// Ordinary property backing for an iterator returned by Symbol.iterator.
     iterator_object: Option<ObjectId>,
-    /// Custom iterator `next` method. `None` selects the existing eager
-    /// string/indexed-object carrier.
+    /// The original receiver can differ from its function-property backing.
+    iterator_receiver: Option<Value>,
+    /// Captured once by GetIterator, then called for each subsequent step.
     next_method: Option<Value>,
+    label: crate::ifc_artifacts::Label,
     next_index: usize,
     done: bool,
     closed: bool,
@@ -7587,6 +7590,17 @@ impl InterpreterCore {
         argument: Value,
         argument_label: crate::ifc_artifacts::Label,
     ) -> Result<(Value, crate::ifc_artifacts::Label), InterpreterError> {
+        self.resume_generator(module, gen_id, argument, argument_label, false)
+    }
+
+    fn resume_generator(
+        &mut self,
+        module: &Ir3Module,
+        gen_id: u32,
+        argument: Value,
+        argument_label: crate::ifc_artifacts::Label,
+        is_return: bool,
+    ) -> Result<(Value, crate::ifc_artifacts::Label), InterpreterError> {
         let phase = {
             let generator = self.generators.get(gen_id as usize).ok_or_else(|| {
                 InterpreterError::TypeError {
@@ -7597,8 +7611,10 @@ impl InterpreterCore {
             match generator.phase {
                 GeneratorPhase::Completed => {
                     return Ok((
-                        self.generator_result_object(Value::Undefined, true)?,
-                        crate::ifc_artifacts::Label::Public,
+                        self.generator_result_object(
+                            if is_return { argument } else { Value::Undefined }, true,
+                        )?,
+                        if is_return { argument_label } else { crate::ifc_artifacts::Label::Public },
                     ));
                 }
                 GeneratorPhase::Executing => {
@@ -7611,6 +7627,15 @@ impl InterpreterCore {
             }
             generator.phase
         };
+
+        if is_return && phase == GeneratorPhase::SuspendedStart {
+            let generator = &mut self.generators[gen_id as usize];
+            generator.execution = None;
+            generator.resume_dst = None;
+            generator.phase = GeneratorPhase::Completed;
+            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            return Ok((self.generator_result_object(argument, true)?, argument_label));
+        }
 
         // Resuming installs one suspended generator frame on top of the
         // synchronously active caller chain. Apply the same fail-closed depth
@@ -7671,9 +7696,13 @@ impl InterpreterCore {
             return Err(error);
         }
 
-        if phase == GeneratorPhase::SuspendedYield
+        let mut argument = Some((argument, argument_label));
+        if !is_return && phase == GeneratorPhase::SuspendedYield
             && let Some(resume_dst) = resume_dst
-            && let Err(error) = self.write_reg_with_label(resume_dst, argument, argument_label)
+            && let Err(error) = {
+                let (value, label) = argument.take().expect("unconsumed generator argument");
+                self.write_reg_with_label(resume_dst, value, label)
+            }
         {
             let activation = self.take_module_execution();
             self.temporarily_suspended_execution_bytes = previous_suspended_bytes;
@@ -7687,7 +7716,29 @@ impl InterpreterCore {
             return Err(error);
         }
 
-        let outcome = self.run_loop_with_mode(module, RunLoopMode::Generator);
+        let outcome = if is_return {
+            // IteratorClose injects Return at the suspension point. Run the
+            // saved finally frames instead of discarding guest cleanup.
+            let (value, label) = argument.take().expect("generator return argument");
+            self.suspend_current_abrupt_completion();
+            self.pending_exception = None;
+            self.pending_return = Some(LabeledReturn {
+                value: value.clone(),
+                label: label.clone(),
+            });
+            if let Some(target) = self.pop_current_finally_target() {
+                self.pending_finally_entry = Some(PendingFinallyEntry {
+                    target,
+                    mode: FinallyMode::Return,
+                });
+                self.ip = target;
+                self.run_loop_with_mode(module, RunLoopMode::Generator)
+            } else {
+                Ok(RunLoopExit::GeneratorReturn { value, label })
+            }
+        } else {
+            self.run_loop_with_mode(module, RunLoopMode::Generator)
+        };
         let activation = self.take_module_execution();
         let escaped_exception = activation.pending_exception.clone();
         self.temporarily_suspended_execution_bytes = previous_suspended_bytes;
@@ -8242,9 +8293,10 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::ForOfInit { src, dst } => {
                     let value = self.read_reg(src)?;
-                    match self.init_for_of_iterator(Some(module), value) {
+                    let mut label = self.read_reg_label(src)?;
+                    match self.init_for_of_iterator(module, value, &mut label) {
                         Ok(iterator) => {
-                            self.write_reg(dst, iterator)?;
+                            self.write_reg_with_label(dst, iterator, label)?;
                             self.ip += 1;
                         }
                         Err(error) => {
@@ -8261,9 +8313,10 @@ impl InterpreterCore {
                     done_target,
                 } => {
                     let iterator = self.read_reg(iterator)?;
-                    match self.advance_for_of_iterator(Some(module), iterator) {
+                    let mut label = crate::ifc_artifacts::Label::Public;
+                    match self.advance_for_of_iterator(module, iterator, &mut label) {
                         Ok(Some(value)) => {
-                            self.write_reg(value_dst, value)?;
+                            self.write_reg_with_label(value_dst, value, label)?;
                             self.ip += 1;
                         }
                         Ok(None) => {
@@ -9321,7 +9374,7 @@ impl InterpreterCore {
                         let outcome = if capability.0 == "promise:constructor" && args.count > 0 {
                             self.construct_promise(module, args)
                         } else {
-                            self.dispatch_promise_hostcall(&capability.0, args)
+                            self.dispatch_promise_hostcall(module, &capability.0, args)
                         };
                         match outcome {
                             Ok((result, result_label)) => {
@@ -11669,66 +11722,84 @@ impl InterpreterCore {
 
     fn init_for_of_iterator(
         &mut self,
-        module: Option<&Ir3Module>,
+        module: &Ir3Module,
         value: Value,
+        label: &mut crate::ifc_artifacts::Label,
     ) -> Result<Value, InterpreterError> {
-        if matches!(value, Value::Iterator(_)) {
-            return Ok(value);
+        if let Value::Iterator(handle) = value {
+            *label = label.join(&self.for_of_iterator_label(handle)?);
+            self.set_for_of_iterator_label(handle, label.clone())?;
+            return Ok(Value::Iterator(handle));
         }
 
+        if matches!(value, Value::Generator(_)) {
+            let handle = self.alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
+                values: Vec::new(),
+                array_object: None,
+                iterator_object: None,
+                iterator_receiver: Some(value),
+                next_method: Some(Value::BuiltinFunction(BuiltinFunction::generator_next())),
+                label: label.clone(),
+                next_index: 0,
+                done: false,
+                closed: false,
+                return_called: false,
+            }))?;
+            return Ok(Value::Iterator(handle));
+        }
+
+        let mut array_object = None;
         let mut iterator_object = None;
+        let mut iterator_receiver = None;
         let mut next_method = None;
-        let values = if let (Some(module), Value::Object(iterable_object)) = (module, &value) {
+        let values = if value.is_object_like() {
+            let backing = self.iterator_carrier_backing_id(&value, "iterable object")?;
             let iterator_key = RuntimePropertyKey::Symbol(WellKnownSymbol::Iterator.id());
-            match self.prototype_chain_lookup_runtime_property(*iterable_object, &iterator_key)? {
-                None => self.collect_for_of_values(&value)?,
-                Some(property) => {
-                    let method_completion = self.read_runtime_property_inline(
-                        module,
-                        Value::Object(*iterable_object),
-                        Some(property),
-                    )?;
-                    let method = self.complete_inline_call(method_completion)?;
+            let property = match backing {
+                Some(object) => self.prototype_chain_lookup_runtime_property(object, &iterator_key)?,
+                None => None,
+            };
+            match property {
+                None if backing.is_some_and(|id| self.heap[id.0 as usize].is_array) => {
+                    // The intrinsic array iterator is represented directly.
+                    // An explicitly present undefined/null override must
+                    // still reject instead of selecting this intrinsic.
+                    array_object = backing;
+                    Vec::new()
+                }
+                None => {
+                    return Err(InterpreterError::TypeError {
+                        expected: "iterable with Symbol.iterator".to_string(),
+                        got: value.type_name().to_string(),
+                    });
+                }
+                Some(_) => {
+                    let method = self.read_iterator_property(module, &value, &iterator_key, label)?;
                     if !Self::is_sync_callable(&method) {
                         return Err(InterpreterError::TypeError {
                             expected: "callable Symbol.iterator method".to_string(),
                             got: method.type_name().to_string(),
                         });
                     }
-                    let iterator_completion = self.invoke_inline_method_call(
-                        module,
-                        method,
-                        Value::Object(*iterable_object),
-                        &[],
-                    )?;
-                    let iterator = self.complete_inline_call(iterator_completion)?;
+                    let (completion, iterator_label) =
+                        self.invoke_inline_method_call_labeled(module, method, value, &[])?;
+                    *label = label.join(&iterator_label);
+                    let iterator = self.complete_inline_call(completion)?;
                     match iterator {
-                        Value::Iterator(_) => return Ok(iterator),
+                        Value::Iterator(_) | Value::Generator(_) => {
+                            return self.init_for_of_iterator(module, iterator, label);
+                        }
                         iterator => {
-                            // bd-es2ra: every object-like carrier is a valid
-                            // iterator; only primitives reject. A carrier
-                            // without ordinary-property backing reads `next`
-                            // as undefined and fails the callable check.
                             let backing = self.iterator_carrier_backing_id(
                                 &iterator,
                                 "object returned by Symbol.iterator",
                             )?;
-                            let next = match backing {
-                                Some(object_id) => {
-                                    let next_property = self
-                                        .prototype_chain_lookup_runtime_property(
-                                            object_id,
-                                            &RuntimePropertyKey::String(JsString::from("next")),
-                                        )?;
-                                    let next_completion = self.read_runtime_property_inline(
-                                        module,
-                                        Value::Object(object_id),
-                                        next_property,
-                                    )?;
-                                    self.complete_inline_call(next_completion)?
-                                }
-                                None => Value::Undefined,
-                            };
+                            let next = self.read_iterator_property(
+                                module,
+                                &iterator,
+                                &RuntimePropertyKey::String(JsString::from("next")),
+                                label,
+                            )?;
                             if !Self::is_sync_callable(&next) {
                                 return Err(InterpreterError::TypeError {
                                     expected: "callable iterator.next".to_string(),
@@ -11736,6 +11807,7 @@ impl InterpreterCore {
                                 });
                             }
                             iterator_object = backing;
+                            iterator_receiver = Some(iterator);
                             next_method = Some(next);
                             Vec::new()
                         }
@@ -11747,8 +11819,11 @@ impl InterpreterCore {
         };
         let handle = self.alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
             values,
+            array_object,
             iterator_object,
+            iterator_receiver,
             next_method,
+            label: label.clone(),
             next_index: 0,
             done: false,
             closed: false,
@@ -11759,10 +11834,51 @@ impl InterpreterCore {
 
     fn advance_for_of_iterator(
         &mut self,
-        module: Option<&Ir3Module>,
+        module: &Ir3Module,
         iterator: Value,
+        label: &mut crate::ifc_artifacts::Label,
     ) -> Result<Option<Value>, InterpreterError> {
         let handle = self.expect_iterator_handle(iterator)?;
+        *label = label.join(&self.for_of_iterator_label(handle)?);
+        let array_step = match self.iterator_state_mut(handle)? {
+            RuntimeIteratorState::ForOf(state) if !state.closed && !state.done => {
+                state.array_object.map(|object| (object, state.next_index))
+            }
+            _ => None,
+        };
+        if let Some((array, index)) = array_step {
+            let length_key = RuntimePropertyKey::String(JsString::from("length"));
+            *label = label.join(&self.runtime_property_label(array, &length_key));
+            let length = self.array_like_length(array)? as usize;
+            if index >= length {
+                if let RuntimeIteratorState::ForOf(state) = self.iterator_state_mut(handle)? {
+                    state.done = true;
+                }
+                self.set_for_of_iterator_label(handle, label.clone())?;
+                return Ok(None);
+            }
+            // Advance before Get so an accessor that resumes this iterator
+            // cannot yield the same array index twice.
+            if let RuntimeIteratorState::ForOf(state) = self.iterator_state_mut(handle)? {
+                state.next_index += 1;
+            }
+            let value = self.read_iterator_property(
+                module,
+                &Value::Object(array),
+                &RuntimePropertyKey::String(JsString::from(index.to_string())),
+                label,
+            )?;
+            self.set_for_of_iterator_label(handle, label.clone())?;
+            return Ok(Some(value));
+        }
+
+        let retained_clone_bytes = match self.iterators.get(handle as usize) {
+            Some(RuntimeIteratorState::ForOf(state)) => state
+                .iterator_receiver.as_ref().map(Self::estimate_timer_value_bytes).unwrap_or(0)
+                .saturating_add(state.next_method.as_ref().map(Self::estimate_timer_value_bytes).unwrap_or(0)),
+            _ => 0,
+        };
+        self.check_temporary_memory_budget(retained_clone_bytes)?;
         let custom_step = match self.iterator_state_mut(handle)? {
             RuntimeIteratorState::ForOf(state) => {
                 if state.closed || state.done {
@@ -11770,14 +11886,13 @@ impl InterpreterCore {
                     return Ok(None);
                 }
                 if let Some(next_method) = state.next_method.clone() {
-                    let object_id =
-                        state
-                            .iterator_object
-                            .ok_or_else(|| InterpreterError::TypeError {
-                                expected: "custom iterator receiver".to_string(),
-                                got: "missing iterator object".to_string(),
-                            })?;
-                    Some((object_id, next_method))
+                    let receiver = state.iterator_receiver.clone().ok_or_else(|| {
+                        InterpreterError::TypeError {
+                            expected: "custom iterator receiver".to_string(),
+                            got: "missing iterator object".to_string(),
+                        }
+                    })?;
+                    Some((receiver, next_method))
                 } else if let Some(value) = state.values.get(state.next_index).cloned() {
                     state.next_index += 1;
                     return Ok(Some(value));
@@ -11794,52 +11909,98 @@ impl InterpreterCore {
             }
         };
 
-        let (iterator_object, next_method) =
-            custom_step.expect("custom for-of state selected a next method");
-        let module = module.ok_or_else(|| InterpreterError::TypeError {
-            expected: "module-backed custom iterator.next".to_string(),
-            got: "missing module context".to_string(),
-        })?;
-        let result_completion = self.invoke_inline_method_call(
+        let (receiver, next_method) = custom_step.expect("captured iterator.next");
+        let (completion, result_label) =
+            self.invoke_inline_method_call_labeled(module, next_method, receiver, &[])?;
+        *label = label.join(&result_label);
+        let result = self.complete_inline_call(completion)?;
+        self.iterator_carrier_backing_id(&result, "iterator result object")?;
+        let done = self.read_iterator_property(
             module,
-            next_method,
-            Value::Object(iterator_object),
-            &[],
-        )?;
-        let result = self.complete_inline_call(result_completion)?;
-        // bd-es2ra: every object-like carrier is a valid iterator result;
-        // only primitives reject. A carrier without ordinary-property backing
-        // reads `done`/`value` as undefined: the step is not done and yields
-        // undefined.
-        let Some(result_object) =
-            self.iterator_carrier_backing_id(&result, "iterator result object")?
-        else {
-            return Ok(Some(Value::Undefined));
-        };
-        let done_property = self.prototype_chain_lookup_runtime_property(
-            result_object,
+            &result,
             &RuntimePropertyKey::String(JsString::from("done")),
+            label,
         )?;
-        let done_completion =
-            self.read_runtime_property_inline(module, Value::Object(result_object), done_property)?;
-        let done = self.complete_inline_call(done_completion)?;
         if done.is_truthy() {
             if let RuntimeIteratorState::ForOf(state) = self.iterator_state_mut(handle)? {
                 state.done = true;
             }
+            self.set_for_of_iterator_label(handle, label.clone())?;
             return Ok(None);
         }
-        let value_property = self.prototype_chain_lookup_runtime_property(
-            result_object,
-            &RuntimePropertyKey::String(JsString::from("value")),
-        )?;
-        let value_completion = self.read_runtime_property_inline(
+        let value = self.read_iterator_property(
             module,
-            Value::Object(result_object),
-            value_property,
+            &result,
+            &RuntimePropertyKey::String(JsString::from("value")),
+            label,
         )?;
-        let value = self.complete_inline_call(value_completion)?;
+        self.set_for_of_iterator_label(handle, label.clone())?;
         Ok(Some(value))
+    }
+
+    fn read_iterator_property(
+        &mut self,
+        module: &Ir3Module,
+        receiver: &Value,
+        key: &RuntimePropertyKey,
+        label: &mut crate::ifc_artifacts::Label,
+    ) -> Result<Value, InterpreterError> {
+        let Some(backing) =
+            self.iterator_carrier_backing_id(receiver, "iterator protocol object")?
+        else {
+            return Ok(Value::Undefined);
+        };
+        self.run_pre_runtime_property_access_hook(module, backing, key)?;
+        *label = label.join(&self.runtime_property_label(backing, key));
+        match self.prototype_chain_lookup_runtime_property(backing, key)? {
+            Some(RuntimeProperty::Data(value)) => Ok(value),
+            Some(RuntimeProperty::Accessor(accessor)) => match accessor.get {
+                Some(getter) => {
+                    let (completion, getter_label) = self.invoke_inline_method_call_labeled(
+                        module, getter, receiver.clone(), &[],
+                    )?;
+                    *label = label.join(&getter_label);
+                    self.complete_inline_call(completion)
+                }
+                None => Ok(Value::Undefined),
+            },
+            None => Ok(Value::Undefined),
+        }
+    }
+
+    fn for_of_iterator_label(
+        &self,
+        handle: u32,
+    ) -> Result<crate::ifc_artifacts::Label, InterpreterError> {
+        match self.iterators.get(handle as usize) {
+            Some(RuntimeIteratorState::ForOf(state)) => {
+                self.check_temporary_memory_budget(Self::estimate_label_bytes(&state.label))?;
+                Ok(state.label.clone())
+            }
+            _ => Err(InterpreterError::TypeError {
+                expected: "for..of iterator".to_string(),
+                got: "invalid iterator handle".to_string(),
+            }),
+        }
+    }
+
+    fn set_for_of_iterator_label(
+        &mut self,
+        handle: u32,
+        label: crate::ifc_artifacts::Label,
+    ) -> Result<(), InterpreterError> {
+        let previous = match self.iterator_state_mut(handle)? {
+            RuntimeIteratorState::ForOf(state) => std::mem::replace(&mut state.label, label),
+            RuntimeIteratorState::ForIn(_) => unreachable!("validated for-of handle"),
+        };
+        if let Err(error) = self.sync_estimated_memory_bytes() {
+            if let RuntimeIteratorState::ForOf(state) = self.iterator_state_mut(handle)? {
+                state.label = previous;
+            }
+            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            return Err(error);
+        }
+        Ok(())
     }
 
     fn close_iterator(
@@ -11849,7 +12010,7 @@ impl InterpreterCore {
         reason: IteratorCloseReason,
     ) -> Result<(), InterpreterError> {
         let handle = self.expect_iterator_handle(iterator)?;
-        let iterator_object = match self.iterator_state_mut(handle)? {
+        let iterator_receiver = match self.iterator_state_mut(handle)? {
             RuntimeIteratorState::ForIn(state) => {
                 state.closed = true;
                 state.done = true;
@@ -11861,11 +12022,40 @@ impl InterpreterCore {
                 if state.return_called {
                     return Ok(());
                 }
-                state.iterator_object
+                state.iterator_receiver.clone()
+                    .or_else(|| state.iterator_object.map(Value::Object))
             }
         };
 
-        let Some(iterator_object) = iterator_object else {
+        let Some(iterator_receiver) = iterator_receiver else {
+            return Ok(());
+        };
+        if let Value::Generator(generator_id) = &iterator_receiver {
+            if let RuntimeIteratorState::ForOf(state) = self.iterator_state_mut(handle)? {
+                state.return_called = true;
+            }
+            let original_exception = if reason == IteratorCloseReason::Throw {
+                self.pending_exception.take()
+            } else {
+                None
+            };
+            let outcome = self.resume_generator(
+                module, *generator_id, Value::Undefined,
+                crate::ifc_artifacts::Label::Public, true,
+            );
+            if reason == IteratorCloseReason::Throw {
+                self.pending_exception = original_exception;
+            }
+            return match outcome {
+                Ok(_) => Ok(()),
+                Err(error) if reason == IteratorCloseReason::Throw
+                    && Self::is_js_catchable_error(&error) => Ok(()),
+                Err(error) => Err(error),
+            };
+        }
+        let Some(iterator_object) =
+            self.iterator_carrier_backing_id(&iterator_receiver, "iterator object")?
+        else {
             return Ok(());
         };
         let return_property = self.prototype_chain_lookup_runtime_property(
@@ -11874,7 +12064,7 @@ impl InterpreterCore {
         )?;
         let return_method = match self.read_runtime_property_inline(
             module,
-            Value::Object(iterator_object),
+            iterator_receiver.clone(),
             return_property,
         ) {
             Ok(InlineCallCompletion::Value(value)) => value,
@@ -11910,7 +12100,7 @@ impl InterpreterCore {
         let close_value = match self.invoke_inline_method_call(
             module,
             return_method,
-            Value::Object(iterator_object),
+            iterator_receiver,
             &[],
         ) {
             Ok(InlineCallCompletion::Value(value)) => value,
@@ -13041,39 +13231,6 @@ impl InterpreterCore {
             label = label.join(&argument_label);
         }
         Ok(label)
-    }
-
-    fn collect_promise_combinator_inputs(
-        &self,
-        args: RegRange,
-    ) -> Result<Vec<(Value, crate::ifc_artifacts::Label)>, InterpreterError> {
-        if args.count == 0 {
-            return Ok(Vec::new());
-        }
-        let first = self.read_reg(args.start)?;
-        let first_label = self.read_reg_label(args.start)?;
-        if args.count == 1 {
-            if let Value::Object(id) = first {
-                return Ok(self
-                    .read_array_like_values(id)
-                    .into_iter()
-                    .map(|value| (value, first_label.clone()))
-                    .collect());
-            }
-            return Ok(vec![(first, first_label)]);
-        }
-        let mut values = Vec::with_capacity(args.count as usize);
-        for i in 0..args.count {
-            let reg = args
-                .start
-                .checked_add(i)
-                .ok_or(InterpreterError::RegisterOutOfBounds {
-                    register: args.start,
-                    max: self.config.max_registers,
-                })?;
-            values.push((self.read_reg(reg)?, self.read_reg_label(reg)?));
-        }
-        Ok(values)
     }
 
     fn array_like_length(&self, obj_id: ObjectId) -> Result<u32, InterpreterError> {
@@ -14336,44 +14493,15 @@ impl InterpreterCore {
 
     fn dispatch_promise_combinator(
         &mut self,
+        module: &Ir3Module,
         kind: PromiseCombinatorKind,
         args: RegRange,
     ) -> Result<(Value, crate::ifc_artifacts::Label), InterpreterError> {
-        let inputs = self.collect_promise_combinator_inputs(args)?;
-        let mut accumulated_label = self.promise_hostcall_registration_label(args)?;
-        for (input, input_label) in &inputs {
-            accumulated_label = accumulated_label.join(input_label);
-            if let Value::Promise(handle) = input {
-                let record = self
-                    .promise_store
-                    .get(crate::promise_model::PromiseHandle(*handle))
-                    .map_err(|e| InterpreterError::TypeError {
-                        expected: "promise".to_string(),
-                        got: e.to_string(),
-                    })?;
-                accumulated_label = accumulated_label.join(&record.label);
-            }
-        }
-        let total = inputs.len() as u32;
+        // Create the aggregate before GetIterator. Protocol failures reject
+        // the returned Promise; extra arguments do not become input values.
+        let (iterable, mut accumulated_label) = self.promise_hostcall_argument(args, 0)?;
         let result_promise = self.create_promise_accounted()?;
-
-        match kind {
-            PromiseCombinatorKind::All | PromiseCombinatorKind::AllSettled if total == 0 => {
-                let empty = self.build_promise_all_result(Vec::new())?;
-                self.fulfill_promise(result_promise, empty, accumulated_label.clone())?;
-                return Ok((Value::Promise(result_promise.0), accumulated_label));
-            }
-            PromiseCombinatorKind::Any if total == 0 => {
-                let aggregate = self.build_aggregate_error(Vec::new())?;
-                self.reject_promise(result_promise, aggregate, accumulated_label.clone())?;
-                return Ok((Value::Promise(result_promise.0), accumulated_label));
-            }
-            PromiseCombinatorKind::Race if total == 0 => {
-                return Ok((Value::Promise(result_promise.0), accumulated_label));
-            }
-            _ => {}
-        }
-
+        let total = 0;
         let state = match kind {
             PromiseCombinatorKind::All => {
                 PromiseCombinatorState::All(crate::promise_model::PromiseAllTracker {
@@ -14434,29 +14562,131 @@ impl InterpreterCore {
             }
         };
 
-        for (index, (input, input_label)) in inputs.into_iter().enumerate() {
-            let index = index as u32;
-            let input = self.normalize_promise_combinator_input(input, input_label.clone())?;
-            // Always enqueue/attach both reactions, including for settled
-            // inputs. Synchronous tracker updates change the observable order
-            // of Promise.all/race/any/allSettled relative to other jobs and can
-            // stop reading later inputs after an early winner.
-            self.register_executable_promise_reactions(
-                input,
-                PromiseReactionRegistration {
-                    on_fulfilled: Some(PromiseReactionAction::Combinator {
-                        combinator_id,
-                        index,
-                    }),
-                    on_rejected: Some(PromiseReactionAction::Combinator {
-                        combinator_id,
-                        index,
-                    }),
-                },
-                input_label,
-            )?;
+        let saved_exception = self.pending_exception.take();
+        let saved_return = self.pending_return.take();
+        let mut active_iterator = None;
+        let mut close_on_error = false;
+        let outcome = (|| -> Result<u32, InterpreterError> {
+            let iterator = self.init_for_of_iterator(module, iterable, &mut accumulated_label)?;
+            active_iterator = Some(iterator.clone());
+            let mut total = 0u32;
+            loop {
+                // Native array/string steps can execute no guest bytecode.
+                // Charge every step and poll cancellation inside the loop.
+                if self.config.cancellation_token.as_ref()
+                    .is_some_and(CancellationToken::is_cancelled)
+                {
+                    return Err(InterpreterError::Cancelled);
+                }
+                if self.instructions_executed >= self.config.instruction_budget {
+                    return Err(InterpreterError::BudgetExhausted {
+                        executed: self.instructions_executed,
+                        budget: self.config.instruction_budget,
+                    });
+                }
+                self.instructions_executed += 1;
+                // IteratorStep/IteratorValue errors mark the protocol done.
+                // Only later element-processing errors require IteratorClose.
+                close_on_error = false;
+                let next = self.advance_for_of_iterator(
+                    module, iterator.clone(), &mut accumulated_label,
+                );
+                let Some(value) = next? else {
+                    break;
+                };
+                close_on_error = true;
+                let index = total;
+                total = total.checked_add(1).ok_or_else(|| InterpreterError::RangeError {
+                    message: "Promise combinator input exceeds supported array length".to_string(),
+                })?;
+                let input_label = accumulated_label.clone();
+                // Resolve/register this element before reading the next one:
+                // its then getter may mutate the iterable synchronously.
+                let input = self.normalize_promise_combinator_input(value, input_label.clone())?;
+                let source_label = self.promise_store.get(input)
+                    .map_err(|error| InterpreterError::TypeError {
+                        expected: "valid Promise combinator input".to_string(),
+                        got: error.to_string(),
+                    })?.label.clone();
+                accumulated_label = accumulated_label.join(&source_label);
+                self.join_promise_combinator_label(combinator_id, &accumulated_label)?;
+                self.register_executable_promise_reactions(
+                    input,
+                    PromiseReactionRegistration {
+                        on_fulfilled: Some(PromiseReactionAction::Combinator {
+                            combinator_id, index,
+                        }),
+                        on_rejected: Some(PromiseReactionAction::Combinator {
+                            combinator_id, index,
+                        }),
+                    },
+                    input_label,
+                )?;
+            }
+            self.join_promise_combinator_label(combinator_id, &accumulated_label)?;
+            Ok(total)
+        })();
+        let outcome = match outcome {
+            Err(error) if Self::is_js_catchable_error(&error) => {
+                let thrown = self.pending_exception.take();
+                let close = if close_on_error {
+                    match active_iterator {
+                        Some(iterator) => self.close_iterator(
+                            module, iterator, IteratorCloseReason::Throw,
+                        ),
+                        None => Ok(()),
+                    }
+                } else {
+                    Ok(())
+                };
+                self.remove_promise_combinator(combinator_id);
+                close.and_then(|()| {
+                    let (reason, label) = match thrown {
+                        Some(thrown) => (
+                            thrown.value, accumulated_label.join(&thrown.label),
+                        ),
+                        None => (self.promise_error_value(&error)?, accumulated_label.clone()),
+                    };
+                    accumulated_label = label;
+                    self.reject_promise(
+                        result_promise, Self::value_to_js_value(&reason), accumulated_label.clone(),
+                    )?;
+                    Ok(None)
+                })
+            }
+            Err(error) => {
+                self.remove_promise_combinator(combinator_id);
+                Err(error)
+            }
+            Ok(total) => Ok(Some(total)),
+        };
+        self.pending_exception = saved_exception;
+        self.pending_return = saved_return;
+        if let Some(total) = outcome? {
+            if total == 0 {
+                self.remove_promise_combinator(combinator_id);
+                match kind {
+                    PromiseCombinatorKind::All | PromiseCombinatorKind::AllSettled => {
+                        let empty = self.build_promise_all_result(Vec::new())?;
+                        self.fulfill_promise(result_promise, empty, accumulated_label.clone())?;
+                    }
+                    PromiseCombinatorKind::Any => {
+                        let aggregate = self.build_aggregate_error(Vec::new())?;
+                        self.reject_promise(result_promise, aggregate, accumulated_label.clone())?;
+                    }
+                    PromiseCombinatorKind::Race => {}
+                }
+            } else if let Some(state) = self.promise_combinators.get_mut(&combinator_id) {
+                // Reactions are jobs; the final input count is published
+                // before any queued element reaction can read the tracker.
+                match &mut state.tracker {
+                    PromiseCombinatorState::All(tracker) => tracker.total = total,
+                    PromiseCombinatorState::AllSettled(tracker) => tracker.total = total,
+                    PromiseCombinatorState::Any(tracker) => tracker.total = total,
+                    PromiseCombinatorState::Race(_) => {}
+                }
+            }
         }
-
         Ok((Value::Promise(result_promise.0), accumulated_label))
     }
 
@@ -14509,6 +14739,7 @@ impl InterpreterCore {
     /// - `promise:any` — create a Promise.any aggregate.
     fn dispatch_promise_hostcall(
         &mut self,
+        module: &Ir3Module,
         cap: &str,
         args: RegRange,
     ) -> Result<(Value, crate::ifc_artifacts::Label), InterpreterError> {
@@ -14574,12 +14805,12 @@ impl InterpreterCore {
                     registration_label,
                 )
             }
-            "promise:all" => self.dispatch_promise_combinator(PromiseCombinatorKind::All, args),
-            "promise:race" => self.dispatch_promise_combinator(PromiseCombinatorKind::Race, args),
+            "promise:all" => self.dispatch_promise_combinator(module, PromiseCombinatorKind::All, args),
+            "promise:race" => self.dispatch_promise_combinator(module, PromiseCombinatorKind::Race, args),
             "promise:allSettled" => {
-                self.dispatch_promise_combinator(PromiseCombinatorKind::AllSettled, args)
+                self.dispatch_promise_combinator(module, PromiseCombinatorKind::AllSettled, args)
             }
-            "promise:any" => self.dispatch_promise_combinator(PromiseCombinatorKind::Any, args),
+            "promise:any" => self.dispatch_promise_combinator(module, PromiseCombinatorKind::Any, args),
             _ => {
                 // Unknown promise sub-capability — return undefined.
                 Ok((Value::Undefined, crate::ifc_artifacts::Label::Public))
@@ -17604,7 +17835,15 @@ impl InterpreterCore {
                     .iter()
                     .map(Self::estimate_value_bytes)
                     .sum::<u64>();
-                MEMORY_ESTIMATE_ITERATOR_BASE_BYTES.saturating_add(values)
+                MEMORY_ESTIMATE_ITERATOR_BASE_BYTES
+                    .saturating_add(values)
+                    .saturating_add(
+                        state.iterator_receiver.as_ref().map(Self::estimate_timer_value_bytes).unwrap_or(0),
+                    )
+                    .saturating_add(
+                        state.next_method.as_ref().map(Self::estimate_timer_value_bytes).unwrap_or(0),
+                    )
+                    .saturating_add(Self::estimate_label_bytes(&state.label))
             }
         }
     }
@@ -21758,8 +21997,11 @@ mod tests {
         let handle = core
             .alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
                 values: Vec::new(),
+                array_object: None,
                 iterator_object: Some(object),
+                iterator_receiver: Some(Value::Object(object)),
                 next_method: None,
+                label: crate::ifc_artifacts::Label::Public,
                 next_index: 0,
                 done: false,
                 closed: false,
@@ -28174,7 +28416,9 @@ mod tests {
             core.write_reg_with_label(0, Value::Promise(source.0), Label::Secret)
                 .unwrap();
             let (result, label) = core
-                .dispatch_promise_hostcall("promise:reject", RegRange { start: 0, count: 1 })
+                .dispatch_promise_hostcall(
+                    &test_module(Vec::new()), "promise:reject", RegRange { start: 0, count: 1 },
+                )
                 .expect("a settled promise is a valid rejection reason");
             let Value::Promise(rejected) = result else {
                 panic!("rejection returns a promise");
@@ -28311,6 +28555,32 @@ mod tests {
         args: RegRange,
         dst: Reg,
     ) -> crate::promise_model::PromiseHandle {
+        // These IFC probes supply element registers. Materialize a labeled
+        // array so the probes exercise the same iterable API as source JS.
+        let args = if args.count == 1
+            && matches!(
+                core.read_reg(args.start).unwrap(),
+                Value::Object(id) if core.heap[id.0 as usize].is_array
+            )
+        {
+            args
+        } else {
+            let values = (0..args.count)
+                .map(|index| core.read_reg(args.start + index).unwrap())
+                .collect::<Vec<_>>();
+            let array = core.alloc_array_from_values(&values).unwrap();
+            for index in 0..args.count {
+                let label = core.read_reg_label(args.start + index).unwrap();
+                core.set_own_runtime_property_label(
+                    array,
+                    &RuntimePropertyKey::String(JsString::from(index.to_string())),
+                    &label,
+                ).unwrap();
+            }
+            let iterable_reg = dst + 1;
+            core.write_reg(iterable_reg, Value::Object(array)).unwrap();
+            RegRange { start: iterable_reg, count: 1 }
+        };
         core.execute(&promise_combinator_module_bd_ur3tk_19(
             capability, args, dst,
         ))

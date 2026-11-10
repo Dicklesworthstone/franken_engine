@@ -286,3 +286,21 @@ fn accessor_kinds_survive_ast_ir_and_schema_verification() {
     module.header.schema_version = IrSchemaVersion { major: 0, minor: 15, patch: 0 };
     assert!(verify_ir3_specialization(&module).is_err());
 }
+
+#[test]
+fn computed_accessor_returned_method_keeps_receiver_and_single_key_evaluation() {
+    assert_output(r#"
+        const key = Symbol('method');
+        let reads = 0;
+        function propertyKey() { reads += 1; return key; }
+        const object = {
+            value: 42,
+            get [key]() {
+                console.log('get');
+                return function() { return this.value; };
+            }
+        };
+        console.log(object[propertyKey()]());
+        console.log(reads);
+    "#, &["get", "42", "1"]);
+}

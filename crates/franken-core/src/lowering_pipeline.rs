@@ -11776,16 +11776,10 @@ fn lower_expression_to_ir1(
                 return Ok(());
             }
             // Detect method calls: obj.method(args) → CallMethod with receiver
-            let is_method = matches!(
-                callee.as_ref(),
-                Expression::Member {
-                    computed: false,
-                    ..
-                }
-            );
+            let is_method = matches!(callee.as_ref(), Expression::Member { .. });
             if is_method {
                 if let Expression::Member {
-                    object, property, ..
+                    object, property, computed,
                 } = callee.as_ref()
                 {
                     // Push receiver (object) first
@@ -11815,7 +11809,7 @@ fn lower_expression_to_ir1(
                     // GetProperty pops object and pushes property value
                     let key = lower_member_property_key_to_ir1(
                         property,
-                        false,
+                        *computed,
                         ops,
                         bindings,
                         binding_lookup,

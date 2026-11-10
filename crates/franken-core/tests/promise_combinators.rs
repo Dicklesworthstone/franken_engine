@@ -4,7 +4,8 @@
 use std::collections::BTreeSet;
 
 use frankenengine_core::ast::ParseGoal;
-use frankenengine_core::baseline_interpreter::{InterpreterConfig, InterpreterCore};
+use frankenengine_core::baseline_interpreter::{InterpreterConfig, InterpreterCore, InterpreterError};
+use frankenengine_core::checkpoint::CancellationToken;
 use frankenengine_core::capability::RuntimeCapability;
 use frankenengine_core::ir_contract::Ir0Module;
 use frankenengine_core::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
@@ -163,4 +164,276 @@ fn empty_combinators_preserve_their_distinct_settlement_rules() {
         "#,
         &["all:0", "settled:0", "any:AggregateError:0", "tick"],
     );
+}
+
+#[test]
+fn combinators_consume_custom_iterables_and_ignore_extra_arguments() {
+    assert_output(
+        r#"
+        const iterable = {
+            [Symbol.iterator]() {
+                let index = 0;
+                return {
+                    next() {
+                        index += 1;
+                        return { value: index * 2, done: index > 2 };
+                    }
+                };
+            }
+        };
+        Promise.all(iterable, ['ignored']).then(values => console.log(values[0] + ',' + values[1]));
+        Promise.race(iterable).then(value => console.log('race:' + value));
+        Promise.any(iterable).then(value => console.log('any:' + value));
+        Promise.allSettled(iterable).then(values => console.log(values[1].status + ':' + values[1].value));
+        "#,
+        &["2,4", "race:2", "any:2", "fulfilled:4"],
+    );
+}
+
+#[test]
+fn string_iteration_uses_code_points_and_empty_strings_are_empty_iterables() {
+    assert_output(
+        r#"
+        Promise.all('A\uD83D\uDE00\uD800').then(values => {
+            console.log(values.length + ':' + values[1].length + ':' + values[2].length);
+        });
+        Promise.all('').then(values => console.log('empty:' + values.length));
+        "#,
+        &["empty:0", "3:2:1"],
+    );
+}
+
+#[test]
+fn non_iterables_reject_the_returned_promise_without_synchronous_throw() {
+    assert_output(
+        r#"
+        Promise.all().catch(error => console.log('missing:' + error.name));
+        Promise.race(null).catch(error => console.log('null:' + error.name));
+        Promise.any(4).catch(error => console.log('number:' + error.name));
+        Promise.allSettled({ 0: 1, length: 1 }).catch(error => console.log('object:' + error.name));
+        const overridden = [];
+        overridden[Symbol.iterator] = undefined;
+        Promise.all(overridden).catch(error => console.log('override:' + error.name));
+        console.log('sync');
+        "#,
+        &[
+            "sync", "missing:TypeError", "null:TypeError", "number:TypeError",
+            "object:TypeError", "override:TypeError",
+        ],
+    );
+}
+
+#[test]
+fn iterator_failures_reject_with_exact_identity_and_do_not_call_return() {
+    assert_output(
+        r#"
+        const reason = {};
+        let closed = 0;
+        const iterable = {
+            [Symbol.iterator]() {
+                let index = 0;
+                return {
+                    next() {
+                        index += 1;
+                        if (index === 2) throw reason;
+                        return { value: 1, done: false };
+                    },
+                    return() { closed += 1; return {}; }
+                };
+            }
+        };
+        Promise.all(iterable).catch(error => console.log((error === reason) + ':' + closed));
+        Promise.race(iterable).catch(error => console.log('race:' + (error === reason)));
+        console.log('sync');
+        "#,
+        &["sync", "true:0", "race:true"],
+    );
+}
+
+#[test]
+fn iteration_resolves_each_element_before_requesting_the_next() {
+    assert_output(
+        r#"
+        let trace = '';
+        class Thenable {
+            get then() {
+                trace += 'get;';
+                return resolve => resolve(8);
+            }
+        }
+        const iterable = {
+            [Symbol.iterator]() {
+                let index = 0;
+                return {
+                    next() {
+                        trace += 'next' + index + ';';
+                        index += 1;
+                        return { value: new Thenable(), done: index > 1 };
+                    }
+                };
+            }
+        };
+        Promise.all(iterable).then(values => console.log(values[0]));
+        console.log(trace);
+        "#,
+        &["next0;get;next1;", "8"],
+    );
+}
+
+#[test]
+fn array_iteration_observes_holes_and_length_changes_during_resolution() {
+    assert_output(
+        r#"
+        const values = [0, 2];
+        class First {
+            get then() {
+                values[1] = 7;
+                values.push(9);
+                return undefined;
+            }
+        }
+        values[0] = new First();
+        Promise.all(values).then(result => console.log(result.length + ':' + result[1] + ':' + result[2]));
+        const sparse = [1, 2, 3];
+        delete sparse[1];
+        Promise.all(sparse).then(result => console.log(result.length + ':' + result[1]));
+        "#,
+        &["3:7:9", "3:undefined"],
+    );
+}
+
+#[test]
+fn iterator_next_getter_is_captured_once_and_preserves_its_receiver() {
+    assert_output(
+        r#"
+        let reads = 0;
+        class Cursor {
+            constructor() { this.index = 0; }
+            get next() {
+                reads += 1;
+                return function() {
+                    this.index += 1;
+                    return { value: this.index, done: this.index > 2 };
+                };
+            }
+        }
+        const iterable = { [Symbol.iterator]() { return new Cursor(); } };
+        Promise.all(iterable).then(values => console.log(reads + ':' + values[0] + ',' + values[1]));
+        "#,
+        &["1:1,2"],
+    );
+}
+
+#[test]
+fn generators_are_consumed_synchronously_and_resolved_through_jobs() {
+    assert_output(
+        r#"
+        function* values() {
+            console.log('start');
+            yield Promise.resolve(3);
+            yield 5;
+            console.log('end');
+        }
+        Promise.all(values()).then(result => console.log(result[0] + ',' + result[1]));
+        console.log('sync');
+        "#,
+        &["start", "end", "sync", "3,5"],
+    );
+}
+
+#[test]
+fn custom_iterable_may_return_a_generator_and_empty_generators_are_empty() {
+    assert_output(
+        r#"
+        function* values() { yield 4; yield 6; }
+        function* empty() {}
+        const iterable = { [Symbol.iterator]() { return values(); } };
+        Promise.all(iterable).then(result => console.log(result[0] + ',' + result[1]));
+        Promise.all(empty()).then(result => console.log('empty:' + result.length));
+        "#,
+        &["empty:0", "4,6"],
+    );
+}
+
+#[test]
+fn shared_generator_iteration_closes_through_finally_on_break_and_throw() {
+    assert_output(
+        r#"
+        function* values() {
+            try { yield 1; yield 2; }
+            finally { console.log('closed'); }
+        }
+        for (const value of values()) { console.log(value); break; }
+        const original = {};
+        function* failingCleanup() {
+            try { yield 1; }
+            finally { throw 'cleanup'; }
+        }
+        try {
+            for (const value of failingCleanup()) { throw original; }
+        } catch (error) { console.log(error === original); }
+        "#,
+        &["1", "closed", "true"],
+    );
+}
+
+#[test]
+fn iterator_protocol_getter_errors_keep_the_original_thrown_value() {
+    assert_output(
+        r#"
+        const reason = {};
+        const brokenIterable = {
+            get [Symbol.iterator]() { throw reason; }
+        };
+        class BrokenStep {
+            get done() { throw reason; }
+        }
+        const iterable = {
+            [Symbol.iterator]() { return { next() { return new BrokenStep(); } }; }
+        };
+        Promise.all(brokenIterable).catch(error => console.log('iterator:' + (error === reason)));
+        Promise.all(iterable).catch(error => console.log('step:' + (error === reason)));
+        "#,
+        &["iterator:true", "step:true"],
+    );
+}
+
+#[test]
+fn native_iterable_steps_obey_instruction_budgets_and_cancellation() {
+    let tree = CanonicalEs2020Parser.parse(
+        "const values = []; values.length = 10000; Promise.all(values);",
+        ParseGoal::Script,
+    ).expect("parse sparse-array budget source");
+    let module = lower_ir0_to_ir3(
+        &Ir0Module::from_syntax_tree(tree, "iterable-budget.js"),
+        &LoweringContext::new("budget", "budget", "budget"),
+    ).expect("lower sparse-array budget source").ir3;
+    for throughput in [false, true] {
+        let mut config = if throughput {
+            InterpreterConfig::v8_defaults()
+        } else {
+            InterpreterConfig::quickjs_defaults()
+        };
+        config.granted_capabilities = BTreeSet::from([
+            RuntimeCapability::VmDispatch, RuntimeCapability::HeapAllocate,
+        ]);
+        config.instruction_budget = 128;
+        let failure = InterpreterCore::new(config.clone(), "iterable-budget")
+            .execute(&module).expect_err("native iteration must consume the instruction budget");
+        assert!(
+            matches!(failure, InterpreterError::BudgetExhausted { executed: 128, budget: 128 }),
+            "throughput={throughput}: {failure:?}",
+        );
+
+        let token = CancellationToken::new();
+        token.cancel();
+        config.cancellation_token = Some(token);
+        config.checkpoint_density = u64::MAX;
+        let failure = InterpreterCore::new(config, "iterable-cancel")
+            .execute(&module).expect_err("native iteration must poll cancellation");
+        assert!(
+            matches!(failure, InterpreterError::Cancelled),
+            "throughput={throughput}: {failure:?}",
+        );
+    }
 }

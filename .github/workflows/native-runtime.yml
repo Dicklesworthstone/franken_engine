@@ -188,19 +188,32 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: '0'
       CARGO_TERM_COLOR: never
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out the exact source using the runner's Git
+        run: |
+          set -euo pipefail
+          test -z "$(find . -mindepth 1 -maxdepth 1 -print -quit)"
+          git init --initial-branch=main .
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          GIT_TERMINAL_PROMPT=0 git fetch --no-tags --depth=1 origin "$GITHUB_SHA"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - name: Capture exact native-runtime source inputs
         run: |
           git rev-parse HEAD > native-runtime-revision.txt
           git archive --format=tar.gz --output=native-runtime-sources.tar.gz HEAD
-      - name: Retain reproducible source inputs
-        uses: actions/upload-artifact@v4
-        with:
-          name: native-runtime-sources
-          path: |
-            native-runtime-sources.tar.gz
-            native-runtime-revision.txt
-          retention-days: 7
+      - name: Publish reproducible source inputs
+        run: |
+          set -euo pipefail
+          {
+            printf '## Native-core source inputs\n\n'
+            printf 'Source commit: [%s](%s/%s/tree/%s)\n\n' \
+              "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_SHA"
+            printf 'Pinned Rust toolchain: %s\n\n' "$RUSTUP_TOOLCHAIN"
+            printf 'Exact source archive and lockfile checksums:\n\n~~~text\n'
+            cat native-runtime-revision.txt
+            sha256sum native-runtime-sources.tar.gz Cargo.lock
+            printf '~~~\n'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Install Rust
         run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component clippy --component rustfmt
       - name: Run native-core unit tests
@@ -224,13 +237,28 @@ jobs:
             --test promise_reactions --test promise_combinators \
             --test source_timers --test timer_callbacks --test async_source \
             -- --nocapture --test-threads=1 2>&1 | tee native-runtime-source-execution.log
-      - name: Retain complete test output
+      - name: Publish complete native-core diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: native-runtime-validation
-          path: native-runtime-*.log
-          retention-days: 7
+        run: |
+          set -euo pipefail
+          test "$GITHUB_RETENTION_DAYS" -ge 7
+          printf '\nComplete compiler and test output is retained in this job log for %s days.\n' \
+            "$GITHUB_RETENTION_DAYS" | tee -a "$GITHUB_STEP_SUMMARY"
+          printf '\n### Diagnostic SHA-256 checksums\n\n~~~text\n' >> "$GITHUB_STEP_SUMMARY"
+          status=0
+          for log in native-runtime-tests.log native-runtime-orchestrator.log \
+            native-runtime-source-execution.log; do
+            if test -s "$log"; then
+              printf '\nFull output: %s\n' "$log"
+              cat "$log"
+              sha256sum "$log" | tee -a "$GITHUB_STEP_SUMMARY"
+            else
+              printf '::error::Missing or empty native-core diagnostic log: %s\n' "$log"
+              status=1
+            fi
+          done
+          printf '~~~\n' >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
   # Compile the production runtime dependency closure without the unrelated
   # publication binaries. This is additional source-level coverage, not a
   # substitute for the unchanged full-engine gates or native-core unit tests.

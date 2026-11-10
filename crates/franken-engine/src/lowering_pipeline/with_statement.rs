@@ -37,9 +37,11 @@
 //! any other code, so resolution continues outward through every enclosing
 //! object.
 //!
-//! Refused, as before: destructuring `var` declarations and destructuring
-//! `for-in`/`for-of` heads that bind through the object. `arguments` is never
-//! looked up in the object.
+//! Destructuring `var` declarations and non-lexical `for-in`/`for-of` heads
+//! use the ordinary assignment-pattern lowering after their bound names are
+//! hoisted. Every target keeps its own dynamic reference, so getters, defaults,
+//! rest copying and iterator closing retain the shared destructuring semantics.
+//! `arguments` is never looked up in the object.
 
 use std::collections::BTreeSet;
 
@@ -91,6 +93,40 @@ pub(super) fn intrinsic_capability(name: &str) -> Option<&'static str> {
         BASE_INTRINSIC => Some(WITH_BASE_CAPABILITY),
         RECEIVER_INTRINSIC => Some(WITH_RECEIVER_CAPABILITY),
         _ => None,
+    }
+}
+
+/// The identifier represented by an engine-generated dynamic reference.
+///
+/// Rewriting `x` as a member must not lose NamedEvaluation for an anonymous
+/// default or initializer. Ordinary source member assignments do not infer a
+/// name. The unspellable intrinsic distinguishes the two without adding a
+/// self binding to a function expression or changing its source text.
+pub(super) fn reference_binding_name(expression: &Expression) -> Option<&str> {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+        ..
+    } = expression
+    else {
+        return None;
+    };
+    let Expression::Identifier(name) = property.as_ref() else {
+        return None;
+    };
+    let Expression::Call {
+        callee, arguments, ..
+    } = object.as_ref()
+    else {
+        return None;
+    };
+    if matches!(callee.as_ref(), Expression::Identifier(callee) if callee == BASE_INTRINSIC)
+        && matches!(arguments.as_slice(), [_, _, Expression::StringLiteral(binding)] if binding.as_ref() == name)
+    {
+        Some(name)
+    } else {
+        None
     }
 }
 
@@ -166,6 +202,43 @@ fn declarator(name: &str, initializer: Option<Expression>, span: SourceSpan) -> 
         pattern: BindingPattern::Identifier(name.to_string()),
         initializer,
         span,
+    }
+}
+
+/// A binding pattern with no newly created lexical environment initializes
+/// existing references. Retain its structure as an assignment pattern so the
+/// shared lowerer can capture each reference at the specified point, before
+/// fetching that element or evaluating its default (ES2020 13.3.3.8-.9).
+fn assignment_pattern(pattern: BindingPattern) -> Expression {
+    match pattern {
+        BindingPattern::Identifier(name) => Expression::Identifier(name),
+        BindingPattern::ObjectPattern(properties) => Expression::ObjectLiteral(
+            properties
+                .into_iter()
+                .map(|property| ObjectProperty {
+                    key: property.key,
+                    value: assignment_pattern(property.value),
+                    computed: property.computed,
+                    shorthand: false,
+                    kind: ObjectPropertyKind::Data,
+                })
+                .collect(),
+        ),
+        BindingPattern::ArrayPattern(elements) => Expression::ArrayLiteral(
+            elements
+                .into_iter()
+                .map(|element| element.map(assignment_pattern))
+                .collect(),
+        ),
+        BindingPattern::Rest(inner) => {
+            Expression::SpreadElement(Box::new(assignment_pattern(*inner)))
+        }
+        BindingPattern::AssignmentPattern { left, right } => Expression::Assignment {
+            operator: AssignmentOperator::Assign,
+            left: Box::new(assignment_pattern(*left)),
+            right: Box::new(right),
+            assignment_strictness: AssignmentStrictness::Sloppy,
+        },
     }
 }
 
@@ -1173,14 +1246,23 @@ impl Rewriter<'_> {
         outcome
     }
 
-    /// `n = value`, through the object.
-    fn assign(&mut self, name: &str, value: Expression) -> Expression {
-        Expression::Assignment {
+    /// Initialize a pattern through the same references as an assignment.
+    /// A catch parameter or other inner binding remains local even when a
+    /// different name in the same `var` declaration resolves through `with`.
+    fn assign_pattern(
+        &mut self,
+        pattern: BindingPattern,
+        mut value: Expression,
+    ) -> Result<Expression, LoweringPipelineError> {
+        let mut target = assignment_pattern(pattern);
+        self.expression(&mut target)?;
+        self.expression(&mut value)?;
+        Ok(Expression::Assignment {
             operator: AssignmentOperator::Assign,
-            left: Box::new(self.reference(name)),
+            left: Box::new(target),
             right: Box::new(value),
             assignment_strictness: AssignmentStrictness::Sloppy,
-        }
+        })
     }
 
     /// The assignments a `var` declaration at the body's function level
@@ -1191,16 +1273,18 @@ impl Rewriter<'_> {
     ) -> Result<Vec<(Expression, SourceSpan)>, LoweringPipelineError> {
         let mut assignments = Vec::new();
         for declarator in declaration.declarations {
-            let BindingPattern::Identifier(name) = &declarator.pattern else {
-                return Err(unsupported(
-                    "a destructuring var declaration inside a with statement is not supported",
+            self.hoisted.extend(
+                declarator
+                    .pattern
+                    .binding_names()
+                    .into_iter()
+                    .map(str::to_string),
+            );
+            if let Some(initializer) = declarator.initializer {
+                assignments.push((
+                    self.assign_pattern(declarator.pattern, initializer)?,
                     declarator.span,
                 ));
-            };
-            self.hoisted.insert(name.clone());
-            if let Some(mut initializer) = declarator.initializer {
-                self.expression(&mut initializer)?;
-                assignments.push((self.assign(name, initializer), declarator.span));
             }
         }
         Ok(assignments)
@@ -1215,8 +1299,8 @@ impl Rewriter<'_> {
                 .any(|name| self.is_free(name))
     }
 
-    /// `for (n in/of ...)` and `for (var n in/of ...)` assign each value to
-    /// `n` through the object: iterate a fresh constant and assign it first.
+    /// Non-lexical `for-in`/`for-of` heads initialize their references on every
+    /// iteration: bind a fresh constant and destructure it before the body.
     fn rebind_loop_head(
         &mut self,
         binding: &mut BindingPattern,
@@ -1224,22 +1308,25 @@ impl Rewriter<'_> {
         body: &mut Statement,
         span: SourceSpan,
     ) -> Outcome {
-        let BindingPattern::Identifier(name) = binding else {
+        // Annex B's `for (var x = initializer in object)` evaluates its
+        // initializer once before enumeration, not as an element default.
+        // It was already refused here; keep that separate from destructuring.
+        if matches!(binding, BindingPattern::AssignmentPattern { .. }) {
             return Err(unsupported(
-                "a destructuring for-in/for-of head inside a with statement is not supported",
+                "a for-in var initializer inside a with statement is not supported",
                 span,
             ));
-        };
-        let name = name.clone();
+        }
         if *binding_kind == Some(VariableDeclarationKind::Var) {
-            self.hoisted.insert(name.clone());
+            self.hoisted
+                .extend(binding.binding_names().into_iter().map(str::to_string));
         }
         let iteration = format!(
             "{SYNTHETIC_PREFIX}iteration_{}_{}",
             self.id, self.next_iteration
         );
         self.next_iteration += 1;
-        *binding = BindingPattern::Identifier(iteration.clone());
+        let pattern = std::mem::replace(binding, BindingPattern::Identifier(iteration.clone()));
         *binding_kind = Some(VariableDeclarationKind::Const);
         self.statement(body)?;
         let original = std::mem::replace(
@@ -1249,7 +1336,7 @@ impl Rewriter<'_> {
                 span,
             }),
         );
-        let assignment = self.assign(&name, identifier(&iteration));
+        let assignment = self.assign_pattern(pattern, identifier(&iteration))?;
         *body = Statement::Block(BlockStatement {
             body: vec![expression_statement(assignment, span), original],
             span,
@@ -1635,8 +1722,51 @@ mod tests {
     }
 
     #[test]
-    fn destructuring_var_inside_with_is_refused() {
-        let tree = parse("with (o) { var {a} = p; }");
-        assert!(rewrite_with_statements(&tree).is_err());
+    fn destructuring_var_hoists_every_bound_name_before_entering_the_object() {
+        let tree = parse("with (o) { var {a, b: [c = 1, ...rest]} = p; }");
+        let rewritten = rewrite_with_statements(&tree)
+            .expect("rewrite destructuring")
+            .expect("has with");
+        let Statement::Block(block) = &rewritten.body[0] else {
+            panic!("with becomes a block");
+        };
+        let Statement::VariableDeclaration(declaration) = &block.body[0] else {
+            panic!("var declarations precede ToObject");
+        };
+        assert_eq!(declaration.kind, VariableDeclarationKind::Var);
+        let names: Vec<_> = declaration
+            .declarations
+            .iter()
+            .flat_map(|declaration| declaration.pattern.binding_names())
+            .collect();
+        assert_eq!(names, ["a", "c", "rest"]);
+        assert!(
+            declaration
+                .declarations
+                .iter()
+                .all(|declaration| declaration.initializer.is_none())
+        );
+        assert!(!contains_with(&rewritten.body));
+    }
+
+    #[test]
+    fn inferred_names_require_a_generated_identifier_reference() {
+        let reference = member(
+            intrinsic(
+                BASE_INTRINSIC,
+                vec![identifier("object"), identifier("scope"), string("x")],
+            ),
+            "x",
+        );
+        assert_eq!(reference_binding_name(&reference), Some("x"));
+        assert_eq!(reference_binding_name(&member(identifier("o"), "x")), None);
+        let different_property = member(
+            intrinsic(
+                BASE_INTRINSIC,
+                vec![identifier("object"), identifier("scope"), string("x")],
+            ),
+            "y",
+        );
+        assert_eq!(reference_binding_name(&different_property), None);
     }
 }

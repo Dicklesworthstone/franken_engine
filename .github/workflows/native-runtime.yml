@@ -341,6 +341,7 @@ jobs:
             --test process_spawn_foundation_bd_x85a7 \
             --test esm_function_exports \
             --test nested_callback_semantics \
+            --test with_statement_bd_9vouw_101 \
             --test error_stack_trace_formatting \
             --test console_methods_bd_9vouw_158 \
             --test bigint_arithmetic_bd_9vouw_54 \
@@ -355,6 +356,7 @@ jobs:
             crates/franken-engine/src/baseline_interpreter/object_integrity.rs \
             crates/franken-engine/src/baseline_interpreter/promise_capability.rs \
             crates/franken-engine/src/promise_model.rs \
+            crates/franken-engine/src/lowering_pipeline/with_statement.rs \
             crates/franken-engine/tests/async_generator_execution.rs \
             crates/franken-engine/tests/esm_function_exports.rs \
             crates/franken-engine/tests/array_species_bd_9vouw_94.rs \
@@ -363,6 +365,7 @@ jobs:
             crates/franken-engine/tests/gc_reclaim_bd_9vouw_57.rs \
             crates/franken-engine/tests/error_stack_trace_formatting.rs \
             crates/franken-engine/tests/console_methods_bd_9vouw_158.rs \
+            crates/franken-engine/tests/with_statement_bd_9vouw_101.rs \
             crates/franken-engine/tests/bigint_arithmetic_bd_9vouw_54.rs
       - name: Retain exact revision and complete validation output
         if: always()

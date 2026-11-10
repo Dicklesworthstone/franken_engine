@@ -4894,7 +4894,11 @@ fn lower_destructuring_assignment_element_to_ir1(
             label_counter,
             span_table,
         )?;
-        if let Expression::Identifier(name) = target {
+        let name = match target {
+            Expression::Identifier(name) => Some(name.as_str()),
+            _ => with_statement::reference_binding_name(target),
+        };
+        if let Some(name) = name {
             name_anonymous_function_definition(ops, start, default, name);
         }
         ops.push(Ir1Op::StoreBinding {
@@ -18507,6 +18511,7 @@ fn lower_expression_to_ir1_inner(
                     label_counter,
                     span_table,
                 )?;
+                let start = ops.len();
                 lower_expression_to_ir1(
                     right,
                     ops,
@@ -18517,6 +18522,9 @@ fn lower_expression_to_ir1_inner(
                     label_counter,
                     span_table,
                 )?;
+                if let Some(name) = with_statement::reference_binding_name(left) {
+                    name_anonymous_function_definition(ops, start, right, name);
+                }
                 ops.push(Ir1Op::SetProperty {
                     key,
                     strict: member_assignment_is_strict(*assignment_strictness),

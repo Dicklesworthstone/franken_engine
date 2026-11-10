@@ -60,6 +60,7 @@ use crate::object_model::{
     BaselineStringAccessor, BaselineSymbolProperty, ExactOrderedStringMap, OrderedStringMap,
     PropertyKey as TypedPropertyKey, SymbolId, WellKnownSymbol, canonical_array_index,
 };
+pub use crate::object_model::{BuiltinFunction, BuiltinFunctionKind};
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 use crate::runtime_config::ExecutionConfig;
 
@@ -925,56 +926,6 @@ fn well_known_symbol_description(id: SymbolId) -> Option<&'static str> {
     }
 }
 
-/// Small set of builtin callable kinds the baseline interpreter exposes as
-/// first-class values.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BuiltinFunctionKind {
-    Require,
-    // NOTE: variants must be appended at the tail only — `kind as u64` feeds
-    // the register content hash, so mid-enum insertion silently shifts every
-    // downstream ordinal (same rule as the engine's BuiltinFunctionKind).
-    StringPrototypeCharAt,
-    StringPrototypeCharCodeAt,
-    StringPrototypeCodePointAt,
-    StringPrototypeAt,
-    StringPrototypeIsWellFormed,
-    StringPrototypeToWellFormed,
-    ArrayIsArray,
-    Symbol,
-    SymbolFor,
-    SymbolKeyFor,
-    SymbolPrototypeToString,
-    GeneratorPrototypeNext,
-    // Appended at the tail (ordinals feed the register content hash).
-    /// ES CreateResolvingFunctions resolve capability, bound to a promise
-    /// handle carried in [`BuiltinFunction::bound_object`] (bd-3ose7). Passed
-    /// into a user thenable's `then` so it can settle the adopting promise.
-    PromiseCapabilityResolve,
-    /// ES CreateResolvingFunctions reject capability (bd-3ose7).
-    PromiseCapabilityReject,
-    PromisePrototypeThen,
-    PromisePrototypeCatch,
-    PromisePrototypeFinally,
-    /// One half of a resolving pair with a shared already-resolved cell.
-    PromiseResolveFunction,
-    PromiseRejectFunction,
-}
-
-/// First-class builtin callable value with the module provenance needed for
-/// deterministic CommonJS resolution.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct BuiltinFunction {
-    pub kind: BuiltinFunctionKind,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub module_specifier: String,
-    /// Promise handle or resolving-pair ID a resolve/reject function is bound to.
-    /// `None` for every ordinary builtin; `skip_serializing_if` keeps existing
-    /// serialized forms byte-identical.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bound_object: Option<u32>,
-}
-
 impl BuiltinFunction {
     fn require(module_specifier: impl Into<String>) -> Self {
         Self {
@@ -1037,30 +988,63 @@ impl BuiltinFunction {
             bound_object: None,
         }
     }
+}
 
-    fn display_name(&self) -> &'static str {
-        match self.kind {
-            BuiltinFunctionKind::Require => "require",
-            BuiltinFunctionKind::StringPrototypeCharAt => "charAt",
-            BuiltinFunctionKind::StringPrototypeCharCodeAt => "charCodeAt",
-            BuiltinFunctionKind::StringPrototypeCodePointAt => "codePointAt",
-            BuiltinFunctionKind::StringPrototypeAt => "at",
-            BuiltinFunctionKind::StringPrototypeIsWellFormed => "isWellFormed",
-            BuiltinFunctionKind::StringPrototypeToWellFormed => "toWellFormed",
-            BuiltinFunctionKind::ArrayIsArray => "isArray",
-            BuiltinFunctionKind::Symbol => "Symbol",
-            BuiltinFunctionKind::SymbolFor => "for",
-            BuiltinFunctionKind::SymbolKeyFor => "keyFor",
-            BuiltinFunctionKind::SymbolPrototypeToString => "toString",
-            BuiltinFunctionKind::GeneratorPrototypeNext => "next",
-            BuiltinFunctionKind::PromiseCapabilityResolve => "resolve",
-            BuiltinFunctionKind::PromiseCapabilityReject => "reject",
-            BuiltinFunctionKind::PromisePrototypeThen => "then",
-            BuiltinFunctionKind::PromisePrototypeCatch => "catch",
-            BuiltinFunctionKind::PromisePrototypeFinally => "finally",
-            BuiltinFunctionKind::PromiseResolveFunction => "resolve",
-            BuiltinFunctionKind::PromiseRejectFunction => "reject",
+#[cfg(test)]
+mod promise_value_roundtrip_tests {
+    use super::*;
+
+    #[test]
+    fn every_callable_and_suspended_value_roundtrips_through_promises() {
+        let values = [
+            Value::Function(5),
+            Value::Closure(5),
+            Value::Iterator(5),
+            Value::GeneratorFunction(5),
+            Value::Generator(5),
+            Value::AsyncFunction(5),
+            Value::AsyncFunctionObject(5),
+            Value::AsyncGeneratorFunction(5),
+            Value::AsyncGeneratorObject(5),
+            Value::Promise(5),
+            Value::BuiltinFunction(BuiltinFunction::require("/modules/owner.cjs")),
+            Value::BuiltinFunction(BuiltinFunction::promise_capability(
+                BuiltinFunctionKind::PromiseResolveFunction,
+                5,
+            )),
+        ];
+        for value in values {
+            let payload = InterpreterCore::value_to_js_value(&value);
+            assert_eq!(InterpreterCore::js_value_to_value(&payload), value);
+            let encoded = serde_json::to_string(&payload).expect("serialize Promise value");
+            let decoded: crate::object_model::JsValue =
+                serde_json::from_str(&encoded).expect("deserialize Promise value");
+            assert_eq!(payload, decoded);
+            assert!(payload.is_object());
+            assert_eq!(payload.type_name(), value.type_name());
+            assert_eq!(
+                payload.is_callable(),
+                InterpreterCore::is_sync_callable(&value)
+            );
         }
+    }
+
+    #[test]
+    fn promise_builtin_provenance_retains_its_owned_memory_charge() {
+        let builtin = BuiltinFunction::require("/modules/owner.cjs");
+        let expected = MEMORY_ESTIMATE_STRING_BASE_BYTES + builtin.module_specifier.len() as u64;
+        assert_eq!(
+            crate::promise_model::estimate_js_value_memory_bytes(
+                &crate::object_model::JsValue::BuiltinFunction(builtin)
+            ),
+            expected
+        );
+        assert_eq!(
+            crate::promise_model::estimate_js_value_memory_bytes(
+                &crate::object_model::JsValue::BuiltinFunction(BuiltinFunction::array_is_array())
+            ),
+            0
+        );
     }
 }
 
@@ -12685,7 +12669,25 @@ impl InterpreterCore {
             }
             Value::Function(idx) => crate::object_model::JsValue::Function(*idx),
             Value::Promise(handle) => crate::object_model::JsValue::Promise(*handle),
-            _ => crate::object_model::JsValue::Str(JsString::from(val.to_string())),
+            Value::Closure(handle) => crate::object_model::JsValue::Closure(*handle),
+            Value::Iterator(handle) => crate::object_model::JsValue::Iterator(*handle),
+            Value::GeneratorFunction(handle) => {
+                crate::object_model::JsValue::GeneratorFunction(*handle)
+            }
+            Value::Generator(handle) => crate::object_model::JsValue::Generator(*handle),
+            Value::AsyncFunction(handle) => crate::object_model::JsValue::AsyncFunction(*handle),
+            Value::AsyncFunctionObject(handle) => {
+                crate::object_model::JsValue::AsyncFunctionObject(*handle)
+            }
+            Value::AsyncGeneratorFunction(handle) => {
+                crate::object_model::JsValue::AsyncGeneratorFunction(*handle)
+            }
+            Value::AsyncGeneratorObject(handle) => {
+                crate::object_model::JsValue::AsyncGeneratorObject(*handle)
+            }
+            Value::BuiltinFunction(builtin) => {
+                crate::object_model::JsValue::BuiltinFunction(builtin.clone())
+            }
         }
     }
 
@@ -12705,6 +12707,25 @@ impl InterpreterCore {
             crate::object_model::JsValue::Function(idx) => Value::Function(*idx),
             crate::object_model::JsValue::Promise(handle) => Value::Promise(*handle),
             crate::object_model::JsValue::Symbol(sym) => Value::Symbol(*sym),
+            crate::object_model::JsValue::Closure(handle) => Value::Closure(*handle),
+            crate::object_model::JsValue::Iterator(handle) => Value::Iterator(*handle),
+            crate::object_model::JsValue::GeneratorFunction(handle) => {
+                Value::GeneratorFunction(*handle)
+            }
+            crate::object_model::JsValue::Generator(handle) => Value::Generator(*handle),
+            crate::object_model::JsValue::AsyncFunction(handle) => Value::AsyncFunction(*handle),
+            crate::object_model::JsValue::AsyncFunctionObject(handle) => {
+                Value::AsyncFunctionObject(*handle)
+            }
+            crate::object_model::JsValue::AsyncGeneratorFunction(handle) => {
+                Value::AsyncGeneratorFunction(*handle)
+            }
+            crate::object_model::JsValue::AsyncGeneratorObject(handle) => {
+                Value::AsyncGeneratorObject(*handle)
+            }
+            crate::object_model::JsValue::BuiltinFunction(builtin) => {
+                Value::BuiltinFunction(builtin.clone())
+            }
         }
     }
 

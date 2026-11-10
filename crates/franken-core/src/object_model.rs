@@ -2163,10 +2163,88 @@ pub struct ObjectHandle(pub u32);
 // JsValue — runtime value for the object model
 // ---------------------------------------------------------------------------
 
+/// Small set of builtin callable kinds the baseline interpreter exposes as
+/// first-class values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BuiltinFunctionKind {
+    Require,
+    // NOTE: variants must be appended at the tail only — `kind as u64` feeds
+    // the register content hash, so mid-enum insertion silently shifts every
+    // downstream ordinal (same rule as the engine's BuiltinFunctionKind).
+    StringPrototypeCharAt,
+    StringPrototypeCharCodeAt,
+    StringPrototypeCodePointAt,
+    StringPrototypeAt,
+    StringPrototypeIsWellFormed,
+    StringPrototypeToWellFormed,
+    ArrayIsArray,
+    Symbol,
+    SymbolFor,
+    SymbolKeyFor,
+    SymbolPrototypeToString,
+    GeneratorPrototypeNext,
+    // Appended at the tail (ordinals feed the register content hash).
+    /// ES CreateResolvingFunctions resolve capability, bound to a promise
+    /// handle carried in [`BuiltinFunction::bound_object`] (bd-3ose7). Passed
+    /// into a user thenable's `then` so it can settle the adopting promise.
+    PromiseCapabilityResolve,
+    /// ES CreateResolvingFunctions reject capability (bd-3ose7).
+    PromiseCapabilityReject,
+    PromisePrototypeThen,
+    PromisePrototypeCatch,
+    PromisePrototypeFinally,
+    /// One half of a resolving pair with a shared already-resolved cell.
+    PromiseResolveFunction,
+    PromiseRejectFunction,
+}
+
+/// First-class builtin callable value with the module provenance needed for
+/// deterministic CommonJS resolution.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct BuiltinFunction {
+    pub kind: BuiltinFunctionKind,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub module_specifier: String,
+    /// Promise handle or resolving-pair ID a resolve/reject function is bound to.
+    /// `None` for every ordinary builtin; `skip_serializing_if` keeps existing
+    /// serialized forms byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bound_object: Option<u32>,
+}
+
+impl BuiltinFunction {
+    pub(crate) fn display_name(&self) -> &'static str {
+        match self.kind {
+            BuiltinFunctionKind::Require => "require",
+            BuiltinFunctionKind::StringPrototypeCharAt => "charAt",
+            BuiltinFunctionKind::StringPrototypeCharCodeAt => "charCodeAt",
+            BuiltinFunctionKind::StringPrototypeCodePointAt => "codePointAt",
+            BuiltinFunctionKind::StringPrototypeAt => "at",
+            BuiltinFunctionKind::StringPrototypeIsWellFormed => "isWellFormed",
+            BuiltinFunctionKind::StringPrototypeToWellFormed => "toWellFormed",
+            BuiltinFunctionKind::ArrayIsArray => "isArray",
+            BuiltinFunctionKind::Symbol => "Symbol",
+            BuiltinFunctionKind::SymbolFor => "for",
+            BuiltinFunctionKind::SymbolKeyFor => "keyFor",
+            BuiltinFunctionKind::SymbolPrototypeToString => "toString",
+            BuiltinFunctionKind::GeneratorPrototypeNext => "next",
+            BuiltinFunctionKind::PromiseCapabilityResolve => "resolve",
+            BuiltinFunctionKind::PromiseCapabilityReject => "reject",
+            BuiltinFunctionKind::PromisePrototypeThen => "then",
+            BuiltinFunctionKind::PromisePrototypeCatch => "catch",
+            BuiltinFunctionKind::PromisePrototypeFinally => "finally",
+            BuiltinFunctionKind::PromiseResolveFunction => "resolve",
+            BuiltinFunctionKind::PromiseRejectFunction => "reject",
+        }
+    }
+}
+
 /// Runtime value for the ES2020 object model.
 ///
-/// This intentionally mirrors the baseline interpreter's `Value` but adds
-/// `Symbol` and keeps `Object` typed via `ObjectHandle`.
+/// This mirrors every baseline interpreter value without coercion and keeps
+/// `Object` typed via `ObjectHandle`. New variants are appended so existing
+/// serialized variant ordinals remain stable.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum JsValue {
     Undefined,
@@ -2187,6 +2265,15 @@ pub enum JsValue {
     /// Keeping the handle distinct from object/function handles preserves
     /// identity when a promise is itself a rejection reason.
     Promise(u32),
+    Closure(u32),
+    Iterator(u32),
+    GeneratorFunction(u32),
+    Generator(u32),
+    AsyncFunction(u32),
+    AsyncFunctionObject(u32),
+    AsyncGeneratorFunction(u32),
+    AsyncGeneratorObject(u32),
+    BuiltinFunction(BuiltinFunction),
 }
 
 impl JsValue {
@@ -2197,11 +2284,33 @@ impl JsValue {
     }
 
     pub fn is_object(&self) -> bool {
-        matches!(self, Self::Object(_) | Self::Promise(_))
+        matches!(
+            self,
+            Self::Object(_)
+                | Self::Promise(_)
+                | Self::Function(_)
+                | Self::Closure(_)
+                | Self::Iterator(_)
+                | Self::GeneratorFunction(_)
+                | Self::Generator(_)
+                | Self::AsyncFunction(_)
+                | Self::AsyncFunctionObject(_)
+                | Self::AsyncGeneratorFunction(_)
+                | Self::AsyncGeneratorObject(_)
+                | Self::BuiltinFunction(_)
+        )
     }
 
     pub fn is_callable(&self) -> bool {
-        matches!(self, Self::Function(_))
+        matches!(
+            self,
+            Self::Function(_)
+                | Self::Closure(_)
+                | Self::GeneratorFunction(_)
+                | Self::AsyncFunction(_)
+                | Self::AsyncGeneratorFunction(_)
+                | Self::BuiltinFunction(_)
+        )
     }
 
     pub fn type_name(&self) -> &'static str {
@@ -2212,8 +2321,18 @@ impl JsValue {
             Self::Int(_) | Self::Float(_) => "number",
             Self::Str(_) => "string",
             Self::Symbol(_) => "symbol",
-            Self::Object(_) | Self::Promise(_) => "object",
-            Self::Function(_) => "function",
+            Self::Object(_)
+            | Self::Promise(_)
+            | Self::Iterator(_)
+            | Self::Generator(_)
+            | Self::AsyncFunctionObject(_)
+            | Self::AsyncGeneratorObject(_) => "object",
+            Self::Function(_)
+            | Self::Closure(_)
+            | Self::GeneratorFunction(_)
+            | Self::AsyncFunction(_)
+            | Self::AsyncGeneratorFunction(_)
+            | Self::BuiltinFunction(_) => "function",
         }
     }
 
@@ -2282,6 +2401,15 @@ impl fmt::Display for JsValue {
             Self::Object(h) => write!(f, "[object#{}]", h.0),
             Self::Function(idx) => write!(f, "[function#{idx}]"),
             Self::Promise(_) => write!(f, "[object Promise]"),
+            Self::Closure(idx) => write!(f, "[closure#{idx}]"),
+            Self::Iterator(idx) => write!(f, "[iterator#{idx}]"),
+            Self::GeneratorFunction(idx) => write!(f, "[generatorfunction#{idx}]"),
+            Self::Generator(idx) => write!(f, "[generator#{idx}]"),
+            Self::AsyncFunction(idx) => write!(f, "[asyncfunction#{idx}]"),
+            Self::AsyncFunctionObject(idx) => write!(f, "[asyncfunctionobject#{idx}]"),
+            Self::AsyncGeneratorFunction(idx) => write!(f, "[asyncgeneratorfunction#{idx}]"),
+            Self::AsyncGeneratorObject(idx) => write!(f, "[asyncgeneratorobject#{idx}]"),
+            Self::BuiltinFunction(builtin) => write!(f, "[builtin:{}]", builtin.display_name()),
         }
     }
 }

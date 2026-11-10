@@ -60,10 +60,14 @@ fn estimate_string_memory_bytes(text: &str) -> u64 {
 /// Dynamic payload retained by an object-model value.
 ///
 /// Handles and numeric variants are inline identifiers/scalars and therefore
-/// have no additional dynamic charge. Strings own a separate allocation.
+/// have no additional dynamic charge. Strings and builtin module provenance
+/// own separate allocations.
 pub(crate) fn estimate_js_value_memory_bytes(value: &JsValue) -> u64 {
     match value {
         JsValue::Str(text) => estimate_string_memory_bytes(text),
+        JsValue::BuiltinFunction(builtin) if !builtin.module_specifier.is_empty() => {
+            estimate_string_memory_bytes(&builtin.module_specifier)
+        }
         _ => 0,
     }
 }

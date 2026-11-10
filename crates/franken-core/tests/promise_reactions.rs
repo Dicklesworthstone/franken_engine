@@ -37,6 +37,97 @@ fn run_source(source: &str) -> Vec<String> {
 }
 
 #[test]
+fn source_promise_values_preserve_captured_functions_and_returned_closures() {
+    assert_eq!(
+        run_source(
+            r#"
+        const offset = 40;
+        const original = value => value + offset;
+        Promise.resolve(original).then(callback => {
+            console.log(callback === original);
+            console.log(callback(2));
+            return value => original(value) + 1;
+        }).then(callback => console.log(callback(2)));
+    "#
+        ),
+        ["true", "42", "43"]
+    );
+}
+
+#[test]
+fn source_promise_rejection_and_finally_preserve_callable_identity() {
+    assert_eq!(
+        run_source(
+            r#"
+        const original = () => 7;
+        Promise.reject(original).finally(() => original).catch(reason => {
+            console.log(reason === original);
+            console.log(reason());
+        });
+    "#
+        ),
+        ["true", "7"]
+    );
+}
+
+#[test]
+fn source_promise_values_preserve_native_and_bound_resolving_functions() {
+    assert_eq!(
+        run_source(
+            r#"
+        const native = Array.isArray;
+        Promise.resolve(native).then(callback => {
+            console.log(callback === native);
+            console.log(callback([]));
+        });
+        new Promise(resolve => {
+            Promise.resolve(resolve).then(deliver => deliver(8));
+        }).then(value => console.log(value));
+    "#
+        ),
+        ["true", "true", "8"]
+    );
+}
+
+#[test]
+fn source_promise_values_preserve_generator_state() {
+    assert_eq!(
+        run_source(
+            r#"
+        function* sequence() { yield 3; return 5; }
+        const iterator = sequence();
+        Promise.resolve(iterator).then(value => {
+            console.log(value === iterator);
+            console.log(value.next().value);
+            return value;
+        }).then(value => console.log(value.next().value));
+    "#
+        ),
+        ["true", "3", "5"]
+    );
+}
+
+#[test]
+fn source_promise_combinator_results_preserve_callable_payloads() {
+    assert_eq!(
+        run_source(
+            r#"
+        const original = value => value + 1;
+        Promise.all([original, Promise.resolve(original)]).then(values => {
+            console.log(values[0] === original);
+            console.log(values[1](9));
+        });
+        Promise.allSettled([Promise.reject(original)]).then(values => {
+            console.log(values[0].reason === original);
+            console.log(values[0].reason(10));
+        });
+    "#
+        ),
+        ["true", "10", "true", "11"]
+    );
+}
+
+#[test]
 fn source_promises_execute_a_deferred_chain_with_catch_and_finally() {
     assert_eq!(
         run_source(

@@ -1348,7 +1348,13 @@ const STATIC_BUILTIN_GLOBALS: [&str; 8] = [
 /// Intrinsics that exist only through call-lowering seams. Bare unshadowed
 /// reads are undefined, but a real outer lexical binding with the same name
 /// must still propagate into a nested function and shadow the seam.
-const DIRECT_CALL_INTRINSIC_GLOBALS: [&str; 2] = ["require", "console"];
+const DIRECT_CALL_INTRINSIC_GLOBALS: [&str; 5] = [
+    "require",
+    "console",
+    "setTimeout",
+    "clearTimeout",
+    "clearInterval",
+];
 
 /// Return a UTF-8-exact static name without ever projecting a lone UTF-16
 /// surrogate through U+FFFD. Identifiers are always well formed; quoted
@@ -1375,6 +1381,26 @@ fn is_static_builtin_global(name: &str) -> bool {
 
 fn is_non_materialized_intrinsic_global(name: &str) -> bool {
     is_static_builtin_global(name) || DIRECT_CALL_INTRINSIC_GLOBALS.contains(&name)
+}
+
+/// Expose the timer operations with executable core implementations. Interval
+/// registration is not included: the runtime does not schedule repeats yet.
+fn timer_builtin_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Identifier(name) = callee else {
+        return None;
+    };
+    if binding_lookup.contains_key(name.as_str()) {
+        return None;
+    }
+    match name.as_str() {
+        "setTimeout" => Some("timer:setTimeout"),
+        "clearTimeout" => Some("timer:clearTimeout"),
+        "clearInterval" => Some("timer:clearInterval"),
+        _ => None,
+    }
 }
 
 /// Materialize the supported first-class builtin global values. Most static
@@ -11578,10 +11604,12 @@ fn lower_expression_to_ir1(
                 });
                 return Ok(());
             }
-            // bd-lmchj: connect source-level console calls to the capture-only
-            // hostcalls already implemented by the core interpreter. The
-            // receiver is syntactic and is not materialized as a heap object.
-            if let Some(capability) = console_builtin_call_capability(callee, binding_lookup) {
+            // Connect source console/timer calls to the executable hostcalls.
+            // Intrinsic globals use lexical shadowing rather than a
+            // materialized global object in the current core runtime.
+            if let Some(capability) = console_builtin_call_capability(callee, binding_lookup)
+                .or_else(|| timer_builtin_call_capability(callee, binding_lookup))
+            {
                 for arg in arguments {
                     lower_expression_to_ir1(
                         arg,
@@ -11593,9 +11621,16 @@ fn lower_expression_to_ir1(
                         label_counter,
                     )?;
                 }
+                let mut arg_count = arguments.len() as u32;
+                if capability == "timer:setTimeout" && arg_count == 1 {
+                    ops.push(Ir1Op::LoadLiteral {
+                        value: Ir1Literal::Integer(0),
+                    });
+                    arg_count = 2;
+                }
                 ops.push(Ir1Op::HostCall {
                     capability: capability.to_string(),
-                    arg_count: arguments.len() as u32,
+                    arg_count,
                 });
                 return Ok(());
             }
@@ -12444,6 +12479,33 @@ fn lower_expression_to_ir1(
             });
         }
         Expression::New { callee, arguments } => {
+            if matches!(callee.as_ref(), Expression::Identifier(name)
+                if name == "Promise" && !binding_lookup.contains_key(name))
+            {
+                for argument in arguments {
+                    lower_expression_to_ir1(
+                        argument,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                }
+                // A missing executor must throw synchronously. Reserve the
+                // zero-argument internal hostcall for raw pending allocation.
+                if arguments.is_empty() {
+                    ops.push(Ir1Op::LoadLiteral {
+                        value: Ir1Literal::Undefined,
+                    });
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: "promise:constructor".to_string(),
+                    arg_count: arguments.len().max(1) as u32,
+                });
+                return Ok(());
+            }
             lower_expression_to_ir1(
                 callee,
                 ops,

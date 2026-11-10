@@ -182,6 +182,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
+      RUSTUP_TOOLCHAIN: nightly-2026-09-21
       CARGO_BUILD_JOBS: '2'
       CARGO_INCREMENTAL: '0'
       CARGO_PROFILE_TEST_DEBUG: '0'
@@ -201,19 +202,27 @@ jobs:
             native-runtime-revision.txt
           retention-days: 7
       - name: Install Rust
-        run: rustup toolchain install nightly --profile minimal --component clippy --component rustfmt
+        run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component clippy --component rustfmt
       - name: Run native-core unit tests
         run: |
           status=0
-          cargo +nightly test --locked -p frankenengine-core --lib -- --nocapture > native-runtime-tests.log 2>&1 || status=$?
+          cargo test --locked -p frankenengine-core --lib -- --nocapture > native-runtime-tests.log 2>&1 || status=$?
           tail -n 160 native-runtime-tests.log
           exit "$status"
       - name: Run public native-core execution budget regressions
         if: always()
         run: |
           set -o pipefail
-          cargo +nightly test --locked -p frankenengine-core --test orchestrator_execution_budgets \
+          cargo test --locked -p frankenengine-core --test orchestrator_execution_budgets \
             -- --nocapture 2>&1 | tee native-runtime-orchestrator.log
+      - name: Run native-core source execution regressions
+        if: always()
+        run: |
+          set -o pipefail
+          cargo test --locked --no-fail-fast -p frankenengine-core \
+            --test global_value_bindings_bd_9vouw_296 --test module_callable_ownership \
+            --test promise_reactions --test promise_combinators --test source_timers \
+            -- --nocapture --test-threads=1 2>&1 | tee native-runtime-source-execution.log
       - name: Retain complete test output
         if: always()
         uses: actions/upload-artifact@v4

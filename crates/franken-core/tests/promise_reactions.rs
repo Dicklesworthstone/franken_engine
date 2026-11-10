@@ -1,5 +1,5 @@
-//! Executable Promise jobs through the core's public IR boundary. These are
-//! real guest calls, including closure state, exceptions, and pending chains.
+//! Executable source and IR Promise jobs, including closure state, exceptions,
+//! pending chains, and both core interpreter profiles.
 
 use std::collections::BTreeSet;
 
@@ -23,7 +23,17 @@ fn run_source(source: &str) -> Vec<String> {
     let ir0 = Ir0Module::from_syntax_tree(tree, "promise-source.js");
     let context = LoweringContext::new("promise-source", "promise-source", "promise-source");
     let module = lower_ir0_to_ir3(&ir0, &context).expect("lower source").ir3;
-    lines(core().execute(&module).expect("execute source"))
+    let quickjs = lines(core().execute(&module).expect("execute QuickJS source"));
+    let v8 = lines(
+        core_with_config(InterpreterConfig::v8_defaults())
+            .execute(&module)
+            .expect("execute V8 source"),
+    );
+    assert_eq!(
+        quickjs, v8,
+        "Promise behavior must agree between core profiles"
+    );
+    quickjs
 }
 
 #[test]
@@ -107,6 +117,118 @@ fn source_promise_self_resolution_rejects_and_native_handlers_are_callable() {
     );
 }
 
+#[test]
+fn source_promise_executors_run_synchronously_and_ignore_later_completions() {
+    assert_eq!(
+        run_source(
+            r#"
+        console.log('before');
+        new Promise((resolve, reject) => {
+            console.log('executor');
+            resolve(2);
+            reject(3);
+            throw 4;
+        }).then(value => console.log(value));
+        new Promise(() => { throw { marker: 5 }; }).catch(error => console.log(error.marker));
+        new Promise(() => 99).then(() => console.log('must stay pending'));
+        console.log('after');
+    "#
+        ),
+        ["before", "executor", "after", "2", "5"]
+    );
+}
+
+#[test]
+fn source_resolving_pairs_lock_in_pending_adoption_and_escape_to_timers() {
+    assert_eq!(
+        run_source(
+            r#"
+        let release;
+        const pending = new Promise(resolve => { release = resolve; });
+        new Promise((resolve, reject) => {
+            resolve(pending);
+            reject('late');
+            throw 'ignored';
+        }).then(value => console.log(value), error => console.log(error));
+        Promise.resolve({ then(resolve, reject) {
+            resolve(pending);
+            reject('late thenable');
+            throw 'ignored thenable';
+        } }).then(value => console.log(value), error => console.log(error));
+        setTimeout(() => { release(21); release(99); }, 0);
+    "#
+        ),
+        ["21", "21"]
+    );
+}
+
+#[test]
+fn source_finally_waits_for_a_pending_executor_before_restoring_rejection() {
+    assert_eq!(
+        run_source(
+            r#"
+        Promise.reject('original').finally(() => new Promise(resolve => {
+            setTimeout(() => { console.log('finalizer'); resolve(99); }, 0);
+        })).catch(error => console.log(error));
+        console.log('sync');
+    "#
+        ),
+        ["sync", "finalizer", "original"]
+    );
+}
+
+#[test]
+fn source_promise_constructor_rejects_invalid_executors_and_respects_shadowing() {
+    assert_eq!(
+        run_source(
+            r#"
+        try { new Promise(); } catch (error) { console.log(error.name); }
+        try { new Promise(42); } catch (error) { console.log(error.name); }
+        function outer(Promise) {
+            return function inner() { return new Promise(9); };
+        }
+        function Custom(value) { this.value = value; }
+        console.log(outer(Custom)().value);
+    "#
+        ),
+        ["TypeError", "TypeError", "9"]
+    );
+}
+
+#[test]
+fn source_identity_handlers_and_adoption_resolve_newly_added_thenables() {
+    assert_eq!(
+        run_source(
+            r#"
+        const value = {};
+        const original = Promise.resolve(value);
+        value.then = resolve => resolve(42);
+        original.then().then(result => console.log(result));
+        original.catch(() => 0).then(result => console.log(result));
+        original.finally(undefined).then(result => console.log(result));
+        original.then(() => original).then(result => console.log(result));
+    "#
+        ),
+        ["42", "42", "42", "42"]
+    );
+}
+
+#[test]
+fn source_native_callback_and_executor_failures_reject_with_error_objects() {
+    assert_eq!(
+        run_source(
+            r#"
+        Promise.resolve().then(value => value.x).catch(error => console.log(error.name));
+        new Promise(() => { const value = undefined; return value.x; })
+            .catch(error => console.log(error.name));
+        Promise.resolve({ then(resolve) { const value = undefined; return value.x; } })
+            .catch(error => console.log(error.name));
+    "#
+        ),
+        ["TypeError", "TypeError", "TypeError"]
+    );
+}
+
 fn host(capability: &str, start: u32, count: u32, dst: u32) -> Op {
     Op::HostCall {
         capability: CapabilityTag(capability.to_string()),
@@ -153,7 +275,10 @@ fn module(mut main: Vec<Op>, functions: Vec<(u32, Vec<Op>)>) -> Ir3Module {
 }
 
 fn core() -> InterpreterCore {
-    let mut config = InterpreterConfig::quickjs_defaults();
+    core_with_config(InterpreterConfig::quickjs_defaults())
+}
+
+fn core_with_config(mut config: InterpreterConfig) -> InterpreterCore {
     config.instruction_budget = 100_000;
     config.granted_capabilities = BTreeSet::from([
         RuntimeCapability::VmDispatch,
@@ -540,6 +665,21 @@ fn a_reaction_cannot_swallow_the_instruction_budget() {
     let error = core()
         .execute(&module)
         .expect_err("infinite callback must stop");
+    assert!(
+        matches!(error, InterpreterError::BudgetExhausted { .. }),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_promise_executor_cannot_swallow_the_instruction_budget() {
+    let module = module(
+        vec![closure(0, 0), promise("constructor", 0, 1, 1)],
+        vec![(2, vec![Op::Jump { target: 3 }])],
+    );
+    let error = core()
+        .execute(&module)
+        .expect_err("infinite executor must stop");
     assert!(
         matches!(error, InterpreterError::BudgetExhausted { .. }),
         "{error:?}"

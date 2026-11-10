@@ -1236,7 +1236,7 @@ impl EventLoop {
 
     /// Schedule a timer macrotask. Returns the registration sequence.
     pub fn set_timeout(&mut self, handler: ClosureHandle, delay_ms: u64, label: Label) -> u64 {
-        let fire_at = self.clock.now_ms() + delay_ms;
+        let fire_at = self.clock.now_ms().saturating_add(delay_ms);
         self.macrotasks
             .schedule(MacrotaskSource::Timer, handler, fire_at, label)
     }
@@ -2126,6 +2126,22 @@ mod tests {
         assert!(result.clock_advanced);
         assert!(result.macrotask.is_some());
         assert_eq!(event_loop.clock.now_ms(), 100);
+    }
+
+    #[test]
+    fn repeated_timer_deadlines_saturate_at_the_virtual_clock_ceiling() {
+        let mut event_loop = EventLoop::new();
+        event_loop.clock.advance_to(u64::MAX - 1);
+        for sequence in 0..2 {
+            assert_eq!(
+                event_loop.set_timeout(ClosureHandle(7), 5, Label::Public),
+                sequence,
+            );
+            let task = event_loop.turn().macrotask.unwrap();
+            assert_eq!(task.scheduled_at, u64::MAX);
+            assert_eq!(task.registration_seq, sequence);
+            assert_eq!(event_loop.clock.now_ms(), u64::MAX);
+        }
     }
 
     #[test]

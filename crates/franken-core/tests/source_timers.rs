@@ -91,3 +91,91 @@ fn outer_lexical_timer_bindings_shadow_intrinsics_in_nested_functions() {
         &["9", "clear:7", "interval:8"],
     );
 }
+
+#[test]
+fn intervals_repeat_with_arguments_and_microtasks_until_cancelled_inside_callback() {
+    assert_output(
+        r#"
+        let count = 0;
+        const id = setInterval(prefix => {
+            count += 1;
+            console.log(prefix + count);
+            Promise.resolve(count).then(value => console.log('micro:' + value));
+            if (count === 3) clearInterval(id);
+        }, 2, 'tick:');
+        console.log('sync');
+        "#,
+        &[
+            "sync", "tick:1", "micro:1", "tick:2", "micro:2", "tick:3", "micro:3",
+        ],
+    );
+}
+
+#[test]
+fn equal_deadline_intervals_requeue_after_previously_registered_timers() {
+    assert_output(
+        r#"
+        let firstCount = 0;
+        let secondCount = 0;
+        const first = setInterval(() => {
+            firstCount += 1;
+            console.log('first:' + firstCount);
+            if (firstCount === 2) clearTimeout(first);
+        }, 1);
+        const second = setInterval(() => {
+            secondCount += 1;
+            console.log('second:' + secondCount);
+            if (secondCount === 2) clearInterval(second);
+        }, 1);
+        setTimeout(() => console.log('once'), 1);
+        "#,
+        &["first:1", "second:1", "once", "first:2", "second:2"],
+    );
+}
+
+#[test]
+fn promise_reactions_cancel_the_next_interval_firing() {
+    assert_output(
+        r#"
+        const id = setInterval((...args) => {
+            console.log(args.length);
+            Promise.resolve().then(() => {
+                clearInterval(id);
+                console.log('cancelled');
+            });
+        });
+        console.log('sync');
+        "#,
+        &["sync", "0", "cancelled"],
+    );
+}
+
+#[test]
+fn zero_delay_intervals_allow_later_timeouts_to_cancel_them() {
+    assert_output(
+        r#"
+        let count = 0;
+        const id = setInterval(() => { count += 1; }, 0);
+        setTimeout(() => {
+            clearTimeout(id);
+            console.log(count > 0);
+            console.log('stopped');
+        }, 5);
+        "#,
+        &["true", "stopped"],
+    );
+}
+
+#[test]
+fn lexical_interval_bindings_shadow_intrinsics_through_nested_closures() {
+    assert_output(
+        r#"
+        function outer(setInterval) {
+            return () => setInterval(20, 22);
+        }
+        const call = outer((first, second) => first + second);
+        console.log(call());
+        "#,
+        &["42"],
+    );
+}

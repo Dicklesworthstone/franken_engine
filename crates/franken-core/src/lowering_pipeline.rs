@@ -1348,10 +1348,11 @@ const STATIC_BUILTIN_GLOBALS: [&str; 8] = [
 /// Intrinsics that exist only through call-lowering seams. Bare unshadowed
 /// reads are undefined, but a real outer lexical binding with the same name
 /// must still propagate into a nested function and shadow the seam.
-const DIRECT_CALL_INTRINSIC_GLOBALS: [&str; 5] = [
+const DIRECT_CALL_INTRINSIC_GLOBALS: [&str; 6] = [
     "require",
     "console",
     "setTimeout",
+    "setInterval",
     "clearTimeout",
     "clearInterval",
 ];
@@ -1383,8 +1384,7 @@ fn is_non_materialized_intrinsic_global(name: &str) -> bool {
     is_static_builtin_global(name) || DIRECT_CALL_INTRINSIC_GLOBALS.contains(&name)
 }
 
-/// Expose the timer operations with executable core implementations. Interval
-/// registration is not included: the runtime does not schedule repeats yet.
+/// Expose the timer operations with executable core implementations.
 fn timer_builtin_call_capability(
     callee: &Expression,
     binding_lookup: &BTreeMap<String, BindingId>,
@@ -1397,6 +1397,7 @@ fn timer_builtin_call_capability(
     }
     match name.as_str() {
         "setTimeout" => Some("timer:setTimeout"),
+        "setInterval" => Some("timer:setInterval"),
         "clearTimeout" => Some("timer:clearTimeout"),
         "clearInterval" => Some("timer:clearInterval"),
         _ => None,
@@ -11622,7 +11623,7 @@ fn lower_expression_to_ir1(
                     )?;
                 }
                 let mut arg_count = arguments.len() as u32;
-                if capability == "timer:setTimeout" && arg_count == 1 {
+                if matches!(capability, "timer:setTimeout" | "timer:setInterval") && arg_count == 1 {
                     ops.push(Ir1Op::LoadLiteral {
                         value: Ir1Literal::Integer(0),
                     });

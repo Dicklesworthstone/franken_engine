@@ -136,3 +136,53 @@ fn imported_timer_callbacks_use_their_owner_and_can_call_forwarded_closures() {
         &["sync", "42"],
     );
 }
+
+#[test]
+fn interval_native_resolvers_settle_before_reactions_cancel_the_interval() {
+    assert_output(
+        r#"
+        let id;
+        new Promise(resolve => { id = setInterval(resolve, 0, 42); })
+            .then(value => {
+                console.log(value);
+                clearTimeout(id);
+            });
+        console.log('sync');
+        "#,
+        &["sync", "42"],
+    );
+}
+
+#[test]
+fn interval_payloads_capture_primitives_once_and_reuse_object_identity() {
+    assert_output(
+        r#"
+        let initial = 7;
+        const state = { count: 0 };
+        const id = setInterval((first, ...rest) => {
+            console.log(first);
+            console.log(rest[0] === state);
+            state.count += 1;
+            if (state.count === 2) clearInterval(id);
+        }, 1, initial, state);
+        initial = 99;
+        "#,
+        &["7", "true", "7", "true"],
+    );
+}
+
+#[test]
+fn imported_interval_callbacks_keep_their_owner_across_repeated_firings() {
+    assert_output(
+        r#"
+        import { apply } from './operations.mjs';
+        let count = 0;
+        const id = setInterval(apply, 1, value => {
+            count += 1;
+            console.log(value + count);
+            if (count === 2) clearInterval(id);
+        }, 40);
+        "#,
+        &["41", "42"],
+    );
+}

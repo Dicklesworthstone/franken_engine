@@ -3047,6 +3047,8 @@ pub enum InterpreterError {
     /// Range error (e.g. an out-of-range code point argument). Mirrors the
     /// engine's variant and Display wording for oracle parity (bd-7zwar).
     RangeError { message: String },
+    /// Pending asynchronous work exceeded the deterministic turn limit.
+    EventLoopTurnLimitExceeded { turns: u32, max_turns: u32 },
 }
 
 impl fmt::Display for InterpreterError {
@@ -3054,6 +3056,12 @@ impl fmt::Display for InterpreterError {
         match self {
             Self::BudgetExhausted { executed, budget } => {
                 write!(f, "instruction budget exhausted: {executed}/{budget}")
+            }
+            Self::EventLoopTurnLimitExceeded { turns, max_turns } => {
+                write!(
+                    f,
+                    "event loop turn limit exceeded: {turns}/{max_turns} with pending work"
+                )
             }
             Self::RegisterOutOfBounds { register, max } => {
                 write!(f, "register {register} out of bounds (max {max})")
@@ -14257,10 +14265,23 @@ impl InterpreterCore {
     /// This is called after top-level script evaluation to handle any
     /// pending timers or other async work before the interpreter exits.
     fn run_event_loop_until_idle(&mut self, module: &Ir3Module) -> Result<(), InterpreterError> {
-        const MAX_TURNS: u32 = 10_000; // Safety limit to prevent infinite loops
+        self.run_event_loop_with_turn_limit(module, 10_000)
+    }
+
+    fn run_event_loop_with_turn_limit(
+        &mut self,
+        module: &Ir3Module,
+        max_turns: u32,
+    ) -> Result<(), InterpreterError> {
         let mut turns = 0;
 
-        while self.event_loop.has_pending_work() && turns < MAX_TURNS {
+        while self.event_loop.has_pending_work() {
+            if turns == max_turns {
+                return Err(InterpreterError::EventLoopTurnLimitExceeded {
+                    turns,
+                    max_turns,
+                });
+            }
             turns += 1;
 
             // Phase 1: Execute one macrotask (if ready). The dequeued task's
@@ -14270,12 +14291,20 @@ impl InterpreterCore {
             // runtime component (bd-ur3tk.21).
             let previous_turn_bytes = self.promise_runtime_memory_bytes();
             let turn_result = self.event_loop.turn();
-            let released_bytes =
-                previous_turn_bytes.saturating_sub(self.promise_runtime_memory_bytes());
+            let released_bytes = turn_result.macrotask.as_ref().map_or(0, |task| {
+                (std::mem::size_of::<crate::promise_model::Macrotask>() as u64)
+                    .saturating_add(Self::estimate_label_bytes(&task.label))
+            });
             self.promise_in_flight_task_bytes = self
                 .promise_in_flight_task_bytes
                 .saturating_add(released_bytes);
-            self.apply_promise_runtime_memory_delta(previous_turn_bytes)?;
+            if let Err(error) = self.apply_promise_runtime_memory_delta(previous_turn_bytes) {
+                self.promise_in_flight_task_bytes = self
+                    .promise_in_flight_task_bytes
+                    .saturating_sub(released_bytes);
+                self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                return Err(error);
+            }
             let callback_result = if let Some(macrotask) = turn_result.macrotask {
                 self.execute_macrotask_callback(module, &macrotask)
             } else {
@@ -14316,8 +14345,11 @@ impl InterpreterCore {
             return Ok(());
         };
 
+        let timer = self.active_timers[&timer_id].clone();
         let previous_bytes = self.promise_runtime_memory_bytes();
-        self.active_timers.remove(&timer_id);
+        if !timer.repeating {
+            self.active_timers.remove(&timer_id);
+        }
         let invocation = self.timer_invocations.remove(&macrotask.registration_seq);
         // The removed callable/argument vector remains live throughout the
         // callback. Transfer its charge rather than rebating the budget while
@@ -14326,26 +14358,85 @@ impl InterpreterCore {
         self.promise_in_flight_task_bytes = self
             .promise_in_flight_task_bytes
             .saturating_add(retained_bytes);
-        let outcome = match invocation {
-            Some(invocation) => self
-                .invoke_inline_method_call_labeled(
-                    module,
-                    invocation.callee,
-                    Value::Undefined,
-                    &invocation.arguments,
-                )
-                .and_then(|(mut completion, _)| {
-                    if let InlineCallCompletion::Throw(thrown) = &mut completion {
-                        thrown.label = thrown.label.join(&macrotask.label);
+        let outcome = match &invocation {
+            Some(invocation) => {
+                // A repeating callback retains its callable for the next
+                // firing. Account for an owned builtin module path copied
+                // into the isolated activation before allocating that copy.
+                let callable_bytes = Self::estimate_timer_value_bytes(&invocation.callee);
+                match self.check_temporary_memory_budget(callable_bytes) {
+                    Err(error) => Err(error),
+                    Ok(()) => {
+                        self.promise_in_flight_task_bytes = self
+                            .promise_in_flight_task_bytes
+                            .saturating_add(callable_bytes);
+                        self.estimated_memory_bytes =
+                            self.estimated_memory_bytes.saturating_add(callable_bytes);
+                        let outcome = self
+                            .invoke_inline_method_call_labeled(
+                                module,
+                                invocation.callee.clone(),
+                                Value::Undefined,
+                                &invocation.arguments,
+                            )
+                            .and_then(|(mut completion, _)| {
+                                if let InlineCallCompletion::Throw(thrown) = &mut completion {
+                                    thrown.label = thrown.label.join(&macrotask.label);
+                                }
+                                self.complete_inline_call(completion).map(|_| ())
+                            });
+                        self.promise_in_flight_task_bytes = self
+                            .promise_in_flight_task_bytes
+                            .saturating_sub(callable_bytes);
+                        self.estimated_memory_bytes =
+                            self.estimated_memory_bytes.saturating_sub(callable_bytes);
+                        outcome
                     }
-                    self.complete_inline_call(completion).map(|_| ())
-                }),
+                }
+            }
             None => Ok(()),
         };
+
+        // Keep the public ID live during the callback so either cancellation
+        // API can suppress rescheduling, including cancellation by a callback
+        // that has already enqueued Promise reactions. Each firing receives a
+        // new queue sequence, preserving order against other same-time timers.
+        let still_active = self.active_timers.get(&timer_id).is_some_and(|active| {
+            active.registration_seq == Some(macrotask.registration_seq)
+        });
+        if outcome.is_ok()
+            && timer.repeating
+            && still_active
+            && let Some(invocation) = invocation
+        {
+            let previous_bytes = self.promise_runtime_memory_bytes();
+            let sequence = self.event_loop.set_timeout(
+                macrotask.handler,
+                timer.delay_ms,
+                macrotask.label.clone(),
+            );
+            self.timer_invocations.insert(sequence, invocation);
+            self.active_timers.get_mut(&timer_id).unwrap().registration_seq = Some(sequence);
+            self.promise_in_flight_task_bytes = self
+                .promise_in_flight_task_bytes
+                .saturating_sub(retained_bytes);
+            if let Err(error) = self.apply_promise_runtime_memory_delta(previous_bytes) {
+                self.event_loop.macrotasks.rollback_last_scheduled(sequence);
+                self.timer_invocations.remove(&sequence);
+                self.active_timers.remove(&timer_id);
+                self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                return Err(error);
+            }
+            return Ok(());
+        }
+
+        if still_active {
+            self.active_timers.remove(&timer_id);
+        }
         self.promise_in_flight_task_bytes = self
             .promise_in_flight_task_bytes
             .saturating_sub(retained_bytes);
-        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(retained_bytes);
+        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
         outcome
     }
 
@@ -14842,7 +14933,7 @@ impl InterpreterCore {
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         match cap {
-            "timer:setTimeout" => {
+            "timer:setTimeout" | "timer:setInterval" => {
                 // args[0] = callable, args[1] = delay_ms, args[2..] are
                 // captured now and forwarded when this registration fires.
                 if args.count < 2 {
@@ -14872,6 +14963,13 @@ impl InterpreterCore {
                         });
                     }
                     _ => 0,
+                };
+                // Repeating zero-delay timers must advance virtual time;
+                // otherwise they can starve every later deadline forever.
+                let delay_ms = if cap == "timer:setInterval" {
+                    delay_ms.max(1)
+                } else {
+                    delay_ms
                 };
 
                 let timer_id = self.next_timer_id;
@@ -14955,7 +15053,7 @@ impl InterpreterCore {
                     ActiveTimer {
                         handler: handler_id,
                         delay_ms,
-                        repeating: false,
+                        repeating: cap == "timer:setInterval",
                         registration_seq,
                     },
                 );
@@ -14974,67 +15072,7 @@ impl InterpreterCore {
 
                 self.emit_witness(
                     WitnessEventKind::HostcallDispatched,
-                    Some(&format!("timer:setTimeout:{}", timer_id)),
-                );
-
-                Ok(Value::Int(timer_id as i64))
-            }
-            "timer:setInterval" => {
-                // Similar to setTimeout but repeating
-                if args.count < 2 {
-                    return Ok(Value::Undefined);
-                }
-
-                let handler_reg = args.start;
-                let delay_reg =
-                    args.start
-                        .checked_add(1)
-                        .ok_or(InterpreterError::RegisterOutOfBounds {
-                            register: args.start,
-                            max: self.config.max_registers,
-                        })?;
-
-                let handler_val = self.read_reg(handler_reg)?;
-                let delay_val = self.read_reg(delay_reg)?;
-
-                let delay_ms = match delay_val {
-                    Value::Int(i) => i.max(0) as u64,
-                    Value::Float(f) => f.0.max(0.0) as u64,
-                    Value::Symbol(_) => {
-                        return Err(InterpreterError::TypeError {
-                            expected: "timer delay coercible to number".to_string(),
-                            got: "symbol".to_string(),
-                        });
-                    }
-                    _ => 0,
-                };
-
-                let timer_id = self.next_timer_id;
-                let handler_id = match handler_val {
-                    Value::Closure(id) => Some(id),
-                    _ => None,
-                };
-
-                let previous_bytes = self.promise_runtime_memory_bytes();
-                self.check_temporary_memory_budget(Self::active_timer_entry_bytes())?;
-                self.active_timers.insert(
-                    timer_id,
-                    ActiveTimer {
-                        handler: handler_id,
-                        delay_ms,
-                        repeating: true,
-                        registration_seq: None,
-                    },
-                );
-                if let Err(error) = self.apply_promise_runtime_memory_delta(previous_bytes) {
-                    self.active_timers.remove(&timer_id);
-                    return Err(error);
-                }
-                self.next_timer_id = self.next_timer_id.wrapping_add(1);
-
-                self.emit_witness(
-                    WitnessEventKind::HostcallDispatched,
-                    Some(&format!("timer:setInterval:{}", timer_id)),
+                    Some(&format!("{}:{}", cap, timer_id)),
                 );
 
                 Ok(Value::Int(timer_id as i64))
@@ -34021,42 +34059,44 @@ mod tests {
     fn timer_payload_admission_rolls_back_queue_maps_and_identity() {
         let args = RegRange { start: 0, count: 3 };
         for config in [test_quickjs_config(), test_v8_config()] {
-            let mut admitted = core_with_timer_payload(config.clone());
-            let baseline = admitted.estimated_memory_bytes;
-            assert_eq!(
-                admitted
-                    .dispatch_timer_hostcall("timer:setTimeout", args)
-                    .unwrap(),
-                Value::Int(0)
-            );
-            let charge = admitted.estimated_memory_bytes - baseline;
-            assert!(charge > InterpreterCore::active_timer_entry_bytes());
-
-            for ceiling in [baseline, baseline + charge - 1] {
-                let mut refused = core_with_timer_payload(config.clone());
-                refused.config.max_total_memory_bytes = ceiling;
-                assert!(matches!(
-                    refused.dispatch_timer_hostcall("timer:setTimeout", args),
-                    Err(InterpreterError::MemoryBudgetExceeded { .. }),
-                ));
-                assert!(refused.active_timers.is_empty());
-                assert!(refused.timer_invocations.is_empty());
-                assert!(refused.event_loop.macrotasks.is_empty());
-                assert_eq!(refused.next_timer_id, 0);
-                assert_eq!(refused.estimated_memory_bytes, baseline);
+            for capability in ["timer:setTimeout", "timer:setInterval"] {
+                let mut admitted = core_with_timer_payload(config.clone());
+                let baseline = admitted.estimated_memory_bytes;
                 assert_eq!(
-                    refused.estimated_memory_bytes,
-                    refused.recompute_estimated_memory_bytes()
-                );
-
-                refused.config.max_total_memory_bytes = config.max_total_memory_bytes;
-                assert_eq!(
-                    refused
-                        .dispatch_timer_hostcall("timer:setTimeout", args)
+                    admitted
+                        .dispatch_timer_hostcall(capability, args)
                         .unwrap(),
                     Value::Int(0)
                 );
-                assert_eq!(refused.active_timers[&0].registration_seq, Some(0));
+                let charge = admitted.estimated_memory_bytes - baseline;
+                assert!(charge > InterpreterCore::active_timer_entry_bytes());
+
+                for ceiling in [baseline, baseline + charge - 1] {
+                    let mut refused = core_with_timer_payload(config.clone());
+                    refused.config.max_total_memory_bytes = ceiling;
+                    assert!(matches!(
+                        refused.dispatch_timer_hostcall(capability, args),
+                        Err(InterpreterError::MemoryBudgetExceeded { .. }),
+                    ));
+                    assert!(refused.active_timers.is_empty());
+                    assert!(refused.timer_invocations.is_empty());
+                    assert!(refused.event_loop.macrotasks.is_empty());
+                    assert_eq!(refused.next_timer_id, 0);
+                    assert_eq!(refused.estimated_memory_bytes, baseline);
+                    assert_eq!(
+                        refused.estimated_memory_bytes,
+                        refused.recompute_estimated_memory_bytes()
+                    );
+
+                    refused.config.max_total_memory_bytes = config.max_total_memory_bytes;
+                    assert_eq!(
+                        refused
+                            .dispatch_timer_hostcall(capability, args)
+                            .unwrap(),
+                        Value::Int(0)
+                    );
+                    assert_eq!(refused.active_timers[&0].registration_seq, Some(0));
+                }
             }
         }
     }
@@ -34317,20 +34357,36 @@ mod tests {
     #[test]
     fn set_interval_repeats() {
         let mut core = quickjs_test_core();
-        core.execute(&test_module_with_functions(
-            vec![
-                Ir3Instruction::CreateClosure {
-                    dst: 0,
-                    function_index: 0,
-                    capture_count: 0,
-                },
-                Ir3Instruction::LoadInt { dst: 1, value: 40 },
-                timer_hostcall("timer:setInterval", RegRange { start: 0, count: 2 }, 2),
-                Ir3Instruction::Halt,
-            ],
+        let module = test_module_with_pool_and_functions(
+            timer_callback_body(0),
+            vec!["interval fired".to_string()],
             vec![timer_callback_desc(0, "timer_callback")],
-        ))
-        .unwrap();
+        );
+        core.write_reg(0, Value::Function(0)).unwrap();
+        core.write_reg(1, Value::Int(40)).unwrap();
+        assert_eq!(
+            core.dispatch_timer_hostcall("timer:setInterval", RegRange { start: 0, count: 2 })
+                .unwrap(),
+            Value::Int(0),
+        );
+
+        for firing in 0..3 {
+            let task = core.event_loop.turn().macrotask.unwrap();
+            assert_eq!(task.registration_seq, firing);
+            assert_eq!(task.scheduled_at, (firing + 1) * 40);
+            core.sync_estimated_memory_bytes().unwrap();
+            core.execute_macrotask_callback(&module, &task).unwrap();
+            assert_eq!(core.active_timers.len(), 1);
+            assert_eq!(core.active_timers[&0].registration_seq, Some(firing + 1));
+            assert_eq!(core.timer_invocations.len(), 1);
+            assert_eq!(core.event_loop.macrotasks.len(), 1);
+            assert_eq!(core.next_timer_id, 1);
+            assert_eq!(core.promise_in_flight_task_bytes, 0);
+            assert_eq!(
+                core.estimated_memory_bytes,
+                core.recompute_estimated_memory_bytes(),
+            );
+        }
 
         let timer = core
             .active_timers
@@ -34339,7 +34395,207 @@ mod tests {
         assert_eq!(timer.handler, Some(0));
         assert_eq!(timer.delay_ms, 40);
         assert!(timer.repeating);
-        assert_eq!(timer.registration_seq, None);
+        assert_eq!(timer.registration_seq, Some(3));
+        assert_eq!(core.console_output.len(), 3);
+        assert!(
+            core.console_output
+                .iter()
+                .all(|line| line.message == "interval fired")
+        );
+
+        core.write_reg(2, Value::Int(0)).unwrap();
+        core.dispatch_timer_hostcall("timer:clearInterval", RegRange { start: 2, count: 1 })
+            .unwrap();
+        core.run_event_loop_until_idle(&module).unwrap();
+        assert_eq!(core.console_output.len(), 3);
+        assert!(core.active_timers.is_empty());
+        assert!(core.timer_invocations.is_empty());
+    }
+
+    #[test]
+    fn interval_forwarded_arguments_keep_labels_across_firings() {
+        use crate::ifc_artifacts::Label;
+
+        let module = test_module_with_pool_and_functions(
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 2,
+                    pool_index: 0,
+                },
+                Ir3Instruction::SetProperty {
+                    obj: 1,
+                    key: 2,
+                    val: 0,
+                },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec!["value".to_string()],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 2,
+                frame_size: 3,
+                name: Some("labeled_interval".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        for config in [test_quickjs_config(), test_v8_config()] {
+            let mut core = InterpreterCore::new(config, "interval-labels");
+            let object = core.alloc_object_with_prototype(None).unwrap();
+            core.write_reg(0, Value::Function(0)).unwrap();
+            core.write_reg_with_label(1, Value::Int(2), Label::Confidential)
+                .unwrap();
+            core.write_reg_with_label(2, Value::str("secret"), Label::Secret)
+                .unwrap();
+            core.write_reg(3, Value::Object(object)).unwrap();
+            core.dispatch_timer_hostcall("timer:setInterval", RegRange { start: 0, count: 4 })
+                .unwrap();
+
+            for _ in 0..2 {
+                let task = core.event_loop.turn().macrotask.unwrap();
+                core.sync_estimated_memory_bytes().unwrap();
+                assert_eq!(task.label, Label::Secret);
+                core.execute_macrotask_callback(&module, &task).unwrap();
+                assert_eq!(
+                    core.prototype_chain_get(object, "value").unwrap(),
+                    Value::str("secret")
+                );
+                assert_eq!(
+                    core.own_stored_runtime_property_label(
+                        object,
+                        &RuntimePropertyKey::String(JsString::from("value")),
+                    ),
+                    Label::Secret,
+                );
+                assert_eq!(
+                    core.estimated_memory_bytes,
+                    core.recompute_estimated_memory_bytes()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn interval_reschedule_budget_refusal_removes_payload_and_rolls_back_queue_sequence() {
+        use crate::ifc_artifacts::Label;
+
+        let module = test_module_with_pool_and_functions(
+            timer_callback_body(0),
+            vec!["ran once".to_string()],
+            vec![timer_callback_desc(0, "budget_interval")],
+        );
+        let mut core = quickjs_test_core();
+        core.write_reg_with_label(
+            0,
+            Value::Function(0),
+            Label::Custom {
+                name: "scheduling provenance".repeat(4096),
+                level: 5,
+            },
+        )
+        .unwrap();
+        core.write_reg(1, Value::Int(1)).unwrap();
+        core.dispatch_timer_hostcall("timer:setInterval", RegRange { start: 0, count: 2 })
+            .unwrap();
+        let callback_bytes = InterpreterCore::retained_module_program_bytes(&module) * 2
+            + 8 * std::mem::size_of::<Ir3Instruction>() as u64;
+        let original_limit = core.config.max_total_memory_bytes;
+        core.config.max_total_memory_bytes = core.estimated_memory_bytes + callback_bytes + 4096;
+
+        assert!(matches!(
+            core.run_event_loop_until_idle(&module),
+            Err(InterpreterError::MemoryBudgetExceeded { .. }),
+        ));
+        assert_eq!(
+            core.console_output.len(),
+            1,
+            "callback must finish before rescheduling fails"
+        );
+        assert_eq!(core.console_output[0].message, "ran once");
+        assert!(core.active_timers.is_empty());
+        assert!(core.timer_invocations.is_empty());
+        assert!(core.event_loop.macrotasks.is_empty());
+        assert_eq!(core.promise_in_flight_task_bytes, 0);
+        assert_eq!(
+            core.estimated_memory_bytes,
+            core.recompute_estimated_memory_bytes()
+        );
+
+        core.config.max_total_memory_bytes = original_limit;
+        assert_eq!(
+            core.dispatch_timer_hostcall("timer:setInterval", RegRange { start: 0, count: 2 })
+                .unwrap(),
+            Value::Int(1),
+        );
+        assert_eq!(core.active_timers[&1].registration_seq, Some(1));
+    }
+
+    #[test]
+    fn interval_callback_instruction_exhaustion_propagates_without_rescheduling() {
+        let module = test_module_with_functions(
+            vec![Ir3Instruction::Jump { target: 0 }],
+            vec![timer_callback_desc(0, "unbounded_interval_callback")],
+        );
+        let mut core = quickjs_test_core();
+        core.config.instruction_budget = 50;
+        core.write_reg(0, Value::Function(0)).unwrap();
+        core.write_reg(1, Value::Int(0)).unwrap();
+        core.dispatch_timer_hostcall("timer:setInterval", RegRange { start: 0, count: 2 })
+            .unwrap();
+
+        assert!(matches!(
+            core.run_event_loop_until_idle(&module),
+            Err(InterpreterError::BudgetExhausted {
+                executed: 50,
+                budget: 50
+            }),
+        ));
+        assert!(core.active_timers.is_empty());
+        assert!(core.timer_invocations.is_empty());
+        assert!(core.event_loop.macrotasks.is_empty());
+        assert_eq!(core.promise_in_flight_task_bytes, 0);
+        assert_eq!(
+            core.estimated_memory_bytes,
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn interval_turn_exhaustion_reports_pending_work_instead_of_success() {
+        let module = test_module(vec![Ir3Instruction::Halt]);
+        let mut core = quickjs_test_core();
+        core.write_reg(0, Value::BuiltinFunction(BuiltinFunction::array_is_array()))
+            .unwrap();
+        core.write_reg(1, Value::Int(0)).unwrap();
+        core.dispatch_timer_hostcall("timer:setInterval", RegRange { start: 0, count: 2 })
+            .unwrap();
+
+        let error = core.run_event_loop_with_turn_limit(&module, 3).unwrap_err();
+        assert_eq!(
+            error,
+            InterpreterError::EventLoopTurnLimitExceeded {
+                turns: 3,
+                max_turns: 3
+            }
+        );
+        assert!(!InterpreterCore::is_js_catchable_error(&error));
+        assert_eq!(core.event_loop.clock.now_ms(), 3);
+        assert_eq!(core.active_timers[&0].registration_seq, Some(3));
+        assert_eq!(core.timer_invocations.len(), 1);
+        assert_eq!(core.event_loop.macrotasks.len(), 1);
+        assert_eq!(core.promise_in_flight_task_bytes, 0);
+        assert_eq!(
+            core.estimated_memory_bytes,
+            core.recompute_estimated_memory_bytes()
+        );
+
+        core.write_reg(2, Value::Int(0)).unwrap();
+        core.dispatch_timer_hostcall("timer:clearTimeout", RegRange { start: 2, count: 1 })
+            .unwrap();
+        core.run_event_loop_with_turn_limit(&module, 1).unwrap();
+        assert!(core.active_timers.is_empty());
+        assert!(core.timer_invocations.is_empty());
+        assert!(!core.event_loop.has_pending_work());
     }
 
     #[test]

@@ -1700,8 +1700,28 @@ pub fn lower_ir0_to_ir1(
     let mut synthetic_import_index = 0u32;
     let mut label_counter = 0u32;
 
+    // Root function declarations are instantiated before source evaluation.
+    // Their captures use the already-reserved binding IDs, so later lexical
+    // declarations retain TDZ cells while calls before the function's source
+    // position see the callable. Do not recreate it at that later position:
+    // a preceding assignment to the same binding must remain observable.
+    for statement in &ir0.tree.body {
+        if matches!(statement, Statement::FunctionDeclaration(_)) {
+            lower_statement_to_ir1(
+                statement,
+                &mut ir1.ops,
+                &mut bindings,
+                &mut binding_lookup,
+                &mut binding_index,
+                root_scope_id,
+                &mut label_counter,
+            )?;
+        }
+    }
+
     for statement in &ir0.tree.body {
         match statement {
+            Statement::FunctionDeclaration(_) => {}
             Statement::Import(import) => {
                 let specifier = import.source.clone();
                 let alloc_import_binding =

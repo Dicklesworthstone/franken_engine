@@ -135,18 +135,15 @@ fn block_scope_and_hoisted_var_resolution_precede_global_folding() {
 
 #[test]
 fn parameter_temporal_dead_zone_is_not_folded_to_a_global_value() {
-    for source in [
-        "(function (x = undefined, undefined = 7) { return x; })();",
-        "(function (x = NaN, NaN = 7) { return x; })();",
-        "(function (x = Infinity, Infinity = 7) { return x; })();",
-    ] {
-        for (lane, result) in execute_both(source).into_iter().enumerate() {
-            let error = result.expect_err("later parameter access must fail its TDZ");
-            assert!(
-                error.to_string().contains("before initialization"),
-                "lane {lane}, {source:?}: {error}"
-            );
-        }
+    for name in ["undefined", "NaN", "Infinity"] {
+        let source = format!(
+            "let caught = false; \
+             try {{ (function (x = {name}, {name} = 7) {{ return x; }})(); }} \
+             catch (error) {{ caught = error.name === 'ReferenceError' \
+                 && error.message === \"Cannot access '{name}' before initialization\"; }} \
+             caught;"
+        );
+        assert_value(&source, Value::Bool(true));
     }
 }
 

@@ -4878,7 +4878,12 @@ fn parse_source_on_current_stack(
                 end_line,
                 end_column,
             );
-            statements.push(parse_statement(statement_text, goal, span, &mut context)?);
+            statements.extend(parse_module_statement_segment(
+                statement_text,
+                goal,
+                span,
+                &mut context,
+            )?);
         }
     }
 
@@ -4891,6 +4896,90 @@ fn parse_source_on_current_stack(
         body: statements,
         span,
     })
+}
+
+/// Keep exported declarations in the same declaration-plus-export form used
+/// by the engine twin. Binding resolution and function hoisting then see the
+/// original declaration, including its async/generator flags.
+fn parse_module_statement_segment(
+    statement: &str,
+    goal: ParseGoal,
+    span: SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+) -> ParseResult<Vec<Statement>> {
+    if goal == ParseGoal::Module
+        && let Some(declaration_text) = clause_keyword_tail(
+            statement,
+            "export",
+            ScanGrammarContext::from_execution_context(context),
+        )
+        && (parse_variable_declaration_kind(declaration_text).is_some()
+            || starts_named_exportable_declaration(declaration_text))
+    {
+        let prefix = &statement[..statement.len().saturating_sub(declaration_text.len())];
+        let terminators = source_line_terminator_ranges(prefix);
+        let start_line = span.start_line.saturating_add(terminators.len() as u64);
+        let start_column = terminators.last().map_or_else(
+            || span.start_column.saturating_add(prefix.len() as u64),
+            |(_, end)| prefix.len().saturating_sub(*end).saturating_add(1) as u64,
+        );
+        let declaration_span = SourceSpan::new(
+            span.start_offset.saturating_add(prefix.len() as u64),
+            span.end_offset,
+            start_line,
+            start_column,
+            span.end_line,
+            span.end_column,
+        );
+        let declaration = parse_statement(
+            declaration_text,
+            goal,
+            declaration_span,
+            context,
+        )?;
+        let names: Vec<String> = match &declaration {
+            Statement::VariableDeclaration(declaration) => declaration
+                .declarations
+                .iter()
+                .flat_map(|declarator| declarator.pattern.binding_names())
+                .map(str::to_string)
+                .collect(),
+            Statement::FunctionDeclaration(function) => function.name.iter().cloned().collect(),
+            Statement::ClassDeclaration(class) => class.name.iter().cloned().collect(),
+            _ => Vec::new(),
+        };
+        if names.is_empty() {
+            return Err(ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "named export declaration must introduce at least one binding",
+                context.source_label.to_string(),
+                Some(span),
+            ));
+        }
+        return Ok(vec![
+            declaration,
+            Statement::Export(ExportDeclaration {
+                kind: ExportKind::NamedClause(format!("{{ {} }}", names.join(", ")).into()),
+                span,
+            }),
+        ]);
+    }
+
+    Ok(vec![parse_statement(statement, goal, span, context)?])
+}
+
+fn starts_named_exportable_declaration(statement: &str) -> bool {
+    starts_with_keyword(statement, "function")
+        || strip_async_function_keyword(statement).is_some()
+        || starts_with_keyword(statement, "class")
+}
+
+fn starts_with_export_block_statement(text: &str, grammar_context: ScanGrammarContext) -> bool {
+    let Some(rest) = clause_keyword_tail(text, "export", grammar_context) else {
+        return false;
+    };
+    let declaration = clause_keyword_tail(rest, "default", grammar_context).unwrap_or(rest);
+    starts_named_exportable_declaration(declaration)
 }
 
 fn source_line_start_offsets(source: &str) -> Vec<u64> {
@@ -5674,7 +5763,8 @@ fn split_statement_segments_with_completion_limit_and_memo<'a>(
                         || starts_with_keyword(segment_body, "do")
                         || starts_with_keyword(segment_body, "try")
                         || starts_with_keyword(segment_body, "switch")
-                        || starts_with_keyword(segment_body, "class");
+                        || starts_with_keyword(segment_body, "class")
+                        || starts_with_export_block_statement(segment_body, grammar_context);
                     if starts_with_block {
                         let after = index.saturating_add(1);
                         let rest_with_trivia = &line[after..];
@@ -5951,7 +6041,7 @@ fn parse_statement_inner(
         return parse_import(statement, context.source_label, span).map(Statement::Import);
     }
 
-    if statement.starts_with("export ") || statement == "export" {
+    if starts_with_keyword(statement, "export") {
         if goal == ParseGoal::Script {
             return Err(ParseError::new(
                 ParseErrorCode::InvalidGoal,
@@ -6029,7 +6119,7 @@ fn parse_statement_inner(
     {
         return self::parse_function_declaration(statement, span, context);
     }
-    if statement.starts_with("class ") || statement.starts_with("class{") {
+    if starts_with_keyword(statement, "class") {
         return self::parse_class_declaration(statement, span, context);
     }
     if statement.starts_with('{') && statement.ends_with('}') {
@@ -6363,10 +6453,8 @@ fn parse_export(
     span: SourceSpan,
     context: &mut ParseExecutionContext<'_>,
 ) -> ParseResult<ExportDeclaration> {
-    let body = statement
-        .get("export ".len()..)
-        .map(str::trim)
-        .unwrap_or("");
+    let grammar_context = ScanGrammarContext::from_execution_context(context);
+    let body = clause_keyword_tail(statement, "export", grammar_context).unwrap_or("");
     if body.is_empty() {
         return Err(ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
@@ -6376,7 +6464,7 @@ fn parse_export(
         ));
     }
 
-    let kind = if let Some(default_expr) = body.strip_prefix("default ") {
+    let kind = if let Some(default_expr) = clause_keyword_tail(body, "default", grammar_context) {
         ExportKind::Default(parse_expression(default_expr.trim(), &span, context, 1)?)
     } else {
         ExportKind::NamedClause(parse_named_export_clause(

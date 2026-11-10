@@ -5,14 +5,12 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use frankenengine_core::ast::ParseGoal;
+use frankenengine_core::ast::{ExportKind, ParseGoal, Statement};
 use frankenengine_core::baseline_interpreter::{
     ExecutionResult, InterpreterConfig, InterpreterCore, InterpreterError, Value,
 };
 use frankenengine_core::capability::RuntimeCapability;
-use frankenengine_core::ir_contract::{
-    CapabilityTag, Ir0Module, Ir3Instruction, Ir3Module, RegRange,
-};
+use frankenengine_core::ir_contract::{Ir0Module, Ir3Instruction, Ir3Module};
 use frankenengine_core::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use frankenengine_core::parser::{CanonicalEs2020Parser, Es2020Parser};
 
@@ -63,6 +61,79 @@ fn assert_both(source: &str, expected: Value) {
     for throughput in [false, true] {
         assert_eq!(execute(source, throughput).unwrap(), expected, "{source}");
     }
+}
+
+#[test]
+fn exported_declarations_keep_bindings_hoisting_and_initializer_order() {
+    assert_both(
+        "const answer = add(2); export function add(value) { return value + 40; } answer;",
+        Value::Int(42),
+    );
+    assert_both(
+        "answer = () => 42; export function answer() { return 0; } answer();",
+        Value::Int(42),
+    );
+    assert_both(
+        "let observed = ''; try { read(); } catch (error) { observed = error.name; } \
+         export function read() { return value; } export const value = 42; \
+         observed + ':' + read();",
+        Value::str("ReferenceError:42"),
+    );
+    assert_both(
+        "let calls = 0; function initialize() { calls += 1; return { x: 2, y: 3 }; } \
+         export const { x: first, y: second } = initialize(); calls * 100 + first * 10 + second;",
+        Value::Int(123),
+    );
+    assert_both(
+        "export/* declaration */class Counter { constructor(value) { this.value = value; } \
+             next() { this.value += 1; return this.value; } } \
+         const counter = new Counter(41); counter.next();",
+        Value::Int(42),
+    );
+}
+
+#[test]
+fn exported_async_generator_declarations_preserve_source_flags_and_names() {
+    let tree = CanonicalEs2020Parser.parse(
+        "export const { x: first, y: second } = { x: 2, y: 3 }; \
+         export async function* sequence() { yield first; return second; }",
+        ParseGoal::Module,
+    ).unwrap();
+    assert_eq!(tree.body.len(), 4);
+    let Statement::VariableDeclaration(declaration) = &tree.body[0] else {
+        panic!("expected the unchanged variable declaration");
+    };
+    assert_eq!(declaration.declarations[0].pattern.binding_names(), ["first", "second"]);
+    let Statement::Export(export) = &tree.body[1] else {
+        panic!("expected the variable export clause");
+    };
+    assert!(matches!(
+        &export.kind,
+        ExportKind::NamedClause(clause) if clause.canonical_head() == "{ first, second }",
+    ));
+    let Statement::FunctionDeclaration(function) = &tree.body[2] else {
+        panic!("expected the unchanged function declaration");
+    };
+    assert_eq!(function.name.as_deref(), Some("sequence"));
+    assert!(function.is_async && function.is_generator);
+    let Statement::Export(export) = &tree.body[3] else {
+        panic!("expected the function export clause");
+    };
+    assert!(matches!(
+        &export.kind,
+        ExportKind::NamedClause(clause) if clause.canonical_head() == "{ sequence }",
+    ));
+    let ir0 = Ir0Module::from_syntax_tree(tree, "export-async-generator");
+    let lowered = lower_ir0_to_ir3(
+        &ir0,
+        &LoweringContext::new("exports", "exports", "exports"),
+    ).unwrap();
+    assert!(lowered.ir3.instructions.iter().any(|instruction| matches!(
+        instruction,
+        Ir3Instruction::CreateAsyncGenerator { .. },
+    )));
+    assert!(CanonicalEs2020Parser.parse("export const value = 1;", ParseGoal::Script).is_err());
+    assert!(CanonicalEs2020Parser.parse("export function () {}", ParseGoal::Module).is_err());
 }
 
 #[test]
@@ -131,14 +202,14 @@ fn relative_requires_inside_an_imported_function_use_its_origin() {
 
 #[test]
 fn imported_timer_callbacks_return_without_reentering_the_importer() {
-    // Timer registration is currently a public IR hostcall; the importer and
-    // callback still pass through the real parser and lowering pipeline. Keep
-    // all compiled offsets intact by appending the registration trampoline.
+    // Exercise source timer registration and the importer's real completion.
+    // Keep its code longer than the callback module so an owner mix-up cannot
+    // accidentally resume at a compatible instruction in the foreign program.
     let source = format!(
-        "import {{ tick }} from './timer.mjs'; function unrelated() {{ return -900; }} {} console.log('sync'); tick;",
+        "import {{ tick }} from './timer.mjs'; function unrelated() {{ return -900; }} {} console.log('sync'); setTimeout(tick, 0); 1;",
         "0;".repeat(96),
     );
-    let mut module = lower_source(&source);
+    let module = lower_source(&source);
     let callback_module = lower_source(include_str!("fixtures/modules/timer.mjs"));
     let main_halt = module
         .instructions
@@ -146,23 +217,6 @@ fn imported_timer_callbacks_return_without_reentering_the_importer() {
         .position(|instruction| matches!(instruction, Ir3Instruction::Halt))
         .unwrap();
     assert!(main_halt > callback_module.instructions.len());
-    let registration = module.instructions.len() as u32;
-    module.instructions[main_halt] = Ir3Instruction::Jump {
-        target: registration,
-    };
-    module.instructions.extend([
-        Ir3Instruction::LoadInt { dst: 1, value: 0 },
-        Ir3Instruction::HostCall {
-            capability: CapabilityTag("timer:setTimeout".to_string()),
-            args: RegRange { start: 0, count: 2 },
-            dst: 2,
-        },
-        Ir3Instruction::LoadInt { dst: 0, value: 1 },
-        Ir3Instruction::Halt,
-    ]);
-    module
-        .required_capabilities
-        .push(CapabilityTag("timer:setTimeout".to_string()));
 
     for throughput in [false, true] {
         let result = execute_module(&module, throughput).unwrap();

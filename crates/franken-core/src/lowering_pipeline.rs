@@ -5025,6 +5025,15 @@ fn lower_statement_to_ir1_with_flow(
             }
         }
         Statement::FunctionDeclaration(func) => {
+            if func.is_async && func.is_generator {
+                return Err(unsupported_frontier_expression_error(
+                    "async_generator",
+                    "FE-LOWER-ASYNC-GENERATOR-0001",
+                    "core.async_generator_source_runtime",
+                    "async generator source execution is not yet supported",
+                    Some(func.span.clone()),
+                ));
+            }
             let name = func.name.clone().unwrap_or_else(|| "anonymous".to_string());
             let bid = alloc_binding(
                 bindings,
@@ -5037,7 +5046,11 @@ fn lower_statement_to_ir1_with_flow(
             .map_err(LoweringPipelineError::SemanticViolation)?;
 
             // Lower function body with its own fresh scope.
-            let mut body_ops = Vec::new();
+            let mut body_ops = if func.is_async {
+                vec![Ir1Op::AsyncFunctionStart]
+            } else {
+                Vec::new()
+            };
             let mut body_bindings = Vec::new();
             let mut body_lookup = BTreeMap::new();
             let mut body_binding_index: BindingId = 0;
@@ -5335,7 +5348,11 @@ fn lower_statement_to_ir1_with_flow(
                 let method_name = property_key_function_display_name(&method_property_key);
 
                 // Lower method body with its own scope.
-                let mut m_body_ops = Vec::new();
+                let mut m_body_ops = if method.kind == MethodKind::AsyncMethod {
+                    vec![Ir1Op::AsyncFunctionStart]
+                } else {
+                    Vec::new()
+                };
                 let mut m_bindings = Vec::new();
                 let mut m_lookup = BTreeMap::new();
                 let mut m_binding_index: BindingId = 0;
@@ -5479,7 +5496,9 @@ fn lower_statement_to_ir1_with_flow(
                     MethodKind::Set => {
                         exact_prefixed_property_key(IR_ACCESSOR_SET_PREFIX, &method_property_key)
                     }
-                    MethodKind::Method | MethodKind::Constructor => method_property_key,
+                    MethodKind::Method | MethodKind::Constructor | MethodKind::AsyncMethod => {
+                        method_property_key
+                    }
                 };
 
                 // SetProperty pops value (top), then object (next).
@@ -5867,6 +5886,10 @@ fn nested_function_body(op: &Ir1Op) -> Option<&[Ir1Op]> {
         }
         _ => None,
     }
+}
+
+fn is_async_function_body(body_ops: &[Ir1Op]) -> bool {
+    matches!(body_ops.first(), Some(Ir1Op::AsyncFunctionStart))
 }
 
 /// Classify every operation nested in a function body while keeping its
@@ -6707,11 +6730,18 @@ pub fn lower_ir2_to_ir3(
                 value_stack.push(src);
             }
             Ir1Op::Await => {
-                let current = value_stack.pop().unwrap_or(0);
-                let dst = alloc_register(&mut register_cursor);
-                ir3.instructions
-                    .push(Ir3Instruction::Move { dst, src: current });
-                value_stack.push(dst);
+                return Err(unsupported_frontier_expression_error(
+                    "top_level_await",
+                    "FE-LOWER-TOP-LEVEL-AWAIT-0001",
+                    "core.async_module_evaluation",
+                    "top-level await requires asynchronous module evaluation",
+                    None,
+                ));
+            }
+            Ir1Op::AsyncFunctionStart => {
+                return Err(LoweringPipelineError::InvariantViolation {
+                    detail: "AsyncFunctionStart is only valid at the start of a function body",
+                });
             }
             Ir1Op::GeneratorBodyStart => {
                 ir3.instructions.push(Ir3Instruction::GeneratorBodyStart);
@@ -7412,6 +7442,12 @@ pub fn lower_ir2_to_ir3(
                             function_index,
                             capture_count: free_vars.len() as u32,
                         });
+                    } else if is_async_function_body(body_ops) {
+                        ir3.instructions.push(Ir3Instruction::CreateAsyncFunction {
+                            dst,
+                            function_index,
+                            capture_count: free_vars.len() as u32,
+                        });
                     } else {
                         ir3.instructions.push(Ir3Instruction::CreateClosure {
                             dst,
@@ -7522,6 +7558,12 @@ pub fn lower_ir2_to_ir3(
                 );
                 if *is_generator {
                     ir3.instructions.push(Ir3Instruction::CreateGenerator {
+                        dst,
+                        function_index,
+                        capture_count: free_vars.len() as u32,
+                    });
+                } else if is_async_function_body(body_ops) {
+                    ir3.instructions.push(Ir3Instruction::CreateAsyncFunction {
                         dst,
                         function_index,
                         capture_count: free_vars.len() as u32,
@@ -7947,6 +7989,16 @@ pub fn lower_ir2_to_ir3(
         } = deferred_functions[deferred_idx].clone();
         deferred_idx += 1;
         validate_deferred_rest_parameter_abi(param_names.len(), fn_rest_param_index)?;
+        let fn_is_async = is_async_function_body(&body_ops);
+        if fn_is_async && fn_is_generator {
+            return Err(unsupported_frontier_expression_error(
+                "async_generator",
+                "FE-LOWER-ASYNC-GENERATOR-0001",
+                "core.async_generator_source_runtime",
+                "async generator source execution is not yet supported",
+                None,
+            ));
+        }
         let (body_ops, param_names, fn_name, free_vars, free_var_ids) =
             (&body_ops, &param_names, &fn_name, &free_vars, &free_var_ids);
         let entry = u32::try_from(ir3.instructions.len()).map_err(|_| {
@@ -8966,6 +9018,12 @@ pub fn lower_ir2_to_ir3(
                             function_index,
                             capture_count: inner_fv.len() as u32,
                         });
+                    } else if is_async_function_body(inner_body) {
+                        ir3.instructions.push(Ir3Instruction::CreateAsyncFunction {
+                            dst,
+                            function_index,
+                            capture_count: inner_fv.len() as u32,
+                        });
                     } else {
                         ir3.instructions.push(Ir3Instruction::CreateClosure {
                             dst,
@@ -9064,6 +9122,12 @@ pub fn lower_ir2_to_ir3(
                             function_index,
                             capture_count: inner_fv.len() as u32,
                         });
+                    } else if is_async_function_body(inner_body) {
+                        ir3.instructions.push(Ir3Instruction::CreateAsyncFunction {
+                            dst,
+                            function_index,
+                            capture_count: inner_fv.len() as u32,
+                        });
                     } else {
                         ir3.instructions.push(Ir3Instruction::CreateClosure {
                             dst,
@@ -9093,11 +9157,29 @@ pub fn lower_ir2_to_ir3(
                     ir3.instructions.push(Ir3Instruction::GeneratorBodyStart);
                 }
                 Ir1Op::Await => {
+                    if !fn_is_async {
+                        return Err(unsupported_frontier_expression_error(
+                            "await_outside_async_function",
+                            "FE-LOWER-AWAIT-CONTEXT-0001",
+                            "core.async_function_context",
+                            "await requires an async function activation",
+                            None,
+                        ));
+                    }
                     let current = fn_value_stack.pop().unwrap_or(0);
                     let dst = alloc_register(&mut fn_reg);
                     ir3.instructions
                         .push(Ir3Instruction::Move { dst, src: current });
+                    ir3.instructions
+                        .push(Ir3Instruction::AwaitValue { promise_reg: dst });
                     fn_value_stack.push(dst);
+                }
+                Ir1Op::AsyncFunctionStart => {
+                    if !fn_is_async {
+                        return Err(LoweringPipelineError::InvariantViolation {
+                            detail: "AsyncFunctionStart must precede the function parameter prologue",
+                        });
+                    }
                 }
                 // Iterator-protocol ops (bd-ddloz): mirror the top-level
                 // pass. Previously these fell through to the nop arm below,
@@ -10158,7 +10240,11 @@ fn lower_class_expression_to_ir1(
         // Function names remain a display/debug carrier. Property identity
         // is kept separately in exact UTF-16 below.
         let method_name = property_key_function_display_name(&method_property_key);
-        let mut method_body_ops = Vec::new();
+        let mut method_body_ops = if method.kind == MethodKind::AsyncMethod {
+            vec![Ir1Op::AsyncFunctionStart]
+        } else {
+            Vec::new()
+        };
         let mut method_bindings = Vec::new();
         let mut method_lookup = BTreeMap::new();
         let mut method_binding_index: BindingId = 0;
@@ -10319,7 +10405,9 @@ fn lower_class_expression_to_ir1(
             MethodKind::Set => {
                 exact_prefixed_property_key(IR_ACCESSOR_SET_PREFIX, &method_property_key)
             }
-            MethodKind::Method | MethodKind::Constructor => method_property_key,
+            MethodKind::Method | MethodKind::Constructor | MethodKind::AsyncMethod => {
+                method_property_key
+            }
         };
         ops.push(Ir1Op::SetProperty {
             key: Ir1PropertyKey::Static(property_key),
@@ -12220,9 +12308,13 @@ fn lower_expression_to_ir1(
                 });
             }
         }
-        Expression::ArrowFunction { params, body, .. } => {
+        Expression::ArrowFunction { params, body, is_async } => {
             // Lower arrow function body with its own fresh scope.
-            let mut body_ops = Vec::new();
+            let mut body_ops = if *is_async {
+                vec![Ir1Op::AsyncFunctionStart]
+            } else {
+                Vec::new()
+            };
             let mut body_bindings = Vec::new();
             let mut body_lookup = BTreeMap::new();
             let mut body_binding_index: BindingId = 0;
@@ -12298,6 +12390,11 @@ fn lower_expression_to_ir1(
             }
             // Ensure body ends with a return.
             if !matches!(body_ops.last(), Some(Ir1Op::Return)) {
+                if *is_async && matches!(body, ArrowBody::Block(_)) {
+                    body_ops.push(Ir1Op::LoadLiteral {
+                        value: Ir1Literal::Undefined,
+                    });
+                }
                 body_ops.push(Ir1Op::Return);
             }
             let (mut arrow_free_vars, mut arrow_free_var_ids, mut arrow_free_var_outer_ids) =
@@ -12342,8 +12439,17 @@ fn lower_expression_to_ir1(
             params,
             body,
             is_generator,
-            ..
+            is_async,
         } => {
+            if *is_async && *is_generator {
+                return Err(unsupported_frontier_expression_error(
+                    "async_generator",
+                    "FE-LOWER-ASYNC-GENERATOR-0001",
+                    "core.async_generator_source_runtime",
+                    "async generator source execution is not yet supported",
+                    None,
+                ));
+            }
             // Same as ArrowFunction but with a BlockStatement body and optional name.
             // A named function expression owns a private outer cell. Install
             // the source spelling only while lowering its parameter/body
@@ -12362,7 +12468,11 @@ fn lower_expression_to_ir1(
             } else {
                 None
             };
-            let mut body_ops = Vec::new();
+            let mut body_ops = if *is_async {
+                vec![Ir1Op::AsyncFunctionStart]
+            } else {
+                Vec::new()
+            };
             let mut body_bindings = Vec::new();
             let mut body_lookup = BTreeMap::new();
             let mut body_binding_index: BindingId = 0;
@@ -13155,9 +13265,8 @@ mod tests {
         (ir1, module, value)
     }
 
-    // Promise static calls and reaction methods now execute through the source
-    // pipeline (tests/promise_reactions.rs). Generic `await` lowering remains
-    // a separate limitation here: Ir1Op::Await is still a value passthrough.
+    // Source Promise jobs and async functions share the executable pipeline;
+    // tests/async_source.rs covers suspension, resumption and completion.
 
     fn deferred_ir1_body_bd_6pvhn<'a>(ir1: &'a Ir1Module, name: &str) -> &'a [Ir1Op] {
         ir1.ops

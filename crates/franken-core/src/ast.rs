@@ -1511,6 +1511,9 @@ pub enum MethodKind {
     Method,
     Get,
     Set,
+    /// An ordinary class method with async execution semantics. Appended to
+    /// preserve existing serialized variant ordinals and method struct fields.
+    AsyncMethod,
 }
 
 /// A single method definition inside a class body.

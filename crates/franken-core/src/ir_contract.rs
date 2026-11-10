@@ -676,12 +676,22 @@ pub enum Ir1Op {
     /// Host call: invoke a runtime capability by name, consuming arg_count
     /// values from the stack and pushing the result.
     HostCall { capability: String, arg_count: u32 },
+    /// Marks an async function's body before its parameter prologue. Keeping
+    /// the mode inside `body_ops` preserves the public function-variant fields
+    /// and every synchronous artifact's existing wire/canonical shape.
+    AsyncFunctionStart,
 }
 
 impl Ir1Op {
     pub fn canonical_value(&self) -> CanonicalValue {
         let mut map = BTreeMap::new();
         match self {
+            Self::AsyncFunctionStart => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("async_function_start".to_string()),
+                );
+            }
             Self::LoadLiteral { value } => {
                 map.insert(
                     "op".to_string(),

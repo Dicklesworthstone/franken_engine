@@ -11370,6 +11370,31 @@ fn try_parse_object_method(
 ) -> ParseResult<Option<(Expression, Expression, bool)>> {
     let grammar_context = ScanGrammarContext::from_execution_context(context).expression();
     let part = trim_directive_trivia(part).0;
+    let (is_async, part) = if let Some(after_async) = strip_contextual_keyword(part, "async") {
+        let (after_trivia, saw_line_terminator) = trim_directive_trivia(after_async);
+        if after_trivia.starts_with('(') {
+            (false, part)
+        } else if saw_line_terminator {
+            return Err(ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "async object-method modifier cannot cross a line terminator",
+                context.source_label.to_string(),
+                Some(span.clone()),
+            ));
+        } else {
+            (true, after_trivia)
+        }
+    } else {
+        (false, part)
+    };
+    if is_async && part.starts_with('*') {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "async generator object methods are not yet supported",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
 
     if part.starts_with('[') {
         let Some((key_inner, after_key)) =
@@ -11398,9 +11423,9 @@ fn try_parse_object_method(
         if matches!(&key, Expression::Raw(_) | Expression::SpreadElement(_)) {
             return Err(invalid_computed_key());
         }
-        validate_object_method_source_consumed(function_source, span, context)?;
+        validate_object_method_source_consumed(function_source, is_async, span, context)?;
         let value =
-            parse_function_expression(function_source, false, span, context, recursion_depth + 1)?;
+            parse_function_expression(function_source, is_async, span, context, recursion_depth + 1)?;
         validate_object_method_parameter_names(&value, span, context)?;
         return Ok(Some((key, value, true)));
     }
@@ -11431,15 +11456,16 @@ fn try_parse_object_method(
         return Ok(None);
     };
     let function_source = &part[parameter_list_index..];
-    validate_object_method_source_consumed(function_source, span, context)?;
+    validate_object_method_source_consumed(function_source, is_async, span, context)?;
     let value =
-        parse_function_expression(function_source, false, span, context, recursion_depth + 1)?;
+        parse_function_expression(function_source, is_async, span, context, recursion_depth + 1)?;
     validate_object_method_parameter_names(&value, span, context)?;
     Ok(Some((key, value, false)))
 }
 
 fn validate_object_method_source_consumed(
     function_source: &str,
+    is_async: bool,
     span: &SourceSpan,
     context: &ParseExecutionContext<'_>,
 ) -> ParseResult<()> {
@@ -11447,7 +11473,7 @@ fn validate_object_method_source_consumed(
         function_source,
         '(',
         ')',
-        ScanGrammarContext::function_parameters(false, false, context.strict_mode),
+        ScanGrammarContext::function_parameters(is_async, false, context.strict_mode),
     )
     .ok_or_else(|| {
         ParseError::new(
@@ -11461,7 +11487,7 @@ fn validate_object_method_source_consumed(
         trim_directive_trivia(after_params).0,
         '{',
         '}',
-        ScanGrammarContext::function_body(false, false, context.strict_mode),
+        ScanGrammarContext::function_body(is_async, false, context.strict_mode),
     )
     .ok_or_else(|| {
         ParseError::new(
@@ -14453,7 +14479,7 @@ fn parse_class_body(
     }
 
     // Split on top-level method boundaries.  Each method looks like:
-    // [static] [get|set] name(...) { ... }
+    // [static] [async|get|set] name(...) { ... }
     // We scan for `}` at brace_depth==0 to find method boundaries.
     let segments = split_class_members(body);
     for segment in segments {
@@ -14471,8 +14497,37 @@ fn parse_class_body(
             segment
         };
 
+        let (is_async, rest) = if let Some(after_async) = strip_contextual_keyword(rest, "async") {
+            let (after_trivia, saw_line_terminator) = trim_directive_trivia(after_async);
+            if after_trivia.starts_with('(') {
+                // `async() {}` is an ordinary method named "async".
+                (false, rest)
+            } else if saw_line_terminator {
+                return Err(ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    "async class-method modifier cannot cross a line terminator",
+                    context.source_label.to_string(),
+                    Some(span.clone()),
+                ));
+            } else {
+                (true, after_trivia)
+            }
+        } else {
+            (false, rest)
+        };
+        if is_async && rest.starts_with('*') {
+            return Err(ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "async generator class methods are not yet supported",
+                context.source_label.to_string(),
+                Some(span.clone()),
+            ));
+        }
         let kind;
-        let rest = if starts_with_keyword(rest, "get") {
+        let rest = if is_async {
+            kind = MethodKind::AsyncMethod;
+            rest
+        } else if starts_with_keyword(rest, "get") {
             kind = MethodKind::Get;
             rest.strip_prefix("get").unwrap_or(rest).trim_start()
         } else if starts_with_keyword(rest, "set") {
@@ -14493,7 +14548,15 @@ fn parse_class_body(
             )
         })?;
         let method_name = rest[..paren_idx].trim();
-        let actual_kind = if method_name == "constructor" {
+        if is_async && !is_static && method_name == "constructor" {
+            return Err(ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "class constructors cannot be async",
+                context.source_label.to_string(),
+                Some(span.clone()),
+            ));
+        }
+        let actual_kind = if method_name == "constructor" && !is_static {
             MethodKind::Constructor
         } else {
             kind
@@ -14522,7 +14585,12 @@ fn parse_class_body(
 
         // Parse parameters.
         let (params_src, rest) =
-            extract_balanced_with_context(rest, '(', ')', ScanGrammarContext::STRICT_SCRIPT)
+            extract_balanced_with_context(
+                rest,
+                '(',
+                ')',
+                ScanGrammarContext::function_parameters(is_async, false, true),
+            )
                 .ok_or_else(|| {
                     ParseError::new(
                         ParseErrorCode::UnsupportedSyntax,
@@ -14534,7 +14602,12 @@ fn parse_class_body(
         // Parse method body.
         let rest = rest.trim_start();
         let (body_src, _) =
-            extract_balanced_with_context(rest, '{', '}', ScanGrammarContext::STRICT_SCRIPT)
+            extract_balanced_with_context(
+                rest,
+                '{',
+                '}',
+                ScanGrammarContext::function_body(is_async, false, true),
+            )
                 .ok_or_else(|| {
                     ParseError::new(
                         ParseErrorCode::UnsupportedSyntax,
@@ -14545,13 +14618,13 @@ fn parse_class_body(
                 })?;
         let goal = ParseGoal::Script;
         let has_own_use_strict_directive = has_use_strict_directive(body_src);
-        let params = with_grammar_context(context, true, false, false, false, false, |context| {
+        let params = with_grammar_context(context, true, is_async, false, false, false, |context| {
             parse_arrow_params(params_src, span, context)
         })?;
-        validate_parameter_binding_names(&params, true, false, false, false, span, context)?;
+        validate_parameter_binding_names(&params, true, is_async, false, false, span, context)?;
         validate_use_strict_parameter_list(&params, has_own_use_strict_directive, span, context)?;
         let body_stmts =
-            with_grammar_context(context, true, false, false, false, false, |context| {
+            with_grammar_context(context, true, is_async, false, is_async, false, |context| {
                 parse_body_statements(body_src, goal, span, context)
             })?;
 

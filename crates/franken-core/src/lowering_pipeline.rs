@@ -12217,16 +12217,30 @@ fn lower_expression_to_ir1(
             ops.push(Ir1Op::LoadSuper);
         }
         Expression::ArrayLiteral(elements) => {
-            // Check if any element is a spread
             let has_spread = elements
                 .iter()
                 .any(|elem| matches!(elem, Some(Expression::SpreadElement(_))));
+            let has_holes = elements.iter().any(Option::is_none);
 
-            if has_spread {
-                // With spreads, use incremental approach:
-                // 1. Create empty array
-                // 2. For each element: ArrayPush or SpreadIntoArray
+            if has_spread || has_holes {
+                // Elisions advance length without creating an own indexed
+                // property. Retain the fresh array in a private binding so
+                // holes after a spread use its current, dynamic length.
+                let array_binding = if has_holes {
+                    Some(alloc_internal_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        "sparse_array_literal",
+                    )?)
+                } else {
+                    None
+                };
                 ops.push(Ir1Op::NewArray { count: 0 });
+                if let Some(binding_id) = array_binding {
+                    ops.push(Ir1Op::StoreBinding { binding_id });
+                }
                 for elem in elements {
                     match elem {
                         Some(Expression::SpreadElement(inner)) => {
@@ -12256,32 +12270,39 @@ fn lower_expression_to_ir1(
                             ops.push(Ir1Op::ArrayPush);
                         }
                         None => {
-                            // Hole - push undefined
-                            ops.push(Ir1Op::LoadLiteral {
-                                value: Ir1Literal::Undefined,
+                            let binding_id = array_binding.expect("elisions retain their array");
+                            // Keep the array below this assignment's operands
+                            // so subsequent pushes/spreads retain the target.
+                            ops.push(Ir1Op::LoadBinding { binding_id });
+                            ops.push(Ir1Op::LoadBinding { binding_id });
+                            ops.push(Ir1Op::GetProperty {
+                                key: Ir1PropertyKey::Static("length".into()),
                             });
-                            ops.push(Ir1Op::ArrayPush);
+                            ops.push(Ir1Op::LoadLiteral {
+                                value: Ir1Literal::Integer(1),
+                            });
+                            ops.push(Ir1Op::BinaryOp {
+                                operator: BinaryOperator::Add,
+                            });
+                            ops.push(Ir1Op::SetProperty {
+                                key: Ir1PropertyKey::Static("length".into()),
+                            });
+                            ops.push(Ir1Op::Pop);
                         }
                     }
                 }
             } else {
-                // No spreads - use original efficient batch approach
-                for elem in elements {
-                    if let Some(expr) = elem {
-                        lower_expression_to_ir1(
-                            expr,
-                            ops,
-                            bindings,
-                            binding_lookup,
-                            binding_index,
-                            root_scope_id,
-                            label_counter,
-                        )?;
-                    } else {
-                        ops.push(Ir1Op::LoadLiteral {
-                            value: Ir1Literal::Undefined,
-                        });
-                    }
+                // Dense literals retain the compact batch construction path.
+                for expr in elements.iter().flatten() {
+                    lower_expression_to_ir1(
+                        expr,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
                 }
                 ops.push(Ir1Op::NewArray {
                     count: elements.len() as u32,
@@ -16694,14 +16715,21 @@ mod tests {
             Some(Expression::NumericLiteral(3)),
         ]));
         let result = lower_ir0_to_ir1(&ir0).expect("array should lower");
-        // Holes are lowered as LoadLiteral { Undefined }, so count
-        // reflects total slots including holes.
         assert!(
             result
                 .module
                 .ops
                 .iter()
-                .any(|op| matches!(op, Ir1Op::NewArray { count: 3 }))
+                .any(|op| matches!(op, Ir1Op::NewArray { count: 0 }))
+        );
+        assert!(
+            !result.module.ops.iter().any(|op| matches!(
+                op,
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::Undefined
+                }
+            )),
+            "an elision must not become an explicit undefined element",
         );
     }
 

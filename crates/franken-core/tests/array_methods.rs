@@ -825,29 +825,33 @@ fn callback_array_results_retain_element_and_predicate_provenance() {
             ("reduce", "(accumulator, value) => 1"),
         ] {
             let mut core = InterpreterCore::new(config(throughput), "array-callback-labels");
-            let setup = format!(
-                "const holder = {{ values: [42, 43], callback: {callback_source} }}; holder;"
-            );
-            let Value::Object(holder) = core.execute(&lower(&setup)).unwrap().value else {
-                panic!("callback holder completion")
-            };
-            let holder = &core.get_heap()[holder.0 as usize];
-            let callback = holder.properties.get("callback").unwrap().clone();
-            let array = holder.properties.get("values").unwrap().clone();
-            let Value::Object(object) = array else {
-                panic!("array completion")
-            };
-            core.write_register(0, Value::Object(object));
-            core.write_register(1, Value::str(method));
-            core.write_register(2, callback);
+            let mut module = lower(&format!(
+                "const values = [42, 43]; values.{method}({callback_source});"
+            ));
+            // Seeds carry heap/register data, not executable module owners.
+            // Inject the secret element before the sole execution so its
+            // callback is created and invoked while its owner is retained.
+            const SECRET_REGISTER: u32 = 255;
+            let mut injected = 0;
+            for instruction in &mut module.instructions {
+                if let Op::LoadInt { dst, value: 42 } = instruction {
+                    *instruction = Op::Move {
+                        dst: *dst,
+                        src: SECRET_REGISTER,
+                    };
+                    injected += 1;
+                }
+            }
+            assert_eq!(injected, 1, "one source element receives the secret label");
+            core.write_register(SECRET_REGISTER as usize, Value::Int(42));
             let mut wire = serde_json::to_value(core.capture_execution_seed()).unwrap();
-            wire["heap"][object.0 as usize]["property_labels"]["0"] =
+            wire["register_labels"][SECRET_REGISTER as usize] =
                 serde_json::to_value(Label::Secret).unwrap();
             core.reset_execution_state_from_seed(
                 &serde_json::from_value::<ExecutionSeed>(wire).unwrap(),
             )
             .unwrap();
-            let result = core.execute(&native_array_call(1)).unwrap();
+            let result = core.execute(&module).unwrap();
             assert_eq!(result.completion_label, Label::Secret, "{method}");
             if let Value::Object(result_object) = result.value {
                 let object =
@@ -911,4 +915,26 @@ fn array_callback_validation_errors_keep_secret_dependencies_in_catch() {
             );
         }
     }
+}
+
+#[test]
+fn sparse_array_literals_preserve_elisions_around_spreads_and_in_functions() {
+    assert_output(
+        r#"
+        const sparse = [, undefined, , 3, ,];
+        function build(values) { return [, ...values, , 9, ,]; }
+        const result = build([4, 5]);
+        const spreadHole = [...[,]];
+        console.log(sparse.length + ':' + (0 in sparse) + ':' + (1 in sparse) + ':' +
+            (2 in sparse) + ':' + (3 in sparse) + ':' + (4 in sparse));
+        console.log(result.length + ':' + (0 in result) + ':' + result[1] + ':' +
+            result[2] + ':' + (3 in result) + ':' + result[4] + ':' + (5 in result));
+        console.log(spreadHole.length + ':' + (0 in spreadHole));
+    "#,
+        &[
+            "5:false:true:false:true:false",
+            "6:false:4:5:false:9:false",
+            "1:true",
+        ],
+    );
 }

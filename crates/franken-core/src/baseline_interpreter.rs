@@ -11877,9 +11877,14 @@ impl InterpreterCore {
             Some(RuntimeProperty::Data(value)) => Ok(value),
             Some(RuntimeProperty::Accessor(accessor)) => match accessor.get {
                 Some(getter) => {
-                    let (completion, getter_label) = self.invoke_inline_method_call_labeled(
-                        module, getter, receiver.clone(), &[],
-                    )?;
+                    let (completion, getter_label) =
+                        self.invoke_inline_method_call_with_receiver_label(
+                            module,
+                            getter,
+                            receiver.clone(),
+                            label.clone(),
+                            &[],
+                        )?;
                     *label = label.join(&getter_label);
                     self.complete_inline_call(completion)
                 }
@@ -12146,6 +12151,25 @@ impl InterpreterCore {
         receiver: Value,
         extra_args: &[(Value, crate::ifc_artifacts::Label)],
     ) -> Result<(InlineCallCompletion, crate::ifc_artifacts::Label), InterpreterError> {
+        self.invoke_inline_method_call_with_receiver_label(
+            module,
+            callee,
+            receiver,
+            crate::ifc_artifacts::Label::Public,
+            extra_args,
+        )
+    }
+
+    /// Property getters retain the provenance of their selected receiver
+    /// inside the isolated activation, including writes of `this` elsewhere.
+    fn invoke_inline_method_call_with_receiver_label(
+        &mut self,
+        module: &Ir3Module,
+        callee: Value,
+        receiver: Value,
+        receiver_label: crate::ifc_artifacts::Label,
+        extra_args: &[(Value, crate::ifc_artifacts::Label)],
+    ) -> Result<(InlineCallCompletion, crate::ifc_artifacts::Label), InterpreterError> {
         self.ensure_call_depth_available()?;
         let owner_program = self.callable_module(&callee)?;
         let module = owner_program.as_deref().unwrap_or(module);
@@ -12234,7 +12258,7 @@ impl InterpreterCore {
             self.scope_chain = snapshot.scope_chain.clone();
             self.current_module_specifier = Some(module.header.source_label.clone());
             self.sync_estimated_memory_bytes()?;
-            self.write_reg(0, receiver)?;
+            self.write_reg_with_label(0, receiver, receiver_label)?;
             self.write_reg(1, callee)?;
             for (offset, (arg, label)) in extra_args.iter().enumerate() {
                 let reg = 3u32
@@ -13911,10 +13935,11 @@ impl InterpreterCore {
                             reason: "Promise then getter has no executable owner".to_string(),
                         })?;
                         self.run_pre_runtime_property_access_hook(&program, object_id, &key)?;
-                        match self.invoke_inline_method_call_labeled(
+                        match self.invoke_inline_method_call_with_receiver_label(
                             &program,
                             getter,
                             value.clone(),
+                            label.clone(),
                             &[],
                         ) {
                             Ok((InlineCallCompletion::Value(then), getter_label)) => {
@@ -33094,6 +33119,97 @@ mod tests {
             assert_eq!(result.value, Value::Int(42));
             assert_eq!(result.completion_label, crate::ifc_artifacts::Label::Secret);
             assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        }
+    }
+
+    #[test]
+    fn inline_protocol_getters_keep_receiver_labels_in_heap_writes() {
+        for config in [test_quickjs_config(), test_v8_config()] {
+            for promise_resolution in [false, true] {
+                let mut core = InterpreterCore::new(config.clone(), "inline-getter-receiver");
+                let sink = core.alloc_object_with_prototype(None).unwrap();
+                let receiver = core
+                    .alloc_object_with_properties(&[("sink", Value::Object(sink))])
+                    .unwrap();
+                core.write_reg(0, Value::Object(receiver)).unwrap();
+                let module = test_module_with_pool_and_functions(
+                    vec![
+                        Ir3Instruction::CreateClosure {
+                            function_index: 0,
+                            capture_count: 0,
+                            dst: 1,
+                        },
+                        Ir3Instruction::LoadStr { dst: 2, pool_index: 0 },
+                        Ir3Instruction::DefineAccessor {
+                            obj: 0,
+                            key: 2,
+                            func: 1,
+                            kind: AccessorKind::Get,
+                        },
+                        Ir3Instruction::LoadUndefined { dst: 3 },
+                        Ir3Instruction::Return { value: 3 },
+                        Ir3Instruction::LoadThis { dst: 0 },
+                        Ir3Instruction::LoadStr { dst: 1, pool_index: 1 },
+                        Ir3Instruction::GetProperty { obj: 0, key: 1, dst: 2 },
+                        Ir3Instruction::LoadStr { dst: 3, pool_index: 2 },
+                        Ir3Instruction::SetProperty { obj: 2, key: 3, val: 0 },
+                        Ir3Instruction::LoadUndefined { dst: 0 },
+                        Ir3Instruction::Return { value: 0 },
+                    ],
+                    vec!["then".into(), "sink".into(), "saved".into()],
+                    vec![Ir3FunctionDesc {
+                        entry: 5,
+                        arity: 0,
+                        frame_size: 4,
+                        name: None,
+                        is_generator: false,
+                        rest_param_index: None,
+                    }],
+                );
+                core.execute(&module).unwrap();
+                let key = RuntimePropertyKey::String(JsString::from("then"));
+                core.set_own_runtime_property_label(
+                    receiver,
+                    &key,
+                    &crate::ifc_artifacts::Label::Secret,
+                ).unwrap();
+
+                if promise_resolution {
+                    let promise = core.create_promise_accounted().unwrap();
+                    core.resolve_promise_with_value(
+                        promise,
+                        Value::Object(receiver),
+                        crate::ifc_artifacts::Label::Public,
+                    ).unwrap();
+                    assert_eq!(
+                        core.promise_store.get(promise).unwrap().label,
+                        crate::ifc_artifacts::Label::Secret,
+                    );
+                } else {
+                    let mut label = crate::ifc_artifacts::Label::Public;
+                    assert_eq!(
+                        core.read_iterator_property(
+                            &module,
+                            &Value::Object(receiver),
+                            &key,
+                            &mut label,
+                        ).unwrap(),
+                        Value::Undefined,
+                    );
+                    assert_eq!(label, crate::ifc_artifacts::Label::Secret);
+                }
+
+                assert_eq!(
+                    core.heap[sink.0 as usize].properties.get("saved"),
+                    Some(&Value::Object(receiver)),
+                );
+                assert_eq!(
+                    core.own_property_label(sink, "saved"),
+                    crate::ifc_artifacts::Label::Secret,
+                    "promise_resolution={promise_resolution}: getter writes must retain this provenance",
+                );
+                assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+            }
         }
     }
 

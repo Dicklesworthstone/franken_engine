@@ -128,6 +128,137 @@ fn source_promise_combinator_results_preserve_callable_payloads() {
 }
 
 #[test]
+fn source_thenable_getters_run_once_synchronously_and_keep_the_receiver() {
+    assert_eq!(
+        run_source(
+            r#"
+        let reads = 0;
+        class Thenable {
+            constructor() { this.value = 42; }
+            get then() {
+                reads += 1;
+                console.log('getter');
+                return function(resolve) {
+                    console.log(this === thenable);
+                    resolve(this.value);
+                };
+            }
+        }
+        const thenable = new Thenable();
+        const pending = Promise.resolve(thenable);
+        console.log('sync:' + reads);
+        pending.then(value => console.log(value));
+    "#
+        ),
+        ["getter", "sync:1", "true", "42"]
+    );
+}
+
+#[test]
+fn source_thenable_jobs_keep_the_callable_read_before_property_mutation() {
+    assert_eq!(
+        run_source(
+            r#"
+        const thenable = { then(resolve) { resolve(7); } };
+        Promise.resolve(thenable).then(value => console.log(value));
+        thenable.then = resolve => resolve(99);
+        console.log('sync');
+    "#
+        ),
+        ["sync", "7"]
+    );
+}
+
+#[test]
+fn source_thenable_getter_throws_reject_with_the_exact_original_value() {
+    assert_eq!(
+        run_source(
+            r#"
+        const original = () => 17;
+        class Thenable {
+            get then() {
+                console.log('getter');
+                throw original;
+            }
+        }
+        Promise.resolve(new Thenable()).catch(reason => {
+            console.log(reason === original);
+            console.log(reason());
+        });
+        console.log('sync');
+    "#
+        ),
+        ["getter", "sync", "true", "17"]
+    );
+}
+
+#[test]
+fn source_noncallable_then_getters_fulfill_without_a_second_property_read() {
+    assert_eq!(
+        run_source(
+            r#"
+        let reads = 0;
+        class Thenable { get then() { reads += 1; return 5; } }
+        const thenable = new Thenable();
+        Promise.resolve(thenable).then(value => {
+            console.log(value === thenable);
+            console.log(reads);
+        });
+        console.log(reads);
+    "#
+        ),
+        ["1", "true", "1"]
+    );
+}
+
+#[test]
+fn source_class_thenable_getters_and_callable_thenables_are_adopted() {
+    assert_eq!(
+        run_source(
+            r#"
+        class Deferred {
+            constructor(value) { this.value = value; }
+            get then() { return resolve => resolve(this.value); }
+        }
+        function callable() {}
+        callable.then = function(resolve) {
+            console.log(this === callable);
+            resolve(13);
+        };
+        Promise.resolve(new Deferred(11)).then(value => console.log(value));
+        Promise.resolve(callable).then(value => console.log(value));
+    "#
+        ),
+        ["true", "11", "13"]
+    );
+}
+
+#[test]
+fn source_constructor_resolution_locks_before_invoking_a_then_getter() {
+    assert_eq!(
+        run_source(
+            r#"
+        let resolveOuter;
+        let rejectOuter;
+        const result = new Promise((resolve, reject) => {
+            resolveOuter = resolve;
+            rejectOuter = reject;
+        });
+        class Thenable {
+            get then() {
+                rejectOuter('ignored');
+                return resolve => resolve(23);
+            }
+        }
+        resolveOuter(new Thenable());
+        result.then(value => console.log(value), error => console.log(error));
+    "#
+        ),
+        ["23"]
+    );
+}
+
+#[test]
 fn source_promises_execute_a_deferred_chain_with_catch_and_finally() {
     assert_eq!(
         run_source(

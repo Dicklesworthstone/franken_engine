@@ -995,6 +995,148 @@ mod promise_value_roundtrip_tests {
     use super::*;
 
     #[test]
+    fn microtask_payload_clones_are_admitted_before_dequeue_and_released_on_error() {
+        let mut core = InterpreterCore::new(
+            InterpreterConfig::quickjs_defaults(),
+            "microtask-payload-budget",
+        );
+        let promise = core.create_promise_accounted().unwrap();
+        let task = crate::promise_model::Microtask::ResolveThenableValue {
+            promise,
+            then: crate::object_model::JsValue::BuiltinFunction(
+                BuiltinFunction::require("owner/".repeat(1024)),
+            ),
+            thenable: crate::object_model::JsValue::Object(crate::object_model::ObjectHandle(0)),
+            label: crate::ifc_artifacts::Label::Custom {
+                name: "private-job".repeat(1024),
+                level: 4,
+            },
+        };
+        let clone_bytes = (std::mem::size_of::<crate::promise_model::Microtask>() as u64)
+            + crate::promise_model::estimate_microtask_payload_memory_bytes(&task);
+        core.event_loop.microtasks.enqueue(task);
+        core.sync_estimated_memory_bytes().unwrap();
+        let before = core.estimated_memory_bytes;
+        let witness_len = core.event_loop.microtasks.witness_log().len();
+        let original_ceiling = core.config.max_total_memory_bytes;
+        core.config.max_total_memory_bytes = before + clone_bytes - 1;
+
+        assert!(matches!(
+            core.drain_microtasks(None),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.event_loop.microtasks.pending_count(), 1);
+        assert_eq!(core.event_loop.microtasks.witness_log().len(), witness_len);
+        assert_eq!(core.promise_in_flight_task_bytes, 0);
+        assert_eq!(core.estimated_memory_bytes, before);
+
+        core.config.max_total_memory_bytes = original_ceiling;
+        assert!(matches!(
+            core.drain_microtasks(None),
+            Err(InterpreterError::TypeError { .. })
+        ));
+        assert_eq!(core.promise_in_flight_task_bytes, 0);
+        assert_eq!(core.estimated_memory_bytes, core.recompute_estimated_memory_bytes());
+    }
+
+    #[test]
+    fn a_partial_microtask_checkpoint_is_a_fatal_limit_error() {
+        let mut core = InterpreterCore::new(
+            InterpreterConfig::quickjs_defaults(),
+            "microtask-limit",
+        );
+        let promises: Vec<_> = (0..3)
+            .map(|_| core.create_promise_accounted().unwrap())
+            .collect();
+        for promise in &promises {
+            core.event_loop.microtasks.enqueue(crate::promise_model::Microtask::PromiseReaction {
+                handler: None,
+                argument: crate::object_model::JsValue::Int(1),
+                result_promise: *promise,
+                label: crate::ifc_artifacts::Label::Public,
+            });
+        }
+        core.sync_estimated_memory_bytes().unwrap();
+        let error = core.drain_microtasks_with_limit(None, 2).unwrap_err();
+        assert_eq!(
+            error,
+            InterpreterError::MicrotaskLimitExceeded { drained: 2, max_drain: 2 }
+        );
+        assert!(!InterpreterCore::is_js_catchable_error(&error));
+        assert_eq!(core.event_loop.microtasks.pending_count(), 1);
+        assert!(matches!(
+            core.promise_store.get(promises[2]).unwrap().state,
+            crate::promise_model::PromiseState::Pending
+        ));
+        assert_eq!(core.estimated_memory_bytes, core.recompute_estimated_memory_bytes());
+        core.drain_microtasks_with_limit(None, 1).unwrap();
+        assert!(core.event_loop.microtasks.is_empty());
+    }
+
+    #[test]
+    fn thenable_jobs_retain_the_exact_callable_and_resolution_label() {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities.insert(RuntimeCapability::HeapAllocate);
+        let mut core = InterpreterCore::new(config, "captured-then");
+        let callable = Value::BuiltinFunction(BuiltinFunction::require("/owner.cjs"));
+        let object = core.alloc_object_with_properties(&[("then", callable.clone())]).unwrap();
+        let promise = core.create_promise_accounted().unwrap();
+        core.resolve_promise_with_value(
+            promise,
+            Value::Object(object),
+            crate::ifc_artifacts::Label::Secret,
+        ).unwrap();
+        core.set_object_runtime_property(
+            object,
+            RuntimePropertyKey::String(JsString::from("then")),
+            Value::Undefined,
+        ).unwrap();
+        assert_eq!(core.estimated_memory_bytes, core.recompute_estimated_memory_bytes());
+        let task = core.event_loop.microtasks.dequeue().unwrap();
+        let crate::promise_model::Microtask::ResolveThenableValue {
+            promise: captured_promise,
+            then,
+            thenable,
+            label,
+        } = task else {
+            panic!("expected a captured thenable job");
+        };
+        assert_eq!(captured_promise, promise);
+        assert_eq!(InterpreterCore::js_value_to_value(&then), callable);
+        assert_eq!(InterpreterCore::js_value_to_value(&thenable), Value::Object(object));
+        assert_eq!(label, crate::ifc_artifacts::Label::Secret);
+    }
+
+    #[test]
+    fn captured_thenable_job_admission_rolls_back_the_queue_and_promise_state() {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities.insert(RuntimeCapability::HeapAllocate);
+        let mut core = InterpreterCore::new(config, "captured-then-budget");
+        let object = core.alloc_object_with_properties(&[("then", Value::Function(0))]).unwrap();
+        let promise = core.create_promise_accounted().unwrap();
+        core.sync_estimated_memory_bytes().unwrap();
+        let before = core.estimated_memory_bytes;
+        let enqueued = core.event_loop.microtasks.total_enqueued();
+        core.config.max_total_memory_bytes = before;
+        assert!(matches!(
+            core.resolve_promise_with_value(
+                promise,
+                Value::Object(object),
+                crate::ifc_artifacts::Label::Public,
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.event_loop.microtasks.total_enqueued(), enqueued);
+        assert!(core.event_loop.microtasks.is_empty());
+        assert!(matches!(
+            core.promise_store.get(promise).unwrap().state,
+            crate::promise_model::PromiseState::Pending
+        ));
+        assert_eq!(core.estimated_memory_bytes, before);
+        assert_eq!(core.estimated_memory_bytes, core.recompute_estimated_memory_bytes());
+    }
+
+    #[test]
     fn every_callable_and_suspended_value_roundtrips_through_promises() {
         let values = [
             Value::Function(5),
@@ -3049,6 +3191,8 @@ pub enum InterpreterError {
     RangeError { message: String },
     /// Pending asynchronous work exceeded the deterministic turn limit.
     EventLoopTurnLimitExceeded { turns: u32, max_turns: u32 },
+    /// A microtask checkpoint could not drain within its deterministic budget.
+    MicrotaskLimitExceeded { drained: u32, max_drain: u32 },
 }
 
 impl fmt::Display for InterpreterError {
@@ -3061,6 +3205,12 @@ impl fmt::Display for InterpreterError {
                 write!(
                     f,
                     "event loop turn limit exceeded: {turns}/{max_turns} with pending work"
+                )
+            }
+            Self::MicrotaskLimitExceeded { drained, max_drain } => {
+                write!(
+                    f,
+                    "microtask limit exceeded: {drained}/{max_drain} with pending work"
                 )
             }
             Self::RegisterOutOfBounds { register, max } => {
@@ -13530,23 +13680,79 @@ impl InterpreterCore {
             }
             return Ok(());
         }
-        if let Value::Object(object_id) = value {
-            let then = self.prototype_chain_get(object_id, "then")?;
+        let object_id = match &value {
+            Value::Object(id) => Some(*id),
+            _ => self.function_object_id(&value),
+        };
+        let mut label = label;
+        if let Some(object_id) = object_id {
+            let key = RuntimePropertyKey::String(JsString::from("then"));
+            label = label.join(&self.runtime_property_label(object_id, &key));
+            let property = self.prototype_chain_lookup_runtime_property(object_id, &key)?;
+            let then = match property {
+                Some(RuntimeProperty::Data(then)) => then,
+                Some(RuntimeProperty::Accessor(accessor)) => match accessor.get {
+                    Some(getter) => {
+                        // Source getters retain their defining executable.
+                        // Prefer that owner even when resolution happens in an
+                        // importing module or a later Promise reaction.
+                        let program = self.callable_module(&getter)?.or_else(|| {
+                            self.current_module_specifier.as_ref().and_then(|specifier| {
+                                self.module_state.modules.get(specifier)
+                                    .and_then(|record| record.compiled_module.clone())
+                            })
+                        }).ok_or_else(|| InterpreterError::ModuleEvaluationFailed {
+                            specifier: self.current_module_specifier.clone()
+                                .unwrap_or_else(|| "<unowned getter>".to_string()),
+                            reason: "Promise then getter has no executable owner".to_string(),
+                        })?;
+                        self.run_pre_runtime_property_access_hook(&program, object_id, &key)?;
+                        match self.invoke_inline_method_call_labeled(
+                            &program,
+                            getter,
+                            value.clone(),
+                            &[],
+                        ) {
+                            Ok((InlineCallCompletion::Value(then), getter_label)) => {
+                                label = label.join(&getter_label);
+                                then
+                            }
+                            Ok((InlineCallCompletion::Throw(thrown), _)) => {
+                                return self.reject_promise(
+                                    promise,
+                                    Self::value_to_js_value(&thrown.value),
+                                    label.join(&thrown.label),
+                                );
+                            }
+                            Err(error) if Self::is_js_catchable_error(&error) => {
+                                let reason = self.promise_error_value(&error)?;
+                                return self.reject_promise(
+                                    promise,
+                                    Self::value_to_js_value(&reason),
+                                    label,
+                                );
+                            }
+                            Err(error) => return Err(error),
+                        }
+                    }
+                    None => Value::Undefined,
+                },
+                None => Value::Undefined,
+            };
             if Self::is_sync_callable(&then) {
-                // The `then` function is re-read from the thenable in the job
-                // (a data-property `then` yields the same callable), so a
-                // concrete handle need not be threaded through the microtask —
-                // core represents object methods as `Value::Function` as well
-                // as `Value::Closure`, and only the latter fits a
-                // `ClosureHandle`. `then_handler` is therefore an unused
-                // placeholder here.
-                let task = crate::promise_model::Microtask::ResolveThenable {
+                // Get(thenable, "then") happens once during resolution. The
+                // later job invokes this exact callable even if the property
+                // is replaced, deleted, or has a stateful getter.
+                self.check_temporary_memory_budget(
+                    Self::estimate_timer_value_bytes(&then)
+                        .saturating_add(Self::estimate_timer_value_bytes(&value)),
+                )?;
+                let task = crate::promise_model::Microtask::ResolveThenableValue {
                     promise,
-                    then_handler: crate::closure_model::ClosureHandle(0),
+                    then: Self::value_to_js_value(&then),
                     thenable: Self::value_to_js_value(&value),
                     label,
                 };
-                // Transactional thenable-job enqueue (bd-ur3tk.21).
                 let previous_bytes = self.promise_runtime_memory_bytes();
                 self.event_loop.microtasks.enqueue(task);
                 if let Err(error) = self.apply_promise_runtime_memory_delta(previous_bytes) {
@@ -14302,6 +14508,25 @@ impl InterpreterCore {
                 self.promise_in_flight_task_bytes = self
                     .promise_in_flight_task_bytes
                     .saturating_sub(released_bytes);
+                // The selected queue entry has already been consumed. A
+                // fatal admission refusal must release its captured callable
+                // and arguments rather than leave an unscheduled timer alive.
+                if let Some(task) = &turn_result.macrotask
+                    && task.source == crate::promise_model::MacrotaskSource::Timer
+                {
+                    let timer_id = self
+                        .active_timers
+                        .iter()
+                        .find(|(_, timer)| {
+                            timer.registration_seq == Some(task.registration_seq)
+                                && timer.handler == Some(task.handler.0)
+                        })
+                        .map(|(timer_id, _)| *timer_id);
+                    if let Some(timer_id) = timer_id {
+                        self.active_timers.remove(&timer_id);
+                        self.timer_invocations.remove(&task.registration_seq);
+                    }
+                }
                 self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
                 return Err(error);
             }
@@ -14464,160 +14689,209 @@ impl InterpreterCore {
     /// until the queue is empty, matching ES2020 semantics (microtask checkpoint).
     /// A safety bound prevents infinite loops from pathological promise chains.
     fn drain_microtasks(&mut self, module: Option<&Ir3Module>) -> Result<(), InterpreterError> {
-        let max_drain = 10_000u32;
+        self.drain_microtasks_with_limit(module, 10_000)
+    }
+
+    fn drain_microtasks_with_limit(
+        &mut self,
+        module: Option<&Ir3Module>,
+        max_drain: u32,
+    ) -> Result<(), InterpreterError> {
         let mut drained = 0u32;
 
         while drained < max_drain {
-            // The dequeue itself appends a replay witness event; charge it
-            // transactionally (bd-ur3tk.21). The task payload stays resident
-            // (and charged) in the queue buffer until the post-drain compact.
-            let previous_queue_bytes = self.promise_runtime_memory_bytes();
-            let Some(task) = self.event_loop.microtasks.dequeue() else {
+            // Dequeue clones a job while its original remains in the replay
+            // buffer. Admit that clone before allocating it, and keep its
+            // owned payload charged until the job completes or fails.
+            let Some(cloned_bytes) = self.event_loop.microtasks.peek_next().map(|task| {
+                (std::mem::size_of::<crate::promise_model::Microtask>() as u64)
+                    .saturating_add(
+                        crate::promise_model::estimate_microtask_payload_memory_bytes(task),
+                    )
+            }) else {
                 break;
             };
+            self.check_temporary_memory_budget(cloned_bytes)?;
+            let previous_queue_bytes = self.promise_runtime_memory_bytes();
+            let task = self.event_loop.microtasks.dequeue().expect("pending job checked");
+            self.promise_in_flight_task_bytes = self
+                .promise_in_flight_task_bytes
+                .saturating_add(cloned_bytes);
             if let Err(error) = self.apply_promise_runtime_memory_delta(previous_queue_bytes) {
+                self.promise_in_flight_task_bytes = self
+                    .promise_in_flight_task_bytes
+                    .saturating_sub(cloned_bytes);
                 self.event_loop.microtasks.rollback_last_dequeued();
                 return Err(error);
             }
             drained += 1;
-            match task {
-                crate::promise_model::Microtask::PromiseReaction {
-                    handler,
-                    argument,
-                    result_promise,
-                    label: task_label,
-                } => {
-                    if self.promise_reactions.contains_key(&result_promise) {
-                        self.run_executable_promise_reaction(
-                            module,
-                            result_promise,
-                            handler == Some(crate::closure_model::ClosureHandle(1)),
-                            argument,
-                            task_label,
-                        )?;
-                    } else if handler.is_none()
-                        && let Some(resumption_context) =
+            let outcome = (|| -> Result<(), InterpreterError> {
+                match task {
+                    crate::promise_model::Microtask::PromiseReaction {
+                        handler,
+                        argument,
+                        result_promise,
+                        label: task_label,
+                    } => {
+                        if self.promise_reactions.contains_key(&result_promise) {
+                            self.run_executable_promise_reaction(
+                                module,
+                                result_promise,
+                                handler == Some(crate::closure_model::ClosureHandle(1)),
+                                argument,
+                                task_label,
+                            )?;
+                        } else if handler.is_none()
+                            && let Some(resumption_context) =
+                                self.take_async_resumption_context(result_promise.0)
+                        {
+                            if let Err(error) = self
+                                .resume_async_function_after_await(
+                                    resumption_context,
+                                    Ok(argument),
+                                    task_label.clone(),
+                                    module,
+                                )
+                                .and_then(|()| self.continue_resumed_async_function(module))
+                            {
+                                self.reject_promise(
+                                    result_promise,
+                                    Self::promise_rejection_from_error(&error),
+                                    task_label,
+                                )?;
+                            }
+                        } else {
+                            // The identity handler still invokes the derived
+                            // Promise's resolve function, including assimilation.
+                            self.resolve_promise_with_value(
+                                result_promise,
+                                Self::js_value_to_value(&argument),
+                                task_label,
+                            )?;
+                        }
+                    }
+                    crate::promise_model::Microtask::PromiseRejection {
+                        reason,
+                        result_promise,
+                        label: task_label,
+                    } => {
+                        if self.promise_reactions.contains_key(&result_promise) {
+                            self.run_executable_promise_reaction(
+                                module,
+                                result_promise,
+                                true,
+                                reason,
+                                task_label,
+                            )?;
+                        } else if let Some(resumption_context) =
                             self.take_async_resumption_context(result_promise.0)
-                    {
-                        if let Err(error) = self
-                            .resume_async_function_after_await(
-                                resumption_context,
-                                Ok(argument),
-                                task_label.clone(),
-                                module,
-                            )
-                            .and_then(|()| self.continue_resumed_async_function(module))
                         {
-                            self.reject_promise(
-                                result_promise,
-                                Self::promise_rejection_from_error(&error),
-                                task_label,
-                            )?;
+                            if let Err(error) = self
+                                .resume_async_function_after_await(
+                                    resumption_context,
+                                    Err(reason),
+                                    task_label.clone(),
+                                    module,
+                                )
+                                .and_then(|()| self.continue_resumed_async_function(module))
+                            {
+                                self.reject_promise(
+                                    result_promise,
+                                    Self::promise_rejection_from_error(&error),
+                                    task_label,
+                                )?;
+                            }
+                        } else {
+                            self.reject_promise(result_promise, reason, task_label)?;
                         }
-                    } else {
-                        // The identity handler still invokes the derived
-                        // Promise's resolve function, including assimilation.
-                        self.resolve_promise_with_value(
-                            result_promise,
-                            Self::js_value_to_value(&argument),
-                            task_label,
-                        )?;
                     }
-                }
-                crate::promise_model::Microtask::PromiseRejection {
-                    reason,
-                    result_promise,
-                    label: task_label,
-                } => {
-                    if self.promise_reactions.contains_key(&result_promise) {
-                        self.run_executable_promise_reaction(
-                            module,
-                            result_promise,
-                            true,
-                            reason,
-                            task_label,
-                        )?;
-                    } else if let Some(resumption_context) =
-                        self.take_async_resumption_context(result_promise.0)
-                    {
-                        if let Err(error) = self
-                            .resume_async_function_after_await(
-                                resumption_context,
-                                Err(reason),
-                                task_label.clone(),
-                                module,
-                            )
-                            .and_then(|()| self.continue_resumed_async_function(module))
-                        {
-                            self.reject_promise(
-                                result_promise,
-                                Self::promise_rejection_from_error(&error),
-                                task_label,
-                            )?;
-                        }
-                    } else {
-                        self.reject_promise(result_promise, reason, task_label)?;
-                    }
-                }
-                crate::promise_model::Microtask::ResolveThenable {
-                    promise,
-                    then_handler: _,
-                    thenable,
-                    label: task_label,
-                } => {
-                    // PromiseResolveThenableJob (ES2020 25.6.1.3.1, bd-3ose7):
-                    // call `thenable.then(resolve, reject)` with resolve/reject
-                    // capabilities bound to `promise`. The user `then` runs
-                    // synchronously within this job, so the microtasks it
-                    // schedules and the settle it performs are enqueued in
-                    // program order (preserving nested-microtask ordering). The
-                    // task label is preserved — a throw from `then` rejects the
-                    // promise with the thrown value's label, not `Public`.
-                    let Some(module) = module else {
-                        return Err(InterpreterError::TypeError {
-                            expected: "module context for ResolveThenable job".to_string(),
+                    crate::promise_model::Microtask::ResolveThenableValue {
+                        promise,
+                        then,
+                        thenable,
+                        label: task_label,
+                    } => {
+                        let module = module.ok_or_else(|| InterpreterError::TypeError {
+                            expected: "module context for captured thenable job".to_string(),
                             got: "missing module context".to_string(),
-                        });
-                    };
-                    let thenable_value = Self::js_value_to_value(&thenable);
-                    if let Value::Promise(source) = thenable_value {
-                        self.register_executable_promise_reactions(
-                            crate::promise_model::PromiseHandle(source),
-                            PromiseReactionRegistration {
-                                on_fulfilled: Some(PromiseReactionAction::Forward(promise)),
-                                on_rejected: Some(PromiseReactionAction::Forward(promise)),
-                            },
-                            task_label,
-                        )?;
-                        continue;
+                        })?;
+                        let (pair_id, resolve_fn, reject_fn) =
+                            self.create_promise_resolving_functions(promise, task_label.clone())?;
+                        let outcome = self.invoke_inline_method_call_labeled(
+                            module,
+                            Self::js_value_to_value(&then),
+                            Self::js_value_to_value(&thenable),
+                            &[(resolve_fn, task_label.clone()), (reject_fn, task_label.clone())],
+                        );
+                        self.complete_promise_resolving_call(pair_id, outcome, task_label)?;
                     }
-                    // Re-read `then` from the thenable (same callable for a
-                    // data property); it may be a `Value::Function` or
-                    // `Value::Closure`, both of which CallMethod invokes.
-                    let then_fn = match thenable_value {
-                        Value::Object(object_id) => self.prototype_chain_get(object_id, "then")?,
-                        _ => Value::Undefined,
-                    };
-                    if !Self::is_sync_callable(&then_fn) {
-                        // The thenable's `then` was removed/replaced with a
-                        // non-callable after the job was queued: fulfill with
-                        // the thenable itself, matching a non-thenable value.
-                        if !self.promise_is_settled(promise) {
-                            self.fulfill_promise(promise, thenable.clone(), task_label.clone())?;
+                    crate::promise_model::Microtask::ResolveThenable {
+                        promise,
+                        then_handler: _,
+                        thenable,
+                        label: task_label,
+                    } => {
+                        // PromiseResolveThenableJob (ES2020 25.6.1.3.1, bd-3ose7):
+                        // call `thenable.then(resolve, reject)` with resolve/reject
+                        // capabilities bound to `promise`. The user `then` runs
+                        // synchronously within this job, so the microtasks it
+                        // schedules and the settle it performs are enqueued in
+                        // program order (preserving nested-microtask ordering). The
+                        // task label is preserved — a throw from `then` rejects the
+                        // promise with the thrown value's label, not `Public`.
+                        let Some(module) = module else {
+                            return Err(InterpreterError::TypeError {
+                                expected: "module context for ResolveThenable job".to_string(),
+                                got: "missing module context".to_string(),
+                            });
+                        };
+                        let thenable_value = Self::js_value_to_value(&thenable);
+                        if let Value::Promise(source) = thenable_value {
+                            self.register_executable_promise_reactions(
+                                crate::promise_model::PromiseHandle(source),
+                                PromiseReactionRegistration {
+                                    on_fulfilled: Some(PromiseReactionAction::Forward(promise)),
+                                    on_rejected: Some(PromiseReactionAction::Forward(promise)),
+                                },
+                                task_label,
+                            )?;
+                            return Ok(());
                         }
-                        continue;
+                        // Re-read `then` from the thenable (same callable for a
+                        // data property); it may be a `Value::Function` or
+                        // `Value::Closure`, both of which CallMethod invokes.
+                        let then_fn = match thenable_value {
+                            Value::Object(object_id) => self.prototype_chain_get(object_id, "then")?,
+                            _ => Value::Undefined,
+                        };
+                        if !Self::is_sync_callable(&then_fn) {
+                            // The thenable's `then` was removed/replaced with a
+                            // non-callable after the job was queued: fulfill with
+                            // the thenable itself, matching a non-thenable value.
+                            if !self.promise_is_settled(promise) {
+                                self.fulfill_promise(promise, thenable.clone(), task_label.clone())?;
+                            }
+                            return Ok(());
+                        }
+                        let (pair_id, resolve_fn, reject_fn) =
+                            self.create_promise_resolving_functions(promise, task_label.clone())?;
+                        let outcome = self.invoke_inline_method_call_labeled(
+                            module,
+                            then_fn,
+                            thenable_value,
+                            &[(resolve_fn, task_label.clone()), (reject_fn, task_label.clone())],
+                        );
+                        self.complete_promise_resolving_call(pair_id, outcome, task_label)?;
                     }
-                    let (pair_id, resolve_fn, reject_fn) =
-                        self.create_promise_resolving_functions(promise, task_label.clone())?;
-                    let outcome = self.invoke_inline_method_call_labeled(
-                        module,
-                        then_fn,
-                        thenable_value,
-                        &[(resolve_fn, task_label.clone()), (reject_fn, task_label.clone())],
-                    );
-                    self.complete_promise_resolving_call(pair_id, outcome, task_label)?;
                 }
-            }
+                Ok(())
+            })();
+            self.promise_in_flight_task_bytes = self
+                .promise_in_flight_task_bytes
+                .saturating_sub(cloned_bytes);
+            self.estimated_memory_bytes =
+                self.estimated_memory_bytes.saturating_sub(cloned_bytes);
+            outcome?;
         }
         // Compaction releases the consumed task slots and payloads retained
         // by the cursor-based buffer (bd-ur3tk.21). A release cannot exceed
@@ -14625,6 +14899,9 @@ impl InterpreterCore {
         let previous_queue_bytes = self.promise_runtime_memory_bytes();
         self.event_loop.microtasks.compact();
         self.apply_promise_runtime_memory_delta(previous_queue_bytes)?;
+        if !self.event_loop.microtasks.is_empty() {
+            return Err(InterpreterError::MicrotaskLimitExceeded { drained, max_drain });
+        }
         Ok(())
     }
 
@@ -34467,6 +34744,53 @@ mod tests {
                     ),
                     Label::Secret,
                 );
+                assert_eq!(
+                    core.estimated_memory_bytes,
+                    core.recompute_estimated_memory_bytes()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn timer_turn_admission_refusal_releases_only_the_selected_callback_payload() {
+        let module = test_module_with_pool_and_functions(
+            timer_callback_body(0),
+            vec!["callback must not run".to_string()],
+            vec![timer_callback_desc(0, "refused_timer")],
+        );
+        for capability in ["timer:setTimeout", "timer:setInterval"] {
+            for retain_other_timer in [false, true] {
+                let mut core = core_with_timer_payload(test_quickjs_config());
+                let args = RegRange { start: 0, count: 3 };
+                core.dispatch_timer_hostcall(capability, args).unwrap();
+                if retain_other_timer {
+                    core.dispatch_timer_hostcall(capability, args).unwrap();
+                }
+                let ceiling = core.estimated_memory_bytes;
+                core.config.max_total_memory_bytes = ceiling;
+
+                assert!(matches!(
+                    core.run_event_loop_until_idle(&module),
+                    Err(InterpreterError::MemoryBudgetExceeded {
+                        requested_bytes,
+                        max_bytes,
+                        ..
+                    }) if requested_bytes > ceiling && max_bytes == ceiling,
+                ));
+                assert!(core.console_output.is_empty());
+                assert_eq!(core.instructions_executed, 0);
+                assert!(!core.active_timers.contains_key(&0));
+                assert!(!core.timer_invocations.contains_key(&0));
+                let remaining = usize::from(retain_other_timer);
+                assert_eq!(core.active_timers.len(), remaining);
+                assert_eq!(core.timer_invocations.len(), remaining);
+                assert_eq!(core.event_loop.macrotasks.len(), remaining);
+                if retain_other_timer {
+                    assert_eq!(core.active_timers[&1].registration_seq, Some(1));
+                    assert!(core.timer_invocations.contains_key(&1));
+                }
+                assert_eq!(core.promise_in_flight_task_bytes, 0);
                 assert_eq!(
                     core.estimated_memory_bytes,
                     core.recompute_estimated_memory_bytes()

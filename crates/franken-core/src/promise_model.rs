@@ -117,6 +117,11 @@ pub(crate) fn estimate_microtask_payload_memory_bytes(task: &Microtask) -> u64 {
             thenable, label, ..
         } => estimate_js_value_memory_bytes(thenable)
             .saturating_add(estimate_label_memory_bytes(label)),
+        Microtask::ResolveThenableValue {
+            then, thenable, label, ..
+        } => estimate_js_value_memory_bytes(then)
+            .saturating_add(estimate_js_value_memory_bytes(thenable))
+            .saturating_add(estimate_label_memory_bytes(label)),
     }
 }
 
@@ -277,6 +282,14 @@ pub enum Microtask {
         /// The thenable value.
         thenable: JsValue,
         /// IFC label.
+        label: Label,
+    },
+    /// PromiseResolveThenableJob with the exact callable read at resolution.
+    /// Appended to preserve existing serialized job ordinals.
+    ResolveThenableValue {
+        promise: PromiseHandle,
+        then: JsValue,
+        thenable: JsValue,
         label: Label,
     },
 }
@@ -861,6 +874,11 @@ impl MicrotaskQueue {
         } else {
             None
         }
+    }
+
+    /// Borrow the next job so its owned clone can be admitted before dequeue.
+    pub(crate) fn peek_next(&self) -> Option<&Microtask> {
+        self.tasks.get(self.cursor)
     }
 
     /// Check if there are pending microtasks.

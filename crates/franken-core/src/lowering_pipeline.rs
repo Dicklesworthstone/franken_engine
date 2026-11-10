@@ -50,6 +50,38 @@ pub(crate) const FUNCTION_EXPRESSION_SELF_CAPTURE_PREFIX: &str = "\0function-exp
 const ARROW_LEXICAL_THIS_CAPTURE: &str = "\0arrow-lexical-this\0";
 const ARROW_LEXICAL_NEW_TARGET_CAPTURE: &str = "\0arrow-lexical-new-target\0";
 const ARROW_LEXICAL_SUPER_CAPTURE: &str = "\0arrow-lexical-super\0";
+const GLOBAL_VALUE_NAMES: [&str; 3] = ["undefined", "NaN", "Infinity"];
+
+/// These are immutable global properties, not lexical tokens. Only fold a
+/// reference after the current scope and its enclosing captures have been
+/// resolved; an identically named parameter, lexical or `var` binding wins.
+fn unshadowed_global_value(
+    binding_lookup: &BTreeMap<String, BindingId>,
+    name: &str,
+) -> Option<Ir1Literal> {
+    if binding_lookup.contains_key(name) {
+        return None;
+    }
+    match name {
+        "undefined" => Some(Ir1Literal::Undefined),
+        "NaN" => Some(Ir1Literal::Float(f64::NAN.to_bits())),
+        "Infinity" => Some(Ir1Literal::Float(f64::INFINITY.to_bits())),
+        _ => None,
+    }
+}
+
+fn immutable_global_write_error() -> LoweringPipelineError {
+    // The core AST does not yet carry strictness provenance for assignments.
+    // A sloppy write must be ignored and a strict write must throw after its
+    // RHS runs. Do not turn either into a mutable forward-reference binding.
+    unsupported_frontier_expression_error(
+        "immutable_global_write",
+        "FE-LOWER-GLOBAL-VALUE-WRITE-0001",
+        "lower_ir0_to_ir1.immutable_global_write",
+        "assignment to an unshadowed immutable global requires strictness provenance",
+        None,
+    )
+}
 
 fn lexical_capture_cell_name(name: &str, binding_id: BindingId) -> String {
     format!("{LEXICAL_CAPTURE_CELL_PREFIX}{binding_id}\0{name}")
@@ -2549,6 +2581,7 @@ fn seed_function_outer_static_bindings(
     for global in STATIC_BUILTIN_GLOBALS
         .iter()
         .chain(DIRECT_CALL_INTRINSIC_GLOBALS.iter())
+        .chain(GLOBAL_VALUE_NAMES.iter())
         .copied()
     {
         if !body_lookup.contains_key(global) && outer_lookup.contains_key(global) {
@@ -10347,6 +10380,10 @@ fn lower_expression_to_ir1(
 ) -> Result<(), LoweringPipelineError> {
     match expression {
         Expression::Identifier(name) => {
+            if let Some(value) = unshadowed_global_value(binding_lookup, name) {
+                ops.push(Ir1Op::LoadLiteral { value });
+                return Ok(());
+            }
             // `Symbol` is the one supported static builtin global that also
             // has a first-class callable value. Materialize it before the
             // non-materialized-global fallback while preserving lexical
@@ -10599,6 +10636,15 @@ fn lower_expression_to_ir1(
         } => {
             if *operator == UnaryOperator::Delete {
                 match argument.as_ref() {
+                    Expression::Identifier(name)
+                        if unshadowed_global_value(binding_lookup, name).is_some() =>
+                    {
+                        // The immutable global properties are non-configurable.
+                        // Strict-mode identifier deletes are rejected by parsing.
+                        ops.push(Ir1Op::LoadLiteral {
+                            value: Ir1Literal::Boolean(false),
+                        });
+                    }
                     Expression::Member {
                         object,
                         property,
@@ -10674,6 +10720,9 @@ fn lower_expression_to_ir1(
 
             match argument.as_ref() {
                 Expression::Identifier(name) => {
+                    if unshadowed_global_value(binding_lookup, name).is_some() {
+                        return Err(immutable_global_write_error());
+                    }
                     let binding_id = if let Some(existing) = binding_lookup.get(name.as_str()) {
                         *existing
                     } else {
@@ -10888,6 +10937,9 @@ fn lower_expression_to_ir1(
             right,
         } => {
             if let Expression::Identifier(name) = left.as_ref() {
+                if unshadowed_global_value(binding_lookup, name).is_some() {
+                    return Err(immutable_global_write_error());
+                }
                 let binding_id = if let Some(existing) = binding_lookup.get(name.as_str()) {
                     *existing
                 } else {

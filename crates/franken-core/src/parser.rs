@@ -1735,10 +1735,10 @@ impl GrammarCompletenessMatrix {
                 },
                 GrammarFamilyCoverage {
                     family_id: "literal.undefined".to_string(),
-                    es2020_clause: "ECMA-262 Annex B / runtime literal".to_string(),
+                    es2020_clause: "ECMA-262 §18.1.3 / §12.1".to_string(),
                     script_goal: GrammarCoverageStatus::Supported,
                     module_goal: GrammarCoverageStatus::Supported,
-                    notes: "undefined token preserved as dedicated literal for deterministic lowering."
+                    notes: "undefined is an IdentifierReference; lowering resolves lexical shadowing before folding the immutable global value."
                         .to_string(),
                 },
                 GrammarFamilyCoverage {
@@ -9001,9 +9001,6 @@ fn parse_primary_expression(
     if expression == "null" {
         return Ok(Expression::NullLiteral);
     }
-    if expression == "undefined" {
-        return Ok(Expression::UndefinedLiteral);
-    }
     if expression == "this" {
         return Ok(Expression::This);
     }
@@ -11651,17 +11648,6 @@ fn parse_f64_numeric_literal(input: &str) -> Option<f64> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return None;
-    }
-
-    // Handle special values
-    if trimmed == "Infinity" {
-        return Some(f64::INFINITY);
-    }
-    if trimmed == "-Infinity" {
-        return Some(f64::NEG_INFINITY);
-    }
-    if trimmed == "NaN" {
-        return Some(f64::NAN);
     }
 
     // Strip numeric separators
@@ -15287,14 +15273,23 @@ mod tests {
     }
 
     #[test]
-    fn undefined_literal_is_parsed() {
+    fn global_value_names_are_identifier_references() {
         let parser = CanonicalEs2020Parser;
-        let tree = parser.parse("undefined", ParseGoal::Script).expect("parse");
-        match &tree.body[0] {
-            Statement::Expression(expr) => {
-                assert_eq!(expr.expression, Expression::UndefinedLiteral);
+        for (source, name) in [
+            ("undefined", "undefined"),
+            ("NaN", "NaN"),
+            ("Infinity", "Infinity"),
+            (r"undef\u0069ned", "undefined"),
+            (r"N\u0061N", "NaN"),
+            (r"Inf\u0069nity", "Infinity"),
+        ] {
+            let tree = parser.parse(source, ParseGoal::Script).expect("parse");
+            match &tree.body[0] {
+                Statement::Expression(expr) => {
+                    assert_eq!(expr.expression, Expression::Identifier(name.to_string()));
+                }
+                _ => panic!("expected expression statement"),
             }
-            _ => panic!("expected expression statement"),
         }
     }
 
@@ -21694,12 +21689,9 @@ strict"; var static = 1; }"#,
 
     #[test]
     fn parse_f64_numeric_literal_special_values() {
-        assert_eq!(parse_f64_numeric_literal("Infinity"), Some(f64::INFINITY));
-        assert_eq!(
-            parse_f64_numeric_literal("-Infinity"),
-            Some(f64::NEG_INFINITY)
-        );
-        assert!(parse_f64_numeric_literal("NaN").unwrap().is_nan());
+        assert_eq!(parse_f64_numeric_literal("Infinity"), None);
+        assert_eq!(parse_f64_numeric_literal("-Infinity"), None);
+        assert_eq!(parse_f64_numeric_literal("NaN"), None);
     }
 
     #[test]

@@ -938,3 +938,16 @@ fn sparse_array_literals_preserve_elisions_around_spreads_and_in_functions() {
         ],
     );
 }
+
+#[test]
+fn generic_callback_methods_use_javascript_numeric_string_lengths() {
+    assert_output(
+        r#"
+        for (const length of ['0x2', '0b10', '0o2', '\uFEFF2', '\u00852', 'inf', 'infinity', '+0x2']) {
+            const object = { length, 0: 5, 1: 7, map: [].map };
+            console.log(object.map(value => value * 2).join(','));
+        }
+    "#,
+        &["10,14", "10,14", "10,14", "10,14", "", "", "", ""],
+    );
+}

@@ -66,6 +66,7 @@ use crate::runtime_config::ExecutionConfig;
 
 mod array_methods;
 mod async_generator;
+mod string_methods;
 use async_generator::{
     AsyncGeneratorAwaitKind, AsyncGeneratorContinuation, AsyncGeneratorObject,
     AsyncGeneratorResumeKind,
@@ -5173,6 +5174,15 @@ impl InterpreterCore {
         receiver_label: crate::ifc_artifacts::Label,
     ) -> Result<(Value, crate::ifc_artifacts::Label), InterpreterError> {
         let result = match builtin.kind {
+            BuiltinFunctionKind::StringPrototypeIndexOf
+            | BuiltinFunctionKind::StringPrototypeLastIndexOf
+            | BuiltinFunctionKind::StringPrototypeIncludes
+            | BuiltinFunctionKind::StringPrototypeStartsWith
+            | BuiltinFunctionKind::StringPrototypeEndsWith
+            | BuiltinFunctionKind::StringPrototypeSlice
+            | BuiltinFunctionKind::StringPrototypeSubstring => {
+                return self.dispatch_string_method(module, builtin.kind, receiver, args, receiver_label);
+            }
             BuiltinFunctionKind::ArrayPrototypePush
             | BuiltinFunctionKind::ArrayPrototypePop
             | BuiltinFunctionKind::ArrayPrototypeJoin
@@ -5443,7 +5453,14 @@ impl InterpreterCore {
                     | BuiltinFunctionKind::ArrayPrototypeFind
                     | BuiltinFunctionKind::ArrayPrototypeFindIndex
                     | BuiltinFunctionKind::ArrayPrototypeReduce
-                    | BuiltinFunctionKind::ArrayPrototypeReduceRight => {
+                    | BuiltinFunctionKind::ArrayPrototypeReduceRight
+                    | BuiltinFunctionKind::StringPrototypeIndexOf
+                    | BuiltinFunctionKind::StringPrototypeLastIndexOf
+                    | BuiltinFunctionKind::StringPrototypeIncludes
+                    | BuiltinFunctionKind::StringPrototypeStartsWith
+                    | BuiltinFunctionKind::StringPrototypeEndsWith
+                    | BuiltinFunctionKind::StringPrototypeSlice
+                    | BuiltinFunctionKind::StringPrototypeSubstring => {
                         unreachable!("handled above")
                     }
                 }
@@ -5707,6 +5724,27 @@ impl InterpreterCore {
             ))),
             "toWellFormed" => Some(Value::BuiltinFunction(BuiltinFunction::string_method(
                 BuiltinFunctionKind::StringPrototypeToWellFormed,
+            ))),
+            "indexOf" => Some(Value::BuiltinFunction(BuiltinFunction::string_method(
+                BuiltinFunctionKind::StringPrototypeIndexOf,
+            ))),
+            "lastIndexOf" => Some(Value::BuiltinFunction(BuiltinFunction::string_method(
+                BuiltinFunctionKind::StringPrototypeLastIndexOf,
+            ))),
+            "includes" => Some(Value::BuiltinFunction(BuiltinFunction::string_method(
+                BuiltinFunctionKind::StringPrototypeIncludes,
+            ))),
+            "startsWith" => Some(Value::BuiltinFunction(BuiltinFunction::string_method(
+                BuiltinFunctionKind::StringPrototypeStartsWith,
+            ))),
+            "endsWith" => Some(Value::BuiltinFunction(BuiltinFunction::string_method(
+                BuiltinFunctionKind::StringPrototypeEndsWith,
+            ))),
+            "slice" => Some(Value::BuiltinFunction(BuiltinFunction::string_method(
+                BuiltinFunctionKind::StringPrototypeSlice,
+            ))),
+            "substring" => Some(Value::BuiltinFunction(BuiltinFunction::string_method(
+                BuiltinFunctionKind::StringPrototypeSubstring,
             ))),
             _ => canonical_array_index(key)
                 .and_then(|index| text.encode_utf16().nth(index as usize))

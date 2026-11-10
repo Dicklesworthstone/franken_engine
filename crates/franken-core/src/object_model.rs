@@ -2213,6 +2213,13 @@ pub enum BuiltinFunctionKind {
     ArrayPrototypeFindIndex,
     ArrayPrototypeReduce,
     ArrayPrototypeReduceRight,
+    StringPrototypeIndexOf,
+    StringPrototypeLastIndexOf,
+    StringPrototypeIncludes,
+    StringPrototypeStartsWith,
+    StringPrototypeEndsWith,
+    StringPrototypeSlice,
+    StringPrototypeSubstring,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -2268,6 +2275,13 @@ impl BuiltinFunction {
             BuiltinFunctionKind::ArrayPrototypeFindIndex => "findIndex",
             BuiltinFunctionKind::ArrayPrototypeReduce => "reduce",
             BuiltinFunctionKind::ArrayPrototypeReduceRight => "reduceRight",
+            BuiltinFunctionKind::StringPrototypeIndexOf => "indexOf",
+            BuiltinFunctionKind::StringPrototypeLastIndexOf => "lastIndexOf",
+            BuiltinFunctionKind::StringPrototypeIncludes => "includes",
+            BuiltinFunctionKind::StringPrototypeStartsWith => "startsWith",
+            BuiltinFunctionKind::StringPrototypeEndsWith => "endsWith",
+            BuiltinFunctionKind::StringPrototypeSlice => "slice",
+            BuiltinFunctionKind::StringPrototypeSubstring => "substring",
         }
     }
 }

@@ -97,10 +97,11 @@ impl InterpreterCore {
                     got: "symbol".into(),
                 });
             }
-            let number = Self::coerce_to_float(&length_value).unwrap_or(f64::NAN);
-            // A getter may produce a fresh owned string; no native local needs
-            // to retain it while later separator or element callbacks run.
-            drop(length_value);
+            // LengthOfArrayLike uses the same exact StringNumericLiteral
+            // conversion as string positions, including radix prefixes and
+            // ECMAScript whitespace. Account fresh conversion strings before
+            // parsing them, and release them before later callbacks run.
+            let number = self.native_method_to_number(module, length_value, &mut label)?;
             let length = if number.is_nan() || number <= 0.0 {
                 0
             } else {

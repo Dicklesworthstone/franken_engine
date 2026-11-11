@@ -212,10 +212,11 @@
     } else {
       try {
         const size = chunkSize(s.size, value);
-        // A size callback may reenter cancel/error/close. Never resurrect its
-        // queue or publish after a terminal transition.
-        if (!canEnqueue(s)) throw invalid('Stream changed while sizing a chunk');
-        push(s.queue, value, size);
+        // This enqueue was admitted before size ran. A reentrant close
+        // request still includes this chunk behind any already queued data.
+        // Closed/errored streams cannot expose it; avoid retaining that
+        // unreachable chunk without inventing a new error for the producer.
+        if (s.state === 'readable') push(s.queue, value, size);
       } catch (error) { errorReadable(s, error); throw error; }
     }
     pull(s);

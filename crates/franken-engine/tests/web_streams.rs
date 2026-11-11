@@ -401,3 +401,160 @@ finally { delete Object.prototype.start; }
         assert_eq!(run(source, lane), ["FROM_INTERNAL 20,22 0 false"]);
     }
 }
+
+
+#[test]
+fn reentrant_size_close_preserves_the_admitted_final_chunk() {
+    let source = r#"
+const web = require('stream/web');
+(async function () {
+  for (const queued of [false, true]) {
+    let controller, sizes = 0;
+    const stream = new web.ReadableStream({start(c){controller=c;}}, {
+      highWaterMark:0,
+      size(chunk){sizes++;if(chunk==='last')controller.close();return 1;}
+    });
+    if (queued) controller.enqueue('first');
+    controller.enqueue('last');
+    const values = [];
+    for await (const value of stream) values.push(value);
+    let denied = false;
+    try { controller.enqueue('too late'); } catch (error) { denied = error instanceof TypeError; }
+    console.log('SIZING_CLOSE', queued, values.join(',') || 'empty', sizes, denied, stream.locked);
+  }
+})();
+"#;
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        assert_eq!(
+            run(source, lane),
+            [
+                "SIZING_CLOSE false empty 1 true false",
+                "SIZING_CLOSE true first,last 2 true false",
+            ]
+        );
+    }
+}
+
+#[test]
+fn reentrant_size_error_and_cancel_preserve_exact_terminal_outcomes() {
+    let source = r#"
+const web = require('node:stream/web');
+(async function () {
+  for (const action of ['error', 'cancel']) {
+    let controller, cleanup, cancels = 0;
+    const reason = false;
+    const stream = new web.ReadableStream({
+      start(c){controller=c;}, cancel(value){if(value===reason)cancels++;}
+    }, {
+      highWaterMark:0,
+      size(chunk){
+        if(chunk==='last'){
+          if(action==='error')controller.error(reason);
+          else cleanup=stream.cancel(reason);
+        }
+        return 1;
+      }
+    });
+    controller.enqueue('first');
+    controller.enqueue('last');
+    const reader = stream.getReader();
+    const result = await reader.read().then(item=>item.done, error=>error===reason);
+    if(cleanup!==undefined)await cleanup;
+    reader.releaseLock();
+    console.log('SIZING_TERMINAL',action,result,cancels,controller.desiredSize,stream.locked);
+  }
+  let controller;
+  const stream = new web.ReadableStream({start(c){controller=c;}}, {
+    size(chunk){if(chunk==='last'){controller.close();return -1;}return 1;}
+  });
+  controller.enqueue('first');
+  let invalid = false;
+  try{controller.enqueue('last');}catch(error){invalid=error instanceof RangeError;}
+  const reader = stream.getReader();
+  console.log('SIZING_INVALID',invalid,
+    await reader.read().then(()=>false,error=>error instanceof RangeError));
+  reader.releaseLock();
+})();
+"#;
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        assert_eq!(
+            run(source, lane),
+            [
+                "SIZING_TERMINAL error true 0 null false",
+                "SIZING_TERMINAL cancel true 1 0 false",
+                "SIZING_INVALID true true",
+            ]
+        );
+    }
+}
+
+#[test]
+fn reentrant_transform_size_finishes_the_write_without_losing_queue_or_reason() {
+    let source = r#"
+const web = require('stream/web');
+(async function () {
+  for (const action of ['terminate','error','cancel']) {
+    let controller, cleanup;
+    const reason = false;
+    const stream = new web.TransformStream({start(c){controller=c;}},undefined,{
+      highWaterMark:Infinity,
+      size(chunk){
+        if(chunk==='last'){
+          if(action==='terminate')controller.terminate();
+          else if(action==='error')controller.error(reason);
+          else cleanup=stream.readable.cancel(reason);
+        }
+        return 1;
+      }
+    });
+    const writer=stream.writable.getWriter();
+    await writer.write('first');await writer.write('last');
+    if(cleanup!==undefined)await cleanup;
+    const failed=await writer.closed.then(()=>false,
+      error=>action==='terminate'?error instanceof TypeError:error===reason);
+    writer.releaseLock();
+    const reader=stream.readable.getReader(),values=[];
+    let readFailed=false;
+    if(action==='error')readFailed=await reader.read().then(()=>false,error=>error===reason);
+    else for(;;){const item=await reader.read();if(item.done)break;values.push(item.value);}
+    reader.releaseLock();
+    console.log('SIZING_TRANSFORM',action,values.join(',')||'empty',failed,readFailed,
+      stream.readable.locked,stream.writable.locked);
+  }
+})();
+"#;
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        assert_eq!(
+            run(source, lane),
+            [
+                "SIZING_TRANSFORM terminate first,last true false false false",
+                "SIZING_TRANSFORM error empty true true false false",
+                "SIZING_TRANSFORM cancel empty true false false false",
+            ]
+        );
+    }
+}
+
+#[test]
+fn reentrant_size_read_keeps_the_pending_request_separate_from_the_queued_chunk() {
+    let source = r#"
+const web = require('stream/web');
+(async function () {
+  let controller,reader,pending,sizes=0;
+  const stream=new web.ReadableStream({start(c){controller=c;}},{
+    highWaterMark:0,size(){sizes++;pending=reader.read();return 1;}
+  });
+  reader=stream.getReader();
+  controller.enqueue('queued');
+  controller.enqueue('direct');
+  const first=(await pending).value;
+  controller.close();
+  const second=(await reader.read()).value,end=(await reader.read()).done;
+  reader.releaseLock();
+  console.log('SIZING_READ',first,second,end,sizes,stream.locked);
+})();
+"#;
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        assert_eq!(run(source, lane), ["SIZING_READ direct queued true 1 false"]);
+    }
+}

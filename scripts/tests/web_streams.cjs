@@ -735,3 +735,150 @@ test('from internal dictionaries ignore inherited source and strategy callbacks'
   assert.equal(traps, 0);
   assert.deepEqual(await collect(stream), [1, 2]);
 });
+
+
+// The size callback runs inside an already-admitted enqueue. Reentrant close,
+// error or cancellation may finish that operation without rejecting it.
+// Independent contract cases: WPT streams/readable-streams/reentrant-strategies.any.js
+// and streams/transform-streams/reentrant-strategies.any.js.
+test('readable sizing can request close without losing the admitted final chunk', async () => {
+  for (const queued of [false, true]) {
+    const actual = await both(async api => {
+      let controller, sizes = 0;
+      const stream = new api.ReadableStream({ start(c) { controller = c; } }, {
+        highWaterMark: 0,
+        size(chunk) { sizes++; if (chunk === 'last') controller.close(); return 1; },
+      });
+      if (queued) controller.enqueue('first');
+      controller.enqueue('last');
+      const desired = controller.desiredSize;
+      const values = await collect(stream);
+      assert.throws(() => controller.enqueue('too late'), TypeError);
+      return [values, sizes, desired, stream.locked];
+    });
+    assert.deepEqual(actual, queued ? [['first', 'last'], 2, -2, false] : [[], 1, 0, false]);
+  }
+});
+test('readable sizing preserves error and cancellation without inventing an enqueue error', async () => {
+  for (const action of ['error', 'cancel']) {
+    for (const queued of [false, true]) {
+      const actual = await both(async api => {
+        let controller, cleanup, cancels = 0;
+        const reason = { action };
+        const stream = new api.ReadableStream({
+          start(c) { controller = c; },
+          cancel(value) { assert.equal(value, reason); cancels++; },
+        }, {
+          highWaterMark: 0,
+          size(chunk) {
+            if (chunk === 'last') {
+              if (action === 'error') controller.error(reason);
+              else cleanup = stream.cancel(reason);
+            }
+            return 1;
+          },
+        });
+        if (queued) controller.enqueue('first');
+        controller.enqueue('last');
+        const reader = stream.getReader();
+        if (action === 'error') {
+          await assert.rejects(reader.read(), error => error === reason);
+          await assert.rejects(reader.closed, error => error === reason);
+        } else {
+          await cleanup;
+          assert.deepEqual(await reader.read(), { value: undefined, done: true });
+          await reader.closed;
+        }
+        assert.throws(() => controller.enqueue('too late'), TypeError);
+        reader.releaseLock();
+        return [cancels, controller.desiredSize, stream.locked];
+      });
+      assert.deepEqual(actual, [action === 'cancel' ? 1 : 0, action === 'error' ? null : 0, false]);
+    }
+  }
+});
+test('reentrant readable sizing still validates the admitted size and preserves explicit failures', async () => {
+  for (const invalid of [-1, NaN, Infinity]) {
+    await both(async api => {
+      let controller;
+      const stream = new api.ReadableStream({ start(c) { controller = c; } }, {
+        size(chunk) { if (chunk === 'last') { controller.close(); return invalid; } return 1; },
+      });
+      controller.enqueue('first');
+      assert.throws(() => controller.enqueue('last'), RangeError);
+      const reader = stream.getReader();
+      await assert.rejects(reader.read(), RangeError);
+      reader.releaseLock();
+      return stream.locked;
+    });
+  }
+  await both(async api => {
+    let controller;
+    const reason = { sizing: true };
+    const stream = new api.ReadableStream({ start(c) { controller = c; } }, {
+      size() { controller.close(); throw reason; },
+    });
+    assert.throws(() => controller.enqueue('last'), error => error === reason);
+    return collect(stream);
+  });
+});
+test('reentrant reader demand during sizing keeps the originally selected queue path', async () => {
+  const actual = await both(async api => {
+    let controller, reader, pending, sizes = 0;
+    const stream = new api.ReadableStream({ start(c) { controller = c; } }, {
+      highWaterMark: 0,
+      size() { sizes++; pending = reader.read(); return 1; },
+    });
+    reader = stream.getReader();
+    controller.enqueue('queued');
+    let settled = false;
+    pending.then(() => { settled = true; });
+    await ticks();
+    assert.equal(settled, false);
+    controller.enqueue('direct');
+    const direct = (await pending).value;
+    controller.close();
+    const queued = (await reader.read()).value, end = (await reader.read()).done;
+    reader.releaseLock();
+    return [direct, queued, end, sizes, stream.locked];
+  });
+  assert.deepEqual(actual, ['direct', 'queued', true, 1, false]);
+});
+test('transform sizing terminal transitions complete the admitted write and retain their reason', async () => {
+  for (const action of ['terminate', 'error', 'cancel']) {
+    for (const queued of [false, true]) {
+      const actual = await both(async api => {
+        let controller, cleanup;
+        const reason = { action };
+        const stream = new api.TransformStream({ start(c) { controller = c; } }, undefined, {
+          highWaterMark: Infinity,
+          size(chunk) {
+            if (chunk === 'last') {
+              if (action === 'terminate') controller.terminate();
+              else if (action === 'error') controller.error(reason);
+              else cleanup = stream.readable.cancel(reason);
+            }
+            return 1;
+          },
+        });
+        const writer = stream.writable.getWriter();
+        if (queued) await writer.write('first');
+        await writer.write('last');
+        if (cleanup !== undefined) await cleanup;
+        await assert.rejects(writer.closed, action === 'terminate' ? TypeError : error => error === reason);
+        writer.releaseLock();
+        const reader = stream.readable.getReader(), values = [];
+        if (action === 'error') {
+          await assert.rejects(reader.read(), error => error === reason);
+          await assert.rejects(reader.closed, error => error === reason);
+        } else {
+          for (;;) { const item = await reader.read(); if (item.done) break; values.push(item.value); }
+          await reader.closed;
+        }
+        reader.releaseLock();
+        return [values, stream.readable.locked, stream.writable.locked];
+      });
+      assert.deepEqual(actual, [action === 'terminate' && queued ? ['first', 'last'] : [], false, false]);
+    }
+  }
+});

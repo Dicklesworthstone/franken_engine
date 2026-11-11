@@ -92,6 +92,286 @@ impl InterpreterHook for StopHostcall {
     }
 }
 
+fn checkpoint_source_module(source: &str) -> frankenengine_engine::ir_contract::Ir3Module {
+    use frankenengine_engine::ast::ParseGoal;
+    use frankenengine_engine::ir_contract::Ir0Module;
+    use frankenengine_engine::lowering_pipeline::{
+        AmbientAuthorityGrant, LoweringContext, lower_ir0_to_ir3,
+    };
+    use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
+
+    let tree = CanonicalEs2020Parser
+        .parse_with_options(
+            ParserSource {
+                label: "terminal-checkpoint.js".into(),
+                text: source.into(),
+            },
+            ParseGoal::Script,
+            &ParserOptions::default(),
+        )
+        .expect("checkpoint regression source parses");
+    lower_ir0_to_ir3(
+        &Ir0Module::from_syntax_tree(tree, "terminal-checkpoint.js"),
+        &LoweringContext::new(
+            "checkpoint-trace",
+            "checkpoint-decision",
+            "checkpoint-policy",
+        )
+        .with_ambient_authority_grant(AmbientAuthorityGrant::TrustedProcessShape),
+    )
+    .expect("checkpoint regression source lowers")
+    .ir3
+}
+
+fn checkpoint_configurations()
+-> impl Iterator<Item = frankenengine_engine::baseline_interpreter::InterpreterConfig> {
+    use frankenengine_engine::baseline_interpreter::InterpreterConfig;
+    use frankenengine_engine::capability::RuntimeCapability;
+
+    [
+        InterpreterConfig::quickjs_defaults(),
+        InterpreterConfig::v8_defaults(),
+    ]
+    .into_iter()
+    .map(|mut config| {
+        config.granted_capabilities = BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+            RuntimeCapability::Console,
+            RuntimeCapability::Timer,
+            RuntimeCapability::FsRead,
+            RuntimeCapability::FsWrite,
+        ]);
+        config
+    })
+}
+
+const QUEUED_CHECKPOINT_EFFECTS: &str = r#"
+    require('fs').writeFileSync('before.txt', 'committed');
+    process.nextTick(() => require('fs').writeFileSync('tick.txt', 'deferred'));
+    queueMicrotask(() => require('fs').writeFileSync('microtask.txt', 'deferred'));
+    Promise.resolve().then(() => require('fs').writeFileSync('promise.txt', 'deferred'));
+    (async () => { await 0; require('fs').writeFileSync('await.txt', 'deferred'); })();
+    setTimeout(() => require('fs').writeFileSync('timer.txt', 'deferred'), 0);
+    console.log('stop-here');
+"#;
+
+#[test]
+fn terminal_capability_denial_stops_queued_guest_effects_bd_9vouw_7() {
+    use frankenengine_engine::baseline_interpreter::{InterpreterCore, InterpreterError};
+    use frankenengine_engine::capability::RuntimeCapability;
+    use frankenengine_extension_host::host_io::{
+        HostIoRecorder, InMemoryHostIoTranscript, SandboxedHostIo,
+    };
+    use std::sync::Arc;
+
+    let module = checkpoint_source_module(QUEUED_CHECKPOINT_EFFECTS);
+    for config in checkpoint_configurations() {
+        for allowed in [true, false] {
+            let directory = tempfile::tempdir().expect("real checkpoint filesystem");
+            let transcript = Arc::new(InMemoryHostIoTranscript::recording());
+            let recorder: Arc<dyn HostIoRecorder> = transcript.clone();
+            let mut config = config.clone();
+            if !allowed {
+                config
+                    .granted_capabilities
+                    .remove(&RuntimeCapability::Console);
+            }
+            let mut core = InterpreterCore::new(config, "terminal-capability-checkpoint");
+            core.set_host_io(
+                Arc::new(SandboxedHostIo::with_root(directory.path()).unwrap()),
+                Some(recorder),
+            );
+            let result = core.execute(&module);
+            if allowed {
+                assert!(result.is_ok(), "positive control must execute: {result:?}");
+                assert_eq!(transcript.entries().len(), 6);
+            } else {
+                assert!(
+                    matches!(
+                        result,
+                        Err(InterpreterError::CapabilityDenied { ref capability })
+                            if capability == "console:log"
+                    ),
+                    "the original denial must survive: {result:?}"
+                );
+                assert_eq!(
+                    transcript.entries().len(),
+                    1,
+                    "only the pre-denial effect commits"
+                );
+            }
+            assert_eq!(
+                std::fs::read(directory.path().join("before.txt")).unwrap(),
+                b"committed"
+            );
+            for path in [
+                "tick.txt",
+                "microtask.txt",
+                "promise.txt",
+                "await.txt",
+                "timer.txt",
+            ] {
+                assert_eq!(
+                    directory.path().join(path).exists(),
+                    allowed,
+                    "deferred guest effect {path} must obey the terminal boundary"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn terminal_containment_stops_queued_effects_and_core_reuse_drops_them_bd_9vouw_7() {
+    use frankenengine_engine::baseline_interpreter::{
+        ChallengeToken, InterpreterCore, InterpreterError,
+    };
+    use frankenengine_extension_host::host_io::{
+        HostIoRecorder, InMemoryHostIoTranscript, SandboxedHostIo,
+    };
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let module = checkpoint_source_module(QUEUED_CHECKPOINT_EFFECTS);
+    let next_module =
+        checkpoint_source_module("require('fs').writeFileSync('fresh.txt', 'fresh execution');");
+    for config in checkpoint_configurations() {
+        for action in [
+            HookAction::Challenge(ChallengeToken {
+                token: "review".into(),
+            }),
+            HookAction::Sandbox,
+            HookAction::Suspend,
+            HookAction::Terminate("stop-before-checkpoint".into()),
+            HookAction::Quarantine("stop-before-checkpoint".into()),
+        ] {
+            let directory = tempfile::tempdir().expect("real containment filesystem");
+            let transcript = Arc::new(InMemoryHostIoTranscript::recording());
+            let recorder: Arc<dyn HostIoRecorder> = transcript.clone();
+            let mut core = InterpreterCore::new(config.clone(), "terminal-containment-checkpoint");
+            core.set_host_io(
+                Arc::new(SandboxedHostIo::with_root(directory.path()).unwrap()),
+                Some(recorder),
+            );
+            let hook = Arc::new(StopHostcall {
+                calls: AtomicUsize::new(0),
+                capability: "console:log",
+                allowed_before_stop: 0,
+                action: action.clone(),
+            });
+            core.set_hook(hook.clone());
+            assert!(
+                matches!(
+                    core.execute(&module),
+                    Err(InterpreterError::ContainmentActionRequested { .. })
+                ),
+                "{action:?}"
+            );
+            assert_eq!(hook.calls.load(Ordering::SeqCst), 1);
+            assert_eq!(transcript.entries().len(), 1, "{action:?}");
+
+            // A new execution restores the pre-run seed. It may execute new
+            // work, but cannot resurrect the prior execution's queued jobs.
+            core.clear_hook();
+            core.execute(&next_module)
+                .expect("fresh execution after containment");
+            assert_eq!(
+                std::fs::read(directory.path().join("fresh.txt")).unwrap(),
+                b"fresh execution"
+            );
+            assert_eq!(transcript.entries().len(), 2, "{action:?}");
+            for path in [
+                "tick.txt",
+                "microtask.txt",
+                "promise.txt",
+                "await.txt",
+                "timer.txt",
+            ] {
+                assert!(!directory.path().join(path).exists(), "{action:?}: {path}");
+            }
+        }
+    }
+}
+
+#[test]
+fn terminal_writable_callback_stops_other_ticks_and_microtasks_bd_9vouw_7() {
+    use frankenengine_engine::baseline_interpreter::{InterpreterCore, InterpreterError};
+    use frankenengine_engine::capability::RuntimeCapability;
+    use frankenengine_extension_host::host_io::{
+        HostIoRecorder, InMemoryHostIoTranscript, SandboxedHostIo,
+    };
+    use std::sync::Arc;
+
+    // Public stream imports use the JavaScript stream module. Its completion
+    // and late end callbacks run on nextTick; neither may let a host denial
+    // drain later guest callbacks as stream lifecycle cleanup.
+    for source in [
+        r#"
+            const { Writable } = require('stream');
+            const first = new Writable({ write(c, e, done) { done(); } });
+            const second = new Writable({ write(c, e, done) { done(); } });
+            first.end(() => console.log('stop-here'));
+            second.end(() => require('fs').writeFileSync('later-tick.txt', 'deferred'));
+            queueMicrotask(() => require('fs').writeFileSync('microtask.txt', 'deferred'));
+        "#,
+        r#"
+            const { Writable } = require('stream');
+            const first = new Writable({ write(c, e, done) { done(); } });
+            first.on('close', () => {
+                first.end(() => console.log('stop-here'));
+                const second = new Writable({ write(c, e, done) { done(); } });
+                second.end(() => require('fs').writeFileSync('later-tick.txt', 'deferred'));
+            });
+            first.end();
+            queueMicrotask(() => require('fs').writeFileSync('microtask.txt', 'deferred'));
+        "#,
+    ] {
+        let module = checkpoint_source_module(source);
+        for config in checkpoint_configurations() {
+            for allowed in [true, false] {
+                let directory = tempfile::tempdir().expect("real Writable checkpoint filesystem");
+                let transcript = Arc::new(InMemoryHostIoTranscript::recording());
+                let recorder: Arc<dyn HostIoRecorder> = transcript.clone();
+                let mut config = config.clone();
+                if !allowed {
+                    config
+                        .granted_capabilities
+                        .remove(&RuntimeCapability::Console);
+                }
+                let mut core = InterpreterCore::new(config, "terminal-writable-checkpoint");
+                core.set_host_io(
+                    Arc::new(SandboxedHostIo::with_root(directory.path()).unwrap()),
+                    Some(recorder),
+                );
+                let result = core.execute(&module);
+                if allowed {
+                    assert!(result.is_ok(), "positive Writable control: {result:?}");
+                    assert_eq!(transcript.entries().len(), 2);
+                } else {
+                    assert!(
+                        matches!(
+                            result,
+                            Err(InterpreterError::CapabilityDenied { ref capability })
+                                if capability == "console:log"
+                        ),
+                        "original Writable denial: {result:?}"
+                    );
+                    assert!(transcript.entries().is_empty());
+                }
+                for path in ["later-tick.txt", "microtask.txt"] {
+                    assert_eq!(
+                        directory.path().join(path).exists(),
+                        allowed,
+                        "{source}: {path}"
+                    );
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn hostcall_hook_stops_before_second_real_write_in_both_lanes_bd_9vouw_7() {
     use frankenengine_engine::baseline_interpreter::{

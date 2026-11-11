@@ -29592,6 +29592,11 @@ impl InterpreterCore {
                     Some(label.clone()),
                 );
                 if let Err(error) = invocation {
+                    // A denied or contained execution cannot be resumed by
+                    // converting its failure into a guest stream error.
+                    if Self::stops_guest_execution(&error) {
+                        return Err(error);
+                    }
                     let (error_value, error_label, consumes_pending_exception) =
                         self.writable_invocation_error_value(&error, label);
                     if passthrough_internal || flavor == WritableStreamFlavor::Transform {
@@ -29656,7 +29661,9 @@ impl InterpreterCore {
                     if state.writes.rollback_active(token) {
                         self.next_writable_completion_token = token;
                     }
-                } else if passthrough_internal || flavor == WritableStreamFlavor::Transform {
+                } else if !Self::stops_guest_execution(&error)
+                    && (passthrough_internal || flavor == WritableStreamFlavor::Transform)
+                {
                     let (error_value, error_label, consumes_pending_exception) =
                         if matches!(&error, InterpreterError::UncaughtException { .. })
                             && let Some(pending) = self.pending_exception.as_ref()
@@ -30038,6 +30045,12 @@ impl InterpreterCore {
         first_error_charge: &mut u64,
         error: InterpreterError,
     ) -> Result<(), InterpreterError> {
+        // Resource/security failures revoke the entire execution. Even a
+        // single batched stream tick must not invoke a later callback after
+        // one; callers release the retained-error and snapshot charges.
+        if Self::stops_guest_execution(&error) {
+            return Err(error);
+        }
         let retained_error_bytes = first_error
             .as_ref()
             .map(Self::estimate_interpreter_error_bytes)
@@ -38396,9 +38409,13 @@ impl InterpreterCore {
             self.top_level_compact_tier1 = previous_compact_tier1;
             result
         };
-        // `process.exit` ends the program on the spot: no microtask, timer or
-        // other pending callback runs after it (bd-my9hk).
-        if matches!(result, Err(InterpreterError::ProcessExit { .. })) {
+        // A terminal runtime/security failure revokes guest execution, not
+        // just the current stack. In particular, a queued Promise reaction,
+        // nextTick, or Writable callback must not perform another host effect
+        // after containment or a capability/budget denial. Return before
+        // materializing scopes or draining jobs, preserving the first error.
+        // Ordinary JavaScript throws retain their existing checkpoint rules.
+        if result.as_ref().is_err_and(Self::stops_guest_execution) {
             return result;
         }
         if result.is_err() {
@@ -50702,9 +50719,14 @@ impl InterpreterCore {
     }
 
     fn run_nested_module_execution(&mut self, module: &Ir3Module) -> Result<(), InterpreterError> {
-        let result = self.run_loop(module);
-        let checkpoint_result = self.drain_runtime_checkpoint(Some(module));
-        checkpoint_result?;
+        let result = match self.run_loop(module) {
+            // Imported code shares the execution's jobs and authority. A
+            // terminal failure must not run that shared queue before the
+            // loader restores the caller and propagates the original error.
+            Err(error) if Self::stops_guest_execution(&error) => return Err(error),
+            result => result,
+        };
+        self.drain_runtime_checkpoint(Some(module))?;
         match result {
             Ok(_) | Err(InterpreterError::Halted) => Ok(()),
             Err(err) => Err(err),
@@ -64889,6 +64911,17 @@ impl InterpreterCore {
         }
     }
 
+    /// Whether an error ends the entire guest execution rather than one
+    /// JavaScript activation. This shares the catch boundary used by the VM:
+    /// engine faults, resource limits, cancellation, capability denials and
+    /// containment must not be converted into deferred guest cleanup work.
+    fn stops_guest_execution(error: &InterpreterError) -> bool {
+        !matches!(
+            error,
+            InterpreterError::Halted | InterpreterError::UncaughtException { .. }
+        ) && Self::js_catchable_error_name(error).is_none()
+    }
+
     /// Build a JS error object (name/message/stack) for a host
     /// [`InterpreterError`] so it can be bound as the catch parameter when a
     /// native runtime error is caught by JS `try`/`catch` (bd-8enww.4.3). The
@@ -75618,11 +75651,12 @@ impl InterpreterCore {
                                 ) && state.end_callback_batch_remaining > 0)
                         });
                     if let Err(error) = self.drive_writable_tick(object_id, module) {
-                        if emitting_terminal_error {
+                        if emitting_terminal_error || Self::stops_guest_execution(&error) {
                             // An unhandled stream `error` is process-fatal in
                             // the reference runtime. Do not run close handlers,
                             // other Writable ticks, or the ordinary microtask
-                            // queue.
+                            // queue. Runtime/security failures have the same
+                            // stop boundary even outside the stream-error phase.
                             return Err(error);
                         }
                         if first_error.is_none() {
@@ -75637,13 +75671,16 @@ impl InterpreterCore {
                         self.pending_writable_terminal_ticks =
                             self.pending_writable_terminal_ticks.saturating_sub(1);
                     }
-                    if let Err(error) = self.drive_writable_terminal_tick(object_id, module)
-                        && first_error.is_none()
-                    {
-                        first_error = Some(error);
+                    if let Err(error) = self.drive_writable_terminal_tick(object_id, module) {
+                        if Self::stops_guest_execution(&error) {
+                            return Err(error);
+                        }
+                        if first_error.is_none() {
+                            first_error = Some(error);
+                        }
                     }
-                } else if first_error.is_none() {
-                    first_error = Some(InterpreterError::InternalError {
+                } else {
+                    return Err(InterpreterError::InternalError {
                         details: "scheduled Writable tick lost both live and terminal state"
                             .to_string(),
                     });
@@ -141189,6 +141226,128 @@ mod async_runtime_tests_current {
         assert!(!finish_core.writable_streams.contains_key(&finish_writable));
 
         for core in [&callback_core, &prefinish_core, &finish_core] {
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn native_writable_terminal_callback_stops_its_batch_bd_9vouw_7() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        for console_allowed in [false, true] {
+            let mut core = test_interpreter();
+            if console_allowed {
+                core.config
+                    .granted_capabilities
+                    .insert(RuntimeCapability::Console);
+            }
+            let Value::Object(writable) = core
+                .construct_stream_writable(RegRange { start: 0, count: 0 })
+                .expect("native Writable")
+            else {
+                panic!("Writable constructor must return an object");
+            };
+            {
+                let state = core
+                    .writable_streams
+                    .get_mut(&writable)
+                    .expect("native state");
+                state.end_requested = true;
+                state.final_status = WritableFinalStatus::Done;
+                state.tick_phase = WritableTickPhase::Callbacks;
+                for _ in 0..2 {
+                    state.end_callbacks.push_back(WritableEndCallbackRecord {
+                        callback: WritableCallbackRecord {
+                            value: Value::BuiltinFunction(BuiltinFunction::new_kind(
+                                BuiltinFunctionKind::ConsoleLog,
+                            )),
+                            label: Label::Public,
+                            module_specifier: None,
+                        },
+                        registered_after_end: false,
+                    });
+                }
+            }
+            core.sync_estimated_memory_bytes()
+                .expect("account callback batch");
+            core.schedule_writable_tick(writable)
+                .expect("schedule callback batch");
+            let prior_decisions = core.hostcall_decisions.len();
+            let outcome = core.drain_runtime_checkpoint(Some(&module));
+            if console_allowed {
+                outcome.expect("allowed native callbacks drain normally");
+                assert_eq!(core.hostcall_decisions.len(), prior_decisions + 2);
+                assert!(!core.writable_streams.contains_key(&writable));
+            } else {
+                assert!(matches!(
+                    outcome,
+                    Err(InterpreterError::CapabilityDenied { capability, .. })
+                        if capability == "console:log"
+                ));
+                assert_eq!(core.hostcall_decisions.len(), prior_decisions + 1);
+                assert_eq!(core.writable_streams[&writable].end_callbacks.len(), 1);
+                assert_eq!(
+                    core.writable_streams[&writable].tick_phase,
+                    WritableTickPhase::Finish
+                );
+            }
+            assert_eq!(core.writable_in_flight_callback_bytes, 0);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn native_writable_final_does_not_convert_terminal_denial_to_stream_error_bd_9vouw_7() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        for console_allowed in [false, true] {
+            let mut core = test_interpreter();
+            if console_allowed {
+                core.config
+                    .granted_capabilities
+                    .insert(RuntimeCapability::Console);
+            }
+            let Value::Object(writable) = core
+                .construct_stream_writable(RegRange { start: 0, count: 0 })
+                .expect("native Writable")
+            else {
+                panic!("Writable constructor must return an object");
+            };
+            {
+                let state = core
+                    .writable_streams
+                    .get_mut(&writable)
+                    .expect("native state");
+                state.end_requested = true;
+                state.final_callback = Some(Value::BuiltinFunction(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::ConsoleLog,
+                )));
+            }
+            core.sync_estimated_memory_bytes()
+                .expect("account final callback");
+            let prior_decisions = core.hostcall_decisions.len();
+            let outcome = core.drive_writable(writable, &module);
+            if console_allowed {
+                outcome.expect("allowed final callback runs");
+            } else {
+                assert!(matches!(
+                    outcome,
+                    Err(InterpreterError::CapabilityDenied { capability, .. })
+                        if capability == "console:log"
+                ));
+            }
+            assert_eq!(core.hostcall_decisions.len(), prior_decisions + 1);
+            assert!(core.writable_streams[&writable].terminal_error.is_none());
+            assert!(
+                core.writable_streams[&writable]
+                    .terminal_error_origin
+                    .is_none()
+            );
+            assert_eq!(core.writable_in_flight_callback_bytes, 0);
             assert_eq!(
                 core.estimated_memory_bytes(),
                 core.recompute_estimated_memory_bytes()

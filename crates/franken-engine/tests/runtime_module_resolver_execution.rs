@@ -3886,6 +3886,110 @@ promises.readFile('output.txt', 'utf8').then(function(value) {
 }
 
 #[test]
+fn imported_module_terminal_denial_stops_queued_host_effects_bd_9vouw_7() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for (syntax, entry_name, entry_source, child_name, child_prefix) in [
+            (
+                ModuleSyntax::CommonJs,
+                "entry.cjs",
+                "require('./child.cjs'); console.log('entry resumed');",
+                "child.cjs",
+                "const fs = require('node:fs');",
+            ),
+            (
+                ModuleSyntax::EsModule,
+                "entry.mjs",
+                "import './child.mjs'; console.log('entry resumed');",
+                "child.mjs",
+                "import fs from 'node:fs';",
+            ),
+            (
+                ModuleSyntax::EsModule,
+                "entry.mjs",
+                "import('./child.mjs').then(() => console.log('entry resumed'));",
+                "child.mjs",
+                "import fs from 'node:fs';",
+            ),
+        ] {
+            for read_allowed in [false, true] {
+                let root = tempfile::tempdir().expect("module checkpoint filesystem sandbox");
+                std::fs::write(root.path().join("input.txt"), "allowed read").expect("input");
+                let child_source = format!(
+                    r#"{child_prefix}
+fs.writeFileSync('before.txt', 'committed');
+process.nextTick(() => fs.writeFileSync('tick.txt', 'deferred'));
+queueMicrotask(() => fs.writeFileSync('microtask.txt', 'deferred'));
+Promise.resolve().then(() => fs.writeFileSync('promise.txt', 'deferred'));
+(async () => {{ await 0; fs.writeFileSync('await.txt', 'deferred'); }})();
+setTimeout(() => fs.writeFileSync('timer.txt', 'deferred'), 0);
+fs.readFileSync('input.txt', 'utf8');
+"#
+                );
+                let resolver = Arc::new(
+                    OpaqueResolver::new(vec![
+                        (entry_name, definition(syntax, entry_source)),
+                        (child_name, definition(syntax, &child_source)),
+                    ])
+                    .with_native_builtins(),
+                );
+                let source = entry(&resolver, entry_name, syntax);
+                let installed = ExecutionModuleResolver::new(
+                    &source.module.record.id,
+                    resolver,
+                    Arc::new(AllowAllPolicy),
+                );
+                let transcript = Arc::new(InMemoryHostIoTranscript::recording());
+                let mut engine = orchestrator(lane, syntax);
+                engine.set_host_io(
+                    Arc::new(SandboxedHostIo::with_root(root.path()).expect("real provider")),
+                    Some(transcript.clone()),
+                );
+                let mut execution = package();
+                execution.capabilities.push("fs_write".into());
+                if read_allowed {
+                    execution.capabilities.push("fs_read".into());
+                }
+                let outcome = engine.execute_resolved_entry_with_resolver(
+                    &execution,
+                    &source,
+                    installed,
+                );
+                if read_allowed {
+                    let result = outcome.expect("allowed imported code drains all deferred work");
+                    assert_eq!(lines(&result), ["entry resumed"], "{lane:?}: {entry_source}");
+                    assert_eq!(transcript.len(), 7, "six writes and the allowed read");
+                } else {
+                    let error = outcome.expect_err("imported module read authority is denied");
+                    assert!(
+                        matches!(
+                            error.primary_error(),
+                            OrchestratorError::Interpreter(InterpreterError::CapabilityDenied {
+                                capability,
+                                ..
+                            }) if capability == "fs_read"
+                        ),
+                        "{lane:?}: {entry_source}: {error:?}"
+                    );
+                    assert!(engine.last_failed_console_output().is_empty());
+                    assert_eq!(transcript.len(), 1, "only the pre-denial write reaches the host");
+                }
+                assert_eq!(
+                    std::fs::read(root.path().join("before.txt")).expect("pre-denial effect"),
+                    b"committed"
+                );
+                for path in ["tick.txt", "microtask.txt", "promise.txt", "await.txt", "timer.txt"] {
+                    assert_eq!(
+                        root.path().join(path).exists(),
+                        read_allowed,
+                        "{lane:?}: {entry_source}: queued {path} follows module authority"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn delivered_filesystem_functions_do_not_acquire_read_or_write_authority() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
         for (module, invocation, read_grant) in [

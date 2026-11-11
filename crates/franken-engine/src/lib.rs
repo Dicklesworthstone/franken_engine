@@ -438,6 +438,7 @@ pub mod queueing_admission_control;
 pub mod quickening_feedback_lattice;
 pub mod rch_validation_telemetry;
 pub mod rch_worker_registry;
+pub mod react_client_build;
 pub mod react_compilation_pipeline;
 pub mod react_compile_operator_surface;
 pub mod react_compile_run_parity;

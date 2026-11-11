@@ -1254,6 +1254,7 @@ impl<'a> JsExpressionScanner<'a> {
         let mut control_parenthesis = false;
         let mut for_parenthesis = false;
         let mut function_parenthesis = None;
+        let mut class_bodies = Vec::new();
         let mut statement_start = statement_context;
         // Some marks a block; its boolean says whether a statement, rather
         // than a function-expression value, follows the closing brace.
@@ -1366,8 +1367,9 @@ impl<'a> JsExpressionScanner<'a> {
                     after_dot = false;
                 }
                 b'{' => {
-                    let block_kind =
-                        block_after_previous.or_else(|| at_statement_start.then_some(true));
+                    let block_kind = block_after_previous
+                        .or_else(|| class_bodies.pop())
+                        .or_else(|| at_statement_start.then_some(true));
                     self.pos += 1;
                     self.scan_code(Some(b'}'), nesting + 1, block_kind.is_some(), false)?;
                     expect_operand = block_kind.unwrap_or(false);
@@ -1430,6 +1432,15 @@ impl<'a> JsExpressionScanner<'a> {
                     for_parenthesis = !after_dot && word == "for";
                     if !after_dot && word == "function" {
                         function_parenthesis = Some(at_statement_start && statement_context);
+                    }
+                    if !after_dot
+                        && word == "class"
+                        && !self.source[self.pos..].trim_start().starts_with([':', '('])
+                    {
+                        // A declaration ends a statement; a class expression
+                        // remains a value. Retain nested `extends class {}`
+                        // headers until their corresponding bodies arrive.
+                        class_bodies.push(at_statement_start && statement_context);
                     }
                     next_block = (!after_dot && matches!(word, "else" | "do" | "try" | "finally"))
                         .then_some(true);

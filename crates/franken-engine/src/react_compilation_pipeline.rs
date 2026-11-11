@@ -366,8 +366,8 @@ pub fn compile_react_source(
 /// `Jsx` accepts ordinary JavaScript, and `Tsx` accepts ordinary TypeScript;
 /// a module need not contain JSX or any runtime statements. Generated runtime
 /// imports are hygienic across the whole source and follow its directives.
-/// Source maps preserve exact unchanged-source positions and anchor generated
-/// JSX calls to their source element. Type-erased lines without an exact
+/// Source maps retain verified unchanged-line anchors and locate generated JSX
+/// calls at their source element. Type-erased lines without an exact
 /// correspondence are left unmapped, rather than assigned invented positions.
 pub fn compile_react_module(
     source: &str,
@@ -1574,6 +1574,27 @@ export default <div title={text}>{template}</div>;
         assert!(result.generated_code.contains("Fragment as"));
         assert!(result.generated_code.contains("jsx as"));
         assert!(result.generated_code.contains("jsxs as"));
+    }
+
+    #[test]
+    fn module_scanner_distinguishes_class_declarations_from_expression_division() {
+        let source = r#"
+class View { render() { return <main/>; } }
+/<Declaration>/.test("<Declaration>");
+const Value = class { render() { return <span/>; } } / 2;
+export default class extends class {} { render() { return <footer/>; } }
+/<Exported>/.test("<Exported>");
+"#;
+        let result = compile_react_module(
+            source,
+            ReactInputLanguage::Jsx,
+            &ReactCompileConfig::default(),
+        )
+        .expect("classes preserve the following regular expression or division");
+        assert_eq!(result.jsx_elements, 3);
+        assert!(result.generated_code.contains("/<Declaration>/.test"));
+        assert!(result.generated_code.contains("} / 2"));
+        assert!(result.generated_code.contains("/<Exported>/.test"));
     }
 
     #[test]

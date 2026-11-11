@@ -952,7 +952,7 @@ fn parse_attributes(
 
             if cursor.peek() == Some('"') || cursor.peek() == Some('\'') {
                 if let Some(quote) = cursor.advance() {
-                    let value = read_until_char(cursor, quote);
+                    let value = decode_jsx_entities(&read_until_char(cursor, quote))?;
                     families.push(JsxFeatureFamily::StringAttribute);
                     attrs.push(JsxAttribute::Named {
                         name: attr_name,
@@ -1066,13 +1066,328 @@ fn parse_children(
         if !text.is_empty() {
             families.push(JsxFeatureFamily::TextChild);
             children.push(JsxChild::Text {
-                value: text,
+                value: decode_jsx_entities(&text)?,
                 span: cursor.make_span(start),
             });
         }
     }
 
     Ok(children)
+}
+
+/// Decode JSX's HTML4 character references exactly once, before lowering.
+/// JavaScript expression containers never pass through this decoder.
+/// See https://react.github.io/jsx/#sec-HTMLCharacterReference. Unknown,
+/// unterminated, and out-of-range references remain literal source text.
+fn decode_jsx_entities(source: &str) -> Result<String, JsxParseError> {
+    let mut output = String::with_capacity(source.len());
+    let mut remaining = source;
+    while let Some(ampersand) = remaining.find('&') {
+        output.push_str(&remaining[..ampersand]);
+        remaining = &remaining[ampersand + 1..];
+        // Stop at another ampersand or any non-reference character. Searching
+        // for a later semicolon through arbitrary text would be quadratic on
+        // a long sequence of unmatched ampersands.
+        let length = remaining
+            .bytes()
+            .take_while(|byte| byte.is_ascii_alphanumeric() || *byte == b'#')
+            .count();
+        let code_point = if remaining.as_bytes().get(length) == Some(&b';') {
+            let reference = &remaining[..length];
+            if let Some(digits) = reference.strip_prefix("#x") {
+                (!digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_hexdigit()))
+                    .then(|| u32::from_str_radix(digits, 16).ok())
+                    .flatten()
+            } else if let Some(digits) = reference.strip_prefix('#') {
+                (!digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()))
+                    .then(|| digits.parse::<u32>().ok())
+                    .flatten()
+            } else {
+                jsx_named_entity(reference).map(u32::from)
+            }
+            .filter(|value| *value <= 0x10ffff)
+        } else {
+            None
+        };
+        if let Some(code_point) = code_point {
+            let character = char::from_u32(code_point).ok_or_else(|| JsxParseError::FailClosed {
+                diagnostics: vec![JsxDiagnostic {
+                    code: JsxDiagnosticCode::UnsupportedJsxSyntax,
+                    severity: JsxDiagnosticSeverity::Error,
+                    message: "JSX numeric surrogate references require a UTF-16 string representation".to_string(),
+                    span: None,
+                }],
+            })?;
+            output.push(character);
+            remaining = &remaining[length + 1..];
+        } else {
+            output.push('&');
+        }
+    }
+    output.push_str(remaining);
+    Ok(output)
+}
+
+/// The HTML4 named reference table used by JSX, with the XML `apos` spelling.
+/// Values are Unicode code points from the public HTML4 character-reference
+/// table, not HTML5's larger set or its semicolon-omission recovery rules.
+fn jsx_named_entity(name: &str) -> Option<char> {
+    Some(match name {
+        "AElig" => '\u{c6}',
+        "Aacute" => '\u{c1}',
+        "Acirc" => '\u{c2}',
+        "Agrave" => '\u{c0}',
+        "Alpha" => '\u{391}',
+        "Aring" => '\u{c5}',
+        "Atilde" => '\u{c3}',
+        "Auml" => '\u{c4}',
+        "Beta" => '\u{392}',
+        "Ccedil" => '\u{c7}',
+        "Chi" => '\u{3a7}',
+        "Dagger" => '\u{2021}',
+        "Delta" => '\u{394}',
+        "ETH" => '\u{d0}',
+        "Eacute" => '\u{c9}',
+        "Ecirc" => '\u{ca}',
+        "Egrave" => '\u{c8}',
+        "Epsilon" => '\u{395}',
+        "Eta" => '\u{397}',
+        "Euml" => '\u{cb}',
+        "Gamma" => '\u{393}',
+        "Iacute" => '\u{cd}',
+        "Icirc" => '\u{ce}',
+        "Igrave" => '\u{cc}',
+        "Iota" => '\u{399}',
+        "Iuml" => '\u{cf}',
+        "Kappa" => '\u{39a}',
+        "Lambda" => '\u{39b}',
+        "Mu" => '\u{39c}',
+        "Ntilde" => '\u{d1}',
+        "Nu" => '\u{39d}',
+        "OElig" => '\u{152}',
+        "Oacute" => '\u{d3}',
+        "Ocirc" => '\u{d4}',
+        "Ograve" => '\u{d2}',
+        "Omega" => '\u{3a9}',
+        "Omicron" => '\u{39f}',
+        "Oslash" => '\u{d8}',
+        "Otilde" => '\u{d5}',
+        "Ouml" => '\u{d6}',
+        "Phi" => '\u{3a6}',
+        "Pi" => '\u{3a0}',
+        "Prime" => '\u{2033}',
+        "Psi" => '\u{3a8}',
+        "Rho" => '\u{3a1}',
+        "Scaron" => '\u{160}',
+        "Sigma" => '\u{3a3}',
+        "THORN" => '\u{de}',
+        "Tau" => '\u{3a4}',
+        "Theta" => '\u{398}',
+        "Uacute" => '\u{da}',
+        "Ucirc" => '\u{db}',
+        "Ugrave" => '\u{d9}',
+        "Upsilon" => '\u{3a5}',
+        "Uuml" => '\u{dc}',
+        "Xi" => '\u{39e}',
+        "Yacute" => '\u{dd}',
+        "Yuml" => '\u{178}',
+        "Zeta" => '\u{396}',
+        "aacute" => '\u{e1}',
+        "acirc" => '\u{e2}',
+        "acute" => '\u{b4}',
+        "aelig" => '\u{e6}',
+        "agrave" => '\u{e0}',
+        "alefsym" => '\u{2135}',
+        "alpha" => '\u{3b1}',
+        "amp" => '\u{26}',
+        "and" => '\u{2227}',
+        "ang" => '\u{2220}',
+        "apos" => '\u{27}',
+        "aring" => '\u{e5}',
+        "asymp" => '\u{2248}',
+        "atilde" => '\u{e3}',
+        "auml" => '\u{e4}',
+        "bdquo" => '\u{201e}',
+        "beta" => '\u{3b2}',
+        "brvbar" => '\u{a6}',
+        "bull" => '\u{2022}',
+        "cap" => '\u{2229}',
+        "ccedil" => '\u{e7}',
+        "cedil" => '\u{b8}',
+        "cent" => '\u{a2}',
+        "chi" => '\u{3c7}',
+        "circ" => '\u{2c6}',
+        "clubs" => '\u{2663}',
+        "cong" => '\u{2245}',
+        "copy" => '\u{a9}',
+        "crarr" => '\u{21b5}',
+        "cup" => '\u{222a}',
+        "curren" => '\u{a4}',
+        "dArr" => '\u{21d3}',
+        "dagger" => '\u{2020}',
+        "darr" => '\u{2193}',
+        "deg" => '\u{b0}',
+        "delta" => '\u{3b4}',
+        "diams" => '\u{2666}',
+        "divide" => '\u{f7}',
+        "eacute" => '\u{e9}',
+        "ecirc" => '\u{ea}',
+        "egrave" => '\u{e8}',
+        "empty" => '\u{2205}',
+        "emsp" => '\u{2003}',
+        "ensp" => '\u{2002}',
+        "epsilon" => '\u{3b5}',
+        "equiv" => '\u{2261}',
+        "eta" => '\u{3b7}',
+        "eth" => '\u{f0}',
+        "euml" => '\u{eb}',
+        "euro" => '\u{20ac}',
+        "exist" => '\u{2203}',
+        "fnof" => '\u{192}',
+        "forall" => '\u{2200}',
+        "frac12" => '\u{bd}',
+        "frac14" => '\u{bc}',
+        "frac34" => '\u{be}',
+        "frasl" => '\u{2044}',
+        "gamma" => '\u{3b3}',
+        "ge" => '\u{2265}',
+        "gt" => '\u{3e}',
+        "hArr" => '\u{21d4}',
+        "harr" => '\u{2194}',
+        "hearts" => '\u{2665}',
+        "hellip" => '\u{2026}',
+        "iacute" => '\u{ed}',
+        "icirc" => '\u{ee}',
+        "iexcl" => '\u{a1}',
+        "igrave" => '\u{ec}',
+        "image" => '\u{2111}',
+        "infin" => '\u{221e}',
+        "int" => '\u{222b}',
+        "iota" => '\u{3b9}',
+        "iquest" => '\u{bf}',
+        "isin" => '\u{2208}',
+        "iuml" => '\u{ef}',
+        "kappa" => '\u{3ba}',
+        "lArr" => '\u{21d0}',
+        "lambda" => '\u{3bb}',
+        "lang" => '\u{2329}',
+        "laquo" => '\u{ab}',
+        "larr" => '\u{2190}',
+        "lceil" => '\u{2308}',
+        "ldquo" => '\u{201c}',
+        "le" => '\u{2264}',
+        "lfloor" => '\u{230a}',
+        "lowast" => '\u{2217}',
+        "loz" => '\u{25ca}',
+        "lrm" => '\u{200e}',
+        "lsaquo" => '\u{2039}',
+        "lsquo" => '\u{2018}',
+        "lt" => '\u{3c}',
+        "macr" => '\u{af}',
+        "mdash" => '\u{2014}',
+        "micro" => '\u{b5}',
+        "middot" => '\u{b7}',
+        "minus" => '\u{2212}',
+        "mu" => '\u{3bc}',
+        "nabla" => '\u{2207}',
+        "nbsp" => '\u{a0}',
+        "ndash" => '\u{2013}',
+        "ne" => '\u{2260}',
+        "ni" => '\u{220b}',
+        "not" => '\u{ac}',
+        "notin" => '\u{2209}',
+        "nsub" => '\u{2284}',
+        "ntilde" => '\u{f1}',
+        "nu" => '\u{3bd}',
+        "oacute" => '\u{f3}',
+        "ocirc" => '\u{f4}',
+        "oelig" => '\u{153}',
+        "ograve" => '\u{f2}',
+        "oline" => '\u{203e}',
+        "omega" => '\u{3c9}',
+        "omicron" => '\u{3bf}',
+        "oplus" => '\u{2295}',
+        "or" => '\u{2228}',
+        "ordf" => '\u{aa}',
+        "ordm" => '\u{ba}',
+        "oslash" => '\u{f8}',
+        "otilde" => '\u{f5}',
+        "otimes" => '\u{2297}',
+        "ouml" => '\u{f6}',
+        "para" => '\u{b6}',
+        "part" => '\u{2202}',
+        "permil" => '\u{2030}',
+        "perp" => '\u{22a5}',
+        "phi" => '\u{3c6}',
+        "pi" => '\u{3c0}',
+        "piv" => '\u{3d6}',
+        "plusmn" => '\u{b1}',
+        "pound" => '\u{a3}',
+        "prime" => '\u{2032}',
+        "prod" => '\u{220f}',
+        "prop" => '\u{221d}',
+        "psi" => '\u{3c8}',
+        "quot" => '\u{22}',
+        "rArr" => '\u{21d2}',
+        "radic" => '\u{221a}',
+        "rang" => '\u{232a}',
+        "raquo" => '\u{bb}',
+        "rarr" => '\u{2192}',
+        "rceil" => '\u{2309}',
+        "rdquo" => '\u{201d}',
+        "real" => '\u{211c}',
+        "reg" => '\u{ae}',
+        "rfloor" => '\u{230b}',
+        "rho" => '\u{3c1}',
+        "rlm" => '\u{200f}',
+        "rsaquo" => '\u{203a}',
+        "rsquo" => '\u{2019}',
+        "sbquo" => '\u{201a}',
+        "scaron" => '\u{161}',
+        "sdot" => '\u{22c5}',
+        "sect" => '\u{a7}',
+        "shy" => '\u{ad}',
+        "sigma" => '\u{3c3}',
+        "sigmaf" => '\u{3c2}',
+        "sim" => '\u{223c}',
+        "spades" => '\u{2660}',
+        "sub" => '\u{2282}',
+        "sube" => '\u{2286}',
+        "sum" => '\u{2211}',
+        "sup" => '\u{2283}',
+        "sup1" => '\u{b9}',
+        "sup2" => '\u{b2}',
+        "sup3" => '\u{b3}',
+        "supe" => '\u{2287}',
+        "szlig" => '\u{df}',
+        "tau" => '\u{3c4}',
+        "there4" => '\u{2234}',
+        "theta" => '\u{3b8}',
+        "thetasym" => '\u{3d1}',
+        "thinsp" => '\u{2009}',
+        "thorn" => '\u{fe}',
+        "tilde" => '\u{2dc}',
+        "times" => '\u{d7}',
+        "trade" => '\u{2122}',
+        "uArr" => '\u{21d1}',
+        "uacute" => '\u{fa}',
+        "uarr" => '\u{2191}',
+        "ucirc" => '\u{fb}',
+        "ugrave" => '\u{f9}',
+        "uml" => '\u{a8}',
+        "upsih" => '\u{3d2}',
+        "upsilon" => '\u{3c5}',
+        "uuml" => '\u{fc}',
+        "weierp" => '\u{2118}',
+        "xi" => '\u{3be}',
+        "yacute" => '\u{fd}',
+        "yen" => '\u{a5}',
+        "yuml" => '\u{ff}',
+        "zeta" => '\u{3b6}',
+        "zwj" => '\u{200d}',
+        "zwnj" => '\u{200c}',
+        _ => return None,
+    })
 }
 
 fn read_identifier(cursor: &mut Cursor<'_>) -> String {
@@ -1983,6 +2298,47 @@ mod tests {
             allow_namespaced_names: true,
             ..default_config()
         }
+    }
+
+    #[test]
+    fn test_jsx_entities_decode_in_text_and_quoted_attributes_only() {
+        let source = r#"<div title="A &quot;quote&quot; &amp; &apos;apostrophe&apos;">&lt;tag&gt; &#169; &#x1F600; &nbsp;&Omega;{"&amp;"}</div>"#;
+        let parsed = parse_jsx(source, &default_config()).expect("JSX entities parse");
+        let JsxNode::Element(element) = parsed.node else {
+            panic!("expected element");
+        };
+        assert!(matches!(
+            &element.attributes[0],
+            JsxAttribute::Named {
+                value: JsxAttributeValue::StringLiteral { value }, ..
+            } if value == "A \"quote\" & 'apostrophe'"
+        ));
+        assert!(matches!(
+            &element.children[0],
+            JsxChild::Text { value, .. } if value == "<tag> © 😀 \u{a0}Ω"
+        ));
+        assert!(matches!(
+            &element.children[1],
+            JsxChild::ExpressionContainer { expression, .. } if expression == r#""&amp;""#
+        ));
+        assert_eq!(element.span.end_offset as usize, source.len());
+    }
+
+    #[test]
+    fn test_jsx_entities_preserve_unknown_references_and_decode_once() {
+        assert_eq!(
+            decode_jsx_entities("&amp;lt; &unknown; &apos &AMP; &#x110000; &#-1; &amp").unwrap(),
+            "&lt; &unknown; &apos &AMP; &#x110000; &#-1; &amp"
+        );
+        assert_eq!(
+            decode_jsx_entities("&#0;&#00065;&#x1f600;&copy;").unwrap(),
+            "\0A😀©"
+        );
+        assert_eq!(decode_jsx_entities("&&&&amp;").unwrap(), "&&&&");
+        assert!(
+            decode_jsx_entities("&#xD800;").is_err(),
+            "do not replace a surrogate with different text"
+        );
     }
 
     // --- Runtime mode ---

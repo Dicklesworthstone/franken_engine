@@ -4884,6 +4884,14 @@ fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
                     // the closing brace and the labelled body greedily absorbs
                     // `rest` (bd-t7txt / bd-bg9l1.27.4).
                     let seg_body = strip_leading_labels(seg);
+                    // Exported classes have the same heritage boundary as
+                    // ordinary declarations. An inner `extends class {}` or
+                    // `extends function () {}` body cannot end the export.
+                    let class_statement = strip_export_keywords(seg_body).unwrap_or(seg_body);
+                    let closes_class_body = !starts_with_keyword(class_statement, "class")
+                        || class_body_brace(class_statement).is_none_or(|body| {
+                            line.len() - class_statement.len() + body == outer_brace_open
+                        });
                     let starts_with_block = seg_body.starts_with('{')
                         // A bare or labelled BLOCK statement (`{..}` / `outer:
                         // {..}`) is block-terminated too; without this the closing
@@ -4912,12 +4920,9 @@ fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
                         // A class declaration ends with its body, not with a
                         // braced heritage (`class C extends class {} {}`,
                         // `extends function () {} {}`, bd-9vouw.176).
-                        || (starts_with_keyword(seg_body, "class")
-                            && class_body_brace(seg_body).is_none_or(|body| {
-                                line.len() - seg_body.len() + body == outer_brace_open
-                            }))
+                        || starts_with_keyword(seg_body, "class")
                         || starts_with_export_block_statement(seg_body);
-                    if starts_with_block {
+                    if starts_with_block && closes_class_body {
                         let after = index.saturating_add(1);
                         let rest = line[after..].trim_start();
                         // A `while` continues only a do statement still
@@ -20684,6 +20689,35 @@ mod tests {
             Statement::VariableDeclaration(declaration)
                 if declaration.declarations[0].name() == Some("after")
         ));
+    }
+
+    #[test]
+    fn exported_class_heritage_bodies_do_not_end_the_declaration() {
+        for source in [
+            "export class Derived extends class {} {} const after = 1;",
+            "export default class extends class {} {} const after = 1;",
+            "export default class Derived extends function () {} {} const after = 1;",
+        ] {
+            let tree = CanonicalEs2020Parser
+                .parse(source, ParseGoal::Module)
+                .unwrap_or_else(|error| panic!("{source}: {error}"));
+            assert!(matches!(
+                tree.body.last(),
+                Some(Statement::VariableDeclaration(declaration))
+                    if declaration.declarations[0].name() == Some("after")
+            ));
+            let super_class = match &tree.body[0] {
+                Statement::ClassDeclaration(class) => &class.super_class,
+                Statement::Export(export) => match &export.kind {
+                    ExportKind::Default(Expression::ClassExpression { super_class, .. }) => {
+                        super_class
+                    }
+                    _ => panic!("expected default class expression"),
+                },
+                _ => panic!("expected exported class"),
+            };
+            assert!(super_class.is_some(), "heritage must remain attached: {source}");
+        }
     }
 
     #[test]

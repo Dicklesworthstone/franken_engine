@@ -1325,11 +1325,11 @@ mod tests {
         let binding = original.find("const").unwrap() as i64;
         let map = serde_json::json!({
             "version": 3, "sources": ["app.js"], "sourcesContent": [original], "names": [],
-            "mappings": [
+            "mappings": ([
                 encode_vlq(&[0, 0, 0, 0]),
                 encode_vlq(&[start as i64, 0, 0, start as i64]),
                 encode_vlq(&[binding - start as i64, 0, 0, binding - start as i64]),
-            ].join(","),
+            ].join(",")),
         })
         .to_string();
         let edits = [SourceEdit {

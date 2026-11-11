@@ -615,14 +615,18 @@ fn runtime_import_insertion(source: &str, parsed: &SyntaxTree) -> usize {
     parsed
         .body
         .iter()
-        .find(|statement| {
-            !matches!(statement,
+        .skip_while(|statement| {
+            matches!(statement,
                 Statement::Expression(statement)
                     if matches!(statement.expression, Expression::StringLiteral(_)))
         })
-        .map_or(source.len(), |statement| {
-            statement.span().start_offset as usize
-        })
+        // Named declaration exports expand to a declaration followed by its
+        // export record. The declaration span starts after `export`, while
+        // the following record retains the full source statement's span.
+        // Choose the earliest surface span, never the interior declaration.
+        .map(|statement| statement.span().start_offset as usize)
+        .min()
+        .unwrap_or(source.len())
 }
 
 struct JavaScriptEmitter<'a> {
@@ -1531,6 +1535,30 @@ mod tests {
                     .find("from \"react/jsx-runtime\"")
                     .unwrap()
         );
+    }
+
+    #[test]
+    fn module_runtime_imports_precede_complete_export_declarations() {
+        for declaration in [
+            "export const app = <div/>;",
+            "export function App() { return <div/>; }",
+            "export default function App() { return <div/>; }",
+            "export class App { render() { return <div/>; } }",
+            "export default class App { render() { return <div/>; } }",
+        ] {
+            let source = format!("\"use client\";\n{declaration}");
+            let compiled = compile_react_module(
+                &source,
+                ReactInputLanguage::Jsx,
+                &ReactCompileConfig::default(),
+            )
+            .unwrap_or_else(|error| panic!("{declaration}: {error}"));
+            let imports = compiled.generated_code.find("import {").unwrap();
+            let export = compiled.generated_code.find("export ").unwrap();
+            assert!(imports < export, "{}", compiled.generated_code);
+            assert!(compiled.generated_code.starts_with("\"use client\";"));
+            assert_eq!(compiled.jsx_elements, 1);
+        }
     }
 
     #[test]

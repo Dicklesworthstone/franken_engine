@@ -207,3 +207,197 @@ Promise.all([failed,complete]).then(function(values){
         assert_eq!(run(source, lane), ["TEE_PIPE_COMPLETE true 2,4,6 true"]);
     }
 }
+
+
+#[test]
+fn from_sync_records_preserve_values_getter_order_and_completed_value_observation() {
+    let source = r#"
+const {ReadableStream} = require('stream/web');
+const events = [];
+let calls = 0;
+const input = {
+  [Symbol.iterator]() { return this; },
+  next() {
+    const done = calls++ !== 0;
+    events.push('next:' + done);
+    return {
+      get done() { events.push('done:' + done); return done; },
+      get value() { events.push('value:' + done); return Promise.resolve(done ? 'ignored' : 42); },
+      get then() { throw Error('iterator record was assimilated'); }
+    };
+  }
+};
+(async function () {
+  const stream = ReadableStream.from(input), values = [];
+  for await (const value of stream) values.push(value);
+  console.log('SYNC_RECORD', values.join(','), events.join(','), stream.locked);
+})();
+"#;
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        assert_eq!(
+            run(source, lane),
+            ["SYNC_RECORD 42 next:false,done:false,value:false,next:true,done:true,value:true false"]
+        );
+    }
+}
+
+#[test]
+fn from_sync_rejection_preserves_the_error_and_closes_only_unfinished_values() {
+    // This post-ES2020 Web API follows current AsyncFromSyncIteratorContinuation.
+    let source = r#"
+const {ReadableStream} = require('node:stream/web');
+(async function () {
+  for (const done of [true, false]) {
+    const events = [], reason = {done};
+    const input = {
+      [Symbol.iterator]() { return this; },
+      next() { return {done, value:Promise.reject(reason)}; },
+      get return() {
+        events.push('get');
+        return function () {
+          events.push('call:' + arguments.length);
+          return {
+            get then() { throw Error('cleanup was assimilated'); },
+            get done() { throw Error('cleanup was inspected'); }
+          };
+        };
+      }
+    };
+    const reader = ReadableStream.from(input).getReader();
+    const failed = await reader.read().then(() => false, error => error === reason);
+    console.log('SYNC_REJECT', done, failed, events.length, events.join(',') || 'none');
+    reader.releaseLock();
+  }
+  for (const field of ['done', 'value']) {
+    const events = [], reason = {field};
+    const reader = ReadableStream.from({
+      [Symbol.iterator]() { return this; },
+      next() { return {
+        get done() { if (field === 'done') throw reason; return false; },
+        get value() { throw reason; }
+      }; },
+      return() { events.push('return'); return {done:true}; }
+    }).getReader();
+    console.log('SYNC_GETTER', field,
+      await reader.read().then(() => false, error => error === reason), events.length);
+    reader.releaseLock();
+  }
+})();
+"#;
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        assert_eq!(
+            run(source, lane),
+            [
+                "SYNC_REJECT true true 0 none",
+                "SYNC_REJECT false true 2 get,call:0",
+                "SYNC_GETTER done true 0",
+                "SYNC_GETTER value true 0",
+            ]
+        );
+    }
+}
+
+#[test]
+fn from_sync_cancellation_waits_for_return_value_while_closing_pending_reads() {
+    let source = r#"
+const {ReadableStream} = require('stream/web');
+(async function () {
+  const events = [];
+  let rejectCleanup, settled = false;
+  const cleanup = new Promise(function(resolve,reject){rejectCleanup=reject;});
+  const stream = ReadableStream.from({
+    [Symbol.iterator]() { return this; },
+    next() { return {done:false,value:1}; },
+    return(reason) {
+      events.push('return:' + reason + ':' + arguments.length);
+      return {
+        get done() { events.push('done'); return true; },
+        get value() { events.push('value'); return cleanup; },
+        get then() { throw Error('cleanup record was assimilated'); }
+      };
+    }
+  });
+  const reader = stream.getReader(), pending = reader.read();
+  const cancelled = reader.cancel('stop').then(function(){settled=true;return false;},
+    function(error){settled=true;return error===false;});
+  console.log('SYNC_CANCEL_PENDING', (await pending).done, settled, events.join(','));
+  rejectCleanup(false);
+  console.log('SYNC_CANCEL_RESULT', await cancelled, (await reader.read()).done);
+  reader.releaseLock();
+  console.log('SYNC_CANCEL_UNLOCKED', stream.locked);
+})();
+"#;
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        assert_eq!(
+            run(source, lane),
+            [
+                "SYNC_CANCEL_PENDING true false return:stop:1,done,value",
+                "SYNC_CANCEL_RESULT true true",
+                "SYNC_CANCEL_UNLOCKED false",
+            ]
+        );
+    }
+}
+
+#[test]
+fn from_keeps_async_values_opaque_and_accepts_absent_iterator_cleanup() {
+    let source = r#"
+const {ReadableStream} = require('node:stream/web');
+(async function () {
+  let calls = 0, valueReads = 0;
+  const value = {get then(){valueReads++;throw Error('async value was awaited');}};
+  const reader = ReadableStream.from({
+    [Symbol.asyncIterator]() { return this; },
+    next() {
+      const done = calls++ !== 0;
+      return {then(resolve){resolve({
+        done, get value(){if(done)throw Error('completed async value read');return value;}
+      });}};
+    }
+  }).getReader();
+  console.log('ASYNC_RECORD', (await reader.read()).value === value,
+    (await reader.read()).done, valueReads);
+  reader.releaseLock();
+  const reason = {get then(){throw Error('unused cancellation reason awaited');}};
+  await ReadableStream.from({
+    [Symbol.iterator]() { return this; }, next(){return {done:false,value:1};}, return:null
+  }).cancel(reason);
+  const invalid = ReadableStream.from({[Symbol.iterator](){return this;},next:null}).getReader();
+  console.log('FROM_PROTOCOL', await invalid.read().then(()=>false,error=>error instanceof TypeError));
+  invalid.releaseLock();
+})();
+"#;
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        assert_eq!(
+            run(source, lane),
+            ["ASYNC_RECORD true true 0", "FROM_PROTOCOL true"]
+        );
+    }
+}
+
+#[test]
+fn from_internal_algorithms_ignore_public_controller_and_dictionary_tampering() {
+    let source = r#"
+const web = require('stream/web');
+const prototype = web.ReadableStreamDefaultController.prototype;
+const close = prototype.close, enqueue = prototype.enqueue;
+let calls = 0, stream;
+Object.defineProperty(Object.prototype, 'start', {
+  configurable:true, get(){calls++;throw Error('inherited source callback');}
+});
+try { stream = web.ReadableStream.from([20, Promise.resolve(22)]); }
+finally { delete Object.prototype.start; }
+(async function () {
+  const values = [];
+  try {
+    prototype.close = function(){calls++;throw Error('public close');};
+    prototype.enqueue = function(){calls++;throw Error('public enqueue');};
+    for await (const value of stream) values.push(value);
+  } finally { prototype.close=close;prototype.enqueue=enqueue; }
+  console.log('FROM_INTERNAL', values.join(','), calls, stream.locked);
+})();
+"#;
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        assert_eq!(run(source, lane), ["FROM_INTERNAL 20,22 0 false"]);
+    }
+}

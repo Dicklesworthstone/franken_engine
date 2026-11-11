@@ -493,3 +493,245 @@ test('controller error releases sizing algorithms before the in-flight write fin
     w.releaseLock();return sizes;
   });
 });
+
+
+// ReadableStream.from is a Web API, so its sync adapter follows the current
+// WHATWG/Web IDL + AsyncFromSyncIteratorContinuation contract. In particular,
+// close-on-yield-rejection is newer than ES2020/Node 22. Keep the historical
+// Node comparisons above separate from these explicit protocol expectations.
+// https://streams.spec.whatwg.org/#readable-stream-from-iterable
+// https://webidl.spec.whatwg.org/#js-async-sequence
+// https://tc39.es/ecma262/#sec-asyncfromsynciteratorcontinuation
+test('from adapts synchronous records without assimilating their then property', async () => {
+  async function observe(from) {
+    const events = [];
+    let calls = 0;
+    const iterable = {
+      [Symbol.iterator]() { return this; },
+      next() {
+        const done = calls++ !== 0;
+        events.push('next:' + done);
+        return {
+          get done() { events.push('done:' + done); return done; },
+          get value() { events.push('value:' + done); return Promise.resolve(done ? 'ignored' : 42); },
+          get then() { events.push('record:then'); throw Error('iterator result was assimilated'); },
+        };
+      },
+    };
+    const values = [];
+    for await (const value of from(iterable)) values.push(value);
+    return [values, events];
+  }
+  // Language iteration independently supplies the sync-to-async adapter.
+  const expected = await observe(iterable => iterable);
+  assert.deepEqual(await observe(iterable => candidate().ReadableStream.from(iterable)), expected);
+  assert.deepEqual(expected, [[42], ['next:false', 'done:false', 'value:false',
+    'next:true', 'done:true', 'value:true']]);
+});
+test('from waits for the value of a completed sync result and keeps its rejection', async () => {
+  for (const failure of [undefined, false, 0, { final: true }]) {
+    const gate = deferred();
+    let returns = 0, settled = false;
+    const reader = candidate().ReadableStream.from({
+      [Symbol.iterator]() { return this; },
+      next() { return { done: true, value: gate.promise }; },
+      return() { returns++; return { done: true }; },
+    }).getReader();
+    const completion = reader.read().then(() => { settled = true; return 'wrong'; },
+      error => { settled = true; return error === failure; });
+    await ticks();
+    assert.equal(settled, false);
+    gate.reject(failure);
+    assert.equal(await completion, true);
+    await assert.rejects(reader.closed, error => error === failure);
+    assert.equal(returns, 0);
+    reader.releaseLock();
+  }
+});
+test('from observes done and value failures without running value-rejection cleanup', async () => {
+  for (const field of ['done', 'value']) {
+    const reason = { field };
+    const events = [];
+    const reader = candidate().ReadableStream.from({
+      [Symbol.iterator]() { return this; },
+      next() {
+        return {
+          get done() { events.push('done'); if (field === 'done') throw reason; return false; },
+          get value() { events.push('value'); throw reason; },
+        };
+      },
+      return() { events.push('return'); return { done: true }; },
+    }).getReader();
+    await assert.rejects(reader.read(), error => error === reason);
+    await assert.rejects(reader.closed, error => error === reason);
+    assert.deepEqual(events, field === 'done' ? ['done'] : ['done', 'value']);
+    reader.releaseLock();
+  }
+});
+test('from closes rejected synchronous values without replacing or awaiting their error', async () => {
+  for (const mode of ['reject', 'constructor']) {
+    for (const close of ['throw', 'getter', 'primitive', 'record', 'null']) {
+      const events = [], reason = { mode, close }, secondary = { secondary: true };
+      const value = mode === 'reject' ? Promise.reject(reason) : Promise.resolve(1);
+      if (mode === 'constructor') Object.defineProperty(value, 'constructor', { get() { throw reason; } });
+      const iterable = {
+        [Symbol.iterator]() { return this; },
+        next() { return { done: false, value }; },
+        get return() {
+          events.push('return:get');
+          if (close === 'getter') throw secondary;
+          if (close === 'null') return null;
+          return function () {
+            assert.equal(this, iterable);
+            events.push('return:' + arguments.length);
+            if (close === 'throw') throw secondary;
+            if (close === 'primitive') return 3;
+            return {
+              get then() { throw Error('cleanup result must not be assimilated'); },
+              get done() { throw Error('cleanup result must not be read'); },
+              get value() { throw Error('cleanup result must not be read'); },
+            };
+          };
+        },
+      };
+      const reader = candidate().ReadableStream.from(iterable).getReader();
+      await assert.rejects(reader.read(), error => error === reason);
+      await assert.rejects(reader.closed, error => error === reason);
+      assert.deepEqual(events, close === 'getter' || close === 'null' ?
+        ['return:get'] : ['return:get', 'return:0']);
+      reader.releaseLock();
+    }
+  }
+});
+test('from cancellation awaits sync return values but never assimilates their record', async () => {
+  for (const done of [false, true]) {
+    const api = candidate(), gate = deferred(), events = [], reason = { stop: true };
+    let settled = false;
+    const iterable = {
+      [Symbol.iterator]() { return this; },
+      next() { return { done: false, value: 1 }; },
+      return(value) {
+        assert.equal(this, iterable);
+        assert.equal(arguments.length, 1);
+        assert.equal(value, reason);
+        events.push('return');
+        return {
+          get done() { events.push('done'); return done; },
+          get value() { events.push('value'); return gate.promise; },
+          get then() { throw Error('return record must not be assimilated'); },
+        };
+      },
+    };
+    const stream = api.ReadableStream.from(iterable), reader = stream.getReader();
+    const cleanup = reader.cancel(reason).then(() => { settled = true; return 'wrong'; },
+      error => { settled = true; return error === false; });
+    assert.deepEqual(events, ['return', 'done', 'value']);
+    assert.deepEqual(await reader.read(), { value: undefined, done: true });
+    await ticks();
+    assert.equal(settled, false);
+    gate.reject(false);
+    assert.equal(await cleanup, true);
+    await reader.closed;
+    reader.releaseLock();
+    assert.equal(stream.locked, false);
+  }
+});
+test('from treats a null return as absent and does not await an unused cancel reason', async () => {
+  for (const key of [Symbol.iterator, Symbol.asyncIterator]) {
+    let reasonReads = 0;
+    const reason = { get then() { reasonReads++; throw Error('unused reason awaited'); } };
+    const stream = candidate().ReadableStream.from({
+      [key]() { return this; }, next() { return { done: false, value: 1 }; }, return: null,
+    });
+    await stream.cancel(reason);
+    assert.equal(reasonReads, 0);
+    assert.equal(stream.locked, false);
+  }
+});
+test('from keeps async result and value semantics distinct from sync adaptation', async () => {
+  const events = [];
+  let calls = 0, valueThenReads = 0;
+  const value = { get then() { valueThenReads++; throw Error('async value awaited'); } };
+  const reader = candidate().ReadableStream.from({
+    [Symbol.asyncIterator]() { return this; },
+    next() {
+      const done = calls++ !== 0;
+      return { then(resolve) {
+        events.push('result:then');
+        resolve({ get done() { events.push('done'); return done; },
+          get value() { events.push('value'); if (done) throw Error('done async value read'); return value; } });
+      } };
+    },
+    return() { throw Error('completed async iterator closed'); },
+  }).getReader();
+  assert.equal((await reader.read()).value, value);
+  assert.equal((await reader.read()).done, true);
+  assert.equal(valueThenReads, 0);
+  assert.deepEqual(events, ['result:then', 'done', 'value', 'result:then', 'done']);
+  reader.releaseLock();
+
+  const stream = candidate().ReadableStream.from({
+    [Symbol.asyncIterator]() { return this; },
+    next() { return Promise.resolve({ done: false, value: 1 }); },
+    return() {
+      return Promise.resolve({
+        get done() { throw Error('async cleanup done read'); },
+        get value() { throw Error('async cleanup value read'); },
+      });
+    },
+  });
+  await stream.cancel('stop');
+});
+test('from snapshots next but defers noncallable next errors until the first pull', async () => {
+  for (const key of [Symbol.iterator, Symbol.asyncIterator]) {
+    for (const next of [undefined, null, 3]) {
+      const api = candidate();
+      let stream;
+      assert.doesNotThrow(() => { stream = api.ReadableStream.from({ [key]() { return this; }, next }); });
+      const reader = stream.getReader();
+      await assert.rejects(reader.read(), TypeError);
+      await assert.rejects(reader.closed, TypeError);
+      reader.releaseLock();
+    }
+    const error = { getter: true };
+    assert.throws(() => candidate().ReadableStream.from({
+      [key]() { return this; }, get next() { throw error; },
+    }), reason => reason === error);
+  }
+});
+test('from internal publication ignores guest edits to controller methods', async () => {
+  const api = candidate(), prototype = api.ReadableStreamDefaultController.prototype;
+  const close = prototype.close, enqueue = prototype.enqueue;
+  let traps = 0;
+  try {
+    prototype.close = function () { traps++; throw Error('public close'); };
+    prototype.enqueue = function () { traps++; throw Error('public enqueue'); };
+    assert.deepEqual(await collect(api.ReadableStream.from([20, Promise.resolve(22)])), [20, 22]);
+  } finally {
+    prototype.close = close; prototype.enqueue = enqueue;
+  }
+  assert.equal(traps, 0);
+});
+
+test('from internal dictionaries ignore inherited source and strategy callbacks', async () => {
+  const api = candidate();
+  const names = ['start', 'type', 'size'];
+  const saved = names.map(name => Object.getOwnPropertyDescriptor(Object.prototype, name));
+  let stream, traps = 0;
+  try {
+    for (const name of names) {
+      const descriptor = Object.create(null);
+      descriptor.configurable = true;
+      descriptor.get = function () { traps++; throw Error('inherited ' + name); };
+      Object.defineProperty(Object.prototype, name, descriptor);
+    }
+    stream = api.ReadableStream.from([1, 2]);
+  } finally {
+    for (let i = 0; i < names.length; i++) {
+      if (saved[i] === undefined) delete Object.prototype[names[i]];
+      else Object.defineProperty(Object.prototype, names[i], saved[i]);
+    }
+  }
+  assert.equal(traps, 0);
+  assert.deepEqual(await collect(stream), [1, 2]);
+});

@@ -584,6 +584,10 @@
     enqueue(chunk) { enqueue(get(controllers, this, 'ReadableStreamDefaultController'), chunk); }
     error(reason) { errorReadable(get(controllers, this, 'ReadableStreamDefaultController'), reason); }
   }
+  // Internal iterable-source algorithms must not dispatch through guest edits
+  // to public controller methods after the module has initialized.
+  const defaultControllerClose = ReadableStreamDefaultController.prototype.close;
+  const defaultControllerEnqueue = ReadableStreamDefaultController.prototype.enqueue;
   function defaultReaderState(value) {
     const r = get(readers, value, 'ReadableStreamDefaultReader');
     if (r.byob) throw invalid('Invalid ReadableStreamDefaultReader receiver');
@@ -921,25 +925,64 @@
       if (typeof iteratorMethod !== 'function') throw invalid('Value is not iterable');
       const iterator = apply(iteratorMethod, iterable, []);
       if (iterator === null || (typeof iterator !== 'object' && typeof iterator !== 'function')) throw invalid('Invalid iterator');
-      const next = method(iterator, 'next');
-      if (next === undefined) throw invalid('Iterator has no next method');
-      return new ReadableStream({
-        pull: function (controller) {
-          return then(promised(next, iterator, []), function (item) {
-            if (item === null || (typeof item !== 'object' && typeof item !== 'function')) throw invalid('Invalid iterator result');
-            if (item.done) { controller.close(); return; }
-            if (synchronous) return then(resolved(item.value), function (value) { controller.enqueue(value); });
-            controller.enqueue(item.value);
-          });
-        },
-        cancel: function (reason) {
-          const finish = method(iterator, 'return');
-          if (finish === undefined) return;
-          return then(promised(finish, iterator, [reason]), function (item) {
-            if (item === null || (typeof item !== 'object' && typeof item !== 'function')) throw invalid('Invalid iterator return result');
-          });
+      // GetIteratorFromMethod snapshots next without calling or validating it.
+      // A throwing getter fails construction; a noncallable value fails a pull.
+      const next = iterator.next;
+      function returnMethod() {
+        const finish = iterator.return;
+        if (finish === undefined || finish === null) return undefined;
+        if (typeof finish !== 'function') throw invalid('Iterator return must be a function');
+        return finish;
+      }
+      function closeRejected(error) {
+        // IteratorClose with a throw completion preserves the original error.
+        // Errors obtaining/calling return cannot replace that error, and its
+        // result is neither awaited nor inspected. Only rejected yielded
+        // values take this path.
+        try {
+          const finish = returnMethod();
+          if (finish !== undefined) apply(finish, iterator, []);
+        } catch (ignored) {}
+        throw error;
+      }
+      function syncResult(fn, args, closeOnRejection) {
+        const item = apply(fn, iterator, args);
+        if (item === null || (typeof item !== 'object' && typeof item !== 'function')) throw invalid('Invalid iterator result');
+        // AsyncFromSyncIteratorContinuation reads done then value immediately,
+        // including the value of a done result. Never assimilate the caller's
+        // result object: its then property is unrelated to the yielded value.
+        const done = !!item.done;
+        const value = item.value;
+        let promise;
+        try { promise = resolved(value); }
+        catch (error) {
+          if (!done && closeOnRejection) closeRejected(error);
+          throw error;
         }
-      }, { highWaterMark: 0 });
+        return then(promise, function (value) { return result(value, done); },
+          !done && closeOnRejection ? closeRejected : undefined);
+      }
+      // These are internal algorithms, not guest source/strategy dictionaries.
+      // Inherited start/type/size properties must not inject another callback.
+      const source = create(null), config = create(null);
+      source.pull = function (controller) {
+        const pending = synchronous ? syncResult(next, [], true) : promised(next, iterator, []);
+        return then(pending, function (item) {
+          if (item === null || (typeof item !== 'object' && typeof item !== 'function')) throw invalid('Invalid iterator result');
+          if (item.done) { apply(defaultControllerClose, controller, []); return; }
+          apply(defaultControllerEnqueue, controller, [item.value]);
+        });
+      };
+      source.cancel = function (reason) {
+        const finish = returnMethod();
+        if (finish === undefined) return;
+        const pending = synchronous ? syncResult(finish, [reason], false) : promised(finish, iterator, [reason]);
+        return then(pending, function (item) {
+          if (item === null || (typeof item !== 'object' && typeof item !== 'function')) throw invalid('Invalid iterator return result');
+        });
+      };
+      config.highWaterMark = 0;
+      return new ReadableStream(source, config);
     }
   }
   const readableValues = ReadableStream.prototype.values;

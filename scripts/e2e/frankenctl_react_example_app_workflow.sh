@@ -174,9 +174,13 @@ cat >"$compile_source_path" <<'EOF'
 EOF
 
 cat >"$build_entry_path" <<'EOF'
+import { heading } from './heading.js';
 export default function ExampleEntry() {
-  return <main data-surface="react-build-entry">Example entry</main>;
+  return <main data-surface="react-build-entry">{heading}</main>;
 }
+EOF
+cat >"${fixtures_dir}/heading.js" <<'EOF'
+export const heading = 'Example entry from a transitive module';
 EOF
 
 if ! command -v rch >/dev/null 2>&1; then
@@ -485,6 +489,17 @@ build_example_report() {
       },
       supported_journeys: [
         {
+          journey_id: "client_entry_preparation",
+          outcome: "preview_built",
+          command: $client_command,
+          capability_id: $client[0].capability_id,
+          support_status: $client[0].support_status,
+          graph_hash: $client[0].build.graph_hash,
+          entry_asset: $client[0].build.entry_asset,
+          module_count: ($client[0].build.modules | length),
+          artifact_path: $client_path
+        },
+        {
           journey_id: "react_help",
           outcome: "pass",
           artifact_path: $help_output_path
@@ -541,16 +556,6 @@ build_example_report() {
           error_code: $ssr[0].diagnostic.error_code,
           product_surface_bead: $ssr[0].diagnostic.product_surface_bead,
           artifact_path: $ssr_path
-        },
-        {
-          journey_id: "client_entry_preparation",
-          outcome: "expected_fail_closed",
-          command: $client_command,
-          capability_id: $client[0].capability_id,
-          support_status: $client[0].support_status,
-          error_code: $client[0].diagnostic.error_code,
-          product_surface_bead: $client[0].diagnostic.product_surface_bead,
-          artifact_path: $client_path
         },
         {
           journey_id: "hydration_handoff",
@@ -688,17 +693,19 @@ run_artifact_flow() {
   append_event "react_build_ssr_report_emitted" "unsupported" "expected_fail_closed" "${ssr_trace_id}" "${ssr_decision_id}" "${ssr_policy_id}" "$(json_quote "FE-RGC-016A-CAP-0007")" "$(json_quote "${ssr_report_path}")"
 
   run_step \
-    "cargo run -q -p frankenengine-engine --bin frankenctl -- react build --entry ${build_entry_path} --target client --trace-id ${client_trace_id} --decision-id ${client_decision_id} --policy-id ${client_policy_id}" \
-    "25" \
+    "cargo run -q -p frankenengine-engine --bin frankenctl -- react build --entry ${build_entry_path} --target client --external react/jsx-runtime=https://esm.sh/react@19.1.0/jsx-runtime --trace-id ${client_trace_id} --decision-id ${client_decision_id} --policy-id ${client_policy_id}" \
+    "0" \
     "${client_report_path}" \
     cargo run -q -p frankenengine-engine --bin frankenctl -- react build \
       --entry "${build_entry_path}" \
       --target client \
+      --external "react/jsx-runtime=https://esm.sh/react@19.1.0/jsx-runtime" \
       --trace-id "${client_trace_id}" \
       --decision-id "${client_decision_id}" \
       --policy-id "${client_policy_id}" \
       --out "${client_report_path}" || return $?
-  append_event "react_build_client_report_emitted" "unsupported" "expected_fail_closed" "${client_trace_id}" "${client_decision_id}" "${client_policy_id}" "$(json_quote "FE-RGC-016A-CAP-0008")" "$(json_quote "${client_report_path}")"
+  jq -e '.support_status == "gated_preview" and .blocked == false and .shipped == false and (.build.modules | length) == 2' "${client_report_path}" >/dev/null || return 1
+  append_event "react_build_client_report_emitted" "gated_preview" "preview_built" "${client_trace_id}" "${client_decision_id}" "${client_policy_id}" "null" "$(json_quote "${client_report_path}")"
 
   run_step \
     "cargo run -q -p frankenengine-engine --bin frankenctl -- react build --entry ${build_entry_path} --target hydration --trace-id ${hydration_trace_id} --decision-id ${hydration_decision_id} --policy-id ${hydration_policy_id}" \

@@ -898,11 +898,118 @@ fn frankenctl_react_build_fails_closed_with_contract_guidance() {
 }
 
 #[test]
-fn frankenctl_react_example_app_client_build_fails_closed_with_contract_guidance() {
-    assert_react_build_fails_closed(
-        "client",
-        "react-client-entry-preparation",
-        "FE-RGC-016A-CAP-0008",
+fn frankenctl_react_client_build_publishes_complete_modules_and_detects_tampering() {
+    let root = temp_path("frankenctl_react_client_graph", "dir");
+    fs::create_dir(&root).expect("create project");
+    let entry = root.join("entry.jsx");
+    write_source(
+        &entry,
+        "import { label } from './label.js';\nexport default <main>{label}</main>;\n",
+    );
+    write_source(
+        &root.join("label.js"),
+        "export const label = 'Hello from the dependency';\n",
+    );
+    let out_dir = root.join("dist");
+    let report = root.join("build.json");
+    let run = || {
+        Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+            .args(["react", "build", "--entry"])
+            .arg(&entry)
+            .args([
+                "--target",
+                "client",
+                "--external",
+                "react/jsx-runtime=https://example.test/react-runtime.mjs",
+                "--out-dir",
+            ])
+            .arg(&out_dir)
+            .arg("--out")
+            .arg(&report)
+            .output()
+            .expect("execute client build")
+    };
+
+    let first = run();
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let output = parse_stdout_json(&first);
+    assert_eq!(output["blocked"], false);
+    assert_eq!(output["support_status"], "gated_preview");
+    assert_eq!(
+        output["shipped"], false,
+        "a successful preview is not a full React support claim"
+    );
+    let modules = output["build"]["modules"]
+        .as_array()
+        .expect("module assets");
+    assert_eq!(modules.len(), 2);
+    let directory = PathBuf::from(output["build_directory"].as_str().expect("published path"));
+    assert!(directory.join("index.html").is_file());
+    assert!(directory.join("import-map.json").is_file());
+    for module in modules {
+        let asset = directory.join(module["asset_path"].as_str().expect("asset path"));
+        assert_eq!(
+            fs::read_to_string(&asset).expect("published module"),
+            module["code"].as_str().expect("code")
+        );
+        let map: serde_json::Value =
+            serde_json::from_str(module["source_map"].as_str().expect("source map"))
+                .expect("map JSON");
+        assert!(!map["mappings"].as_str().expect("mappings").is_empty());
+    }
+    let second = run();
+    assert!(second.status.success());
+    assert_eq!(
+        parse_stdout_json(&second),
+        output,
+        "identical builds reuse identical assets"
+    );
+
+    let entry_asset = directory.join(
+        output["build"]["entry_asset"]
+            .as_str()
+            .expect("entry asset"),
+    );
+    fs::write(&entry_asset, "tampered").expect("corrupt emitted module");
+    let corrupted = run();
+    assert!(!corrupted.status.success());
+    assert!(String::from_utf8_lossy(&corrupted.stderr).contains("does not match this build"));
+    assert_eq!(
+        fs::read_to_string(&entry_asset).unwrap(),
+        "tampered",
+        "never overwrite a conflicting build"
+    );
+}
+
+#[test]
+fn frankenctl_react_client_build_rejects_missing_dependencies_before_publication() {
+    let root = temp_path("frankenctl_react_missing_import", "dir");
+    fs::create_dir(&root).expect("create project");
+    let entry = root.join("entry.js");
+    write_source(&entry, "import './missing.js';\n");
+    let out_dir = root.join("dist");
+    let report = root.join("build.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args(["react", "build", "--entry"])
+        .arg(&entry)
+        .args(["--target", "client", "--out-dir"])
+        .arg(&out_dir)
+        .arg("--out")
+        .arg(&report)
+        .output()
+        .expect("execute missing-dependency build");
+    assert!(!output.status.success());
+    assert!(
+        !out_dir.exists(),
+        "failed graph capture must not publish assets"
+    );
+    assert!(
+        !report.exists(),
+        "failed graph capture must not claim a successful report"
     );
 }
 

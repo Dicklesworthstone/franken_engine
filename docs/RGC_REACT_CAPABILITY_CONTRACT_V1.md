@@ -52,9 +52,11 @@ Allowed `support_status` values are:
 - `gated_preview`
 - `shipped`
 
-Until the shipped React operator surface (`bd-1lsy.10.12*`) and the React
-parity gates (`bd-1lsy.9.7*`) are green, rows stay in `unsupported` or
-`deferred` state and must not be represented as shipped support.
+A bounded executable producer may expose a `gated_preview` row with its
+limitations stated explicitly. Promoting a row to `shipped` still requires
+the React operator surface (`bd-1lsy.10.12*`) and the React parity gates
+(`bd-1lsy.9.7*`) to be green. A preview must not be represented as shipped
+support.
 
 ## Explicit Capability Rows
 
@@ -68,13 +70,22 @@ parity gates (`bd-1lsy.9.7*`) are green, rows stay in `unsupported` or
 | `jsx-dev-runtime-diagnostics` | `unsupported` | `bd-1lsy.3.6.2` | `bd-1lsy.9.7.1` | `bd-1lsy.10.12.2` |
 | `tsx-dev-runtime-diagnostics` | `unsupported` | `bd-1lsy.3.6.2` | `bd-1lsy.9.7.1` | `bd-1lsy.10.12.2` |
 | `react-ssr-entrypoint` | `unsupported` | `bd-1lsy.5.7.2` | `bd-1lsy.9.7.2` | `bd-1lsy.10.12.3` |
-| `react-client-entry-preparation` | `unsupported` | `bd-1lsy.5.7.1` | `bd-1lsy.9.7.2` | `bd-1lsy.10.12.3` |
+| `react-client-entry-preparation` | `gated_preview` | `bd-1lsy.5.7.1` | `bd-1lsy.9.7.2` | `bd-1lsy.10.12.3` |
 | `react-hydration-handoff-artifacts` | `unsupported` | `bd-1lsy.5.7.2` | `bd-1lsy.9.7.2` | `bd-1lsy.10.12.3` |
 | `react-diagnostics-source-maps` | `deferred` | `bd-1lsy.10.5` | `bd-1lsy.9.7.1` | `bd-1lsy.10.12.2` |
 
 `jsx-dev` diagnostics and `tsx-dev` diagnostics remain separate rows on purpose:
 the diagnostics surface must be explicit for both source forms so TSX support is
 never implied by a JSX-only dev-runtime contract.
+
+The client preview implements the bounded local ESM portion of `bd-9vouw.509`.
+It captures actual source files, compiles complete modules, rewrites local static
+imports/re-exports, and emits a content-addressed directory containing executable
+modules, source maps, an explicit provider import map, and an HTML entry. It does
+not fetch external providers, bundle CommonJS, or implement SSR/hydration. A
+successful preview report has `blocked: false`, `shipped: false`, and a nonempty
+`build`; producer failure cannot turn a contract row into a success report.
+The broader build bead and full React parity promotion remain open.
 
 ## Unsupported-Surface Governance
 

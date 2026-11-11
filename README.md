@@ -785,9 +785,37 @@ frankenctl react  tsx        ─┼─ × ─ ───┤              ─┼�
 ```
 
 - **`frankenctl react compile`** lowers a single source file under a chosen `--source-form` and `--runtime`. `jsx-fragment` is a degenerate form (no runtime required).
-- **`frankenctl react build`** drives a multi-file FRX build to one of three `--target`s: `ssr`, `client`, or `hydration`.
+- **`frankenctl react build --target client`** offers a bounded ES-module client-build preview. It compiles complete local JS/JSX/TS/TSX modules, follows static imports and re-exports, preserves module boundaries and live bindings, and emits JavaScript assets with source maps. `ssr` and `hydration` remain unsupported and return exit 25.
 - **`frankenctl react doctor`** consumes a React component catalog and emits operator artifacts (`--summary`, `--current-epoch`, `--min-severity`, `--target` filters, `--include-resolved`).
 - **`frankenctl react contract`** emits the React compile/build contract artifact for downstream consumption.
+
+The client preview accepts an explicit source root and runtime-provider map:
+
+```bash
+frankenctl react build --entry ./app/main.tsx --root ./app --target client \
+  --external react=https://your-cdn.example/react.mjs \
+  --external react/jsx-runtime=https://your-cdn.example/react-jsx-runtime.mjs \
+  --external react-dom/client=https://your-cdn.example/react-dom-client.mjs \
+  --out-dir ./dist --out ./client-build.json
+```
+
+Replace the example URLs with compatible ES modules from your selected provider.
+The compiler does not fetch or execute those providers. Serve the reported
+`build_directory` over HTTP: it contains `index.html` with a `root` mount element,
+an import map, and the emitted module assets. The entry module is responsible
+for mounting the application into `#root` with its selected renderer. The
+directory name is the complete
+graph hash; repeat builds verify existing bytes, and changed transitive sources
+produce a different directory. Without `--out-dir`, all assets remain available
+in the JSON report. Source maps retain verified source and JSX anchors; positions
+without a verified origin remain unmapped.
+
+Source discovery stays inside `--root` (the entry directory by default), including
+symlink targets. Missing or ambiguous local files, undeclared bare dependencies,
+CommonJS, dynamic imports, and non-code assets fail before publication. Defaults
+bound the build to 1,024 modules, 32 MiB of source, and 64 MiB of generated output.
+External modules and DOM execution remain the selected runtime's responsibility;
+the preview is not an npm bundler or a claim of SSR/hydration support.
 
 ### Gates in the FRX family (34 `run_frx_*.sh` scripts)
 

@@ -82,6 +82,9 @@ use frankenengine_engine::parser_oracle::{
     DEFAULT_FIXTURE_CATALOG_PATH, OracleGateMode, OraclePartition, ParserOracleConfig,
     run_parser_oracle,
 };
+use frankenengine_engine::react_client_build::{
+    ReactClientBuild, ReactClientBuildConfig, build_react_client,
+};
 use frankenengine_engine::react_compilation_pipeline::{
     ReactCompileConfig, ReactCompileEvidence, ReactCompileResult,
     ReactInputLanguage as ReactPipelineInputLanguage, compile_react_source,
@@ -799,6 +802,10 @@ struct ReactCompileArgs {
 struct ReactBuildArgs {
     entry: PathBuf,
     target: ReactBuildTarget,
+    root: Option<PathBuf>,
+    out_dir: Option<PathBuf>,
+    runtime_mode: ReactRuntimeMode,
+    externals: BTreeMap<String, String>,
     out: Option<PathBuf>,
     trace_id: String,
     decision_id: String,
@@ -1844,6 +1851,10 @@ struct ReactCliReportOutput {
     diagnostic: ReactCliDiagnostic,
     required_artifacts: Vec<String>,
     compilation: Option<ReactCliCompilationOutput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    build: Option<ReactClientBuild>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    build_directory: Option<String>,
     output: Option<String>,
 }
 
@@ -3902,6 +3913,10 @@ fn parse_react_build_command(args: &[String]) -> Result<CommandSpec, String> {
 
     let mut entry: Option<PathBuf> = None;
     let mut target: Option<ReactBuildTarget> = None;
+    let mut root = None;
+    let mut out_dir = None;
+    let mut runtime_mode = ReactRuntimeMode::Automatic;
+    let mut externals = BTreeMap::new();
     let mut out: Option<PathBuf> = None;
     let mut trace_id = "trace-frankenctl-react-build".to_string();
     let mut decision_id = "decision-frankenctl-react-build".to_string();
@@ -3916,6 +3931,25 @@ fn parse_react_build_command(args: &[String]) -> Result<CommandSpec, String> {
                     args, &mut index, "--target",
                 )?)?)
             }
+            "--root" => root = Some(PathBuf::from(next_arg(args, &mut index, "--root")?)),
+            "--out-dir" => {
+                out_dir = Some(PathBuf::from(next_arg(args, &mut index, "--out-dir")?));
+            }
+            "--runtime" => {
+                runtime_mode = parse_react_runtime_mode(&next_arg(args, &mut index, "--runtime")?)?;
+            }
+            "--external" => {
+                let mapping = next_arg(args, &mut index, "--external")?;
+                let (specifier, url) = mapping.split_once('=').ok_or_else(|| {
+                    "react build --external requires <specifier>=<URL>".to_string()
+                })?;
+                if specifier.is_empty() || url.is_empty() {
+                    return Err("react build --external requires a non-empty specifier and URL".to_string());
+                }
+                if externals.insert(specifier.to_string(), url.to_string()).is_some() {
+                    return Err(format!("duplicate react build external `{specifier}`"));
+                }
+            }
             "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
             "--trace-id" => trace_id = next_arg(args, &mut index, "--trace-id")?,
             "--decision-id" => decision_id = next_arg(args, &mut index, "--decision-id")?,
@@ -3929,6 +3963,10 @@ fn parse_react_build_command(args: &[String]) -> Result<CommandSpec, String> {
         entry: entry.ok_or_else(|| "react build requires --entry <path>".to_string())?,
         target: target
             .ok_or_else(|| "react build requires --target <ssr|client|hydration>".to_string())?,
+        root,
+        out_dir,
+        runtime_mode,
+        externals,
         out,
         trace_id,
         decision_id,
@@ -11832,7 +11870,7 @@ fn execute_react_build(args: ReactBuildArgs) -> Result<i32, String> {
     }
     let contract = parse_react_capability_contract()?;
     let row = select_react_build_row(&contract, args.target)?;
-    let output = build_react_cli_report(
+    let mut output = build_react_cli_report(
         &args.trace_id,
         &args.decision_id,
         &args.policy_id,
@@ -11847,11 +11885,261 @@ fn execute_react_build(args: ReactBuildArgs) -> Result<i32, String> {
         args.out.as_ref(),
     );
 
+    if output.shipped
+        || (args.target == ReactBuildTarget::Client && row.support_status == "gated_preview")
+    {
+        if args.target != ReactBuildTarget::Client {
+            return Err("React build target has no executable producer".to_string());
+        }
+        let mut compile = react_compile_config(ReactSourceForm::Jsx, Some(args.runtime_mode));
+        compile.generate_source_maps = true;
+        let config = ReactClientBuildConfig {
+            project_root: args.root.unwrap_or_else(|| {
+                args.entry
+                    .parent()
+                    .filter(|path| !path.as_os_str().is_empty())
+                    .unwrap_or_else(|| Path::new("."))
+                    .to_path_buf()
+            }),
+            entry: args.entry,
+            externals: args.externals,
+            compile,
+            ..ReactClientBuildConfig::default()
+        };
+        let build = build_react_client(&config)
+            .map_err(|error| format!("react client build failed: {error}"))?;
+        if let Some(out_dir) = &args.out_dir {
+            output.build_directory = Some(
+                publish_react_client_build(&build, out_dir)?
+                    .display()
+                    .to_string(),
+            );
+        }
+        output.request.runtime_mode = Some(args.runtime_mode.as_str().to_string());
+        output.blocked = false;
+        output.diagnostic.error_code = "OK".to_string();
+        output.diagnostic.fallback_mode = "execute_native_react_pipeline".to_string();
+        output.diagnostic.claim_language_state = row.support_status.clone();
+        output.diagnostic.waiver_required = false;
+        output.diagnostic.max_waiver_age_hours = 0;
+        output.diagnostic.message = format!(
+            "Built {} ES modules; entry `{}`. This is the bounded client-build preview; external runtime providers are declared in the import map.",
+            build.modules.len(),
+            build.entry_asset,
+        );
+        output.build = Some(build);
+    }
+
     if let Some(path) = &args.out {
         write_json_file(path, &output)?;
     }
     print_json(&output)?;
     if output.blocked { Ok(25) } else { Ok(0) }
+}
+
+/// Publish a complete build under its content identity. Preparing the entire
+/// directory before renaming it keeps a failed build from becoming a runnable
+/// partial application and never replaces a previous build's assets.
+fn publish_react_client_build(build: &ReactClientBuild, out_dir: &Path) -> Result<PathBuf, String> {
+    build
+        .verify_integrity()
+        .map_err(|error| format!("invalid React build: {error}"))?;
+    let mut assets = BTreeMap::<PathBuf, Vec<u8>>::new();
+    for module in &build.modules {
+        let path = PathBuf::from(&module.asset_path);
+        if path
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+            || path.as_os_str().is_empty()
+        {
+            return Err(format!(
+                "invalid React output asset path `{}`",
+                path.display()
+            ));
+        }
+        if ContentHash::compute(module.code.as_bytes()) != module.output_hash {
+            return Err(format!(
+                "React output hash mismatch for `{}`",
+                path.display()
+            ));
+        }
+        if assets
+            .insert(path.clone(), module.code.as_bytes().to_vec())
+            .is_some()
+        {
+            return Err(format!("duplicate React output asset `{}`", path.display()));
+        }
+        if let Some(source_map) = &module.source_map {
+            let map_path = PathBuf::from(format!("{}.map", module.asset_path));
+            if assets
+                .insert(map_path.clone(), source_map.as_bytes().to_vec())
+                .is_some()
+            {
+                return Err(format!(
+                    "duplicate React source map `{}`",
+                    map_path.display()
+                ));
+            }
+        }
+    }
+    if !assets.contains_key(Path::new(&build.entry_asset)) {
+        return Err("React build entry is not present in its assets".to_string());
+    }
+    let import_map = serde_json::to_string_pretty(&serde_json::json!({
+        "imports": build.import_map,
+    }))
+    .map_err(|error| format!("failed to serialize React import map: {error}"))?;
+    // An import URL can contain HTML delimiters. JSON escaping alone does not
+    // stop </script> from ending the HTML raw-text element.
+    let inline_map = import_map
+        .replace('&', "\\u0026")
+        .replace('<', "\\u003c")
+        .replace('>', "\\u003e");
+    let entry_url = build
+        .entry_asset
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    let index = format!(
+        "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n<title>FrankenEngine React app</title>\n<script type=\"importmap\">{inline_map}</script>\n</head>\n<body>\n<div id=\"root\"></div>\n<script type=\"module\" src=\"./{entry_url}\"></script>\n</body>\n</html>\n"
+    );
+    for (name, content) in [("import-map.json", import_map), ("index.html", index)] {
+        if assets
+            .insert(PathBuf::from(name), content.into_bytes())
+            .is_some()
+        {
+            return Err(format!(
+                "React module collides with reserved asset `{name}`"
+            ));
+        }
+    }
+
+    fs::create_dir_all(out_dir).map_err(|error| {
+        format!(
+            "failed to create React output directory `{}`: {error}",
+            out_dir.display()
+        )
+    })?;
+    let destination = out_dir.join(build.graph_hash.to_hex());
+    match fs::symlink_metadata(&destination) {
+        Ok(_) => {
+            verify_react_client_assets(&destination, &assets)?;
+            return Ok(destination);
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("failed to inspect React output: {error}")),
+    }
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("failed to allocate React staging directory: {error}"))?
+        .as_nanos();
+    let staging = out_dir.join(format!(".react-build-{}-{nonce}", std::process::id()));
+    fs::create_dir(&staging).map_err(|error| {
+        format!(
+            "failed to create React staging directory `{}`: {error}",
+            staging.display()
+        )
+    })?;
+    for (relative, bytes) in &assets {
+        let path = staging.join(relative);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                format!(
+                    "failed to prepare React asset directory `{}`: {error}",
+                    parent.display()
+                )
+            })?;
+        }
+        // create_new is intentional: a source asset must never overwrite a map
+        // or any other already prepared file, even if the graph is malformed.
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|error| {
+                format!("failed to create React asset `{}`: {error}", path.display())
+            })?;
+        std::io::Write::write_all(&mut file, bytes)
+            .and_then(|()| file.sync_all())
+            .map_err(|error| {
+                format!("failed to write React asset `{}`: {error}", path.display())
+            })?;
+    }
+    if let Err(error) = fs::rename(&staging, &destination) {
+        // Concurrent identical builds may publish first. Accept only their
+        // exact bytes; a corrupt or unrelated directory stays untouched.
+        verify_react_client_assets(&destination, &assets).map_err(|verification| {
+            format!("failed to publish React build: {error}; {verification}")
+        })?;
+    }
+    Ok(destination)
+}
+
+fn verify_react_client_assets(
+    directory: &Path,
+    expected: &BTreeMap<PathBuf, Vec<u8>>,
+) -> Result<(), String> {
+    let mut pending = vec![PathBuf::new()];
+    let mut actual = BTreeSet::new();
+    while let Some(relative) = pending.pop() {
+        let path = directory.join(&relative);
+        let metadata = fs::symlink_metadata(&path).map_err(|error| {
+            format!(
+                "failed to inspect React asset `{}`: {error}",
+                path.display()
+            )
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "React build asset must not be a symlink: `{}`",
+                path.display()
+            ));
+        }
+        if metadata.is_dir() {
+            for entry in fs::read_dir(&path)
+                .map_err(|error| format!("failed to read React asset directory: {error}"))?
+            {
+                let entry =
+                    entry.map_err(|error| format!("failed to read React asset: {error}"))?;
+                let child = relative.join(entry.file_name());
+                if !expected.keys().any(|asset| asset.starts_with(&child)) {
+                    return Err(format!(
+                        "unexpected file in React build: `{}`",
+                        child.display()
+                    ));
+                }
+                pending.push(child);
+            }
+        } else if metadata.is_file() {
+            let bytes = expected
+                .get(&relative)
+                .ok_or_else(|| format!("unexpected React asset `{}`", relative.display()))?;
+            if metadata.len() != bytes.len() as u64
+                || fs::read(&path).map_err(|error| {
+                    format!("failed to read React asset `{}`: {error}", path.display())
+                })? != *bytes
+            {
+                return Err(format!(
+                    "existing React asset does not match this build: `{}`",
+                    path.display()
+                ));
+            }
+            actual.insert(relative);
+        } else {
+            return Err(format!(
+                "React build asset is not a regular file: `{}`",
+                path.display()
+            ));
+        }
+    }
+    if actual.len() != expected.len() {
+        return Err(format!(
+            "existing React build `{}` is incomplete",
+            directory.display()
+        ));
+    }
+    Ok(())
 }
 
 fn execute_react_doctor(args: ReactDoctorArgs) -> Result<i32, String> {
@@ -12000,8 +12288,8 @@ fn execute_react_contract(args: ReactContractArgs) -> Result<i32, String> {
             ReactCliCommandContract {
                 name: "react build".to_string(),
                 output_schema_version: REACT_CLI_REPORT_SCHEMA_VERSION.to_string(),
-                behavior: "fail_closed_until_build_target_is_shipped".to_string(),
-                usage: "frankenctl react build --entry <path> --target <ssr|client|hydration> [--out <report.json>]".to_string(),
+                behavior: "build_closed_esm_client_graph_else_fail_closed".to_string(),
+                usage: "frankenctl react build --entry <path> --target <ssr|client|hydration> [--root <project>] [--runtime <classic|automatic>] [--external <specifier>=<URL>] [--out-dir <assets>] [--out <report.json>]".to_string(),
             },
             ReactCliCommandContract {
                 name: "react doctor".to_string(),
@@ -12781,6 +13069,8 @@ fn build_react_cli_report(
         diagnostic: build_react_cli_diagnostic(row, shipped),
         required_artifacts: row.required_artifacts.clone(),
         compilation: None,
+        build: None,
+        build_directory: None,
         output: out.map(|path| path.display().to_string()),
     }
 }
@@ -14233,6 +14523,8 @@ fn react_usage() -> String {
         "      [--runtime <classic|automatic>] [--out <report.json>]",
         "      [--trace-id <id>] [--decision-id <id>] [--policy-id <id>]",
         "  frankenctl react build --entry <path> --target <ssr|client|hydration>",
+        "      [--root <project>] [--runtime <classic|automatic>] [--external <specifier>=<URL>]",
+        "      [--out-dir <assets>]",
         "      [--out <report.json>] [--trace-id <id>] [--decision-id <id>] [--policy-id <id>]",
         "  frankenctl react doctor --catalog <react_mismatch_catalog.json> [--summary]",
         "      [--min-severity <info|warning|error|critical>] [--include-resolved]",
@@ -14244,7 +14536,8 @@ fn react_usage() -> String {
         "",
         "notes:",
         "  react compile executes shipped JSX/TSX capability rows and emits native pipeline output;",
-        "  unshipped compile rows and all react build targets still fail closed with guidance.",
+        "  react build --target client compiles a bounded local ES-module graph to browser assets;",
+        "  external runtime providers require explicit --external mappings. SSR/hydration fail closed.",
         "  react doctor consumes a machine-readable mismatch catalog and emits support guidance",
         "  for unsupported React product surfaces.",
     ]
@@ -14269,11 +14562,16 @@ fn react_build_usage() -> String {
     [
         "react build usage:",
         "  frankenctl react build --entry <path> --target <ssr|client|hydration>",
+        "      [--root <project>] [--runtime <classic|automatic>] [--external <specifier>=<URL>]",
+        "      [--out-dir <assets>]",
         "      [--out <report.json>] [--trace-id <id>] [--decision-id <id>] [--policy-id <id>]",
         "",
         "behavior:",
-        "  emits a deterministic react-cli report tied to the embedded React capability contract",
-        "  and exits non-zero until the requested build target is shipped.",
+        "  client preview: compiles local JS/JSX/TS/TSX ES modules with source maps and preserved imports.",
+        "  --root bounds source access (default: entry directory); --external is repeatable.",
+        "  --out-dir publishes index.html, import-map.json and modules under the graph hash.",
+        "  Without --out-dir, the JSON report contains all generated assets.",
+        "  CommonJS and dynamic imports are rejected; SSR and hydration remain unsupported.",
     ]
     .join("\n")
 }
@@ -16423,6 +16721,10 @@ mod tests {
         let exit_code = execute_react_build(ReactBuildArgs {
             entry: entry.clone(),
             target: ReactBuildTarget::Ssr,
+            root: None,
+            out_dir: None,
+            runtime_mode: ReactRuntimeMode::Automatic,
+            externals: BTreeMap::new(),
             out: Some(out.clone()),
             trace_id: "trace-react-build".to_string(),
             decision_id: "decision-react-build".to_string(),

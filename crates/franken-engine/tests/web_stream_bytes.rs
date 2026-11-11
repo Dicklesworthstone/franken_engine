@@ -204,3 +204,137 @@ fn byte_tee_keeps_admitted_chunks_before_later_source_errors() {
 fn nested_byte_tees_serialize_the_source_and_preserve_all_consumers() {
     check(TEE_NESTED, &["TEE_NESTED 32:528,32:528,32:528 true true"]);
 }
+
+const RESIZED_MIN: &str = r#"
+const {ReadableStream}=require('node:stream/web');
+(async function(){
+ const cases=[
+  {name:'shrink',initial:8,after:4,offset:2,kind:0,min:1},
+  {name:'grow',initial:4,after:10,offset:2,kind:0,min:6},
+  {name:'fixed',initial:8,after:12,offset:2,kind:1,min:3},
+  {name:'data',initial:8,after:10,offset:2,kind:2,min:6},
+  {name:'typed',initial:6,after:12,offset:2,kind:3,min:4}
+ ];
+ for(const value of cases){
+  const backing=new ArrayBuffer(value.initial,{maxByteLength:16});
+  const view=value.kind===2?new DataView(backing,value.offset):
+   value.kind===3?new Uint16Array(backing,value.offset):
+   value.kind===1?new Uint8Array(backing,value.offset,3):new Uint8Array(backing,value.offset);
+  let c,gets=0;const stream=new ReadableStream({type:'bytes',start(x){c=x;}});
+  const reader=stream.getReader({mode:'byob'});
+  const pending=reader.read(view,{get min(){gets++;backing.resize(value.after);return value.min;}});
+  const request=c.byobRequest,span=request.view.byteLength,capacity=request.view.buffer.byteLength;
+  const count=value.min*(value.kind===3?2:1);request.view.fill(42);
+  const response=request.view.buffer.transfer();
+  request.respondWithNewView(new Uint8Array(response,value.offset,count));
+  const item=await pending,bytes=new Uint8Array(item.value.buffer,item.value.byteOffset,item.value.byteLength);
+  console.log('RESIZED_MIN',value.name,gets,backing.byteLength,span,capacity,item.value.byteOffset,
+   bytes.length,Array.from(bytes).every(x=>x===42),item.done);
+  await reader.cancel();reader.releaseLock();
+ }
+})();
+"#;
+
+const RESIZED_MIN_FAILURES: &str = r#"
+const {ReadableStream}=require('stream/web');
+(async function(){
+ const cases=[
+  {after:4,min:3,fixed:false,mode:0},
+  {after:2,min:1,fixed:false,mode:0},
+  {after:1,min:1,fixed:false,mode:0},
+  {after:4,min:1,fixed:true,mode:0},
+  {after:6,min:1,fixed:false,mode:1},
+  {after:8,min:1,fixed:false,mode:2}
+ ];
+ let index=0;
+ for(const value of cases){
+  const backing=new ArrayBuffer(8,{maxByteLength:16});
+  const view=value.fixed?new Uint8Array(backing,2,4):new Uint8Array(backing,2);
+  const failure={getter:true};let c,gets=0,replacement;
+  const stream=new ReadableStream({type:'bytes',start(x){c=x;c.enqueue(new Uint8Array([4,2]));}});
+  const reader=stream.getReader({mode:'byob'});
+  const outcome=await reader.read(view,{get min(){
+   gets++;
+   if(value.mode===2){replacement=backing.transfer();return value.min;}
+   backing.resize(value.after);
+   if(value.mode===1)throw failure;
+   return value.min;
+  }}).then(()=>false,error=>value.mode===1?error===failure:
+    index===0?error instanceof RangeError:error instanceof TypeError);
+  const empty=c.byobRequest===null;
+  c.close();const item=await reader.read(new Uint8Array(8));
+  console.log('RESIZED_MIN_FAILURE',index++,outcome,gets,empty,backing.byteLength,
+   replacement===undefined?0:replacement.byteLength,Array.from(item.value).join(','));
+  reader.releaseLock();
+ }
+})();
+"#;
+
+const RESIZED_MIN_ORDER: &str = r#"
+const {ReadableStream}=require('stream/web');
+(async function(){
+ const backing=new ArrayBuffer(8,{maxByteLength:16}),view=new Uint8Array(backing,2);
+ for(const key of ['buffer','byteOffset','byteLength','constructor'])
+  Object.defineProperty(view,key,{get(){throw Error('guest '+key);}});
+ let c,first,gets=0;
+ const stream=new ReadableStream({type:'bytes',start(x){c=x;c.enqueue(new Uint8Array([1,2]));}});
+ const reader=stream.getReader({mode:'byob'});
+ const second=reader.read(view,{get min(){
+  gets++;first=reader.read(new Uint8Array(2));backing.resize(4);return 1;
+ }});
+ c.enqueue(new Uint8Array([3,4]));c.close();
+ const one=await first,two=await second,end=await reader.read(new Uint8Array(1));
+ reader.releaseLock();
+ console.log('RESIZED_MIN_ORDER',gets,backing.byteLength,Array.from(one.value).join(','),
+  Array.from(two.value).join(','),two.value.byteOffset,two.value.buffer.byteLength,end.done,stream.locked);
+ const queuedBacking=new ArrayBuffer(8,{maxByteLength:16});
+ let qc;const queued=new ReadableStream({type:'bytes',start(x){
+  qc=x;qc.enqueue(new Uint8Array([10,20,30,40,50,60]));
+ }});
+ const qr=queued.getReader({mode:'byob'});
+ const part=await qr.read(new Uint8Array(queuedBacking,2),{get min(){queuedBacking.resize(4);return 2;}});
+ qc.close();const tail=await qr.read(new Uint8Array(8));qr.releaseLock();
+ console.log('RESIZED_MIN_QUEUED',queuedBacking.byteLength,part.value.byteOffset,part.value.buffer.byteLength,
+  Array.from(part.value).join(','),Array.from(tail.value).join(','));
+})();
+"#;
+
+#[test]
+fn byob_min_getters_refresh_resized_view_geometry_before_transfer() {
+    check(
+        RESIZED_MIN,
+        &[
+            "RESIZED_MIN shrink 1 0 2 4 2 1 true false",
+            "RESIZED_MIN grow 1 0 8 10 2 6 true false",
+            "RESIZED_MIN fixed 1 0 3 12 2 3 true false",
+            "RESIZED_MIN data 1 0 8 10 2 6 true false",
+            "RESIZED_MIN typed 1 0 10 12 2 8 true false",
+        ],
+    );
+}
+
+#[test]
+fn byob_min_getter_failures_preserve_queued_data_and_untransferred_storage() {
+    check(
+        RESIZED_MIN_FAILURES,
+        &[
+            "RESIZED_MIN_FAILURE 0 true 1 true 4 0 4,2",
+            "RESIZED_MIN_FAILURE 1 true 1 true 2 0 4,2",
+            "RESIZED_MIN_FAILURE 2 true 1 true 1 0 4,2",
+            "RESIZED_MIN_FAILURE 3 true 1 true 4 0 4,2",
+            "RESIZED_MIN_FAILURE 4 true 1 true 6 0 4,2",
+            "RESIZED_MIN_FAILURE 5 true 1 true 0 8 4,2",
+        ],
+    );
+}
+
+#[test]
+fn byob_min_getter_reentry_keeps_read_order_and_authenticated_view_metadata() {
+    check(
+        RESIZED_MIN_ORDER,
+        &[
+            "RESIZED_MIN_ORDER 1 0 1,2 3,4 2 4 true false",
+            "RESIZED_MIN_QUEUED 0 2 4 10,20 30,40,50,60",
+        ],
+    );
+}

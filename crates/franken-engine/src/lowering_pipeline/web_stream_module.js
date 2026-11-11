@@ -418,13 +418,19 @@
       ctor: info.ctor, element: info.element, kind: kind };
   }
   function readInto(r, view, options, receive) {
-    const info = viewInfo(view);
+    let info = viewInfo(view);
     if (info.length === 0 || info.capacity === 0) throw invalid('Cannot read into an empty byte view');
     const minimum = dictionary(options, 'options').min;
     // Node's BYOB extension accepts a positive integer number, not a coerced
     // dictionary value. Reading the option may still reenter/release below.
     const min = minimum === undefined ? 1 : minimum;
     if (typeof min !== 'number' || !(min > 0) || min % 1 !== 0) throw invalid('Invalid min');
+    // The option getter may resize or transfer the backing allocation. Refresh
+    // its authenticated geometry before checking min or taking ownership: a
+    // stale descriptor can strand a read or reject a valid producer response.
+    // These intrinsic reads do not call replaceable view properties.
+    info = viewInfo(view);
+    if (info.length === 0 || info.capacity === 0) throw invalid('Cannot read into an empty byte view');
     if (min > info.length / info.element) throw new NativeRangeError('Invalid min');
     if (r.stream === undefined) throw invalid('Reader lock is released');
     const s = get(streams, r.stream, 'ReadableStream');

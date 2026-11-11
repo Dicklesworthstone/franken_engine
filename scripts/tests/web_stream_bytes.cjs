@@ -223,3 +223,128 @@ check('queued min fills agree for 192 fixed-seed partitions and typed capacities
     });
   }
 });
+
+check('BYOB min getters refresh resizable view geometry before ownership transfer',async()=>{
+  // This exercises the canonical factory's resizable-buffer extension. It is
+  // a descriptor-consistency regression, not a historical Node parity claim.
+  const api=candidate();
+  const cases=[
+    {name:'tracking shrink',initial:8,after:4,offset:2,kind:'u8',min:1,length:2},
+    {name:'tracking growth',initial:4,after:10,offset:2,kind:'u8',min:6,length:8},
+    {name:'fixed growth',initial:8,after:12,offset:2,kind:'u8-fixed',min:3,length:3},
+    {name:'DataView growth',initial:8,after:10,offset:2,kind:'data',min:6,length:8},
+    {name:'typed growth',initial:6,after:12,offset:2,kind:'u16',min:4,length:10}
+  ];
+  for(const value of cases){
+    const backing=new ArrayBuffer(value.initial,{maxByteLength:16});
+    const view=value.kind==='data'?new DataView(backing,value.offset):
+      value.kind==='u16'?new Uint16Array(backing,value.offset):
+      value.kind==='u8-fixed'?new Uint8Array(backing,value.offset,3):
+      new Uint8Array(backing,value.offset);
+    let control,gets=0;
+    const stream=new api.ReadableStream({type:'bytes',start(c){control=c;}});
+    const reader=stream.getReader({mode:'byob'});
+    const pending=reader.read(view,{get min(){gets++;backing.resize(value.after);return value.min;}});
+    const checked=pending.then(item=>item,error=>{throw new Error(value.name+': '+error);});
+    try {
+      const request=control.byobRequest;
+      assert.notEqual(request,null,value.name);
+      assert.equal(request.view.byteLength,value.length,value.name);
+      assert.equal(request.view.byteOffset,value.offset,value.name);
+      assert.equal(request.view.buffer.byteLength,value.after,value.name);
+      assert.equal(backing.byteLength,0,value.name);
+      const count=value.min*(value.kind==='u16'?2:1);
+      request.view.fill(42);
+      const response=request.view.buffer.transfer();
+      request.respondWithNewView(new Uint8Array(response,value.offset,count));
+      const item=await checked;
+      assert.equal(item.done,false,value.name);
+      assert.equal(item.value.byteOffset,value.offset,value.name);
+      assert.equal(item.value.buffer.byteLength,value.after,value.name);
+      assert.deepEqual(bytes(item.value),new Array(count).fill(42),value.name);
+      assert.equal(item.value instanceof (value.kind==='data'?DataView:
+        value.kind==='u16'?Uint16Array:Uint8Array),true,value.name);
+      assert.equal(gets,1,value.name);
+    } finally {await reader.cancel();reader.releaseLock();await checked.catch(()=>{});}
+  }
+});
+check('resized BYOB admission failures leave queued bytes and caller storage intact',async()=>{
+  const api=candidate();
+  for(const value of [
+    {after:4,min:3,lengthTracking:true,error:RangeError},
+    {after:2,min:1,lengthTracking:true,error:TypeError},
+    {after:1,min:1,lengthTracking:true,error:TypeError},
+    {after:4,min:1,lengthTracking:false,error:TypeError}
+  ]){
+    const backing=new ArrayBuffer(8,{maxByteLength:16});
+    const view=value.lengthTracking?new Uint8Array(backing,2):new Uint8Array(backing,2,4);
+    let control,gets=0;
+    const stream=new api.ReadableStream({type:'bytes',start(c){control=c;c.enqueue(new Uint8Array([4,2]));}});
+    const reader=stream.getReader({mode:'byob'});
+    await assert.rejects(reader.read(view,{get min(){gets++;backing.resize(value.after);return value.min;}}),value.error);
+    assert.equal(gets,1);assert.equal(backing.byteLength,value.after);
+    assert.equal(control.byobRequest,null);
+    control.close();
+    assert.deepEqual(bytes((await reader.read(new Uint8Array(8))).value),[4,2]);
+    assert.equal((await reader.read(new Uint8Array(1))).done,true);
+    reader.releaseLock();
+  }
+});
+check('BYOB min getter throws and transfers do not consume bytes or install stale requests',async()=>{
+  const api=candidate();
+  for(const transfer of [false,true]){
+    const backing=new ArrayBuffer(8,{maxByteLength:16}),view=new Uint8Array(backing,2);
+    const failure={getter:true};let replacement,control,gets=0;
+    const stream=new api.ReadableStream({type:'bytes',start(c){control=c;c.enqueue(new Uint8Array([7,9]));}});
+    const reader=stream.getReader({mode:'byob'});
+    const pending=reader.read(view,{get min(){
+      gets++;
+      if(transfer){replacement=backing.transfer();return 1;}
+      backing.resize(6);throw failure;
+    }});
+    await assert.rejects(pending,error=>transfer?error instanceof TypeError:error===failure);
+    assert.equal(gets,1);assert.equal(backing.byteLength,transfer?0:6);
+    if(transfer)assert.equal(replacement.byteLength,8);
+    assert.equal(control.byobRequest,null);
+    control.close();
+    assert.deepEqual(bytes((await reader.read(new Uint8Array(8))).value),[7,9]);
+    reader.releaseLock();
+  }
+});
+check('refreshed BYOB geometry ignores shadowed view properties and preserves read ordering',async()=>{
+  const api=candidate();
+  const backing=new ArrayBuffer(8,{maxByteLength:16}),view=new Uint8Array(backing,2);
+  for(const key of ['buffer','byteOffset','byteLength','constructor'])
+    Object.defineProperty(view,key,{get(){throw Error('guest '+key);}});
+  let control,first,gets=0;
+  const stream=new api.ReadableStream({type:'bytes',start(c){control=c;c.enqueue(new Uint8Array([1,2]));}});
+  const reader=stream.getReader({mode:'byob'});
+  const second=reader.read(view,{get min(){
+    gets++;first=reader.read(new Uint8Array(2));backing.resize(4);return 1;
+  }});
+  control.enqueue(new Uint8Array([3,4]));control.close();
+  const one=await first,two=await second;
+  assert.deepEqual(bytes(one.value),[1,2]);assert.deepEqual(bytes(two.value),[3,4]);
+  assert.equal(two.value.byteOffset,2);assert.equal(two.value.buffer.byteLength,4);
+  assert.equal(gets,1);assert.equal(backing.byteLength,0);
+  assert.equal((await reader.read(new Uint8Array(1))).done,true);
+  reader.releaseLock();
+});
+
+check('BYOB min getter resizing uses the live view range when draining queued bytes',async()=>{
+  const api=candidate();
+  const backing=new ArrayBuffer(8,{maxByteLength:16}),view=new Uint8Array(backing,2);
+  let control;
+  const stream=new api.ReadableStream({type:'bytes',start(c){
+    control=c;c.enqueue(new Uint8Array([10,20,30,40,50,60]));
+  }});
+  const reader=stream.getReader({mode:'byob'});
+  const first=await reader.read(view,{get min(){backing.resize(4);return 2;}});
+  control.close();
+  const rest=await reader.read(new Uint8Array(8));
+  assert.deepEqual(bytes(first.value),[10,20]);assert.deepEqual(bytes(rest.value),[30,40,50,60]);
+  assert.equal(backing.byteLength,0);assert.equal(first.value.byteOffset,2);
+  assert.equal(first.value.buffer.byteLength,4);
+  assert.equal((await reader.read(new Uint8Array(1))).done,true);
+  reader.releaseLock();
+});

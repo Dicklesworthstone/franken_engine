@@ -219,7 +219,10 @@ pub fn build_react_client(config: &ReactClientBuildConfig) -> BuildResult<ReactC
                 ReactClientBuildError::new("FE-REACT-BUILD-COMPILE", format!("{name}: {error}"))
             })?;
         let tree = CanonicalEs2020Parser
-            .parse(&compiled.generated_code, crate::ast::ParseGoal::Module)
+            .parse(
+                compiled.generated_code.as_str(),
+                crate::ast::ParseGoal::Module,
+            )
             .map_err(|error| {
                 ReactClientBuildError::new("FE-REACT-BUILD-PARSE", format!("{name}: {error}"))
             })?;
@@ -333,7 +336,7 @@ pub fn build_react_client(config: &ReactClientBuildConfig) -> BuildResult<ReactC
         // the complete delivered bytes as well, so span/reconstruction defects
         // cannot produce a successful build containing invalid JavaScript.
         CanonicalEs2020Parser
-            .parse(&code, crate::ast::ParseGoal::Module)
+            .parse(code.as_str(), crate::ast::ParseGoal::Module)
             .map_err(|error| {
                 ReactClientBuildError::new("FE-REACT-BUILD-EMIT", format!("{name}: {error}"))
             })?;
@@ -428,11 +431,13 @@ fn validate_externals(externals: &BTreeMap<String, String>) -> BuildResult<()> {
         if specifier.is_empty()
             || specifier.starts_with('.')
             || specifier.starts_with('/')
+            || specifier.ends_with('/')
+            || specifier.contains(':')
             || specifier.chars().any(char::is_control)
         {
             return Err(ReactClientBuildError::new(
                 "FE-REACT-BUILD-EXTERNAL",
-                "external keys must be nonempty bare module specifiers",
+                "external keys must be exact bare module specifiers without URL schemes or a trailing slash",
             ));
         }
         let url = url::Url::parse(target).map_err(|error| {
@@ -983,7 +988,7 @@ mod tests {
             assert!(module.source_map.is_some());
             assert!(module.code.contains("//# sourceMappingURL="));
             CanonicalEs2020Parser
-                .parse(&module.code, crate::ast::ParseGoal::Module)
+                .parse(module.code.as_str(), crate::ast::ParseGoal::Module)
                 .expect("emitted module parses natively");
         }
     }
@@ -1159,6 +1164,32 @@ mod tests {
         ] {
             validate_externals(&BTreeMap::from([("react".into(), url.into())]))
                 .expect("explicit allowed provider");
+        }
+    }
+
+    #[test]
+    fn client_build_external_keys_are_exact_bare_specifiers() {
+        for specifier in [
+            "react/",
+            "@scope/package/",
+            "https://example.com/react.mjs",
+            "node:fs",
+            "data:text/javascript,export default 1",
+        ] {
+            let externals =
+                BTreeMap::from([(specifier.into(), "https://example.com/provider.mjs".into())]);
+            assert_eq!(
+                validate_externals(&externals).unwrap_err().code,
+                "FE-REACT-BUILD-EXTERNAL",
+                "{specifier}",
+            );
+        }
+        for specifier in ["react", "react/jsx-runtime", "@scope/package/subpath"] {
+            validate_externals(&BTreeMap::from([(
+                specifier.into(),
+                "https://example.com/provider.mjs".into(),
+            )]))
+            .expect("exact bare provider specifier");
         }
     }
 

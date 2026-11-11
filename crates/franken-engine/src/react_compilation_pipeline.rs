@@ -982,7 +982,7 @@ fn retain_module_child_expression_spans(node: &JsxNode, lowered: &mut LoweredEle
                     && let Some(children) = spans.get(&element.span.start_offset)
                     && let Some((_, span)) = children.iter().find(|(text, _)| *text == expression)
                 {
-                    prop.span = Some((*span).clone());
+                    prop.span = Some(**span);
                 }
                 visit_value(&mut prop.value, spans);
             }

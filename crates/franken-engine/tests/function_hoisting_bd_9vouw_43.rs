@@ -48,7 +48,6 @@ fn function_body_declarations_are_hoisted() {
 }
 
 #[test]
-#[ignore = "bd-9vouw.43 follow-up: a captured top-level let/const is declared as an initialized var cell, so an early call reads undefined instead of throwing; routing captured lexicals through the TDZ path broke class inner-name bindings (initialized without InitBinding)"]
 fn hoisted_functions_respect_the_temporal_dead_zone() {
     check(
         "var r; try { h(); } catch (e) { r = e.name; } let z = 3; function h() { return z; } \

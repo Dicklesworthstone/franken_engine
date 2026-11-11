@@ -5,7 +5,8 @@
 //! compilation path from React source to executable code.
 
 use frankenengine_engine::react_compilation_pipeline::{
-    ReactCompileConfig, ReactInputLanguage, compile_react_source, generate_compilation_evidence,
+    ReactCompileConfig, ReactInputLanguage, compile_react_module, compile_react_source,
+    generate_compilation_evidence,
 };
 use frankenengine_engine::react_jsx_lowering::{CallConvention, LoweredPropValue, PropsEntry};
 use frankenengine_engine::security_epoch::SecurityEpoch;
@@ -19,6 +20,14 @@ fn execute_generated(
     preamble: &str,
     assertions: &str,
 ) -> Vec<String> {
+    let mut config = config.clone();
+    config.lowering_config.automatic_import_source = Some("./react-runtime.mjs".into());
+    let compiled = compile_react_source(source, ReactInputLanguage::Jsx, &config)
+        .unwrap_or_else(|error| panic!("JSX compilation failed: {error}"));
+    execute_compiled_code(&compiled.generated_code, preamble, assertions)
+}
+
+fn execute_compiled_code(generated_code: &str, preamble: &str, assertions: &str) -> Vec<String> {
     use frankenengine_engine::ast::ParseGoal;
     use frankenengine_engine::execution_orchestrator::LabFixtureExecutionOrchestratorExt as _;
     use frankenengine_engine::execution_orchestrator::{
@@ -26,10 +35,6 @@ fn execute_generated(
     };
 
     let root = tempfile::tempdir().expect("module fixture");
-    let mut config = config.clone();
-    config.lowering_config.automatic_import_source = Some("./react-runtime.mjs".into());
-    let compiled = compile_react_source(source, ReactInputLanguage::Jsx, &config)
-        .unwrap_or_else(|error| panic!("JSX compilation failed: {error}"));
     std::fs::write(
         root.path().join("react-runtime.mjs"),
         r#"
@@ -48,7 +53,7 @@ export function jsxDEV(type, props, key, staticChildren, source, self) {
     )
     .expect("runtime fixture");
     let entry = root.path().join("main.mjs");
-    let program = format!("{preamble}\n{}\n{assertions}\n", compiled.generated_code);
+    let program = format!("{preamble}\n{generated_code}\n{assertions}\n");
     std::fs::write(&entry, &program).expect("generated module fixture");
     let package = ExtensionPackage {
         extension_id: "compiled-jsx-execution".to_string(),
@@ -67,13 +72,86 @@ export function jsxDEV(type, props, key, staticChildren, source, self) {
     .unwrap_or_else(|error| {
         panic!(
             "generated JavaScript did not execute: {error}\n{}",
-            compiled.generated_code
+            generated_code
         )
     })
     .console_output
     .into_iter()
     .map(|line| line.message)
     .collect()
+}
+
+#[test]
+fn full_module_transform_executes_exports_control_flow_and_nested_callbacks() {
+    let source = r#"
+"use client";
+const labels = ["Ada", "Grace"];
+export function Greeting({name}) {
+    if (!name) return <i>anonymous</i>;
+    return <strong>{name}</strong>;
+}
+export function App() {
+    const list = labels.map(name => <Greeting key={name} name={name}/>);
+    return <section id="team">{list}<footer>done</footer></section>;
+}
+const result = App();
+console.log(result.type, result.props.id, result.props.children[0].length);
+console.log(result.props.children[0][0].key, result.props.children[0][1].props.name);
+console.log(result.props.children[1].props.children);
+"#;
+    let mut config = ReactCompileConfig::default();
+    config.lowering_config.automatic_import_source = Some("./react-runtime.mjs".into());
+    let result = compile_react_module(source, ReactInputLanguage::Jsx, &config)
+        .expect("full component module");
+    assert_eq!(result.jsx_elements, 5);
+    assert_eq!(
+        execute_compiled_code(&result.generated_code, "", ""),
+        ["section team 2", "Ada Grace", "done"]
+    );
+}
+
+#[test]
+fn full_tsx_module_erases_types_and_executes_classic_factory_calls() {
+    let source = r#"
+type Props = { label: string };
+interface Item { label: string; }
+function h(type, props, ...children) { return {type, props, children}; }
+export function Card(props: Props) {
+    const title: string = props.label;
+    return <article title={title}><b>{title}</b></article>;
+}
+const cards: Item[] = [{label: "ready"}];
+console.log(JSON.stringify(Card(cards[0])));
+"#;
+    let mut config = ReactCompileConfig::default();
+    config.lowering_config.runtime_mode =
+        frankenengine_engine::jsx_tsx_parser::JsxRuntimeMode::Classic;
+    config.lowering_config.classic_pragma = Some("h".into());
+    let result = compile_react_module(source, ReactInputLanguage::Tsx, &config)
+        .expect("typed component module");
+    assert_eq!(result.jsx_elements, 2);
+    assert_eq!(
+        execute_compiled_code(&result.generated_code, "", ""),
+        [
+            r#"{"type":"article","props":{"title":"ready"},"children":[{"type":"b","props":null,"children":["ready"]}]}"#
+        ]
+    );
+}
+
+#[test]
+fn full_module_development_locations_include_enclosing_function_and_nested_expression() {
+    let source = "\nexport function App() {\n  return <div>{[1].map(value => <span>{value}</span>)}</div>;\n}\nconst result = App();\nconsole.log(result.source.lineNumber, result.source.columnNumber);\nconsole.log(result.props.children[0].source.lineNumber, result.props.children[0].source.columnNumber);\n";
+    let mut config = ReactCompileConfig::default();
+    config.lowering_config.build_mode =
+        frankenengine_engine::react_jsx_lowering::BuildMode::Development;
+    config.lowering_config.automatic_import_source = Some("./react-runtime.mjs".into());
+    config.lowering_config.source_file = Some("App.jsx".into());
+    let result = compile_react_module(source, ReactInputLanguage::Jsx, &config)
+        .expect("development component module");
+    assert_eq!(
+        execute_compiled_code(&result.generated_code, "", ""),
+        ["3 10", "3 33"]
+    );
 }
 
 const ORDERED_PROPS: &str = r#"<ctx.widget first={mark("first", 1)} key={mark("key1", "a")} {...mark("spread", {key: "b", ref: "spread-ref", extra: 2})} ref={mark("ref", "final-ref")} key={mark("key2", "c")} __proto__="own">{mark("child", 3)}</ctx.widget>"#;

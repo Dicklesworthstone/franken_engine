@@ -1431,6 +1431,7 @@ fn classify_orchestrator_error(error: &OrchestratorError) -> FailureClass {
         | OrchestratorError::AdaptiveRoutingDecisionInvalid { .. }
         | OrchestratorError::InvalidConcurrencyEnvelope { .. }
         | OrchestratorError::WitnessSealing { .. }
+        | OrchestratorError::CapabilityWitnessRejected { .. }
         | OrchestratorError::InvalidModuleRoot { .. }
         | OrchestratorError::InvalidModuleConditions { .. }
         | OrchestratorError::EmptyExtensionId

@@ -15,7 +15,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use chrono::{NaiveDate, NaiveDateTime, SecondsFormat, Utc};
 use frankenengine_engine::ast::ParseGoal;
 use frankenengine_engine::authority_footprint::{
-    AuthorityFootprintReport, analyze_authority_footprint,
+    AuthorityFootprintReport, CheckOutcome, analyze_authority_footprint,
 };
 use frankenengine_engine::baseline_interpreter::{
     ConsoleEntry, InterpreterConfig, InterpreterError,
@@ -36,6 +36,9 @@ use frankenengine_engine::agent_sandbox::{
     AGENT_SANDBOX_MANIFEST_SCHEMA_VERSION, AgentSandboxManifest, AgentSandboxReport,
 };
 use frankenengine_engine::capability::{CapabilityProfile, RuntimeCapability};
+use frankenengine_engine::capability_witness::{
+    CapabilityWitness, ConfidenceInterval, ProofKind, ProofObligation, WitnessBuilder,
+};
 use frankenengine_engine::data_contract::{
     DEFAULT_DATA_CONTRACT_PURPOSE, DataContract, DataContractRunBinding,
     E8_REFUSAL_LEDGER_SCHEMA_VERSION, E8RefusalLedgerReceipt,
@@ -51,6 +54,7 @@ use frankenengine_engine::differential_oracle_perf::{
     run_tier_control_perf,
 };
 use frankenengine_engine::e8_analyzed_subset::{E8AnalyzedSubsetScan, scan_source};
+use frankenengine_engine::engine_object_id::{ObjectDomain, SchemaId, derive_id};
 use frankenengine_engine::evidence_ledger::{
     EVIDENCE_CHAIN_RECEIPT_SCHEMA_VERSION, EvidenceChainArtifact, EvidenceSignatureEnvelope,
     EvidenceTrustSnapshot, EvidenceVerificationIdentity, RuntimeEvidenceAuthority,
@@ -83,6 +87,7 @@ use frankenengine_engine::parser_oracle::{
     DEFAULT_FIXTURE_CATALOG_PATH, OracleGateMode, OraclePartition, ParserOracleConfig,
     run_parser_oracle,
 };
+use frankenengine_engine::policy_theorem_compiler::Capability as PolicyCapability;
 use frankenengine_engine::react_client_build::{
     ReactClientBuild, ReactClientBuildConfig, build_react_client,
 };
@@ -97,9 +102,12 @@ use frankenengine_engine::react_doctor_preflight::{
     build_support_bundle as build_react_support_bundle, is_react_ready as react_report_is_ready,
     run_doctor as run_react_doctor, run_preflight as run_react_preflight,
 };
+use frankenengine_engine::react_jsx_lowering::{
+    BuildMode as ReactBuildMode, LoweringDiagnosticSeverity,
+};
 use frankenengine_engine::react_mismatch_catalog::{
-    ComparisonTarget as ReactComparisonTarget, MismatchCatalog,
-    MismatchSeverity as ReactMismatchSeverity,
+    ComparisonTarget as ReactComparisonTarget, MismatchCatalog, MismatchDomain, MismatchEntry,
+    MismatchSeverity as ReactMismatchSeverity, RemediationStatus as ReactRemediationStatus,
 };
 use frankenengine_engine::receipt_verifier_pipeline::{
     ReceiptVerifierCliInput, UnifiedReceiptVerificationVerdict, render_verdict_summary,
@@ -340,6 +348,8 @@ struct CheckArgs {
     format: CheckOutputFormat,
     /// Optional bundle directory for `run_manifest.json` + `events.jsonl`.
     out: Option<PathBuf>,
+    /// Optional signed PLAS `CapabilityWitness` JSON output path (`g2vrp.13`).
+    emit_witness: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -401,6 +411,8 @@ struct RunArgs {
     certificate_out: Option<PathBuf>,
     /// Optional durable FrankenSQLite control-plane database (`g2vrp.13`).
     state_db: Option<PathBuf>,
+    /// Optional signed PLAS `CapabilityWitness` JSON input path (`g2vrp.13`).
+    witness: Option<PathBuf>,
     /// Override the execution-cell close budget for policy testing.
     cell_close_budget_ms: Option<u64>,
     /// Override the interpreter instruction budget (bd-9vouw.6). The
@@ -798,6 +810,8 @@ struct ReactCompileArgs {
     input: PathBuf,
     source_form: ReactSourceForm,
     runtime_mode: Option<ReactRuntimeMode>,
+    build_mode: Option<ReactBuildMode>,
+    sourcemap: bool,
     out: Option<PathBuf>,
     trace_id: String,
     decision_id: String,
@@ -820,7 +834,8 @@ struct ReactBuildArgs {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ReactDoctorArgs {
-    catalog: PathBuf,
+    catalog: Option<PathBuf>,
+    input: Option<PathBuf>,
     out: Option<PathBuf>,
     summary: bool,
     current_epoch: Option<u64>,
@@ -962,6 +977,7 @@ impl ReactSourceForm {
 enum ReactRuntimeMode {
     Classic,
     Automatic,
+    JsxDev,
 }
 
 impl ReactRuntimeMode {
@@ -969,6 +985,7 @@ impl ReactRuntimeMode {
         match self {
             Self::Classic => "classic",
             Self::Automatic => "automatic",
+            Self::JsxDev => "jsx-dev",
         }
     }
 }
@@ -2222,6 +2239,7 @@ fn parse_check_command(args: &[String]) -> Result<CommandSpec, String> {
     let mut goal = ParseGoal::Script;
     let mut format = CheckOutputFormat::Human;
     let mut out: Option<PathBuf> = None;
+    let mut emit_witness: Option<PathBuf> = None;
 
     let mut index = 0usize;
     while index < args.len() {
@@ -2232,6 +2250,9 @@ fn parse_check_command(args: &[String]) -> Result<CommandSpec, String> {
                 format = parse_check_output_format(&next_arg(args, &mut index, "--format")?)?
             }
             "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+            "--emit-witness" => {
+                emit_witness = Some(PathBuf::from(next_arg(args, &mut index, "--emit-witness")?))
+            }
             value if !value.starts_with("--") && input.is_none() => {
                 input = Some(PathBuf::from(value));
             }
@@ -2247,6 +2268,7 @@ fn parse_check_command(args: &[String]) -> Result<CommandSpec, String> {
         parse_goal: goal,
         format,
         out,
+        emit_witness,
     }))
 }
 
@@ -2542,6 +2564,7 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
     let mut data_contract_purpose = DEFAULT_DATA_CONTRACT_PURPOSE.to_string();
     let mut certificate_out: Option<PathBuf> = None;
     let mut state_db: Option<PathBuf> = None;
+    let mut witness: Option<PathBuf> = None;
     let mut cell_close_budget_ms: Option<u64> = None;
     let mut instruction_budget: Option<u64> = None;
     let mut parser_max_token_count: Option<u64> = None;
@@ -2600,6 +2623,9 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
             }
             "--state-db" => {
                 state_db = Some(PathBuf::from(next_arg(args, &mut index, "--state-db")?));
+            }
+            "--witness" => {
+                witness = Some(PathBuf::from(next_arg(args, &mut index, "--witness")?));
             }
             "--cell-close-budget-ms" => {
                 cell_close_budget_ms = Some(parse_positive_u64(
@@ -2715,6 +2741,7 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
         data_contract_purpose,
         certificate_out,
         state_db,
+        witness,
         cell_close_budget_ms,
         instruction_budget,
         parser_max_token_count,
@@ -3791,6 +3818,8 @@ fn parse_react_compile_command(args: &[String]) -> Result<CommandSpec, String> {
     let mut input: Option<PathBuf> = None;
     let mut source_form: Option<ReactSourceForm> = None;
     let mut runtime_mode: Option<ReactRuntimeMode> = None;
+    let mut build_mode: Option<ReactBuildMode> = None;
+    let mut sourcemap = false;
     let mut out: Option<PathBuf> = None;
     let mut trace_id = "trace-frankenctl-react-compile".to_string();
     let mut decision_id = "decision-frankenctl-react-compile".to_string();
@@ -3814,6 +3843,12 @@ fn parse_react_compile_command(args: &[String]) -> Result<CommandSpec, String> {
                     "--runtime",
                 )?)?)
             }
+            "--mode" => {
+                build_mode = Some(parse_react_build_mode(&next_arg(
+                    args, &mut index, "--mode",
+                )?)?)
+            }
+            "--sourcemap" => sourcemap = true,
             "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
             "--trace-id" => trace_id = next_arg(args, &mut index, "--trace-id")?,
             "--decision-id" => decision_id = next_arg(args, &mut index, "--decision-id")?,
@@ -3826,7 +3861,7 @@ fn parse_react_compile_command(args: &[String]) -> Result<CommandSpec, String> {
     let source_form = source_form
         .ok_or_else(|| "react compile requires --source-form <jsx|tsx|jsx-fragment>".to_string())?;
     if source_form != ReactSourceForm::JsxFragment && runtime_mode.is_none() {
-        return Err("react compile requires --runtime <classic|automatic> unless --source-form jsx-fragment".to_string());
+        return Err("react compile requires --runtime <classic|automatic|jsx-dev> unless --source-form jsx-fragment".to_string());
     }
     if source_form == ReactSourceForm::JsxFragment && runtime_mode.is_some() {
         return Err(
@@ -3838,6 +3873,8 @@ fn parse_react_compile_command(args: &[String]) -> Result<CommandSpec, String> {
         input: input.ok_or_else(|| "react compile requires --input <path>".to_string())?,
         source_form,
         runtime_mode,
+        build_mode,
+        sourcemap,
         out,
         trace_id,
         decision_id,
@@ -3924,6 +3961,7 @@ fn parse_react_doctor_command(args: &[String]) -> Result<CommandSpec, String> {
     }
 
     let mut catalog: Option<PathBuf> = None;
+    let mut input: Option<PathBuf> = None;
     let mut out: Option<PathBuf> = None;
     let mut summary = false;
     let mut current_epoch: Option<u64> = None;
@@ -3938,6 +3976,7 @@ fn parse_react_doctor_command(args: &[String]) -> Result<CommandSpec, String> {
     while index < args.len() {
         match args[index].as_str() {
             "--catalog" => catalog = Some(PathBuf::from(next_arg(args, &mut index, "--catalog")?)),
+            "--input" => input = Some(PathBuf::from(next_arg(args, &mut index, "--input")?)),
             "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
             "--summary" => summary = true,
             "--current-epoch" => {
@@ -3962,8 +4001,13 @@ fn parse_react_doctor_command(args: &[String]) -> Result<CommandSpec, String> {
         index += 1;
     }
 
+    if catalog.is_none() && input.is_none() {
+        return Err("react doctor requires --catalog <path> or --input <file|dir>".to_string());
+    }
+
     Ok(CommandSpec::React(ReactArgs::Doctor(ReactDoctorArgs {
-        catalog: catalog.ok_or_else(|| "react doctor requires --catalog <path>".to_string())?,
+        catalog,
+        input,
         out,
         summary,
         current_epoch,
@@ -4451,13 +4495,19 @@ fn execute_compile(args: CompileArgs) -> Result<i32, String> {
         &source_label,
         &prepared.prepared_source,
     );
+    let typed_hostcall_capabilities = prepared
+        .normalization_output
+        .as_ref()
+        .map(|out| out.ordered_hostcall_capabilities.clone())
+        .unwrap_or_default();
     let lowering = lower_ir0_to_ir3(
         &ir0,
         &LoweringContext::new(
             args.trace_id.clone(),
             args.decision_id.clone(),
             args.policy_id.clone(),
-        ),
+        )
+        .with_typed_hostcall_capabilities(typed_hostcall_capabilities),
     )
     .map_err(|error| format!("lowering failed: {error}"))?;
 
@@ -4509,6 +4559,18 @@ fn execute_check(args: CheckArgs) -> Result<i32, String> {
     let source_label = args.input.display().to_string();
     let report = analyze_authority_footprint(&source, source_label.as_str(), args.parse_goal);
 
+    if let Some(witness_path) = args.emit_witness.as_ref() {
+        if report.outcome() != CheckOutcome::Clean {
+            return Err(format!(
+                "cannot emit PLAS capability witness for `{}`: authority check outcome is {:?} (must be Clean)",
+                args.input.display(),
+                report.outcome()
+            ));
+        }
+        let witness = synthesize_check_capability_witness(&report, args.parse_goal)?;
+        write_json_file(witness_path, &witness)?;
+    }
+
     // Optional content-addressed bundle: run_manifest.json + events.jsonl.
     // The report carries no wall-clock/host facts, so the bundle is replay-stable.
     if let Some(out_dir) = args.out.as_ref() {
@@ -4525,6 +4587,98 @@ fn execute_check(args: CheckArgs) -> Result<i32, String> {
     }
 
     Ok(report.outcome().exit_code())
+}
+
+fn synthesize_check_capability_witness(
+    report: &AuthorityFootprintReport,
+    parse_goal: ParseGoal,
+) -> Result<CapabilityWitness, String> {
+    let schema_id = SchemaId::from_definition(b"frankenctl.check.plas-witness.v1");
+    let extension_id = derive_id(
+        ObjectDomain::Attestation,
+        "frankenctl-check",
+        &schema_id,
+        report.source_sha256.as_bytes(),
+    )
+    .map_err(|error| format!("failed to derive witness extension id: {error}"))?;
+    let policy_id = derive_id(
+        ObjectDomain::Attestation,
+        "frankenctl-check",
+        &schema_id,
+        b"frankenctl.check.v1",
+    )
+    .map_err(|error| format!("failed to derive witness policy id: {error}"))?;
+
+    let mut key_bytes = [0u8; SIGNING_KEY_LEN];
+    let key_digest = Sha256::digest(
+        format!("frankenctl.check.witness.seed.v1:{}", report.report_sha256).as_bytes(),
+    );
+    key_bytes.copy_from_slice(&key_digest[..SIGNING_KEY_LEN]);
+    let signing_key = SigningKey::from_bytes(key_bytes)
+        .map_err(|error| format!("failed to construct witness signing key: {error}"))?;
+
+    let mut required_tags: BTreeSet<String> = run_cli_capability_set(parse_goal, false)
+        .into_iter()
+        .map(|cap| cap.to_string())
+        .collect();
+    for req in &report.required_capabilities {
+        required_tags.insert(req.capability_tag.clone());
+    }
+
+    let report_hash = ContentHash::compute(report.report_sha256.as_bytes());
+    let mut builder = WitnessBuilder::new(
+        extension_id,
+        policy_id,
+        SecurityEpoch::from_raw(1),
+        0,
+        signing_key,
+    )
+    .transcript_hash(report_hash)
+    .confidence(ConfidenceInterval::from_trials(100, 100))
+    .meta("source_path", report.source_path.clone())
+    .meta("source_sha256", report.source_sha256.clone())
+    .meta("report_sha256", report.report_sha256.clone())
+    .meta("parse_goal", report.parse_goal.clone());
+
+    for tag in &required_tags {
+        let cap = PolicyCapability::new(tag.as_str());
+        let proof_artifact_id = derive_id(
+            ObjectDomain::EvidenceRecord,
+            "frankenctl-check",
+            &schema_id,
+            format!("{}:{tag}", report.report_sha256).as_bytes(),
+        )
+        .map_err(|error| format!("failed to derive witness proof id for `{tag}`: {error}"))?;
+        builder = builder.require(cap.clone()).proof(ProofObligation {
+            capability: cap,
+            kind: ProofKind::StaticAnalysis,
+            proof_artifact_id,
+            justification: format!(
+                "frankenctl check clean static authority footprint ({})",
+                report.report_sha256
+            ),
+            artifact_hash: report_hash,
+        });
+    }
+
+    for ambient_tag in [
+        "env_read",
+        "process_spawn",
+        "network_egress",
+        "fs_read",
+        "fs_write",
+    ] {
+        if !required_tags.contains(ambient_tag) {
+            builder = builder.deny(
+                PolicyCapability::new(ambient_tag),
+                "not present in clean static authority footprint",
+            );
+        }
+    }
+
+    builder
+        .build()
+        .map_err(|error| format!("failed to synthesize PLAS capability witness: {error}"))
 }
 
 /// One JSON object per finding, newline-delimited (`events.jsonl`). Deterministic
@@ -5305,7 +5459,20 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
     let e8_scan: Option<E8AnalyzedSubsetScan> = bound_contract
         .as_ref()
         .map(|_| scan_source(&source, &source_label, args.parse_goal));
-    let capabilities = run_cli_capabilities(args.parse_goal, args.commonjs_entry);
+    let loaded_witness = args
+        .witness
+        .as_ref()
+        .map(|path| load_json_file::<CapabilityWitness>(path))
+        .transpose()?;
+    let mut capabilities = run_cli_capabilities(args.parse_goal, args.commonjs_entry);
+    if let Some(witness) = loaded_witness.as_ref() {
+        let allowed: BTreeSet<&str> = witness
+            .required_capabilities
+            .iter()
+            .map(|cap| cap.as_str())
+            .collect();
+        capabilities.retain(|cap| allowed.contains(cap.as_str()));
+    }
     let module_root = args
         .module_root
         .as_ref()
@@ -5363,6 +5530,9 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
                 state_db.display()
             )
         })?;
+    }
+    if let Some(witness) = loaded_witness {
+        orchestrator.set_capability_witness(witness);
     }
     // bd-fqlfw.8.2: the bound contract's ingress label + sink surface gates
     // execution fail-closed and records flow edges in the provenance index.
@@ -7765,6 +7935,7 @@ fn classify_run_error(error: &OrchestratorError) -> Option<&'static str> {
         OrchestratorError::Interpreter(InterpreterError::CapabilityDenied { .. }) => {
             Some("capability_denied")
         }
+        OrchestratorError::CapabilityWitnessRejected { .. } => Some("capability_witness_rejected"),
         OrchestratorError::Lowering(lowering) => match lowering.as_ref() {
             LoweringPipelineError::AmbientAuthorityViolation { .. }
             | LoweringPipelineError::UnauthorizedFlow { .. } => Some("rejected_at_lowering"),
@@ -10531,13 +10702,19 @@ fn build_replay_debug_state_producer(
         &source_label,
         &prepared.prepared_source,
     );
+    let typed_hostcall_capabilities = prepared
+        .normalization_output
+        .as_ref()
+        .map(|out| out.ordered_hostcall_capabilities.clone())
+        .unwrap_or_default();
     let lowering = lower_ir0_to_ir3(
         &ir0,
         &LoweringContext::new(
             "replay-debug".to_string(),
             "replay-debug".to_string(),
             "replay-debug".to_string(),
-        ),
+        )
+        .with_typed_hostcall_capabilities(typed_hostcall_capabilities),
     )
     .map_err(|error| format!("lowering failed for `{source_label}`: {error}"))?;
 
@@ -11887,7 +12064,12 @@ fn execute_react_compile(args: ReactCompileArgs) -> Result<i32, String> {
     );
     if output.shipped {
         let language = react_pipeline_language(args.source_form)?;
-        let config = react_compile_config(args.source_form, args.runtime_mode);
+        let config = react_compile_config(
+            args.source_form,
+            args.runtime_mode,
+            args.build_mode,
+            args.sourcemap,
+        );
         let result = compile_react_source(&source, language, &config).map_err(|error| {
             format!(
                 "react compile failed for `{}`: {error}",
@@ -11941,7 +12123,8 @@ fn execute_react_build(args: ReactBuildArgs) -> Result<i32, String> {
         if args.target != ReactBuildTarget::Client {
             return Err("React build target has no executable producer".to_string());
         }
-        let mut compile = react_compile_config(ReactSourceForm::Jsx, Some(args.runtime_mode));
+        let mut compile =
+            react_compile_config(ReactSourceForm::Jsx, Some(args.runtime_mode), None, true);
         compile.generate_source_maps = true;
         let config = ReactClientBuildConfig {
             project_root: args.root.unwrap_or_else(|| {
@@ -12193,14 +12376,35 @@ fn verify_react_client_assets(
 }
 
 fn execute_react_doctor(args: ReactDoctorArgs) -> Result<i32, String> {
-    if !args.catalog.is_file() {
-        return Err(format!(
-            "react doctor requires an existing --catalog <path> (missing `{}`)",
-            args.catalog.display()
-        ));
+    let default_epoch = SecurityEpoch::from_raw(args.current_epoch.unwrap_or(1));
+    let (mut catalog, input_catalog_label) = match (&args.catalog, &args.input) {
+        (Some(catalog_path), maybe_input) => {
+            if !catalog_path.is_file() {
+                return Err(format!(
+                    "react doctor requires an existing --catalog <path> (missing `{}`)",
+                    catalog_path.display()
+                ));
+            }
+            let loaded = load_json_file::<MismatchCatalog>(catalog_path)?;
+            let label = match maybe_input {
+                Some(input_path) => format!("{}+{}", catalog_path.display(), input_path.display()),
+                None => catalog_path.display().to_string(),
+            };
+            (loaded, label)
+        }
+        (None, Some(input_path)) => (
+            MismatchCatalog::new(default_epoch),
+            input_path.display().to_string(),
+        ),
+        (None, None) => {
+            return Err("react doctor requires --catalog <path> or --input <file|dir>".to_string());
+        }
+    };
+
+    if let Some(input_path) = &args.input {
+        analyze_react_doctor_input_path(input_path, catalog.epoch, &mut catalog)?;
     }
 
-    let catalog = load_json_file::<MismatchCatalog>(&args.catalog)?;
     let mut config = ReactDoctorConfig {
         min_mismatch_severity: args.min_severity,
         include_resolved: args.include_resolved,
@@ -12249,7 +12453,7 @@ fn execute_react_doctor(args: ReactDoctorArgs) -> Result<i32, String> {
         decision_id: args.decision_id,
         policy_id: args.policy_id,
         command: "react-doctor".to_string(),
-        input_catalog_path: args.catalog.display().to_string(),
+        input_catalog_path: input_catalog_label,
         catalog_schema_version: catalog.schema_version.clone(),
         catalog_bead_id: catalog.bead_id.clone(),
         catalog_policy_id: catalog.policy_id.clone(),
@@ -12275,6 +12479,256 @@ fn execute_react_doctor(args: ReactDoctorArgs) -> Result<i32, String> {
         print_json(&output)?;
     }
     if output.blocked { Ok(25) } else { Ok(0) }
+}
+
+fn collect_react_doctor_sources(root: &Path, out: &mut BTreeSet<PathBuf>) -> Result<(), String> {
+    if root.is_file() {
+        out.insert(root.to_path_buf());
+        return Ok(());
+    }
+    if !root.is_dir() {
+        return Err(format!(
+            "react doctor --input `{}` does not exist",
+            root.display()
+        ));
+    }
+    for entry in fs::read_dir(root)
+        .map_err(|err| format!("failed to read directory `{}`: {err}", root.display()))?
+    {
+        let entry = entry.map_err(|err| format!("failed to read directory entry: {err}"))?;
+        let path = entry.path();
+        if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n == "node_modules" || n.starts_with('.'))
+        {
+            continue;
+        }
+        let ft = entry
+            .file_type()
+            .map_err(|err| format!("failed to inspect `{}`: {err}", path.display()))?;
+        if ft.is_dir() {
+            collect_react_doctor_sources(&path, out)?;
+        } else if ft.is_file()
+            && matches!(
+                path.extension().and_then(|ext| ext.to_str()),
+                Some("jsx" | "tsx" | "js" | "ts" | "mjs" | "mts" | "cjs" | "cts")
+            )
+        {
+            out.insert(path);
+        }
+    }
+    Ok(())
+}
+
+fn analyze_react_doctor_input_path(
+    input_path: &Path,
+    epoch: SecurityEpoch,
+    catalog: &mut MismatchCatalog,
+) -> Result<(), String> {
+    if !input_path.exists() {
+        return Err(format!(
+            "react doctor requires an existing --input <file|dir> (missing `{}`)",
+            input_path.display()
+        ));
+    }
+    let mut files = BTreeSet::new();
+    collect_react_doctor_sources(input_path, &mut files)?;
+    for (idx, file_path) in files.iter().enumerate() {
+        let source = fs::read_to_string(file_path).map_err(|err| {
+            format!(
+                "failed to read React source `{}`: {err}",
+                file_path.display()
+            )
+        })?;
+        let ext = file_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("jsx");
+        let (source_form, language) = match ext {
+            "tsx" | "ts" | "mts" | "cts" => (ReactSourceForm::Tsx, ReactPipelineInputLanguage::Tsx),
+            _ => (ReactSourceForm::Jsx, ReactPipelineInputLanguage::Jsx),
+        };
+        let mut config = react_compile_config(
+            source_form,
+            Some(ReactRuntimeMode::JsxDev),
+            Some(ReactBuildMode::Development),
+            true,
+        );
+        config.lowering_config.source_file = Some(file_path.display().to_string());
+
+        match compile_react_source(&source, language, &config) {
+            Ok(compiled) => {
+                for (diag_idx, diag) in compiled.lowering_result.diagnostics.iter().enumerate() {
+                    let severity = match diag.severity {
+                        LoweringDiagnosticSeverity::Info => continue,
+                        LoweringDiagnosticSeverity::Warning => ReactMismatchSeverity::Warning,
+                        LoweringDiagnosticSeverity::Error => ReactMismatchSeverity::Error,
+                    };
+                    let entry_id = format!("ast-compile-diag-{idx}-{diag_idx}");
+                    let _ = catalog.add_entry(MismatchEntry {
+                        entry_id: entry_id.clone(),
+                        domain: MismatchDomain::Diagnostics,
+                        severity,
+                        target: ReactComparisonTarget::NodeJs,
+                        summary: format!("{}: {}", file_path.display(), diag.message),
+                        expected_behavior: "Clean React JSX/TSX lowering without diagnostic warnings"
+                            .to_string(),
+                        actual_behavior: diag.message.clone(),
+                        reproduction: format!(
+                            "frankenctl react compile --input {} --source-form {} --runtime jsx-dev --sourcemap",
+                            file_path.display(),
+                            source_form.as_str()
+                        ),
+                        remediation: ReactRemediationStatus::Workaround,
+                        advisory: format!("Diagnostic code `{}` surfaced during native JSX lowering.", diag.code),
+                        react_version_range: ">=18".to_string(),
+                        evidence_hash: ContentHash::compute(entry_id.as_bytes()),
+                        detected_epoch: epoch,
+                        verified_epoch: epoch,
+                        tags: BTreeSet::from([
+                            "react".to_string(),
+                            "jsx-lowering".to_string(),
+                            diag.code.code_str().to_string(),
+                        ]),
+                    });
+                }
+            }
+            Err(compile_err) => {
+                let entry_id = format!("ast-compile-error-{idx}");
+                let _ = catalog.add_entry(MismatchEntry {
+                    entry_id: entry_id.clone(),
+                    domain: MismatchDomain::CompileOutput,
+                    severity: ReactMismatchSeverity::Error,
+                    target: ReactComparisonTarget::NodeJs,
+                    summary: format!(
+                        "React compile/parse failure in `{}`: {compile_err}",
+                        file_path.display()
+                    ),
+                    expected_behavior: "Valid JSX/TSX module compiling cleanly under jsx-dev"
+                        .to_string(),
+                    actual_behavior: compile_err.to_string(),
+                    reproduction: format!(
+                        "frankenctl react compile --input {} --source-form {} --runtime jsx-dev",
+                        file_path.display(),
+                        source_form.as_str()
+                    ),
+                    remediation: ReactRemediationStatus::None,
+                    advisory: "Fix syntax or unsupported JSX/TSX construct before building."
+                        .to_string(),
+                    react_version_range: ">=18".to_string(),
+                    evidence_hash: ContentHash::compute(source.as_bytes()),
+                    detected_epoch: epoch,
+                    verified_epoch: epoch,
+                    tags: BTreeSet::from(["react".to_string(), "compile-error".to_string()]),
+                });
+            }
+        }
+
+        let uses_effect_guard = source.contains("useEffect") || source.contains("typeof window");
+        if !uses_effect_guard
+            && (source.contains("window.")
+                || source.contains("document.")
+                || source.contains("localStorage."))
+        {
+            let entry_id = format!("ast-ssr-dom-boundary-{idx}");
+            let _ = catalog.add_entry(MismatchEntry {
+                entry_id: entry_id.clone(),
+                domain: MismatchDomain::ServerSideRender,
+                severity: ReactMismatchSeverity::Error,
+                target: ReactComparisonTarget::NodeJs,
+                summary: format!(
+                    "Unguarded browser DOM access during render in `{}` breaks SSR",
+                    file_path.display()
+                ),
+                expected_behavior:
+                    "Render body must remain pure of window/document/localStorage for SSR parity"
+                        .to_string(),
+                actual_behavior:
+                    "Direct window/document/localStorage access outside useEffect or typeof guard"
+                        .to_string(),
+                reproduction: format!("frankenctl react doctor --input {}", file_path.display()),
+                remediation: ReactRemediationStatus::Workaround,
+                advisory:
+                    "Move browser global reads into useEffect or guard with `typeof window !== 'undefined'`."
+                        .to_string(),
+                react_version_range: ">=18".to_string(),
+                evidence_hash: ContentHash::compute(entry_id.as_bytes()),
+                detected_epoch: epoch,
+                verified_epoch: epoch,
+                tags: BTreeSet::from(["react".to_string(), "ssr".to_string(), "dom".to_string()]),
+            });
+        }
+
+        if (source.contains("Date.now()") || source.contains("Math.random()"))
+            && (source.contains('<') && source.contains('>'))
+        {
+            let entry_id = format!("ast-hydration-nondet-{idx}");
+            let _ = catalog.add_entry(MismatchEntry {
+                entry_id: entry_id.clone(),
+                domain: MismatchDomain::ClientEntry,
+                severity: ReactMismatchSeverity::Error,
+                target: ReactComparisonTarget::NodeJs,
+                summary: format!(
+                    "Nondeterministic render expression (`Date.now()`/`Math.random()`) in `{}` causes hydration mismatch",
+                    file_path.display()
+                ),
+                expected_behavior:
+                    "Deterministic server/client initial render output across hydration boundary"
+                        .to_string(),
+                actual_behavior:
+                    "Nondeterministic clock/PRNG call observed inside JSX component module"
+                        .to_string(),
+                reproduction: format!("frankenctl react doctor --input {}", file_path.display()),
+                remediation: ReactRemediationStatus::Workaround,
+                advisory:
+                    "Pass deterministic props/seeds or defer clock/random values to a post-mount useEffect."
+                        .to_string(),
+                react_version_range: ">=18".to_string(),
+                evidence_hash: ContentHash::compute(entry_id.as_bytes()),
+                detected_epoch: epoch,
+                verified_epoch: epoch,
+                tags: BTreeSet::from([
+                    "react".to_string(),
+                    "hydration".to_string(),
+                    "nondeterminism".to_string(),
+                ]),
+            });
+        }
+
+        if matches!(ext, "cjs" | "cts")
+            || source.contains("module.exports")
+            || source.contains("require(")
+        {
+            let entry_id = format!("ast-cjs-module-graph-{idx}");
+            let _ = catalog.add_entry(MismatchEntry {
+                entry_id: entry_id.clone(),
+                domain: MismatchDomain::ModuleGraph,
+                severity: ReactMismatchSeverity::Warning,
+                target: ReactComparisonTarget::NodeJs,
+                summary: format!(
+                    "CommonJS construct in `{}` is rejected by the native React ES-module client builder",
+                    file_path.display()
+                ),
+                expected_behavior: "Static ES-module imports/exports for React client builds"
+                    .to_string(),
+                actual_behavior: "CommonJS require/module.exports detected".to_string(),
+                reproduction: format!(
+                    "frankenctl react build --entry {} --target client",
+                    file_path.display()
+                ),
+                remediation: ReactRemediationStatus::Workaround,
+                advisory: "Convert React component modules to ESM (`import`/`export`) and map external runtime providers via `--external`."
+                    .to_string(),
+                react_version_range: ">=18".to_string(),
+                evidence_hash: ContentHash::compute(entry_id.as_bytes()),
+                detected_epoch: epoch,
+                verified_epoch: epoch,
+                tags: BTreeSet::from(["react".to_string(), "cjs".to_string(), "esm".to_string()]),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn execute_react_contract(args: ReactContractArgs) -> Result<i32, String> {
@@ -12945,6 +13399,8 @@ fn select_react_compile_row(
         (ReactSourceForm::Tsx, Some(ReactRuntimeMode::Automatic)) => {
             "tsx-automatic-runtime-compile"
         }
+        (ReactSourceForm::Jsx, Some(ReactRuntimeMode::JsxDev)) => "jsx-dev-runtime-diagnostics",
+        (ReactSourceForm::Tsx, Some(ReactRuntimeMode::JsxDev)) => "tsx-dev-runtime-diagnostics",
         _ => {
             return Err(
                 "react compile request did not map to a declared capability contract row"
@@ -13060,13 +13516,26 @@ fn react_pipeline_language(
 fn react_compile_config(
     source_form: ReactSourceForm,
     runtime_mode: Option<ReactRuntimeMode>,
+    build_mode: Option<ReactBuildMode>,
+    sourcemap: bool,
 ) -> ReactCompileConfig {
     let mut config = ReactCompileConfig::default();
     config.lowering_config.runtime_mode = match runtime_mode {
         Some(ReactRuntimeMode::Classic) => JsxRuntimeMode::Classic,
-        Some(ReactRuntimeMode::Automatic) | None => JsxRuntimeMode::Automatic,
+        Some(ReactRuntimeMode::Automatic | ReactRuntimeMode::JsxDev) | None => {
+            JsxRuntimeMode::Automatic
+        }
     };
+    let effective_build_mode = build_mode.unwrap_or(match runtime_mode {
+        Some(ReactRuntimeMode::JsxDev) => ReactBuildMode::Development,
+        _ => ReactBuildMode::Production,
+    });
+    config.lowering_config.build_mode = effective_build_mode;
+    config.lowering_config.emit_self = effective_build_mode == ReactBuildMode::Development;
+    config.lowering_config.emit_source = effective_build_mode == ReactBuildMode::Development;
     config.lowering_config.source_file = Some(source_form.as_str().to_string());
+    config.generate_source_maps = sourcemap;
+    config.include_debug_info = sourcemap || effective_build_mode == ReactBuildMode::Development;
     config
 }
 
@@ -13247,8 +13716,19 @@ fn parse_react_runtime_mode(value: &str) -> Result<ReactRuntimeMode, String> {
     match value {
         "classic" => Ok(ReactRuntimeMode::Classic),
         "automatic" => Ok(ReactRuntimeMode::Automatic),
+        "jsx-dev" | "jsx_dev" => Ok(ReactRuntimeMode::JsxDev),
         other => Err(format!(
-            "invalid react runtime `{other}` (expected classic|automatic)"
+            "invalid react runtime `{other}` (expected classic|automatic|jsx-dev)"
+        )),
+    }
+}
+
+fn parse_react_build_mode(value: &str) -> Result<ReactBuildMode, String> {
+    match value {
+        "development" | "dev" => Ok(ReactBuildMode::Development),
+        "production" | "prod" => Ok(ReactBuildMode::Production),
+        other => Err(format!(
+            "invalid react compile --mode `{other}` (expected development|production)"
         )),
     }
 }
@@ -13865,7 +14345,8 @@ fn check_usage() -> String {
     [
         "check usage:",
         "  frankenctl check <file> [--goal script|module] [--format human|json] [--out <bundle-dir>]",
-        "  frankenctl check --input <file> [--format json] [--out <bundle-dir>]",
+        "      [--emit-witness <witness.json>]",
+        "  frankenctl check --input <file> [--format json] [--out <bundle-dir>] [--emit-witness <witness.json>]",
         "",
         "  Parses + lowers <file> to IR2 and reports, projected onto source spans:",
         "    - the minimal capability footprint required by its SUPPORTED syntax,",
@@ -13917,7 +14398,7 @@ fn run_usage() -> String {
     [
         "run usage:",
         "  frankenctl run --input <source.js> --extension-id <id> [--goal script|module|commonjs]",
-        "      [--module-root <dir>] [--out <report.json>] [--state-db <state.db>]",
+        "      [--module-root <dir>] [--out <report.json>] [--state-db <state.db>] [--witness <witness.json>]",
         "      [--data-contract <contract.json>] [--purpose <purpose>] [--certificate-out <bundle-dir>]",
         "      [--explain [bundle.json]] [--explain-out <bundle.json>]",
         "      [--emit-trace <trace.json>] [--cell-close-budget-ms <n>]",
@@ -14484,12 +14965,12 @@ fn react_compile_usage() -> String {
     [
         "react compile usage:",
         "  frankenctl react compile --input <path> --source-form <jsx|tsx|jsx-fragment>",
-        "      [--runtime <classic|automatic>] [--out <report.json>]",
-        "      [--trace-id <id>] [--decision-id <id>] [--policy-id <id>]",
+        "      [--runtime <classic|automatic|jsx-dev>] [--mode <development|production>] [--sourcemap]",
+        "      [--out <report.json>] [--trace-id <id>] [--decision-id <id>] [--policy-id <id>]",
         "",
         "behavior:",
         "  emits a deterministic react-cli report tied to the embedded React capability contract",
-        "  and includes generated code plus receipt metadata for shipped compile rows.",
+        "  and includes generated code, optional V3 source maps, and receipt metadata.",
     ]
     .join("\n")
 }
@@ -14515,15 +14996,16 @@ fn react_build_usage() -> String {
 fn react_doctor_usage() -> String {
     [
         "react doctor usage:",
-        "  frankenctl react doctor --catalog <react_mismatch_catalog.json> [--summary]",
+        "  frankenctl react doctor [--catalog <react_mismatch_catalog.json>] [--input <file|dir>] [--summary]",
         "      [--min-severity <info|warning|error|critical>] [--include-resolved]",
         "      [--target <nodejs|bun|deno|v8_reference>] [--current-epoch <n>]",
         "      [--out <react_doctor_report.json>] [--trace-id <id>] [--decision-id <id>]",
         "      [--policy-id <id>]",
         "",
         "behavior:",
-        "  loads a deterministic React mismatch catalog, runs React-aware doctor/preflight",
-        "  analysis, and emits support-bundle plus repro-index data in one machine-readable report.",
+        "  analyzes React JSX/TSX source files/trees (--input) and/or a deterministic React mismatch",
+        "  catalog (--catalog), runs React-aware doctor/preflight analysis, and emits support-bundle",
+        "  plus repro-index data in one machine-readable report.",
     ]
     .join("\n")
 }
@@ -16562,7 +17044,11 @@ mod tests {
         let parsed = parse_command(&args).expect("react doctor should parse");
         match parsed {
             CommandSpec::React(ReactArgs::Doctor(spec)) => {
-                assert_eq!(spec.catalog, PathBuf::from("react_mismatch_catalog.json"));
+                assert_eq!(
+                    spec.catalog,
+                    Some(PathBuf::from("react_mismatch_catalog.json"))
+                );
+                assert_eq!(spec.input, None);
                 assert!(spec.summary);
                 assert_eq!(spec.current_epoch, Some(42));
                 assert_eq!(spec.min_severity, ReactMismatchSeverity::Warning);
@@ -16668,7 +17154,8 @@ mod tests {
             .expect("operation should succeed for valid inputs");
 
         let exit_code = execute_react_doctor(ReactDoctorArgs {
-            catalog: catalog_path.clone(),
+            catalog: Some(catalog_path.clone()),
+            input: None,
             out: Some(out.clone()),
             summary: false,
             current_epoch: None,
@@ -16716,6 +17203,8 @@ mod tests {
             input: input.clone(),
             source_form: ReactSourceForm::Tsx,
             runtime_mode: Some(ReactRuntimeMode::Automatic),
+            build_mode: None,
+            sourcemap: false,
             out: Some(out.clone()),
             trace_id: "trace-react-compile".to_string(),
             decision_id: "decision-react-compile".to_string(),
@@ -16758,6 +17247,8 @@ mod tests {
             input: input.clone(),
             source_form: ReactSourceForm::JsxFragment,
             runtime_mode: None,
+            build_mode: None,
+            sourcemap: false,
             out: Some(out.clone()),
             trace_id: "trace-react-fragment".to_string(),
             decision_id: "decision-react-fragment".to_string(),
@@ -16781,6 +17272,231 @@ mod tests {
 
         let _ = fs::remove_file(input);
         let _ = fs::remove_file(out);
+    }
+
+    #[test]
+    fn execute_react_compile_supports_jsx_dev_runtime_and_sourcemaps_rc_b3() {
+        let input = std::env::temp_dir().join(format!(
+            "frankenctl-react-jsx-dev-{}.tsx",
+            current_unix_ns()
+        ));
+        let out = std::env::temp_dir().join(format!(
+            "frankenctl-react-jsx-dev-report-{}.json",
+            current_unix_ns()
+        ));
+        fs::write(
+            &input,
+            "<section className=\"card\"><span>Dev</span></section>\n",
+        )
+        .expect("jsx-dev fixture should write");
+
+        let exit_code = execute_react_compile(ReactCompileArgs {
+            input: input.clone(),
+            source_form: ReactSourceForm::Tsx,
+            runtime_mode: Some(ReactRuntimeMode::JsxDev),
+            build_mode: Some(ReactBuildMode::Development),
+            sourcemap: true,
+            out: Some(out.clone()),
+            trace_id: "trace-react-jsx-dev".to_string(),
+            decision_id: "decision-react-jsx-dev".to_string(),
+            policy_id: "policy-react-jsx-dev".to_string(),
+        })
+        .expect("jsx-dev compile execution should succeed");
+
+        assert_eq!(exit_code, 0);
+        let output: serde_json::Value =
+            load_json_file(&out).expect("jsx-dev compile output should parse");
+        assert_eq!(output["support_status"].as_str(), Some("shipped"));
+        assert_eq!(output["blocked"].as_bool(), Some(false));
+        assert_eq!(
+            output["compilation"]["runtime_mode"].as_str(),
+            Some("jsx-dev")
+        );
+        assert!(
+            output["compilation"]["generated_code"]
+                .as_str()
+                .expect("generated code should be present")
+                .contains("jsxDEV")
+        );
+        assert!(
+            output["compilation"]["source_map"]
+                .as_str()
+                .is_some_and(|map| map.contains("\"version\":3") || map.contains("\"version\": 3")),
+            "expected V3 source map in compilation output"
+        );
+    }
+
+    #[test]
+    fn execute_react_doctor_input_scans_jsx_ssr_and_hydration_hazards_rc_b3() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "frankenctl-react-doctor-input-{}",
+            current_unix_ns()
+        ));
+        fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+        let clean_file = temp_dir.join("CleanCard.tsx");
+        fs::write(
+            &clean_file,
+            "<div><span>Deterministic Clean Component</span></div>\n",
+        )
+        .expect("clean component should write");
+        let clean_out = temp_dir.join("clean_doctor.json");
+
+        let clean_exit = execute_react_doctor(ReactDoctorArgs {
+            catalog: None,
+            input: Some(clean_file),
+            out: Some(clean_out.clone()),
+            summary: false,
+            current_epoch: Some(3),
+            min_severity: ReactMismatchSeverity::Info,
+            include_resolved: false,
+            targets: vec![],
+            trace_id: "trace-react-doctor-clean".to_string(),
+            decision_id: "decision-react-doctor-clean".to_string(),
+            policy_id: "policy-react-doctor-clean".to_string(),
+        })
+        .expect("clean react doctor input scan should succeed");
+        assert_eq!(clean_exit, 0);
+
+        let hazard_file = temp_dir.join("HydrationHazard.jsx");
+        fs::write(
+            &hazard_file,
+            "<div>{window.location.href}<span>{Date.now()}</span></div>\n",
+        )
+        .expect("hazard component should write");
+        let hazard_out = temp_dir.join("hazard_doctor.json");
+        let hazard_exit = execute_react_doctor(ReactDoctorArgs {
+            catalog: None,
+            input: Some(hazard_file),
+            out: Some(hazard_out.clone()),
+            summary: false,
+            current_epoch: Some(3),
+            min_severity: ReactMismatchSeverity::Info,
+            include_resolved: false,
+            targets: vec![],
+            trace_id: "trace-react-doctor-hazard".to_string(),
+            decision_id: "decision-react-doctor-hazard".to_string(),
+            policy_id: "policy-react-doctor-hazard".to_string(),
+        })
+        .expect("hazard react doctor input scan should succeed");
+        assert_eq!(hazard_exit, 25);
+        let hazard_json: serde_json::Value =
+            load_json_file(&hazard_out).expect("hazard doctor output should parse");
+        assert_eq!(hazard_json["blocked"].as_bool(), Some(true));
+        assert!(
+            hazard_json["entries_analyzed"]
+                .as_u64()
+                .is_some_and(|n| n >= 2),
+            "expected SSR + hydration entries in doctor scan"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "sibling-persistence")]
+    fn check_emit_witness_and_run_witness_enforce_plas_envelope_rc_d2() {
+        use frankenengine_engine::storage_adapter::{
+            DurableFrankensqliteStorageAdapter, EventContext, StoreQuery,
+        };
+        use frankenengine_engine::typed_persistence_models::{
+            PlasWitnessEntry, TypedStorageAdapterExt,
+        };
+
+        let temp_dir =
+            std::env::temp_dir().join(format!("frankenctl-plas-witness-{}", current_unix_ns()));
+        fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+        let src_path = temp_dir.join("pure.js");
+        let witness_path = temp_dir.join("pure.witness.json");
+        let state_db = temp_dir.join("state.db");
+        let report_out = temp_dir.join("run_report.json");
+        fs::write(&src_path, "const answer = 20 + 22;\nanswer;\n").expect("source should write");
+
+        let check_spec = parse_command(&[
+            "check".to_string(),
+            src_path.display().to_string(),
+            "--format".to_string(),
+            "json".to_string(),
+            "--emit-witness".to_string(),
+            witness_path.display().to_string(),
+        ])
+        .expect("check --emit-witness should parse");
+        let CommandSpec::Check(check_args) = check_spec else {
+            panic!("expected Check command");
+        };
+        let check_exit = execute_check(check_args).expect("clean check --emit-witness succeeds");
+        assert_eq!(check_exit, 0);
+        let emitted: CapabilityWitness =
+            load_json_file(&witness_path).expect("witness json must deserialize");
+        emitted
+            .verify_integrity()
+            .expect("emitted witness integrity");
+
+        let run_spec = parse_command(&[
+            "run".to_string(),
+            "--input".to_string(),
+            src_path.display().to_string(),
+            "--extension-id".to_string(),
+            "ext-plas-cli".to_string(),
+            "--witness".to_string(),
+            witness_path.display().to_string(),
+            "--state-db".to_string(),
+            state_db.display().to_string(),
+            "--out".to_string(),
+            report_out.display().to_string(),
+        ])
+        .expect("run --witness --state-db should parse");
+        let CommandSpec::Run(run_args) = run_spec else {
+            panic!("expected Run command");
+        };
+        let run_exit = execute_run(*run_args).expect("authorized run --witness succeeds");
+        assert_eq!(run_exit, 0);
+
+        let mut adapter = DurableFrankensqliteStorageAdapter::open_durable_file(&state_db)
+            .expect("reopen durable state.db");
+        let ctx = EventContext::new("trace-verify", "decision-verify", "policy-verify").unwrap();
+        let query = StoreQuery {
+            key_prefix: Some("typed/plas_witness/".to_string()),
+            ..StoreQuery::default()
+        };
+        let rows = adapter
+            .query_typed::<PlasWitnessEntry>(&query, &ctx)
+            .expect("typed query succeeds");
+        assert_eq!(
+            rows.len(),
+            1,
+            "PlasWitnessEntry must be persisted to state.db"
+        );
+        assert_eq!(rows[0].content_hash, emitted.content_hash.to_hex());
+
+        // Tampered witness must fail closed with capability_witness_rejected.
+        let tampered_path = temp_dir.join("tampered.witness.json");
+        let mut tampered = emitted;
+        tampered.replay_seed = 777;
+        write_json_file(&tampered_path, &tampered).expect("write tampered witness");
+        let tampered_report = temp_dir.join("tampered_report.json");
+        let tampered_spec = parse_command(&[
+            "run".to_string(),
+            "--input".to_string(),
+            src_path.display().to_string(),
+            "--extension-id".to_string(),
+            "ext-plas-tampered".to_string(),
+            "--witness".to_string(),
+            tampered_path.display().to_string(),
+            "--out".to_string(),
+            tampered_report.display().to_string(),
+        ])
+        .expect("tampered run command parses");
+        let CommandSpec::Run(tampered_args) = tampered_spec else {
+            panic!("expected Run command");
+        };
+        let tampered_err =
+            execute_run(*tampered_args).expect_err("tampered witness emits structured refusal");
+        assert!(
+            tampered_err.contains("classification: capability_witness_rejected"),
+            "unexpected error: {tampered_err}"
+        );
+        assert!(
+            !tampered_report.exists(),
+            "rejected witness must fail closed before writing an output report"
+        );
     }
 
     #[test]

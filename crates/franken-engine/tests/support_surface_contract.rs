@@ -530,9 +530,36 @@ fn rgc_911b_react_rows_reference_real_capability_ids() {
                 panic!("missing linked capability {capability_id} in react contract")
             });
         assert_eq!(
-            *status, "deferred",
-            "compile-linked capability {capability_id} should remain deferred"
+            *status, "shipped",
+            "compile-linked capability {capability_id} must be shipped"
         );
+    }
+
+    for shipped_surface_id in [
+        "runtime.react_dev_runtime_diagnostics",
+        "runtime.react_diagnostics_source_maps",
+    ] {
+        let row = contract
+            .surface_rows
+            .iter()
+            .find(|row| row.surface_id == shipped_surface_id)
+            .unwrap_or_else(|| panic!("{shipped_surface_id} row must exist"));
+        assert_eq!(row.support_status, "shipped");
+        for capability_id in row
+            .linked_capability_ids
+            .as_ref()
+            .expect("shipped react diagnostic row should link capabilities")
+        {
+            let status = capability_statuses
+                .get(capability_id.as_str())
+                .unwrap_or_else(|| {
+                    panic!("missing linked capability {capability_id} in react contract")
+                });
+            assert_eq!(
+                *status, "shipped",
+                "diagnostic-linked capability {capability_id} must be shipped"
+            );
+        }
     }
 
     let execution_row = contract
@@ -556,9 +583,9 @@ fn rgc_911b_react_rows_reference_real_capability_ids() {
             .unwrap_or_else(|| {
                 panic!("missing linked capability {capability_id} in react contract")
             });
-        assert_eq!(
-            *status, "unsupported",
-            "execution-linked capability {capability_id} should remain unsupported"
+        assert!(
+            matches!(*status, "unsupported" | "gated_preview"),
+            "execution-linked capability {capability_id} should remain unsupported or gated_preview, got {status}"
         );
     }
 }

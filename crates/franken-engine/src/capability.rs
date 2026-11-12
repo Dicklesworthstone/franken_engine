@@ -363,7 +363,7 @@ pub fn hostcall_registry_row(tag: &str) -> Option<HostcallRegistryRow<'_>> {
             result_contract_for_authority(RuntimeCapability::ProcessSpawn),
             HostcallDispatchBinding::ProcessSpawn,
         ),
-        "env:read" | "env:has" => (
+        "env:read" | "env:has" | "env.read" | "env.has" => (
             Some(RuntimeCapability::EnvRead),
             result_contract_for_authority(RuntimeCapability::EnvRead),
             HostcallDispatchBinding::HostIo,
@@ -393,10 +393,23 @@ pub fn hostcall_registry_row(tag: &str) -> Option<HostcallRegistryRow<'_>> {
             result_contract_for_authority(RuntimeCapability::NetworkEgress),
             HostcallDispatchBinding::Builtin,
         ),
-        "fs:read" | FS_READ_PROMISE_CAPABILITY | "fs:write" | "net:connect" | "net:fetch" | "net:outbound" | "net:request" => {
-            let authority = if matches!(tag, "fs:read" | FS_READ_PROMISE_CAPABILITY) {
+        "fs:read"
+        | "fs.read"
+        | FS_READ_PROMISE_CAPABILITY
+        | "fs:write"
+        | "fs.write"
+        | "net:connect"
+        | "net.connect"
+        | "net:fetch"
+        | "net.fetch"
+        | "net:outbound"
+        | "net.outbound"
+        | "net:request"
+        | "net.request"
+        | "net.send" => {
+            let authority = if matches!(tag, "fs:read" | "fs.read" | FS_READ_PROMISE_CAPABILITY) {
                 RuntimeCapability::FsRead
-            } else if tag == "fs:write" {
+            } else if matches!(tag, "fs:write" | "fs.write") {
                 RuntimeCapability::FsWrite
             } else {
                 RuntimeCapability::NetworkEgress
@@ -520,11 +533,22 @@ pub fn hostcall_registry_row(tag: &str) -> Option<HostcallRegistryRow<'_>> {
                 // constructed unless network egress was granted, closing the bypass
                 // where the deferred `.end()` egress would otherwise skip the engine
                 // capability gate (`.end()` runs as a builtin, not a HostCall IR op).
-                "network" | "net" | "net.write" | "network.write" => {
-                    RuntimeCapability::NetworkEgress
-                }
+                "network"
+                | "net"
+                | "net.write"
+                | "network.write"
+                | "net.send"
+                | "net.connect"
+                | "net.fetch"
+                | "net.request"
+                | "net.outbound" => RuntimeCapability::NetworkEgress,
                 "fs" | "fs.read" => RuntimeCapability::FsRead,
                 "fs.write" => RuntimeCapability::FsWrite,
+                "env.read" | "env.has" => RuntimeCapability::EnvRead,
+                "telemetry.emit" | "evidence.emit" => RuntimeCapability::EvidenceEmit,
+                "timer.set" => RuntimeCapability::Timer,
+                "random.read" => RuntimeCapability::RandomRead,
+                "process.spawn" => RuntimeCapability::ProcessSpawn,
                 _ => return None,
             };
             (

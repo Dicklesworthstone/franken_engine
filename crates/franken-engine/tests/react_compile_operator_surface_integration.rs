@@ -539,25 +539,27 @@ fn contract_add_feature() {
 }
 
 #[test]
-fn contract_shipped_commands_empty_when_none_shipped() {
+fn contract_shipped_commands_contains_react_compile() {
     let contract = build_seed_contract();
-    assert!(contract.shipped_commands().is_empty());
+    let shipped = contract.shipped_commands();
+    assert_eq!(shipped.len(), 1);
+    assert_eq!(shipped[0].command, ReactOperatorCommand::ReactCompile);
 }
 
 #[test]
 fn contract_available_features_count() {
     let contract = build_seed_contract();
     let available = contract.available_features();
-    // 3 Supported + 1 Partial = 4 available
-    assert_eq!(available.len(), 4);
+    // 3 Supported + 2 Partial (including suspense_boundaries coherence diagnostics) = 5 available
+    assert_eq!(available.len(), 5);
 }
 
 #[test]
 fn contract_unsupported_features_count() {
     let contract = build_seed_contract();
     let unsupported = contract.unsupported_features();
-    // 3 NotImplemented + 1 Unsupported = 4 unsupported
-    assert_eq!(unsupported.len(), 4);
+    // 2 NotImplemented + 1 Unsupported = 3 unsupported
+    assert_eq!(unsupported.len(), 3);
 }
 
 // ---------------------------------------------------------------------------

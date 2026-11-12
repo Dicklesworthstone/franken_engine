@@ -44,7 +44,7 @@
     {
       "surface_bead": "bd-1lsy.10.12.2",
       "name": "React-aware doctor, preflight, and support-bundle guidance",
-      "ship_status": "planned"
+      "ship_status": "shipped"
     },
     {
       "surface_bead": "bd-1lsy.10.12.3",
@@ -223,7 +223,7 @@
       "source_form": "jsx",
       "runtime_mode": "jsx_dev_runtime",
       "entry_surface": "diagnostic_contract",
-      "support_status": "unsupported",
+      "support_status": "shipped",
       "owning_implementation_bead": "bd-1lsy.3.6.2",
       "parity_gate_bead": "bd-1lsy.9.7.1",
       "product_surface_bead": "bd-1lsy.10.12.2",
@@ -237,8 +237,8 @@
       ],
       "user_visible_diagnostic": {
         "error_code": "FE-RGC-016A-CAP-0006",
-        "diagnostic_surface": "frankenctl react doctor/preflight",
-        "message_template": "The jsx-dev runtime contract is not shipped; reject the request with diagnostics and unsupported-surface guidance instead of pretending to execute it.",
+        "diagnostic_surface": "frankenctl react compile/doctor",
+        "message_template": "JSX dev-runtime (`jsxDEV`) compilation with `__source`/`__self` metadata and AST diagnostics is shipped through frankenctl react compile and frankenctl react doctor.",
         "remediation_bead": "bd-1lsy.10.11.2"
       },
       "unsupported_surface_policy": {
@@ -256,7 +256,7 @@
       "source_form": "tsx",
       "runtime_mode": "jsx_dev_runtime",
       "entry_surface": "diagnostic_contract",
-      "support_status": "unsupported",
+      "support_status": "shipped",
       "owning_implementation_bead": "bd-1lsy.3.6.2",
       "parity_gate_bead": "bd-1lsy.9.7.1",
       "product_surface_bead": "bd-1lsy.10.12.2",
@@ -270,8 +270,8 @@
       ],
       "user_visible_diagnostic": {
         "error_code": "FE-RGC-016A-CAP-0011",
-        "diagnostic_surface": "frankenctl react doctor/preflight",
-        "message_template": "The tsx-dev runtime contract is not shipped; reject the request with diagnostics and unsupported-surface guidance instead of pretending to execute it.",
+        "diagnostic_surface": "frankenctl react compile/doctor",
+        "message_template": "TSX dev-runtime (`jsxDEV`) compilation with `__source`/`__self` metadata and AST diagnostics is shipped through frankenctl react compile and frankenctl react doctor.",
         "remediation_bead": "bd-1lsy.10.11.2"
       },
       "unsupported_surface_policy": {
@@ -322,7 +322,7 @@
       "source_form": "react_entry",
       "runtime_mode": "client_entry",
       "entry_surface": "client_entry_preparation",
-      "support_status": "unsupported",
+      "support_status": "gated_preview",
       "owning_implementation_bead": "bd-1lsy.5.7.1",
       "parity_gate_bead": "bd-1lsy.9.7.2",
       "product_surface_bead": "bd-1lsy.10.12.3",
@@ -337,7 +337,7 @@
       "user_visible_diagnostic": {
         "error_code": "FE-RGC-016A-CAP-0008",
         "diagnostic_surface": "frankenctl react build",
-        "message_template": "React client-entry preparation is not yet a shipped surface; reject the request and direct the operator to deterministic unsupported-surface guidance.",
+        "message_template": "The client-build preview compiles bounded local JS/JSX/TS/TSX ES-module graphs with source maps and explicit external runtime providers. CommonJS bundling, dynamic imports, SSR, and hydration are outside this preview.",
         "remediation_bead": "bd-1lsy.10.11.2"
       },
       "unsupported_surface_policy": {
@@ -388,7 +388,7 @@
       "source_form": "react_diagnostics",
       "runtime_mode": "source_map_fidelity",
       "entry_surface": "diagnostic_contract",
-      "support_status": "deferred",
+      "support_status": "shipped",
       "owning_implementation_bead": "bd-1lsy.10.5",
       "parity_gate_bead": "bd-1lsy.9.7.1",
       "product_surface_bead": "bd-1lsy.10.12.2",
@@ -402,8 +402,8 @@
       ],
       "user_visible_diagnostic": {
         "error_code": "FE-RGC-016A-CAP-0010",
-        "diagnostic_surface": "frankenctl react doctor/preflight",
-        "message_template": "React-specific diagnostics and source-map fidelity are not yet shipped as a user-supportable contract; reject the request with explicit remediation guidance.",
+        "diagnostic_surface": "frankenctl react compile/doctor",
+        "message_template": "Deterministic V3 source maps (`--sourcemap`) and AST-backed React doctor diagnostics (`--input`) are shipped through frankenctl react compile and frankenctl react doctor.",
         "remediation_bead": "bd-1lsy.10.11.2"
       },
       "unsupported_surface_policy": {

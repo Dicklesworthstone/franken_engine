@@ -2587,6 +2587,8 @@ impl ExecutionOrchestrator {
         package: &ExtensionPackage,
     ) -> Result<PreparedRuntimeFlowGuards, OrchestratorError> {
         Self::validate_package(package)?;
+        self.containment_executor
+            .ensure_execution_allowed(&package.extension_id)?;
         let reserved = self.reserve_execution_context(package)?;
         let prepared = match self.prepare_lowering_output(
             package,
@@ -2624,6 +2626,7 @@ impl ExecutionOrchestrator {
         package: &ExtensionPackage,
         resolved: &ResolutionOutcome,
     ) -> Result<OrchestratorResult, OrchestratorError> {
+        self.ensure_resolved_entry_containment_admission(package)?;
         let record = &resolved.module.record;
         if record.id.is_empty()
             || resolved.module.canonical_specifier.is_empty()
@@ -2719,6 +2722,7 @@ impl ExecutionOrchestrator {
         resolved: &ResolutionOutcome,
         resolver: ExecutionModuleResolver,
     ) -> Result<OrchestratorResult, OrchestratorError> {
+        self.ensure_resolved_entry_containment_admission(package)?;
         if resolver.entry_referrer() != resolved.module.record.id {
             return Err(OrchestratorError::ResolvedEntryRejected {
                 detail: "runtime resolver entry identity does not match the resolved entry"
@@ -2738,11 +2742,11 @@ impl ExecutionOrchestrator {
         }
     }
 
-    /// Execute an extension package through the full pipeline.
-    pub fn execute(
+    /// Reset per-attempt failure surfaces and consume one-shot process authority
+    /// before any execution admission can fail.
+    fn begin_execution_attempt(
         &mut self,
-        package: &ExtensionPackage,
-    ) -> Result<OrchestratorResult, OrchestratorError> {
+    ) -> Result<Option<InstalledProcessSpawnAttempt>, OrchestratorError> {
         // A signed process admission authorizes exactly one execution attempt.
         // Consume it before validation so a malformed package cannot preserve
         // the authority and reuse it for a later, unrelated package.
@@ -2759,6 +2763,33 @@ impl ExecutionOrchestrator {
                 .admit_once()
                 .map_err(OrchestratorError::ProcessSpawnAttempt)?;
         }
+        Ok(process_spawn_attempt)
+    }
+
+    /// Refuse a contained delivered entry before inspecting its source or
+    /// temporarily installing a resolver. Successful delivery delegates attempt
+    /// admission to `execute`; a refusal performs the same cleanup and authority
+    /// consumption so callers cannot observe a previous attempt's effects.
+    fn ensure_resolved_entry_containment_admission(
+        &mut self,
+        package: &ExtensionPackage,
+    ) -> Result<(), OrchestratorError> {
+        if let Err(error) = self
+            .containment_executor
+            .ensure_execution_allowed(&package.extension_id)
+        {
+            let _ = self.begin_execution_attempt()?;
+            return Err(error.into());
+        }
+        Ok(())
+    }
+
+    /// Execute an extension package through the full pipeline.
+    pub fn execute(
+        &mut self,
+        package: &ExtensionPackage,
+    ) -> Result<OrchestratorResult, OrchestratorError> {
+        let process_spawn_attempt = self.begin_execution_attempt()?;
         let process_spawn = process_spawn_attempt
             .as_ref()
             .map(|attempt| Arc::clone(&attempt.provider));
@@ -2771,6 +2802,12 @@ impl ExecutionOrchestrator {
         // Step 0: Validate.
         Self::validate_package(package)?;
         self.ensure_not_cancelled()?;
+        // A new cell must not resurrect a previously contained extension with
+        // its original grants. Check before lowering, attempt identifiers,
+        // recorder setup, or any guest-triggered provider/resolver activity.
+        // A normal completed execution remains Running and can be reused.
+        self.containment_executor
+            .ensure_execution_allowed(&package.extension_id)?;
         // Commit attacker-controlled capability metadata before any execution
         // or host effect. The post-effect evidence phase consumes only this
         // fixed-size summary, so containment cannot be delayed by re-hashing an
@@ -6762,7 +6799,7 @@ mod tests {
     }
 
     #[test]
-    fn post_cell_containment_failure_returns_close_evidence_bd_9rhwp() {
+    fn containment_admission_refuses_quarantined_extension_before_cell_creation() {
         let package = package_with_metadata(
             "bd-9rhwp-containment",
             "const obj = { constructor: 1 }; obj.constructor;",
@@ -6793,17 +6830,273 @@ mod tests {
 
         let error = orchestrator
             .execute(&package)
-            .expect_err("the selected containment action must reject the dead state");
-        let failure = assert_successful_post_cell_cleanup(&error);
-
-        assert!(failure.additional_errors.is_empty());
+            .expect_err("a quarantined extension must not enter the interpreter");
+        assert!(error.post_cell_failure().is_none());
         assert!(matches!(
-            failure.primary_error.as_ref(),
-            OrchestratorError::Containment(ContainmentError::InvalidTransition {
-                from: crate::containment_executor::ContainmentState::Quarantined,
+            error,
+            OrchestratorError::Containment(ContainmentError::AlreadyContained {
+                current_state: crate::containment_executor::ContainmentState::Quarantined,
                 ..
             })
         ));
+        assert_eq!(orchestrator.attempt_counter, 0);
+        assert_eq!(orchestrator.execution_count(), 0);
+        assert!(orchestrator.ledger().is_empty());
+        assert!(orchestrator.last_failed_console_output().is_empty());
+        assert!(orchestrator.last_failed_trace_id().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn containment_admission_blocks_reexecution_before_real_filesystem_effects() {
+        use frankenengine_extension_host::host_io::{InMemoryHostIoTranscript, SandboxedHostIo};
+
+        for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+            for action in [
+                ContainmentAction::Challenge,
+                ContainmentAction::Sandbox,
+                ContainmentAction::Suspend,
+                ContainmentAction::Terminate,
+                ContainmentAction::Quarantine,
+            ] {
+                let root = tempfile::tempdir().expect("sandbox root");
+                let provider = Arc::new(SandboxedHostIo::with_root(root.path()).unwrap());
+                let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+                let config = OrchestratorConfig {
+                    force_lane: Some(lane),
+                    ..OrchestratorConfig::default()
+                };
+                let mut orchestrator = ExecutionOrchestrator::new(config);
+                orchestrator.set_host_io(provider, Some(recorder.clone()));
+                let mut package = package_with_id("contained-extension");
+                // The selection is controlled here; the execution, containment
+                // transition, signed receipt, and filesystem provider are real.
+                orchestrator.containment_action_override = Some(action);
+                let first = orchestrator.execute(&package).expect("initial execution");
+                let receipt = first.containment_receipt.as_ref().unwrap();
+                assert_eq!(receipt.action, action);
+                assert!(receipt.verify_integrity());
+
+                let entries = orchestrator.ledger().entries().to_vec();
+                let head = orchestrator
+                    .ledger()
+                    .evidence_chain_head()
+                    .map(str::to_owned);
+                let attempts = orchestrator.attempt_counter;
+                let sagas = orchestrator.saga_orchestrator.total_count();
+                let recorded = recorder.entries();
+                package.source =
+                    "const fs = require('fs'); fs.writeFileSync('effect.txt', 'effect'); 42;"
+                        .to_string();
+                package.capabilities = vec![
+                    "builtin".to_string(),
+                    "fs_read".to_string(),
+                    "fs_write".to_string(),
+                    "module_load".to_string(),
+                ];
+                package.version = "2.0.0".to_string();
+
+                let error = orchestrator
+                    .execute(&package)
+                    .expect_err("a new version must not reset an extension's containment");
+                assert!(matches!(
+                    error,
+                    OrchestratorError::Containment(ContainmentError::AlreadyContained {
+                        ref extension_id,
+                        current_state,
+                    }) if extension_id == &package.extension_id
+                        && current_state == receipt.new_state
+                ));
+                assert!(!root.path().join("effect.txt").exists());
+                assert_eq!(recorder.entries(), recorded);
+                assert_eq!(orchestrator.attempt_counter, attempts);
+                assert_eq!(orchestrator.execution_count(), 1);
+                assert_eq!(orchestrator.ledger().entries(), entries);
+                assert_eq!(orchestrator.ledger().evidence_chain_head(), head.as_deref());
+                assert_eq!(orchestrator.saga_orchestrator.total_count(), sagas);
+                assert_eq!(
+                    orchestrator.containment_executor.receipts(&package.extension_id),
+                    vec![receipt]
+                );
+
+                // Positive control: the exact source and installed provider
+                // still perform the effect for a different, admitted extension.
+                package.extension_id = "uncontained-peer".to_string();
+                let allowed = orchestrator
+                    .execute(&package)
+                    .expect("independent extension");
+                assert_eq!(std::fs::read(root.path().join("effect.txt")).unwrap(), b"effect");
+                assert_eq!(allowed.host_effect_transcript.len(), 1);
+                assert_eq!(allowed.host_effect_transcript[0].0.kind(), "fs_write");
+            }
+        }
+    }
+
+    #[test]
+    fn containment_admission_keeps_normal_completed_extensions_reusable() {
+        let mut orchestrator = ExecutionOrchestrator::with_defaults();
+        for _ in 0..3 {
+            let result = orchestrator.execute(&simple_package()).unwrap();
+            assert_eq!(result.execution_value, "42");
+            assert_eq!(result.containment_action, ContainmentAction::Allow);
+        }
+        assert_eq!(orchestrator.execution_count(), 3);
+        assert_eq!(orchestrator.attempt_counter, 3);
+    }
+
+    #[test]
+    fn containment_admission_preflight_does_not_reserve_or_lower_blocked_source() {
+        let mut orchestrator = ExecutionOrchestrator::with_defaults();
+        let mut package = simple_package();
+        orchestrator
+            .containment_executor
+            .register(&package.extension_id);
+        orchestrator
+            .containment_executor
+            .execute(
+                ContainmentAction::Suspend,
+                &package.extension_id,
+                &ContainmentContext::default(),
+            )
+            .unwrap();
+        package.source = "const = invalid source".to_string();
+        let error = orchestrator
+            .prepare_next_runtime_flow_guards(&package)
+            .expect_err("containment must precede parser/lowering work");
+        assert!(matches!(
+            error,
+            OrchestratorError::Containment(ContainmentError::AlreadyContained { .. })
+        ));
+        assert!(orchestrator.reserved_execution_context.is_none());
+        assert_eq!(orchestrator.attempt_counter, 0);
+        assert!(orchestrator.ledger().is_empty());
+    }
+
+    #[test]
+    fn containment_admission_clears_stale_failures_and_consumes_process_authority() {
+        use crate::module_resolver::{
+            AllowAllPolicy, DeterministicModuleResolver, ModuleProvenance, ModuleRecord,
+            ModuleSourceKind, ResolutionEvent, ResolvedModule,
+        };
+        use frankenengine_extension_host::process_spawn::DenyAllProcessSpawn;
+
+        let record = ModuleRecord {
+            id: "delivered:contained-entry".to_string(),
+            syntax: ModuleSyntax::EsModule,
+            source: "42".to_string(),
+            dependencies: Vec::new(),
+            required_capabilities: BTreeSet::new(),
+            provenance: ModuleProvenance {
+                kind: ModuleSourceKind::Workspace,
+                origin: "containment-admission-test".to_string(),
+            },
+        };
+        let resolved = ResolutionOutcome {
+            module: ResolvedModule {
+                request_specifier: record.id.clone(),
+                canonical_specifier: record.id.clone(),
+                content_hash: record.canonical_hash(),
+                record,
+                probe_sequence: Vec::new(),
+            },
+            event: ResolutionEvent {
+                trace_id: "resolution-trace".to_string(),
+                decision_id: "resolution-decision".to_string(),
+                policy_id: "resolution-policy".to_string(),
+                component: "module-resolver".to_string(),
+                event: "resolve".to_string(),
+                outcome: "resolved".to_string(),
+                error_code: String::new(),
+            },
+        };
+
+        for entrypoint in 0..3 {
+            let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig {
+                parse_goal: ParseGoal::Module,
+                ..OrchestratorConfig::default()
+            });
+            let mut package =
+                package_with_source("console.log('previous attempt'); throw 'previous failure';");
+            orchestrator
+                .execute(&package)
+                .expect_err("seed a real failed execution");
+            assert!(!orchestrator.last_failed_console_output().is_empty());
+            assert!(orchestrator.last_failed_trace_id().is_some());
+
+            let previous_effect = HostEffectJournalEntry::HostIo {
+                request: HostIoRequest::FsRead {
+                    path: "previous-attempt.txt".to_string(),
+                },
+                outcome: Err(HostIoError::Denied {
+                    reason: "previous-attempt".to_string(),
+                }),
+            };
+            orchestrator.last_failed_host_effect_journal = vec![previous_effect.clone()];
+            orchestrator.last_failed_host_effect_journal_records =
+                vec![HostEffectJournalAttemptRecord::Completed {
+                    sequence: 0,
+                    entry: previous_effect,
+                }];
+            orchestrator
+                .containment_executor
+                .execute(
+                    ContainmentAction::Quarantine,
+                    &package.extension_id,
+                    &ContainmentContext::default(),
+                )
+                .unwrap();
+            let expires_at = u64::try_from(
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis(),
+            )
+            .unwrap()
+            .checked_add(60_000)
+            .unwrap();
+            let authority = ProcessSpawnAttemptAuthority::expiring_at_unix_ms(expires_at);
+            let journal = Arc::new(InMemoryHostEffectJournal::recording());
+            orchestrator.set_process_spawn(
+                Arc::new(DenyAllProcessSpawn),
+                journal.clone(),
+                authority.clone(),
+            );
+            package.source = "42".to_string();
+            let error = match entrypoint {
+                0 => orchestrator.execute(&package),
+                1 => orchestrator.execute_resolved_entry(&package, &resolved),
+                _ => orchestrator.execute_resolved_entry_with_resolver(
+                    &package,
+                    &resolved,
+                    ExecutionModuleResolver::new(
+                        resolved.module.record.id.clone(),
+                        Arc::new(DeterministicModuleResolver::default()),
+                        Arc::new(AllowAllPolicy),
+                    ),
+                ),
+            }
+            .expect_err("every public entry must preserve containment");
+            assert!(matches!(
+                error,
+                OrchestratorError::Containment(ContainmentError::AlreadyContained { .. })
+            ));
+            assert_eq!(
+                authority.admit_once(),
+                Err(ProcessSpawnAttemptError::AlreadyAdmitted)
+            );
+            assert!(orchestrator.last_failed_host_effect_journal().is_empty());
+            assert!(
+                orchestrator
+                    .last_failed_host_effect_journal_records()
+                    .is_empty()
+            );
+            assert!(orchestrator.last_failed_console_output().is_empty());
+            assert!(orchestrator.last_failed_trace_id().is_none());
+            assert!(orchestrator.module_resolver.is_none());
+            // Refusal must occur before opening a journal execution boundary.
+            journal.begin_execution().unwrap();
+            assert!(journal.finish_execution().unwrap().is_empty());
+        }
     }
 
     #[test]

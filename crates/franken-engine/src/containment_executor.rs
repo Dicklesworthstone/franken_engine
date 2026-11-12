@@ -410,6 +410,25 @@ impl ContainmentExecutor {
             .map(|e| e.state)
     }
 
+    /// Admit a fresh execution with its ordinary package authority.
+    ///
+    /// Registration is idempotent and must not act as a containment reset.
+    /// An unregistered extension may enter for the first time, but an existing
+    /// challenge, sandbox, suspension, or shutdown must be resolved explicitly
+    /// before dispatching a new interpreter with the package's full grants.
+    /// In particular, `is_alive()` is insufficient here: a sandboxed extension
+    /// is alive only under its restricted policy, and a challenged extension
+    /// is still waiting for attestation. Neither authorizes ordinary re-entry.
+    pub fn ensure_execution_allowed(&self, extension_id: &str) -> Result<(), ContainmentError> {
+        match self.state(extension_id) {
+            None | Some(ContainmentState::Running) => Ok(()),
+            Some(current_state) => Err(ContainmentError::AlreadyContained {
+                extension_id: extension_id.to_string(),
+                current_state,
+            }),
+        }
+    }
+
     /// Execute a containment action on an extension.
     pub fn execute(
         &mut self,
@@ -935,6 +954,76 @@ mod tests {
     fn unknown_extension_returns_none() {
         let executor = ContainmentExecutor::new();
         assert_eq!(executor.state("ext-999"), None);
+    }
+
+    #[test]
+    fn containment_admission_cannot_reset_by_reregistering() {
+        for action in [
+            ContainmentAction::Challenge,
+            ContainmentAction::Sandbox,
+            ContainmentAction::Suspend,
+            ContainmentAction::Terminate,
+            ContainmentAction::Quarantine,
+        ] {
+            let mut executor = setup_executor();
+            let receipt = executor
+                .execute(action, "ext-001", &test_context())
+                .unwrap();
+            executor.register("ext-001");
+            assert_eq!(
+                executor.ensure_execution_allowed("ext-001"),
+                Err(ContainmentError::AlreadyContained {
+                    extension_id: "ext-001".to_string(),
+                    current_state: receipt.new_state,
+                })
+            );
+            assert_eq!(executor.state("ext-001"), Some(receipt.new_state));
+            assert_eq!(executor.receipts("ext-001"), vec![&receipt]);
+            assert!(executor.ensure_execution_allowed("new-extension").is_ok());
+        }
+    }
+
+    #[test]
+    fn containment_admission_resumes_only_after_explicit_lifecycle_release() {
+        let mut executor = setup_executor();
+        let context = test_context();
+        assert!(executor.ensure_execution_allowed("ext-001").is_ok());
+        executor
+            .execute(ContainmentAction::Challenge, "ext-001", &context)
+            .unwrap();
+        assert!(executor.ensure_execution_allowed("ext-001").is_err());
+        executor
+            .execute(ContainmentAction::Allow, "ext-001", &context)
+            .unwrap();
+        assert!(executor.ensure_execution_allowed("ext-001").is_ok());
+        executor
+            .execute(ContainmentAction::Suspend, "ext-001", &context)
+            .unwrap();
+        assert!(executor.ensure_execution_allowed("ext-001").is_err());
+        executor.resume("ext-001", &context).unwrap();
+        assert!(executor.ensure_execution_allowed("ext-001").is_ok());
+    }
+
+    #[test]
+    fn containment_admission_does_not_restore_full_authority_after_sandbox_resume() {
+        let mut executor = setup_executor();
+        let context = test_context();
+        executor
+            .execute(ContainmentAction::Sandbox, "ext-001", &context)
+            .unwrap();
+        executor
+            .execute(ContainmentAction::Suspend, "ext-001", &context)
+            .unwrap();
+        executor.resume("ext-001", &context).unwrap();
+        assert_eq!(executor.state("ext-001"), Some(ContainmentState::Sandboxed));
+        assert_eq!(
+            executor.ensure_execution_allowed("ext-001"),
+            Err(ContainmentError::AlreadyContained {
+                extension_id: "ext-001".to_string(),
+                current_state: ContainmentState::Sandboxed,
+            })
+        );
+        assert_eq!(executor.sandbox_policy("ext-001"), Some(&context.sandbox_policy));
     }
 
     // -----------------------------------------------------------------------

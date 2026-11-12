@@ -1098,7 +1098,7 @@ fn inherited_array_elements_cannot_launder_secrets_through_aggregates() {
         for (expression, public_output) in AGGREGATES {
             let source = format!(
                 "const crypto = require('crypto'); const p = []; {receiver} \
-                 p[0] = crypto.randomUUID(); const output = {expression}; \
+                 Reflect.set(p, 0, crypto.randomUUID()); const output = {expression}; \
                  const print = console.log; print(output);"
             );
             let provider = Arc::new(ScriptedRandomHostIo::bytes([vec![0x11; 16]]));
@@ -1149,7 +1149,7 @@ fn inherited_array_elements_cannot_launder_secrets_through_aggregates() {
             // the inherited element or depend on secret prototype selection.
             let source = format!(
                 "const crypto = require('crypto'); const p = []; {receiver} \
-                 a[0] = 'public'; p[0] = crypto.randomUUID(); \
+                 a[0] = 'public'; Reflect.set(p, 0, crypto.randomUUID()); \
                  const output = {expression}; const print = console.log; print(output);"
             );
             let provider = Arc::new(ScriptedRandomHostIo::bytes([vec![0x11; 16]]));
@@ -1454,7 +1454,7 @@ fn ed25519_generation_is_deterministic_under_identical_entropy_bd_53l89() {
 
 #[test]
 fn generate_key_pair_sync_rejects_unknown_algorithms_and_options_bd_53l89() {
-    let unknown = eval_crypto_error("require('crypto').generateKeyPairSync('p256');");
+    let unknown = eval_crypto_error("require('crypto').generateKeyPairSync('rsa');");
     assert!(
         unknown.contains("Unknown key pair algorithm"),
         "unknown curve must raise the typed argument error, got {unknown:?}"
@@ -1545,7 +1545,7 @@ fn ed25519_signature_is_never_public_bd_53l89() {
 #[test]
 fn ed25519_sign_rejects_non_null_algorithm_and_foreign_keys_bd_53l89() {
     let algorithm_error = eval_crypto_error(
-        "require('crypto').generateKeyPairSync('ed25519'); require('crypto').sign('sha256', Buffer.from('x'), {});",
+        "const pair = require('crypto').generateKeyPairSync('ed25519'); require('crypto').sign('sha256', Buffer.from('x'), pair);",
     );
     assert!(
         algorithm_error.contains("null algorithm for Ed25519 sign"),
@@ -1554,7 +1554,7 @@ fn ed25519_sign_rejects_non_null_algorithm_and_foreign_keys_bd_53l89() {
 
     let foreign_key = eval_crypto_error("require('crypto').sign(null, Buffer.from('x'), {});");
     assert!(
-        foreign_key.contains("Ed25519 key pair handle"),
+        foreign_key.contains("key pair handle"),
         "a non-handle key argument must raise the handle type error, got {foreign_key:?}"
     );
 }

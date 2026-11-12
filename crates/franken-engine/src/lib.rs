@@ -129,7 +129,6 @@ pub mod capability_lease;
 #[cfg(feature = "governance-surfaces")]
 pub mod capability_pruned_dispatch;
 pub mod capability_token;
-#[cfg(feature = "governance-surfaces")]
 pub mod capability_witness;
 #[cfg(feature = "governance-surfaces")]
 pub mod catastrophe_witness_generator;
@@ -2432,6 +2431,7 @@ struct PreparedEvalSource {
     prepared_source: String,
     parse_goal: ParseGoal,
     source_ingestion: SourceIngestionSummary,
+    typed_hostcall_capabilities: Vec<String>,
     trace_id: String,
     decision_id: String,
     policy_id: String,
@@ -2482,11 +2482,17 @@ fn prepare_eval_source(source: &str, trace_scope: &str) -> EvalResult<PreparedEv
         )
     })?;
     let parse_goal = infer_parse_goal(prepared.prepared_source.as_str());
+    let typed_hostcall_capabilities = prepared
+        .normalization_output
+        .as_ref()
+        .map(|out| out.ordered_hostcall_capabilities.clone())
+        .unwrap_or_default();
 
     Ok(PreparedEvalSource {
         prepared_source: prepared.prepared_source,
         parse_goal,
         source_ingestion: prepared.source_ingestion,
+        typed_hostcall_capabilities,
         trace_id,
         decision_id,
         policy_id,
@@ -2664,7 +2670,8 @@ fn compile_prepared_eval_source(
     .with_ambient_authority_grant(AmbientAuthorityGrant::TrustedProcessShape)
     .with_host_io_exception_provenance(
         frankenengine_extension_host::host_io::HostIoExceptionProvenance::ProviderInternal,
-    );
+    )
+    .with_typed_hostcall_capabilities(prepared.typed_hostcall_capabilities);
     let ir0 =
         Ir0Module::from_syntax_tree_with_source(syntax_tree, "<eval>", &prepared.prepared_source);
     let lowering_output = lower_ir0_to_ir3(&ir0, &lowering_context)

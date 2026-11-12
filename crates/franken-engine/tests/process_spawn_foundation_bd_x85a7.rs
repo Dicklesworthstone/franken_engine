@@ -39,12 +39,40 @@ use frankenengine_engine::runtime_config::RuntimeConfig;
 use frankenengine_extension_host::host_effect_journal::{
     HostEffectJournalAttemptRecord, HostEffectJournalEntry, InMemoryHostEffectJournal,
 };
+use frankenengine_extension_host::host_io::{
+    HostIoCapability, HostIoError, HostIoOutcome, HostIoProvider, HostIoRequest, HostIoResponse,
+};
 #[cfg(unix)]
 use frankenengine_extension_host::process_spawn::{NativeProcessSpawn, ProcessSpawnPolicy};
 use frankenengine_extension_host::process_spawn::{
     ProcessExit, ProcessLaunch, ProcessSpawnCapability, ProcessSpawnError, ProcessSpawnOutcome,
     ProcessSpawnProvider, ProcessSpawnRequest, ProcessSpawnResponse, ProcessStdio,
 };
+
+#[derive(Debug)]
+struct RandomOnlyHostIo;
+
+impl HostIoProvider for RandomOnlyHostIo {
+    fn name(&self) -> &str {
+        "random-only-host-io"
+    }
+
+    fn perform(&self, request: &HostIoRequest, granted: &[HostIoCapability]) -> HostIoOutcome {
+        if !granted.contains(&HostIoCapability::RandomRead) {
+            return Err(HostIoError::Denied {
+                reason: "random_read not granted".to_string(),
+            });
+        }
+        match request {
+            HostIoRequest::RandomRead { byte_len } => Ok(HostIoResponse::RandomRead {
+                bytes: vec![0xA5; *byte_len as usize],
+            }),
+            other => Err(HostIoError::NotImplemented {
+                what: format!("{other:?}"),
+            }),
+        }
+    }
+}
 
 #[derive(Debug)]
 struct RecordingProcessSpawn {
@@ -442,6 +470,7 @@ fn first_class_process_selection_and_arguments_retain_runtime_ifc_denials() {
         ] {
             let provider = Arc::new(RecordingProcessSpawn::successful(b"must-not-run"));
             let mut engine = first_class_process_engine(lane);
+            engine.set_host_io(Arc::new(RandomOnlyHostIo), None);
             engine.set_process_spawn(
                 provider.clone(),
                 Arc::new(InMemoryHostEffectJournal::recording()),
@@ -462,10 +491,16 @@ fn first_class_process_selection_and_arguments_retain_runtime_ifc_denials() {
             assert!(
                 matches!(
                     engine.last_failed_host_effect_journal(),
-                    [HostEffectJournalEntry::ProcessSpawn {
-                        request: ProcessSpawnRequest::Run { .. },
-                        outcome: Err(ProcessSpawnError::FlowPolicyBlocked),
-                    }]
+                    [
+                        HostEffectJournalEntry::HostIo {
+                            request: HostIoRequest::RandomRead { byte_len: 16 },
+                            outcome: Ok(_),
+                        },
+                        HostEffectJournalEntry::ProcessSpawn {
+                            request: ProcessSpawnRequest::Run { .. },
+                            outcome: Err(ProcessSpawnError::FlowPolicyBlocked),
+                        },
+                    ]
                 ),
                 "runtime refusal must retain the exact denied request"
             );
@@ -545,6 +580,7 @@ fn first_class_process_callbacks_keep_selection_labels_out_of_request_data() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
         let provider = Arc::new(RecordingProcessSpawn::successful(b"callback-output"));
         let mut engine = first_class_process_engine(lane);
+        engine.set_host_io(Arc::new(RandomOnlyHostIo), None);
         engine.set_process_spawn(
             provider.clone(),
             Arc::new(InMemoryHostEffectJournal::recording()),
@@ -578,6 +614,10 @@ execFile('tool', ['alpha'], callback);
             matches!(
                 engine.last_failed_host_effect_journal(),
                 [
+                    HostEffectJournalEntry::HostIo {
+                        request: HostIoRequest::RandomRead { byte_len: 16 },
+                        outcome: Ok(_)
+                    },
                     HostEffectJournalEntry::ProcessSpawn {
                         request: ProcessSpawnRequest::Spawn { .. },
                         outcome: Ok(_)
@@ -2221,6 +2261,7 @@ fn run_native_process_collection(source: &str, expected: &[&str]) {
         let (provider, _) =
             native_process_provider("native-printf", &["/usr/bin/printf", "/bin/printf"], 30_000);
         let journal = Arc::new(InMemoryHostEffectJournal::recording());
+        journal.begin_execution().expect("begin recording");
         let mut config = if throughput {
             InterpreterConfig::v8_defaults()
         } else {

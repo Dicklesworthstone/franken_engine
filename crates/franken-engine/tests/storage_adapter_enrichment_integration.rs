@@ -702,7 +702,7 @@ fn enrichment_store_kind_integration_point_exhaustive() {
     );
     assert_eq!(
         StoreKind::PlasWitness.integration_point(),
-        "frankensqlite::analysis::plas_witness"
+        "sqlmodel_rust::PlasWitnessEntry"
     );
     assert_eq!(
         StoreKind::ReplacementLineage.integration_point(),

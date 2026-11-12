@@ -28,11 +28,22 @@ use crate::mmr_proof::{
     verify_inclusion,
 };
 use crate::policy_theorem_compiler::Capability;
+#[cfg(feature = "governance-surfaces")]
 use crate::portfolio_governor::governance_audit_ledger::{
     GovernanceActor, GovernanceAuditLedger, GovernanceDecisionType, GovernanceLedgerConfig,
     GovernanceLedgerInput, GovernanceRationale, ScorecardSnapshot,
 };
 use crate::security_epoch::SecurityEpoch;
+
+/// Configuration for optional governance audit ledger integration when
+/// `governance-surfaces` is disabled (preserves wire-format compatibility).
+#[cfg(not(feature = "governance-surfaces"))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GovernanceLedgerConfig {
+    pub checkpoint_interval: u64,
+    pub signer_key: Vec<u8>,
+    pub policy_id: String,
+}
 use crate::signature_preimage::{
     Signature, SigningKey, VerificationKey, sign_preimage, verify_signature,
 };
@@ -2908,6 +2919,7 @@ fn witness_matches_query(record: &WitnessIndexRecord, query: &WitnessIndexQuery)
 
 fn witness_index_table_metadata(table: &str) -> BTreeMap<String, String> {
     let mut metadata = BTreeMap::new();
+    crate::storage_adapter::mark_typed_heavy_generic_compat_metadata(&mut metadata);
     metadata.insert("table".to_string(), table.to_string());
     metadata
 }
@@ -3355,6 +3367,7 @@ pub struct WitnessPublicationPipeline {
     checkpoints: Vec<WitnessTreeHead>,
     publications: Vec<PublishedWitnessArtifact>,
     evidence_ledger: InMemoryLedger,
+    #[cfg(feature = "governance-surfaces")]
     governance_ledger: Option<GovernanceAuditLedger>,
     events: Vec<WitnessPublicationEvent>,
 }
@@ -3376,6 +3389,7 @@ impl WitnessPublicationPipeline {
                 reason: "policy_id must not be empty".to_string(),
             });
         }
+        #[cfg(feature = "governance-surfaces")]
         let governance_ledger = if let Some(cfg) = config.governance_ledger_config.clone() {
             Some(GovernanceAuditLedger::new(cfg).map_err(|e| {
                 WitnessPublicationError::GovernanceLedger {
@@ -3385,6 +3399,12 @@ impl WitnessPublicationPipeline {
         } else {
             None
         };
+        #[cfg(not(feature = "governance-surfaces"))]
+        if config.governance_ledger_config.is_some() {
+            return Err(WitnessPublicationError::GovernanceLedger {
+                detail: "governance-surfaces feature is disabled".to_string(),
+            });
+        }
 
         // Use this pipeline's head signing key as an explicit evidence
         // identity scoped to its policy. The ledger receives only the public
@@ -3419,6 +3439,7 @@ impl WitnessPublicationPipeline {
             checkpoints: Vec::new(),
             publications: Vec::new(),
             evidence_ledger,
+            #[cfg(feature = "governance-surfaces")]
             governance_ledger,
             events: Vec::new(),
         })
@@ -3444,6 +3465,7 @@ impl WitnessPublicationPipeline {
         self.evidence_ledger.entries()
     }
 
+    #[cfg(feature = "governance-surfaces")]
     pub fn governance_ledger(&self) -> Option<&GovernanceAuditLedger> {
         self.governance_ledger.as_ref()
     }
@@ -3978,6 +4000,7 @@ impl WitnessPublicationPipeline {
             })
     }
 
+    #[cfg(feature = "governance-surfaces")]
     fn emit_governance_entry(
         &mut self,
         artifact: &PublishedWitnessArtifact,
@@ -4034,6 +4057,16 @@ impl WitnessPublicationPipeline {
             .map_err(|e| WitnessPublicationError::GovernanceLedger {
                 detail: e.to_string(),
             })?;
+        Ok(())
+    }
+
+    #[cfg(not(feature = "governance-surfaces"))]
+    fn emit_governance_entry(
+        &mut self,
+        _artifact: &PublishedWitnessArtifact,
+        _bundle: &TransparencyProofBundle,
+        _action: &str,
+    ) -> Result<(), WitnessPublicationError> {
         Ok(())
     }
 }
@@ -5405,6 +5438,7 @@ mod tests {
         witness
     }
 
+    #[cfg(feature = "governance-surfaces")]
     fn publication_config_with_governance() -> WitnessPublicationConfig {
         WitnessPublicationConfig {
             checkpoint_interval: 1,
@@ -5417,6 +5451,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "governance-surfaces")]
     #[test]
     fn publication_pipeline_publish_emits_artifact_and_ledgers() {
         let head_signing_key =
@@ -5461,6 +5496,7 @@ mod tests {
         .expect("serde serialization should succeed");
     }
 
+    #[cfg(feature = "governance-surfaces")]
     #[test]
     fn publication_pipeline_rejects_missing_promotion_signature_quorum() {
         let head_signing_key =
@@ -5527,6 +5563,7 @@ mod tests {
         .expect("serde serialization should succeed");
     }
 
+    #[cfg(feature = "governance-surfaces")]
     #[test]
     fn publication_pipeline_revocation_appends_signed_entry() {
         let head_signing_key =

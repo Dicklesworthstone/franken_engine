@@ -1426,6 +1426,7 @@ pub fn typed_persistence_create_table_sql() -> Vec<String> {
         create_table::<SpecializationIndexEntry>()
             .if_not_exists()
             .build(),
+        create_table::<PlasWitnessEntry>().if_not_exists().build(),
     ]
 }
 
@@ -1677,6 +1678,10 @@ impl<C: Connection> TypedSqlModelSession<C> {
 
     /// Add a specialization-index row to the SQLModel unit of work.
     pub fn add_specialization_index(&mut self, record: &SpecializationIndexEntry) {
+        self.add_typed(record);
+    }
+
+    pub fn add_plas_witness(&mut self, record: &PlasWitnessEntry) {
         self.add_typed(record);
     }
 
@@ -2642,6 +2647,167 @@ impl TypedStoreRecord for SpecializationIndexEntry {
     }
 }
 
+// ---------------------------------------------------------------------------
+// PlasWitness: typed PLAS capability witness persistence (`g2vrp.13`)
+// ---------------------------------------------------------------------------
+
+/// Typed persistence row for signed PLAS `CapabilityWitness` artifacts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "sibling-persistence", derive(Model))]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "sibling-persistence", sqlmodel(table = "plas_witness"))]
+pub struct PlasWitnessEntry {
+    /// Monotonic typed record identifier.
+    #[cfg_attr(feature = "sibling-persistence", sqlmodel(primary_key))]
+    pub witness_record_id: i64,
+
+    /// Content-addressed witness identifier (canonical hex).
+    pub witness_id: String,
+
+    /// Bound extension identifier (canonical hex or label).
+    pub extension_id: String,
+
+    /// Governing policy identifier (canonical hex or label).
+    pub policy_id: String,
+
+    /// Witness lifecycle state (`draft`, `validated`, `promoted`, `active`, `superseded`, `revoked`).
+    pub lifecycle_state: String,
+
+    /// Security epoch under which the witness was synthesized.
+    pub security_epoch: i64,
+
+    /// Promotion/persistence timestamp in Unix milliseconds.
+    pub promotion_timestamp_ms: i64,
+
+    /// Witness content hash (canonical hex).
+    pub content_hash: String,
+
+    /// Canonical JSON array of required capability names.
+    pub required_capabilities_json: String,
+
+    /// Full serialized `CapabilityWitness` JSON payload.
+    pub witness_json: String,
+
+    /// Structured metadata JSON object.
+    pub metadata_json: String,
+}
+
+impl PlasWitnessEntry {
+    /// Build a deterministic typed lookup for one witness row.
+    #[cfg(feature = "sibling-persistence")]
+    pub fn select_by_witness_record_id(witness_record_id: i64) -> Select<Self> {
+        Select::<Self>::new().filter(Expr::col("witness_record_id").eq(witness_record_id))
+    }
+
+    /// Build a deterministic typed lookup by content-addressed witness id.
+    #[cfg(feature = "sibling-persistence")]
+    pub fn select_by_witness_id(witness_id: impl Into<String>) -> Select<Self> {
+        Select::<Self>::new()
+            .filter(Expr::col("witness_id").eq(witness_id.into()))
+            .order_by(Expr::col("witness_record_id").asc())
+    }
+
+    /// Build a deterministic typed lookup by extension id.
+    #[cfg(feature = "sibling-persistence")]
+    pub fn select_by_extension_id(extension_id: impl Into<String>) -> Select<Self> {
+        Select::<Self>::new()
+            .filter(Expr::col("extension_id").eq(extension_id.into()))
+            .order_by(Expr::col("witness_record_id").asc())
+    }
+
+    /// Construct a validated `PlasWitnessEntry` from a `CapabilityWitness`.
+    pub fn from_capability_witness(
+        witness_record_id: i64,
+        witness: &crate::capability_witness::CapabilityWitness,
+        promotion_timestamp_ms: i64,
+    ) -> StorageResult<Self> {
+        witness.verify_integrity().map_err(|err| {
+            typed_integrity_error::<Self>(format!("witness integrity failed: {err}"))
+        })?;
+        let required_caps: Vec<&str> = witness
+            .required_capabilities
+            .iter()
+            .map(|cap| cap.as_str())
+            .collect();
+        let required_capabilities_json = serde_json::to_string(&required_caps).map_err(|err| {
+            typed_integrity_error::<Self>(format!(
+                "failed to encode required capabilities JSON: {err}"
+            ))
+        })?;
+        let witness_json = serde_json::to_string(witness).map_err(|err| {
+            typed_integrity_error::<Self>(format!("failed to encode witness JSON: {err}"))
+        })?;
+        let metadata_json = serde_json::to_string(&witness.metadata).map_err(|err| {
+            typed_integrity_error::<Self>(format!("failed to encode metadata JSON: {err}"))
+        })?;
+        let security_epoch = i64::try_from(witness.epoch.as_u64()).map_err(|_| {
+            typed_integrity_error::<Self>("`witness.epoch` exceeds non-negative i64")
+        })?;
+        let entry = Self {
+            witness_record_id,
+            witness_id: hex::encode(witness.witness_id.as_bytes()),
+            extension_id: hex::encode(witness.extension_id.as_bytes()),
+            policy_id: hex::encode(witness.policy_id.as_bytes()),
+            lifecycle_state: witness.lifecycle_state.to_string(),
+            security_epoch,
+            promotion_timestamp_ms,
+            content_hash: witness.content_hash.to_hex(),
+            required_capabilities_json,
+            witness_json,
+            metadata_json,
+        };
+        entry.validate_typed_record()?;
+        Ok(entry)
+    }
+}
+
+impl TypedStoreRecord for PlasWitnessEntry {
+    const STORE_KIND: StoreKind = StoreKind::PlasWitness;
+    const MODEL_NAME: &'static str = "PlasWitnessEntry";
+
+    fn typed_record_id(&self) -> i64 {
+        self.witness_record_id
+    }
+
+    fn typed_record_extra_metadata(&self) -> BTreeMap<String, String> {
+        BTreeMap::from([
+            ("witness_id".to_string(), self.witness_id.clone()),
+            ("extension_id".to_string(), self.extension_id.clone()),
+            ("policy_id".to_string(), self.policy_id.clone()),
+            ("lifecycle_state".to_string(), self.lifecycle_state.clone()),
+            (
+                "security_epoch".to_string(),
+                self.security_epoch.to_string(),
+            ),
+            ("content_hash".to_string(), self.content_hash.clone()),
+        ])
+    }
+
+    fn validate_typed_record(&self) -> StorageResult<()> {
+        require_non_negative_typed::<Self>("witness_record_id", self.witness_record_id)?;
+        require_non_empty_typed::<Self>("witness_id", &self.witness_id)?;
+        require_non_empty_typed::<Self>("extension_id", &self.extension_id)?;
+        require_non_empty_typed::<Self>("policy_id", &self.policy_id)?;
+        require_non_empty_typed::<Self>("lifecycle_state", &self.lifecycle_state)?;
+        require_non_negative_typed::<Self>("security_epoch", self.security_epoch)?;
+        require_non_negative_typed::<Self>("promotion_timestamp_ms", self.promotion_timestamp_ms)?;
+        require_non_empty_typed::<Self>("content_hash", &self.content_hash)?;
+        let required_caps: Vec<String> = serde_json::from_str(&self.required_capabilities_json)
+            .map_err(|err| {
+                typed_integrity_error::<Self>(format!(
+                    "`required_capabilities_json` must be a JSON string array: {err}"
+                ))
+            })?;
+        if required_caps.is_empty() {
+            return Err(typed_integrity_error::<Self>(
+                "`required_capabilities_json` must contain at least one capability",
+            ));
+        }
+        require_json_object_typed::<Self>("witness_json", &self.witness_json)?;
+        require_json_object_typed::<Self>("metadata_json", &self.metadata_json)
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::manual_async_fn)] // Mock trait impls must match sqlmodel_core::Connection signatures.
 mod tests {
@@ -2795,6 +2961,22 @@ mod tests {
             retention_class: "windowed".to_string(),
             parent_event_ids_json: "[]".to_string(),
             metadata_json: r#"{"source_id":"br_queue_snapshot_json"}"#.to_string(),
+        }
+    }
+
+    fn plas_witness_entry(witness_record_id: i64) -> PlasWitnessEntry {
+        PlasWitnessEntry {
+            witness_record_id,
+            witness_id: format!("aa{:062x}", witness_record_id),
+            extension_id: "bb".repeat(32),
+            policy_id: "cc".repeat(32),
+            lifecycle_state: "promoted".to_string(),
+            security_epoch: 3,
+            promotion_timestamp_ms: 1_700_000_000_029,
+            content_hash: "dd".repeat(32),
+            required_capabilities_json: r#"["fs.read","clock.monotonic"]"#.to_string(),
+            witness_json: r#"{"schema":"plas-witness-test"}"#.to_string(),
+            metadata_json: r#"{"source":"typed-persistence-test"}"#.to_string(),
         }
     }
 
@@ -3250,7 +3432,7 @@ mod tests {
     #[cfg(feature = "sibling-persistence")]
     fn typed_session_schema_sql_excludes_isolated_fleet_authority_table() {
         let sql = typed_persistence_create_table_sql();
-        assert_eq!(sql.len(), 5);
+        assert_eq!(sql.len(), 6);
         assert!(
             sql.iter()
                 .all(|statement| !statement.contains("\"fleet_trust_state\"")),
@@ -3304,6 +3486,13 @@ mod tests {
             "specialization index DDL should expose nullable invalidation fields: {}",
             sql[4]
         );
+        assert!(
+            sql[5].contains("\"plas_witness\"")
+                && sql[5].contains("\"witness_record_id\" BIGINT NOT NULL")
+                && sql[5].contains("PRIMARY KEY (\"witness_record_id\")"),
+            "PLAS witness DDL should expose typed primary key: {}",
+            sql[5]
+        );
     }
 
     #[test]
@@ -3323,22 +3512,25 @@ mod tests {
         let proof_evidence = proof_evidence_entry(19);
         let shadow_evidence = shadow_evidence_entry(23);
         let specialization = specialization_entry(13);
+        let plas_witness = plas_witness_entry(29);
 
         session.add_replacement_lineage(&replacement);
         session.add_ifc_provenance(&ifc);
         session.add_proof_evidence_index(&proof_evidence);
         session.add_shadow_evidence_journal(&shadow_evidence);
         session.add_specialization_index(&specialization);
+        session.add_plas_witness(&plas_witness);
 
         assert!(session.contains_typed(&replacement));
         assert!(session.contains_typed(&ifc));
         assert!(session.contains_typed(&proof_evidence));
         assert!(session.contains_typed(&shadow_evidence));
         assert!(session.contains_typed(&specialization));
+        assert!(session.contains_typed(&plas_witness));
 
         let debug = session.debug_state();
-        assert_eq!(debug.tracked, 5);
-        assert_eq!(debug.pending_new, 5);
+        assert_eq!(debug.tracked, 6);
+        assert_eq!(debug.pending_new, 6);
         assert_eq!(debug.pending_delete, 0);
         assert_eq!(debug.pending_dirty, 0);
         assert!(!debug.in_transaction);
@@ -3360,6 +3552,7 @@ mod tests {
             ("proof_evidence_index", "evidence_id", 9),
             ("shadow_evidence_journal", "journal_event_id", 9),
             ("specialization_index", "specialization_id", 9),
+            ("plas_witness", "witness_record_id", 11),
         ] {
             let sql = format!("PRAGMA table_info({table})");
             let rows = session
@@ -4828,6 +5021,11 @@ mod tests {
         assert_typed_store_record_contract(specialization_entry(50), specialization_entry(60));
     }
 
+    #[test]
+    fn typed_store_record_conformance_plas_witness() {
+        assert_typed_store_record_contract(plas_witness_entry(70), plas_witness_entry(80));
+    }
+
     // -----------------------------------------------------------------------
     // CONFORMANCE: TypedStorageAdapterExt trait contract
     // -----------------------------------------------------------------------
@@ -4955,6 +5153,14 @@ mod tests {
     fn typed_storage_adapter_ext_conforms_to_contract_proof_evidence() {
         let adapter = InMemoryStorageAdapter::new();
         let records = vec![proof_evidence_entry(500), proof_evidence_entry(600)];
+        assert_typed_storage_adapter_ext_contract(adapter, records);
+    }
+
+    /// Test TypedStorageAdapterExt contract with InMemoryStorageAdapter and PlasWitnessEntry
+    #[test]
+    fn typed_storage_adapter_ext_conforms_to_contract_plas_witness() {
+        let adapter = InMemoryStorageAdapter::new();
+        let records = vec![plas_witness_entry(700), plas_witness_entry(800)];
         assert_typed_storage_adapter_ext_contract(adapter, records);
     }
 }

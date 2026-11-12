@@ -236,57 +236,61 @@ impl LossMatrix {
         )
     }
 
-    /// Conservative matrix: high cost for false negatives (letting bad code run).
+    /// Conservative matrix: high cost for false negatives (letting bad code run),
+    /// calibrated against `Posterior::default_prior()` (`0.85, 0.04, 0.01, 0.10`)
+    /// so genuinely benign executions select `Allow` directly (`2.58M < 2.90M`)
+    /// without any post-hoc `benign_completion_downgrade` override while shifting
+    /// rapidly to `Challenge`/`Sandbox`/`Suspend`/`Terminate` on observed risk.
     pub fn conservative() -> Self {
         Self::new(
             "conservative-v1",
             vec![
-                // Allow: very costly if wrong
+                // Allow: costly under anomalous/malicious states, Allow-optimal at prior
                 le(ContainmentAction::Allow, RiskState::Benign, 0),
-                le(ContainmentAction::Allow, RiskState::Anomalous, 50_000_000),
-                le(ContainmentAction::Allow, RiskState::Malicious, 200_000_000),
-                le(ContainmentAction::Allow, RiskState::Unknown, 30_000_000),
+                le(ContainmentAction::Allow, RiskState::Anomalous, 22_000_000),
+                le(ContainmentAction::Allow, RiskState::Malicious, 120_000_000),
+                le(ContainmentAction::Allow, RiskState::Unknown, 5_000_000),
                 // Challenge
-                le(ContainmentAction::Challenge, RiskState::Benign, 1_000_000),
+                le(ContainmentAction::Challenge, RiskState::Benign, 2_000_000),
                 le(
                     ContainmentAction::Challenge,
                     RiskState::Anomalous,
-                    10_000_000,
+                    5_000_000,
                 ),
                 le(
                     ContainmentAction::Challenge,
                     RiskState::Malicious,
-                    100_000_000,
+                    50_000_000,
                 ),
-                le(ContainmentAction::Challenge, RiskState::Unknown, 10_000_000),
+                le(ContainmentAction::Challenge, RiskState::Unknown, 5_000_000),
                 // Sandbox
-                le(ContainmentAction::Sandbox, RiskState::Benign, 3_000_000),
+                le(ContainmentAction::Sandbox, RiskState::Benign, 4_500_000),
                 le(ContainmentAction::Sandbox, RiskState::Anomalous, 2_000_000),
-                le(ContainmentAction::Sandbox, RiskState::Malicious, 30_000_000),
-                le(ContainmentAction::Sandbox, RiskState::Unknown, 3_000_000),
+                le(ContainmentAction::Sandbox, RiskState::Malicious, 18_000_000),
+                le(ContainmentAction::Sandbox, RiskState::Unknown, 4_000_000),
                 // Suspend
-                le(ContainmentAction::Suspend, RiskState::Benign, 5_000_000),
+                le(ContainmentAction::Suspend, RiskState::Benign, 7_000_000),
                 le(ContainmentAction::Suspend, RiskState::Anomalous, 1_000_000),
-                le(ContainmentAction::Suspend, RiskState::Malicious, 5_000_000),
-                le(ContainmentAction::Suspend, RiskState::Unknown, 3_000_000),
+                le(ContainmentAction::Suspend, RiskState::Malicious, 4_000_000),
+                le(ContainmentAction::Suspend, RiskState::Unknown, 4_000_000),
                 // Terminate
-                le(ContainmentAction::Terminate, RiskState::Benign, 8_000_000),
+                le(ContainmentAction::Terminate, RiskState::Benign, 8_500_000),
                 le(
                     ContainmentAction::Terminate,
                     RiskState::Anomalous,
-                    2_000_000,
+                    2_500_000,
                 ),
                 le(ContainmentAction::Terminate, RiskState::Malicious, 300_000),
-                le(ContainmentAction::Terminate, RiskState::Unknown, 5_000_000),
+                le(ContainmentAction::Terminate, RiskState::Unknown, 5_500_000),
                 // Quarantine
-                le(ContainmentAction::Quarantine, RiskState::Benign, 10_000_000),
+                le(ContainmentAction::Quarantine, RiskState::Benign, 9_800_000),
                 le(
                     ContainmentAction::Quarantine,
                     RiskState::Anomalous,
-                    1_500_000,
+                    1_800_000,
                 ),
                 le(ContainmentAction::Quarantine, RiskState::Malicious, 100_000),
-                le(ContainmentAction::Quarantine, RiskState::Unknown, 5_000_000),
+                le(ContainmentAction::Quarantine, RiskState::Unknown, 6_500_000),
             ],
         )
     }
@@ -3494,5 +3498,28 @@ mod tests {
                 "nominal alert should have no recommended floor action"
             );
         }
+    }
+
+    #[test]
+    fn conservative_matrix_selects_allow_at_default_prior_and_escalates_on_anomaly_rc_c2() {
+        let mut conservative = ExpectedLossSelector::new(LossMatrix::conservative());
+        let mut balanced = ExpectedLossSelector::balanced();
+
+        let prior = Posterior::default_prior();
+        let prior_decision = conservative.select(&prior);
+        assert_eq!(prior_decision.action, ContainmentAction::Allow);
+        assert_eq!(prior_decision.expected_loss_millionths, 2_580_000);
+        assert_eq!(
+            prior_decision.runner_up_action,
+            ContainmentAction::Challenge
+        );
+        assert_eq!(prior_decision.runner_up_loss_millionths, 2_900_000);
+
+        let map_benign_anomaly = Posterior::from_millionths(656_371, 115_830, 34_749, 193_050);
+        assert_eq!(map_benign_anomaly.map_estimate(), RiskState::Benign);
+        let anomaly_cons = conservative.select(&map_benign_anomaly);
+        let anomaly_bal = balanced.select(&map_benign_anomaly);
+        assert_eq!(anomaly_cons.action, ContainmentAction::Sandbox);
+        assert!(anomaly_cons.action.severity() >= anomaly_bal.action.severity());
     }
 }

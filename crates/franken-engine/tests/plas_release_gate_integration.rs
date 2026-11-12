@@ -14,9 +14,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use frankenengine_engine::capability_witness::{
-    CapabilityEscrowReceiptRecord, CapabilityWitness, ConfidenceInterval, LifecycleState,
-    PromotionTheoremInput, ProofKind, ProofObligation, SourceCapabilitySet, WitnessBuilder,
-    WitnessPublicationConfig, WitnessPublicationPipeline, WitnessPublicationQuery,
+    CapabilityEscrowReceiptRecord, CapabilityWitness, CapabilityWitnessTrustRoot,
+    ConfidenceInterval, LifecycleState, PromotionTheoremInput, ProofKind, ProofObligation,
+    SourceCapabilitySet, WitnessBuilder, WitnessPublicationConfig, WitnessPublicationPipeline,
+    WitnessPublicationQuery,
 };
 use frankenengine_engine::engine_object_id::{self, EngineObjectId, ObjectDomain, SchemaId};
 use frankenengine_engine::hash_tiers::ContentHash;
@@ -109,6 +110,7 @@ fn rebind_witness(witness: &mut CapabilityWitness, synthesizer_key: &SigningKey)
     .expect("derive witness id");
     let signature = sign_preimage(synthesizer_key, &unsigned).expect("sign witness");
     witness.synthesizer_signature = signature.to_bytes().to_vec();
+    witness.promotion_signatures = vec![signature.to_bytes().to_vec()];
 }
 
 fn promote_witness_with_passing_theorems(
@@ -159,6 +161,7 @@ fn promote_witness_with_passing_theorems(
 
 fn publish_artifact(
     witness: CapabilityWitness,
+    synthesizer_key: &SigningKey,
     tree_head_signing_key: &SigningKey,
     publish_timestamp_ns: u64,
     revoke_timestamp_ns: Option<u64>,
@@ -169,6 +172,9 @@ fn publish_artifact(
         WitnessPublicationConfig::default(),
     )
     .expect("pipeline");
+    pipeline.set_witness_trust_root(CapabilityWitnessTrustRoot::single_authority(
+        synthesizer_key.verification_key(),
+    ));
 
     let witness_id = witness.witness_id.clone();
     let publication_id = pipeline
@@ -259,7 +265,8 @@ fn base_gate_fixture() -> (PlasReleaseGateInput, PlasReleaseGateTrustAnchors) {
         100,
         10_000,
     );
-    let read_artifact = publish_artifact(read_witness, &tree_head_key, 10_500, None);
+    let read_artifact =
+        publish_artifact(read_witness, &synthesizer_key, &tree_head_key, 10_500, None);
     let read_receipt = grant_receipt(
         "grant-alpha-read",
         &extension,
@@ -276,7 +283,13 @@ fn base_gate_fixture() -> (PlasReleaseGateInput, PlasReleaseGateTrustAnchors) {
         101,
         11_000,
     );
-    let write_artifact = publish_artifact(write_witness, &tree_head_key, 11_200, Some(11_900));
+    let write_artifact = publish_artifact(
+        write_witness,
+        &synthesizer_key,
+        &tree_head_key,
+        11_200,
+        Some(11_900),
+    );
     let write_receipt = grant_receipt(
         "grant-alpha-write",
         &extension,

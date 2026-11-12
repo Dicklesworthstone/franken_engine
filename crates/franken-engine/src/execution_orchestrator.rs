@@ -31,6 +31,7 @@ use crate::baseline_interpreter::{
 };
 use crate::bayesian_posterior::{Evidence, Posterior, RiskState, UpdateResult, UpdaterStore};
 use crate::capability::RuntimeCapability;
+use crate::capability_witness::{CapabilityWitness, WitnessSchemaVersion};
 use crate::checkpoint::CancellationToken;
 use crate::containment_executor::{
     ContainmentContext, ContainmentError, ContainmentExecutor, ContainmentReceipt, SandboxPolicy,
@@ -102,6 +103,9 @@ use crate::tropical_semiring::{
 };
 use crate::ts_normalization::{
     SourceIngestionSummary, TsNormalizationError, prepare_source_entry_for_public_entrypoints,
+};
+use crate::typed_persistence_models::{
+    PlasWitnessEntry, TypedStorageAdapterExt, allocate_typed_record_id,
 };
 use frankenengine_extension_host::host_effect_journal::{
     HostEffectJournalAttemptRecord, HostEffectJournalEntry, InMemoryHostEffectJournal,
@@ -1500,7 +1504,6 @@ struct EvidenceRecordInput<'a> {
     decision: &'a ActionDecision,
     effective_action: ContainmentAction,
     effective_expected_loss_millionths: i64,
-    benign_completion_downgrade: bool,
     exec: &'a ExecutionResult,
     update: &'a UpdateResult,
     ir3_schedule_cost: Option<TropicalWeight>,
@@ -1631,6 +1634,9 @@ pub enum OrchestratorError {
     IfcRuntimeGuardBlocked {
         detail: String,
     },
+    CapabilityWitnessRejected {
+        detail: String,
+    },
     Interpreter(InterpreterError),
     WorkBudget(WorkBudgetError),
     Ledger(LedgerError),
@@ -1700,6 +1706,9 @@ impl fmt::Display for OrchestratorError {
             Self::Lowering(e) => write!(f, "lowering: {e}"),
             Self::IfcRuntimeGuardBlocked { detail } => {
                 write!(f, "ifc runtime guard blocked execution: {detail}")
+            }
+            Self::CapabilityWitnessRejected { detail } => {
+                write!(f, "capability witness rejected: {detail}")
             }
             Self::Interpreter(e) => write!(f, "interpreter: {e}"),
             Self::WorkBudget(e) => write!(f, "execution work admission: {e}"),
@@ -1953,6 +1962,9 @@ pub struct ExecutionOrchestrator {
     /// Flow edges recorded by the data-contract ingress guard for the most
     /// recent `execute` (mirrors what was inserted into the provenance index).
     data_contract_flow_events: Vec<FlowEventRecord>,
+    /// Optional signed PLAS capability witness enforcing least-authority
+    /// execution and persisted as a typed `PlasWitnessEntry` (`g2vrp.13`).
+    capability_witness: Option<CapabilityWitness>,
     /// Pluggable control-plane storage adapter (`g2vrp.13`); defaults to
     /// deterministic in-memory storage and upgrades to FrankenSQLite via
     /// [`Self::open_state_db`].
@@ -2239,6 +2251,7 @@ impl ExecutionOrchestrator {
             cancellation_token: None,
             data_contract_ingress: None,
             data_contract_flow_events: Vec::new(),
+            capability_witness: None,
             storage_adapter: Box::new(InMemoryStorageAdapter::new()),
             #[cfg(test)]
             evidence_compression_status_override: None,
@@ -2263,6 +2276,23 @@ impl ExecutionOrchestrator {
     /// ingress label fail-closed and records a flow edge per declared sink.
     pub fn set_data_contract_ingress(&mut self, ingress: DataContractIfcIngress) {
         self.data_contract_ingress = Some(ingress);
+    }
+
+    /// Install a signed PLAS [`CapabilityWitness`] (`frankenctl run --witness`).
+    ///
+    /// Every subsequent `execute` verifies content integrity, proof coverage,
+    /// schema compatibility, and lifecycle non-terminality, enforces that
+    /// package and lowered IR3 capability requirements stay strictly within
+    /// `witness.required_capabilities` (and disjoint from
+    /// `witness.denied_capabilities`), and persists a typed
+    /// [`PlasWitnessEntry`] in the active storage adapter.
+    pub fn set_capability_witness(&mut self, witness: CapabilityWitness) {
+        self.capability_witness = Some(witness);
+    }
+
+    /// Inspect the currently installed PLAS [`CapabilityWitness`], if any.
+    pub fn capability_witness(&self) -> Option<&CapabilityWitness> {
+        self.capability_witness.as_ref()
     }
 
     /// Install a custom [`StorageAdapter`] backing IFC provenance and replay-index records.
@@ -2789,6 +2819,12 @@ impl ExecutionOrchestrator {
             let lowering_witnesses = lowering_output.witnesses.clone();
             self.phase_enforce_runtime_flow_guards(&lowering_output.ir2_flow_proof_artifact)?;
             self.phase_enforce_data_contract_ingress(&trace_id, &decision_id)?;
+            self.phase_enforce_capability_witness(
+                package,
+                &lowering_output.ir3,
+                &trace_id,
+                &decision_id,
+            )?;
             let ir3_schedule_cost = Self::estimate_ir3_schedule_cost(&lowering_output.ir3)?;
             self.ensure_not_cancelled()?;
 
@@ -3112,29 +3148,6 @@ impl ExecutionOrchestrator {
             let (stopping_decision, optimal_stopping_certificate) =
                 self.observe_optimal_stopping(&update_result, package, attempt_index);
             let mut containment_action = action_decision.action;
-            // bd-sxh8o.4: a completed run whose MAP risk state is Benign, with
-            // zero denied hostcalls, no hook escalation request, and no
-            // stopping crossing carries no observed risk signal. Expected-loss
-            // selection still picks Challenge there because the residual prior
-            // mass on Unknown/Malicious taxes the Allow column, which turned
-            // Challenge into the default label on every benign hello-world run
-            // and made the escalation ladder uninformative. That case is a
-            // prior tax, not containment: emit Allow. Every observed signal
-            // (denied hostcall, e-process stop, hook request) bypasses this
-            // branch and still escalates below. The Conservative matrix taxes
-            // Allow harder, so the same prior-only posterior selects Sandbox
-            // (3.23M vs Challenge 3.25M), which sandboxed every benign
-            // strict-profile run (bd-pgzo7); it is the same prior tax.
-            let benign_completion_downgrade = matches!(
-                containment_action,
-                ContainmentAction::Challenge | ContainmentAction::Sandbox
-            ) && risk_state == RiskState::Benign
-                && stopping_decision != StoppingDecision::Stop
-                && exec_result.requested_hook_action.is_none()
-                && exec_result.hostcall_decisions.iter().all(|d| d.allowed);
-            if benign_completion_downgrade {
-                containment_action = ContainmentAction::Allow;
-            }
             if stopping_decision == StoppingDecision::Stop
                 && containment_action == ContainmentAction::Allow
             {
@@ -3182,7 +3195,6 @@ impl ExecutionOrchestrator {
                 decision: &action_decision,
                 effective_action: containment_action,
                 effective_expected_loss_millionths: expected_loss_millionths,
-                benign_completion_downgrade,
                 exec: &exec_result,
                 update: &update_result,
                 ir3_schedule_cost,
@@ -3659,32 +3671,43 @@ impl ExecutionOrchestrator {
     ) -> Result<PreparedLoweringOutput, OrchestratorError> {
         let source_label = format!("ext:{}", package.extension_id);
         let effective_source_label = package.source_file.as_deref().unwrap_or(&source_label);
-        let (source_ingestion, parse_source) = if self.module_resolver.is_some() {
-            // Resolver records already carry prepared JavaScript. Their ids
-            // are identities, even if one ends in `.ts`; never normalize
-            // authenticated delivered bytes again based on that label.
-            let source_hash = format!(
-                "sha256:{}",
-                ContentHash::compute(package.source.as_bytes()).to_hex()
-            );
-            (
-                SourceIngestionSummary {
-                    original_source_hash: source_hash.clone(),
-                    normalized_source_hash: source_hash,
-                    ..SourceIngestionSummary::default()
-                },
-                package.source.clone(),
-            )
-        } else {
-            let prepared = prepare_source_entry_for_public_entrypoints(
-                &package.source,
-                effective_source_label,
-                trace_id,
-                decision_id,
-                &self.config.policy_id,
-            )?;
-            (prepared.source_ingestion, prepared.prepared_source)
-        };
+        let (source_ingestion, parse_source, typed_hostcall_capabilities) =
+            if self.module_resolver.is_some() {
+                // Resolver records already carry prepared JavaScript. Their ids
+                // are identities, even if one ends in `.ts`; never normalize
+                // authenticated delivered bytes again based on that label.
+                let source_hash = format!(
+                    "sha256:{}",
+                    ContentHash::compute(package.source.as_bytes()).to_hex()
+                );
+                (
+                    SourceIngestionSummary {
+                        original_source_hash: source_hash.clone(),
+                        normalized_source_hash: source_hash,
+                        ..SourceIngestionSummary::default()
+                    },
+                    package.source.clone(),
+                    Vec::new(),
+                )
+            } else {
+                let prepared = prepare_source_entry_for_public_entrypoints(
+                    &package.source,
+                    effective_source_label,
+                    trace_id,
+                    decision_id,
+                    &self.config.policy_id,
+                )?;
+                let typed_caps = prepared
+                    .normalization_output
+                    .as_ref()
+                    .map(|out| out.ordered_hostcall_capabilities.clone())
+                    .unwrap_or_default();
+                (
+                    prepared.source_ingestion,
+                    prepared.prepared_source,
+                    typed_caps,
+                )
+            };
         let script_strict = self.config.parse_goal == ParseGoal::Module
             || crate::parser::source_has_use_strict_directive(
                 &parse_source,
@@ -3741,7 +3764,8 @@ impl ExecutionOrchestrator {
         );
         let lowering_ctx = LoweringContext::new(trace_id, decision_id, &self.config.policy_id)
             .with_ambient_authority_grant(self.ambient_authority_grant)
-            .with_host_io_exception_provenance(host_io_exception_provenance);
+            .with_host_io_exception_provenance(host_io_exception_provenance)
+            .with_typed_hostcall_capabilities(typed_hostcall_capabilities);
         let lowering_ctx = if commonjs_entry {
             lowering_ctx.with_authenticated_commonjs_runtime_bindings()
         } else {
@@ -4218,6 +4242,135 @@ impl ExecutionOrchestrator {
             })
     }
 
+    fn phase_enforce_capability_witness(
+        &mut self,
+        package: &ExtensionPackage,
+        ir3: &Ir3Module,
+        trace_id: &str,
+        decision_id: &str,
+    ) -> Result<(), OrchestratorError> {
+        let Some(witness) = self.capability_witness.clone() else {
+            return Ok(());
+        };
+        if !WitnessSchemaVersion::CURRENT.is_compatible_with(&witness.schema_version) {
+            return Err(OrchestratorError::CapabilityWitnessRejected {
+                detail: format!(
+                    "incompatible witness schema {} (supported {})",
+                    witness.schema_version,
+                    WitnessSchemaVersion::CURRENT
+                ),
+            });
+        }
+        if witness.lifecycle_state.is_terminal() {
+            return Err(OrchestratorError::CapabilityWitnessRejected {
+                detail: format!(
+                    "witness lifecycle state `{}` is terminal and cannot authorize execution",
+                    witness.lifecycle_state
+                ),
+            });
+        }
+        if witness.required_capabilities.is_empty() {
+            return Err(OrchestratorError::CapabilityWitnessRejected {
+                detail: "witness required capability set is empty".to_string(),
+            });
+        }
+        if witness.epoch.as_u64() > self.config.epoch.as_u64() {
+            return Err(OrchestratorError::CapabilityWitnessRejected {
+                detail: format!(
+                    "witness epoch {} exceeds orchestrator epoch {}",
+                    witness.epoch.as_u64(),
+                    self.config.epoch.as_u64()
+                ),
+            });
+        }
+        witness
+            .verify_integrity()
+            .map_err(|err| OrchestratorError::CapabilityWitnessRejected {
+                detail: format!("witness integrity check failed: {err}"),
+            })?;
+        witness.verify_proof_coverage().map_err(|err| {
+            OrchestratorError::CapabilityWitnessRejected {
+                detail: format!("witness proof coverage check failed: {err}"),
+            }
+        })?;
+
+        let allowed: BTreeSet<&str> = witness
+            .required_capabilities
+            .iter()
+            .map(|cap| cap.as_str())
+            .collect();
+        let denied: BTreeSet<&str> = witness
+            .denied_capabilities
+            .iter()
+            .map(|cap| cap.as_str())
+            .collect();
+
+        for cap in &package.capabilities {
+            if denied.contains(cap.as_str()) {
+                return Err(OrchestratorError::CapabilityWitnessRejected {
+                    detail: format!(
+                        "package capability `{cap}` is explicitly denied by capability witness"
+                    ),
+                });
+            }
+            if !allowed.contains(cap.as_str()) {
+                return Err(OrchestratorError::CapabilityWitnessRejected {
+                    detail: format!(
+                        "package capability `{cap}` exceeds capability witness envelope"
+                    ),
+                });
+            }
+        }
+        for cap in &ir3.required_capabilities {
+            let tag = cap.0.as_str();
+            if denied.contains(tag) {
+                return Err(OrchestratorError::CapabilityWitnessRejected {
+                    detail: format!(
+                        "lowered IR3 capability `{tag}` is explicitly denied by capability witness"
+                    ),
+                });
+            }
+            if !allowed.contains(tag) {
+                return Err(OrchestratorError::CapabilityWitnessRejected {
+                    detail: format!(
+                        "lowered IR3 capability `{tag}` exceeds capability witness envelope"
+                    ),
+                });
+            }
+        }
+
+        let ctx = EventContext::new(trace_id, decision_id, self.config.policy_id.clone()).map_err(
+            |err| OrchestratorError::CapabilityWitnessRejected {
+                detail: format!("plas-witness persistence: invalid event context: {err}"),
+            },
+        )?;
+        let natural_key = format!(
+            "witness:{}:{}",
+            hex::encode(witness.witness_id.as_bytes()),
+            witness.content_hash.to_hex()
+        );
+        let record_id = allocate_typed_record_id::<PlasWitnessEntry, _>(
+            &mut self.storage_adapter,
+            &natural_key,
+            &ctx,
+        )
+        .map_err(|err| OrchestratorError::CapabilityWitnessRejected {
+            detail: format!("plas-witness id allocation failed: {err}"),
+        })?;
+        let promotion_timestamp_ms = i64::try_from(witness.timestamp_ns / 1_000_000).unwrap_or(0);
+        let entry =
+            PlasWitnessEntry::from_capability_witness(record_id, &witness, promotion_timestamp_ms)
+                .map_err(|err| OrchestratorError::CapabilityWitnessRejected {
+                    detail: format!("plas-witness typed entry validation failed: {err}"),
+                })?;
+        self.storage_adapter
+            .put_typed(&entry, &ctx)
+            .map(|_| ())
+            .map_err(|err| OrchestratorError::CapabilityWitnessRejected {
+                detail: format!("plas-witness typed persistence failed: {err}"),
+            })
+    }
+
     fn phase_enforce_data_contract_ingress(
         &mut self,
         trace_id: &str,
@@ -4534,7 +4687,6 @@ impl ExecutionOrchestrator {
             decision,
             effective_action,
             effective_expected_loss_millionths,
-            benign_completion_downgrade,
             exec,
             update,
             ir3_schedule_cost,
@@ -4574,12 +4726,12 @@ impl ExecutionOrchestrator {
         }
 
         // Record chosen action.
-        let stopping_override = effective_action != decision.action && !benign_completion_downgrade;
+        let stopping_override = effective_action != decision.action;
         builder = builder.chosen(ChosenAction {
             action_name: format!("{}", effective_action),
             expected_loss_millionths: effective_expected_loss_millionths,
             rationale: format!(
-                "risk_state={:?}, posterior_benign={}, stopping_override={stopping_override}, benign_completion_downgrade={benign_completion_downgrade}",
+                "risk_state={:?}, posterior_benign={}, stopping_override={stopping_override}",
                 update.posterior.map_estimate(),
                 update.posterior.p_benign
             ),

@@ -31,8 +31,8 @@ use crate::typed_persistence_models::{
     FLEET_TRUST_STATE_RECORD_ID, FLEET_TRUST_STATE_SCHEMA_VERSION,
 };
 use crate::typed_persistence_models::{
-    FleetTrustStateEntry, IfcProvenanceEntry, ReplacementLineageEntry, ShadowEvidenceJournalEntry,
-    SpecializationIndexEntry, TypedStoreRecord,
+    FleetTrustStateEntry, IfcProvenanceEntry, PlasWitnessEntry, ReplacementLineageEntry,
+    ShadowEvidenceJournalEntry, SpecializationIndexEntry, TypedStoreRecord,
 };
 #[cfg(feature = "sibling-persistence")]
 use crate::typed_persistence_models::{
@@ -94,8 +94,8 @@ impl StoreKind {
             Self::ShadowEvidenceJournal => "sqlmodel_rust::ShadowEvidenceJournalEntry",
             Self::BenchmarkLedger => "frankensqlite::benchmark::ledger",
             Self::PolicyCache => "frankensqlite::control_plane::policy_cache",
-            Self::PlasWitness => "frankensqlite::analysis::plas_witness",
             // Typed-heavy stores use sqlmodel_rust typed boundaries
+            Self::PlasWitness => "sqlmodel_rust::PlasWitnessEntry",
             Self::ReplacementLineage => "sqlmodel_rust::ReplacementLineageEntry",
             Self::IfcProvenance => "sqlmodel_rust::IfcProvenanceEntry",
             Self::SpecializationIndex => "sqlmodel_rust::SpecializationIndexEntry",
@@ -121,6 +121,7 @@ fn is_typed_heavy_store(store: StoreKind) -> bool {
     matches!(
         store,
         StoreKind::ShadowEvidenceJournal
+            | StoreKind::PlasWitness
             | StoreKind::ReplacementLineage
             | StoreKind::IfcProvenance
             | StoreKind::SpecializationIndex
@@ -135,6 +136,7 @@ fn typed_store_prefix(store: StoreKind) -> String {
 fn typed_heavy_expected_model(store: StoreKind) -> Option<&'static str> {
     match store {
         StoreKind::ShadowEvidenceJournal => Some("ShadowEvidenceJournalEntry"),
+        StoreKind::PlasWitness => Some("PlasWitnessEntry"),
         StoreKind::ReplacementLineage => Some("ReplacementLineageEntry"),
         StoreKind::IfcProvenance => Some("IfcProvenanceEntry"),
         StoreKind::SpecializationIndex => Some("SpecializationIndexEntry"),
@@ -151,6 +153,13 @@ fn typed_heavy_record_id_from_key(store: StoreKind, key: &str) -> Option<i64> {
 
 fn typed_heavy_legacy_prefixes(store: StoreKind) -> &'static [&'static str] {
     match store {
+        StoreKind::PlasWitness => &[
+            "witnesses/",
+            "witness_by_id/",
+            "witness_by_extension/",
+            "witness_by_capability/",
+            "witness_escrow_receipts/",
+        ],
         StoreKind::ReplacementLineage => &[
             "replacement_receipts/",
             "demotion_receipts/",
@@ -251,6 +260,7 @@ fn typed_heavy_payload_matches_typed_model(
         StoreKind::ShadowEvidenceJournal => {
             ShadowEvidenceJournalEntry::from_store_record(&record).is_ok()
         }
+        StoreKind::PlasWitness => PlasWitnessEntry::from_store_record(&record).is_ok(),
         StoreKind::ReplacementLineage => {
             ReplacementLineageEntry::from_store_record(&record).is_ok()
         }
@@ -3292,10 +3302,7 @@ mod tests {
                 StoreKind::PolicyCache,
                 "frankensqlite::control_plane::policy_cache",
             ),
-            (
-                StoreKind::PlasWitness,
-                "frankensqlite::analysis::plas_witness",
-            ),
+            (StoreKind::PlasWitness, "sqlmodel_rust::PlasWitnessEntry"),
             (
                 StoreKind::ReplacementLineage,
                 "sqlmodel_rust::ReplacementLineageEntry",
@@ -3684,9 +3691,21 @@ mod tests {
     fn in_memory_query_empty_store_returns_empty() {
         let mut adapter = InMemoryStorageAdapter::new();
         let rows = adapter
-            .query(StoreKind::PlasWitness, &StoreQuery::default(), &ctx())
+            .query(StoreKind::PolicyCache, &StoreQuery::default(), &ctx())
             .expect("serde serialization should succeed");
         assert!(rows.is_empty());
+
+        let typed_rows = adapter
+            .query(
+                StoreKind::PlasWitness,
+                &StoreQuery {
+                    key_prefix: Some("typed/plas_witness/".to_string()),
+                    ..StoreQuery::default()
+                },
+                &ctx(),
+            )
+            .expect("scoped typed-store query should succeed");
+        assert!(typed_rows.is_empty());
     }
 
     #[test]

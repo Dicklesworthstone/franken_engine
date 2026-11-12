@@ -1928,16 +1928,17 @@ fn benign_completed_run_without_signals_reports_allow() {
 
 #[test]
 fn benign_completed_run_chosen_record_matches_allow_candidate() {
-    // The Balanced matrix now selects Allow outright for a prior-only
-    // posterior (2.80M vs Challenge 2.90M), so the downgrade path this test
-    // audits is exercised through the Conservative matrix, which selects
-    // Sandbox there (bd-pgzo7).
+    // Both Balanced (2.80M vs Challenge 2.90M) and calibrated Conservative
+    // (2.58M vs Challenge 2.90M) select Allow directly at Posterior::default_prior()
+    // without requiring any post-hoc benign_completion_downgrade override.
     let mut orch = ExecutionOrchestrator::new(OrchestratorConfig {
         loss_matrix_preset: LossMatrixPreset::Conservative,
         ..OrchestratorConfig::default()
     });
     let pkg = simple_package("ext-benign-loss", "const answer = 40 + 2;");
     let result = orch.execute(&pkg).expect("execute");
+    assert_eq!(result.action_decision.action, ContainmentAction::Allow);
+    assert_eq!(result.containment_action, ContainmentAction::Allow);
     let entry = &result.evidence_entries[0];
     assert_eq!(entry.chosen_action.action_name, "allow");
     let allow_candidate = entry
@@ -1953,18 +1954,18 @@ fn benign_completed_run_chosen_record_matches_allow_candidate() {
         entry
             .chosen_action
             .rationale
-            .contains("benign_completion_downgrade=true"),
-        "downgrade must be audit-visible in the rationale, got: {}",
+            .contains("stopping_override=false"),
+        "direct selector choice must have stopping_override=false, got: {}",
         entry.chosen_action.rationale
     );
 }
 
 #[test]
 fn conservative_benign_completion_reports_allow_not_sandbox_bd_pgzo7() {
-    // franken-node maps its strict profile to the Conservative matrix. With a
-    // prior-only posterior that matrix selects Sandbox (3.23M) over Challenge
-    // (3.25M), so every benign strict run, `console.log('hello')` included,
-    // exited 92. The selector's choice stays visible in action_decision.
+    // franken-node maps its strict profile to the Conservative matrix. With
+    // LossMatrix::conservative() calibrated against Posterior::default_prior(),
+    // a benign run selects Allow directly (2.58M < Challenge 2.90M) in both
+    // action_decision and containment_action without post-hoc overrides.
     let config = OrchestratorConfig {
         loss_matrix_preset: LossMatrixPreset::Conservative,
         ..OrchestratorConfig::default()
@@ -1976,16 +1977,50 @@ fn conservative_benign_completion_reports_allow_not_sandbox_bd_pgzo7() {
         result.risk_state,
         frankenengine_engine::bayesian_posterior::RiskState::Benign
     );
-    assert_eq!(result.action_decision.action, ContainmentAction::Sandbox);
+    assert_eq!(result.action_decision.action, ContainmentAction::Allow);
     assert_eq!(result.containment_action, ContainmentAction::Allow);
     assert!(
         result.evidence_entries[0]
             .chosen_action
             .rationale
-            .contains("benign_completion_downgrade=true"),
+            .contains("stopping_override=false"),
         "{}",
         result.evidence_entries[0].chosen_action.rationale
     );
+}
+
+#[test]
+fn conservative_allowed_anomaly_preserves_selector_containment_rc_c2() {
+    // When an execution consumes >70% of its instruction budget with zero denied
+    // hostcalls, MAP remains Benign (p_benign = 65.6%) while expected-loss
+    // selection escalates to Sandbox. Without benign_completion_downgrade, that
+    // Bayesian containment decision is honored instead of silently forced to Allow.
+    let mut runtime_config = frankenengine_engine::runtime_config::RuntimeConfig::default();
+    runtime_config.execution.deterministic_budget = 100;
+    runtime_config.execution.throughput_budget = 100;
+    let mut orch = ExecutionOrchestrator::new_with_runtime_config(
+        OrchestratorConfig {
+            loss_matrix_preset: LossMatrixPreset::Conservative,
+            ..OrchestratorConfig::default()
+        },
+        runtime_config,
+    );
+    let pkg = simple_package(
+        "ext-conservative-anomaly",
+        "let acc = 0; for (let i = 0; i < 14; i++) { acc += i; } acc;",
+    );
+    let result = orch.execute(&pkg).expect("execute within budget");
+    assert!(
+        result.instructions_executed > 70 && result.instructions_executed <= 100,
+        "expected >70% of 100-instruction budget, got {}",
+        result.instructions_executed
+    );
+    assert_eq!(
+        result.risk_state,
+        frankenengine_engine::bayesian_posterior::RiskState::Benign
+    );
+    assert_eq!(result.action_decision.action, ContainmentAction::Sandbox);
+    assert_eq!(result.containment_action, ContainmentAction::Sandbox);
 }
 
 #[test]
@@ -3985,9 +4020,13 @@ fn nonexistent_module_root_fails_closed_bd_8mgzb() {
 #[test]
 fn error_message_read_in_catch_reaches_completion_bd_8y64t() {
     let mut orch = ExecutionOrchestrator::with_defaults();
+    // Include an unrelated Secret value in the lowering unit so the program's
+    // whole-unit label ceiling (`ir2_flow_label_ceiling`, bd-9vouw.1) is Secret
+    // rather than Internal, proving that unshadowed primitive `new Error("test")`
+    // stays operand-derived instead of failing high to the unit ceiling.
     let mut package = simple_package(
         "ext-8y64t-positive",
-        r#"const out = { m: false }; try { throw new Error("test"); } catch (e) { out.m = e.message; } out.m;"#,
+        r#"const _seed = "hostcall<\"credential.read\"> secret"; const out = { m: false }; try { throw new Error("test"); } catch (e) { out.m = e.message; } out.m;"#,
     );
     // The builtin hostcall is separately capability-gated; the IFC precision
     // under test is orthogonal to the grant (frankenctl's run path grants the
@@ -4000,13 +4039,14 @@ fn error_message_read_in_catch_reaches_completion_bd_8y64t() {
 }
 
 /// An object argument can invoke guest coercion (user toString) whose thrown
-/// values are not summarized, so the fail-high contract must survive.
+/// values are not summarized, so the fail-high contract must survive when a
+/// sensitive value is present in the lowering unit.
 #[test]
 fn error_constructor_object_argument_stays_fail_high_bd_8y64t() {
     let mut orch = ExecutionOrchestrator::with_defaults();
     let mut package = simple_package(
         "ext-8y64t-object-arg",
-        r#"const out = { m: "x" }; try { throw new Error({ toString() { return "sneaky"; } }); } catch (e) { out.m = typeof e.message; } out.m;"#,
+        r#"const _seed = "hostcall<\"credential.read\"> secret"; const out = { m: "x" }; try { throw new Error({ toString() { return "sneaky"; } }); } catch (e) { out.m = typeof e.message; } out.m;"#,
     );
     package.capabilities = vec!["builtin:Error".to_string()];
     let error = orch
@@ -4023,18 +4063,110 @@ fn error_constructor_object_argument_stays_fail_high_bd_8y64t() {
 }
 
 /// A lexically shadowed `Error` is user code, not the engine builtin: the
-/// audited contract must not apply and the catch binding stays fail-high.
+/// audited contract must not apply and the catch binding stays fail-high when a
+/// sensitive value is present in the lowering unit.
 #[test]
 fn shadowed_error_constructor_stays_fail_high_bd_8y64t() {
     let mut orch = ExecutionOrchestrator::with_defaults();
     let error = orch
         .execute(&simple_package(
             "ext-8y64t-shadowed",
-            r#"let Error = function (message) { this.message = message; }; const out = { m: "x" }; try { throw new Error("test"); } catch (e) { out.m = e.message; } out.m;"#,
+            r#"const _seed = "hostcall<\"fs.read\"> secret"; let Error = function (message) { this.message = message; }; const out = { m: "x" }; try { throw new Error("test"); } catch (e) { out.m = e.message; } out.m;"#,
         ))
         .expect_err("shadowed Error construction must stay fail-high");
     assert!(
         error.to_string().contains("unauthorized flow"),
         "expected an unauthorized-flow denial, got {error}"
+    );
+}
+
+#[test]
+fn plas_capability_witness_enforces_least_authority_and_persists_typed_entry_rc_d2() {
+    use frankenengine_engine::capability_witness::{
+        ConfidenceInterval, ProofKind, ProofObligation, WitnessBuilder,
+    };
+    use frankenengine_engine::engine_object_id::{ObjectDomain, SchemaId, derive_id};
+    use frankenengine_engine::hash_tiers::ContentHash;
+    use frankenengine_engine::policy_theorem_compiler::Capability;
+    use frankenengine_engine::security_epoch::SecurityEpoch;
+    use frankenengine_engine::signature_preimage::SigningKey;
+    use frankenengine_engine::storage_adapter::EventContext;
+    use frankenengine_engine::typed_persistence_models::{
+        PlasWitnessEntry, TypedStorageAdapterExt,
+    };
+
+    let schema_id = SchemaId::from_definition(b"rc-d2-test");
+    let ext_id = derive_id(ObjectDomain::Attestation, "rc-d2", &schema_id, b"ext").unwrap();
+    let policy_id = derive_id(ObjectDomain::Attestation, "rc-d2", &schema_id, b"policy").unwrap();
+    let proof_id = derive_id(ObjectDomain::EvidenceRecord, "rc-d2", &schema_id, b"proof").unwrap();
+    let signing_key = SigningKey::from_bytes([0x42; 32]).unwrap();
+
+    let vm_cap = Capability::new("vm_dispatch");
+    let witness = WitnessBuilder::new(
+        ext_id,
+        policy_id,
+        SecurityEpoch::from_raw(1),
+        1_700_000_000_000_000,
+        signing_key,
+    )
+    .require(vm_cap.clone())
+    .deny(Capability::new("env_read"), "env access forbidden")
+    .proof(ProofObligation {
+        capability: vm_cap,
+        kind: ProofKind::StaticAnalysis,
+        proof_artifact_id: proof_id,
+        justification: "minimal pure arithmetic footprint".to_string(),
+        artifact_hash: ContentHash::compute(b"static-footprint"),
+    })
+    .confidence(ConfidenceInterval::from_trials(100, 100))
+    .build()
+    .expect("valid witness");
+
+    let mut orch = ExecutionOrchestrator::with_defaults();
+    orch.set_capability_witness(witness.clone());
+
+    let mut authorized_pkg = simple_package("ext-rc-d2-ok", "1 + 2;");
+    authorized_pkg.capabilities = vec!["vm_dispatch".to_string()];
+    let result = orch
+        .execute(&authorized_pkg)
+        .expect("package within witness envelope must execute");
+    assert_eq!(result.execution_value, "3");
+
+    let ctx = EventContext::new("trace-rc-d2-read", "decision-rc-d2", "policy-rc-d2").unwrap();
+    let persisted = orch
+        .storage_adapter_mut()
+        .get_typed_by_id::<PlasWitnessEntry>(0, &ctx)
+        .expect("typed lookup succeeds")
+        .expect("PlasWitnessEntry must be persisted on execution");
+    assert_eq!(persisted.content_hash, witness.content_hash.to_hex());
+
+    // Requesting a capability outside the witness envelope fails closed.
+    let mut excess_pkg = simple_package("ext-rc-d2-excess", "1 + 2;");
+    excess_pkg.capabilities = vec!["vm_dispatch".to_string(), "fs.write".to_string()];
+    let err = orch
+        .execute(&excess_pkg)
+        .expect_err("capability outside witness must fail closed");
+    assert!(
+        matches!(
+            err.primary_error(),
+            OrchestratorError::CapabilityWitnessRejected { .. }
+        ),
+        "expected CapabilityWitnessRejected, got {err}"
+    );
+
+    // Tampered witness content hash fails closed.
+    let mut tampered = witness;
+    tampered.replay_seed = 999;
+    let mut tampered_orch = ExecutionOrchestrator::with_defaults();
+    tampered_orch.set_capability_witness(tampered);
+    let tampered_err = tampered_orch
+        .execute(&authorized_pkg)
+        .expect_err("tampered witness must fail closed");
+    assert!(
+        matches!(
+            tampered_err.primary_error(),
+            OrchestratorError::CapabilityWitnessRejected { .. }
+        ),
+        "expected CapabilityWitnessRejected, got {tampered_err}"
     );
 }

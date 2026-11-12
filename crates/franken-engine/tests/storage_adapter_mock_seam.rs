@@ -885,21 +885,25 @@ fn batch_put_is_atomic_equivalent_to_individual_puts() {
     let mut adapter = InMemoryStorageAdapter::new();
     let context = context();
 
+    let compat_meta = BTreeMap::from([(
+        "typed_authority_mode".to_string(),
+        "legacy_generic_compat".to_string(),
+    )]);
     let batch = vec![
         BatchPutEntry {
-            key: "batch/alpha".to_string(),
+            key: "witnesses/batch/alpha".to_string(),
             value: vec![10],
-            metadata: BTreeMap::new(),
+            metadata: compat_meta.clone(),
         },
         BatchPutEntry {
-            key: "batch/beta".to_string(),
+            key: "witnesses/batch/beta".to_string(),
             value: vec![20],
-            metadata: BTreeMap::new(),
+            metadata: compat_meta.clone(),
         },
         BatchPutEntry {
-            key: "batch/gamma".to_string(),
+            key: "witnesses/batch/gamma".to_string(),
             value: vec![30],
-            metadata: BTreeMap::new(),
+            metadata: compat_meta,
         },
     ];
 
@@ -911,9 +915,9 @@ fn batch_put_is_atomic_equivalent_to_individual_puts() {
         .query(StoreKind::PlasWitness, &StoreQuery::default(), &context)
         .expect("query all");
     assert_eq!(results.len(), 3);
-    assert_eq!(results[0].key, "batch/alpha");
-    assert_eq!(results[1].key, "batch/beta");
-    assert_eq!(results[2].key, "batch/gamma");
+    assert_eq!(results[0].key, "witnesses/batch/alpha");
+    assert_eq!(results[1].key, "witnesses/batch/beta");
+    assert_eq!(results[2].key, "witnesses/batch/gamma");
 }
 
 #[test]
@@ -2797,16 +2801,20 @@ fn enrichment_cross_concern_batch_then_individual_overwrites() {
     let mut adapter = InMemoryStorageAdapter::new();
     let ctx = context();
 
+    let compat_meta = BTreeMap::from([(
+        "typed_authority_mode".to_string(),
+        "legacy_generic_compat".to_string(),
+    )]);
     let entries = vec![
         BatchPutEntry {
-            key: "batch/a".to_string(),
+            key: "witnesses/batch/a".to_string(),
             value: vec![10],
-            metadata: BTreeMap::new(),
+            metadata: compat_meta.clone(),
         },
         BatchPutEntry {
-            key: "batch/b".to_string(),
+            key: "witnesses/batch/b".to_string(),
             value: vec![20],
-            metadata: BTreeMap::new(),
+            metadata: compat_meta.clone(),
         },
     ];
     adapter
@@ -2816,21 +2824,21 @@ fn enrichment_cross_concern_batch_then_individual_overwrites() {
     adapter
         .put(
             StoreKind::PlasWitness,
-            "batch/a".to_string(),
+            "witnesses/batch/a".to_string(),
             vec![99],
-            BTreeMap::new(),
+            compat_meta,
             &ctx,
         )
         .expect("overwrite");
 
     let loaded = adapter
-        .get(StoreKind::PlasWitness, "batch/a", &ctx)
+        .get(StoreKind::PlasWitness, "witnesses/batch/a", &ctx)
         .expect("get")
         .expect("exists");
     assert_eq!(loaded.value, vec![99]);
 
     let b = adapter
-        .get(StoreKind::PlasWitness, "batch/b", &ctx)
+        .get(StoreKind::PlasWitness, "witnesses/batch/b", &ctx)
         .expect("get")
         .expect("exists");
     assert_eq!(b.value, vec![20]);

@@ -550,10 +550,7 @@ fn store_kind_integration_point_exhaustive() {
             StoreKind::PolicyCache,
             "frankensqlite::control_plane::policy_cache",
         ),
-        (
-            StoreKind::PlasWitness,
-            "frankensqlite::analysis::plas_witness",
-        ),
+        (StoreKind::PlasWitness, "sqlmodel_rust::PlasWitnessEntry"),
         (
             StoreKind::ReplacementLineage,
             "sqlmodel_rust::ReplacementLineageEntry",
@@ -2440,7 +2437,7 @@ fn cross_concern_full_crud_lifecycle_across_multiple_stores() {
         (StoreKind::ReplayIndex, "r/1"),
         (StoreKind::EvidenceIndex, "e/1"),
         (StoreKind::PolicyCache, "p/1"),
-        (StoreKind::PlasWitness, "w/1"),
+        (StoreKind::BenchmarkLedger, "b/1"),
     ] {
         adapter
             .put(store, key.into(), vec![1], BTreeMap::new(), &context)
@@ -2452,7 +2449,7 @@ fn cross_concern_full_crud_lifecycle_across_multiple_stores() {
         StoreKind::ReplayIndex,
         StoreKind::EvidenceIndex,
         StoreKind::PolicyCache,
-        StoreKind::PlasWitness,
+        StoreKind::BenchmarkLedger,
     ] {
         let rows = adapter
             .query(store, &StoreQuery::default(), &context)
@@ -2462,7 +2459,7 @@ fn cross_concern_full_crud_lifecycle_across_multiple_stores() {
 
     // Stores that were not touched should be empty
     for store in [
-        StoreKind::BenchmarkLedger,
+        StoreKind::PlasWitness,
         StoreKind::ReplacementLineage,
         StoreKind::IfcProvenance,
         StoreKind::SpecializationIndex,

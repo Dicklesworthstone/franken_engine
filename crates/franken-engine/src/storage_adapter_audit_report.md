@@ -38,22 +38,9 @@ Audit of storage_adapter.rs and typed_persistence_models.rs against the FRANKENS
 
 ## Issues Identified
 
-### ❌ ISSUE 1: PlasWitness Integration Point Mismatch
+### ✅ RESOLVED: PlasWitness Integration Point (`bd-rc-2026-11-11-epic-g2vrp.13`)
 
-**Problem:** FRANKENSQLITE_PERSISTENCE_INVENTORY.md lists PLAS witness store as "sqlmodel_rust on frankensqlite", but storage_adapter.rs implements it as raw frankensqlite.
-
-**Code Evidence:**
-```rust
-// storage_adapter.rs:75
-Self::PlasWitness => "frankensqlite::analysis::plas_witness",
-```
-
-**Expected vs Actual:**
-- Inventory says: "sqlmodel_rust on frankensqlite" 
-- Code implements: "frankensqlite::analysis::plas_witness" (raw)
-- is_typed_heavy_store(): PlasWitness NOT included
-
-**Resolution Required:** Either update inventory to list PlasWitness as "raw frankensqlite" OR implement typed model + integration point.
+**Resolution:** Implemented `PlasWitnessEntry` (`#[sqlmodel(table = "plas_witness")]`) with `TypedStoreRecord` (`StoreKind::PlasWitness`), updated `StoreKind::PlasWitness.integration_point()` to `"sqlmodel_rust::PlasWitnessEntry"`, added `StoreKind::PlasWitness` to `is_typed_heavy_store()`, and reconciled `FRANKENSQLITE_PERSISTENCE_INVENTORY.md` + `ADR-0004`.
 
 ### ⚠️ ISSUE 2: EvidenceIndex Model/Store Naming Confusion
 
@@ -93,27 +80,24 @@ From typed_persistence_models.rs analysis:
 - `IfcProvenanceEntry` - Complete typed boundary ✅  
 - `ShadowEvidenceJournalEntry` - Complete typed boundary ✅
 - `SpecializationIndexEntry` - Complete typed boundary ✅
-- `ProofEvidenceIndexEntry` - Exists but store integration unclear ⚠️
+- `PlasWitnessEntry` - Complete typed boundary ✅ (`g2vrp.13`)
+- `ProofEvidenceIndexEntry` - Exists with `StoreKind::EvidenceIndex` typed boundary ✅
 
 All typed models include proper:
 - `TypedStoreRecord` trait implementation
 - SQLModel `#[derive(Model)]` decoration
 - Validation methods and metadata extraction
-- Legacy record mapping functions
+- Legacy record mapping / compatibility metadata guards
 
-## Recommendations
+## Resolution Summary (`g2vrp.13`)
 
-1. **Immediate**: Resolve PlasWitness inventory/code mismatch by updating FRANKENSQLITE_PERSISTENCE_INVENTORY.md model layer from "sqlmodel_rust" to "raw frankensqlite"
-
-2. **Design clarity**: Clarify EvidenceIndex vs ProofEvidenceIndexEntry relationship - are these meant to be the same store with different access patterns?
-
-3. **Documentation**: Add inline comments to storage_adapter.rs explaining why certain stores are typed-heavy vs raw frankensqlite
+1. **Resolved**: `PlasWitness` now routes through `sqlmodel_rust::PlasWitnessEntry` (`StoreKind::PlasWitness::integration_point()`, `is_typed_heavy_store()`, `typed_heavy_expected_model()`, and `typed_heavy_payload_matches_typed_model()`), matching `docs/FRANKENSQLITE_PERSISTENCE_INVENTORY.md` and `docs/adr/ADR-0004-frankensqlite-reuse-scope.md`.
+2. **Legacy index compatibility**: `WitnessIndex` multi-index key prefixes (`witnesses/`, `witness_by_id/`, `witness_by_extension/`, `witness_by_capability/`, `witness_escrow_receipts/`) use explicit `mark_typed_heavy_generic_compat_metadata` compatibility envelopes and remain non-authoritative for untyped payloads.
 
 ## Audit Compliance
 
-✅ **PASS**: Primary inventory requirement met  
-✅ **PASS**: No unauthorized generic StoreRecord usage  
-❌ **FAIL**: Inventory consistency (PlasWitness mismatch)  
-⚠️ **REVIEW**: EvidenceIndex design clarity needed
+✅ **PASS**: Primary inventory requirement met
+✅ **PASS**: No unauthorized generic StoreRecord usage
+✅ **PASS**: Inventory consistency (`PlasWitness` -> `sqlmodel_rust::PlasWitnessEntry`)
 
-**Overall Status: SUBSTANTIALLY COMPLIANT** with 1 documentation fix required.
+**Overall Status: COMPLIANT**

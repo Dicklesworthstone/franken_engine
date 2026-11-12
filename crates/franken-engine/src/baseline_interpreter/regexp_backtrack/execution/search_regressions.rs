@@ -57,7 +57,16 @@ fn candidate_retries_preserve_captures_scratch_and_exact_work_boundaries() {
     ];
     for pattern in patterns {
         let regexp = BacktrackRegExp::new(pattern, "").unwrap();
-        for text in ["", "x", "abc", "baabac", "aaaabc", "1053", "ababbc", "é😀abc"] {
+        for text in [
+            "",
+            "x",
+            "abc",
+            "baabac",
+            "aaaabc",
+            "1053",
+            "ababbc",
+            "é😀abc",
+        ] {
             let input = PreparedInput::new(text);
             for start in 0..=input.char_len() + 1 {
                 for sticky in [false, true] {
@@ -103,7 +112,10 @@ fn global_reuse_and_retry_after_refusal_begin_with_clean_captures() {
             // Production Run never refunds the operation's shared allowance.
             candidate.steps_left = 10_000;
             reference.steps_left = 10_000;
-            assert_eq!(candidate.search(0, false), legacy_search(&mut reference, 0, false));
+            assert_eq!(
+                candidate.search(0, false),
+                legacy_search(&mut reference, 0, false)
+            );
             assert_eq!(candidate.slots, reference.slots);
             assert_eq!(candidate.steps_left, reference.steps_left);
         }
@@ -140,7 +152,11 @@ fn many_unentered_groups_do_not_change_search_results_or_instruction_cost() {
     let captures = run.search(0, false).unwrap().unwrap();
     assert_eq!(captures.len(), 8193);
     assert_eq!(captures[0], Some((32_768, 32_774)));
-    assert!(captures[1..].iter().all(|span| *span == Some((32_774, 32_774))));
+    assert!(
+        captures[1..]
+            .iter()
+            .all(|span| *span == Some((32_774, 32_774)))
+    );
     // Each failed start executes Save(0), Char('n'). The matching attempt
     // executes Save(0), six literals, two saves per empty group, Save(1), Match.
     let expected = 2 * 32_768 + 1 + 6 + 2 * 8192 + 1 + 1;
@@ -162,7 +178,10 @@ fn literal_filter_requires_a_mandatory_forward_case_sensitive_prefix() {
         assert_eq!(run.required_start_literal(false), None, "{pattern}");
     }
     let regexp = BacktrackRegExp::new("a(?=)", "i").unwrap();
-    assert_eq!(Run::new(&regexp, &input, 1000).required_start_literal(false), None);
+    assert_eq!(
+        Run::new(&regexp, &input, 1000).required_start_literal(false),
+        None
+    );
 }
 
 #[test]
@@ -174,12 +193,18 @@ fn literal_skip_is_bounded_affordable_and_leaves_matcher_state_untouched() {
             let mut run = Run::new(&regexp, &input, budget);
             let slots = run.slots.clone();
             let skipped = run.skip_literal_misses(at, 'n');
-            let expected = (budget / 2).min(256).min(1024_usize.saturating_sub(at) as u64);
+            let expected = (budget / 2)
+                .min(256)
+                .min(1024_usize.saturating_sub(at) as u64);
             assert_eq!(skipped as u64, expected);
             assert_eq!(run.steps_remaining(), budget - 2 * expected);
             assert_eq!(run.slots, slots);
             assert!(run.stack.is_empty());
-            assert_eq!(run.stack.capacity(), 0, "prefilter must not allocate frames");
+            assert_eq!(
+                run.stack.capacity(),
+                0,
+                "prefilter must not allocate frames"
+            );
             assert!(run.capture_seen.is_empty());
         }
     }

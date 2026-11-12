@@ -41,23 +41,24 @@ const UNDEFINED: u16 = 0xffff;
 pub(super) fn canonical_encoding(label: &str) -> Option<&'static str> {
     match label {
         "866" | "cp866" | "csibm866" | "ibm866" => Some("ibm866"),
-        "csisolatin2" | "iso-8859-2" | "iso-ir-101" | "iso8859-2" | "iso88592"
-        | "iso_8859-2" | "iso_8859-2:1987" | "l2" | "latin2" => Some("iso-8859-2"),
-        "csisolatin3" | "iso-8859-3" | "iso-ir-109" | "iso8859-3" | "iso88593"
-        | "iso_8859-3" | "iso_8859-3:1988" | "l3" | "latin3" => Some("iso-8859-3"),
-        "csisolatin4" | "iso-8859-4" | "iso-ir-110" | "iso8859-4" | "iso88594"
-        | "iso_8859-4" | "iso_8859-4:1988" | "l4" | "latin4" => Some("iso-8859-4"),
+        "csisolatin2" | "iso-8859-2" | "iso-ir-101" | "iso8859-2" | "iso88592" | "iso_8859-2"
+        | "iso_8859-2:1987" | "l2" | "latin2" => Some("iso-8859-2"),
+        "csisolatin3" | "iso-8859-3" | "iso-ir-109" | "iso8859-3" | "iso88593" | "iso_8859-3"
+        | "iso_8859-3:1988" | "l3" | "latin3" => Some("iso-8859-3"),
+        "csisolatin4" | "iso-8859-4" | "iso-ir-110" | "iso8859-4" | "iso88594" | "iso_8859-4"
+        | "iso_8859-4:1988" | "l4" | "latin4" => Some("iso-8859-4"),
         "csisolatincyrillic" | "cyrillic" | "iso-8859-5" | "iso-ir-144" | "iso8859-5"
         | "iso88595" | "iso_8859-5" | "iso_8859-5:1988" => Some("iso-8859-5"),
-        "arabic" | "asmo-708" | "csiso88596e" | "csiso88596i" | "csisolatinarabic"
-        | "ecma-114" | "iso-8859-6" | "iso-8859-6-e" | "iso-8859-6-i" | "iso-ir-127"
-        | "iso8859-6" | "iso88596" | "iso_8859-6" | "iso_8859-6:1987" => Some("iso-8859-6"),
+        "arabic" | "asmo-708" | "csiso88596e" | "csiso88596i" | "csisolatinarabic" | "ecma-114"
+        | "iso-8859-6" | "iso-8859-6-e" | "iso-8859-6-i" | "iso-ir-127" | "iso8859-6"
+        | "iso88596" | "iso_8859-6" | "iso_8859-6:1987" => Some("iso-8859-6"),
         "csisolatingreek" | "ecma-118" | "elot_928" | "greek" | "greek8" | "iso-8859-7"
         | "iso-ir-126" | "iso8859-7" | "iso88597" | "iso_8859-7" | "iso_8859-7:1987"
         | "sun_eu_greek" => Some("iso-8859-7"),
         "csiso88598e" | "csisolatinhebrew" | "hebrew" | "iso-8859-8" | "iso-8859-8-e"
-        | "iso-ir-138" | "iso8859-8" | "iso88598" | "iso_8859-8" | "iso_8859-8:1988"
-        | "visual" => Some("iso-8859-8"),
+        | "iso-ir-138" | "iso8859-8" | "iso88598" | "iso_8859-8" | "iso_8859-8:1988" | "visual" => {
+            Some("iso-8859-8")
+        }
         "csiso88598i" | "iso-8859-8-i" | "logical" => Some("iso-8859-8-i"),
         "csisolatin6" | "iso-8859-10" | "iso-ir-157" | "iso8859-10" | "iso885910" | "l6"
         | "latin6" => Some("iso-8859-10"),
@@ -124,7 +125,11 @@ pub(super) fn index(encoding: &str) -> Option<&'static [u8; 256]> {
         "x-mac-cyrillic" => 25,
         _ => return None,
     };
-    Some(INDEXES[position * 256..(position + 1) * 256].try_into().expect("128 u16 index entries"))
+    Some(
+        INDEXES[position * 256..(position + 1) * 256]
+            .try_into()
+            .expect("128 u16 index entries"),
+    )
 }
 
 fn value(index: &[u8; 256], pointer: usize) -> u16 {
@@ -159,19 +164,25 @@ pub(super) fn decode(bytes: &[u8], index: &[u8; 256], fatal: bool) -> Option<JsS
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::{DecodeState, canonical_decoder_encoding, complete_prefix, decoder};
+    use super::*;
 
     fn fixtures() -> serde_json::Value {
-        serde_json::from_str(include_str!("../../../tests/fixtures/text_decoder_single_byte.json"))
-            .expect("pinned WHATWG index fixture")
+        serde_json::from_str(include_str!(
+            "../../../tests/fixtures/text_decoder_single_byte.json"
+        ))
+        .expect("pinned WHATWG index fixture")
     }
 
     fn expected_units(entry: &serde_json::Value) -> Vec<u16> {
         (0..128_u16)
-            .chain(entry["high"].as_array().unwrap().iter().map(|value| {
-                value.as_u64().map_or(0xfffd, |value| value as u16)
-            }))
+            .chain(
+                entry["high"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|value| value.as_u64().map_or(0xfffd, |value| value as u16)),
+            )
             .collect()
     }
 
@@ -187,16 +198,33 @@ mod tests {
                 let label = label.as_str().unwrap();
                 assert_eq!(canonical_decoder_encoding(label), Some(name), "{label}");
                 let decorated = format!("\t\n\r\u{c} {} \r\t", label.to_ascii_uppercase());
-                assert_eq!(canonical_decoder_encoding(&decorated), Some(name), "{decorated:?}");
+                assert_eq!(
+                    canonical_decoder_encoding(&decorated),
+                    Some(name),
+                    "{decorated:?}"
+                );
                 for non_ascii in ['\u{a0}', '\u{feff}', '\u{2003}', '\u{b}'] {
-                    assert_eq!(canonical_decoder_encoding(&format!("{non_ascii}{label}")), None);
-                    assert_eq!(canonical_decoder_encoding(&format!("{label}{non_ascii}")), None);
+                    assert_eq!(
+                        canonical_decoder_encoding(&format!("{non_ascii}{label}")),
+                        None
+                    );
+                    assert_eq!(
+                        canonical_decoder_encoding(&format!("{label}{non_ascii}")),
+                        None
+                    );
                 }
                 checked += 1;
             }
         }
         assert_eq!(checked, 168);
-        for unsupported in ["", "latin-2", "utf-32", "replacement", "x-user-defined", "shift_jis"] {
+        for unsupported in [
+            "",
+            "latin-2",
+            "utf-32",
+            "replacement",
+            "x-user-defined",
+            "shift_jis",
+        ] {
             assert_eq!(canonical_decoder_encoding(unsupported), None);
         }
     }
@@ -215,7 +243,11 @@ mod tests {
                     let defined = byte < 128 || !entry["high"][usize::from(byte - 128)].is_null();
                     let decoded = decoder::decode_string(name, &[byte], true, ignore_bom);
                     if defined {
-                        assert_eq!(decoded.unwrap().code_units_vec(), [expected[usize::from(byte)]], "{name}: {byte}");
+                        assert_eq!(
+                            decoded.unwrap().code_units_vec(),
+                            [expected[usize::from(byte)]],
+                            "{name}: {byte}"
+                        );
                     } else {
                         assert!(decoded.is_none(), "{name}: undefined byte {byte}");
                     }
@@ -233,13 +265,33 @@ mod tests {
             let expected = expected_units(entry);
             for split in 0..=input.len() {
                 let mut state = DecodeState::default();
-                let first = state.decode_slice(name, &input[..split], false, false, true).unwrap();
-                assert_eq!(first.code_units_vec(), expected[..split], "{name}: prefix {split}");
+                let first = state
+                    .decode_slice(name, &input[..split], false, false, true)
+                    .unwrap();
+                assert_eq!(
+                    first.code_units_vec(),
+                    expected[..split],
+                    "{name}: prefix {split}"
+                );
                 assert_eq!(complete_prefix(name, &input[..split]), split);
-                assert_eq!(state.pending_len, 0, "single-byte input cannot leave a UTF-8 carry");
-                let second = state.decode_slice(name, &input[split..], false, true, true).unwrap();
-                assert_eq!(second.code_units_vec(), expected[split..], "{name}: suffix {split}");
-                assert!(state.decode_slice(name, &[], false, false, false).unwrap().is_empty());
+                assert_eq!(
+                    state.pending_len, 0,
+                    "single-byte input cannot leave a UTF-8 carry"
+                );
+                let second = state
+                    .decode_slice(name, &input[split..], false, true, true)
+                    .unwrap();
+                assert_eq!(
+                    second.code_units_vec(),
+                    expected[split..],
+                    "{name}: suffix {split}"
+                );
+                assert!(
+                    state
+                        .decode_slice(name, &[], false, false, false)
+                        .unwrap()
+                        .is_empty()
+                );
                 assert_eq!(state, DecodeState::default());
             }
         }
@@ -249,12 +301,27 @@ mod tests {
     fn undefined_bytes_fail_before_a_utf8_looking_suffix_and_decoder_can_be_reused() {
         for name in ["iso-8859-3", "iso-8859-6", "windows-1253", "windows-874"] {
             let table = index(name).unwrap();
-            let undefined = (0..128).find(|&pointer| value(table, pointer) == UNDEFINED).unwrap() as u8 + 128;
+            let undefined = (0..128)
+                .find(|&pointer| value(table, pointer) == UNDEFINED)
+                .unwrap() as u8
+                + 128;
             let mut state = DecodeState::default();
-            assert_eq!(state.decode_slice(name, b"ok", true, false, true).unwrap(), JsString::from("ok"));
-            assert!(state.decode_slice(name, &[undefined, 0xe2], true, false, true).is_none());
+            assert_eq!(
+                state.decode_slice(name, b"ok", true, false, true).unwrap(),
+                JsString::from("ok")
+            );
+            assert!(
+                state
+                    .decode_slice(name, &[undefined, 0xe2], true, false, true)
+                    .is_none()
+            );
             assert_eq!(state, DecodeState::default());
-            assert_eq!(state.decode_slice(name, b"reused", true, false, false).unwrap(), JsString::from("reused"));
+            assert_eq!(
+                state
+                    .decode_slice(name, b"reused", true, false, false)
+                    .unwrap(),
+                JsString::from("reused")
+            );
             assert_eq!(state, DecodeState::default());
         }
     }
@@ -271,7 +338,9 @@ mod tests {
     #[test]
     fn utf8_bom_bytes_remain_three_legacy_characters() {
         for ignore_bom in [false, true] {
-            let text = decoder::decode_string("windows-1251", &[0xef, 0xbb, 0xbf], true, ignore_bom).unwrap();
+            let text =
+                decoder::decode_string("windows-1251", &[0xef, 0xbb, 0xbf], true, ignore_bom)
+                    .unwrap();
             assert_eq!(text.code_units_vec(), [0x43f, 0xbb, 0x457]);
         }
         let text = decoder::decode_string("iso-8859-16", &[0xa4, 0xaa, 0xfe], true, false).unwrap();
@@ -280,7 +349,10 @@ mod tests {
 
     #[test]
     fn hebrew_logical_and_visual_names_share_a_table_without_reordering_text() {
-        assert!(std::ptr::eq(index("iso-8859-8").unwrap(), index("iso-8859-8-i").unwrap()));
+        assert!(std::ptr::eq(
+            index("iso-8859-8").unwrap(),
+            index("iso-8859-8-i").unwrap()
+        ));
         for name in ["iso-8859-8", "iso-8859-8-i"] {
             let text = decoder::decode_string(name, &[0xe0, b'1', 0xe1], true, false).unwrap();
             assert_eq!(text.code_units_vec(), [0x5d0, 0x31, 0x5d1]);

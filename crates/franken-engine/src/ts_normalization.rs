@@ -940,11 +940,12 @@ fn source_looks_typescript(source: &str) -> bool {
     // template or regex literals: marked's `"!:"` and path-to-regexp's
     // `/[{}()\[\]+?!:*\\]/g` read as definite-assignment assertions, and TS
     // normalization then rewrote their class constructors into invalid code.
-    let code =
-        crate::parser::blank_quoted_literals(&crate::parser::strip_comments_to_whitespace(source));
+    let stripped = crate::parser::strip_comments_to_whitespace(source);
+    let code = crate::parser::blank_quoted_literals(&stripped);
+    let code_with_template_exprs = crate::parser::blank_literal_text(&stripped);
     if source_contains_type_only_import_export_syntax(&code)
-        || contains_as_const_assertion(&code)
-        || code.contains("!:")
+        || contains_as_const_assertion(&code_with_template_exprs)
+        || contains_definite_assignment_assertion(&code)
     {
         return true;
     }
@@ -956,6 +957,35 @@ fn source_looks_typescript(source: &str) -> bool {
 fn contains_as_const_assertion(code: &str) -> bool {
     code.match_indices(" as const")
         .any(|(index, needle)| has_token_boundary_after(code, index + needle.len()))
+}
+
+/// TypeScript definite-assignment assertion (`let x!: T;` or class field `prop!: T;`),
+/// requiring an identifier immediately before `!:` and rejecting ternary `? expr!: alt`.
+fn contains_definite_assignment_assertion(code: &str) -> bool {
+    for line in code.lines() {
+        for (index, _) in line.match_indices("!:") {
+            let before = &line[..index];
+            let after = &line[index + 2..];
+            let preceded_by_ident = before.chars().next_back().is_some_and(is_identifier_char);
+            if !preceded_by_ident {
+                continue;
+            }
+            // If an unmatched `?` precedes `ident!:` on the same line, `:` is the
+            // separator of a conditional expression (`cond ? x!: y`), not `ident!: Type`
+            // (unless `x!:` itself is a TS non-null assertion, which only occurs when
+            // `?` is not `?.` or `??`). Wait: in plain JS `x!` is never valid syntax,
+            // EXCEPT if `!` wasn't preceded by an identifier or was inside a regex.
+            // Also require a type-like token after `!:`.
+            let after_trimmed = after.trim_start();
+            let followed_by_type = after_trimmed.chars().next().is_some_and(|ch| {
+                is_identifier_char(ch) || matches!(ch, '[' | '{' | '(' | '\'' | '"' | '`')
+            });
+            if followed_by_type && !before.contains('?') {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn line_looks_like_typescript_construct(line: &str) -> bool {
@@ -5145,5 +5175,15 @@ abstract class Base { }"#;
         assert!(prepared.source_ingestion.ts_decision_count > 0);
         assert!(prepared.normalization_output.is_some());
         assert!(!prepared.prepared_source.contains(": number"));
+    }
+
+    #[test]
+    fn source_looks_typescript_distinguishes_definite_assignment_from_non_ts_punctuation() {
+        assert!(source_looks_typescript("let count!: number;"));
+        assert!(source_looks_typescript("const tag = `${value as const}`;"));
+        assert!(!source_looks_typescript("const re = /!:/g; const x = 1;"));
+        assert!(!source_looks_typescript(
+            "const s = \"!:\"; const y = true ? 1 : 2;"
+        ));
     }
 }

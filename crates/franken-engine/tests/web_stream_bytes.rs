@@ -20,12 +20,19 @@ fn check(source: &str, expected: &[&str]) {
             source_file: None,
             module_root: None,
             capabilities: ["vm_dispatch", "heap_allocate", "builtin", "console"]
-                .into_iter().map(str::to_string).collect(),
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
             version: "1.0.0".into(),
             metadata: BTreeMap::new(),
         };
-        let actual: Vec<_> = engine.execute(&package).expect("native byte-stream completion")
-            .console_output.into_iter().map(|line| line.message).collect();
+        let actual: Vec<_> = engine
+            .execute(&package)
+            .expect("native byte-stream completion")
+            .console_output
+            .into_iter()
+            .map(|line| line.message)
+            .collect();
         assert_eq!(actual, expected, "lane {lane:?}");
     }
 }
@@ -119,7 +126,10 @@ fn automatic_buffers_reach_the_existing_pipe_lifecycle() {
 
 #[test]
 fn released_reader_requests_and_joined_cancellation_preserve_ownership() {
-    check(OWNERSHIP, &["OWNERSHIP true 4,2 true true false true true false true"]);
+    check(
+        OWNERSHIP,
+        &["OWNERSHIP true 4,2 true true false true true false true"],
+    );
 }
 
 #[test]
@@ -187,12 +197,18 @@ const {ReadableStream}=require('stream/web');
 
 #[test]
 fn byte_tee_preserves_typed_views_and_isolates_sibling_writes() {
-    check(TEE_VIEWS, &["TEE_VIEWS 1,2,3,4,5,6 1,2,3,4,5,6,7,8 7,8 true true true false false"]);
+    check(
+        TEE_VIEWS,
+        &["TEE_VIEWS 1,2,3,4,5,6 1,2,3,4,5,6,7,8 7,8 true true true false false"],
+    );
 }
 
 #[test]
 fn byte_tee_cancellations_join_one_upstream_cleanup_in_branch_order() {
-    check(TEE_CANCEL, &["TEE_CANCEL false true 1 first true true true true true false false"]);
+    check(
+        TEE_CANCEL,
+        &["TEE_CANCEL false true 1 first true true true true true false false"],
+    );
 }
 
 #[test]

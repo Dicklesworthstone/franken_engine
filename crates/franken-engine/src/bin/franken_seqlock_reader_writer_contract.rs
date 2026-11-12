@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use frankenengine_engine::seqlock_reader_writer_contract::{
     ArtifactContext, emit_default_contract_bundle, render_summary,
 };

@@ -202,9 +202,9 @@ impl ReachableVisited {
             return Ok(());
         }
         let retained = dense.capacity().checked_mul(std::mem::size_of::<u64>());
-        let Some(retained) = retained.filter(|&bytes| {
-            bytes <= MAX_REACHABLE_BITMAP_BYTES && bytes as u64 <= released
-        }) else {
+        let Some(retained) = retained
+            .filter(|&bytes| bytes <= MAX_REACHABLE_BITMAP_BYTES && bytes as u64 <= released)
+        else {
             drop(dense);
             core.json_release_temporary(requested as u64);
             return Ok(());

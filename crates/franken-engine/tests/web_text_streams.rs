@@ -1,11 +1,11 @@
 //! Text transforms through the actual native engine, not the Node-host factory.
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeMap;
 use frankenengine_engine::baseline_interpreter::LaneChoice;
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, LabFixtureExecutionOrchestratorExt, OrchestratorConfig,
 };
+use std::collections::BTreeMap;
 
 fn run(source: &str, lane: LaneChoice) -> Vec<String> {
     let mut engine = ExecutionOrchestrator::new(OrchestratorConfig {
@@ -18,12 +18,19 @@ fn run(source: &str, lane: LaneChoice) -> Vec<String> {
         source_file: None,
         module_root: None,
         capabilities: ["vm_dispatch", "heap_allocate", "builtin", "console"]
-            .into_iter().map(str::to_string).collect(),
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
         version: "1.0.0".into(),
         metadata: BTreeMap::new(),
     };
-    engine.execute(&package).expect("native text-stream completion")
-        .console_output.into_iter().map(|line| line.message).collect()
+    engine
+        .execute(&package)
+        .expect("native text-stream completion")
+        .console_output
+        .into_iter()
+        .map(|line| line.message)
+        .collect()
 }
 
 #[test]
@@ -44,9 +51,10 @@ Promise.all([
 });
 "#;
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        assert_eq!(run(source, lane), [
-            "TEXT_PIPE 65,240,159,152,128,195,169,239,191,189 \"A😀é�\" utf-8 true",
-        ]);
+        assert_eq!(
+            run(source, lane),
+            ["TEXT_PIPE 65,240,159,152,128,195,169,239,191,189 \"A😀é�\" utf-8 true",]
+        );
     }
 }
 
@@ -71,9 +79,10 @@ const web = require('stream/web');
 })();
 "#;
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        assert_eq!(run(source, lane), [
-            "TEXT_DECODE € utf-8 false false", "TEXT_EOF true true",
-        ]);
+        assert_eq!(
+            run(source, lane),
+            ["TEXT_DECODE € utf-8 false false", "TEXT_EOF true true",]
+        );
     }
 }
 
@@ -92,7 +101,10 @@ const web = require('stream/web');
 })();
 "#;
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        assert_eq!(run(source, lane), ["TEXT_PRESSURE 0 0", "TEXT_CANCEL true 0"]);
+        assert_eq!(
+            run(source, lane),
+            ["TEXT_PRESSURE 0 0", "TEXT_CANCEL true 0"]
+        );
     }
 }
 
@@ -110,12 +122,30 @@ ReadableStream.from(['hello ', '\ud83d', '\ude00']).pipeThrough(new TextEncoderS
     std::fs::write(&entry, source).expect("write ESM input");
     let report = root.path().join("report.json");
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_frankenctl"))
-        .args(["run", "--input"]).arg(&entry)
-        .args(["--goal", "module", "--extension-id", "web-text-streams-esm", "--out"])
-        .arg(&report).output().expect("execute native engine");
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    let payload: serde_json::Value = serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
-    let lines: Vec<_> = payload["console_output"].as_array().unwrap().iter()
-        .map(|line| line["message"].as_str().unwrap()).collect();
+        .args(["run", "--input"])
+        .arg(&entry)
+        .args([
+            "--goal",
+            "module",
+            "--extension-id",
+            "web-text-streams-esm",
+            "--out",
+        ])
+        .arg(&report)
+        .output()
+        .expect("execute native engine");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
+    let lines: Vec<_> = payload["console_output"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|line| line["message"].as_str().unwrap())
+        .collect();
     assert_eq!(lines, ["ESM_TEXT hello 😀"]);
 }

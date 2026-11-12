@@ -5,8 +5,8 @@
 //! reconstruct their captures from position and width. The original slots and
 //! mark are kept once, not once per iteration. Other shapes remain scalar.
 
-use super::{BacktrackError, BacktrackRegExp, Frame, Inst, Run, is_line_terminator};
 use super::literals::LiteralBlocks;
+use super::{BacktrackError, BacktrackRegExp, Frame, Inst, Run, is_line_terminator};
 
 const MAX_CAPTURE_GROUPS: usize = 8;
 const MAX_CAPTURE_SLOTS: usize = MAX_CAPTURE_GROUPS * 2;
@@ -56,13 +56,15 @@ impl CapturedRepeat {
         blocks: &mut LiteralBlocks,
     ) -> Option<Self> {
         let begin = pc.checked_add(3)?;
-        let [Inst::Mark(register), Inst::Clear { from, to }] =
-            regexp.program.get(pc + 1..begin)?
+        let [Inst::Mark(register), Inst::Clear { from, to }] = regexp.program.get(pc + 1..begin)?
         else {
             return None;
         };
-        if *register >= regexp.registers || *from < 2
-            || from % 2 != 0 || to % 2 != 0 || from >= to
+        if *register >= regexp.registers
+            || *from < 2
+            || from % 2 != 0
+            || to % 2 != 0
+            || from >= to
             || *to > regexp.group_count.checked_mul(2)?
         {
             return None;
@@ -78,49 +80,77 @@ impl CapturedRepeat {
         };
         for group in 0..groups {
             let expected = from + group * 2 + usize::from(backward);
-            if !matches!(regexp.program.get(begin + group), Some(Inst::Save(slot)) if *slot == expected) {
+            if !matches!(regexp.program.get(begin + group), Some(Inst::Save(slot)) if *slot == expected)
+            {
                 return None;
             }
         }
         let body = begin.checked_add(groups)?;
         let width = match regexp.program.get(body)? {
-            Inst::Char { backward: direction, .. } if *direction == backward => {
-                if matches!(regexp.program.get(body + 1), Some(Inst::Char { backward: next, .. }) if *next == backward) {
+            Inst::Char {
+                backward: direction,
+                ..
+            } if *direction == backward => {
+                if matches!(regexp.program.get(body + 1), Some(Inst::Char { backward: next, .. }) if *next == backward)
+                {
                     blocks.at(regexp, body)?.len
                 } else {
                     1
                 }
             }
-            Inst::Any { backward: direction } if *direction == backward => 1,
-            Inst::Class { class, backward: direction }
-                if *direction == backward && *class < regexp.classes.len() => 1,
+            Inst::Any {
+                backward: direction,
+            } if *direction == backward => 1,
+            Inst::Class {
+                class,
+                backward: direction,
+            } if *direction == backward && *class < regexp.classes.len() => 1,
             _ => return None,
         };
         let close = body.checked_add(width)?;
         for group in 0..groups {
             let expected = to - 2 - group * 2 + usize::from(!backward);
-            if !matches!(regexp.program.get(close + group), Some(Inst::Save(slot)) if *slot == expected) {
+            if !matches!(regexp.program.get(close + group), Some(Inst::Save(slot)) if *slot == expected)
+            {
                 return None;
             }
         }
         let progress = close.checked_add(groups)?;
         let exit = progress.checked_add(2)?;
-        if target != exit || exit >= regexp.program.len()
+        if target != exit
+            || exit >= regexp.program.len()
             || !matches!(regexp.program.get(progress + 1), Some(Inst::Jump(head)) if *head == pc)
         {
             return None;
         }
-        Some(Self { exit, greedy, register: *register, from: *from, to: *to, body, width, backward })
+        Some(Self {
+            exit,
+            greedy,
+            register: *register,
+            from: *from,
+            to: *to,
+            body,
+            width,
+            backward,
+        })
     }
 
     fn previous(&self, position: usize) -> usize {
-        if self.backward { position + self.width } else { position - self.width }
+        if self.backward {
+            position + self.width
+        } else {
+            position - self.width
+        }
     }
 
     fn restore_iteration(&self, run: &mut Run<'_>, position: usize) {
         let previous = self.previous(position);
         run.registers[self.register] = previous;
-        let (from, to) = if self.backward { (position, previous) } else { (previous, position) };
+        let (from, to) = if self.backward {
+            (position, previous)
+        } else {
+            (previous, position)
+        };
         for pair in run.slots[self.from..self.to].as_chunks_mut::<2>().0 {
             pair[0] = Some(from);
             pair[1] = Some(to);
@@ -143,13 +173,20 @@ impl CapturedCounted {
         pc: usize,
         blocks: &mut LiteralBlocks,
     ) -> Option<Self> {
-        let Inst::CountedLoop { counter, min, max, greedy, body, exit } =
-            regexp.program.get(pc)?
+        let Inst::CountedLoop {
+            counter,
+            min,
+            max,
+            greedy,
+            body,
+            exit,
+        } = regexp.program.get(pc)?
         else {
             return None;
         };
         if max.is_some_and(|maximum| maximum < *min)
-            || *body != pc.checked_add(1)? || *counter >= regexp.registers
+            || *body != pc.checked_add(1)?
+            || *counter >= regexp.registers
         {
             return None;
         }
@@ -161,7 +198,12 @@ impl CapturedCounted {
         {
             return None;
         }
-        Some(Self { body, counter: *counter, minimum: *min, maximum: *max })
+        Some(Self {
+            body,
+            counter: *counter,
+            minimum: *min,
+            maximum: *max,
+        })
     }
 }
 
@@ -235,7 +277,8 @@ impl Run<'_> {
     ) -> Result<Option<usize>, BacktrackError> {
         let regexp = self.regexp;
         if repeat.width > 1 {
-            self.literal_blocks.at(regexp, repeat.body)
+            self.literal_blocks
+                .at(regexp, repeat.body)
                 .expect("the immutable bounded literal body was proved")
                 .execute_after_dispatch(regexp, &self.input.chars, position, &mut self.steps_left)
         } else {
@@ -243,7 +286,9 @@ impl Run<'_> {
                 Inst::Char { c, backward } => self.step(position, *backward, |input| {
                     if regexp.ignore_case {
                         regexp.canonicalize(input) == regexp.canonicalize(*c)
-                    } else { input == *c }
+                    } else {
+                        input == *c
+                    }
                 }),
                 Inst::Class { class, backward } => self.class_step(position, *backward, *class),
                 Inst::Any { backward } => self.step(position, *backward, |input| {
@@ -309,10 +354,19 @@ impl Run<'_> {
             };
             position = next;
         }
-        stack.push(Frame::Register { register: repeat.counter, old: old_count });
-        stack.push(Frame::Register { register: body.register, old: old_mark });
+        stack.push(Frame::Register {
+            register: repeat.counter,
+            old: old_count,
+        });
+        stack.push(Frame::Register {
+            register: body.register,
+            old: old_mark,
+        });
         for (offset, old) in old_slots[..count].iter().copied().enumerate() {
-            stack.push(Frame::Slot { slot: body.from + offset, old });
+            stack.push(Frame::Slot {
+                slot: body.from + offset,
+                old,
+            });
         }
         Ok(Some(position))
     }
@@ -336,20 +390,34 @@ impl Run<'_> {
         let mut old_slots = [None; MAX_CAPTURE_SLOTS];
         old_slots[..count].copy_from_slice(&self.slots[body.from..body.to]);
         debug_assert!(old_count >= repeat.minimum);
-        while repeat.maximum.is_none_or(|maximum| self.registers[repeat.counter] < maximum) {
+        while repeat
+            .maximum
+            .is_none_or(|maximum| self.registers[repeat.counter] < maximum)
+        {
             let Some(next) = self.advance_captured_counted_body(repeat, position)? else {
                 break;
             };
             position = next;
         }
         if position != start {
-            stack.push(Frame::Register { register: repeat.counter, old: old_count });
-            stack.push(Frame::Register { register: body.register, old: old_mark });
+            stack.push(Frame::Register {
+                register: repeat.counter,
+                old: old_count,
+            });
+            stack.push(Frame::Register {
+                register: body.register,
+                old: old_mark,
+            });
             for (offset, old) in old_slots[..count].iter().copied().enumerate() {
-                stack.push(Frame::Slot { slot: body.from + offset, old });
+                stack.push(Frame::Slot {
+                    slot: body.from + offset,
+                    old,
+                });
             }
             stack.push(Frame::CapturedCountedGreedy {
-                pc, position: body.previous(position), start,
+                pc,
+                position: body.previous(position),
+                start,
             });
         }
         Ok(position)
@@ -364,13 +432,20 @@ impl Run<'_> {
         frame: Frame,
         stack: &mut Vec<Frame>,
     ) -> (usize, usize) {
-        let Frame::CapturedCountedGreedy { pc, position, start } = frame else {
+        let Frame::CapturedCountedGreedy {
+            pc,
+            position,
+            start,
+        } = frame
+        else {
             unreachable!("only a counted capture range resumes here");
         };
         let repeat = CapturedCounted::at(self.regexp, pc, &mut self.literal_blocks)
             .expect("the saved counted capture shape belongs to an immutable program");
         let body = &repeat.body;
-        let paired = stack.len().checked_sub(body.to - body.from + 2)
+        let paired = stack
+            .len()
+            .checked_sub(body.to - body.from + 2)
             .expect("a counted capture range retains its original snapshot");
         let old_count = match &stack[paired] {
             Frame::Register { register, old } if *register == repeat.counter => *old,
@@ -396,7 +471,9 @@ impl Run<'_> {
         } else {
             body.restore_iteration(self, position);
             stack.push(Frame::CapturedCountedGreedy {
-                pc, position: body.previous(position), start,
+                pc,
+                position: body.previous(position),
+                start,
             });
         }
         (body.exit, position)
@@ -412,7 +489,12 @@ impl Run<'_> {
         frame: Frame,
         stack: &mut Vec<Frame>,
     ) -> Result<Option<(usize, usize)>, BacktrackError> {
-        let Frame::CapturedCountedLazy { pc, position, start } = frame else {
+        let Frame::CapturedCountedLazy {
+            pc,
+            position,
+            start,
+        } = frame
+        else {
             unreachable!("only a counted capture continuation resumes here");
         };
         let repeat = CapturedCounted::at(self.regexp, pc, &mut self.literal_blocks)
@@ -421,20 +503,32 @@ impl Run<'_> {
         debug_assert!(!body.greedy);
         if position == start {
             stack.push(Frame::Register {
-                register: repeat.counter, old: self.registers[repeat.counter],
+                register: repeat.counter,
+                old: self.registers[repeat.counter],
             });
             stack.push(Frame::Register {
-                register: body.register, old: self.registers[body.register],
+                register: body.register,
+                old: self.registers[body.register],
             });
             for (offset, &old) in self.slots[body.from..body.to].iter().enumerate() {
-                stack.push(Frame::Slot { slot: body.from + offset, old });
+                stack.push(Frame::Slot {
+                    slot: body.from + offset,
+                    old,
+                });
             }
         }
         let Some(position) = self.advance_captured_counted_body(&repeat, position)? else {
             return Ok(None);
         };
-        if repeat.maximum.is_none_or(|maximum| self.registers[repeat.counter] < maximum) {
-            stack.push(Frame::CapturedCountedLazy { pc, position, start });
+        if repeat
+            .maximum
+            .is_none_or(|maximum| self.registers[repeat.counter] < maximum)
+        {
+            stack.push(Frame::CapturedCountedLazy {
+                pc,
+                position,
+                start,
+            });
         }
         Ok(Some((body.exit, position)))
     }
@@ -455,11 +549,21 @@ impl Run<'_> {
             position = next;
         }
         if position != start {
-            stack.push(Frame::Register { register: repeat.register, old: old_mark });
+            stack.push(Frame::Register {
+                register: repeat.register,
+                old: old_mark,
+            });
             for (offset, old) in old_slots[..count].iter().copied().enumerate() {
-                stack.push(Frame::Slot { slot: repeat.from + offset, old });
+                stack.push(Frame::Slot {
+                    slot: repeat.from + offset,
+                    old,
+                });
             }
-            stack.push(Frame::CapturedGreedy { pc, position: repeat.previous(position), start });
+            stack.push(Frame::CapturedGreedy {
+                pc,
+                position: repeat.previous(position),
+                start,
+            });
         }
         Ok(position)
     }
@@ -477,7 +581,12 @@ impl Run<'_> {
         frame: Frame,
         stack: &mut Vec<Frame>,
     ) -> Result<Option<(usize, usize)>, BacktrackError> {
-        let Frame::CapturedLazy { pc, position, start } = frame else {
+        let Frame::CapturedLazy {
+            pc,
+            position,
+            start,
+        } = frame
+        else {
             unreachable!("only captured lazy choices resume here");
         };
         let repeat = CapturedRepeat::at(self.regexp, pc, &mut self.literal_blocks)
@@ -489,13 +598,20 @@ impl Run<'_> {
                 old: self.registers[repeat.register],
             });
             for (offset, &old) in self.slots[repeat.from..repeat.to].iter().enumerate() {
-                stack.push(Frame::Slot { slot: repeat.from + offset, old });
+                stack.push(Frame::Slot {
+                    slot: repeat.from + offset,
+                    old,
+                });
             }
         }
         let Some(position) = self.advance_captured_body(&repeat, position)? else {
             return Ok(None);
         };
-        stack.push(Frame::CapturedLazy { pc, position, start });
+        stack.push(Frame::CapturedLazy {
+            pc,
+            position,
+            start,
+        });
         Ok(Some((repeat.exit, position)))
     }
 
@@ -504,7 +620,12 @@ impl Run<'_> {
         frame: Frame,
         stack: &mut Vec<Frame>,
     ) -> (usize, usize) {
-        let Frame::CapturedGreedy { pc, position, start } = frame else {
+        let Frame::CapturedGreedy {
+            pc,
+            position,
+            start,
+        } = frame
+        else {
             unreachable!("only captured greedy choices resume here");
         };
         let repeat = CapturedRepeat::at(self.regexp, pc, &mut self.literal_blocks)
@@ -526,7 +647,11 @@ impl Run<'_> {
             self.registers[register] = old;
         } else {
             repeat.restore_iteration(self, position);
-            stack.push(Frame::CapturedGreedy { pc, position: repeat.previous(position), start });
+            stack.push(Frame::CapturedGreedy {
+                pc,
+                position: repeat.previous(position),
+                start,
+            });
         }
         (repeat.exit, position)
     }

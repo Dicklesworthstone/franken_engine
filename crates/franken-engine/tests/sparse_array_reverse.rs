@@ -3,12 +3,12 @@ use frankenengine_engine::HybridRouter;
 
 #[test]
 fn reverse_observes_live_pairs_accessors_prototypes_and_partial_errors() {
-    let cases: serde_json::Value = serde_json::from_str(include_str!(
-        "fixtures/array_storage/sparse_reverse.json"
-    )).unwrap();
+    let cases: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/array_storage/sparse_reverse.json")).unwrap();
     for case in cases.as_array().unwrap() {
         let name = case["name"].as_str().unwrap();
-        let outcome = HybridRouter::default().eval(case["source"].as_str().unwrap())
+        let outcome = HybridRouter::default()
+            .eval(case["source"].as_str().unwrap())
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
         assert_eq!(outcome.value, case["expected"].as_str().unwrap(), "{name}");
     }
@@ -23,8 +23,13 @@ fn maximum_length_reverse_finishes_without_visiting_billions_of_holes() {
         const r=a.reverse();
         return [r===a,a.length,Object.keys(a).join(','),a[0],a[4294967287],a[2147483647]].join('|');
     })()"#;
-    let outcome = HybridRouter::default().eval(source).expect("native sparse reverse");
-    assert_eq!(outcome.value, "true|4294967295|0,2147483647,4294967287|y|x|middle");
+    let outcome = HybridRouter::default()
+        .eval(source)
+        .expect("native sparse reverse");
+    assert_eq!(
+        outcome.value,
+        "true|4294967295|0,2147483647,4294967287|y|x|middle"
+    );
 }
 
 #[test]
@@ -35,6 +40,11 @@ fn observable_proxy_pairs_cannot_bypass_or_catch_the_work_budget() {
         try{Array.prototype.reverse.call(p)}catch(e){return 'caught'}
         return 'unreachable';
     })()"#;
-    let error = HybridRouter::default().eval(source).expect_err("observable holes consume native work");
-    assert!(format!("{error:?}").to_ascii_lowercase().contains("budget"), "{error:?}");
+    let error = HybridRouter::default()
+        .eval(source)
+        .expect_err("observable holes consume native work");
+    assert!(
+        format!("{error:?}").to_ascii_lowercase().contains("budget"),
+        "{error:?}"
+    );
 }

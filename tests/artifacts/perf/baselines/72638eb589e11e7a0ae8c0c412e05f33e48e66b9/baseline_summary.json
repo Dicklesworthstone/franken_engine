@@ -1,0 +1,16 @@
+{
+  "git_sha": "72638eb589e11e7a0ae8c0c412e05f33e48e66b9",
+  "timestamp": "2026-11-11T15:32:02Z",
+  "criterion_functions": [
+  "parser_arena_materialization",
+  "lowering_pipeline_ir3",
+  "baseline_interpreter_eval",
+  "baseline_value_string_clone",
+  "iterator_protocol_trace",
+  "scheduler_queue_commit",
+  "evidence_ledger_bundle",
+  "transport_certificate_serialization"
+],
+  "baseline_type": "criterion_estimates",
+  "created_by": "scripts/perf/freeze_baseline.sh"
+}

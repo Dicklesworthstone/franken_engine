@@ -68,17 +68,18 @@ Use raw `/dp/frankensqlite` primitives when all are true:
 Explicit store classification (verified 2026-05-21 via bd-cixqu.12.1 audit):
 
 **Raw `/dp/frankensqlite` stores:**
-- `ReplayIndex`: `frankensqlite::control_plane::replay_index`
-- `BenchmarkLedger`: `frankensqlite::benchmark::ledger`
-- `PolicyCache`: `frankensqlite::control_plane::policy_cache`
-- `EvidenceIndex`: `frankensqlite::control_plane::evidence_index`
-- `PlasWitness`: `frankensqlite::analysis::plas_witness`
+- `ReplayIndex` (replay index): `frankensqlite::control_plane::replay_index`
+- `BenchmarkLedger` (benchmark ledger): `frankensqlite::benchmark::ledger`
+- `PolicyCache` (policy artifact cache): `frankensqlite::control_plane::policy_cache`
+- `EvidenceIndex` (evidence index): `frankensqlite::control_plane::evidence_index`
+- `PlasWitness` (PLAS witness store): `frankensqlite::analysis::plas_witness`
 
 **`sqlmodel_rust` typed stores:**
-- `ShadowEvidenceJournal`: `sqlmodel_rust::ShadowEvidenceJournalEntry`
-- `ReplacementLineage`: `sqlmodel_rust::ReplacementLineageEntry`
-- `IfcProvenance`: `sqlmodel_rust::IfcProvenanceEntry`
-- `SpecializationIndex`: `sqlmodel_rust::SpecializationIndexEntry`
+- `ShadowEvidenceJournal` (shadow evidence journal): `sqlmodel_rust::ShadowEvidenceJournalEntry`
+- `ReplacementLineage` (replacement lineage log): `sqlmodel_rust::ReplacementLineageEntry`
+- `IfcProvenance` (IFC provenance index): `sqlmodel_rust::IfcProvenanceEntry`
+- `SpecializationIndex` (specialization index): `sqlmodel_rust::SpecializationIndexEntry`
+- `FleetTrustState` (fleet trust state): `sqlmodel_rust::FleetTrustStateEntry`
 
 ## Persistence Boundary Definition
 

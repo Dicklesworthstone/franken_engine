@@ -57,7 +57,9 @@ fn run(goal: ParseGoal, imports: &str) {
                 .collect();
             assert_eq!(
                 lines,
-                ["util binary ranges: windows, payloads, metadata, ordering, exceptions, deep graphs"],
+                [
+                    "util binary ranges: windows, payloads, metadata, ordering, exceptions, deep graphs"
+                ],
             );
             assert_eq!(
                 core.estimated_memory_bytes(),

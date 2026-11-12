@@ -147,7 +147,6 @@ fn extra_arguments_do_not_settle_another_promise() {
     ]);
 }
 
-
 #[test]
 fn promise_resolve_assimilates_callable_and_iterator_values() {
     check_all(&[

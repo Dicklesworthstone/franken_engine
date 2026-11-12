@@ -310,6 +310,10 @@ fn enforce_typed_heavy_put_policy(
     Err(typed_heavy_write_policy_error(store, operation, key))
 }
 
+/// Canonical 64-hex-zero prior snapshot sentinel allowed ONLY at genesis (`generation == 1`).
+pub const GENESIS_FLEET_PRIOR_SNAPSHOT_HASH: &str =
+    "0000000000000000000000000000000000000000000000000000000000000000";
+
 fn enforce_fleet_trust_state_cas_policy(
     authorization: &FleetTrustStateCasAuthorization,
     key: &str,
@@ -343,9 +347,18 @@ fn enforce_fleet_trust_state_cas_policy(
                 .to_string(),
         });
     }
-    let expected_prior_snapshot_hash = authorization
-        .expected_current_snapshot_hash()
-        .unwrap_or("0000000000000000000000000000000000000000000000000000000000000000");
+    let is_genesis_generation = model.generation_decimal.trim_start_matches('0') == "1";
+    let expected_prior_snapshot_hash = match authorization.expected_current_snapshot_hash() {
+        Some(hash) => hash,
+        None if is_genesis_generation => GENESIS_FLEET_PRIOR_SNAPSHOT_HASH,
+        None => {
+            return Err(StorageError::WriteRejected {
+                detail:
+                    "non-genesis fleet trust-state CAS requires an explicit prior snapshot hash"
+                        .to_string(),
+            });
+        }
+    };
     if model.prior_snapshot_hash != expected_prior_snapshot_hash {
         return Err(StorageError::WriteRejected {
             detail: "fleet trust-state candidate is not chained to the authorized prior snapshot"
@@ -747,6 +760,206 @@ pub trait StorageAdapter {
     ) -> Result<Vec<StoreRecord>, StorageError>;
 
     fn events(&self) -> &[StorageEvent];
+}
+
+impl<A: StorageAdapter + ?Sized> StorageAdapter for &mut A {
+    fn backend_name(&self) -> &'static str {
+        (**self).backend_name()
+    }
+
+    fn current_schema_version(&self) -> u32 {
+        (**self).current_schema_version()
+    }
+
+    fn ensure_schema_version(&self, expected: u32) -> Result<(), StorageError> {
+        (**self).ensure_schema_version(expected)
+    }
+
+    fn migrate_to(&mut self, target_version: u32) -> Result<MigrationReceipt, StorageError> {
+        (**self).migrate_to(target_version)
+    }
+
+    fn put(
+        &mut self,
+        store: StoreKind,
+        key: String,
+        value: Vec<u8>,
+        metadata: BTreeMap<String, String>,
+        context: &EventContext,
+    ) -> Result<StoreRecord, StorageError> {
+        (**self).put(store, key, value, metadata, context)
+    }
+
+    fn compare_and_swap(
+        &mut self,
+        store: StoreKind,
+        key: String,
+        expected_revision: Option<u64>,
+        value: Vec<u8>,
+        metadata: BTreeMap<String, String>,
+        context: &EventContext,
+    ) -> Result<CompareAndSwapOutcome, StorageError> {
+        (**self).compare_and_swap(store, key, expected_revision, value, metadata, context)
+    }
+
+    fn compare_and_swap_fleet_trust_state(
+        &mut self,
+        authorization: &FleetTrustStateCasAuthorization,
+        key: String,
+        expected_revision: Option<u64>,
+        value: Vec<u8>,
+        metadata: BTreeMap<String, String>,
+        context: &EventContext,
+    ) -> Result<CompareAndSwapOutcome, StorageError> {
+        (**self).compare_and_swap_fleet_trust_state(
+            authorization,
+            key,
+            expected_revision,
+            value,
+            metadata,
+            context,
+        )
+    }
+
+    fn get(
+        &mut self,
+        store: StoreKind,
+        key: &str,
+        context: &EventContext,
+    ) -> Result<Option<StoreRecord>, StorageError> {
+        (**self).get(store, key, context)
+    }
+
+    fn query(
+        &mut self,
+        store: StoreKind,
+        query: &StoreQuery,
+        context: &EventContext,
+    ) -> Result<Vec<StoreRecord>, StorageError> {
+        (**self).query(store, query, context)
+    }
+
+    fn delete(
+        &mut self,
+        store: StoreKind,
+        key: &str,
+        context: &EventContext,
+    ) -> Result<bool, StorageError> {
+        (**self).delete(store, key, context)
+    }
+
+    fn put_batch(
+        &mut self,
+        store: StoreKind,
+        entries: Vec<BatchPutEntry>,
+        context: &EventContext,
+    ) -> Result<Vec<StoreRecord>, StorageError> {
+        (**self).put_batch(store, entries, context)
+    }
+
+    fn events(&self) -> &[StorageEvent] {
+        (**self).events()
+    }
+}
+
+impl<A: StorageAdapter + ?Sized> StorageAdapter for Box<A> {
+    fn backend_name(&self) -> &'static str {
+        (**self).backend_name()
+    }
+
+    fn current_schema_version(&self) -> u32 {
+        (**self).current_schema_version()
+    }
+
+    fn ensure_schema_version(&self, expected: u32) -> Result<(), StorageError> {
+        (**self).ensure_schema_version(expected)
+    }
+
+    fn migrate_to(&mut self, target_version: u32) -> Result<MigrationReceipt, StorageError> {
+        (**self).migrate_to(target_version)
+    }
+
+    fn put(
+        &mut self,
+        store: StoreKind,
+        key: String,
+        value: Vec<u8>,
+        metadata: BTreeMap<String, String>,
+        context: &EventContext,
+    ) -> Result<StoreRecord, StorageError> {
+        (**self).put(store, key, value, metadata, context)
+    }
+
+    fn compare_and_swap(
+        &mut self,
+        store: StoreKind,
+        key: String,
+        expected_revision: Option<u64>,
+        value: Vec<u8>,
+        metadata: BTreeMap<String, String>,
+        context: &EventContext,
+    ) -> Result<CompareAndSwapOutcome, StorageError> {
+        (**self).compare_and_swap(store, key, expected_revision, value, metadata, context)
+    }
+
+    fn compare_and_swap_fleet_trust_state(
+        &mut self,
+        authorization: &FleetTrustStateCasAuthorization,
+        key: String,
+        expected_revision: Option<u64>,
+        value: Vec<u8>,
+        metadata: BTreeMap<String, String>,
+        context: &EventContext,
+    ) -> Result<CompareAndSwapOutcome, StorageError> {
+        (**self).compare_and_swap_fleet_trust_state(
+            authorization,
+            key,
+            expected_revision,
+            value,
+            metadata,
+            context,
+        )
+    }
+
+    fn get(
+        &mut self,
+        store: StoreKind,
+        key: &str,
+        context: &EventContext,
+    ) -> Result<Option<StoreRecord>, StorageError> {
+        (**self).get(store, key, context)
+    }
+
+    fn query(
+        &mut self,
+        store: StoreKind,
+        query: &StoreQuery,
+        context: &EventContext,
+    ) -> Result<Vec<StoreRecord>, StorageError> {
+        (**self).query(store, query, context)
+    }
+
+    fn delete(
+        &mut self,
+        store: StoreKind,
+        key: &str,
+        context: &EventContext,
+    ) -> Result<bool, StorageError> {
+        (**self).delete(store, key, context)
+    }
+
+    fn put_batch(
+        &mut self,
+        store: StoreKind,
+        entries: Vec<BatchPutEntry>,
+        context: &EventContext,
+    ) -> Result<Vec<StoreRecord>, StorageError> {
+        (**self).put_batch(store, entries, context)
+    }
+
+    fn events(&self) -> &[StorageEvent] {
+        (**self).events()
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1871,8 +2084,16 @@ impl FrankensqliteBackend for FleetTrustStateFrankensqliteBackend {
                 "fleet trust-state candidate generation must equal next storage revision {next_revision}"
             ));
         }
-        let expected_prior = expected_current_snapshot_hash
-            .unwrap_or("0000000000000000000000000000000000000000000000000000000000000000");
+        let expected_prior = match (expected_revision, expected_current_snapshot_hash) {
+            (_, Some(hash)) => hash,
+            (None, None) => GENESIS_FLEET_PRIOR_SNAPSHOT_HASH,
+            (Some(_), None) => {
+                return Err(
+                    "non-genesis fleet trust-state CAS requires an explicit prior snapshot hash"
+                        .to_string(),
+                );
+            }
+        };
         if model.prior_snapshot_hash != expected_prior {
             return Err(
                 "fleet trust-state candidate prior hash does not match the CAS predicate"
@@ -2107,6 +2328,348 @@ impl FrankensqliteStorageAdapter<FleetTrustStateFrankensqliteBackend> {
     #[cfg(test)]
     fn open_fleet_trust_state_memory() -> Result<Self, StorageError> {
         Self::new(FleetTrustStateFrankensqliteBackend::open_memory()?)
+    }
+}
+
+/// General-purpose durable FrankenSQLite backend (`g2vrp.13`) backed by
+/// `/dp/sqlmodel_rust` -> `/dp/frankensqlite` strict control-plane file admission.
+#[cfg(feature = "sibling-persistence")]
+pub struct DurableFrankensqliteBackend {
+    connection: FrankenConnection,
+}
+
+#[cfg(feature = "sibling-persistence")]
+impl fmt::Debug for DurableFrankensqliteBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DurableFrankensqliteBackend")
+            .field("path", &self.connection.path())
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(feature = "sibling-persistence")]
+impl DurableFrankensqliteBackend {
+    pub fn open_file(path: impl AsRef<Path>) -> Result<Self, StorageError> {
+        let path = path.as_ref();
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent).map_err(|error| StorageError::BackendUnavailable {
+                backend: "frankensqlite".to_string(),
+                detail: format!(
+                    "failed to create state-db parent directory `{}`: {error}",
+                    parent.display()
+                ),
+            })?;
+        }
+        let path_str = path
+            .to_str()
+            .ok_or_else(|| StorageError::BackendUnavailable {
+                backend: "frankensqlite".to_string(),
+                detail: "state-db path must be valid UTF-8".to_string(),
+            })?;
+        let connection = FrankenConnection::open_strict_durable_control_plane_file(path_str)
+            .map_err(|error| StorageError::BackendUnavailable {
+                backend: "frankensqlite".to_string(),
+                detail: format!("failed to open strict durable state database: {error}"),
+            })?;
+        Ok(Self { connection })
+    }
+
+    fn decode_row(store: StoreKind, row: &SqlModelRow) -> Result<StoreRecord, String> {
+        let key = row
+            .get_named::<String>("record_key")
+            .map_err(|error| format!("invalid storage record_key column: {error}"))?;
+        let value_hex = row
+            .get_named::<String>("value_hex")
+            .map_err(|error| format!("invalid storage value_hex column: {error}"))?;
+        let value =
+            hex::decode(&value_hex).map_err(|error| format!("invalid hex value blob: {error}"))?;
+        let metadata_json = row
+            .get_named::<String>("metadata_json")
+            .map_err(|error| format!("invalid storage metadata_json column: {error}"))?;
+        let metadata: BTreeMap<String, String> = serde_json::from_str(&metadata_json)
+            .map_err(|error| format!("invalid storage metadata JSON: {error}"))?;
+        let revision_i64 = row
+            .get_named::<i64>("revision")
+            .map_err(|error| format!("invalid storage revision column: {error}"))?;
+        let revision = u64::try_from(revision_i64)
+            .map_err(|_| format!("negative storage revision {revision_i64}"))?;
+        Ok(StoreRecord {
+            store,
+            key,
+            value,
+            metadata,
+            revision,
+        })
+    }
+
+    fn read_in_tx(
+        tx: &mut FrankenExclusiveTransaction<'_>,
+        store: StoreKind,
+        key: &str,
+    ) -> Result<Option<StoreRecord>, String> {
+        let rows = tx
+            .query_sync(
+                "SELECT record_key, value_hex, metadata_json, revision \
+                 FROM franken_storage_records \
+                 WHERE store_kind = ?1 AND record_key = ?2 LIMIT 1;",
+                &[
+                    Value::Text(store.as_str().to_string()),
+                    Value::Text(key.to_string()),
+                ],
+            )
+            .map_err(|error| error.to_string())?;
+        rows.first()
+            .map(|row| Self::decode_row(store, row))
+            .transpose()
+    }
+
+    fn upsert_in_tx(
+        tx: &mut FrankenExclusiveTransaction<'_>,
+        store: StoreKind,
+        key: &str,
+        value: &[u8],
+        metadata: &BTreeMap<String, String>,
+    ) -> Result<StoreRecord, String> {
+        let current_rev = Self::read_in_tx(tx, store, key)?
+            .map(|existing| existing.revision)
+            .unwrap_or(0);
+        let next_rev = current_rev
+            .checked_add(1)
+            .ok_or_else(|| "storage revision space exhausted".to_string())?;
+        let next_rev_i64 =
+            i64::try_from(next_rev).map_err(|_| "storage revision overflows i64".to_string())?;
+        let value_hex = hex::encode(value);
+        let metadata_json = serde_json::to_string(metadata).map_err(|error| error.to_string())?;
+        tx.execute_sync(
+            "INSERT INTO franken_storage_records \
+             (store_kind, record_key, value_hex, metadata_json, revision) \
+             VALUES (?1, ?2, ?3, ?4, ?5) \
+             ON CONFLICT(store_kind, record_key) DO UPDATE SET \
+               value_hex = excluded.value_hex, \
+               metadata_json = excluded.metadata_json, \
+               revision = excluded.revision;",
+            &[
+                Value::Text(store.as_str().to_string()),
+                Value::Text(key.to_string()),
+                Value::Text(value_hex),
+                Value::Text(metadata_json),
+                Value::BigInt(next_rev_i64),
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(StoreRecord {
+            store,
+            key: key.to_string(),
+            value: value.to_vec(),
+            metadata: metadata.clone(),
+            revision: next_rev,
+        })
+    }
+}
+
+#[cfg(feature = "sibling-persistence")]
+impl FrankensqliteBackend for DurableFrankensqliteBackend {
+    fn apply_control_plane_profile(&mut self) -> Result<(), String> {
+        self.connection
+            .with_exclusive_transaction_result::<_, String>(|tx| {
+                FrankenExclusiveTransaction::execute_raw(
+                    tx,
+                    "CREATE TABLE IF NOT EXISTS franken_storage_meta (\
+                        meta_key TEXT NOT NULL PRIMARY KEY, \
+                        schema_version BIGINT NOT NULL\
+                     );",
+                )
+                .map_err(|error| error.to_string())?;
+                FrankenExclusiveTransaction::execute_raw(
+                    tx,
+                    "CREATE TABLE IF NOT EXISTS franken_storage_records (\
+                        store_kind TEXT NOT NULL, \
+                        record_key TEXT NOT NULL, \
+                        value_hex TEXT NOT NULL, \
+                        metadata_json TEXT NOT NULL, \
+                        revision BIGINT NOT NULL, \
+                        PRIMARY KEY (store_kind, record_key)\
+                     );",
+                )
+                .map_err(|error| error.to_string())?;
+                tx.execute_sync(
+                    "INSERT OR IGNORE INTO franken_storage_meta (meta_key, schema_version) \
+                     VALUES ('singleton', ?1);",
+                    &[Value::BigInt(i64::from(STORAGE_SCHEMA_VERSION))],
+                )
+                .map_err(|error| error.to_string())?;
+                Ok(())
+            })
+            .map_err(|error| error.to_string())
+    }
+
+    fn current_schema_version(&self) -> Result<u32, String> {
+        self.connection
+            .with_exclusive_transaction_result::<_, String>(|tx| {
+                let rows = tx
+                    .query_sync(
+                        "SELECT schema_version FROM franken_storage_meta \
+                         WHERE meta_key = 'singleton' LIMIT 1;",
+                        &[],
+                    )
+                    .map_err(|error| error.to_string())?;
+                let Some(row) = rows.first() else {
+                    return Ok(STORAGE_SCHEMA_VERSION);
+                };
+                let v = row
+                    .get_named::<i64>("schema_version")
+                    .map_err(|error| error.to_string())?;
+                u32::try_from(v).map_err(|_| format!("invalid schema_version {v}"))
+            })
+            .map_err(|error| error.to_string())
+    }
+
+    fn migrate_to(&mut self, target_version: u32) -> Result<(), String> {
+        self.connection
+            .with_exclusive_transaction_result::<_, String>(|tx| {
+                tx.execute_sync(
+                    "UPDATE franken_storage_meta SET schema_version = ?1 \
+                     WHERE meta_key = 'singleton';",
+                    &[Value::BigInt(i64::from(target_version))],
+                )
+                .map_err(|error| error.to_string())?;
+                Ok(())
+            })
+            .map_err(|error| error.to_string())
+    }
+
+    fn put_record(
+        &mut self,
+        store: StoreKind,
+        key: &str,
+        value: &[u8],
+        metadata: &BTreeMap<String, String>,
+    ) -> Result<StoreRecord, String> {
+        self.connection
+            .with_exclusive_transaction_result::<_, String>(|tx| {
+                Self::upsert_in_tx(tx, store, key, value, metadata)
+            })
+            .map_err(|error| error.to_string())
+    }
+
+    fn compare_and_swap_record(
+        &mut self,
+        store: StoreKind,
+        key: &str,
+        expected_revision: Option<u64>,
+        value: &[u8],
+        metadata: &BTreeMap<String, String>,
+    ) -> Result<CompareAndSwapOutcome, String> {
+        self.connection
+            .with_exclusive_transaction_result::<_, String>(|tx| {
+                let current = Self::read_in_tx(tx, store, key)?;
+                let current_rev = current.as_ref().map(|record| record.revision);
+                if current_rev != expected_revision {
+                    return Ok(CompareAndSwapOutcome::Conflict { current });
+                }
+                let applied = Self::upsert_in_tx(tx, store, key, value, metadata)?;
+                Ok(CompareAndSwapOutcome::Applied(applied))
+            })
+            .map_err(|error| error.to_string())
+    }
+
+    fn get_record(&self, store: StoreKind, key: &str) -> Result<Option<StoreRecord>, String> {
+        self.connection
+            .with_exclusive_transaction_result(|tx| Self::read_in_tx(tx, store, key))
+            .map_err(|error| error.to_string())
+    }
+
+    fn query_records(
+        &self,
+        store: StoreKind,
+        query: &StoreQuery,
+    ) -> Result<Vec<StoreRecord>, String> {
+        self.connection
+            .with_exclusive_transaction_result::<_, String>(|tx| {
+                let rows = tx
+                    .query_sync(
+                        "SELECT record_key, value_hex, metadata_json, revision \
+                         FROM franken_storage_records \
+                         WHERE store_kind = ?1 \
+                         ORDER BY record_key ASC;",
+                        &[Value::Text(store.as_str().to_string())],
+                    )
+                    .map_err(|error| error.to_string())?;
+                let mut records = Vec::with_capacity(rows.len());
+                for row in &rows {
+                    let record = Self::decode_row(store, row)?;
+                    if let Some(prefix) = &query.key_prefix
+                        && !record.key.starts_with(prefix)
+                    {
+                        continue;
+                    }
+                    if !query
+                        .metadata_filters
+                        .iter()
+                        .all(|(k, v)| record.metadata.get(k) == Some(v))
+                    {
+                        continue;
+                    }
+                    records.push(record);
+                }
+                Ok(canonicalize_records(records, query.limit))
+            })
+            .map_err(|error| error.to_string())
+    }
+
+    fn delete_record(&mut self, store: StoreKind, key: &str) -> Result<bool, String> {
+        self.connection
+            .with_exclusive_transaction_result::<_, String>(|tx| {
+                let affected = tx
+                    .execute_sync(
+                        "DELETE FROM franken_storage_records \
+                         WHERE store_kind = ?1 AND record_key = ?2;",
+                        &[
+                            Value::Text(store.as_str().to_string()),
+                            Value::Text(key.to_string()),
+                        ],
+                    )
+                    .map_err(|error| error.to_string())?;
+                Ok(affected > 0)
+            })
+            .map_err(|error| error.to_string())
+    }
+
+    fn put_batch(
+        &mut self,
+        store: StoreKind,
+        entries: &[BatchPutEntry],
+    ) -> Result<Vec<StoreRecord>, String> {
+        self.connection
+            .with_exclusive_transaction_result::<_, String>(|tx| {
+                let mut out = Vec::with_capacity(entries.len());
+                for entry in entries {
+                    out.push(Self::upsert_in_tx(
+                        tx,
+                        store,
+                        &entry.key,
+                        &entry.value,
+                        &entry.metadata,
+                    )?);
+                }
+                Ok(out)
+            })
+            .map_err(|error| error.to_string())
+    }
+}
+
+/// Durable FrankenSQLite storage adapter for `ExecutionOrchestrator` and `frankenctl --state-db`.
+#[cfg(feature = "sibling-persistence")]
+pub type DurableFrankensqliteStorageAdapter =
+    FrankensqliteStorageAdapter<DurableFrankensqliteBackend>;
+
+#[cfg(feature = "sibling-persistence")]
+impl FrankensqliteStorageAdapter<DurableFrankensqliteBackend> {
+    /// Open or initialize a durable FrankenSQLite control-plane state database at `path`.
+    pub fn open_durable_file(path: impl AsRef<Path>) -> Result<Self, StorageError> {
+        Self::new(DurableFrankensqliteBackend::open_file(path)?)
     }
 }
 
@@ -5534,5 +6097,95 @@ mod tests {
             .expect_err("backend without transactional CAS must fail closed");
         assert!(matches!(error, StorageError::BackendUnavailable { .. }));
         assert!(error.to_string().contains("revision-plus-snapshot"));
+    }
+
+    #[test]
+    #[cfg(feature = "sibling-persistence")]
+    fn non_genesis_fleet_cas_rejects_missing_prior_snapshot_hash_even_with_zero_model_prior() {
+        let mut model = fleet_trust_state_entry(2, 2);
+        model.prior_snapshot_hash = GENESIS_FLEET_PRIOR_SNAPSHOT_HASH.to_string();
+        let authorization = FleetTrustStateCasAuthorization::new(None, model.snapshot_hash.clone());
+        let entry = model
+            .to_batch_put_entry()
+            .expect("fleet state should encode");
+        let error = enforce_fleet_trust_state_cas_policy(
+            &authorization,
+            &entry.key,
+            &entry.value,
+            &entry.metadata,
+        )
+        .expect_err("non-genesis CAS without prior snapshot hash must fail closed");
+        assert!(matches!(error, StorageError::WriteRejected { .. }));
+        assert!(
+            error
+                .to_string()
+                .contains("requires an explicit prior snapshot hash")
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "sibling-persistence")]
+    fn durable_frankensqlite_storage_adapter_persists_across_reopen() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("state.db");
+        let mut metadata = BTreeMap::new();
+        metadata.insert("extension_id".to_string(), "ext-alpha".to_string());
+
+        {
+            let mut adapter =
+                DurableFrankensqliteStorageAdapter::open_durable_file(&db_path).expect("open db");
+            let first = adapter
+                .put(
+                    StoreKind::ReplayIndex,
+                    "runs/trace-001".to_string(),
+                    b"{\"value\":\"42\"}".to_vec(),
+                    metadata.clone(),
+                    &ctx(),
+                )
+                .expect("put first");
+            assert_eq!(first.revision, 1);
+
+            let cas_conflict = adapter
+                .compare_and_swap(
+                    StoreKind::ReplayIndex,
+                    "runs/trace-001".to_string(),
+                    None,
+                    b"{}".to_vec(),
+                    metadata.clone(),
+                    &ctx(),
+                )
+                .expect("cas conflict");
+            assert!(matches!(
+                cas_conflict,
+                CompareAndSwapOutcome::Conflict { .. }
+            ));
+
+            let cas_applied = adapter
+                .compare_and_swap(
+                    StoreKind::ReplayIndex,
+                    "runs/trace-001".to_string(),
+                    Some(1),
+                    b"{\"value\":\"43\"}".to_vec(),
+                    metadata.clone(),
+                    &ctx(),
+                )
+                .expect("cas applied");
+            assert!(
+                matches!(cas_applied, CompareAndSwapOutcome::Applied(ref rec) if rec.revision == 2)
+            );
+        }
+
+        let mut reopened =
+            DurableFrankensqliteStorageAdapter::open_durable_file(&db_path).expect("reopen db");
+        let loaded = reopened
+            .get(StoreKind::ReplayIndex, "runs/trace-001", &ctx())
+            .expect("get after reopen")
+            .expect("record must survive reopen");
+        assert_eq!(loaded.revision, 2);
+        assert_eq!(loaded.value, b"{\"value\":\"43\"}".to_vec());
+        assert_eq!(
+            loaded.metadata.get("extension_id"),
+            Some(&"ext-alpha".to_string())
+        );
     }
 }

@@ -6471,7 +6471,9 @@ impl AuthenticatedFleetProtocolStateV2 {
         }
         Ok(restored)
     }
+}
 
+impl AuthenticatedFleetProtocolStateV2 {
     pub fn new(
         fleet_authority_id: FleetAuthorityId,
         node_id: NodeId,

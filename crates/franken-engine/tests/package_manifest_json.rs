@@ -22,10 +22,19 @@ fn execute_graph(goal: &str, mode: &str, suffix: &str) {
             case["manifest"].as_str().expect("exact JSON bytes"),
         )
         .expect("package manifest");
-        for name in ["first.cjs", "last.cjs", "require.cjs", "import.cjs", "index.js"] {
+        for name in [
+            "first.cjs",
+            "last.cjs",
+            "require.cjs",
+            "import.cjs",
+            "index.js",
+        ] {
             fs::write(
                 directory.join(name),
-                format!("module.exports = {};\n", serde_json::to_string(name).unwrap()),
+                format!(
+                    "module.exports = {};\n",
+                    serde_json::to_string(name).unwrap()
+                ),
             )
             .expect("candidate module");
         }
@@ -36,8 +45,8 @@ fn execute_graph(goal: &str, mode: &str, suffix: &str) {
             format!("import value from {request}; export default value;\n")
         };
         fs::write(directory.join(format!("probe.{suffix}")), probe).expect("module importer");
-        let relative = serde_json::to_string(&format!("./{id}/node_modules/pkg/probe.{suffix}"))
-            .unwrap();
+        let relative =
+            serde_json::to_string(&format!("./{id}/node_modules/pkg/probe.{suffix}")).unwrap();
         let label = serde_json::to_string(id).unwrap();
         if mode == "require" {
             source.push_str(&format!("console.log({label}, require({relative}));\n"));
@@ -54,7 +63,13 @@ fn execute_graph(goal: &str, mode: &str, suffix: &str) {
     let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
         .args(["run", "--input"])
         .arg(&entry)
-        .args(["--extension-id", "manifest-json-regression", "--goal", goal, "--out"])
+        .args([
+            "--extension-id",
+            "manifest-json-regression",
+            "--goal",
+            goal,
+            "--out",
+        ])
         .arg(&report)
         .output()
         .expect("execute production CLI");
@@ -71,7 +86,10 @@ fn execute_graph(goal: &str, mode: &str, suffix: &str) {
         .iter()
         .map(|entry| entry["message"].as_str().expect("console message"))
         .collect();
-    assert_eq!(actual, expected, "{goal} must execute the selected files, not only resolve paths");
+    assert_eq!(
+        actual, expected,
+        "{goal} must execute the selected files, not only resolve paths"
+    );
 }
 
 #[test]
@@ -88,7 +106,10 @@ fn assert_fatal_target(id: &str, diagnostic: &str) {
     let cases: Vec<serde_json::Value> =
         serde_json::from_str(include_str!("fixtures/package_target_validation.json"))
             .expect("target fixtures");
-    let case = cases.iter().find(|case| case["id"] == id).expect("target case");
+    let case = cases
+        .iter()
+        .find(|case| case["id"] == id)
+        .expect("target case");
     for (goal, suffix) in [("commonjs", "cjs"), ("module", "mjs")] {
         let root = tempfile::tempdir().expect("isolated module root");
         let directory = root.path().join("node_modules/pkg");
@@ -126,7 +147,10 @@ fn assert_fatal_target(id: &str, diagnostic: &str) {
             .output()
             .expect("execute production CLI");
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(!output.status.success(), "{id} {goal}: invalid target executed");
+        assert!(
+            !output.status.success(),
+            "{id} {goal}: invalid target executed"
+        );
         assert!(stderr.contains(diagnostic), "{id} {goal}: {stderr}");
         // Some error paths publish a partial execution report. It must not
         // contain effects from an alternative that should never be selected.
@@ -135,7 +159,9 @@ fn assert_fatal_target(id: &str, diagnostic: &str) {
                 serde_json::from_slice(&fs::read(&report_path).unwrap()).expect("report JSON");
             if let Some(console) = report["console_output"].as_array() {
                 assert!(
-                    console.iter().all(|entry| entry["message"] != "fallback-body-ran"),
+                    console
+                        .iter()
+                        .all(|entry| entry["message"] != "fallback-body-ran"),
                     "{id} {goal}: invalid target executed a fallback body"
                 );
             }

@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use std::collections::BTreeSet;
 use std::error::Error;
 use std::fs;
@@ -12,7 +14,7 @@ use frankenengine_engine::test262_release_gate::{
     Test262PinSet, Test262Profile, Test262RunnerConfig, Test262WaiverSet, next_high_water_mark,
 };
 use frankenengine_engine::{
-    HybridRouter, JsEngine, QuickJsInspiredNativeEngine, V8InspiredNativeEngine,
+    EvalErrorClass, HybridRouter, JsEngine, QuickJsInspiredNativeEngine, V8InspiredNativeEngine,
 };
 use serde::{Deserialize, Serialize};
 
@@ -567,6 +569,58 @@ fn evaluate_case_vector(
     }
 }
 
+fn negative_error_matches(
+    err: &frankenengine_engine::EvalError,
+    expected_phase: Option<&str>,
+    expected_error_type: &str,
+) -> bool {
+    let class = err.class();
+    let summary = err.diagnostic_summary();
+    if let Some(phase) = expected_phase {
+        match phase {
+            "parse" | "early" if class != EvalErrorClass::Parse => {
+                return false;
+            }
+            "resolution"
+                if !matches!(class, EvalErrorClass::Resolution | EvalErrorClass::Parse) =>
+            {
+                return false;
+            }
+            "runtime" if class == EvalErrorClass::Parse => {
+                return false;
+            }
+            _ => {}
+        }
+    }
+    if expected_error_type.is_empty() || expected_error_type == "Error" {
+        return true;
+    }
+    if expected_error_type == "SyntaxError"
+        && (class == EvalErrorClass::Parse || summary.contains("SyntaxError"))
+    {
+        return true;
+    }
+    if summary.contains(expected_error_type) {
+        return true;
+    }
+    match expected_error_type {
+        "TypeError" => {
+            summary.contains("type error:") || summary.contains("assignment to constant variable")
+        }
+        "ReferenceError" => {
+            summary.contains("reference error:")
+                || summary.contains("before initialization (temporal dead zone)")
+                || summary.contains(" is not defined")
+        }
+        "RangeError" => {
+            summary.contains("range error:") || summary.contains("call stack overflow:")
+        }
+        "URIError" => summary.contains("uri error:"),
+        "EvalError" => summary.contains("eval error:"),
+        _ => false,
+    }
+}
+
 fn execute_case_vector(
     case: &Test262CaseVector,
     rerun_command: String,
@@ -574,18 +628,31 @@ fn execute_case_vector(
     let start = Instant::now();
     let eval_result = evaluate_case_vector(case);
     let elapsed_us = start.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
+    let expected = case.expected_value.trim();
 
     let (outcome, observed_value, error_class, error_code, error_detail) = match eval_result {
         Ok(value) => {
             let trimmed_observed = value.trim().to_string();
-            let expected = case.expected_value.trim();
-            if trimmed_observed == expected {
+            if expected == "TEST262_PASS" || trimmed_observed == expected {
                 (
                     frankenengine_engine::test262_release_gate::Test262ObservedOutcome::Pass,
                     Some(trimmed_observed),
                     None,
                     None,
                     None,
+                )
+            } else if expected == "PARSE_ERROR"
+                || expected.starts_with("NEGATIVE:")
+                || expected.starts_with("THROW:")
+            {
+                (
+                    frankenengine_engine::test262_release_gate::Test262ObservedOutcome::Fail,
+                    Some(trimmed_observed.clone()),
+                    Some("unexpected_completion".to_string()),
+                    Some(FE_T262_UNEXPECTED_PASS.to_string()),
+                    Some(format!(
+                        "{FE_T262_UNEXPECTED_PASS}: expected negative `{expected}`, observed normal completion `{trimmed_observed}`",
+                    )),
                 )
             } else {
                 (
@@ -599,13 +666,39 @@ fn execute_case_vector(
                 )
             }
         }
-        Err(err) => (
-            frankenengine_engine::test262_release_gate::Test262ObservedOutcome::Fail,
-            None,
-            Some(err.class().stable_label().to_string()),
-            Some(err.stable_namespace().to_string()),
-            Some(err.diagnostic_summary()),
-        ),
+        Err(err) => {
+            let matched_negative = if expected == "PARSE_ERROR" {
+                negative_error_matches(&err, Some("parse"), "SyntaxError")
+            } else if let Some(rest) = expected.strip_prefix("NEGATIVE:") {
+                if let Some((phase, error_type)) = rest.split_once(':') {
+                    negative_error_matches(&err, Some(phase), error_type)
+                } else {
+                    false
+                }
+            } else if let Some(error_type) = expected.strip_prefix("THROW:") {
+                negative_error_matches(&err, None, error_type)
+            } else {
+                false
+            };
+
+            if matched_negative {
+                (
+                    frankenengine_engine::test262_release_gate::Test262ObservedOutcome::Pass,
+                    Some(expected.to_string()),
+                    None,
+                    None,
+                    None,
+                )
+            } else {
+                (
+                    frankenengine_engine::test262_release_gate::Test262ObservedOutcome::Fail,
+                    None,
+                    Some(err.class().stable_label().to_string()),
+                    Some(err.stable_namespace().to_string()),
+                    Some(err.diagnostic_summary()),
+                )
+            }
+        }
     };
 
     let observed = Test262ObservedResult {
@@ -1138,5 +1231,47 @@ mod tests {
             Some(FE_T262_EXPECTED_VALUE_MISMATCH)
         );
         assert_eq!(artifact.outcome, "fail");
+    }
+
+    #[test]
+    fn execute_case_vector_matches_suite_pass_and_negative_syntax_and_runtime_errors() {
+        let suite_pass = Test262CaseVector {
+            test_id: "language/suite_pass.js".to_string(),
+            es2020_clause: "12.8.3".to_string(),
+            source: "const x = 40 + 2; x;".to_string(),
+            expected_value: "TEST262_PASS".to_string(),
+            runtime_lane: RuntimeLane::Hybrid,
+            deterministic_seed: 1,
+            origin_commit: None,
+            origin_url: None,
+        };
+        let (obs_pass, _) = execute_case_vector(&suite_pass, "rerun".to_string());
+        assert_eq!(obs_pass.outcome, Test262ObservedOutcome::Pass);
+
+        let neg_parse = Test262CaseVector {
+            test_id: "language/neg_parse.js".to_string(),
+            es2020_clause: "13.3.1.1".to_string(),
+            source: "let x = 1; let x = 2;".to_string(),
+            expected_value: "NEGATIVE:parse:SyntaxError".to_string(),
+            runtime_lane: RuntimeLane::Hybrid,
+            deterministic_seed: 2,
+            origin_commit: None,
+            origin_url: None,
+        };
+        let (obs_neg_parse, _) = execute_case_vector(&neg_parse, "rerun".to_string());
+        assert_eq!(obs_neg_parse.outcome, Test262ObservedOutcome::Pass);
+
+        let neg_runtime = Test262CaseVector {
+            test_id: "language/neg_runtime.js".to_string(),
+            es2020_clause: "13.3.1.4".to_string(),
+            source: "const c = 1; c = 2;".to_string(),
+            expected_value: "NEGATIVE:runtime:TypeError".to_string(),
+            runtime_lane: RuntimeLane::Hybrid,
+            deterministic_seed: 3,
+            origin_commit: None,
+            origin_url: None,
+        };
+        let (obs_neg_runtime, _) = execute_case_vector(&neg_runtime, "rerun".to_string());
+        assert_eq!(obs_neg_runtime.outcome, Test262ObservedOutcome::Pass);
     }
 }

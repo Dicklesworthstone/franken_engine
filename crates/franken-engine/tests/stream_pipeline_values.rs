@@ -28,13 +28,32 @@ fn run(source: &str, lane: LaneChoice) -> (tempfile::TempDir, Vec<String>) {
         source_file: None,
         module_root: None,
         // Stream nextTick uses the existing explicit timer capability.
-        capabilities: ["vm_dispatch", "heap_allocate", "builtin", "console", "fs_read", "fs_write", "timer"]
-            .into_iter().map(str::to_string).collect(),
+        capabilities: [
+            "vm_dispatch",
+            "heap_allocate",
+            "builtin",
+            "console",
+            "fs_read",
+            "fs_write",
+            "timer",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
         version: "1.0.0".into(),
         metadata: BTreeMap::new(),
     };
-    let result = runtime.execute(&package).expect("native stream cancellation completes");
-    (root, result.console_output.into_iter().map(|entry| entry.message).collect())
+    let result = runtime
+        .execute(&package)
+        .expect("native stream cancellation completes");
+    (
+        root,
+        result
+            .console_output
+            .into_iter()
+            .map(|entry| entry.message)
+            .collect(),
+    )
 }
 
 #[test]
@@ -256,7 +275,10 @@ fn cancelling_web_completion_does_not_cancel_the_resource() {
             })();"#,
             lane,
         );
-        assert_eq!(lines, ["ABORT_ERR false false false", "available kept false"]);
+        assert_eq!(
+            lines,
+            ["ABORT_ERR false false false", "available kept false"]
+        );
     }
 }
 

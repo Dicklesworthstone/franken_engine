@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -88,6 +90,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
     }
 
     let mut out_dir: Option<String> = None;
+    let mut config_path: Option<PathBuf> = None;
     let mut epoch_val: u64 = 42;
     let mut trace_id = String::from("trace-rgc-signature-drift-gate");
     let mut decision_id = String::from("decision-rgc-signature-drift-gate");
@@ -109,6 +112,13 @@ fn run(args: Vec<String>) -> Result<(), String> {
                         .ok_or_else(|| "--out-dir requires a path".to_string())?
                         .clone(),
                 );
+            }
+            "--config" => {
+                index += 1;
+                config_path = Some(PathBuf::from(
+                    args.get(index)
+                        .ok_or_else(|| "--config requires a path".to_string())?,
+                ));
             }
             "--epoch" => {
                 index += 1;
@@ -207,7 +217,15 @@ fn run(args: Vec<String>) -> Result<(), String> {
         .iter()
         .map(|s| s.decision.claim_id.as_str())
         .collect();
-    let config = DriftGateConfig::default();
+    let config: DriftGateConfig = match &config_path {
+        Some(path) => {
+            let raw = fs::read_to_string(path)
+                .map_err(|e| format!("failed to read --config {}: {e}", path.display()))?;
+            serde_json::from_str(&raw)
+                .map_err(|e| format!("invalid DriftGateConfig JSON in {}: {e}", path.display()))?
+        }
+        None => DriftGateConfig::default(),
+    };
 
     // Use first specimen's baseline/current for batch (stable low drift pair)
     let baseline = frankenengine_engine::signature_drift_gate::SignatureSnapshot::new(
@@ -434,7 +452,7 @@ fn usage() -> String {
     [
         "franken_signature_drift_gate usage:",
         "  cargo run -p frankenengine-engine --bin franken_signature_drift_gate -- \\",
-        "      --out-dir <path> [--epoch <n>] [--summary] [--emit-artifact-stream]",
+        "      --out-dir <path> [--config <json>] [--epoch <n>] [--summary] [--emit-artifact-stream]",
         "      [--trace-id <id>] [--decision-id <id>] [--policy-id <id>]",
         "      [--run-id <id>] [--generated-at-utc <rfc3339>]",
         "      [--source-commit <sha>] [--toolchain <name>]",

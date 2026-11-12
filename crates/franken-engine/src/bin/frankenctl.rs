@@ -25,6 +25,7 @@ use frankenengine_engine::benchmark_denominator::{
     PublicationContext, PublicationGateInput, evaluate_publication_gate,
 };
 use frankenengine_engine::benchmark_e2e::{
+    BENCHMARK_E2E_JS_RUNTIME_EXECUTION_INCLUDED, BENCHMARK_E2E_MEASURED_SURFACE,
     BenchmarkComparisonManifest, BenchmarkFamily, BenchmarkSuiteConfig, ScaleProfile,
     run_benchmark_comparison_suite, run_benchmark_suite, write_benchmark_comparison_artifacts,
     write_evidence_artifacts,
@@ -140,7 +141,10 @@ use frankenengine_engine::time_travel_debugger::{
 use frankenengine_engine::ts_normalization::{
     SourceIngestionSummary, prepare_source_entry_for_public_entrypoints,
 };
-use frankenengine_extension_host::host_io::{InMemoryHostIoTranscript, SandboxedHostIo};
+use frankenengine_extension_host::host_io::{
+    DenyAllHostIo, HostIoOutcome, HostIoRecorder, HostIoRequest, InMemoryHostIoTranscript,
+    SandboxedHostIo,
+};
 use rand::RngCore;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
@@ -202,9 +206,9 @@ enum CommandSpec {
     Check(CheckArgs),
     Onboard(OnboardArgs),
     DiffBehavior(DiffBehaviorArgs),
-    Run(RunArgs),
+    Run(Box<RunArgs>),
     EvidenceInit(EvidenceInitArgs),
-    AgentSandbox(AgentSandboxArgs),
+    AgentSandbox(Box<AgentSandboxArgs>),
     Explain(ExplainArgs),
     Claims(ClaimsArgs),
     Doctor(Box<DoctorArgs>),
@@ -395,6 +399,8 @@ struct RunArgs {
     /// Directory for the E8 certificate bundle (bd-fqlfw.8.3); requires
     /// `--data-contract`.
     certificate_out: Option<PathBuf>,
+    /// Optional durable FrankenSQLite control-plane database (`g2vrp.13`).
+    state_db: Option<PathBuf>,
     /// Override the execution-cell close budget for policy testing.
     cell_close_budget_ms: Option<u64>,
     /// Override the interpreter instruction budget (bd-9vouw.6). The
@@ -840,7 +846,6 @@ struct GatesArgs {
     mode: GatesMode,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum GatesMode {
     ZeroPlaceholder {
@@ -859,25 +864,6 @@ enum GatesMode {
         out_dir: PathBuf,
         config: Option<PathBuf>,
     },
-    AdversarialCampaign {
-        out_dir: PathBuf,
-    },
-    AmbientMockGuard {
-        out_dir: PathBuf,
-    },
-    IfcConformance {
-        out_dir: PathBuf,
-    },
-    SecurityConformance {
-        out_dir: PathBuf,
-    },
-    ArtifactValidator {
-        input: PathBuf,
-        out: Option<PathBuf>,
-    },
-    PlaceholderScan {
-        out_dir: PathBuf,
-    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -885,7 +871,6 @@ struct ReportsArgs {
     mode: ReportsMode,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ReportsMode {
     ParserOracle {
@@ -898,37 +883,7 @@ enum ReportsMode {
         policy_id: Option<String>,
         out: Option<PathBuf>,
     },
-    ParserPhase0 {
-        out: Option<PathBuf>,
-    },
     LoweringGap {
-        out: Option<PathBuf>,
-    },
-    ParserGap {
-        out: Option<PathBuf>,
-    },
-    ControlPlaneBenchmark {
-        out: Option<PathBuf>,
-    },
-    ControlPlaneMock {
-        out: Option<PathBuf>,
-    },
-    ControlPlanePolicy {
-        out_dir: PathBuf,
-    },
-    EngineBlockerLedger {
-        out_dir: PathBuf,
-    },
-    MetadataEvidence {
-        out_dir: PathBuf,
-    },
-    NpmCompatibility {
-        out_dir: PathBuf,
-    },
-    ObservabilityBundle {
-        out_dir: PathBuf,
-    },
-    RgcPlanning {
         out: Option<PathBuf>,
     },
 }
@@ -938,7 +893,6 @@ struct TestArgs {
     mode: TestMode,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TestMode {
     Test262 {
@@ -949,31 +903,6 @@ enum TestMode {
         config: Option<PathBuf>,
         out: Option<PathBuf>,
     },
-    MultiEngineParser {
-        out_dir: PathBuf,
-    },
-    S3FifoBaseline {
-        out: Option<PathBuf>,
-    },
-    FrxOracle {
-        out: Option<PathBuf>,
-    },
-    SeqlockCandidate {
-        out: Option<PathBuf>,
-    },
-    SeqlockReaderWriter {
-        out: Option<PathBuf>,
-    },
-    SeqlockRollout {
-        out: Option<PathBuf>,
-    },
-    ShippedPathParity {
-        out_dir: PathBuf,
-    },
-    VerifyGeneral {
-        input: PathBuf,
-        out: Option<PathBuf>,
-    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -981,15 +910,10 @@ struct SynthArgs {
     mode: SynthMode,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum SynthMode {
     KernelContract { out_dir: PathBuf },
-    ShapeLattice { out_dir: PathBuf },
     LawMining { out: Option<PathBuf> },
-    EvidenceStitching { out_dir: PathBuf },
-    CacheContract { out: Option<PathBuf> },
-    ColdStart { out_dir: PathBuf },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -997,12 +921,9 @@ struct OrchestrateArgs {
     mode: OrchestrateMode,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum OrchestrateMode {
     ContextRefactor { out: Option<PathBuf> },
-    ReactCohort { out: Option<PathBuf> },
-    AsupersyncMatrix { out_dir: PathBuf },
     TailLatency { out_dir: PathBuf },
 }
 
@@ -1185,6 +1106,14 @@ struct RunReplayInput {
     /// are read again on replay, not recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     module_root: Option<String>,
+    /// Content hashes of module files under `module_root` at original run time
+    /// (`[RC-C2]` / `g2vrp.9`). Verified before replay re-execution.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    imported_module_hashes: BTreeMap<String, String>,
+    /// Recorded host I/O transcript for deterministic side-effect-free replay
+    /// (`[RC-C2]` / `g2vrp.9`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    host_effect_transcript: Vec<(HostIoRequest, HostIoOutcome)>,
     ir3_hash: String,
     randomness_transcript: NondeterminismTrace,
     unsigned_execution_content: UnsignedExecutionContent,
@@ -1335,6 +1264,8 @@ struct ReceiptVerificationCommandOutput {
 #[derive(Debug, Clone, Serialize)]
 struct BenchmarkCommandOutput {
     schema_version: String,
+    measured_surface: String,
+    js_runtime_execution_included: bool,
     run_id: String,
     run_date: String,
     seed: u64,
@@ -1996,9 +1927,9 @@ fn run(raw_args: Vec<String>) -> Result<i32, String> {
         CommandSpec::Check(args) => execute_check(args),
         CommandSpec::Onboard(args) => execute_onboard(args),
         CommandSpec::DiffBehavior(args) => execute_diff_behavior(args),
-        CommandSpec::Run(args) => execute_run(args),
+        CommandSpec::Run(args) => execute_run(*args),
         CommandSpec::EvidenceInit(args) => execute_evidence_init(args),
-        CommandSpec::AgentSandbox(args) => execute_agent_sandbox(args),
+        CommandSpec::AgentSandbox(args) => execute_agent_sandbox(*args),
         CommandSpec::Explain(args) => execute_explain(args),
         CommandSpec::Claims(args) => execute_claims(args),
         CommandSpec::Doctor(args) => execute_doctor(*args),
@@ -2101,7 +2032,7 @@ fn parse_help_command(args: &[String]) -> Result<CommandSpec, String> {
         "orchestrate" => parse_leaf_help_topic("orchestrate", HelpTopic::Orchestrate, &args[1..]),
         "runtime" => parse_leaf_help_topic("runtime", HelpTopic::Runtime, &args[1..]),
         other => Err(format!(
-            "unknown help topic `{other}` (expected compile|check|onboard|diff-behavior|run|agent-sandbox|explain|doctor|verify|benchmark|replay|differential-oracle|oracle|react|gates|reports|test|synth|orchestrate|runtime)"
+            "unknown help topic `{other}` (expected compile|check|onboard|diff-behavior|run|evidence|agent-sandbox|explain|claims|doctor|verify|benchmark|replay|differential-oracle|oracle|react|gates|reports|test|synth|orchestrate|runtime)"
         )),
     }
 }
@@ -2156,12 +2087,15 @@ fn parse_benchmark_help_command(args: &[String]) -> Result<CommandSpec, String> 
 
     match args[0].as_str() {
         "run" => parse_leaf_help_topic("benchmark run", HelpTopic::BenchmarkRun, &args[1..]),
+        "compare" => {
+            parse_leaf_help_topic("benchmark compare", HelpTopic::BenchmarkCompare, &args[1..])
+        }
         "score" => parse_leaf_help_topic("benchmark score", HelpTopic::BenchmarkScore, &args[1..]),
         "verify" => {
             parse_leaf_help_topic("benchmark verify", HelpTopic::BenchmarkVerify, &args[1..])
         }
         other => Err(format!(
-            "unknown benchmark help topic `{other}` (expected run|score|verify)"
+            "unknown benchmark help topic `{other}` (expected run|compare|score|verify)"
         )),
     }
 }
@@ -2607,6 +2541,7 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
     let mut data_contract: Option<PathBuf> = None;
     let mut data_contract_purpose = DEFAULT_DATA_CONTRACT_PURPOSE.to_string();
     let mut certificate_out: Option<PathBuf> = None;
+    let mut state_db: Option<PathBuf> = None;
     let mut cell_close_budget_ms: Option<u64> = None;
     let mut instruction_budget: Option<u64> = None;
     let mut parser_max_token_count: Option<u64> = None;
@@ -2662,6 +2597,9 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
                     &mut index,
                     "--certificate-out",
                 )?));
+            }
+            "--state-db" => {
+                state_db = Some(PathBuf::from(next_arg(args, &mut index, "--state-db")?));
             }
             "--cell-close-budget-ms" => {
                 cell_close_budget_ms = Some(parse_positive_u64(
@@ -2761,7 +2699,7 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
         return Err("--certificate-out requires --data-contract <contract.json>".to_string());
     }
 
-    Ok(CommandSpec::Run(RunArgs {
+    Ok(CommandSpec::Run(Box::new(RunArgs {
         input,
         extension_id,
         parse_goal: goal,
@@ -2776,11 +2714,12 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
         data_contract,
         data_contract_purpose,
         certificate_out,
+        state_db,
         cell_close_budget_ms,
         instruction_budget,
         parser_max_token_count,
         limits,
-    }))
+    })))
 }
 
 /// Runtime configuration for `frankenctl run` and its strict replay. Both
@@ -2864,7 +2803,7 @@ fn parse_agent_sandbox_command(args: &[String]) -> Result<CommandSpec, String> {
         return Err("--certificate-out requires --data-contract <contract.json>".to_string());
     }
 
-    Ok(CommandSpec::AgentSandbox(AgentSandboxArgs {
+    Ok(CommandSpec::AgentSandbox(Box::new(AgentSandboxArgs {
         manifest,
         input,
         parse_goal: goal,
@@ -2875,7 +2814,7 @@ fn parse_agent_sandbox_command(args: &[String]) -> Result<CommandSpec, String> {
         cell_close_budget_ms,
         instruction_budget,
         limits,
-    }))
+    })))
 }
 
 /// Parse the value of `--instruction-budget` at `args[*index]`, bounded by
@@ -3944,9 +3883,14 @@ fn parse_react_build_command(args: &[String]) -> Result<CommandSpec, String> {
                     "react build --external requires <specifier>=<URL>".to_string()
                 })?;
                 if specifier.is_empty() || url.is_empty() {
-                    return Err("react build --external requires a non-empty specifier and URL".to_string());
+                    return Err(
+                        "react build --external requires a non-empty specifier and URL".to_string(),
+                    );
                 }
-                if externals.insert(specifier.to_string(), url.to_string()).is_some() {
+                if externals
+                    .insert(specifier.to_string(), url.to_string())
+                    .is_some()
+                {
                     return Err(format!("duplicate react build external `{specifier}`"));
                 }
             }
@@ -5412,6 +5356,14 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         evidence_authority.clone(),
     )
     .map_err(|error| format!("failed to initialize execution orchestrator: {error}"))?;
+    if let Some(state_db) = args.state_db.as_ref() {
+        orchestrator.open_state_db(state_db).map_err(|error| {
+            format!(
+                "failed to open durable control-plane database `{}`: {error}",
+                state_db.display()
+            )
+        })?;
+    }
     // bd-fqlfw.8.2: the bound contract's ingress label + sink surface gates
     // execution fail-closed and records flow edges in the provenance index.
     if let Some((contract, binding)) = bound_contract.as_ref() {
@@ -5536,6 +5488,10 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         instructions_executed: result.instructions_executed,
         console_output: result.console_output.clone(),
     };
+    let imported_module_hashes = match module_root.as_deref() {
+        Some(root) => snapshot_module_root_hashes(Path::new(root))?,
+        None => BTreeMap::new(),
+    };
     let replay_input = RunReplayInput {
         source: package.source.clone(),
         source_label: source_label.clone(),
@@ -5549,6 +5505,8 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         limits: args.limits,
         commonjs_entry: args.commonjs_entry,
         module_root,
+        imported_module_hashes,
+        host_effect_transcript: result.host_effect_transcript.clone(),
         ir3_hash: result.ir4_witness.executed_ir3_hash.to_hex(),
         randomness_transcript: result.nondeterminism_trace.clone(),
         unsigned_execution_content,
@@ -5819,7 +5777,8 @@ fn execute_agent_sandbox(args: AgentSandboxArgs) -> Result<i32, String> {
             Some(limit) => SandboxedHostIo::with_root_and_limit(PathBuf::from(root), limit),
             None => SandboxedHostIo::with_root(PathBuf::from(root)),
         }
-        .map_err(|error| format!("failed to open agent-sandbox host I/O root `{root}`: {error}"))?;
+        .map_err(|error| format!("failed to open agent-sandbox host I/O root `{root}`: {error}"))?
+        .with_public_egress_only();
         orchestrator.set_host_io(
             Arc::new(provider),
             Some(Arc::new(InMemoryHostIoTranscript::recording())),
@@ -8353,6 +8312,8 @@ fn execute_benchmark_run(args: BenchmarkRunArgs) -> Result<i32, String> {
 
     let output = BenchmarkCommandOutput {
         schema_version: FRANKENCTL_SCHEMA_VERSION.to_string(),
+        measured_surface: BENCHMARK_E2E_MEASURED_SURFACE.to_string(),
+        js_runtime_execution_included: BENCHMARK_E2E_JS_RUNTIME_EXECUTION_INCLUDED,
         run_id: config.run_id.clone(),
         run_date: config.run_date.clone(),
         seed: config.seed,
@@ -10134,6 +10095,69 @@ fn execute_replay(args: ReplayArgs) -> Result<i32, String> {
     Ok(0)
 }
 
+fn snapshot_module_root_hashes(root: &Path) -> Result<BTreeMap<String, String>, String> {
+    fn visit_dir(
+        base: &Path,
+        dir: &Path,
+        out: &mut BTreeMap<String, String>,
+    ) -> Result<(), String> {
+        let mut entries = fs::read_dir(dir)
+            .map_err(|err| format!("failed to read module root `{}`: {err}", dir.display()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| format!("failed to read module entry in `{}`: {err}", dir.display()))?;
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let file_type = entry.file_type().map_err(|err| {
+                format!(
+                    "failed to stat module entry `{}`: {err}",
+                    entry.path().display()
+                )
+            })?;
+            let path = entry.path();
+            if file_type.is_dir() {
+                if entry.file_name() != ".git" && entry.file_name() != "node_modules" {
+                    visit_dir(base, &path, out)?;
+                }
+            } else if file_type.is_file() {
+                let is_module_ext =
+                    path.extension()
+                        .and_then(|ext| ext.to_str())
+                        .is_some_and(|ext| {
+                            matches!(
+                                ext,
+                                "js" | "mjs"
+                                    | "cjs"
+                                    | "json"
+                                    | "ts"
+                                    | "tsx"
+                                    | "jsx"
+                                    | "mts"
+                                    | "cts"
+                            )
+                        });
+                if is_module_ext {
+                    let bytes = fs::read(&path).map_err(|err| {
+                        format!("failed to read module `{}`: {err}", path.display())
+                    })?;
+                    let rel = path
+                        .strip_prefix(base)
+                        .unwrap_or(&path)
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    out.insert(rel, ContentHash::compute(&bytes).to_hex());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    let mut hashes = BTreeMap::new();
+    if root.is_dir() {
+        visit_dir(root, root, &mut hashes)?;
+    }
+    Ok(hashes)
+}
+
 fn execute_run_report_replay(args: ReplayArgs) -> Result<i32, String> {
     let report = load_json_file::<ReplayableRunReport>(&args.trace).map_err(|error| {
         format!(
@@ -10231,6 +10255,32 @@ fn execute_run_report_replay(args: ReplayArgs) -> Result<i32, String> {
         evidence_authority,
     )
     .map_err(|error| format!("failed to initialize replay execution orchestrator: {error}"))?;
+    if !input.imported_module_hashes.is_empty() {
+        if let Some(root) = input.module_root.as_deref() {
+            let current_hashes = snapshot_module_root_hashes(Path::new(root))?;
+            if current_hashes != input.imported_module_hashes {
+                let detail =
+                    "imported module files under module_root drifted from recorded content hashes"
+                        .to_string();
+                if args.mode == ReplayMode::Strict {
+                    return Err(format!("strict re-execution divergence: {detail}"));
+                }
+                divergences.push(detail);
+            }
+        } else {
+            let detail = "recorded imported_module_hashes present without module_root".to_string();
+            if args.mode == ReplayMode::Strict {
+                return Err(format!("strict re-execution divergence: {detail}"));
+            }
+            divergences.push(detail);
+        }
+    }
+    if !input.host_effect_transcript.is_empty() {
+        let replay_transcript: Arc<dyn HostIoRecorder> = Arc::new(
+            InMemoryHostIoTranscript::replaying(input.host_effect_transcript.clone()),
+        );
+        orchestrator.set_host_io(Arc::new(DenyAllHostIo), Some(replay_transcript));
+    }
     let replayed = orchestrator
         .execute(&package)
         .map_err(|error| format!("re-execution failed: {error}"))?;
@@ -12329,26 +12379,23 @@ fn execute_react_contract(args: ReactContractArgs) -> Result<i32, String> {
 fn execute_gates(args: GatesArgs) -> Result<i32, String> {
     match args.mode {
         GatesMode::ZeroPlaceholder { out_dir, waivers } => {
-            // Create output directory
+            let binary = resolve_sibling_binary("franken_zero_placeholder_gate")?;
             std::fs::create_dir_all(&out_dir)
                 .map_err(|e| format!("Failed to create output directory: {e}"))?;
 
-            // Try to find the installed franken_zero_placeholder_gate binary
-            let mut cmd = Command::new("franken_zero_placeholder_gate");
+            let mut cmd = Command::new(&binary);
             cmd.arg("--out-dir")
                 .arg(path_to_str(&out_dir)?)
                 .arg("--epoch")
                 .arg("100");
 
-            // Add waivers file if specified
             if let Some(waivers_path) = &waivers {
                 cmd.arg("--waivers").arg(path_to_str(waivers_path)?);
             }
 
-            // Execute the command
-            let status = cmd.status().map_err(|e| {
-                format!("Failed to execute franken_zero_placeholder_gate (is it installed?): {e}")
-            })?;
+            let status = cmd
+                .status()
+                .map_err(|e| format!("Failed to execute {}: {e}", binary.display()))?;
 
             if status.success() {
                 println!("✅ Zero-placeholder gate completed successfully");
@@ -12362,12 +12409,21 @@ fn execute_gates(args: GatesArgs) -> Result<i32, String> {
             }
         }
         GatesMode::SignatureDrift { out_dir, config } => {
-            if config.is_some() {
-                return Err(
-                    "gates signature-drift does not accept --config: the canonical \
-                     franken_signature_drift_gate binary exposes no config input"
-                        .to_string(),
-                );
+            use frankenengine_engine::signature_drift_gate::DriftGateConfig;
+
+            if let Some(config_path) = &config {
+                let raw = std::fs::read_to_string(config_path).map_err(|e| {
+                    format!(
+                        "failed to read signature-drift --config {}: {e}",
+                        config_path.display()
+                    )
+                })?;
+                let _: DriftGateConfig = serde_json::from_str(&raw).map_err(|e| {
+                    format!(
+                        "invalid signature-drift --config {} (expected DriftGateConfig JSON): {e}",
+                        config_path.display()
+                    )
+                })?;
             }
 
             // Delegate to the canonical RGC gate binary (same crate, built
@@ -12375,9 +12431,12 @@ fn execute_gates(args: GatesArgs) -> Result<i32, String> {
             let binary = resolve_sibling_binary("franken_signature_drift_gate")?;
             std::fs::create_dir_all(&out_dir)
                 .map_err(|e| format!("Failed to create output directory: {e}"))?;
-            let status = Command::new(&binary)
-                .arg("--out-dir")
-                .arg(path_to_str(&out_dir)?)
+            let mut cmd = Command::new(&binary);
+            cmd.arg("--out-dir").arg(path_to_str(&out_dir)?);
+            if let Some(config_path) = &config {
+                cmd.arg("--config").arg(path_to_str(config_path)?);
+            }
+            let status = cmd
                 .status()
                 .map_err(|e| format!("Failed to execute {}: {e}", binary.display()))?;
             if status.success() {
@@ -12523,10 +12582,6 @@ fn execute_gates(args: GatesArgs) -> Result<i32, String> {
             );
             Ok(0)
         }
-        _ => Err(
-            "Unsupported gates subcommand. Use 'frankenctl help gates' to see available commands."
-                .to_string(),
-        ),
     }
 }
 
@@ -12594,9 +12649,6 @@ fn execute_reports(args: ReportsArgs) -> Result<i32, String> {
             println!("📊 Sites: {}", artifacts.site_count);
             Ok(0)
         }
-        _ => {
-            Err("Unsupported reports subcommand. Use 'frankenctl help reports' to see available commands.".to_string())
-        }
     }
 }
 
@@ -12606,27 +12658,20 @@ fn execute_test(args: TestArgs) -> Result<i32, String> {
             out_dir,
             suite_path,
         } => {
-            // Create output directory
+            let binary = resolve_sibling_binary("franken_test262_runner")?;
             std::fs::create_dir_all(&out_dir)
                 .map_err(|e| format!("Failed to create output directory: {e}"))?;
 
-            // Try to find the installed franken_test262_runner binary.
-            // The runner names its output flag `--output-root`, and ingests a real
-            // tc39/test262 checkout via `--suite-path` (generating case vectors live
-            // from the pinned suite). The previous `--out-dir` / `--suite` names were
-            // both rejected by the runner as unknown flags.
-            let mut cmd = Command::new("franken_test262_runner");
+            let mut cmd = Command::new(&binary);
             cmd.arg("--output-root").arg(path_to_str(&out_dir)?);
 
-            // Point the runner at a real Test262 checkout if specified.
             if let Some(suite) = &suite_path {
                 cmd.arg("--suite-path").arg(path_to_str(suite)?);
             }
 
-            // Execute the command
-            let status = cmd.status().map_err(|e| {
-                format!("Failed to execute franken_test262_runner (is it installed?): {e}")
-            })?;
+            let status = cmd
+                .status()
+                .map_err(|e| format!("Failed to execute {}: {e}", binary.display()))?;
 
             if status.success() {
                 println!("✅ Test262 conformance testing completed successfully");
@@ -12661,10 +12706,6 @@ fn execute_test(args: TestArgs) -> Result<i32, String> {
                 Err(format!("Lockstep harness failed with exit code: {code}"))
             }
         }
-        _ => Err(
-            "Unsupported test subcommand. Use 'frankenctl help test' to see available commands."
-                .to_string(),
-        ),
     }
 }
 
@@ -12709,223 +12750,112 @@ fn which_on_path(name: &str) -> bool {
 fn execute_synth(args: SynthArgs) -> Result<i32, String> {
     match args.mode {
         SynthMode::KernelContract { out_dir } => {
+            use frankenengine_engine::kernel_synthesis_contract::{
+                build_synthesis_envelope, mine_canonical_kernels, run_kernel_synth_evidence,
+            };
+
             std::fs::create_dir_all(&out_dir)
                 .map_err(|e| format!("Failed to create output directory: {e}"))?;
 
-            // Generate kernel contract synthesis
-            let epoch = SecurityEpoch::from_raw(1);
-            let contract_spec = serde_json::json!({
-                "schema_version": FRANKENCTL_SCHEMA_VERSION,
-                "timestamp": Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
-                "synthesis_type": "kernel_contract",
-                "security_epoch": epoch.as_u64(),
-                "contract_definitions": [
-                    {
-                        "name": "execution_boundary",
-                        "type": "isolation_contract",
-                        "properties": {
-                            "memory_isolation": true,
-                            "execution_isolation": true,
-                            "capability_restriction": "strict"
-                        }
-                    },
-                    {
-                        "name": "resource_management",
-                        "type": "resource_contract",
-                        "properties": {
-                            "cpu_allocation": "bounded",
-                            "memory_allocation": "bounded",
-                            "io_access": "restricted"
-                        }
-                    },
-                    {
-                        "name": "communication_interface",
-                        "type": "ipc_contract",
-                        "properties": {
-                            "message_passing": "typed",
-                            "serialization": "deterministic",
-                            "authentication": "required"
-                        }
-                    }
-                ],
-                "status": "synthesis_complete"
-            });
+            let corpus = mine_canonical_kernels();
+            let envelope = build_synthesis_envelope(&corpus.schemas);
+            let manifest = run_kernel_synth_evidence();
 
             let contract_path = out_dir.join("kernel_contract.json");
-            write_json_file(&contract_path, &contract_spec)?;
+            write_json_file(&contract_path, &manifest)?;
 
-            // Generate lowering context for kernel synthesis
-            let context = LoweringContext::new(
-                "synth-kernel-contract".to_string(),
-                "decision-kernel-contract".to_string(),
-                "synth.kernel-contract.v1".to_string(),
-            );
+            let corpus_path = out_dir.join("kernel_corpus.json");
+            write_json_file(&corpus_path, &corpus)?;
 
-            let lowering_spec = serde_json::json!({
-                "lowering_context": {
-                    "trace_id": context.trace_id,
-                    "decision_id": context.decision_id,
-                    "policy_id": context.policy_id
-                },
-                "synthesis_phase": "kernel_lowering"
-            });
-
-            let lowering_path = out_dir.join("lowering_spec.json");
-            write_json_file(&lowering_path, &lowering_spec)?;
+            let envelope_path = out_dir.join("synthesis_envelope.json");
+            write_json_file(&envelope_path, &envelope)?;
 
             println!("✅ Kernel contract synthesis completed");
-            println!("📄 Contract written to: {}", contract_path.display());
-            println!("📄 Lowering spec written to: {}", lowering_path.display());
-            println!("📁 Output directory: {}", out_dir.display());
+            println!("📄 Evidence manifest: {}", contract_path.display());
+            println!("📄 Kernel corpus: {}", corpus_path.display());
+            println!("📄 Synthesis envelope: {}", envelope_path.display());
+            println!(
+                "📊 Evaluated {} kernels (eligible={}, forbidden={}, deferred={})",
+                manifest.kernels_evaluated,
+                manifest.eligible_count,
+                manifest.forbidden_count,
+                manifest.deferred_count
+            );
             Ok(0)
         }
         SynthMode::LawMining { out } => {
-            // Generate law mining synthesis using parsing capabilities
-            let law_mining_result = serde_json::json!({
-                "schema_version": FRANKENCTL_SCHEMA_VERSION,
-                "timestamp": Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
-                "synthesis_type": "law_mining",
-                "parser_integration": {
-                    "parser_type": "CanonicalEs2020Parser",
-                    "parse_goals": ["Module", "Script", "Expression"],
-                    "event_capture": "enabled"
-                },
-                "extracted_laws": [
-                    {
-                        "category": "syntactic_invariants",
-                        "count": 47,
-                        "description": "Invariants extracted from parse tree structure"
-                    },
-                    {
-                        "category": "semantic_constraints",
-                        "count": 23,
-                        "description": "Constraints derived from lowering pipeline analysis"
-                    },
-                    {
-                        "category": "execution_patterns",
-                        "count": 15,
-                        "description": "Patterns identified from execution traces"
-                    }
-                ],
-                "confidence_metrics": {
-                    "extraction_accuracy": 0.94,
-                    "pattern_coverage": 0.87,
-                    "validation_score": 0.91
-                },
-                "status": "mining_complete"
-            });
+            use frankenengine_engine::law_mining::{LawMiningCatalog, default_fixture};
+
+            let fixture = default_fixture();
+            let catalog = LawMiningCatalog::from_sources(
+                fixture.generated_epoch,
+                &fixture.counterexamples,
+                &fixture.evidence_entries,
+            );
 
             if let Some(path) = out {
-                write_json_file(&path, &law_mining_result)?;
-                println!("✅ Law mining synthesis written to: {}", path.display());
+                write_json_file(&path, &catalog)?;
+                println!("✅ Law mining catalog written to: {}", path.display());
             } else {
-                print_json(&law_mining_result)?;
+                print_json(&catalog)?;
             }
             Ok(0)
         }
-        _ => Err(
-            "Unsupported synth subcommand. Only specific synthesis commands are supported."
-                .to_string(),
-        ),
     }
 }
 
 fn execute_orchestrate(args: OrchestrateArgs) -> Result<i32, String> {
     match args.mode {
         OrchestrateMode::ContextRefactor { out } => {
-            // Generate a context refactor analysis report
-            let config = OrchestratorConfig {
-                ..OrchestratorConfig::default()
+            use frankenengine_engine::control_plane_mock_inventory::{
+                evaluate_orchestrator_context_refactor, orchestrator_context_refactor_exit_code,
             };
 
-            // Create a sample refactoring analysis
-            let refactor_analysis = serde_json::json!({
-                "schema_version": FRANKENCTL_SCHEMA_VERSION,
-                "timestamp": Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
-                "analysis_type": "context_refactor",
-                "config": {
-                    "policy_id": config.policy_id,
-                    "enable_optimization": true,
-                    "target_performance": "high_throughput"
-                },
-                "recommendations": [
-                    {
-                        "type": "context_isolation",
-                        "priority": "high",
-                        "description": "Refactor shared context to isolated execution domains",
-                        "estimated_impact": "15-20% performance improvement"
-                    },
-                    {
-                        "type": "execution_boundaries",
-                        "priority": "medium",
-                        "description": "Define clear execution boundaries for context switching",
-                        "estimated_impact": "5-10% latency reduction"
-                    }
-                ],
-                "status": "analysis_complete"
+            let (contract, report) = evaluate_orchestrator_context_refactor()
+                .map_err(|e| format!("context refactor evaluation failed: {e}"))?;
+            let exit_code = orchestrator_context_refactor_exit_code(&report);
+            let bundle = serde_json::json!({
+                "schema_version": report.schema_version,
+                "contract": contract,
+                "report": report,
             });
 
             if let Some(path) = out {
-                write_json_file(&path, &refactor_analysis)?;
+                write_json_file(&path, &bundle)?;
                 println!(
                     "✅ Context refactor analysis written to: {}",
                     path.display()
                 );
             } else {
-                print_json(&refactor_analysis)?;
+                print_json(&bundle)?;
             }
-            Ok(0)
+            Ok(exit_code)
         }
         OrchestrateMode::TailLatency { out_dir } => {
-            std::fs::create_dir_all(&out_dir)
-                .map_err(|e| format!("Failed to create output directory: {e}"))?;
-
-            // Generate tail latency optimization report
-            let config = OrchestratorConfig {
-                ..OrchestratorConfig::default()
+            use frankenengine_engine::tail_latency_control_plane::{
+                StressProfile, write_tail_latency_control_plane_bundle,
             };
 
-            let latency_report = serde_json::json!({
-                "schema_version": FRANKENCTL_SCHEMA_VERSION,
-                "timestamp": Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
-                "analysis_type": "tail_latency_optimization",
-                "config": {
-                    "policy_id": config.policy_id,
-                    "target_percentile": "p99",
-                    "optimization_level": "aggressive"
-                },
-                "optimizations": [
-                    {
-                        "category": "execution_scheduling",
-                        "impact": "high",
-                        "description": "Optimize execution scheduling for tail latency reduction",
-                        "expected_improvement": "25-35% p99 reduction"
-                    },
-                    {
-                        "category": "resource_pooling",
-                        "impact": "medium",
-                        "description": "Implement resource pooling to reduce allocation overhead",
-                        "expected_improvement": "10-15% p95 improvement"
-                    }
-                ],
-                "metrics": {
-                    "baseline_p99_ms": 250,
-                    "optimized_p99_ms": 175,
-                    "improvement_ratio": 1.43
-                },
-                "status": "optimization_complete"
-            });
+            let command_lines = vec![format!(
+                "frankenctl orchestrate tail-latency --out-dir {}",
+                out_dir.display()
+            )];
+            let artifacts = write_tail_latency_control_plane_bundle(
+                &out_dir,
+                StressProfile::Balanced,
+                1,
+                &command_lines,
+            )
+            .map_err(|e| format!("tail latency control-plane bundle failed: {e}"))?;
 
-            let report_path = out_dir.join("tail_latency_report.json");
-            write_json_file(&report_path, &latency_report)?;
-
-            println!("✅ Tail latency optimization completed");
-            println!("📄 Report written to: {}", report_path.display());
-            println!("📁 Output directory: {}", out_dir.display());
+            let report_bytes = fs::read(&artifacts.report_path)
+                .map_err(|e| format!("failed to read tail latency report: {e}"))?;
+            let report_hash = ContentHash::compute(&report_bytes).to_hex();
+            println!("✅ Tail latency control-plane bundle completed");
+            println!("📄 Report written to: {}", artifacts.report_path.display());
+            println!("🔖 Report hash: {report_hash}");
+            println!("📁 Output directory: {}", artifacts.out_dir.display());
             Ok(0)
-        }
-        _ => {
-            Err("Unsupported orchestrate subcommand. Only specific orchestration commands are supported.".to_string())
         }
     }
 }
@@ -13122,12 +13052,8 @@ fn react_pipeline_language(
     source_form: ReactSourceForm,
 ) -> Result<ReactPipelineInputLanguage, String> {
     match source_form {
-        ReactSourceForm::Jsx => Ok(ReactPipelineInputLanguage::Jsx),
+        ReactSourceForm::Jsx | ReactSourceForm::JsxFragment => Ok(ReactPipelineInputLanguage::Jsx),
         ReactSourceForm::Tsx => Ok(ReactPipelineInputLanguage::Tsx),
-        ReactSourceForm::JsxFragment => Err(
-            "react compile fragment lowering is still contract-gated; use --source-form jsx or tsx"
-                .to_string(),
-        ),
     }
 }
 
@@ -13739,6 +13665,7 @@ fn usage() -> String {
         "",
         "PRODUCTION-READY SURFACES:",
         "  frankenctl version",
+        "  frankenctl help [command]",
         "  frankenctl compile --input <source.js> --out <artifact.json> [--goal script|module]",
         "      [--trace-id <id>] [--decision-id <id>] [--policy-id <id>]",
         "  frankenctl check <source.js> [--goal script|module] [--format human|json] [--out <bundle-dir>]",
@@ -13770,11 +13697,15 @@ fn usage() -> String {
         "  frankenctl verify receipt --input <verifier_input.json> --receipt-id <id> [--summary] [--output <report.json>]",
         "  frankenctl benchmark run [--seed <u64>] [--run-id <id>] [--run-date <YYYY-MM-DD>]",
         "      [--profile small|medium|large]... [--family <name>]... [--out-dir <path>]",
+        "      # synthetic control-plane lifecycle suite (js_runtime_execution_included=false)",
+        "  frankenctl benchmark compare --manifest <comparison-manifest.json>",
+        "      [--run-id <id>] [--run-date <YYYY-MM-DD>] [--out-dir <path>]",
         "  frankenctl benchmark score --input <publication_gate_input.json>",
         "      [--trace-id <id>] [--decision-id <id>] [--policy-id <id>] [--output <path>]",
         "  frankenctl benchmark verify --bundle <dir> [--summary] [--output <report.json>]",
         "  frankenctl replay run --trace <trace.json> [--compare-trace <trace.json>]",
         "      [--mode strict|best-effort|validate] [--out <report.json>]",
+        "  frankenctl replay debug --trace <trace.json> [--script <commands.jsonl>] [--out <transcript.jsonl>]",
         "  frankenctl differential-oracle run --input <source.js>",
         "      [--case-id <id>] [--timeout-ms <u64>] [--out <report.json>]",
         "  frankenctl differential-oracle perf --manifest <manifest.json>",
@@ -13986,7 +13917,7 @@ fn run_usage() -> String {
     [
         "run usage:",
         "  frankenctl run --input <source.js> --extension-id <id> [--goal script|module|commonjs]",
-        "      [--module-root <dir>] [--out <report.json>]",
+        "      [--module-root <dir>] [--out <report.json>] [--state-db <state.db>]",
         "      [--data-contract <contract.json>] [--purpose <purpose>] [--certificate-out <bundle-dir>]",
         "      [--explain [bundle.json]] [--explain-out <bundle.json>]",
         "      [--emit-trace <trace.json>] [--cell-close-budget-ms <n>]",
@@ -14198,6 +14129,11 @@ fn benchmark_run_usage() -> String {
         "benchmark run usage:",
         "  frankenctl benchmark run [--seed <u64>] [--run-id <id>] [--run-date <YYYY-MM-DD>]",
         "      [--profile small|medium|large]... [--family <name>]... [--out-dir <path>]",
+        "",
+        "notes:",
+        "  measures synthetic extension_lifecycle_control_plane transitions",
+        "  (js_runtime_execution_included=false); use `benchmark compare` or",
+        "  `differential-oracle perf` for live JS execution benchmarks.",
     ]
     .join("\n")
 }
@@ -14613,12 +14549,6 @@ fn gates_usage() -> String {
         "  frankenctl gates signature-drift --out-dir <dir> [--config <file>]",
         "  frankenctl gates compounding-red-team --out-dir <dir> [--config <file>]",
         "  frankenctl gates erasure-bandwidth --out-dir <dir> [--config <file>]",
-        "  frankenctl gates adversarial-campaign --out-dir <dir>",
-        "  frankenctl gates ambient-mock-guard --out-dir <dir>",
-        "  frankenctl gates ifc-conformance --out-dir <dir>",
-        "  frankenctl gates security-conformance --out-dir <dir>",
-        "  frankenctl gates artifact-validator --input <file> [--out <file>]",
-        "  frankenctl gates placeholder-scan --out-dir <dir>",
         "",
         "behavior:",
         "  validation gates for quality assurance and release gating.",
@@ -14630,17 +14560,7 @@ fn reports_usage() -> String {
     [
         "reports usage:",
         "  frankenctl reports parser-oracle [--partition <smoke|full|nightly>] [--gate-mode <report_only|fail_closed>] [--seed <u64>] [--fixture-catalog <path>] [--trace-id <id>] [--decision-id <id>] [--policy-id <id>] [--out <path>]",
-        "  frankenctl reports parser-phase0 [--out <file>]",
         "  frankenctl reports lowering-gap [--out <file>]",
-        "  frankenctl reports parser-gap [--out <file>]",
-        "  frankenctl reports control-plane-benchmark [--out <file>]",
-        "  frankenctl reports control-plane-mock [--out <file>]",
-        "  frankenctl reports control-plane-policy --out-dir <dir>",
-        "  frankenctl reports engine-blocker-ledger --out-dir <dir>",
-        "  frankenctl reports metadata-evidence --out-dir <dir>",
-        "  frankenctl reports npm-compatibility --out-dir <dir>",
-        "  frankenctl reports observability-bundle --out-dir <dir>",
-        "  frankenctl reports rgc-planning [--out <file>]",
         "",
         "behavior:",
         "  generate analysis reports and evidence artifacts.",
@@ -14653,14 +14573,6 @@ fn test_usage() -> String {
         "test usage:",
         "  frankenctl test test262 --out-dir <dir> [--suite-path <path>]",
         "  frankenctl test lockstep [--config <file>] [--out <file>]",
-        "  frankenctl test multi-engine-parser --out-dir <dir>",
-        "  frankenctl test s3fifo-baseline [--out <file>]",
-        "  frankenctl test frx-oracle [--out <file>]",
-        "  frankenctl test seqlock-candidate [--out <file>]",
-        "  frankenctl test seqlock-reader-writer [--out <file>]",
-        "  frankenctl test seqlock-rollout [--out <file>]",
-        "  frankenctl test shipped-path-parity --out-dir <dir>",
-        "  frankenctl test verify-general --input <file> [--out <file>]",
         "",
         "behavior:",
         "  testing and verification tools for correctness validation.",
@@ -14672,11 +14584,7 @@ fn synth_usage() -> String {
     [
         "synth usage:",
         "  frankenctl synth kernel-contract --out-dir <dir>",
-        "  frankenctl synth shape-lattice --out-dir <dir>",
         "  frankenctl synth law-mining [--out <file>]",
-        "  frankenctl synth evidence-stitching --out-dir <dir>",
-        "  frankenctl synth cache-contract [--out <file>]",
-        "  frankenctl synth cold-start --out-dir <dir>",
         "",
         "behavior:",
         "  synthesis and generation tools for runtime artifacts.",
@@ -14688,8 +14596,6 @@ fn orchestrate_usage() -> String {
     [
         "orchestrate usage:",
         "  frankenctl orchestrate context-refactor [--out <file>]",
-        "  frankenctl orchestrate react-cohort [--out <file>]",
-        "  frankenctl orchestrate asupersync-matrix --out-dir <dir>",
         "  frankenctl orchestrate tail-latency --out-dir <dir>",
         "",
         "behavior:",
@@ -14917,6 +14823,60 @@ mod tests {
         let error = parse_command(&missing_extension_id)
             .expect_err("run without extension-id should fail closed");
         assert_eq!(error, "run requires --extension-id <id>");
+    }
+
+    #[test]
+    #[cfg(feature = "sibling-persistence")]
+    fn parse_run_command_accepts_state_db_and_persists_replay_index_record() {
+        use frankenengine_engine::storage_adapter::{
+            DurableFrankensqliteStorageAdapter, EventContext, StorageAdapter, StoreKind, StoreQuery,
+        };
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src_path = dir.path().join("app.js");
+        let db_path = dir.path().join("control_plane.db");
+        let report_path = dir.path().join("report.json");
+        fs::write(&src_path, "const x = 6 * 7; x;").expect("write source");
+
+        let raw_args = vec![
+            "run".to_string(),
+            "--input".to_string(),
+            src_path.display().to_string(),
+            "--extension-id".to_string(),
+            "ext-state-db".to_string(),
+            "--state-db".to_string(),
+            db_path.display().to_string(),
+            "--out".to_string(),
+            report_path.display().to_string(),
+        ];
+        let spec = match parse_command(&raw_args).expect("parse run --state-db") {
+            CommandSpec::Run(spec) => *spec,
+            other => panic!("expected Run, got {other:?}"),
+        };
+        assert_eq!(spec.state_db, Some(db_path.clone()));
+        let code = execute_run(spec).expect("execute_run with --state-db");
+        assert_eq!(code, 0);
+
+        let mut adapter = DurableFrankensqliteStorageAdapter::open_durable_file(&db_path)
+            .expect("reopen durable state-db");
+        let ctx = EventContext::new("verify-trace", "verify-decision", "verify-policy")
+            .expect("event ctx");
+        let rows = adapter
+            .query(
+                StoreKind::ReplayIndex,
+                &StoreQuery {
+                    key_prefix: Some("runs/".to_string()),
+                    metadata_filters: BTreeMap::new(),
+                    limit: None,
+                },
+                &ctx,
+            )
+            .expect("query replay_index");
+        assert_eq!(rows.len(), 1, "expected 1 durable replay_index run record");
+        assert_eq!(
+            rows[0].metadata.get("extension_id"),
+            Some(&"ext-state-db".to_string())
+        );
     }
 
     #[test]
@@ -16109,6 +16069,60 @@ mod tests {
         let parsed = parse_command(&benchmark).expect("benchmark run --help should parse");
         assert_eq!(parsed, CommandSpec::HelpTopic(HelpTopic::BenchmarkRun));
 
+        for args in [
+            vec![
+                "help".to_string(),
+                "benchmark".to_string(),
+                "compare".to_string(),
+            ],
+            vec![
+                "benchmark".to_string(),
+                "compare".to_string(),
+                "--help".to_string(),
+            ],
+        ] {
+            let parsed = parse_command(&args).expect("benchmark compare help should parse");
+            assert_eq!(parsed, CommandSpec::HelpTopic(HelpTopic::BenchmarkCompare));
+        }
+
+        for (args, expected) in [
+            (
+                vec!["help".to_string(), "evidence".to_string()],
+                HelpTopic::Evidence,
+            ),
+            (
+                vec![
+                    "help".to_string(),
+                    "evidence".to_string(),
+                    "init".to_string(),
+                ],
+                HelpTopic::Evidence,
+            ),
+            (
+                vec!["help".to_string(), "claims".to_string()],
+                HelpTopic::Claims,
+            ),
+            (
+                vec![
+                    "help".to_string(),
+                    "claims".to_string(),
+                    "explain".to_string(),
+                ],
+                HelpTopic::ClaimsExplain,
+            ),
+            (
+                vec![
+                    "help".to_string(),
+                    "replay".to_string(),
+                    "debug".to_string(),
+                ],
+                HelpTopic::ReplayDebug,
+            ),
+        ] {
+            let parsed = parse_command(&args).expect("nested help topic should parse");
+            assert_eq!(parsed, CommandSpec::HelpTopic(expected));
+        }
+
         let replay = vec![
             "replay".to_string(),
             "run".to_string(),
@@ -16116,6 +16130,29 @@ mod tests {
         ];
         let parsed = parse_command(&replay).expect("replay run --help should parse");
         assert_eq!(parsed, CommandSpec::HelpTopic(HelpTopic::ReplayRun));
+
+        let top_usage = usage();
+        assert!(top_usage.contains("frankenctl help [command]"));
+        assert!(top_usage.contains("frankenctl benchmark compare --manifest"));
+        assert!(top_usage.contains("frankenctl replay debug --trace"));
+        assert!(top_usage.contains("js_runtime_execution_included=false"));
+
+        for phantom in [
+            "adversarial-campaign",
+            "parser-phase0",
+            "multi-engine-parser",
+            "shape-lattice",
+            "react-cohort",
+        ] {
+            assert!(
+                !gates_usage().contains(phantom)
+                    && !reports_usage().contains(phantom)
+                    && !test_usage().contains(phantom)
+                    && !synth_usage().contains(phantom)
+                    && !orchestrate_usage().contains(phantom),
+                "operator usage must not advertise unimplemented subcommand `{phantom}`"
+            );
+        }
     }
 
     #[test]
@@ -16698,6 +16735,48 @@ mod tests {
                 .as_str()
                 .expect("generated code should be present")
                 .contains("div")
+        );
+
+        let _ = fs::remove_file(input);
+        let _ = fs::remove_file(out);
+    }
+
+    #[test]
+    fn execute_react_compile_supports_jsx_fragment_source_form() {
+        let input = std::env::temp_dir().join(format!(
+            "frankenctl-react-fragment-{}.jsx",
+            current_unix_ns()
+        ));
+        let out = std::env::temp_dir().join(format!(
+            "frankenctl-react-fragment-report-{}.json",
+            current_unix_ns()
+        ));
+        fs::write(&input, "<><span>Alpha</span><span>Beta</span></>\n")
+            .expect("react fragment fixture should write");
+
+        let exit_code = execute_react_compile(ReactCompileArgs {
+            input: input.clone(),
+            source_form: ReactSourceForm::JsxFragment,
+            runtime_mode: None,
+            out: Some(out.clone()),
+            trace_id: "trace-react-fragment".to_string(),
+            decision_id: "decision-react-fragment".to_string(),
+            policy_id: "policy-react-fragment".to_string(),
+        })
+        .expect("react fragment compile execution should succeed");
+
+        assert_eq!(exit_code, 0);
+        let output: serde_json::Value =
+            load_json_file(&out).expect("react fragment compile output should parse");
+        assert_eq!(output["support_status"].as_str(), Some("shipped"));
+        assert_eq!(output["blocked"].as_bool(), Some(false));
+        assert_eq!(output["diagnostic"]["error_code"].as_str(), Some("OK"));
+        assert_eq!(output["compilation"]["language"].as_str(), Some("jsx"));
+        assert!(
+            output["compilation"]["generated_code"]
+                .as_str()
+                .expect("generated code should be present")
+                .contains("Fragment")
         );
 
         let _ = fs::remove_file(input);
@@ -17582,7 +17661,7 @@ mod tests {
     }
 
     #[test]
-    fn signature_drift_rejects_config_before_touching_the_filesystem() {
+    fn signature_drift_validates_config_before_touching_the_filesystem() {
         let temp_root = std::env::temp_dir().join(format!(
             "frankenctl-signature-drift-config-{}",
             current_unix_ns()
@@ -17596,11 +17675,86 @@ mod tests {
                 config: Some(config.clone()),
             },
         })
-        .expect_err("--config must be refused");
+        .expect_err("missing --config must be refused before creating out_dir");
 
         assert!(error.contains("--config"));
-        assert!(error.contains("franken_signature_drift_gate"));
         assert!(!out_dir.exists(), "refusal must not create the out dir");
+
+        std::fs::create_dir_all(&temp_root).expect("temp_root");
+        std::fs::write(&config, b"{invalid-json").expect("write invalid json");
+        let malformed_err = execute_gates(GatesArgs {
+            mode: GatesMode::SignatureDrift {
+                out_dir: out_dir.clone(),
+                config: Some(config),
+            },
+        })
+        .expect_err("malformed --config JSON must fail closed");
+        assert!(malformed_err.contains("DriftGateConfig"));
+        assert!(
+            !out_dir.exists(),
+            "malformed --config must not create out_dir"
+        );
+    }
+
+    #[test]
+    fn synth_and_orchestrate_commands_execute_real_library_pipelines() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "frankenctl-synth-orchestrate-{}",
+            current_unix_ns()
+        ));
+        let kernel_dir = temp_root.join("kernel");
+        let law_path = temp_root.join("law_catalog.json");
+        let latency_dir = temp_root.join("tail_latency");
+
+        let exit_kernel = execute_synth(SynthArgs {
+            mode: SynthMode::KernelContract {
+                out_dir: kernel_dir.clone(),
+            },
+        })
+        .expect("kernel-contract must execute real kernel_synthesis_contract");
+        assert_eq!(exit_kernel, 0);
+        let manifest_json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(kernel_dir.join("kernel_contract.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            manifest_json["schema_version"],
+            "franken-engine.kernel-synthesis-contract.v1"
+        );
+        assert!(manifest_json["kernels_evaluated"].as_u64().unwrap() >= 10);
+        assert!(kernel_dir.join("kernel_corpus.json").is_file());
+        assert!(kernel_dir.join("synthesis_envelope.json").is_file());
+
+        let exit_law = execute_synth(SynthArgs {
+            mode: SynthMode::LawMining {
+                out: Some(law_path.clone()),
+            },
+        })
+        .expect("law-mining must execute real LawMiningCatalog::from_sources");
+        assert_eq!(exit_law, 0);
+        let law_json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&law_path).unwrap()).unwrap();
+        assert_eq!(law_json["schema_version"], "franken-engine.law-mining.v1");
+        assert!(!law_json["candidates"].as_array().unwrap().is_empty());
+
+        let exit_latency = execute_orchestrate(OrchestrateArgs {
+            mode: OrchestrateMode::TailLatency {
+                out_dir: latency_dir.clone(),
+            },
+        })
+        .expect("tail-latency must emit real control-plane bundle");
+        assert_eq!(exit_latency, 0);
+        assert!(
+            latency_dir
+                .join("latency_control_plane_report.json")
+                .is_file()
+        );
+        assert!(
+            latency_dir
+                .join("admission_publication_bundle.json")
+                .is_file()
+        );
+        assert!(latency_dir.join("run_manifest.json").is_file());
     }
 
     #[test]

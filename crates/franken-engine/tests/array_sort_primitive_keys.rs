@@ -5,10 +5,9 @@ use frankenengine_engine::HybridRouter;
 
 #[test]
 fn default_sort_keeps_primitive_keys_and_observable_fallback_semantics() {
-    let cases: serde_json::Value = serde_json::from_str(include_str!(
-        "fixtures/array_sort_primitive_keys.json"
-    ))
-    .expect("valid primitive-sort cases");
+    let cases: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/array_sort_primitive_keys.json"))
+            .expect("valid primitive-sort cases");
     for case in cases.as_array().expect("case array") {
         let name = case["name"].as_str().expect("case name");
         let source = case["source"].as_str().expect("JavaScript source");

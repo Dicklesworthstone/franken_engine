@@ -37,8 +37,17 @@ fn run(source: &str, root: &Path, lane: LaneChoice, caps: &[&str]) -> Result<Run
         version: "1.0.0".into(),
         metadata: BTreeMap::new(),
     };
-    let result = runtime.execute(&package).map_err(|error| format!("{error:?}"))?;
-    Ok((result.console_output.into_iter().map(|line| line.message).collect(), recording.entries()))
+    let result = runtime
+        .execute(&package)
+        .map_err(|error| format!("{error:?}"))?;
+    Ok((
+        result
+            .console_output
+            .into_iter()
+            .map(|line| line.message)
+            .collect(),
+        recording.entries(),
+    ))
 }
 
 #[test]
@@ -56,16 +65,24 @@ const fs=require('node:fs/promises');
         let root = tempfile::tempdir().unwrap();
         let (lines, effects) = run(source, root.path(), lane, &["fs_write"]).unwrap();
         assert_eq!(lines, ["WRITE_CONTENTS_COMPLETE"]);
-        assert_eq!(std::fs::read(root.path().join("data")).unwrap(), "abc!é".as_bytes());
-        let operations: Vec<&str> = effects.iter().filter_map(|(request, _)| match request {
-            HostIoRequest::FsMeta { operation, .. } => Some(operation.as_str()),
-            _ => None,
-        }).collect();
-        assert_eq!(operations, [
-            "open", "write_fd", "fsync", "close_fd",
-            "open", "write_fd", "fsync", "close_fd",
-            "open", "write_fd", "fsync", "close_fd",
-        ]);
+        assert_eq!(
+            std::fs::read(root.path().join("data")).unwrap(),
+            "abc!é".as_bytes()
+        );
+        let operations: Vec<&str> = effects
+            .iter()
+            .filter_map(|(request, _)| match request {
+                HostIoRequest::FsMeta { operation, .. } => Some(operation.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            operations,
+            [
+                "open", "write_fd", "fsync", "close_fd", "open", "write_fd", "fsync", "close_fd",
+                "open", "write_fd", "fsync", "close_fd",
+            ]
+        );
     }
 }
 
@@ -76,13 +93,24 @@ fn large_scalar_writes_are_bounded_without_changing_the_output() {
         let (lines, effects) = run(
             "require('fs/promises').writeFile('data',Buffer.alloc(40007,90),{flush:true})\
              .then(()=>console.log('BOUNDED_WRITE_COMPLETE'));",
-            root.path(), lane, &["fs_write"],
-        ).unwrap();
+            root.path(),
+            lane,
+            &["fs_write"],
+        )
+        .unwrap();
         assert_eq!(lines, ["BOUNDED_WRITE_COMPLETE"]);
-        assert_eq!(std::fs::read(root.path().join("data")).unwrap(), vec![90; 40007]);
+        assert_eq!(
+            std::fs::read(root.path().join("data")).unwrap(),
+            vec![90; 40007]
+        );
         let mut sizes = Vec::new();
         for (request, _) in &effects {
-            if let HostIoRequest::FsMeta { operation: FsOperation::WriteFd, data, .. } = request {
+            if let HostIoRequest::FsMeta {
+                operation: FsOperation::WriteFd,
+                data,
+                ..
+            } = request
+            {
                 assert!(!data.is_empty() && data.len() <= 16384);
                 sizes.push(data.len());
             }
@@ -108,8 +136,19 @@ const fs=require('fs/promises');
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("data"), b"keep").unwrap();
         let (lines, effects) = run(source, root.path(), lane, &["fs_write"]).unwrap();
-        assert_eq!(lines, ["ERR_INVALID_ARG_TYPE", "AbortError ABORT_ERR true", "PREFLIGHT_COMPLETE"]);
-        assert!(!effects.iter().any(|(request, _)| matches!(request, HostIoRequest::FsMeta { .. })));
+        assert_eq!(
+            lines,
+            [
+                "ERR_INVALID_ARG_TYPE",
+                "AbortError ABORT_ERR true",
+                "PREFLIGHT_COMPLETE"
+            ]
+        );
+        assert!(
+            !effects
+                .iter()
+                .any(|(request, _)| matches!(request, HostIoRequest::FsMeta { .. }))
+        );
         assert_eq!(std::fs::read(root.path().join("data")).unwrap(), b"keep");
     }
 }
@@ -120,8 +159,11 @@ fn scalar_path_does_not_gain_write_authority_from_a_read_grant() {
         let root = tempfile::tempdir().unwrap();
         let error = run(
             "require('fs/promises').writeFile('forbidden','x',{flush:true});",
-            root.path(), lane, &["fs_read"],
-        ).expect_err("the protected write effect requires FsWrite");
+            root.path(),
+            lane,
+            &["fs_read"],
+        )
+        .expect_err("the protected write effect requires FsWrite");
         assert!(error.to_ascii_lowercase().contains("capabil"), "{error}");
         assert!(!root.path().join("forbidden").exists());
     }
@@ -150,7 +192,10 @@ const fs=require('node:fs/promises');
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("data"), b"GOOD").unwrap();
         let (lines, _) = run(source, root.path(), lane, &["fs_read", "fs_write"]).unwrap();
-        assert_eq!(lines, ["READ 4 true __GOOD__ FAKE", "WRITE 4 true", "VIEW_COMPLETE"]);
+        assert_eq!(
+            lines,
+            ["READ 4 true __GOOD__ FAKE", "WRITE 4 true", "VIEW_COMPLETE"]
+        );
         assert_eq!(std::fs::read(root.path().join("data")).unwrap(), b"GOOD");
     }
 }
@@ -180,8 +225,15 @@ const fs=require('fs/promises');
         let root = tempfile::tempdir().unwrap();
         let (lines, effects) = run(source, root.path(), lane, &["fs_write"]).unwrap();
         assert_eq!(lines, ["VECTOR 4 true", "SAFE_BYTES_COMPLETE 0"]);
-        assert_eq!(std::fs::read(root.path().join("data")).unwrap(), b"REALREAL");
-        assert!(effects.iter().all(|(request, _)| request.required_capability()
-            == frankenengine_extension_host::host_io::HostIoCapability::FsWrite));
+        assert_eq!(
+            std::fs::read(root.path().join("data")).unwrap(),
+            b"REALREAL"
+        );
+        assert!(
+            effects
+                .iter()
+                .all(|(request, _)| request.required_capability()
+                    == frankenengine_extension_host::host_io::HostIoCapability::FsWrite)
+        );
     }
 }

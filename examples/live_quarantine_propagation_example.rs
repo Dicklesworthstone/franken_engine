@@ -14,8 +14,8 @@ use serde::{Deserialize, Serialize};
 use frankenengine_engine::fleet_immune_protocol::NodeId;
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::proof_artifact::{
-    ProofArtifactPaths, ProofCommand, PROOF_EVENT_SCHEMA_VERSION, PROOF_MANIFEST_SCHEMA_VERSION,
-    PROOF_REPORT_SCHEMA_VERSION,
+    PROOF_EVENT_SCHEMA_VERSION, PROOF_MANIFEST_SCHEMA_VERSION, PROOF_REPORT_SCHEMA_VERSION,
+    ProofArtifactPaths, ProofCommand,
 };
 use frankenengine_engine::quarantine_propagation::{
     QuarantineAck, QuarantineDecision, QuarantineState,
@@ -419,8 +419,9 @@ pub fn execute_quarantine_propagation_with_proof(
             "{PROVISIONAL_PROOF_COMMAND_NOTE}; in-process quarantine simulation generated artifacts for extension {} event {} fleet-size {}",
             event.extension_id, event.event_id, fleet.total_instances
         ),
-        redacted_display:
-            format!("{PROVISIONAL_PROOF_COMMAND_NOTE}; in-process quarantine simulation generated artifacts for redacted extension, event, and fleet size"),
+        redacted_display: format!(
+            "{PROVISIONAL_PROOF_COMMAND_NOTE}; in-process quarantine simulation generated artifacts for redacted extension, event, and fleet size"
+        ),
         cwd: "/data/projects/franken_engine".to_string(),
         exit_code: None,
         duration_ms: None,
@@ -452,10 +453,7 @@ pub fn execute_quarantine_propagation_with_proof(
         threat_severity: event.severity_score,
         decision_summary: format!(
             "Quarantine propagation for {} completed with {}/{} instances acknowledging ({:.1}% convergence)",
-            event.extension_id,
-            acks_received,
-            total_instances,
-            convergence_percentage
+            event.extension_id, acks_received, total_instances, convergence_percentage
         ),
         next_steps: if convergence_achieved {
             format!(

@@ -40,10 +40,9 @@ fn config(throughput: bool) -> InterpreterConfig {
 
 #[test]
 fn sync_completion_and_cleanup_follow_the_native_promise_scheduler() {
-    let fixtures: Vec<Fixture> = serde_json::from_str(include_str!(
-        "fixtures/array_from_async/sync_protocol.json"
-    ))
-    .expect("shared fixtures decode");
+    let fixtures: Vec<Fixture> =
+        serde_json::from_str(include_str!("fixtures/array_from_async/sync_protocol.json"))
+            .expect("shared fixtures decode");
     assert_eq!(fixtures.len(), 24);
     for fixture in fixtures {
         let tree = parse_script(&fixture.source).expect("source parses");
@@ -58,14 +57,28 @@ fn sync_completion_and_cleanup_follow_the_native_promise_scheduler() {
                 let mut core = InterpreterCore::new(config(throughput), "async-sync-protocol");
                 core.set_gc_stress_interval(stress);
                 let result = core.execute(&module).unwrap_or_else(|error| {
-                    panic!("{}: throughput={throughput}, gc={stress:?}: {error}", fixture.name)
+                    panic!(
+                        "{}: throughput={throughput}, gc={stress:?}: {error}",
+                        fixture.name
+                    )
                 });
-                let actual = result.console_output.iter().map(|entry| entry.message.as_str())
-                    .collect::<Vec<_>>().join("\n");
-                assert_eq!(actual, fixture.expected,
-                    "{}: throughput={throughput}, gc={stress:?}", fixture.name);
-                assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes(),
-                    "{}: throughput={throughput}, gc={stress:?}", fixture.name);
+                let actual = result
+                    .console_output
+                    .iter()
+                    .map(|entry| entry.message.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                assert_eq!(
+                    actual, fixture.expected,
+                    "{}: throughput={throughput}, gc={stress:?}",
+                    fixture.name
+                );
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes(),
+                    "{}: throughput={throughput}, gc={stress:?}",
+                    fixture.name
+                );
             }
         }
     }
@@ -142,7 +155,10 @@ fn sync_next_resource_exhaustion_cannot_be_caught_or_start_cleanup() {
         let mut config = config(throughput);
         config.instruction_budget = 2048;
         let mut core = InterpreterCore::new(config, "async-sync-resource");
-        assert!(matches!(core.execute(&module), Err(InterpreterError::BudgetExhausted { .. })));
+        assert!(matches!(
+            core.execute(&module),
+            Err(InterpreterError::BudgetExhausted { .. })
+        ));
         assert!(core.console_output().is_empty());
     }
 }

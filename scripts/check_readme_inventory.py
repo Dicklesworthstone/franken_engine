@@ -168,15 +168,13 @@ def measure() -> list[Surface]:
         ),
         Surface(
             "integration_tests",
-            r"\| Integration tests in `crates/franken-engine/tests/` \| ([\d,]+) top-level files",
-            "top-level files in crates/franken-engine/tests/",
-            sum(1 for p in (REPO / "crates/franken-engine/tests").iterdir() if p.is_file())
-            if (REPO / "crates/franken-engine/tests").is_dir()
-            else 0,
+            r"\| Integration tests in `crates/franken-engine/tests/` \| ([\d,]+) top-level (?:`\.rs` )?files",
+            "top-level .rs files in crates/franken-engine/tests/",
+            _count_files("crates/franken-engine/tests", "*.rs"),
         ),
         Surface(
             "rgc_gate_tests",
-            r"top-level files \(([\d,]+) are RGC gate tests\)",
+            r"top-level (?:`\.rs` )?files \(([\d,]+) are RGC gate tests\)",
             "crates/franken-engine/tests/rgc_*.rs",
             _count_files("crates/franken-engine/tests", "rgc_*.rs"),
         ),
@@ -200,7 +198,7 @@ def measure() -> list[Surface]:
         ),
         Surface(
             "bead_records",
-            r"\| Tracked beads in `\.beads/issues\.jsonl` \| ([\d,]+) records",
+            r"\| Tracked beads in `\.beads/issues\.jsonl` \| ≈?([\d,]+) records",
             "non-blank lines in .beads/issues.jsonl",
             bead_records,
             advisory=True,

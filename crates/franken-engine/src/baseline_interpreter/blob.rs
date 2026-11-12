@@ -53,7 +53,8 @@ fn lossy_text_lengths(bytes: &[u8]) -> (usize, usize) {
             (
                 utf8.saturating_add(chunk.valid().len())
                     .saturating_add(3 * replacement),
-                utf16.saturating_add(chunk.valid().encode_utf16().count())
+                utf16
+                    .saturating_add(chunk.valid().encode_utf16().count())
                     .saturating_add(replacement),
             )
         })
@@ -177,7 +178,9 @@ impl InterpreterCore {
             self.json_reserve_temporary(scratch)?;
             let next = self.advance_for_of_iterator(Some(module), iterator.clone());
             self.json_release_temporary(scratch);
-            let Some(value) = next? else { break; };
+            let Some(value) = next? else {
+                break;
+            };
             self.append_blob_part(&value, bytes)?;
         }
         Ok(())
@@ -248,7 +251,10 @@ impl InterpreterCore {
     /// the result, including replacement expansion for malformed input.
     fn decode_blob_text(&self, receiver: &Value) -> Result<String, InterpreterError> {
         let data = self.require_blob_data(receiver, "text")?;
-        let bytes = data.bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&data.bytes);
+        let bytes = data
+            .bytes
+            .strip_prefix(b"\xef\xbb\xbf")
+            .unwrap_or(&data.bytes);
         if let Ok(text) = std::str::from_utf8(bytes) {
             self.check_string_limit(text.encode_utf16().count())?;
             self.check_blob_bytes_headroom(0, text.len())?;
@@ -357,7 +363,9 @@ impl InterpreterCore {
                 // Preserve provenance on the object AND its backing store,
                 // rather than relying only on the fulfilled Promise's label.
                 self.join_object_mutation_label(buffer, &label)?;
-                let backing = self.heap.get(buffer.0 as usize)
+                let backing = self
+                    .heap
+                    .get(buffer.0 as usize)
                     .and_then(|object| object.typed_array.as_deref())
                     .map(|view| view.buffer);
                 if let Some(backing) = backing {
@@ -542,7 +550,8 @@ mod tests {
         core.config.max_total_memory_bytes = baseline + expected.len() as u64;
         let mut bytes = Vec::new();
         for text in parts {
-            core.append_blob_part(&Value::Str(text), &mut bytes).unwrap();
+            core.append_blob_part(&Value::Str(text), &mut bytes)
+                .unwrap();
         }
         assert_eq!(bytes, expected.as_bytes());
         assert!(matches!(
@@ -580,27 +589,56 @@ mod tests {
     fn binary_reads_keep_exact_bytes_and_independent_writable_backings() {
         let mut core = core();
         for source in [vec![], vec![0, 255, 239, 187, 191, 13, 10, 128]] {
-            let blob = core.alloc_blob(source.clone(), "text/plain".into()).unwrap();
+            let blob = core
+                .alloc_blob(source.clone(), "text/plain".into())
+                .unwrap();
             let receiver = Value::Object(blob);
             let first = core.copy_blob_binary(&receiver, true).unwrap();
             let second = core.copy_blob_binary(&receiver, true).unwrap();
             let raw = core.copy_blob_binary(&receiver, false).unwrap();
-            let first_view = core.heap[first.0 as usize].typed_array.as_deref().unwrap().clone();
-            let second_view = core.heap[second.0 as usize].typed_array.as_deref().unwrap().clone();
+            let first_view = core.heap[first.0 as usize]
+                .typed_array
+                .as_deref()
+                .unwrap()
+                .clone();
+            let second_view = core.heap[second.0 as usize]
+                .typed_array
+                .as_deref()
+                .unwrap()
+                .clone();
             assert_eq!(first_view.kind, TypedArrayKind::Uint8);
             assert_eq!(first_view.byte_offset, 0);
             assert_eq!(first_view.byte_length, source.len());
             assert_ne!(first_view.buffer, second_view.buffer);
             assert_ne!(first_view.buffer, raw);
-            assert_eq!(core.text_codec_input_bytes(&Value::Object(first)).unwrap(), source);
-            assert_eq!(core.text_codec_input_bytes(&Value::Object(raw)).unwrap(), source);
-            core.with_array_buffer_bytes_mut(first_view.buffer, |bytes| bytes.fill(7)).unwrap();
-            assert_eq!(core.text_codec_input_bytes(&Value::Object(second)).unwrap(), source);
-            assert_eq!(core.text_codec_input_bytes(&Value::Object(raw)).unwrap(), source);
-            assert_eq!(core.require_blob_data(&receiver, "bytes").unwrap().bytes, source);
+            assert_eq!(
+                core.text_codec_input_bytes(&Value::Object(first)).unwrap(),
+                source
+            );
+            assert_eq!(
+                core.text_codec_input_bytes(&Value::Object(raw)).unwrap(),
+                source
+            );
+            core.with_array_buffer_bytes_mut(first_view.buffer, |bytes| bytes.fill(7))
+                .unwrap();
+            assert_eq!(
+                core.text_codec_input_bytes(&Value::Object(second)).unwrap(),
+                source
+            );
+            assert_eq!(
+                core.text_codec_input_bytes(&Value::Object(raw)).unwrap(),
+                source
+            );
+            assert_eq!(
+                core.require_blob_data(&receiver, "bytes").unwrap().bytes,
+                source
+            );
             assert_eq!(core.json_parse_temporary_bytes, 0);
         }
-        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]
@@ -612,17 +650,24 @@ mod tests {
             let baseline = core.estimated_memory_bytes();
             let objects = core.heap.len();
             core.config.max_total_memory_bytes = baseline + 4095;
-            assert!(matches!(core.copy_blob_binary(&receiver, typed),
-                Err(InterpreterError::MemoryBudgetExceeded { .. })));
+            assert!(matches!(
+                core.copy_blob_binary(&receiver, typed),
+                Err(InterpreterError::MemoryBudgetExceeded { .. })
+            ));
             assert_eq!(core.heap.len(), objects);
             assert_eq!(core.estimated_memory_bytes(), baseline);
             assert_eq!(core.json_parse_temporary_bytes, 0);
             // Staging fits but the simultaneously live destination cannot.
             core.config.max_total_memory_bytes = baseline + 4096;
-            assert!(matches!(core.copy_blob_binary(&receiver, typed),
-                Err(InterpreterError::MemoryBudgetExceeded { .. })));
+            assert!(matches!(
+                core.copy_blob_binary(&receiver, typed),
+                Err(InterpreterError::MemoryBudgetExceeded { .. })
+            ));
             assert_eq!(core.json_parse_temporary_bytes, 0);
-            assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
         }
     }
 
@@ -646,8 +691,10 @@ mod tests {
         let baseline = core.estimated_memory_bytes();
         for receiver in [Value::Undefined, Value::Null, Value::str("not a blob")] {
             for typed in [false, true] {
-                assert!(matches!(core.copy_blob_binary(&receiver, typed),
-                    Err(InterpreterError::TypeError { .. })));
+                assert!(matches!(
+                    core.copy_blob_binary(&receiver, typed),
+                    Err(InterpreterError::TypeError { .. })
+                ));
                 assert_eq!(core.estimated_memory_bytes(), baseline);
                 assert_eq!(core.json_parse_temporary_bytes, 0);
             }

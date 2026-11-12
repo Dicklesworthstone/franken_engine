@@ -2,7 +2,7 @@
 //! Regression tests for `Array.prototype.forEach` callback dispatch behavior.
 
 fn baseline_interpreter_source() -> &'static str {
-    include_str!("../src/baseline_interpreter.rs")
+    frankenengine_engine::baseline_interpreter::COMBINED_PRODUCTION_SOURCE
 }
 
 #[test]

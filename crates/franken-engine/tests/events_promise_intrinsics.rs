@@ -35,9 +35,16 @@ fn check(source: &str, expected: &str) {
             let result = core.execute(&lowered.ir3).unwrap_or_else(|error| {
                 panic!("event fixture executes: throughput={throughput}, GC={stress:?}: {error}")
             });
-            assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
-            let actual = result.console_output.iter()
-                .map(|entry| entry.message.as_str()).collect::<Vec<_>>().join("\n");
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+            let actual = result
+                .console_output
+                .iter()
+                .map(|entry| entry.message.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
             assert_eq!(actual, expected, "throughput={throughput}, GC={stress:?}");
         }
     }

@@ -1,8 +1,8 @@
 use super::*;
 use crate::ast::ParseGoal;
 use crate::baseline_interpreter::{
-    AllocKind, FunctionRef, HookAction, HookContext, InterpreterCore, InterpreterError,
-    ObjectRef, PropertyKey, Value,
+    AllocKind, FunctionRef, HookAction, HookContext, InterpreterCore, InterpreterError, ObjectRef,
+    PropertyKey, Value,
 };
 use crate::capability::RuntimeCapability;
 use crate::ir_contract::Ir0Module;
@@ -15,7 +15,9 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 const WAIT: Duration = Duration::from_secs(10);
 
 fn module(source: &str) -> Ir3Module {
-    let tree = CanonicalEs2020Parser.parse(source, ParseGoal::Script).unwrap();
+    let tree = CanonicalEs2020Parser
+        .parse(source, ParseGoal::Script)
+        .unwrap();
     lower_ir0_to_ir3(
         &Ir0Module::from_syntax_tree(tree, "task-group.js"),
         &LoweringContext::new("task-group", "task-group", "task-group"),
@@ -102,7 +104,9 @@ fn parked(panic_after_release: bool) -> (Arc<ParkedHook>, Receiver<()>, Sender<(
 fn cancelled(outcome: ExecutionTaskOutcome) {
     assert!(matches!(
         outcome,
-        Ok(Err(WorkBudgetError::Interpreter(InterpreterError::Cancelled)))
+        Ok(Err(WorkBudgetError::Interpreter(
+            InterpreterError::Cancelled
+        )))
     ));
 }
 
@@ -125,7 +129,11 @@ fn real_native_result_and_prepaid_accounting_are_preserved() {
     assert_eq!(parent.remaining(), 256, "partition is charged only once");
     group.close_and_join(Duration::ZERO).unwrap();
     drop(group);
-    assert_eq!(parent.remaining(), 256, "unused child credits are not refunded");
+    assert_eq!(
+        parent.remaining(),
+        256,
+        "unused child credits are not refunded"
+    );
 }
 
 #[test]
@@ -155,9 +163,14 @@ fn blocked_workers_hold_capacity_until_join_and_collection() {
     let parent = ExecutionWorkPool::new(512);
     let mut group = ExecutionTaskGroup::new(&parent, 512, 1).unwrap();
     let (hook, entered, release) = parked(false);
-    let id = group.spawn_with_hook(
-        module("let object = {}; object;"), config(128), "parked", Some(hook),
-    ).unwrap();
+    let id = group
+        .spawn_with_hook(
+            module("let object = {}; object;"),
+            config(128),
+            "parked",
+            Some(hook),
+        )
+        .unwrap();
     entered.recv_timeout(WAIT).unwrap();
     assert_eq!(group.poll(), 0);
     assert!(group.take_result(id).is_none());
@@ -181,10 +194,14 @@ fn closing_cancels_every_worker_before_waiting_and_timeout_retains_ownership() {
     let mut controls = Vec::new();
     for _ in 0..2 {
         let (hook, entered, release) = parked(false);
-        let id = group.spawn_with_hook(
-            module("let object = {}; while (true) {}"),
-            config(1024), "close-all", Some(hook),
-        ).unwrap();
+        let id = group
+            .spawn_with_hook(
+                module("let object = {}; while (true) {}"),
+                config(1024),
+                "close-all",
+                Some(hook),
+            )
+            .unwrap();
         entered.recv_timeout(WAIT).unwrap();
         controls.push(group.task_control(id).unwrap());
         releases.push(release);
@@ -261,9 +278,14 @@ fn worker_panic_is_collected_without_losing_other_results() {
     let parent = ExecutionWorkPool::new(512);
     let mut group = ExecutionTaskGroup::new(&parent, 512, 2).unwrap();
     let (hook, entered, release) = parked(true);
-    let bad = group.spawn_with_hook(
-        module("let object = {}; object;"), config(128), "panic", Some(hook),
-    ).unwrap();
+    let bad = group
+        .spawn_with_hook(
+            module("let object = {}; object;"),
+            config(128),
+            "panic",
+            Some(hook),
+        )
+        .unwrap();
     entered.recv_timeout(WAIT).unwrap();
     let good = group.spawn(module("42;"), config(128), "normal").unwrap();
     release.send(()).unwrap();
@@ -285,16 +307,22 @@ fn current_capability_denial_and_guest_exceptions_are_not_join_successes() {
     let mut denied = config(128);
     denied.granted_capabilities.clear();
     let denied_id = group.spawn(module("7;"), denied, "capability").unwrap();
-    let thrown_id = group.spawn(module("throw 7;"), config(128), "exception").unwrap();
+    let thrown_id = group
+        .spawn(module("throw 7;"), config(128), "exception")
+        .unwrap();
     wait_for_all(&mut group);
     group.close_and_join(Duration::ZERO).unwrap();
     assert!(matches!(
         group.take_result(denied_id),
-        Some(Ok(Err(WorkBudgetError::Interpreter(InterpreterError::CapabilityDenied { .. }))))
+        Some(Ok(Err(WorkBudgetError::Interpreter(
+            InterpreterError::CapabilityDenied { .. }
+        ))))
     ));
     assert!(matches!(
         group.take_result(thrown_id),
-        Some(Ok(Err(WorkBudgetError::Interpreter(InterpreterError::UncaughtException { .. }))))
+        Some(Ok(Err(WorkBudgetError::Interpreter(
+            InterpreterError::UncaughtException { .. }
+        ))))
     ));
 }
 
@@ -302,14 +330,20 @@ fn current_capability_denial_and_guest_exceptions_are_not_join_successes() {
 fn native_budget_exhaustion_spends_the_reservation_and_retains_typed_error() {
     let parent = ExecutionWorkPool::new(16);
     let mut group = ExecutionTaskGroup::new(&parent, 8, 1).unwrap();
-    let id = group.spawn(module("while (true) {}"), config(8), "fuel").unwrap();
+    let id = group
+        .spawn(module("while (true) {}"), config(8), "fuel")
+        .unwrap();
     assert!(matches!(
         collect(&mut group, id),
-        Ok(Err(WorkBudgetError::Interpreter(InterpreterError::BudgetExhausted { budget: 8, .. })))
+        Ok(Err(WorkBudgetError::Interpreter(
+            InterpreterError::BudgetExhausted { budget: 8, .. }
+        )))
     ));
     assert!(matches!(
         group.spawn(module("7;"), config(1), "exhausted"),
-        Err(ExecutionGroupStartError::Admission(WorkBudgetError::Exhausted { .. }))
+        Err(ExecutionGroupStartError::Admission(
+            WorkBudgetError::Exhausted { .. }
+        ))
     ));
     assert_eq!(group.retained(), 0);
     assert_eq!(parent.remaining(), 8);
@@ -328,7 +362,9 @@ fn invalid_or_full_dispatch_never_debits_the_group() {
     let mut group = ExecutionTaskGroup::new(&parent, 128, 1).unwrap();
     assert!(matches!(
         group.spawn(module("7;"), config(0), "zero-budget"),
-        Err(ExecutionGroupStartError::Admission(WorkBudgetError::ZeroInstructionBudget))
+        Err(ExecutionGroupStartError::Admission(
+            WorkBudgetError::ZeroInstructionBudget
+        ))
     ));
     group.next_id = u64::MAX;
     assert!(matches!(
@@ -346,9 +382,14 @@ fn taking_one_task_control_does_not_cancel_another_task() {
     let parent = ExecutionWorkPool::new(2048);
     let mut group = ExecutionTaskGroup::new(&parent, 2048, 2).unwrap();
     let (hook, entered, release) = parked(false);
-    let first = group.spawn_with_hook(
-        module("let object = {}; while (true) {}"), config(1024), "one", Some(hook),
-    ).unwrap();
+    let first = group
+        .spawn_with_hook(
+            module("let object = {}; while (true) {}"),
+            config(1024),
+            "one",
+            Some(hook),
+        )
+        .unwrap();
     entered.recv_timeout(WAIT).unwrap();
     let second = group.spawn(module("42;"), config(128), "two").unwrap();
     group.task_control(first).unwrap().cancel();
@@ -375,7 +416,9 @@ fn drop_closes_escaped_control_without_refunding_or_revoking_parent() {
 fn debug_output_does_not_include_guest_source_or_trace() {
     let parent = ExecutionWorkPool::new(256);
     let mut group = ExecutionTaskGroup::new(&parent, 256, 1).unwrap();
-    let id = group.spawn(module("'private-result';"), config(128), "private-trace").unwrap();
+    let id = group
+        .spawn(module("'private-result';"), config(128), "private-trace")
+        .unwrap();
     wait_for_all(&mut group);
     let debug = format!("{group:?}");
     assert!(!debug.contains("private-result"));

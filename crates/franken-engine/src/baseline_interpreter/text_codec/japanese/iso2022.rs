@@ -53,7 +53,9 @@ impl State {
         // Reject malformed restored slots before arithmetic or table access.
         let valid = match state.phase {
             ASCII..=LEAD => state.phase == state.output && state.leading == 0,
-            TRAIL => state.output == LEAD && !state.designation && matches!(state.leading, 0x21..=0x7e),
+            TRAIL => {
+                state.output == LEAD && !state.designation && matches!(state.leading, 0x21..=0x7e)
+            }
             ESCAPE_START => state.leading == 0,
             ESCAPE => matches!(state.leading, 0x24 | 0x28),
             _ => false,
@@ -63,7 +65,11 @@ impl State {
 
     fn save(&self) -> DecodeState {
         DecodeState {
-            pending: [self.phase, self.output | (u8::from(self.designation) << 7), self.leading],
+            pending: [
+                self.phase,
+                self.output | (u8::from(self.designation) << 7),
+                self.leading,
+            ],
             pending_len: 3,
             bom_seen: false,
             streaming: true,
@@ -87,10 +93,10 @@ impl State {
                             _ => char::from(byte),
                         })
                     }
-                    KATAKANA if matches!(byte, 0x21..=0x5f) => {
-                        Action::Emit(char::from_u32(0xff61 + u32::from(byte - 0x21))
-                            .expect("halfwidth katakana is scalar text"))
-                    }
+                    KATAKANA if matches!(byte, 0x21..=0x5f) => Action::Emit(
+                        char::from_u32(0xff61 + u32::from(byte - 0x21))
+                            .expect("halfwidth katakana is scalar text"),
+                    ),
                     LEAD if matches!(byte, 0x21..=0x7e) => {
                         self.leading = byte;
                         self.phase = TRAIL;
@@ -101,7 +107,11 @@ impl State {
             }
             TRAIL => {
                 let lead = std::mem::take(&mut self.leading);
-                self.phase = if byte == Some(0x1b) { ESCAPE_START } else { LEAD };
+                self.phase = if byte == Some(0x1b) {
+                    ESCAPE_START
+                } else {
+                    LEAD
+                };
                 if let Some(byte @ 0x21..=0x7e) = byte {
                     let pointer = usize::from(lead - 0x21) * 94 + usize::from(byte - 0x21);
                     if let Some(scalar) = index(pointer, false) {
@@ -136,7 +146,11 @@ impl State {
                     self.phase = output;
                     self.output = output;
                     let previous = std::mem::replace(&mut self.designation, true);
-                    if previous { Action::Error(None, None) } else { Action::Continue }
+                    if previous {
+                        Action::Error(None, None)
+                    } else {
+                        Action::Continue
+                    }
                 } else {
                     self.phase = self.output;
                     self.designation = false;
@@ -195,7 +209,11 @@ pub(super) fn decode(
             Action::End => break,
         }
     }
-    *saved = if stream { state.save() } else { DecodeState::default() };
+    *saved = if stream {
+        state.save()
+    } else {
+        DecodeState::default()
+    };
     Some(JsString::from(text))
 }
 

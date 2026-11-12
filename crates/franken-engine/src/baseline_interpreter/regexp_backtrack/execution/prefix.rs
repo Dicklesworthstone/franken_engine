@@ -49,12 +49,10 @@ impl Predicate {
                 .get(position)
                 .is_some_and(|&c| regexp.dot_all || !is_line_terminator(c)),
             Self::LineStart => {
-                position == 0
-                    || (regexp.multiline && is_line_terminator(chars[position - 1]))
+                position == 0 || (regexp.multiline && is_line_terminator(chars[position - 1]))
             }
             Self::LineEnd => {
-                position == chars.len()
-                    || (regexp.multiline && is_line_terminator(chars[position]))
+                position == chars.len() || (regexp.multiline && is_line_terminator(chars[position]))
             }
             Self::WordBoundary(negated) => {
                 let before = position > 0 && is_word_char(chars[position - 1]);
@@ -128,22 +126,31 @@ impl StartPrefix {
                     };
                     (Predicate::Char(literal), true)
                 }
-                Inst::Class { class, backward: false } if *class < regexp.classes.len() => {
-                    (Predicate::Class(*class), true)
-                }
+                Inst::Class {
+                    class,
+                    backward: false,
+                } if *class < regexp.classes.len() => (Predicate::Class(*class), true),
                 Inst::Any { backward: false } => (Predicate::Any, true),
                 Inst::LineStart => (Predicate::LineStart, false),
                 Inst::LineEnd => (Predicate::LineEnd, false),
                 Inst::WordBoundary { negated } => (Predicate::WordBoundary(*negated), false),
                 Inst::Split { .. } => {
-                    prefix.branch = Some(BranchStart { pc, offset, cost: cost - 1 });
+                    prefix.branch = Some(BranchStart {
+                        pc,
+                        offset,
+                        cost: cost - 1,
+                    });
                     break;
                 }
                 // Assertions, backreferences and counter tests need the real
                 // capture/register state. Never infer their outcome here.
                 _ => break,
             };
-            prefix.checks[prefix.len] = Check { predicate, offset, cost };
+            prefix.checks[prefix.len] = Check {
+                predicate,
+                offset,
+                cost,
+            };
             prefix.len += 1;
             offset += usize::from(consumes);
             if prefix.len == MAX_PREFIX_CHECKS {
@@ -177,7 +184,9 @@ impl StartPrefix {
                 return Some(check.cost);
             }
         }
-        self.branch.as_ref()?.rejection_cost(regexp, chars, start, budget, classes)
+        self.branch
+            .as_ref()?
+            .rejection_cost(regexp, chars, start, budget, classes)
     }
 
     /// Isolate cold-cache cost checks without replacing the production walk.
@@ -253,12 +262,17 @@ impl BranchStart {
                     continue;
                 }
                 Inst::Char { c, backward: false } => {
-                    let literal = if regexp.ignore_case { regexp.canonicalize(*c) } else { *c };
+                    let literal = if regexp.ignore_case {
+                        regexp.canonicalize(*c)
+                    } else {
+                        *c
+                    };
                     (Predicate::Char(literal), true)
                 }
-                Inst::Class { class, backward: false } if *class < regexp.classes.len() => {
-                    (Predicate::Class(*class), true)
-                }
+                Inst::Class {
+                    class,
+                    backward: false,
+                } if *class < regexp.classes.len() => (Predicate::Class(*class), true),
                 Inst::Any { backward: false } => (Predicate::Any, true),
                 Inst::LineStart => (Predicate::LineStart, false),
                 Inst::LineEnd => (Predicate::LineEnd, false),
@@ -288,7 +302,10 @@ impl Run<'_> {
         let mut missed = 0;
         while missed < count {
             let Some(cost) = prefix.rejection_cost_with_cache(
-                self.regexp, &self.input.chars, at + missed, self.steps_left,
+                self.regexp,
+                &self.input.chars,
+                at + missed,
+                self.steps_left,
                 &mut self.class_matches,
             ) else {
                 break;

@@ -61,7 +61,9 @@ impl<V> IndexedValues<V> {
     #[inline]
     pub(super) fn get(&self, index: &u32) -> Option<(&String, &V)> {
         match self {
-            Self::Packed(entries) => entries.get(*index as usize).map(|(key, value)| (key, value)),
+            Self::Packed(entries) => entries
+                .get(*index as usize)
+                .map(|(key, value)| (key, value)),
             Self::Queue(entries) => Some((
                 entries.keys.get(*index as usize)?,
                 entries.values.get(*index as usize)?,
@@ -325,7 +327,9 @@ impl<V> IndexedValues<V> {
             Self::Dictionary(entries) => {
                 len == 0
                     || (entries.first_key_value().is_some_and(|(key, _)| *key == 0)
-                        && entries.last_key_value().is_some_and(|(key, _)| *key == len - 1))
+                        && entries
+                            .last_key_value()
+                            .is_some_and(|(key, _)| *key == len - 1))
             }
         }
     }
@@ -334,9 +338,9 @@ impl<V> IndexedValues<V> {
         match self {
             Self::Packed(entries) => Values::Packed(entries.iter()),
             Self::Queue(entries) => Values::Queue(entries.keys.iter().zip(entries.values.iter())),
-            Self::Holey(entries) => Values::Holey(Counted::new(
-                entries.slots.iter().flatten(), entries.live,
-            )),
+            Self::Holey(entries) => {
+                Values::Holey(Counted::new(entries.slots.iter().flatten(), entries.live))
+            }
             Self::Dictionary(entries) => Values::Dictionary(entries.values()),
         }
     }
@@ -348,7 +352,8 @@ impl<V> IndexedValues<V> {
                 ValuesMut::Queue(entries.keys.iter_mut().zip(entries.values.iter_mut()))
             }
             Self::Holey(entries) => ValuesMut::Holey(Counted::new(
-                entries.slots.iter_mut().flatten(), entries.live,
+                entries.slots.iter_mut().flatten(),
+                entries.live,
             )),
             Self::Dictionary(entries) => ValuesMut::Dictionary(entries.values_mut()),
         }
@@ -442,8 +447,13 @@ impl<V: PartialEq> PartialEq for IndexedValues<V> {
             (Self::Holey(holey), Self::Dictionary(dictionary))
             | (Self::Dictionary(dictionary), Self::Holey(holey)) => {
                 holey.live == dictionary.len()
-                    && holey.slots.iter().enumerate()
-                        .filter_map(|(index, entry)| entry.as_ref().map(|value| (index as u32, value)))
+                    && holey
+                        .slots
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, entry)| {
+                            entry.as_ref().map(|value| (index as u32, value))
+                        })
                         .eq(dictionary.iter().map(|(index, value)| (*index, value)))
             }
             (Self::Dictionary(left), Self::Dictionary(right)) => left == right,
@@ -469,17 +479,24 @@ impl<V: fmt::Debug> fmt::Debug for IndexedValues<V> {
                 .debug_map()
                 .entries(entries.keys.iter().zip(entries.values.iter()).enumerate())
                 .finish(),
-            Self::Holey(entries) => formatter.debug_map().entries(
-                entries.slots.iter().enumerate()
-                    .filter_map(|(index, entry)| entry.as_ref().map(|value| (index, value))),
-            ).finish(),
+            Self::Holey(entries) => formatter
+                .debug_map()
+                .entries(
+                    entries
+                        .slots
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, entry)| entry.as_ref().map(|value| (index, value))),
+                )
+                .finish(),
             Self::Dictionary(entries) => fmt::Debug::fmt(entries, formatter),
         }
     }
 }
 
 type HoleyValueIter<'a, V> = Counted<std::iter::Flatten<slice::Iter<'a, Option<(String, V)>>>>;
-type HoleyValueIterMut<'a, V> = Counted<std::iter::Flatten<slice::IterMut<'a, Option<(String, V)>>>>;
+type HoleyValueIterMut<'a, V> =
+    Counted<std::iter::Flatten<slice::IterMut<'a, Option<(String, V)>>>>;
 type HoleyValueIntoIter<V> = Counted<std::iter::Flatten<vec::IntoIter<Option<(String, V)>>>>;
 
 pub(super) enum Values<'a, V> {
@@ -675,7 +692,10 @@ mod tests {
     fn dense_reads_updates_and_pop_drain_stay_packed() {
         let mut values = dense(4096);
         for index in 0..4096 {
-            assert_eq!(values.get(&index).map(|entry| *entry.1), Some(u64::from(index)));
+            assert_eq!(
+                values.get(&index).map(|entry| *entry.1),
+                Some(u64::from(index))
+            );
             assert_eq!(
                 values.insert(index, (index.to_string(), 7)),
                 Some(u64::from(index))
@@ -716,7 +736,10 @@ mod tests {
         assert_eq!(values.len(), 6);
         assert_eq!(values.get(&(u32::MAX - 1)).map(|entry| *entry.1), Some(88));
         assert_eq!(
-            values.values().map(|entry| entry.0.as_str()).collect::<Vec<_>>(),
+            values
+                .values()
+                .map(|entry| entry.0.as_str())
+                .collect::<Vec<_>>(),
             ["0", "1", "2", "3", "4", "4294967294"]
         );
         values.clear();
@@ -819,7 +842,10 @@ mod tests {
         assert!(matches!(values, IndexedValues::Holey(_)));
         assert_eq!(values.get(&1), None);
         for index in [0, 2, 3, 4, 5, 6, 7] {
-            assert_eq!(values.get(&index).map(|entry| *entry.1), Some(u64::from(index)));
+            assert_eq!(
+                values.get(&index).map(|entry| *entry.1),
+                Some(u64::from(index))
+            );
         }
     }
 
@@ -873,7 +899,10 @@ mod tests {
         drop(expected.splice(0..0, [91, 92]));
         assert!(matches!(map.array_entries, IndexedValues::Queue(_)));
         let removed: Vec<_> = expected.splice(2..7, [99]).collect();
-        assert_eq!(map.splice_dense_index_values(33, 2, 5, vec![99]), Ok(removed));
+        assert_eq!(
+            map.splice_dense_index_values(33, 2, 5, vec![99]),
+            Ok(removed)
+        );
         assert!(matches!(map.array_entries, IndexedValues::Queue(_)));
         assert_eq!(map.index_values().copied().collect::<Vec<_>>(), expected);
     }
@@ -896,9 +925,7 @@ mod tests {
                 match if step < 128 { 0 } else { random as u32 % 7 } {
                     0..=2 => {
                         let entry = (index.to_string(), random);
-                        let expected = oracle
-                            .insert(index, entry.clone())
-                            .map(|(_, value)| value);
+                        let expected = oracle.insert(index, entry.clone()).map(|(_, value)| value);
                         assert_eq!(values.insert(index, entry), expected);
                     }
                     3 => assert_eq!(values.remove(&index), oracle.remove(&index)),
@@ -920,12 +947,18 @@ mod tests {
                             key % 11 != index % 11
                         });
                     }
-                    _ => assert_eq!(values.get(&index), oracle.get(&index).map(|(key, value)| (key, value))),
+                    _ => assert_eq!(
+                        values.get(&index),
+                        oracle.get(&index).map(|(key, value)| (key, value))
+                    ),
                 }
                 assert_eq!(values.len(), oracle.len(), "seed={seed}, step={step}");
                 assert_eq!(
                     values.values().collect::<Vec<_>>(),
-                    oracle.values().map(|(key, value)| (key, value)).collect::<Vec<_>>()
+                    oracle
+                        .values()
+                        .map(|(key, value)| (key, value))
+                        .collect::<Vec<_>>()
                 );
                 assert_eq!(values.contains_key(&index), oracle.contains_key(&index));
                 assert_eq!(values.get(&u32::MAX), None);
@@ -938,7 +971,9 @@ mod tests {
         let mut values = dense(4096);
         let (address, capacity) = match &values {
             IndexedValues::Packed(entries) => (entries.as_ptr(), entries.capacity()),
-            IndexedValues::Queue(_) | IndexedValues::Holey(_) | IndexedValues::Dictionary(_) => unreachable!(),
+            IndexedValues::Queue(_) | IndexedValues::Holey(_) | IndexedValues::Dictionary(_) => {
+                unreachable!()
+            }
         };
         let key_addresses: Vec<_> = values.values().map(|entry| entry.0.as_ptr()).collect();
         let mut next = 0_u32;
@@ -994,7 +1029,10 @@ mod tests {
         assert_eq!(sparse.get(&2).map(|entry| *entry.1), Some(2));
         assert_eq!(sparse.get(&(u32::MAX - 1)).map(|entry| *entry.1), Some(99));
         sparse.insert(1, ("1".into(), 1));
-        assert!(matches!(sparse, IndexedValues::Dictionary(_)), "insertion must not repack");
+        assert!(
+            matches!(sparse, IndexedValues::Dictionary(_)),
+            "insertion must not repack"
+        );
         sparse.retain(|index, _| *index < 8);
         assert!(matches!(sparse, IndexedValues::Packed(_)));
         assert_eq!(sparse, dense(8));
@@ -1039,10 +1077,19 @@ mod tests {
                         assert_eq!(actual_visits, expected_visits);
                         assert_eq!(actual.len(), expected.len());
                         for index in 0..=len {
-                            assert_eq!(actual.get(&index), expected.get(&index).map(|(key, value)| (key, value)),
-                                "len={len} mask={mask} panic_at={panic_at} dictionary={dictionary}");
+                            assert_eq!(
+                                actual.get(&index),
+                                expected.get(&index).map(|(key, value)| (key, value)),
+                                "len={len} mask={mask} panic_at={panic_at} dictionary={dictionary}"
+                            );
                         }
-                        assert_eq!(actual.values().collect::<Vec<_>>(), expected.values().map(|(key, value)| (key, value)).collect::<Vec<_>>());
+                        assert_eq!(
+                            actual.values().collect::<Vec<_>>(),
+                            expected
+                                .values()
+                                .map(|(key, value)| (key, value))
+                                .collect::<Vec<_>>()
+                        );
                         assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
                     }
                 }
@@ -1065,13 +1112,21 @@ mod tests {
             let dropped = Rc::new(Cell::new(0));
             let mut values = IndexedValues::new();
             for index in 0..16_u32 {
-                values.insert(index, (index.to_string(), Owned {
-                    bytes: Box::new([index as u8; 16]),
-                    dropped: Rc::clone(&dropped),
-                }));
+                values.insert(
+                    index,
+                    (
+                        index.to_string(),
+                        Owned {
+                            bytes: Box::new([index as u8; 16]),
+                            dropped: Rc::clone(&dropped),
+                        },
+                    ),
+                );
             }
-            let addresses: Vec<_> = values.values()
-                .map(|(key, value)| (key.as_ptr(), value.bytes.as_ptr())).collect();
+            let addresses: Vec<_> = values
+                .values()
+                .map(|(key, value)| (key.as_ptr(), value.bytes.as_ptr()))
+                .collect();
             if dictionary {
                 values.promote();
             }
@@ -1083,7 +1138,10 @@ mod tests {
             assert_eq!(dropped.get(), 9);
             for index in 0..7_u32 {
                 let (key, value) = values.get(&index).unwrap();
-                assert_eq!((key.as_ptr(), value.bytes.as_ptr()), addresses[index as usize]);
+                assert_eq!(
+                    (key.as_ptr(), value.bytes.as_ptr()),
+                    addresses[index as usize]
+                );
                 assert_eq!(value.bytes[0], index as u8 + 32);
             }
             values.clear();
@@ -1112,31 +1170,61 @@ mod tests {
             let mut actual = IndexedValues::new();
             let mut expected = BTreeMap::new();
             for index in 0..8_u32 {
-                actual.insert(index, (index.to_string(), DropPanic {
-                    index, panic_at, drops: Rc::clone(&actual_drops),
-                }));
-                expected.insert(index, (index.to_string(), DropPanic {
-                    index, panic_at, drops: Rc::clone(&expected_drops),
-                }));
+                actual.insert(
+                    index,
+                    (
+                        index.to_string(),
+                        DropPanic {
+                            index,
+                            panic_at,
+                            drops: Rc::clone(&actual_drops),
+                        },
+                    ),
+                );
+                expected.insert(
+                    index,
+                    (
+                        index.to_string(),
+                        DropPanic {
+                            index,
+                            panic_at,
+                            drops: Rc::clone(&expected_drops),
+                        },
+                    ),
+                );
             }
             let mut actual_visits = Vec::new();
             let mut expected_visits = Vec::new();
-            assert!(catch_unwind(AssertUnwindSafe(|| {
-                actual.retain(|index, _| {
-                    actual_visits.push(*index);
-                    *index < panic_at
-                });
-            })).is_err());
-            assert!(catch_unwind(AssertUnwindSafe(|| {
-                expected.retain(|index, _| {
-                    expected_visits.push(*index);
-                    *index < panic_at
-                });
-            })).is_err());
+            assert!(
+                catch_unwind(AssertUnwindSafe(|| {
+                    actual.retain(|index, _| {
+                        actual_visits.push(*index);
+                        *index < panic_at
+                    });
+                }))
+                .is_err()
+            );
+            assert!(
+                catch_unwind(AssertUnwindSafe(|| {
+                    expected.retain(|index, _| {
+                        expected_visits.push(*index);
+                        *index < panic_at
+                    });
+                }))
+                .is_err()
+            );
             assert_eq!(actual_visits, expected_visits);
             assert_eq!(*actual_drops.borrow(), *expected_drops.borrow());
-            assert_eq!(actual.values().map(|(_, value)| value.index).collect::<Vec<_>>(),
-                expected.values().map(|(_, value)| value.index).collect::<Vec<_>>());
+            assert_eq!(
+                actual
+                    .values()
+                    .map(|(_, value)| value.index)
+                    .collect::<Vec<_>>(),
+                expected
+                    .values()
+                    .map(|(_, value)| value.index)
+                    .collect::<Vec<_>>()
+            );
             assert!(!actual.contains_key(&panic_at));
             // The panicking value is already removed, so ordinary destruction
             // of the survivors must neither re-panic nor double-drop it.
@@ -1170,15 +1258,24 @@ mod tests {
         assert_eq!(map.get_exact(&lone), Some(&99));
         assert_eq!(map.shift_dense_index_values(8), Some(0));
         map.unshift_dense_index_values(7, vec![40, 41]).unwrap();
-        assert_eq!(map.splice_dense_index_values(9, 2, 3, vec![50]), Ok(vec![1, 2, 3]));
+        assert_eq!(
+            map.splice_dense_index_values(9, 2, 3, vec![50]),
+            Ok(vec![1, 2, 3])
+        );
         assert!(matches!(map.array_entries, IndexedValues::Queue(_)));
-        assert_eq!(map.index_values().copied().collect::<Vec<_>>(), [40, 41, 50, 4, 5, 6, 7]);
+        assert_eq!(
+            map.index_values().copied().collect::<Vec<_>>(),
+            [40, 41, 50, 4, 5, 6, 7]
+        );
         let wire = serde_json::to_string(&map).unwrap();
         let decoded: OrderedStringMap<i64> = serde_json::from_str(&wire).unwrap();
         assert_eq!(decoded, map);
         assert_eq!(serde_json::to_string(&decoded).unwrap(), wire);
-        let names: Vec<_> = map.exact_keys().into_iter()
-            .filter(|key| key.as_str().and_then(canonical_array_index).is_none()).collect();
+        let names: Vec<_> = map
+            .exact_keys()
+            .into_iter()
+            .filter(|key| key.as_str().and_then(canonical_array_index).is_none())
+            .collect();
         assert_eq!(names, [JsString::from("z"), lone, JsString::from("a")]);
     }
 
@@ -1279,27 +1376,49 @@ mod tests {
             let mut actual = IndexedValues::new();
             let mut expected = BTreeMap::new();
             for index in 0..64_u32 {
-                actual.insert(index, (index.to_string(), Owned {
-                    index, panic_at, drops: Rc::clone(&actual_drops),
-                }));
-                expected.insert(index, (index.to_string(), Owned {
-                    index, panic_at, drops: Rc::clone(&expected_drops),
-                }));
+                actual.insert(
+                    index,
+                    (
+                        index.to_string(),
+                        Owned {
+                            index,
+                            panic_at,
+                            drops: Rc::clone(&actual_drops),
+                        },
+                    ),
+                );
+                expected.insert(
+                    index,
+                    (
+                        index.to_string(),
+                        Owned {
+                            index,
+                            panic_at,
+                            drops: Rc::clone(&expected_drops),
+                        },
+                    ),
+                );
             }
             let mut actual_visits = Vec::new();
             let mut expected_visits = Vec::new();
-            assert!(catch_unwind(AssertUnwindSafe(|| {
-                actual.retain(|index, _| {
-                    actual_visits.push(*index);
-                    index % 4 == 0
-                });
-            })).is_err());
-            assert!(catch_unwind(AssertUnwindSafe(|| {
-                expected.retain(|index, _| {
-                    expected_visits.push(*index);
-                    index % 4 == 0
-                });
-            })).is_err());
+            assert!(
+                catch_unwind(AssertUnwindSafe(|| {
+                    actual.retain(|index, _| {
+                        actual_visits.push(*index);
+                        index % 4 == 0
+                    });
+                }))
+                .is_err()
+            );
+            assert!(
+                catch_unwind(AssertUnwindSafe(|| {
+                    expected.retain(|index, _| {
+                        expected_visits.push(*index);
+                        index % 4 == 0
+                    });
+                }))
+                .is_err()
+            );
             assert_eq!(actual_visits, expected_visits);
             assert_eq!(*actual_drops.borrow(), *expected_drops.borrow());
             assert_eq!(actual.len(), expected.len());

@@ -250,9 +250,10 @@ impl UnitCursor {
                     } else {
                         // Another thread can publish between the cache check
                         // and parts(). Publication always precedes release.
-                        self.leaf = Some(Arc::clone(node.joined.get().expect(
-                            "concatenation parts are released only after publication",
-                        )));
+                        self.leaf =
+                            Some(Arc::clone(node.joined.get().expect(
+                                "concatenation parts are released only after publication",
+                            )));
                         self.units_left = length;
                     }
                 }
@@ -352,7 +353,8 @@ mod tests {
                         assert_eq!(value.as_str(), Some(expected.as_str()));
                     } else {
                         for _ in 0..64 {
-                            let text = if let Some([left, right]) = value.unjoined_concat_children() {
+                            let text = if let Some([left, right]) = value.unjoined_concat_children()
+                            {
                                 format!("{}{}", left.as_str().unwrap(), right.as_str().unwrap())
                             } else {
                                 value.as_str().unwrap().to_string()
@@ -443,7 +445,10 @@ mod tests {
         assert_eq!(units.next(), Some(0xd83d));
         assert_eq!(units.nth(1), Some(0xe9));
         assert_eq!(units.next(), Some(u16::from(b'x')));
-        assert_eq!(units.collect::<Vec<_>>(), "tail".encode_utf16().collect::<Vec<_>>());
+        assert_eq!(
+            units.collect::<Vec<_>>(),
+            "tail".encode_utf16().collect::<Vec<_>>()
+        );
         assert_unjoined(&value);
     }
 
@@ -468,7 +473,10 @@ mod tests {
     #[test]
     fn exact_lone_surrogates_and_relational_order_remain_exact() {
         let exact = JsString::from_code_units(&[0xd800, 0x61, 0xdc00]);
-        assert_eq!(exact.encode_utf16().collect::<Vec<_>>(), [0xd800, 0x61, 0xdc00]);
+        assert_eq!(
+            exact.encode_utf16().collect::<Vec<_>>(),
+            [0xd800, 0x61, 0xdc00]
+        );
         let left = rope("\u{1f600}", "suffix");
         let right = rope("\u{ff5a}", "suffix");
         assert_eq!(left.utf16_cmp(&right), std::cmp::Ordering::Less);
@@ -594,9 +602,8 @@ mod tests {
                 for c in alphabet {
                     let text = format!("{a}{b}{c}{a}{b}{c}");
                     let value = rope(&text, "\u{1f603}tail");
-                    let expected: Vec<u16> = format!("{text}\u{1f603}tail")
-                        .encode_utf16()
-                        .collect();
+                    let expected: Vec<u16> =
+                        format!("{text}\u{1f603}tail").encode_utf16().collect();
                     for consumed in 0..expected.len() {
                         for index in consumed..expected.len() {
                             let mut cursor = UnitCursor::new(&value);

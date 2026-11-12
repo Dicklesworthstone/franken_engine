@@ -15,9 +15,9 @@
     "is_x86_feature_detected": 2,
     "is_aarch64_feature_detected": 1,
     "is_arm_feature_detected": 0,
-    "target_arch_cfg_sites": 62,
+    "target_arch_cfg_sites": 67,
     "target_feature_sites": 10,
-    "_measured_on": "2026-07-26, HEAD bf45e1ca2, by scripts/check_isa_path_registration.py",
+    "_measured_on": "2026-11-11, by scripts/check_isa_path_registration.py",
     "_note": "target_arch_cfg_sites was 57 when this inventory was first written on 2026-07-24 and is 62 today. The gate caught that drift on its first run, which is the behaviour it exists for: a new architecture-specific site is a deliberate engineering act and the inventory must acknowledge it. The 2026-07-24 pass also split core::arch counts by target architecture; the gate measures core::arch:: as one metric because splitting it needs a parse rather than a scan, and an unmeasurable declared total is worse than an honest combined one. 2026-07-26: no counts changed, but the swar-lexer entry's compliance verdict was corrected -- its cited equivalence mechanism tested only the 8-lane aggregate and was near-vacuous, and a real per-lane SWAR/scalar disagreement was found and fixed underneath it."
   },
   "key_structural_finding": {

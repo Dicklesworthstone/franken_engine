@@ -3711,16 +3711,27 @@ fn commonjs_require_refuses_unexported_and_missing_packages_bd_4dme3() {
 #[test]
 fn module_imports_share_nearest_package_format_across_relative_and_bare_paths() {
     let root = tempfile::tempdir().expect("module root");
-    write_tree(root.path(), &[
-        ("package.json", r#"{"type":"module"}"#),
-        ("common/package.json", r#"{"type":"commonjs"}"#),
-        ("common/value.js", "module.exports = { value: 20 };"),
-        ("node_modules/legacy/index.js", "module.exports = { value: 30 };"),
-        ("node_modules/esm/package.json", r#"{"type":"module","main":"./index.js"}"#),
-        ("node_modules/esm/index.js", "export const value = 42;"),
-        ("entry.mjs",
-            "import a from './common/value.js'; import b from 'legacy'; import { value } from 'esm'; console.log(a.value + b.value + value);"),
-    ]);
+    write_tree(
+        root.path(),
+        &[
+            ("package.json", r#"{"type":"module"}"#),
+            ("common/package.json", r#"{"type":"commonjs"}"#),
+            ("common/value.js", "module.exports = { value: 20 };"),
+            (
+                "node_modules/legacy/index.js",
+                "module.exports = { value: 30 };",
+            ),
+            (
+                "node_modules/esm/package.json",
+                r#"{"type":"module","main":"./index.js"}"#,
+            ),
+            ("node_modules/esm/index.js", "export const value = 42;"),
+            (
+                "entry.mjs",
+                "import a from './common/value.js'; import b from 'legacy'; import { value } from 'esm'; console.log(a.value + b.value + value);",
+            ),
+        ],
+    );
     let entry = root.path().join("entry.mjs");
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
         let result = ExecutionOrchestrator::new(OrchestratorConfig {
@@ -3728,7 +3739,11 @@ fn module_imports_share_nearest_package_format_across_relative_and_bare_paths() 
             parse_goal: ParseGoal::Module,
             ..OrchestratorConfig::default()
         })
-        .execute(&commonjs_entry_package(root.path(), &entry, "mixed-module-format"))
+        .execute(&commonjs_entry_package(
+            root.path(),
+            &entry,
+            "mixed-module-format",
+        ))
         .unwrap_or_else(|error| panic!("{lane:?}: mixed module formats failed: {error}"));
         assert_eq!(console_lines(&result), ["92"], "{lane:?}");
     }
@@ -3737,12 +3752,18 @@ fn module_imports_share_nearest_package_format_across_relative_and_bare_paths() 
 #[test]
 fn dynamic_import_obeys_a_relative_commonjs_package_scope() {
     let root = tempfile::tempdir().expect("module root");
-    write_tree(root.path(), &[
-        ("package.json", r#"{"type":"module"}"#),
-        ("common/package.json", r#"{"type":"commonjs"}"#),
-        ("common/value.js", "module.exports = { value: 20 };"),
-        ("entry.mjs", "import('./common/value.js').then(m => console.log(m.default.value));"),
-    ]);
+    write_tree(
+        root.path(),
+        &[
+            ("package.json", r#"{"type":"module"}"#),
+            ("common/package.json", r#"{"type":"commonjs"}"#),
+            ("common/value.js", "module.exports = { value: 20 };"),
+            (
+                "entry.mjs",
+                "import('./common/value.js').then(m => console.log(m.default.value));",
+            ),
+        ],
+    );
     let entry = root.path().join("entry.mjs");
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
         let result = ExecutionOrchestrator::new(OrchestratorConfig {
@@ -3750,7 +3771,11 @@ fn dynamic_import_obeys_a_relative_commonjs_package_scope() {
             parse_goal: ParseGoal::Module,
             ..OrchestratorConfig::default()
         })
-        .execute(&commonjs_entry_package(root.path(), &entry, "dynamic-module-format"))
+        .execute(&commonjs_entry_package(
+            root.path(),
+            &entry,
+            "dynamic-module-format",
+        ))
         .unwrap_or_else(|error| panic!("{lane:?}: dynamic CommonJS import failed: {error}"));
         assert_eq!(console_lines(&result), ["20"], "{lane:?}");
     }
@@ -3773,13 +3798,21 @@ fn filesystem_module_source_budget_admits_the_boundary_and_rejects_the_next_byte
         config.parser_options.budget.max_source_bytes = 64;
         std::fs::write(&dependency, &source).expect("exactly admitted source");
         let result = ExecutionOrchestrator::new(config.clone())
-            .execute(&commonjs_entry_package(root.path(), &entry, "module-byte-boundary"))
+            .execute(&commonjs_entry_package(
+                root.path(),
+                &entry,
+                "module-byte-boundary",
+            ))
             .unwrap_or_else(|error| panic!("{lane:?}: exact byte budget failed: {error}"));
         assert_eq!(console_lines(&result), ["42"], "{lane:?}");
 
         std::fs::write(&dependency, format!("{source} ")).expect("one byte over budget");
         let error = ExecutionOrchestrator::new(config)
-            .execute(&commonjs_entry_package(root.path(), &entry, "module-byte-refusal"))
+            .execute(&commonjs_entry_package(
+                root.path(),
+                &entry,
+                "module-byte-refusal",
+            ))
             .expect_err("the dependency exceeds its source admission budget");
         assert!(
             error.to_string().contains("source-byte budget"),
@@ -3954,7 +3987,7 @@ fn error_message_read_in_catch_reaches_completion_bd_8y64t() {
     let mut orch = ExecutionOrchestrator::with_defaults();
     let mut package = simple_package(
         "ext-8y64t-positive",
-        r#"let caught = false; try { throw new Error("test"); } catch (e) { caught = e.message; } caught;"#,
+        r#"const out = { m: false }; try { throw new Error("test"); } catch (e) { out.m = e.message; } out.m;"#,
     );
     // The builtin hostcall is separately capability-gated; the IFC precision
     // under test is orthogonal to the grant (frankenctl's run path grants the
@@ -3962,7 +3995,7 @@ fn error_message_read_in_catch_reaches_completion_bd_8y64t() {
     package.capabilities = vec!["builtin:Error".to_string()];
     let result = orch
         .execute(&package)
-        .expect("catch(e){e.message} must execute on the orchestrator path");
+        .expect("catch(e){out.m = e.message} must execute on the orchestrator path");
     assert_eq!(result.execution_value, "test");
 }
 
@@ -3971,11 +4004,13 @@ fn error_message_read_in_catch_reaches_completion_bd_8y64t() {
 #[test]
 fn error_constructor_object_argument_stays_fail_high_bd_8y64t() {
     let mut orch = ExecutionOrchestrator::with_defaults();
+    let mut package = simple_package(
+        "ext-8y64t-object-arg",
+        r#"const out = { m: "x" }; try { throw new Error({ toString() { return "sneaky"; } }); } catch (e) { out.m = typeof e.message; } out.m;"#,
+    );
+    package.capabilities = vec!["builtin:Error".to_string()];
     let error = orch
-        .execute(&simple_package(
-            "ext-8y64t-object-arg",
-            r#"let m = "x"; try { throw new Error({ toString() { return "sneaky"; } }); } catch (e) { m = typeof e.message; } m;"#,
-        ))
+        .execute(&package)
         .expect_err("object-argument Error construction must stay fail-high");
     assert!(
         matches!(error.primary_error(), OrchestratorError::Lowering(_)),
@@ -3995,7 +4030,7 @@ fn shadowed_error_constructor_stays_fail_high_bd_8y64t() {
     let error = orch
         .execute(&simple_package(
             "ext-8y64t-shadowed",
-            r#"let Error = function (message) { this.message = message; }; let m = "x"; try { throw new Error("test"); } catch (e) { m = e.message; } m;"#,
+            r#"let Error = function (message) { this.message = message; }; const out = { m: "x" }; try { throw new Error("test"); } catch (e) { out.m = e.message; } out.m;"#,
         ))
         .expect_err("shadowed Error construction must stay fail-high");
     assert!(

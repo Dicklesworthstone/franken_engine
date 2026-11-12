@@ -198,6 +198,16 @@ impl CatalogBackedRelation {
                 ),
             };
         }
+        if self.relation_id() == "ir_capability_preservation"
+            && input.required_capabilities != variant.required_capabilities
+        {
+            return Equivalence::Diverged {
+                detail: format!(
+                    "lowered IR3 required_capabilities drifted under capability-preserving transform: input={:?} variant={:?}",
+                    input.required_capabilities, variant.required_capabilities,
+                ),
+            };
+        }
         if input.exec_value != variant.exec_value {
             return Equivalence::Diverged {
                 detail: format!(
@@ -321,7 +331,7 @@ impl MetamorphicRelation for CatalogBackedRelation {
     }
 
     fn validate_program(&self, source: &str) -> bool {
-        parse_program(source).is_ok()
+        EngineEvalAdapter::validate_syntax(source)
     }
 }
 
@@ -385,8 +395,8 @@ fn property_contract_for_pair(
         relation_id: relation_id.to_string(),
         generator_id: generator_id.to_string(),
         expected_equivalence: "equivalent".to_string(),
-        validates_input: parse_program(&pair.input_source).is_ok(),
-        validates_variant: parse_program(&pair.variant_source).is_ok(),
+        validates_input: EngineEvalAdapter::validate_syntax(&pair.input_source),
+        validates_variant: EngineEvalAdapter::validate_syntax(&pair.variant_source),
         replay_supported: true,
         shrink_strategy: "recorded_choice_stream_then_ddmin".to_string(),
     }
@@ -480,8 +490,6 @@ fn generate_pair_for_relation(
         "ir_capability_preservation" => {
             let name = pick_identifier(machine, "ir_capability_preservation.name")?;
             let second_pick = pick_identifier(machine, "ir_capability_preservation.second")?;
-            // Distinct binding names (see generate_arithmetic_program): a duplicate
-            // `let` fails real-engine lowering (bd-x9t1n.3).
             let second = if second_pick == name {
                 let pos = IDENTIFIERS.iter().position(|&id| id == name).unwrap_or(0);
                 IDENTIFIERS[(pos + 1) % IDENTIFIERS.len()]
@@ -489,15 +497,11 @@ fn generate_pair_for_relation(
                 second_pick
             };
             Some(GeneratedPair {
-                // Engine-valid ES2020 (bd-x9t1n.7): the toy `cap(...)` capability
-                // markers and the top-level `return` are dropped identically on
-                // both sides (the real engine has no `cap` builtin and rejects
-                // top-level return); the relation's verdict is unchanged because
-                // both sides still compute the same value through the same bindings,
-                // ending with an expression statement.
-                input_source: format!("let {name} = 2 + 3; let {second} = {name} * 2; {second};"),
+                input_source: format!(
+                    "let {name} = 2 + 3; let {second} = Math.max({name}, 1) * 2; {second};"
+                ),
                 variant_source: format!(
-                    "let {name} = 2 + 3;\nlet {second} = ({name}) * 2;\n{second};"
+                    "let {name} = 2 + 3;\nlet {second} = Math.max(({name}), (1)) * 2;\n{second};"
                 ),
             })
         }
@@ -561,19 +565,15 @@ fn generate_pair_for_relation(
         "execution_prototype_chain_equivalence" => {
             let base =
                 machine.int_inclusive("execution_prototype_chain_equivalence.base", 10, 29)?;
-            // Consumed to keep the recorded choice stream (and replay) stable even
-            // though the engine-valid rewrite no longer interpolates it (bd-x9t1n.7).
-            let _derived =
+            let derived =
                 machine.int_inclusive("execution_prototype_chain_equivalence.derived", 50, 69)?;
             Some(GeneratedPair {
-                // Engine-valid ES2020 (bd-x9t1n.7): the toy `proto(...)` had no JS
-                // grammar and the toy parser has no object-literal/member-access
-                // support, so model the chain as a base value the variant re-reads
-                // through an equivalence-preserving alias (`mirror`), ending in an
-                // expression statement (no top-level `return`). Both sides resolve the
-                // same value; parses + executes in toy AND real engine.
-                input_source: format!("let base = {base}; base;"),
-                variant_source: format!("let base = {base}; let mirror = base; mirror;"),
+                input_source: format!(
+                    "const proto = {{ val: {base}, extra: {derived} }}; const child = Object.create(proto); child.val + child.extra;"
+                ),
+                variant_source: format!(
+                    "const proto = {{ val: {base} }}; const mid = Object.create(proto); mid.extra = {derived}; const leaf = Object.create(mid); leaf.val + leaf.extra;"
+                ),
             })
         }
         "execution_promise_resolution_order_stability" => Some(GeneratedPair {
@@ -1816,6 +1816,7 @@ mod tests {
             "parser_whitespace_invariance",
             "parser_comment_invariance",
             "parser_parenthesization_invariance",
+            "parser_unicode_escape_equivalence",
             "parser_source_position_independence",
             "ir_lowering_determinism",
             "ir_optimization_idempotence",
@@ -2008,8 +2009,8 @@ mod tests {
         );
 
         let outcome = relation.oracle(&crate::relation::GeneratedPair {
-            input_source: "let alpha = 1 + 2; return alpha;".to_string(),
-            variant_source: "let alpha = 1 + 3; return alpha;".to_string(),
+            input_source: "let alpha = 1 + 2; alpha;".to_string(),
+            variant_source: "let alpha = 1 + 3; alpha;".to_string(),
         });
 
         assert!(matches!(outcome, Equivalence::Diverged { .. }));
@@ -2118,5 +2119,42 @@ mod tests {
                 "{relation_id} must fail closed until its toy ExecOptions knob is mapped to real engine configuration: {outcome:?}"
             );
         }
+    }
+
+    #[test]
+    fn unicode_escape_prototype_chain_and_capability_relations_hold_on_real_engine() {
+        let unicode_rel = relation(
+            "parser_unicode_escape_equivalence",
+            Subsystem::Parser,
+            OracleKind::AstEquality,
+        );
+        for seed in 0u64..8 {
+            let pair = unicode_rel.generate_pair(seed);
+            assert!(
+                pair.variant_source.contains("\\u"),
+                "variant must contain unicode escapes: {pair:?}"
+            );
+            assert!(unicode_rel.validate_program(&pair.input_source));
+            assert!(unicode_rel.validate_program(&pair.variant_source));
+            assert!(unicode_rel.oracle(&pair).is_equivalent());
+        }
+
+        let proto_rel = relation(
+            "execution_prototype_chain_equivalence",
+            Subsystem::Execution,
+            OracleKind::SideEffectTraceEquality,
+        );
+        let proto_pair = proto_rel.generate_pair(3);
+        assert!(proto_pair.input_source.contains("Object.create"));
+        assert!(proto_rel.oracle(&proto_pair).is_equivalent());
+
+        let cap_rel = relation(
+            "ir_capability_preservation",
+            Subsystem::Ir,
+            OracleKind::IrEquality,
+        );
+        let cap_pair = cap_rel.generate_pair(3);
+        assert!(cap_pair.input_source.contains("Math.max"));
+        assert!(cap_rel.oracle(&cap_pair).is_equivalent());
     }
 }

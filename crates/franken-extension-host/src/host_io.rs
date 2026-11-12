@@ -25,8 +25,8 @@ mod http_response;
 mod network_deadline;
 pub use control::{HostIoControl, UnrestrictedHostIoControl};
 pub use http_response::{ParsedHttpResponse, parse_http_response};
-pub use network_deadline::NetworkRevocation;
 use network_deadline::{DeadlineTcpStream, NetworkDeadline};
+pub use network_deadline::{NetworkEgressPolicy, NetworkRevocation};
 
 /// Capability a guest must hold for the host to perform a given I/O request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -847,6 +847,7 @@ pub struct SandboxedHostIo {
     root_fd: std::sync::Arc<OwnedFd>,
     max_bytes: u64,
     network_timeout: Duration,
+    egress_policy: NetworkEgressPolicy,
     /// Network-only containment authority, shared by every provider clone.
     network_revocation: NetworkRevocation,
     random_bytes_remaining: std::sync::Arc<std::sync::atomic::AtomicU64>,
@@ -923,6 +924,7 @@ impl SandboxedHostIo {
             root_fd: std::sync::Arc::new(root_fd),
             max_bytes,
             network_timeout: SANDBOXED_HOST_IO_NETWORK_TIMEOUT,
+            egress_policy: NetworkEgressPolicy::Unrestricted,
             network_revocation: NetworkRevocation::default(),
             random_bytes_remaining: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(
                 SANDBOXED_HOST_IO_RANDOM_BUDGET_BYTES,
@@ -968,6 +970,22 @@ impl SandboxedHostIo {
         NetworkDeadline::new(timeout)?;
         self.network_timeout = timeout;
         Ok(self)
+    }
+
+    /// Configure the post-DNS destination IP egress policy (`[RC-C2]` / `g2vrp.9`).
+    #[must_use]
+    pub fn with_egress_policy(mut self, policy: NetworkEgressPolicy) -> Self {
+        self.egress_policy = policy;
+        self
+    }
+
+    /// Restrict network connections to public Internet IP space only, blocking
+    /// loopback, RFC1918 private networks, link-local / cloud metadata
+    /// (`169.254.169.254`, `fe80::/10`), CGNAT, unique-local, multicast, and
+    /// IPv4-mapped IPv6 equivalents after DNS resolution.
+    #[must_use]
+    pub fn with_public_egress_only(self) -> Self {
+        self.with_egress_policy(NetworkEgressPolicy::PublicInternetOnly)
     }
 
     /// Append PEM-encoded certificates to the TLS trust anchors used for

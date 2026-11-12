@@ -31,7 +31,8 @@ fn run_util_program(preamble: &str, goal: &str, body: &str) -> Vec<String> {
         String::from_utf8_lossy(&output.stderr)
     );
     let report: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(report_path).expect("read report")).expect("report JSON");
+        serde_json::from_slice(&std::fs::read(report_path).expect("read report"))
+            .expect("report JSON");
     report["console_output"]
         .as_array()
         .expect("console_output")
@@ -176,9 +177,15 @@ console.log(JSON.stringify(parse('FRESH=two')));
     ];
     for (preamble, goal) in [
         ("const { parseEnv: parse } = require('util');", "script"),
-        ("const { parseEnv: parse } = require('node:util');", "script"),
+        (
+            "const { parseEnv: parse } = require('node:util');",
+            "script",
+        ),
         ("import { parseEnv as parse } from 'node:util';", "module"),
-        ("import util from 'util'; const parse = util.parseEnv;", "module"),
+        (
+            "import util from 'util'; const parse = util.parseEnv;",
+            "module",
+        ),
     ] {
         assert_eq!(run_util_program(preamble, goal, body), expected);
     }

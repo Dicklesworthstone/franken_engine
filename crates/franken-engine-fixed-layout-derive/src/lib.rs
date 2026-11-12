@@ -35,7 +35,7 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, Data, DeriveInput, Fields, Ident, Type, Variant};
+use syn::{Data, DeriveInput, Fields, Ident, Type, Variant, parse_macro_input};
 
 /// Derive macro for the FixedLayout trait.
 #[proc_macro_derive(FixedLayout)]
@@ -328,7 +328,7 @@ fn generate_enum_impl(
                 // FixedLayout trait on the concrete field type.
                 let field_type = &field_types[0];
                 quote! {
-                    Self::#variant_name(ref value) => {
+                    Self::#variant_name(value) => {
                         buffer[0] = #discriminant;
                         let field_size = <#field_type as franken_engine_deterministic_trait::FixedLayout>::LAYOUT_SIZE;
                         value.encode_fixed(&mut buffer[1..1 + field_size]);

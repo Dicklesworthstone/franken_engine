@@ -1,24 +1,35 @@
 //! Native execution tests: the hosted path factory cannot establish these pass.
 #![forbid(unsafe_code)]
-use std::collections::BTreeMap;
 use frankenengine_engine::baseline_interpreter::LaneChoice;
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, LabFixtureExecutionOrchestratorExt, OrchestratorConfig,
 };
+use std::collections::BTreeMap;
 
 fn run(source: &str, lane: LaneChoice) -> Vec<String> {
     let mut engine = ExecutionOrchestrator::new(OrchestratorConfig {
-        force_lane: Some(lane), ..OrchestratorConfig::default()
+        force_lane: Some(lane),
+        ..OrchestratorConfig::default()
     });
     let package = ExtensionPackage {
-        extension_id: "path-namespace-values".into(), source: source.into(),
-        source_file: None, module_root: None,
+        extension_id: "path-namespace-values".into(),
+        source: source.into(),
+        source_file: None,
+        module_root: None,
         capabilities: ["vm_dispatch", "heap_allocate", "builtin", "console"]
-            .into_iter().map(str::to_string).collect(),
-        version: "1.0.0".into(), metadata: BTreeMap::new(),
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        version: "1.0.0".into(),
+        metadata: BTreeMap::new(),
     };
-    engine.execute(&package).expect("native path namespace completion")
-        .console_output.into_iter().map(|line| line.message).collect()
+    engine
+        .execute(&package)
+        .expect("native path namespace completion")
+        .console_output
+        .into_iter()
+        .map(|line| line.message)
+        .collect()
 }
 
 const NAMESPACES: &str = r#"
@@ -57,41 +68,57 @@ try{format([]);}catch(error){console.log('ERROR',error.code);}
 #[test]
 fn windows_and_posix_values_share_one_native_namespace_pair() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        assert_eq!(run(NAMESPACES, lane), [
-            "IDENTITY true true true true true",
-            "PATH C:\\out\\file.txt C:\\out ..\\out file true ;",
-        ]);
+        assert_eq!(
+            run(NAMESPACES, lane),
+            [
+                "IDENTITY true true true true true",
+                "PATH C:\\out\\file.txt C:\\out ..\\out file true ;",
+            ]
+        );
     }
 }
 
 #[test]
 fn components_roundtrip_and_namespace_roots_preserve_windows_meaning() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        assert_eq!(run(COMPONENTS, lane), [
-            r#"[{"root":"C:\\","dir":"C:\\base","base":"file.tar.gz","ext":".gz","name":"file.tar"},"C:\\base\\file.tar.gz","C:\\base",".gz"]"#,
-            r#"[{"root":"//server/share/","dir":"//server/share/","base":"a.txt","ext":".txt","name":"a"},"//server/share/a.txt","//server/share/",".txt"]"#,
-            r#"[{"root":"C:","dir":"C:","base":"relative","ext":"","name":"relative"},"C:relative","C:",""]"#,
-            r#"[{"root":"","dir":"","base":".hidden","ext":"","name":".hidden"},".hidden",".",""]"#,
-            r#"[{"root":"C:\\","dir":"C:\\é","base":"😀.txt","ext":".txt","name":"😀"},"C:\\é\\😀.txt","C:\\é",".txt"]"#,
-            "NAMESPACE \\\\?\\C:\\out \\\\?\\UNC\\server\\share\\file",
-        ]);
+        assert_eq!(
+            run(COMPONENTS, lane),
+            [
+                r#"[{"root":"C:\\","dir":"C:\\base","base":"file.tar.gz","ext":".gz","name":"file.tar"},"C:\\base\\file.tar.gz","C:\\base",".gz"]"#,
+                r#"[{"root":"//server/share/","dir":"//server/share/","base":"a.txt","ext":".txt","name":"a"},"//server/share/a.txt","//server/share/",".txt"]"#,
+                r#"[{"root":"C:","dir":"C:","base":"relative","ext":"","name":"relative"},"C:relative","C:",""]"#,
+                r#"[{"root":"","dir":"","base":".hidden","ext":"","name":".hidden"},".hidden",".",""]"#,
+                r#"[{"root":"C:\\","dir":"C:\\é","base":"😀.txt","ext":".txt","name":"😀"},"C:\\é\\😀.txt","C:\\é",".txt"]"#,
+                "NAMESPACE \\\\?\\C:\\out \\\\?\\UNC\\server\\share\\file",
+            ]
+        );
     }
 }
 
 #[test]
 fn mixed_inline_and_escaped_path_values_observe_namespace_mutations() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        assert_eq!(run(MUTATION, lane), [
-            "MUTATION patched patched patched true", "CALLBACK C:\\root\\a,C:\\root\\b", "RESTORED C:\\root\\c",
-        ]);
+        assert_eq!(
+            run(MUTATION, lane),
+            [
+                "MUTATION patched patched patched true",
+                "CALLBACK C:\\root\\a,C:\\root\\b",
+                "RESTORED C:\\root\\c",
+            ]
+        );
     }
 }
 
 #[test]
 fn path_format_orders_getters_and_preserves_shadowed_loaders() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        assert_eq!(run(GETTERS, lane), [
-            "FORMAT C:\\out\\file.txt dir,base,name,ext,root", "LOCAL path/win32", "ERROR ERR_INVALID_ARG_TYPE",
-        ]);
+        assert_eq!(
+            run(GETTERS, lane),
+            [
+                "FORMAT C:\\out\\file.txt dir,base,name,ext,root",
+                "LOCAL path/win32",
+                "ERROR ERR_INVALID_ARG_TYPE",
+            ]
+        );
     }
 }

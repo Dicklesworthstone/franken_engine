@@ -80,13 +80,16 @@ console.log(pending instanceof Promise);
   console.log((await blob.bytes()).join(','));
 })();
 "#;
-    assert_eq!(run(source), [
-        "true",
-        "true 0 3 0,255,65",
-        "true true true",
-        "0,255,65 0,255,65 3 application/octet-stream",
-        "0,255,65",
-    ]);
+    assert_eq!(
+        run(source),
+        [
+            "true",
+            "true 0 3 0,255,65",
+            "true true true",
+            "0,255,65 0,255,65 3 application/octet-stream",
+            "0,255,65",
+        ]
+    );
 }
 
 #[test]
@@ -104,12 +107,15 @@ input.fill(0);
   console.log((await new Blob().bytes()).length, (await new Blob().arrayBuffer()).byteLength);
 })();
 "#;
-    assert_eq!(run(source), [
-        "239,187,191,255,0,65,195,169,239,191,189",
-        "255,0,65,195,169,239",
-        "\"�\\u0000A\"",
-        "0 0",
-    ]);
+    assert_eq!(
+        run(source),
+        [
+            "239,187,191,255,0,65,195,169,239,191,189",
+            "255,0,65,195,169,239",
+            "\"�\\u0000A\"",
+            "0 0",
+        ]
+    );
 }
 
 #[test]
@@ -126,7 +132,10 @@ const read = Blob.prototype.bytes;
   console.log((await blob.bytes()).join(','));
 })();
 "#;
-    assert_eq!(run(source), ["TypeError", "TypeError", "TypeError", "65,66", "65,66"]);
+    assert_eq!(
+        run(source),
+        ["TypeError", "TypeError", "TypeError", "65,66", "65,66"]
+    );
 }
 
 #[test]

@@ -31,7 +31,13 @@ fn run(source: &str, root: &Path, lane: LaneChoice, caps: &[&str]) -> Result<Vec
     )
     .expect("stream test configuration");
     orchestrator.set_host_io(provider, Some(recorder));
-    let mut capabilities = vec!["vm_dispatch", "heap_allocate", "builtin", "console", "timer"];
+    let mut capabilities = vec![
+        "vm_dispatch",
+        "heap_allocate",
+        "builtin",
+        "console",
+        "timer",
+    ];
     capabilities.extend_from_slice(caps);
     let package = ExtensionPackage {
         extension_id: "native-filesystem-streams".into(),
@@ -42,8 +48,14 @@ fn run(source: &str, root: &Path, lane: LaneChoice, caps: &[&str]) -> Result<Vec
         version: "1.0.0".into(),
         metadata: BTreeMap::new(),
     };
-    let result = orchestrator.execute(&package).map_err(|error| format!("{error:?}"))?;
-    Ok(result.console_output.into_iter().map(|entry| entry.message).collect())
+    let result = orchestrator
+        .execute(&package)
+        .map_err(|error| format!("{error:?}"))?;
+    Ok(result
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect())
 }
 
 const READ_RANGE: &str = r#"
@@ -64,7 +76,10 @@ fn path_read_stream_uses_inclusive_byte_ranges_and_native_decoder() {
         let output = run(READ_RANGE, root.path(), lane, &["fs_read", "fs_write"])
             .expect("native read-stream lifecycle");
         assert_eq!(output, ["é€ 5", "null true"]);
-        assert_eq!(std::fs::read_to_string(root.path().join("input.txt")).unwrap(), "Aé€😃Z");
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("input.txt")).unwrap(),
+            "Aé€😃Z"
+        );
     }
 }
 
@@ -103,7 +118,10 @@ fn stream_factory_does_not_grant_descriptor_or_read_authority() {
             let error = run(READ_RANGE, root.path(), lane, caps)
                 .expect_err("both existing descriptor and read authorities remain required");
             assert!(error.to_ascii_lowercase().contains("capabil"), "{error}");
-            assert_eq!(std::fs::read_to_string(root.path().join("input.txt")).unwrap(), "private");
+            assert_eq!(
+                std::fs::read_to_string(root.path().join("input.txt")).unwrap(),
+                "private"
+            );
         }
     }
 }
@@ -129,7 +147,10 @@ fn file_pipeline_uses_the_shared_stream_machinery_and_real_descriptor_effects() 
                 .expect("native file-to-file pipeline"),
             ["18000 18000 null null"]
         );
-        assert_eq!(std::fs::read(root.path().join("output.txt")).unwrap(), input.as_bytes());
+        assert_eq!(
+            std::fs::read(root.path().join("output.txt")).unwrap(),
+            input.as_bytes()
+        );
     }
 }
 
@@ -150,11 +171,13 @@ fn corked_writes_keep_byte_counts_callbacks_and_flush_close() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
         let root = tempfile::tempdir().unwrap();
         assert_eq!(
-            run(CORKED_WRITE, root.path(), lane, &["fs_write"])
-                .expect("native corked writes"),
+            run(CORKED_WRITE, root.path(), lane, &["fs_write"]).expect("native corked writes"),
             ["5 3 null"]
         );
-        assert_eq!(std::fs::read(root.path().join("output.txt")).unwrap(), b"A\0\xff\xc3\xa9");
+        assert_eq!(
+            std::fs::read(root.path().join("output.txt")).unwrap(),
+            b"A\0\xff\xc3\xa9"
+        );
     }
 }
 
@@ -173,11 +196,13 @@ fn handle_write_stream_drains_then_closes_the_same_positioned_owner() {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("input.txt"), "abcdefghij").unwrap();
         assert_eq!(
-            run(WRITE_HANDLE, root.path(), lane, &["fs_write"])
-                .expect("native handle writer"),
+            run(WRITE_HANDLE, root.path(), lane, &["fs_write"]).expect("native handle writer"),
             ["2", "-1"]
         );
-        assert_eq!(std::fs::read_to_string(root.path().join("input.txt")).unwrap(), "aXYdefghij");
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("input.txt")).unwrap(),
+            "aXYdefghij"
+        );
     }
 }
 

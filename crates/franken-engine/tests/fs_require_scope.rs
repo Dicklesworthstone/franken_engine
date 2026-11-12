@@ -33,8 +33,7 @@ fn run(source: &str) -> Vec<String> {
 
 #[test]
 fn loop_local_loaders_are_called_instead_of_the_filesystem_facade() {
-    let output = run(
-        r#"
+    let output = run(r#"
         for (let require = name => 'for:' + name, i = 0; i < 1; i += 1) {
             console.log(require('fs'));
         }
@@ -48,15 +47,16 @@ fn loop_local_loaders_are_called_instead_of_the_filesystem_facade() {
             try { require('node:fs/promises'); }
             catch (error) { console.log(error.name); }
         }
-        "#,
+        "#);
+    assert_eq!(
+        output,
+        ["for:fs", "of:node:fs", "pattern:fs/promises", "TypeError"]
     );
-    assert_eq!(output, ["for:fs", "of:node:fs", "pattern:fs/promises", "TypeError"]);
 }
 
 #[test]
 fn dynamic_require_getter_keeps_its_receiver_and_observable_lookup() {
-    let output = run(
-        r#"
+    let output = run(r#"
         let gets = 0;
         const loader = {
             prefix: 'custom:',
@@ -67,15 +67,13 @@ fn dynamic_require_getter_keeps_its_receiver_and_observable_lookup() {
         };
         with (loader) { console.log(require('fs')); }
         console.log(gets);
-        "#,
-    );
+        "#);
     assert_eq!(output, ["custom:fs", "1"]);
 }
 
 #[test]
 fn named_class_require_remains_the_class_not_a_module_loader() {
-    let output = run(
-        r#"
+    let output = run(r#"
         const Loader = class require {
             static load() {
                 try { require('fs'); }
@@ -84,18 +82,15 @@ fn named_class_require_remains_the_class_not_a_module_loader() {
             }
         };
         console.log(Loader.load());
-        "#,
-    );
+        "#);
     assert_eq!(output, ["TypeError"]);
 }
 
 #[test]
 fn lexical_for_of_source_keeps_the_loop_bindings_temporal_dead_zone() {
-    let output = run(
-        r#"
+    let output = run(r#"
         try { for (let require of require('fs')) {} }
         catch (error) { console.log(error.name); }
-        "#,
-    );
+        "#);
     assert_eq!(output, ["ReferenceError"]);
 }

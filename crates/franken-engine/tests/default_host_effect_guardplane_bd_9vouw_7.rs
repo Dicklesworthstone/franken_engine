@@ -64,11 +64,17 @@ fn default_and_false_flags_keep_live_signed_host_observations_in_both_lanes() {
             assert_eq!(result.console_output[0].message, "observed");
             let primary = &result.evidence_entries[0];
             assert_eq!(
-                primary.metadata.get("guardplane_hook_enabled").map(String::as_str),
+                primary
+                    .metadata
+                    .get("guardplane_hook_enabled")
+                    .map(String::as_str),
                 Some("true")
             );
             assert_eq!(
-                primary.metadata.get("guardplane_hook_scope").map(String::as_str),
+                primary
+                    .metadata
+                    .get("guardplane_hook_scope")
+                    .map(String::as_str),
                 Some("host_effects")
             );
             assert!(!primary.metadata.contains_key("hook_requested_action"));
@@ -76,21 +82,33 @@ fn default_and_false_flags_keep_live_signed_host_observations_in_both_lanes() {
                 .evidence_entries
                 .iter()
                 .filter(|entry| {
-                    entry.metadata.get("guardplane_operation").map(String::as_str)
+                    entry
+                        .metadata
+                        .get("guardplane_operation")
+                        .map(String::as_str)
                         == Some("hostcall")
                 })
                 .collect();
             assert_eq!(effects.len(), 1, "{lane:?}: {metadata:?}");
             assert_eq!(
-                effects[0].metadata.get("guardplane_hostcall_capability").map(String::as_str),
+                effects[0]
+                    .metadata
+                    .get("guardplane_hostcall_capability")
+                    .map(String::as_str),
                 Some("console:log")
             );
             assert_eq!(
-                effects[0].metadata.get("guardplane_hostcall_allowed").map(String::as_str),
+                effects[0]
+                    .metadata
+                    .get("guardplane_hostcall_allowed")
+                    .map(String::as_str),
                 Some("true")
             );
             assert_eq!(
-                effects[0].metadata.get("guardplane_action").map(String::as_str),
+                effects[0]
+                    .metadata
+                    .get("guardplane_action")
+                    .map(String::as_str),
                 Some("allow")
             );
             for entry in &result.evidence_entries {
@@ -145,7 +163,11 @@ fn default_monitoring_preserves_symbol_utf16_and_ordinary_instruction_semantics(
             Some("0"),
             "pure instructions must not create per-instruction risk records"
         );
-        assert!(!result.evidence_entries[0].metadata.contains_key("hook_requested_action"));
+        assert!(
+            !result.evidence_entries[0]
+                .metadata
+                .contains_key("hook_requested_action")
+        );
     }
 }
 
@@ -177,11 +199,18 @@ fn declared_capability_breadth_does_not_contain_an_authorized_effect() {
         let result = orchestrator.execute(&input).expect("authorized effect");
         assert_eq!(result.console_output.len(), 1, "{lane:?}");
         assert_eq!(result.console_output[0].message, "broad-authority");
-        assert!(!result.evidence_entries[0].metadata.contains_key("hook_requested_action"));
+        assert!(
+            !result.evidence_entries[0]
+                .metadata
+                .contains_key("hook_requested_action")
+        );
         // Post-execution policy may still consider the declared authority.
         // The live hook must not treat declaration alone as an attempted abuse.
         assert!(result.evidence_entries.iter().any(|entry| {
-            entry.metadata.get("guardplane_hostcall_capability").map(String::as_str)
+            entry
+                .metadata
+                .get("guardplane_hostcall_capability")
+                .map(String::as_str)
                 == Some("console:log")
                 && entry.metadata.get("guardplane_action").map(String::as_str) == Some("allow")
         }));
@@ -190,10 +219,16 @@ fn declared_capability_breadth_does_not_contain_an_authorized_effect() {
 
 #[test]
 fn effects_only_policy_preserves_real_authority_and_stops_witness_denied_effects() {
-    let mut module = Ir3Module::new(ContentHash::compute(b"default-env-guard"), "default-env-guard");
+    let mut module = Ir3Module::new(
+        ContentHash::compute(b"default-env-guard"),
+        "default-env-guard",
+    );
     module.constant_pool = vec!["KEY".into()];
     module.instructions = vec![
-        Ir3Instruction::LoadStr { dst: 0, pool_index: 0 },
+        Ir3Instruction::LoadStr {
+            dst: 0,
+            pool_index: 0,
+        },
         Ir3Instruction::HostCall {
             capability: CapabilityTag("env:read".into()),
             args: RegRange { start: 0, count: 1 },
@@ -257,13 +292,25 @@ fn effects_only_policy_preserves_real_authority_and_stops_witness_denied_effects
                 }
             );
             if !authorized {
-                assert!(matches!(result, Err(InterpreterError::CapabilityDenied { .. })));
-                assert!(transcript.entries().is_empty(), "no unauthorized provider call");
+                assert!(matches!(
+                    result,
+                    Err(InterpreterError::CapabilityDenied { .. })
+                ));
+                assert!(
+                    transcript.entries().is_empty(),
+                    "no unauthorized provider call"
+                );
             } else if witness_denied {
                 let result = result.expect("containment stays a structured execution result");
                 assert_ne!(records[0].action, HookAction::Allow);
-                assert_eq!(result.result.requested_hook_action, Some(records[0].action.clone()));
-                assert!(transcript.entries().is_empty(), "contain before the snapshot read");
+                assert_eq!(
+                    result.result.requested_hook_action,
+                    Some(records[0].action.clone())
+                );
+                assert!(
+                    transcript.entries().is_empty(),
+                    "contain before the snapshot read"
+                );
             } else {
                 let result = result.expect("authorized snapshot read");
                 assert_eq!(records[0].action, HookAction::Allow);
@@ -294,9 +341,16 @@ fn explicit_instruction_policy_retains_its_scope_and_containment() {
             ))
             .expect("full instruction containment remains a structured result");
         assert!(result.console_output.is_empty());
-        assert!(result.evidence_entries[0].metadata.contains_key("hook_requested_action"));
+        assert!(
+            result.evidence_entries[0]
+                .metadata
+                .contains_key("hook_requested_action")
+        );
         assert_eq!(
-            result.evidence_entries[0].metadata.get("guardplane_hook_scope").map(String::as_str),
+            result.evidence_entries[0]
+                .metadata
+                .get("guardplane_hook_scope")
+                .map(String::as_str),
             Some("instructions_and_host_effects")
         );
     }

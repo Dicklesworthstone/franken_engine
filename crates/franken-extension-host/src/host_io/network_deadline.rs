@@ -7,7 +7,7 @@
 use super::control::OperationControl;
 use super::{HostIoControl, UnrestrictedHostIoControl};
 use std::io::{self, Read, Write};
-use std::net::{Shutdown, SocketAddr, TcpStream};
+use std::net::{IpAddr, Shutdown, SocketAddr, TcpStream};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -18,11 +18,88 @@ mod revocation;
 pub use revocation::NetworkRevocation;
 use revocation::REVOCATION_POLL_INTERVAL;
 
+/// Destination IP policy enforced after DNS resolution and before any socket
+/// connect (`[RC-C2]` / `g2vrp.9`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NetworkEgressPolicy {
+    /// Raw mechanism mode for embedders that wrap `SandboxedHostIo` in their
+    /// own product-level egress filter or run local `127.0.0.1` tests.
+    #[default]
+    Unrestricted,
+    /// Block loopback, RFC1918 private, link-local / cloud metadata
+    /// (`169.254.0.0/16`, `fe80::/10`), unique-local (`fc00::/7`), CGNAT
+    /// (`100.64.0.0/10`), unspecified, multicast, broadcast, documentation/test
+    /// ranges, and IPv4-mapped IPv6 equivalents (`::ffff:...`).
+    PublicInternetOnly,
+}
+
+impl NetworkEgressPolicy {
+    /// Returns `true` when `ip` is non-public (loopback, private, link-local /
+    /// cloud-metadata, CGNAT, unique-local, unspecified, multicast, broadcast,
+    /// or reserved documentation/benchmarking space), unwrapping IPv4-mapped
+    /// IPv6 addresses via `to_canonical()`.
+    #[must_use]
+    pub fn is_forbidden_public_egress_ip(ip: IpAddr) -> bool {
+        match ip.to_canonical() {
+            IpAddr::V4(v4) => {
+                let octets = v4.octets();
+                v4.is_loopback()
+                    || v4.is_private()
+                    || v4.is_link_local()
+                    || v4.is_unspecified()
+                    || v4.is_broadcast()
+                    || v4.is_multicast()
+                    || v4.is_documentation()
+                    // 0.0.0.0/8 ("this network")
+                    || octets[0] == 0
+                    // 100.64.0.0/10 (Carrier-Grade NAT, RFC 6598)
+                    || (octets[0] == 100 && (octets[1] & 0b1100_0000) == 64)
+                    // 192.0.0.0/24 (IETF protocol assignments)
+                    || (octets[0] == 192 && octets[1] == 0 && octets[2] == 0)
+                    // 198.18.0.0/15 (benchmarking, RFC 2544)
+                    || (octets[0] == 198 && (octets[1] == 18 || octets[1] == 19))
+                    // 240.0.0.0/4 (reserved for future use)
+                    || octets[0] >= 240
+            }
+            IpAddr::V6(v6) => {
+                let segs = v6.segments();
+                v6.is_loopback()
+                    || v6.is_unspecified()
+                    || v6.is_multicast()
+                    || v6.is_unique_local()
+                    || v6.is_unicast_link_local()
+                    // 2001:db8::/32 documentation
+                    || (segs[0] == 0x2001 && segs[1] == 0x0db8)
+                    // 100::/64 discard-only (RFC 6666)
+                    || (segs[0] == 0x0100 && segs[1] == 0 && segs[2] == 0 && segs[3] == 0)
+            }
+        }
+    }
+
+    pub(super) fn validate_addresses(self, addresses: &[SocketAddr]) -> io::Result<()> {
+        if self == Self::PublicInternetOnly {
+            for addr in addresses {
+                if Self::is_forbidden_public_egress_ip(addr.ip()) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        format!(
+                            "SSRF egress policy blocked non-public destination {}",
+                            addr.ip()
+                        ),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct NetworkDeadline {
     end: Instant,
     revocation: Option<NetworkRevocation>,
     control: Option<OperationControl>,
+    egress_policy: NetworkEgressPolicy,
 }
 
 impl NetworkDeadline {
@@ -44,6 +121,7 @@ impl NetworkDeadline {
             end,
             revocation: None,
             control: None,
+            egress_policy: NetworkEgressPolicy::Unrestricted,
         }
     }
 
@@ -100,6 +178,7 @@ impl DeadlineTcpStream {
         addresses: &[SocketAddr],
         deadline: NetworkDeadline,
     ) -> io::Result<Self> {
+        deadline.egress_policy.validate_addresses(addresses)?;
         if addresses.len() == 1 {
             return Self::connect(&addresses[0], deadline);
         }
@@ -250,6 +329,7 @@ impl super::SandboxedHostIo {
     pub(super) fn network_deadline(&self) -> io::Result<NetworkDeadline> {
         let mut deadline = NetworkDeadline::new(self.network_timeout)?;
         deadline.revocation = Some(self.network_revocation.clone());
+        deadline.egress_policy = self.egress_policy;
         deadline.remaining()?;
         Ok(deadline)
     }
@@ -1131,6 +1211,58 @@ mod pinned_tests {
                 .unwrap_err()
                 .kind(),
             io::ErrorKind::TimedOut
+        );
+    }
+
+    #[test]
+    fn public_egress_only_policy_blocks_metadata_loopback_private_and_mapped_ipv6() {
+        let forbidden = [
+            "127.0.0.1",
+            "10.0.0.1",
+            "172.16.0.1",
+            "192.168.1.1",
+            "169.254.169.254",
+            "100.64.0.1",
+            "0.0.0.0",
+            "::1",
+            "fe80::1",
+            "fc00::1",
+            "::ffff:169.254.169.254",
+            "::ffff:127.0.0.1",
+        ];
+        for raw in forbidden {
+            let ip: IpAddr = raw.parse().unwrap();
+            assert!(
+                NetworkEgressPolicy::is_forbidden_public_egress_ip(ip),
+                "expected {raw} to be blocked by PublicInternetOnly policy"
+            );
+        }
+        for allowed in ["1.1.1.1", "8.8.8.8", "2606:4700:4700::1111"] {
+            let ip: IpAddr = allowed.parse().unwrap();
+            assert!(
+                !NetworkEgressPolicy::is_forbidden_public_egress_ip(ip),
+                "expected {allowed} to be permitted by PublicInternetOnly policy"
+            );
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let provider = SandboxedHostIo::with_root(dir.path())
+            .unwrap()
+            .with_public_egress_only();
+        let err = crate::host_io::HostIoProvider::perform(
+            &provider,
+            &HostIoRequest::NetworkSend {
+                endpoint: addr.to_string(),
+                payload: b"GET /latest/meta-data/ HTTP/1.1\r\n\r\n".to_vec(),
+            },
+            &[HostIoCapability::NetworkSend],
+        )
+        .expect_err("loopback/SSRF target must be denied before socket connect");
+        assert!(
+            format!("{err:?}").contains("SSRF egress policy blocked non-public destination"),
+            "unexpected error: {err:?}"
         );
     }
 }

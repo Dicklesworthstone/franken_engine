@@ -96,7 +96,6 @@ fn events_static_helpers_match_node() {
     assert_eq!(printed, EXPECTED);
 }
 
-
 /// Literal CommonJS requests and cross-file destructuring must reach the same
 /// retained Events factory as an aliased require. Otherwise a later file
 /// reinitializes the constructor, loses settings and replaces captured helpers.
@@ -177,14 +176,21 @@ console.log('helpers', E === alias, E.EventEmitter === E,
         })
         .execute(&package)
         .unwrap_or_else(|error| panic!("native events execute in {lane:?}: {error}"));
-        let actual: Vec<_> = result.console_output.iter()
-            .map(|entry| entry.message.as_str()).collect();
-        assert_eq!(actual, [
-            "helpers true true 1 true",
-            "iterator 7,x 1",
-            "settings 17 21 1 object",
-            "once 42",
-            "shared true true 91 31 true true",
-        ], "{lane:?}");
+        let actual: Vec<_> = result
+            .console_output
+            .iter()
+            .map(|entry| entry.message.as_str())
+            .collect();
+        assert_eq!(
+            actual,
+            [
+                "helpers true true 1 true",
+                "iterator 7,x 1",
+                "settings 17 21 1 object",
+                "once 42",
+                "shared true true 91 31 true true",
+            ],
+            "{lane:?}"
+        );
     }
 }

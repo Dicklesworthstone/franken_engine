@@ -106,7 +106,10 @@ fn sparse_shift_unshift_preserve_live_reads_writes_and_abrupt_prefixes() {
         "5 glength,h3,d4,h2,g2,s3,h1,d2,h0,g0,s1,s0,slength {\"0\":\"x\",\"1\":\"a\",\"3\":\"c\",\"length\":5}",
     ];
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        assert_eq!(run(SHIFT_SOURCE, lane).expect("native sparse mutations"), expected);
+        assert_eq!(
+            run(SHIFT_SOURCE, lane).expect("native sparse mutations"),
+            expected
+        );
     }
 }
 
@@ -121,10 +124,13 @@ var b = []; b.length = 4294967293; b[7] = payload; b[4294967292] = 'tail';
 console.log(b.unshift('x', 'y'), b[0], b[1], b[9] === payload, b[4294967294], 7 in b);
 "#;
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        assert_eq!(run(source, lane).expect("bounded indexed moves"), [
-            "head 4294967294 true tail false named",
-            "4294967295 x y true tail false",
-        ]);
+        assert_eq!(
+            run(source, lane).expect("bounded indexed moves"),
+            [
+                "head 4294967294 true tail false named",
+                "4294967295 x y true tail false",
+            ]
+        );
     }
 }
 

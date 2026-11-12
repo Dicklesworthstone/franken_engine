@@ -54,20 +54,20 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 // Filesystem methods retain the caller's FsRead/FsWrite checks at invocation.
+#[cfg(test)]
+#[path = "diagnostics_channel_module_tests.rs"]
+mod diagnostics_channel_module_tests;
 #[path = "fs_module.rs"]
 mod fs_module;
-#[path = "stream_operators.rs"]
-mod stream_operators;
-#[path = "zlib_module.rs"]
-mod zlib_module;
 #[path = "native_module_loader.rs"]
 mod native_module_loader;
 #[cfg(test)]
 #[path = "readline_module_tests.rs"]
 mod readline_module_tests;
-#[cfg(test)]
-#[path = "diagnostics_channel_module_tests.rs"]
-mod diagnostics_channel_module_tests;
+#[path = "stream_operators.rs"]
+mod stream_operators;
+#[path = "zlib_module.rs"]
+mod zlib_module;
 
 use super::LoweringPipelineError;
 use super::native_module_source::NativeModuleSource;
@@ -451,12 +451,27 @@ const ASSERT_GLOBALS: [&str; 10] = [
 ];
 
 const READLINE_GLOBALS: [&str; 11] = [
-    "AbortController", "AbortSignal", "Date", "Error", "Object", "Promise",
-    "Reflect", "String", "Symbol", "TypeError", "WeakMap",
+    "AbortController",
+    "AbortSignal",
+    "Date",
+    "Error",
+    "Object",
+    "Promise",
+    "Reflect",
+    "String",
+    "Symbol",
+    "TypeError",
+    "WeakMap",
 ];
 
 const DIAGNOSTICS_CHANNEL_GLOBALS: [&str; 7] = [
-    "Array", "Map", "Object", "Reflect", "TypeError", "WeakMap", "queueMicrotask",
+    "Array",
+    "Map",
+    "Object",
+    "Reflect",
+    "TypeError",
+    "WeakMap",
+    "queueMicrotask",
 ];
 
 const VM_GLOBALS: [&str; 2] = ["EvalError", "TypeError"];
@@ -493,11 +508,32 @@ const STREAM_CONSUMERS_GLOBALS: [&str; 8] = [
 ];
 
 const WEB_STREAMS_GLOBALS: [&str; 26] = [
-    "AbortController", "AbortSignal", "ArrayBuffer", "BigInt64Array", "BigUint64Array",
-    "DataView", "EventTarget", "Float32Array", "Float64Array", "Int8Array", "Int16Array",
-    "Int32Array", "Object", "Promise", "RangeError", "Reflect", "String", "Symbol",
-    "TextDecoder", "TextEncoder", "TypeError", "Uint8Array", "Uint8ClampedArray",
-    "Uint16Array", "Uint32Array", "WeakMap",
+    "AbortController",
+    "AbortSignal",
+    "ArrayBuffer",
+    "BigInt64Array",
+    "BigUint64Array",
+    "DataView",
+    "EventTarget",
+    "Float32Array",
+    "Float64Array",
+    "Int8Array",
+    "Int16Array",
+    "Int32Array",
+    "Object",
+    "Promise",
+    "RangeError",
+    "Reflect",
+    "String",
+    "Symbol",
+    "TextDecoder",
+    "TextEncoder",
+    "TypeError",
+    "Uint8Array",
+    "Uint8ClampedArray",
+    "Uint16Array",
+    "Uint32Array",
+    "WeakMap",
 ];
 
 const STREAM_GLOBALS: [&str; 22] = [
@@ -566,9 +602,7 @@ pub(super) fn is_module_declaration(statement: &Statement) -> bool {
     )
 }
 
-pub(crate) fn has_ambient_fs_require(
-    tree: &SyntaxTree,
-) -> Result<bool, LoweringPipelineError> {
+pub(crate) fn has_ambient_fs_require(tree: &SyntaxTree) -> Result<bool, LoweringPipelineError> {
     fs_module::has_ambient_fs_require(tree)
 }
 
@@ -718,9 +752,12 @@ pub(crate) fn native_runtime_module_tree(
         rewrite_module_objects_with_runtime_sources(&tree, true, false)?.ok_or_else(invalid)?;
     if matches!(
         native,
-        NativeBuiltinModule::Stream | NativeBuiltinModule::StreamPromises
-            | NativeBuiltinModule::Fs | NativeBuiltinModule::FsPromises
-            | NativeBuiltinModule::Readline | NativeBuiltinModule::ReadlinePromises
+        NativeBuiltinModule::Stream
+            | NativeBuiltinModule::StreamPromises
+            | NativeBuiltinModule::Fs
+            | NativeBuiltinModule::FsPromises
+            | NativeBuiltinModule::Readline
+            | NativeBuiltinModule::ReadlinePromises
     ) {
         // The runtime provider shares its dependencies with public native
         // imports. Re-running the legacy Events initializer would reset
@@ -1076,10 +1113,19 @@ fn facade_claimed_events_declarators(body: &[Statement]) -> BTreeSet<(usize, usi
                         && (super::is_require_event_emitter_member_initializer(
                             initializer,
                             &lookup,
-                        ) || super::is_require_events_module_initializer(initializer, &lookup)))
+                        ) || super::is_require_events_module_initializer(
+                            initializer,
+                            &lookup,
+                        )))
                         || (modules.contains(local)
-                            && super::is_require_events_module_initializer(initializer, &lookup)
-                            && finite(local, super::LoweringOnlyModuleAliasSurface::EventsModule)) =>
+                            && super::is_require_events_module_initializer(
+                                initializer,
+                                &lookup,
+                            )
+                            && finite(
+                                local,
+                                super::LoweringOnlyModuleAliasSurface::EventsModule,
+                            )) =>
                 {
                     claimed.insert((statement_index, declarator_index));
                 }
@@ -1204,11 +1250,16 @@ fn facade_claimed_stream_declarators(body: &[Statement]) -> BTreeSet<(usize, usi
     const READLINE: Search = Search {
         statement: |_| false,
         expression: |expression| {
-            matches!(builtin_require_member(expression), Some((PureModule::Readline, _)))
+            matches!(
+                builtin_require_member(expression),
+                Some((PureModule::Readline, _))
+            )
         },
     };
     if stream_operators::requires_stream_module(body)
-        || body.iter().any(|statement| READLINE.in_statement(statement))
+        || body
+            .iter()
+            .any(|statement| READLINE.in_statement(statement))
     {
         return BTreeSet::new();
     }
@@ -1413,14 +1464,14 @@ fn module_syntax_source(module: PureModule) -> &'static NativeModuleSource {
     static DECODER: NativeModuleSource =
         NativeModuleSource::new("franken:string_decoder", STRING_DECODER_SOURCE);
     static VM: NativeModuleSource = NativeModuleSource::new("franken:vm", VM_SOURCE);
-    static READLINE: NativeModuleSource = NativeModuleSource::new("franken:readline", READLINE_SOURCE);
+    static READLINE: NativeModuleSource =
+        NativeModuleSource::new("franken:readline", READLINE_SOURCE);
     static DIAGNOSTICS_CHANNEL: NativeModuleSource =
         NativeModuleSource::new("franken:diagnostics_channel", DIAGNOSTICS_CHANNEL_SOURCE);
     static BUFFER: NativeModuleSource = NativeModuleSource::new("franken:buffer", BUFFER_SOURCE);
     static QUERYSTRING: NativeModuleSource =
         NativeModuleSource::new("franken:querystring", QUERYSTRING_SOURCE);
-    static ZLIB: NativeModuleSource =
-        NativeModuleSource::new("franken:zlib", zlib_module::SOURCE);
+    static ZLIB: NativeModuleSource = NativeModuleSource::new("franken:zlib", zlib_module::SOURCE);
     static STREAM: NativeModuleSource = NativeModuleSource::new("franken:stream", STREAM_SOURCE);
     static CONSUMERS: NativeModuleSource =
         NativeModuleSource::new("franken:stream/consumers", STREAM_CONSUMERS_SOURCE);
@@ -1511,8 +1562,10 @@ fn module_source_with_runtime_sources(
 }
 
 fn native_buffer_bindings(initializer: Expression) -> Result<Expression, LoweringPipelineError> {
-    static SOURCE: NativeModuleSource =
-        NativeModuleSource::new("franken:native-buffer-bindings", NATIVE_BUFFER_BINDINGS_SOURCE);
+    static SOURCE: NativeModuleSource = NativeModuleSource::new(
+        "franken:native-buffer-bindings",
+        NATIVE_BUFFER_BINDINGS_SOURCE,
+    );
     let invalid = || LoweringPipelineError::InvariantViolation {
         detail: "the native Buffer constructor bindings are invalid",
     };
@@ -1944,9 +1997,19 @@ mod tests {
     #[test]
     fn authenticated_commonjs_native_source_loads_keep_runtime_identity() {
         for name in [
-            "util", "util/types", "events", "assert", "assert/strict", "timers",
-            "timers/promises", "string_decoder", "buffer", "stream", "stream/promises",
-            "stream/consumers", "stream/web",
+            "util",
+            "util/types",
+            "events",
+            "assert",
+            "assert/strict",
+            "timers",
+            "timers/promises",
+            "string_decoder",
+            "buffer",
+            "stream",
+            "stream/promises",
+            "stream/consumers",
+            "stream/web",
         ] {
             for specifier in [name.to_string(), format!("node:{name}")] {
                 assert!(NativeBuiltinModule::from_specifier(&specifier).is_some());
@@ -2169,20 +2232,43 @@ mod tests {
             (PureModule::Events, "franken:events", EVENTS_SOURCE),
             (PureModule::Assert, "franken:assert", ASSERT_SOURCE),
             (PureModule::Timers, "franken:timers", TIMERS_SOURCE),
-            (PureModule::StringDecoder, "franken:string_decoder", STRING_DECODER_SOURCE),
+            (
+                PureModule::StringDecoder,
+                "franken:string_decoder",
+                STRING_DECODER_SOURCE,
+            ),
             (PureModule::Readline, "franken:readline", READLINE_SOURCE),
-            (PureModule::DiagnosticsChannel, "franken:diagnostics_channel", DIAGNOSTICS_CHANNEL_SOURCE),
+            (
+                PureModule::DiagnosticsChannel,
+                "franken:diagnostics_channel",
+                DIAGNOSTICS_CHANNEL_SOURCE,
+            ),
             (PureModule::Vm, "franken:vm", VM_SOURCE),
             (PureModule::Buffer, "franken:buffer", BUFFER_SOURCE),
-            (PureModule::Querystring, "franken:querystring", QUERYSTRING_SOURCE),
+            (
+                PureModule::Querystring,
+                "franken:querystring",
+                QUERYSTRING_SOURCE,
+            ),
             (PureModule::Zlib, "franken:zlib", zlib_module::SOURCE),
             (PureModule::Stream, "franken:stream", STREAM_SOURCE),
-            (PureModule::StreamConsumers, "franken:stream/consumers", STREAM_CONSUMERS_SOURCE),
-            (PureModule::WebStreams, "franken:stream/web", WEB_STREAMS_SOURCE),
+            (
+                PureModule::StreamConsumers,
+                "franken:stream/consumers",
+                STREAM_CONSUMERS_SOURCE,
+            ),
+            (
+                PureModule::WebStreams,
+                "franken:stream/web",
+                WEB_STREAMS_SOURCE,
+            ),
         ] {
             let tree = CanonicalEs2020Parser
                 .parse_with_options(
-                    ParserSource { label: label.into(), text: source.into() },
+                    ParserSource {
+                        label: label.into(),
+                        text: source.into(),
+                    },
                     ParseGoal::Script,
                     &ParserOptions::default(),
                 )
@@ -2191,7 +2277,10 @@ mod tests {
                 panic!("one module expression for {label}");
             };
             let cached = parse_module_source(module).expect("cached module source");
-            assert_eq!(cached, statement.expression, "exact syntax and spans for {label}");
+            assert_eq!(
+                cached, statement.expression,
+                "exact syntax and spans for {label}"
+            );
             assert_eq!(
                 cached.canonical_value(),
                 statement.expression.canonical_value(),
@@ -2288,18 +2377,21 @@ mod tests {
     /// dependency is a module value, not an ambient name or HostCall.
     #[test]
     fn buffer_source_reads_only_its_globals() {
-        let names: BTreeSet<String> =
-            BUFFER_GLOBALS.iter().map(|name| name.to_string()).collect();
+        let names: BTreeSet<String> = BUFFER_GLOBALS.iter().map(|name| name.to_string()).collect();
         let mut expected = names.clone();
         expected.extend(BUFFER_PLACEHOLDERS.iter().map(|(name, _)| name.to_string()));
         expected.insert("arguments".to_string());
         let free = free_names(&mut parse_module_source(PureModule::Buffer).expect("parses"));
         assert_eq!(free, expected);
-        let protected =
-            free_names(&mut module_source(&names, PureModule::Buffer).expect("builds"));
-        assert_eq!(protected, BTreeSet::from([
-            "globalThis".to_string(), "arguments".to_string(), WEB_STREAMS_BINDING.to_string(),
-        ]));
+        let protected = free_names(&mut module_source(&names, PureModule::Buffer).expect("builds"));
+        assert_eq!(
+            protected,
+            BTreeSet::from([
+                "globalThis".to_string(),
+                "arguments".to_string(),
+                WEB_STREAMS_BINDING.to_string(),
+            ])
+        );
     }
 
     #[test]
@@ -2309,14 +2401,29 @@ mod tests {
             "const b=require('node:buffer'); const w=require('stream/web'); b.Blob===Blob;",
             "function unused(){return require('buffer').File;} require('node:stream/web');",
         ] {
-            let tree = CanonicalEs2020Parser.parse_with_options(
-                ParserSource { label: "binary-files.js".into(), text: source.into() },
-                ParseGoal::Script, &ParserOptions::default(),
-            ).expect("program parses");
-            let rewritten = rewrite_util_requires(&tree).unwrap().expect("shared modules");
-            let declarations: Vec<_> = rewritten.body.iter()
-                .filter(|statement| is_module_declaration(statement)).collect();
-            assert_eq!(declarations.len(), 2, "only buffer and stream/web: {source}");
+            let tree = CanonicalEs2020Parser
+                .parse_with_options(
+                    ParserSource {
+                        label: "binary-files.js".into(),
+                        text: source.into(),
+                    },
+                    ParseGoal::Script,
+                    &ParserOptions::default(),
+                )
+                .expect("program parses");
+            let rewritten = rewrite_util_requires(&tree)
+                .unwrap()
+                .expect("shared modules");
+            let declarations: Vec<_> = rewritten
+                .body
+                .iter()
+                .filter(|statement| is_module_declaration(statement))
+                .collect();
+            assert_eq!(
+                declarations.len(),
+                2,
+                "only buffer and stream/web: {source}"
+            );
             assert!(rewrite_util_requires(&rewritten).unwrap().is_none());
         }
         assert_eq!(intrinsic_capability("__franken_buffer_web_streams"), None);
@@ -3196,7 +3303,10 @@ mod web_stream_tests {
     fn parse(source: &str) -> SyntaxTree {
         CanonicalEs2020Parser
             .parse_with_options(
-                ParserSource { label: "web-streams.js".into(), text: source.into() },
+                ParserSource {
+                    label: "web-streams.js".into(),
+                    text: source.into(),
+                },
                 ParseGoal::Script,
                 &ParserOptions::default(),
             )
@@ -3226,7 +3336,10 @@ mod web_stream_tests {
             "const name = 'stream/web'; require(name);",
             "require('stream/web/unknown');",
         ] {
-            assert!(rewrite_util_requires(&parse(source)).unwrap().is_none(), "{source}");
+            assert!(
+                rewrite_util_requires(&parse(source)).unwrap().is_none(),
+                "{source}"
+            );
         }
     }
 

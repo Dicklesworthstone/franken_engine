@@ -5,14 +5,21 @@
 
 use std::collections::BTreeSet;
 
-use super::super::{ModuleRenamer, NativeModuleSource, READLINE_MODULE_BINDING};
 use super::super::super::with_statement::{
     Outcome, Walk, lexical_names, var_names, walk_expression,
 };
+use super::super::{ModuleRenamer, NativeModuleSource, READLINE_MODULE_BINDING};
 use crate::ast::{BindingPattern, Expression, Statement, SyntaxTree};
 
 const GLOBALS: [&str; 8] = [
-    "Array", "Number", "Object", "Promise", "RangeError", "Reflect", "TypeError", "WeakMap",
+    "Array",
+    "Number",
+    "Object",
+    "Promise",
+    "RangeError",
+    "Reflect",
+    "TypeError",
+    "WeakMap",
 ];
 const TICK: &str = "__franken_readline_cursor_tick";
 static INSTALLER: NativeModuleSource = NativeModuleSource::new(
@@ -41,7 +48,13 @@ pub(super) fn compose(tree: &mut SyntaxTree, bindings: &BTreeSet<String>) -> Out
     lexical_names(&tree.body, &mut names);
     for statement in &tree.body {
         if let Statement::Import(import) = statement {
-            names.extend(import.clause.binding_names().into_iter().map(str::to_string));
+            names.extend(
+                import
+                    .clause
+                    .binding_names()
+                    .into_iter()
+                    .map(str::to_string),
+            );
         }
     }
     let mut installer = INSTALLER.expression()?;
@@ -79,8 +92,8 @@ pub(super) fn compose(tree: &mut SyntaxTree, bindings: &BTreeSet<String>) -> Out
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::super::{rewrite_module_objects, rewrite_util_requires};
+    use super::*;
     use crate::ast::ParseGoal;
     use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 
@@ -104,7 +117,10 @@ mod tests {
         let globals: BTreeSet<String> = GLOBALS.iter().map(|name| (*name).into()).collect();
         let mut expected = globals.clone();
         expected.insert(TICK.into());
-        assert_eq!(super::super::super::tests::free_names(&mut source), expected);
+        assert_eq!(
+            super::super::super::tests::free_names(&mut source),
+            expected
+        );
         TickIntrinsic.expression(&mut source).unwrap();
         ModuleRenamer {
             through_global_object: globals,
@@ -134,11 +150,15 @@ mod tests {
             let rewritten = rewrite_util_requires(&tree).unwrap().unwrap();
             assert_eq!(rewritten.body.len(), objects.body.len());
             assert!(rewrite_util_requires(&rewritten).unwrap().is_none());
-            let count = rewritten.body.iter().filter(|statement| {
-                matches!(statement, Statement::VariableDeclaration(declaration)
+            let count = rewritten
+                .body
+                .iter()
+                .filter(|statement| {
+                    matches!(statement, Statement::VariableDeclaration(declaration)
                     if matches!(&declaration.declarations[0].pattern,
                         BindingPattern::Identifier(name) if name == READLINE_MODULE_BINDING))
-            }).count();
+                })
+                .count();
             assert_eq!(count, 1);
         }
     }

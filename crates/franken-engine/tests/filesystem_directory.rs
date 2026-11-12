@@ -37,13 +37,26 @@ fn run(source: &str, root: &Path, caps: &[&str], lane: LaneChoice) -> Result<Run
         version: "1.0.0".into(),
         metadata: BTreeMap::new(),
     };
-    let result = orchestrator.execute(&package).map_err(|error| format!("{error:?}"))?;
-    Ok((result.console_output.into_iter().map(|entry| entry.message).collect(), recording.entries()))
+    let result = orchestrator
+        .execute(&package)
+        .map_err(|error| format!("{error:?}"))?;
+    Ok((
+        result
+            .console_output
+            .into_iter()
+            .map(|entry| entry.message)
+            .collect(),
+        recording.entries(),
+    ))
 }
 
 fn fixture(root: &Path) {
     std::fs::create_dir_all(root.join("tree/sub/deep")).unwrap();
-    for (file, bytes) in [("tree/a.txt", "a"), ("tree/sub/b.txt", "b"), ("tree/sub/deep/c.txt", "c")] {
+    for (file, bytes) in [
+        ("tree/a.txt", "a"),
+        ("tree/sub/b.txt", "b"),
+        ("tree/sub/deep/c.txt", "c"),
+    ] {
         std::fs::write(root.join(file), bytes).unwrap();
     }
 }
@@ -60,12 +73,35 @@ fn recursive_directory_iteration_completes_with_only_native_read_effects() {
              console.log(files.sort().join(','));try{dir.readSync();}catch(e){console.log(e.code);}})();",
             root.path(), &["fs_read"], lane,
         ).expect("native directory completion");
-        assert_eq!(lines, ["tree/a.txt,tree/sub/b.txt,tree/sub/deep/c.txt", "ERR_DIR_CLOSED"]);
-        let directories = effects.iter().filter(|(request, _)| matches!(request,
-            HostIoRequest::FsMeta { operation: FsOperation::ReadDir, .. })).count();
+        assert_eq!(
+            lines,
+            [
+                "tree/a.txt,tree/sub/b.txt,tree/sub/deep/c.txt",
+                "ERR_DIR_CLOSED"
+            ]
+        );
+        let directories = effects
+            .iter()
+            .filter(|(request, _)| {
+                matches!(
+                    request,
+                    HostIoRequest::FsMeta {
+                        operation: FsOperation::ReadDir,
+                        ..
+                    }
+                )
+            })
+            .count();
         assert_eq!(directories, 3);
-        assert!(effects.iter().all(|(request, _)| request.required_capability() == HostIoCapability::FsRead));
-        assert_eq!(std::fs::read(root.path().join("tree/sub/deep/c.txt")).unwrap(), b"c");
+        assert!(
+            effects
+                .iter()
+                .all(|(request, _)| request.required_capability() == HostIoCapability::FsRead)
+        );
+        assert_eq!(
+            std::fs::read(root.path().join("tree/sub/deep/c.txt")).unwrap(),
+            b"c"
+        );
     }
 }
 
@@ -81,8 +117,19 @@ fn early_return_releases_the_cursor_without_prefetching_child_directories() {
             root.path(), &["fs_read"], lane,
         ).expect("early cleanup and protected realm helpers");
         assert_eq!(lines, ["ERR_DIR_CLOSED"]);
-        assert_eq!(effects.iter().filter(|(request, _)| matches!(request,
-            HostIoRequest::FsMeta { operation: FsOperation::ReadDir, .. })).count(), 1);
+        assert_eq!(
+            effects
+                .iter()
+                .filter(|(request, _)| matches!(
+                    request,
+                    HostIoRequest::FsMeta {
+                        operation: FsOperation::ReadDir,
+                        ..
+                    }
+                ))
+                .count(),
+            1
+        );
     }
 }
 
@@ -99,7 +146,10 @@ fn accepted_reads_finish_before_close_and_sync_calls_cannot_race_them() {
              await closing;try{dir.read();}catch(e){console.log(e.code);}});",
             root.path(), &["fs_read"], lane,
         ).expect("queued directory operations complete");
-        assert_eq!(lines, ["ERR_DIR_CONCURRENT_OPERATION", "2 true", "ERR_DIR_CLOSED"]);
+        assert_eq!(
+            lines,
+            ["ERR_DIR_CONCURRENT_OPERATION", "2 true", "ERR_DIR_CLOSED"]
+        );
     }
 }
 
@@ -108,8 +158,13 @@ fn directory_iteration_never_infers_read_authority_from_write_permission() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
         let root = tempfile::tempdir().unwrap();
         fixture(root.path());
-        let error = run("require('fs').opendirSync('tree');", root.path(), &["fs_write"], lane)
-            .expect_err("directory acquisition requires FsRead");
+        let error = run(
+            "require('fs').opendirSync('tree');",
+            root.path(),
+            &["fs_write"],
+            lane,
+        )
+        .expect_err("directory acquisition requires FsRead");
         assert!(error.to_ascii_lowercase().contains("capabil"), "{error}");
     }
 }
@@ -125,18 +180,34 @@ fn glob_discovery_prunes_unreachable_and_excluded_trees_on_both_lanes() {
             "const fs=require('node:fs');const String='guest';const Object='guest';\
              console.log(fs.globSync(['tree/**/*.txt','tree/a.txt'],\
              {exclude:['tree/sub/deep/**']}).sort().join(','));",
-            root.path(), &["fs_read"], lane,
-        ).expect("glob uses the real protected filesystem factory");
+            root.path(),
+            &["fs_read"],
+            lane,
+        )
+        .expect("glob uses the real protected filesystem factory");
         assert_eq!(lines, ["tree/a.txt,tree/sub/b.txt"]);
-        let directories: Vec<_> = effects.iter().filter_map(|(request, _)| {
-            match request {
-                HostIoRequest::FsMeta { operation: FsOperation::ReadDir, path, .. } => Some(path),
+        let directories: Vec<_> = effects
+            .iter()
+            .filter_map(|(request, _)| match request {
+                HostIoRequest::FsMeta {
+                    operation: FsOperation::ReadDir,
+                    path,
+                    ..
+                } => Some(path),
                 _ => None,
-            }
-        }).collect();
+            })
+            .collect();
         assert_eq!(directories.len(), 3, "root, tree, and tree/sub only");
-        assert!(directories.iter().all(|path| !path.contains("unrelated") && !path.ends_with("/deep")));
-        assert!(effects.iter().all(|(request, _)| request.required_capability() == HostIoCapability::FsRead));
+        assert!(
+            directories
+                .iter()
+                .all(|path| !path.contains("unrelated") && !path.ends_with("/deep"))
+        );
+        assert!(
+            effects
+                .iter()
+                .all(|(request, _)| request.required_capability() == HostIoCapability::FsRead)
+        );
     }
 }
 
@@ -151,11 +222,25 @@ fn glob_async_iterator_returns_without_acquiring_unrequested_descendants() {
              const scan=glob('tree/**',{withFileTypes:true});\
              const first=await scan.next();console.log(first.value.name,first.value.isDirectory());\
              await scan.return();console.log((await scan.next()).done);})();",
-            root.path(), &["fs_read"], lane,
-        ).expect("native async iterator cleanup and completion");
+            root.path(),
+            &["fs_read"],
+            lane,
+        )
+        .expect("native async iterator cleanup and completion");
         assert_eq!(lines, ["tree true", "true"]);
-        assert_eq!(effects.iter().filter(|(request, _)| matches!(request,
-            HostIoRequest::FsMeta { operation: FsOperation::ReadDir, .. })).count(), 1);
+        assert_eq!(
+            effects
+                .iter()
+                .filter(|(request, _)| matches!(
+                    request,
+                    HostIoRequest::FsMeta {
+                        operation: FsOperation::ReadDir,
+                        ..
+                    }
+                ))
+                .count(),
+            1
+        );
     }
 }
 
@@ -168,8 +253,11 @@ fn glob_braces_ranges_and_async_iteration_produce_exact_completion_output() {
             "const fs=require('fs');(async function(){const files=[];\
              for await(const entry of fs.promises.glob('tree/{a,sub/[b-c]}.txt'))files.push(entry);\
              console.log('GLOB_COMPLETE',files.sort().join(','));})();",
-            root.path(), &["fs_read"], lane,
-        ).expect("native generator drains all matching paths");
+            root.path(),
+            &["fs_read"],
+            lane,
+        )
+        .expect("native generator drains all matching paths");
         assert_eq!(lines, ["GLOB_COMPLETE tree/a.txt,tree/sub/b.txt"]);
     }
 }
@@ -182,13 +270,24 @@ fn glob_invalid_queries_fail_before_io_and_no_match_does_not_grant_authority() {
         let (lines, effects) = run(
             "const fs=require('fs');try{fs.globSync('../*');}catch(e){console.log(e.code);}\
              try{fs.globSync(new Array(129).fill('*'));}catch(e){console.log(e.code);}",
-            root.path(), &[], lane,
-        ).expect("query validation requires no filesystem authority");
+            root.path(),
+            &[],
+            lane,
+        )
+        .expect("query validation requires no filesystem authority");
         assert_eq!(lines, ["ERR_FS_GLOB_UNSUPPORTED", "ERR_FS_GLOB_LIMIT"]);
         assert!(effects.is_empty());
-        let refused = run("require('fs').globSync('missing/**/*.txt');", root.path(), &["fs_write"], lane)
-            .expect_err("even no-match discovery requires explicit read authority");
-        assert!(refused.to_ascii_lowercase().contains("capabil"), "{refused}");
+        let refused = run(
+            "require('fs').globSync('missing/**/*.txt');",
+            root.path(),
+            &["fs_write"],
+            lane,
+        )
+        .expect_err("even no-match discovery requires explicit read authority");
+        assert!(
+            refused.to_ascii_lowercase().contains("capabil"),
+            "{refused}"
+        );
     }
 }
 
@@ -210,15 +309,24 @@ fn callback_glob_drains_before_completion_and_prunes_with_typed_predicates() {
         )
         .expect("shared callback collector completes with protected Promise helpers");
         assert_eq!(lines, ["SUBMITTED", "CALLBACK_GLOB false a.txt,b.txt"]);
-        let directories: Vec<_> = effects.iter().filter_map(|(request, _)| {
-            match request {
-                HostIoRequest::FsMeta { operation: FsOperation::ReadDir, path, .. } => Some(path),
+        let directories: Vec<_> = effects
+            .iter()
+            .filter_map(|(request, _)| match request {
+                HostIoRequest::FsMeta {
+                    operation: FsOperation::ReadDir,
+                    path,
+                    ..
+                } => Some(path),
                 _ => None,
-            }
-        }).collect();
+            })
+            .collect();
         assert_eq!(directories.len(), 3);
         assert!(directories.iter().all(|path| !path.ends_with("/deep")));
-        assert!(effects.iter().all(|(request, _)| request.required_capability() == HostIoCapability::FsRead));
+        assert!(
+            effects
+                .iter()
+                .all(|(request, _)| request.required_capability() == HostIoCapability::FsRead)
+        );
     }
 }
 
@@ -258,7 +366,14 @@ fn predicate_mutations_do_not_change_captured_glob_descent_or_retain_failed_scan
             lane,
         )
         .expect("predicate invocation cannot rewrite traversal decisions");
-        assert_eq!(lines, ["PREDICATE_FILES a.txt,b.txt,c.txt", "SAME_FAILURE true", "CLOSED_SCAN true"]);
+        assert_eq!(
+            lines,
+            [
+                "PREDICATE_FILES a.txt,b.txt,c.txt",
+                "SAME_FAILURE true",
+                "CLOSED_SCAN true"
+            ]
+        );
         assert!(effects.iter().all(|(request, _)| match request {
             HostIoRequest::FsMeta { path, .. } => !path.contains("outside"),
             _ => true,

@@ -33,7 +33,7 @@
     },
     {
       "feature": "sibling-dataframes",
-      "default_enabled": true,
+      "default_enabled": false,
       "enables_dependencies": [
         "fp-io",
         "fp-frame",
@@ -48,7 +48,7 @@
       "dependency_key": "franken-kernel",
       "crate_module": "franken_kernel",
       "source_kind": "crates.io",
-      "version_requirement": "0.3.4",
+      "version_requirement": "0.5.0",
       "feature_gate": "asupersync-integration",
       "approved_boundary_files": [
         "crates/franken-engine/src/control_plane/mod.rs"
@@ -68,7 +68,7 @@
       "dependency_key": "franken-decision",
       "crate_module": "franken_decision",
       "source_kind": "crates.io",
-      "version_requirement": "0.3.4",
+      "version_requirement": "0.5.0",
       "feature_gate": "asupersync-integration",
       "approved_boundary_files": [
         "crates/franken-engine/src/control_plane/mod.rs",
@@ -88,7 +88,7 @@
       "dependency_key": "franken-evidence",
       "crate_module": "franken_evidence",
       "source_kind": "crates.io",
-      "version_requirement": "0.3.4",
+      "version_requirement": "0.5.0",
       "feature_gate": "asupersync-integration",
       "approved_boundary_files": [
         "crates/franken-engine/src/control_plane/mod.rs"
@@ -157,8 +157,11 @@
     {
       "dependency_key": "fastapi-core",
       "crate_module": "fastapi_core",
-      "source_kind": "crates.io",
-      "version_requirement": "0.3.1",
+      "source_kind": "git",
+      "version_requirement": "0.4.4",
+      "package_version": "0.4.4",
+      "git_url": "https://github.com/Dicklesworthstone/fastapi_rust",
+      "git_revision": "fb15fa5025cfdc23ab99344db5e2a4939dbcf38e",
       "feature_gate": "sibling-service-api",
       "approved_boundary_files": [
         "crates/franken-engine/src/policy_controller/service_endpoint_template.rs"

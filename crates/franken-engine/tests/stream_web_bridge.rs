@@ -2,25 +2,36 @@
 //! establish that the native parser, module identity, GC or VM passes these.
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeMap;
 use frankenengine_engine::baseline_interpreter::LaneChoice;
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, LabFixtureExecutionOrchestratorExt, OrchestratorConfig,
 };
+use std::collections::BTreeMap;
 
 fn run(source: &str, lane: LaneChoice) -> Vec<String> {
     let mut engine = ExecutionOrchestrator::new(OrchestratorConfig {
-        force_lane: Some(lane), ..OrchestratorConfig::default()
+        force_lane: Some(lane),
+        ..OrchestratorConfig::default()
     });
     let package = ExtensionPackage {
-        extension_id: "stream-web-bridge".into(), source: source.into(),
-        source_file: None, module_root: None,
+        extension_id: "stream-web-bridge".into(),
+        source: source.into(),
+        source_file: None,
+        module_root: None,
         capabilities: ["vm_dispatch", "heap_allocate", "builtin", "console"]
-            .into_iter().map(str::to_string).collect(),
-        version: "1.0.0".into(), metadata: BTreeMap::new(),
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        version: "1.0.0".into(),
+        metadata: BTreeMap::new(),
     };
-    engine.execute(&package).expect("native bridge completes")
-        .console_output.into_iter().map(|line| line.message).collect()
+    engine
+        .execute(&package)
+        .expect("native bridge completes")
+        .console_output
+        .into_iter()
+        .map(|line| line.message)
+        .collect()
 }
 
 #[test]
@@ -67,7 +78,10 @@ setImmediate(function(){writer.abort(reason).then(async function(){
 });});
 "#;
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        assert_eq!(run(source, lane), ["BRIDGE_ABORT_COMPLETE true write,destroy true"]);
+        assert_eq!(
+            run(source, lane),
+            ["BRIDGE_ABORT_COMPLETE true write,destroy true"]
+        );
     }
 }
 
@@ -85,6 +99,12 @@ bad.on('error',error=>console.log('BRIDGE_FALSE_ERROR',error.code,error.cause===
         // Independent endpoint completion can interleave; neither may vanish.
         let mut lines = run(source, lane);
         lines.sort();
-        assert_eq!(lines, ["BRIDGE_BYTES_COMPLETE 4142 true", "BRIDGE_FALSE_ERROR ERR_STREAM_WEB true"]);
+        assert_eq!(
+            lines,
+            [
+                "BRIDGE_BYTES_COMPLETE 4142 true",
+                "BRIDGE_FALSE_ERROR ERR_STREAM_WEB true"
+            ]
+        );
     }
 }

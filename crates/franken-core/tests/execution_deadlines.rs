@@ -27,7 +27,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 fn future() -> Instant {
-    Instant::now().checked_add(Duration::from_secs(3600)).unwrap()
+    Instant::now()
+        .checked_add(Duration::from_secs(3600))
+        .unwrap()
 }
 
 fn wait_until(deadline: Instant) {
@@ -56,7 +58,9 @@ fn config(throughput: bool, budget: u64) -> InterpreterConfig {
 }
 
 fn module(source: &str) -> Ir3Module {
-    let tree = CanonicalEs2020Parser.parse(source, ParseGoal::Script).unwrap();
+    let tree = CanonicalEs2020Parser
+        .parse(source, ParseGoal::Script)
+        .unwrap();
     lower_ir0_to_ir3(
         &Ir0Module::from_syntax_tree(tree, "deadline.js"),
         &LoweringContext::new("deadline", "deadline", "deadline"),
@@ -114,7 +118,10 @@ fn expired_deadlines_cannot_be_reset_but_do_not_revoke_siblings() {
     parent.cancel();
     assert!(sibling.is_cancelled());
     parent.reset();
-    assert!(!sibling.is_cancelled(), "deadline-free reuse stays unchanged");
+    assert!(
+        !sibling.is_cancelled(),
+        "deadline-free reuse stays unchanged"
+    );
     assert!(expired.is_cancelled());
 }
 
@@ -142,11 +149,18 @@ fn deadline_expiry_uses_existing_checkpoint_drain_and_event_precedence() {
             LoopSite::BytecodeDispatch,
             "deadline",
             "deadline-trace",
-            DensityConfig { max_iterations: 1, max_total_iterations: 1 },
+            DensityConfig {
+                max_iterations: 1,
+                max_total_iterations: 1,
+            },
             CancellationToken::new().with_deadline(Instant::now()),
         );
         guard.tick();
-        let action = if explicit { guard.explicit_checkpoint() } else { guard.check() };
+        let action = if explicit {
+            guard.explicit_checkpoint()
+        } else {
+            guard.check()
+        };
         assert_eq!(action, CheckpointAction::Drain);
         let events = guard.drain_events();
         assert_eq!(events.len(), 1);
@@ -180,7 +194,10 @@ fn pool_clones_partitions_and_queued_signals_keep_the_same_deadline() {
     }
     assert_eq!(signal.deadline(), Some(end));
     assert_eq!(ExecutionWorkPool::new(1).deadline(), None);
-    assert_eq!(ExecutionWorkPool::with_admission_limit(1, 1).deadline(), None);
+    assert_eq!(
+        ExecutionWorkPool::with_admission_limit(1, 1).deadline(),
+        None
+    );
     root.revoke();
     signal.reset();
     assert!(signal.is_cancelled());
@@ -194,8 +211,14 @@ fn pool_clones_partitions_and_queued_signals_keep_the_same_deadline() {
 fn expired_roots_refuse_before_debit_capacity_or_native_initialization() {
     let pool = ExecutionWorkPool::with_deadline(128, 0, Instant::now());
     for amount in [0, 1, 128] {
-        assert!(matches!(pool.reserve(amount), Err(WorkBudgetError::Revoked)));
-        assert!(matches!(pool.partition(amount), Err(WorkBudgetError::Revoked)));
+        assert!(matches!(
+            pool.reserve(amount),
+            Err(WorkBudgetError::Revoked)
+        ));
+        assert!(matches!(
+            pool.partition(amount),
+            Err(WorkBudgetError::Revoked)
+        ));
     }
     for throughput in [false, true] {
         assert!(matches!(
@@ -210,7 +233,9 @@ fn expired_roots_refuse_before_debit_capacity_or_native_initialization() {
 #[test]
 fn queued_expiry_does_not_renew_time_refund_fuel_or_free_a_held_slot() {
     let source = module("42;");
-    let end = Instant::now().checked_add(Duration::from_millis(100)).unwrap();
+    let end = Instant::now()
+        .checked_add(Duration::from_millis(100))
+        .unwrap();
     let pool = ExecutionWorkPool::with_deadline(256, 1, end);
     let job = pool.reserve(128).unwrap();
     let control = job.task_control();
@@ -219,7 +244,10 @@ fn queued_expiry_does_not_renew_time_refund_fuel_or_free_a_held_slot() {
     assert!(control.is_cancelled());
     assert_eq!(pool.outstanding_admissions(), 1);
     assert_eq!(pool.remaining(), 128);
-    assert!(matches!(job.execute(&source, config(false, 128), "queued"), Err(WorkBudgetError::Revoked)));
+    assert!(matches!(
+        job.execute(&source, config(false, 128), "queued"),
+        Err(WorkBudgetError::Revoked)
+    ));
     assert_eq!(pool.outstanding_admissions(), 0);
     assert_eq!(pool.remaining(), 128);
 }
@@ -233,7 +261,10 @@ fn earlier_caller_deadline_reaches_both_native_profiles_without_refund() {
         let mut current = config(throughput, 128);
         current.cancellation_token = Some(caller.clone());
         let mut vm = BudgetedInterpreter::new(pool.clone(), current, "caller-deadline").unwrap();
-        assert!(matches!(vm.execute(&source), Err(WorkBudgetError::Interpreter(InterpreterError::Cancelled))));
+        assert!(matches!(
+            vm.execute(&source),
+            Err(WorkBudgetError::Interpreter(InterpreterError::Cancelled))
+        ));
         assert_eq!(pool.remaining(), 128);
         assert_eq!(pool.outstanding_admissions(), 0);
         assert!(!pool.is_revoked());
@@ -274,11 +305,22 @@ fn active_native_execution_observes_expiry_without_an_external_cancel_thread() {
         // exhaustion stands in for the deadline check.
         let end = Instant::now().checked_add(Duration::from_secs(2)).unwrap();
         let pool = ExecutionWorkPool::with_deadline(256, 1, end);
-        let hook = Arc::new(ExpireAtAllocation { deadline: end, calls: AtomicUsize::new(0) });
-        let mut vm = BudgetedInterpreter::new(pool.clone(), config(throughput, 128), "active-deadline").unwrap();
+        let hook = Arc::new(ExpireAtAllocation {
+            deadline: end,
+            calls: AtomicUsize::new(0),
+        });
+        let mut vm =
+            BudgetedInterpreter::new(pool.clone(), config(throughput, 128), "active-deadline")
+                .unwrap();
         vm.set_hook(hook.clone());
-        assert!(matches!(vm.execute(&source), Err(WorkBudgetError::Interpreter(InterpreterError::Cancelled))));
-        assert!(hook.calls.load(Ordering::SeqCst) > 0, "must exercise the actual native hook");
+        assert!(matches!(
+            vm.execute(&source),
+            Err(WorkBudgetError::Interpreter(InterpreterError::Cancelled))
+        ));
+        assert!(
+            hook.calls.load(Ordering::SeqCst) > 0,
+            "must exercise the actual native hook"
+        );
         assert!(pool.is_revoked());
         assert_eq!(pool.outstanding_admissions(), 0);
         assert_eq!(pool.remaining(), 128);
@@ -303,11 +345,19 @@ fn ordinary_orchestration_preserves_cell_cleanup_after_deadline_refusal() {
         runtime.execution.deterministic_budget = 128;
         runtime.execution.throughput_budget = 128;
         let mut orchestrator = ExecutionOrchestrator::try_new_lab_with_runtime_config(
-            OrchestratorConfig { force_lane: lane, work_pool: Some(pool.clone()), ..OrchestratorConfig::default() },
+            OrchestratorConfig {
+                force_lane: lane,
+                work_pool: Some(pool.clone()),
+                ..OrchestratorConfig::default()
+            },
             runtime,
-        ).unwrap();
+        )
+        .unwrap();
         let error = orchestrator.execute(&package).unwrap_err();
-        assert!(matches!(error.primary_error(), OrchestratorError::WorkBudget(WorkBudgetError::Revoked)));
+        assert!(matches!(
+            error.primary_error(),
+            OrchestratorError::WorkBudget(WorkBudgetError::Revoked)
+        ));
         assert!(error.post_cell_failure().unwrap().cleanup.close_succeeded());
         assert_eq!(pool.remaining(), 256);
         assert_eq!(pool.outstanding_admissions(), 0);
@@ -322,8 +372,8 @@ mod admitted_job_deadlines {
         HostEffectDrainError, HostEffectLimits, HostEffectWorkPool,
     };
     use frankenengine_extension_host::host_io::{
-        HostIoCapability, HostIoControl, HostIoError, HostIoOutcome, HostIoProvider,
-        HostIoRequest, HostIoResponse,
+        HostIoCapability, HostIoControl, HostIoError, HostIoOutcome, HostIoProvider, HostIoRequest,
+        HostIoResponse,
     };
     use frankenengine_extension_host::process_spawn::{
         ProcessExit, ProcessLaunch, ProcessSpawnCapability, ProcessSpawnControl, ProcessSpawnError,
@@ -337,11 +387,16 @@ mod admitted_job_deadlines {
     const PROCESS: &[ProcessSpawnCapability] = &[ProcessSpawnCapability::Spawn];
 
     fn effects() -> HostEffectWorkPool {
-        HostEffectWorkPool::new(HostEffectLimits { operations: 8, max_in_flight: 1 })
+        HostEffectWorkPool::new(HostEffectLimits {
+            operations: 8,
+            max_in_flight: 1,
+        })
     }
 
     fn read() -> HostIoRequest {
-        HostIoRequest::FsRead { path: "deadline-input".into() }
+        HostIoRequest::FsRead {
+            path: "deadline-input".into(),
+        }
     }
 
     fn launch() -> ProcessLaunch {
@@ -356,7 +411,11 @@ mod admitted_job_deadlines {
     }
 
     fn run() -> ProcessSpawnRequest {
-        ProcessSpawnRequest::Run { launch: launch(), stdin: Vec::new(), timeout_millis: None }
+        ProcessSpawnRequest::Run {
+            launch: launch(),
+            stdin: Vec::new(),
+            timeout_millis: None,
+        }
     }
 
     #[test]
@@ -369,7 +428,10 @@ mod admitted_job_deadlines {
         let clamped = root.reserve_until(64, later).unwrap();
         let ordinary = root.reserve(64).unwrap();
         assert_eq!(job.deadline(), Some(early));
-        assert_eq!(job.execution_cancellation().unwrap().deadline(), Some(early));
+        assert_eq!(
+            job.execution_cancellation().unwrap().deadline(),
+            Some(early)
+        );
         assert_eq!(clamped.deadline(), Some(parent_end));
         assert_eq!(ordinary.deadline(), Some(parent_end));
         assert_eq!(root.deadline(), Some(parent_end));
@@ -398,8 +460,14 @@ mod admitted_job_deadlines {
             assert_eq!(root.outstanding_admissions(), 0);
         }
         let root = ExecutionWorkPool::with_admission_limit(128, 1);
-        assert!(matches!(root.reserve_until(0, future()), Err(WorkBudgetError::ZeroInstructionBudget)));
-        assert!(matches!(root.reserve_until(129, future()), Err(WorkBudgetError::Exhausted { .. })));
+        assert!(matches!(
+            root.reserve_until(0, future()),
+            Err(WorkBudgetError::ZeroInstructionBudget)
+        ));
+        assert!(matches!(
+            root.reserve_until(129, future()),
+            Err(WorkBudgetError::Exhausted { .. })
+        ));
         assert_eq!(root.outstanding_admissions(), 0);
         assert_eq!(root.remaining(), 128);
     }
@@ -433,7 +501,9 @@ mod admitted_job_deadlines {
         let conversions = Arc::new(AtomicUsize::new(0));
         assert!(matches!(
             queue.pop_front().unwrap().spawn(
-                source.clone(), config(false, 128), CountTrace(conversions.clone())
+                source.clone(),
+                config(false, 128),
+                CountTrace(conversions.clone())
             ),
             Err(ExecutionTaskStartError::Admission(WorkBudgetError::Revoked))
         ));
@@ -452,10 +522,18 @@ mod admitted_job_deadlines {
             let root = ExecutionWorkPool::with_admission_limit(256, 1);
             let end = Instant::now().checked_add(Duration::from_secs(2)).unwrap();
             let job = root.reserve_until(128, end).unwrap();
-            let hook = Arc::new(ExpireAtAllocation { deadline: end, calls: AtomicUsize::new(0) });
-            let mut task = job.spawn_with_hook(
-                source.clone(), config(throughput, 128), "timed-worker", Some(hook.clone())
-            ).unwrap();
+            let hook = Arc::new(ExpireAtAllocation {
+                deadline: end,
+                calls: AtomicUsize::new(0),
+            });
+            let mut task = job
+                .spawn_with_hook(
+                    source.clone(),
+                    config(throughput, 128),
+                    "timed-worker",
+                    Some(hook.clone()),
+                )
+                .unwrap();
             assert!(matches!(
                 task.join_timeout(WAIT).unwrap(),
                 Err(WorkBudgetError::Interpreter(InterpreterError::Cancelled))
@@ -463,8 +541,11 @@ mod admitted_job_deadlines {
             assert!(hook.calls.load(Ordering::SeqCst) > 0);
             assert!(!root.is_revoked());
             assert_eq!(root.outstanding_admissions(), 0);
-            let result = root.reserve(128).unwrap()
-                .execute(&module("42;"), config(throughput, 128), "untimed-peer").unwrap();
+            let result = root
+                .reserve(128)
+                .unwrap()
+                .execute(&module("42;"), config(throughput, 128), "untimed-peer")
+                .unwrap();
             assert_eq!(result.value.to_string(), "42");
             assert_eq!(root.remaining(), 0);
         }
@@ -488,43 +569,67 @@ mod admitted_job_deadlines {
     }
 
     impl HostIoProvider for Provider {
-        fn name(&self) -> &str { "deadline-io" }
+        fn name(&self) -> &str {
+            "deadline-io"
+        }
         fn perform(&self, _: &HostIoRequest, _: &[HostIoCapability]) -> HostIoOutcome {
             panic!("the live control must be forwarded")
         }
         fn perform_controlled(
-            &self, _: &HostIoRequest, _: &[HostIoCapability], control: Arc<dyn HostIoControl>,
+            &self,
+            _: &HostIoRequest,
+            _: &[HostIoCapability],
+            control: Arc<dyn HostIoControl>,
         ) -> HostIoOutcome {
             control.checkpoint()?;
             *self.io_control.lock().unwrap() = Some(control);
             self.calls.fetch_add(1, Ordering::SeqCst);
-            if let Some(end) = self.until { wait_until(end); }
+            if let Some(end) = self.until {
+                wait_until(end);
+            }
             Ok(HostIoResponse::FsRead { bytes: vec![42] })
         }
     }
 
     impl ProcessSpawnProvider for Provider {
-        fn name(&self) -> &str { "deadline-process" }
-        fn perform(&self, _: &ProcessSpawnRequest, _: &[ProcessSpawnCapability]) -> ProcessSpawnOutcome {
+        fn name(&self) -> &str {
+            "deadline-process"
+        }
+        fn perform(
+            &self,
+            _: &ProcessSpawnRequest,
+            _: &[ProcessSpawnCapability],
+        ) -> ProcessSpawnOutcome {
             panic!("the live control must be forwarded")
         }
         fn perform_controlled(
-            &self, request: &ProcessSpawnRequest, _: &[ProcessSpawnCapability],
+            &self,
+            request: &ProcessSpawnRequest,
+            _: &[ProcessSpawnCapability],
             control: Arc<dyn ProcessSpawnControl>,
         ) -> ProcessSpawnOutcome {
             control.checkpoint()?;
             *self.process_control.lock().unwrap() = Some(control);
             self.calls.fetch_add(1, Ordering::SeqCst);
-            if let Some(end) = self.until { wait_until(end); }
+            if let Some(end) = self.until {
+                wait_until(end);
+            }
             if self.fail_process {
                 return Err(ProcessSpawnError::TimedOut { runtime_millis: 7 });
             }
             if matches!(request, ProcessSpawnRequest::Spawn { .. }) {
-                Ok(ProcessSpawnResponse::Spawned { handle: "owned-deadline-child".into() })
+                Ok(ProcessSpawnResponse::Spawned {
+                    handle: "owned-deadline-child".into(),
+                })
             } else {
                 Ok(ProcessSpawnResponse::Run {
-                    exit: ProcessExit { success: true, code: Some(0), signal: None },
-                    stdout: vec![42], stderr: Vec::new(),
+                    exit: ProcessExit {
+                        success: true,
+                        code: Some(0),
+                        signal: None,
+                    },
+                    stdout: vec![42],
+                    stderr: Vec::new(),
                 })
             }
         }
@@ -546,10 +651,34 @@ mod admitted_job_deadlines {
         io.perform(&read(), IO).unwrap();
         process.perform(&run(), PROCESS).unwrap();
         wait_until(end);
-        assert!(inner.io_control.lock().unwrap().as_ref().unwrap().checkpoint().is_err());
-        assert!(inner.process_control.lock().unwrap().as_ref().unwrap().checkpoint().is_err());
-        assert!(matches!(io.perform(&read(), IO), Err(HostIoError::Denied { .. })));
-        assert!(matches!(process.perform(&run(), PROCESS), Err(ProcessSpawnError::Denied { .. })));
+        assert!(
+            inner
+                .io_control
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .checkpoint()
+                .is_err()
+        );
+        assert!(
+            inner
+                .process_control
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .checkpoint()
+                .is_err()
+        );
+        assert!(matches!(
+            io.perform(&read(), IO),
+            Err(HostIoError::Denied { .. })
+        ));
+        assert!(matches!(
+            process.perform(&run(), PROCESS),
+            Err(ProcessSpawnError::Denied { .. })
+        ));
         assert_eq!(inner.calls.load(Ordering::SeqCst), 2);
         assert_eq!(effects.snapshot().unwrap().committed_operations, 2);
         assert_eq!(root.outstanding_admissions(), 1);
@@ -557,7 +686,10 @@ mod admitted_job_deadlines {
         assert!(!effects.is_revoked());
         drop(job);
         let peer = root.reserve(8).unwrap();
-        effects.bind_host_io_for_admission(inner.clone(), &peer).perform(&read(), IO).unwrap();
+        effects
+            .bind_host_io_for_admission(inner.clone(), &peer)
+            .perform(&read(), IO)
+            .unwrap();
         assert_eq!(inner.calls.load(Ordering::SeqCst), 3);
         assert_eq!(root.remaining(), 112);
     }
@@ -569,16 +701,31 @@ mod admitted_job_deadlines {
             let end = Instant::now().checked_add(Duration::from_secs(1)).unwrap();
             let job = root.reserve_until(8, end).unwrap();
             let effects = effects();
-            let inner = Arc::new(Provider { until: Some(end), fail_process, ..Provider::default() });
+            let inner = Arc::new(Provider {
+                until: Some(end),
+                fail_process,
+                ..Provider::default()
+            });
             let process = effects.bind_process_spawn_for_admission(inner.clone(), &job);
-            let outcome = process.perform(&ProcessSpawnRequest::Spawn { launch: launch() }, PROCESS);
+            let outcome =
+                process.perform(&ProcessSpawnRequest::Spawn { launch: launch() }, PROCESS);
             assert!(job.task_control().is_cancelled());
             if fail_process {
-                assert_eq!(outcome, Err(ProcessSpawnError::TimedOut { runtime_millis: 7 }));
+                assert_eq!(
+                    outcome,
+                    Err(ProcessSpawnError::TimedOut { runtime_millis: 7 })
+                );
             } else {
-                assert_eq!(outcome, Ok(ProcessSpawnResponse::Spawned { handle: "owned-deadline-child".into() }));
-                assert_eq!(process.cleanup_handle("owned-deadline-child"),
-                    Ok(ProcessSpawnResponse::Cleaned { was_present: true }));
+                assert_eq!(
+                    outcome,
+                    Ok(ProcessSpawnResponse::Spawned {
+                        handle: "owned-deadline-child".into()
+                    })
+                );
+                assert_eq!(
+                    process.cleanup_handle("owned-deadline-child"),
+                    Ok(ProcessSpawnResponse::Cleaned { was_present: true })
+                );
                 assert_eq!(inner.cleanups.load(Ordering::SeqCst), 1);
             }
             assert_eq!(effects.snapshot().unwrap().in_flight, 0);
@@ -595,13 +742,22 @@ mod admitted_job_deadlines {
             let end = Instant::now().checked_add(Duration::from_secs(1)).unwrap();
             let job = root.reserve_until(8, end).unwrap();
             let effects = effects();
-            let inner = Arc::new(Provider { until: Some(end), ..Provider::default() });
+            let inner = Arc::new(Provider {
+                until: Some(end),
+                ..Provider::default()
+            });
             if process_call {
                 let process = effects.bind_process_spawn_for_admission(inner.clone(), &job);
-                assert!(matches!(process.perform(&run(), PROCESS), Err(ProcessSpawnError::Denied { .. })));
+                assert!(matches!(
+                    process.perform(&run(), PROCESS),
+                    Err(ProcessSpawnError::Denied { .. })
+                ));
             } else {
                 let io = effects.bind_host_io_for_admission(inner.clone(), &job);
-                assert!(matches!(io.perform(&read(), IO), Err(HostIoError::Denied { .. })));
+                assert!(matches!(
+                    io.perform(&read(), IO),
+                    Err(HostIoError::Denied { .. })
+                ));
             }
             assert_eq!(inner.calls.load(Ordering::SeqCst), 1);
             assert_eq!(effects.snapshot().unwrap().committed_operations, 1);
@@ -616,10 +772,17 @@ mod admitted_job_deadlines {
         release: Mutex<mpsc::Receiver<()>>,
     }
     impl HostIoProvider for ParkedProvider {
-        fn name(&self) -> &str { "parked-deadline-io" }
-        fn perform(&self, _: &HostIoRequest, _: &[HostIoCapability]) -> HostIoOutcome { unreachable!() }
+        fn name(&self) -> &str {
+            "parked-deadline-io"
+        }
+        fn perform(&self, _: &HostIoRequest, _: &[HostIoCapability]) -> HostIoOutcome {
+            unreachable!()
+        }
         fn perform_controlled(
-            &self, _: &HostIoRequest, _: &[HostIoCapability], control: Arc<dyn HostIoControl>,
+            &self,
+            _: &HostIoRequest,
+            _: &[HostIoCapability],
+            control: Arc<dyn HostIoControl>,
         ) -> HostIoOutcome {
             control.checkpoint()?;
             self.entered.send(()).unwrap();
@@ -637,22 +800,32 @@ mod admitted_job_deadlines {
         let effects = effects();
         let (entered_tx, entered) = mpsc::channel();
         let (release, release_rx) = mpsc::channel();
-        let io = effects.bind_host_io_for_admission(Arc::new(ParkedProvider {
-            entered: entered_tx, release: Mutex::new(release_rx),
-        }), &job);
+        let io = effects.bind_host_io_for_admission(
+            Arc::new(ParkedProvider {
+                entered: entered_tx,
+                release: Mutex::new(release_rx),
+            }),
+            &job,
+        );
         let worker = std::thread::spawn(move || io.perform(&read(), IO));
         entered.recv_timeout(WAIT).unwrap();
         wait_until(end);
         assert!(job.task_control().is_cancelled());
         assert_eq!(root.outstanding_admissions(), 1);
         assert_eq!(effects.snapshot().unwrap().in_flight, 1);
-        assert!(matches!(root.reserve(8), Err(WorkBudgetError::AdmissionLimit { limit: 1 })));
+        assert!(matches!(
+            root.reserve(8),
+            Err(WorkBudgetError::AdmissionLimit { limit: 1 })
+        ));
         let drained = effects.revoke_and_drain(Duration::ZERO);
         // Release and join before reporting the assertion to avoid stranding the
         // controlled worker if the drain implementation regresses.
         release.send(()).unwrap();
         let outcome = worker.join().unwrap();
-        assert_eq!(drained, Err(HostEffectDrainError::TimedOut { in_flight: 1 }));
+        assert_eq!(
+            drained,
+            Err(HostEffectDrainError::TimedOut { in_flight: 1 })
+        );
         assert!(matches!(outcome, Err(HostIoError::Denied { .. })));
         assert_eq!(effects.revoke_and_drain(WAIT).unwrap().in_flight, 0);
         assert_eq!(root.outstanding_admissions(), 1);

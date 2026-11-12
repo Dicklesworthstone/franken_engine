@@ -48,8 +48,9 @@ fn canonical_decoder_encoding(label: &str) -> Option<&'static str> {
         | "iso_8859-1:1987" | "l1" | "latin1" | "us-ascii" | "windows-1252" | "x-cp1252" => {
             Some("windows-1252")
         }
-        _ => single_byte::canonical_encoding(&label)
-            .or_else(|| japanese::canonical_encoding(&label)),
+        _ => {
+            single_byte::canonical_encoding(&label).or_else(|| japanese::canonical_encoding(&label))
+        }
     }
 }
 

@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use frankenengine_engine::module_cache::{
     S3FifoBaselineArtifactContext, emit_default_s3fifo_baseline_bundle,
     render_s3fifo_baseline_summary,

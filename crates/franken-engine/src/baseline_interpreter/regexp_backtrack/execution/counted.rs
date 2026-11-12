@@ -9,9 +9,9 @@
 //! Assertion floors, partial refusal state and instruction charges are kept;
 //! compact choices neither widen ordinary frames nor renew the allowance.
 
-use super::{BacktrackError, BacktrackRegExp, Frame, Inst, Run, is_line_terminator};
-use super::literals::LITERAL_WIDTH;
 use super::ClassMatches;
+use super::literals::LITERAL_WIDTH;
+use super::{BacktrackError, BacktrackRegExp, Frame, Inst, Run, is_line_terminator};
 
 #[derive(Clone, Copy)]
 enum Atom {
@@ -39,9 +39,16 @@ impl CountedRepeat {
     pub(super) fn at(regexp: &BacktrackRegExp, pc: usize) -> Option<Self> {
         let first = pc.checked_add(2)?;
         let [
-            Inst::CountedLoop { counter, min, body, exit, .. },
+            Inst::CountedLoop {
+                counter,
+                min,
+                body,
+                exit,
+                ..
+            },
             Inst::Mark(mark),
-        ] = regexp.program.get(pc..first)? else {
+        ] = regexp.program.get(pc..first)?
+        else {
             return None;
         };
         let end = exit.checked_sub(2)?;
@@ -53,9 +60,14 @@ impl CountedRepeat {
             return None;
         }
         let [
-            Inst::CounterStep { counter: step_counter, mark: step_mark, min: step_min },
+            Inst::CounterStep {
+                counter: step_counter,
+                mark: step_mark,
+                min: step_min,
+            },
             Inst::Jump(head),
-        ] = regexp.program.get(end..*exit)? else {
+        ] = regexp.program.get(end..*exit)?
+        else {
             return None;
         };
         if *body != pc + 1
@@ -87,7 +99,11 @@ impl CountedRepeat {
                 (Atom::Sequence(first), backward)
             }
             Inst::Char { c, backward } => {
-                let literal = if regexp.ignore_case { regexp.canonicalize(*c) } else { *c };
+                let literal = if regexp.ignore_case {
+                    regexp.canonicalize(*c)
+                } else {
+                    *c
+                };
                 (Atom::Char(literal), *backward)
             }
             Inst::Class { class, backward } if width == 1 && *class < regexp.classes.len() => {
@@ -96,13 +112,25 @@ impl CountedRepeat {
             Inst::Any { backward } if width == 1 => (Atom::Any, *backward),
             _ => return None,
         };
-        Some(Self { counter: *counter, mark: *mark, width, exit: *exit, count: *min, atom, backward })
+        Some(Self {
+            counter: *counter,
+            mark: *mark,
+            width,
+            exit: *exit,
+            count: *min,
+            atom,
+            backward,
+        })
     }
 
     /// Reconstruct the preceding COMPLETE iteration, in either direction.
     /// A saved range always has at least one successful body to undo here.
     fn previous(&self, position: usize) -> usize {
-        if self.backward { position + self.width } else { position - self.width }
+        if self.backward {
+            position + self.width
+        } else {
+            position - self.width
+        }
     }
 
     fn accepts(
@@ -112,13 +140,21 @@ impl CountedRepeat {
         position: usize,
         classes: &mut ClassMatches,
     ) -> bool {
-        let index = if self.backward { position.checked_sub(1) } else { Some(position) };
+        let index = if self.backward {
+            position.checked_sub(1)
+        } else {
+            Some(position)
+        };
         let Some(&c) = index.and_then(|index| chars.get(index)) else {
             return false;
         };
         match self.atom {
             Atom::Char(literal) => {
-                if regexp.ignore_case { regexp.canonicalize(c) == literal } else { c == literal }
+                if regexp.ignore_case {
+                    regexp.canonicalize(c) == literal
+                } else {
+                    c == literal
+                }
             }
             Atom::Class(class) => classes.matches(regexp, class, c),
             Atom::Any => regexp.dot_all || !is_line_terminator(c),
@@ -130,8 +166,14 @@ impl CountedRepeat {
 
     pub(super) fn push_undo(&self, stack: &mut Vec<Frame>, old_count: usize, old_mark: usize) {
         if old_count < self.count {
-            stack.push(Frame::Register { register: self.mark, old: old_mark });
-            stack.push(Frame::Register { register: self.counter, old: old_count });
+            stack.push(Frame::Register {
+                register: self.mark,
+                old: old_mark,
+            });
+            stack.push(Frame::Register {
+                register: self.counter,
+                old: old_count,
+            });
         }
     }
 }
@@ -173,16 +215,26 @@ impl Run<'_> {
             pay(&mut self.steps_left)?; // First consuming instruction
             let next = match repeat.atom {
                 Atom::Literal(_) => {
-                    let block = self.literal_blocks.at(self.regexp, body)
+                    let block = self
+                        .literal_blocks
+                        .at(self.regexp, body)
                         .expect("a complete bounded literal body was proved before execution");
                     debug_assert_eq!(block.len, repeat.width);
                     block.execute_after_dispatch(
-                        self.regexp, &self.input.chars, position, &mut self.steps_left,
+                        self.regexp,
+                        &self.input.chars,
+                        position,
+                        &mut self.steps_left,
                     )?
                 }
                 Atom::Sequence(_) => execute_fixed_body_after_dispatch(
-                    self.regexp, body..body + repeat.width, repeat.backward,
-                    &self.input.chars, position, &mut self.steps_left, &mut self.class_matches,
+                    self.regexp,
+                    body..body + repeat.width,
+                    repeat.backward,
+                    &self.input.chars,
+                    position,
+                    &mut self.steps_left,
+                    &mut self.class_matches,
                 )?,
                 _ => unreachable!("only a multi-character body enters this path"),
             };
@@ -198,20 +250,34 @@ impl Run<'_> {
             return Ok(Some(next));
         }
         if self.steps_left >= 5 {
-            if !repeat.accepts(self.regexp, &self.input.chars, position, &mut self.class_matches) {
+            if !repeat.accepts(
+                self.regexp,
+                &self.input.chars,
+                position,
+                &mut self.class_matches,
+            ) {
                 self.steps_left -= 2; // Mark and the failed atom.
                 return Ok(None);
             }
             self.steps_left -= 5;
             self.registers[repeat.mark] = position;
             self.registers[repeat.counter] += 1;
-            return Ok(Some(if repeat.backward { position - 1 } else { position + 1 }));
+            return Ok(Some(if repeat.backward {
+                position - 1
+            } else {
+                position + 1
+            }));
         }
         let old_mark = self.registers[repeat.mark];
         pay(&mut self.steps_left)?;
         self.registers[repeat.mark] = position;
         pay(&mut self.steps_left)?;
-        if !repeat.accepts(self.regexp, &self.input.chars, position, &mut self.class_matches) {
+        if !repeat.accepts(
+            self.regexp,
+            &self.input.chars,
+            position,
+            &mut self.class_matches,
+        ) {
             self.registers[repeat.mark] = old_mark;
             return Ok(None);
         }
@@ -245,8 +311,14 @@ impl Run<'_> {
             position = next;
         }
         if position != start {
-            stack.push(Frame::Register { register: repeat.mark, old: old_mark });
-            stack.push(Frame::Register { register: repeat.counter, old: old_count });
+            stack.push(Frame::Register {
+                register: repeat.mark,
+                old: old_mark,
+            });
+            stack.push(Frame::Register {
+                register: repeat.counter,
+                old: old_count,
+            });
             stack.push(Frame::CountedGreedy {
                 pc,
                 position: repeat.previous(position),
@@ -295,7 +367,10 @@ impl Run<'_> {
         let Some(position) = self.advance_counted_atom(&repeat, position)? else {
             return Ok(None);
         };
-        let Inst::CountedLoop { max, greedy: false, .. } = &self.regexp.program[pc] else {
+        let Inst::CountedLoop {
+            max, greedy: false, ..
+        } = &self.regexp.program[pc]
+        else {
             unreachable!("a counted lazy continuation belongs to a lazy loop");
         };
         if max.is_none_or(|maximum| self.registers[repeat.counter] < maximum) {
@@ -313,23 +388,42 @@ impl Run<'_> {
         frame: Frame,
         stack: &mut Vec<Frame>,
     ) -> (usize, usize) {
-        let Frame::CountedGreedy { pc, position, start } = frame else {
+        let Frame::CountedGreedy {
+            pc,
+            position,
+            start,
+        } = frame
+        else {
             unreachable!("only a counted greedy range resumes here");
         };
         let repeat = CountedRepeat::at(self.regexp, pc)
             .expect("the immutable counted loop was proved before saving its range");
-        let paired = stack.len().checked_sub(2).expect("two paired register frames");
+        let paired = stack
+            .len()
+            .checked_sub(2)
+            .expect("two paired register frames");
         let (old_mark, old_count) = match (&stack[paired], &stack[paired + 1]) {
-            (Frame::Register { register: mark, old: old_mark },
-             Frame::Register { register: counter, old: old_count })
-                if *mark == repeat.mark && *counter == repeat.counter => (*old_mark, *old_count),
+            (
+                Frame::Register {
+                    register: mark,
+                    old: old_mark,
+                },
+                Frame::Register {
+                    register: counter,
+                    old: old_count,
+                },
+            ) if *mark == repeat.mark && *counter == repeat.counter => (*old_mark, *old_count),
             _ => unreachable!("counted choices retain their mark and counter undo"),
         };
         let distance = position.abs_diff(start);
         debug_assert_eq!(distance % repeat.width, 0);
         // Counters count iterations, not matched characters. Preserve the
         // existing one-atom path without introducing division there.
-        let iterations = if repeat.width == 1 { distance } else { distance / repeat.width };
+        let iterations = if repeat.width == 1 {
+            distance
+        } else {
+            distance / repeat.width
+        };
         self.registers[repeat.counter] = old_count + iterations;
         if position == start {
             self.registers[repeat.mark] = old_mark;
@@ -337,7 +431,11 @@ impl Run<'_> {
         } else {
             let previous = repeat.previous(position);
             self.registers[repeat.mark] = previous;
-            stack.push(Frame::CountedGreedy { pc, position: previous, start });
+            stack.push(Frame::CountedGreedy {
+                pc,
+                position: previous,
+                start,
+            });
         }
         (repeat.exit, position)
     }
@@ -361,7 +459,9 @@ pub(super) fn fixed_body_direction(
         _ => None,
     };
     let backward = direction(instructions.first()?)?;
-    instructions.iter().all(|instruction| direction(instruction) == Some(backward))
+    instructions
+        .iter()
+        .all(|instruction| direction(instruction) == Some(backward))
         .then_some(backward)
 }
 
@@ -386,7 +486,11 @@ pub(super) fn execute_fixed_body_after_dispatch(
         if offset != 0 {
             pay(steps_left)?;
         }
-        let index = if backward { position.checked_sub(1) } else { Some(position) };
+        let index = if backward {
+            position.checked_sub(1)
+        } else {
+            Some(position)
+        };
         let Some(&input) = index.and_then(|index| chars.get(index)) else {
             return Ok(None);
         };

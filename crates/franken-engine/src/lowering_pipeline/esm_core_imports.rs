@@ -548,11 +548,16 @@ mod web_stream_tests {
     use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 
     fn parse(text: &str) -> SyntaxTree {
-        CanonicalEs2020Parser.parse_with_options(
-            ParserSource { label: "web-stream-imports.mjs".into(), text: text.into() },
-            ParseGoal::Module,
-            &ParserOptions::default(),
-        ).expect("ESM fixture parses")
+        CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource {
+                    label: "web-stream-imports.mjs".into(),
+                    text: text.into(),
+                },
+                ParseGoal::Module,
+                &ParserOptions::default(),
+            )
+            .expect("ESM fixture parses")
     }
 
     #[test]
@@ -565,19 +570,34 @@ mod web_stream_tests {
             "export * as web from 'node:stream/web';",
         ] {
             let original = parse(source);
-            let lowered = rewrite_core_module_imports(&original).expect("recognized ESM core module");
+            let lowered =
+                rewrite_core_module_imports(&original).expect("recognized ESM core module");
             assert!(rewrite_core_module_imports(&lowered).is_none(), "{source}");
             let native = super::super::util_module::rewrite_util_requires(&lowered)
-                .expect("shared lowering").expect("native web stream factory");
-            assert_eq!(native.body.iter().filter(|s| super::super::util_module::is_module_declaration(s)).count(), 1);
-            assert!(super::super::util_module::rewrite_util_requires(&native).unwrap().is_none());
+                .expect("shared lowering")
+                .expect("native web stream factory");
+            assert_eq!(
+                native
+                    .body
+                    .iter()
+                    .filter(|s| super::super::util_module::is_module_declaration(s))
+                    .count(),
+                1
+            );
+            assert!(
+                super::super::util_module::rewrite_util_requires(&native)
+                    .unwrap()
+                    .is_none()
+            );
             assert_eq!(original, parse(source), "input AST remains unchanged");
         }
     }
 
     #[test]
     fn web_stream_imports_do_not_replace_user_loaders_or_relative_modules() {
-        let shadowed = parse("import require from './loader.mjs'; import {ReadableStream} from 'stream/web'; new ReadableStream();");
+        let shadowed = parse(
+            "import require from './loader.mjs'; import {ReadableStream} from 'stream/web'; new ReadableStream();",
+        );
         assert!(rewrite_core_module_imports(&shadowed).is_none());
         for source in [
             "import web from './stream/web.mjs'; web();",
@@ -585,8 +605,17 @@ mod web_stream_tests {
         ] {
             assert!(rewrite_core_module_imports(&parse(source)).is_none());
         }
-        let mixed = parse("import {ReadableStream} from 'stream/web'; import {value} from './data.mjs'; new ReadableStream(); value;");
+        let mixed = parse(
+            "import {ReadableStream} from 'stream/web'; import {value} from './data.mjs'; new ReadableStream(); value;",
+        );
         let rewritten = rewrite_core_module_imports(&mixed).unwrap();
-        assert_eq!(rewritten.body.iter().filter(|s| matches!(s, Statement::Import(_))).count(), 1);
+        assert_eq!(
+            rewritten
+                .body
+                .iter()
+                .filter(|s| matches!(s, Statement::Import(_)))
+                .count(),
+            1
+        );
     }
 }

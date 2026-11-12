@@ -19,12 +19,11 @@ use frankenengine_engine::lowering_pipeline::AmbientAuthorityGrant;
 use frankenengine_engine::module_compatibility_matrix::CompatibilityMode;
 use frankenengine_engine::module_resolver::{
     AllowAllPolicy, CapabilityPolicyHook, DeterministicModuleResolver, ExecutionModuleResolver,
-    ExternalPackageDefinition, ExternalPackageExportTarget,
-    ImportStyle, MetadataResolutionOutcome, ModuleDefinition, ModuleDependency, ModuleMetadata,
-    ModuleMetadataTarget,
-    ModulePolicyHook, ModuleRecord, ModuleRequest, ModuleResolver, ModuleSourceKind,
-    ModuleSourceLocation, ModuleSyntax, NativeBuiltinModule, ResolutionContext,
-    ResolutionErrorCode, ResolutionOutcome, ResolutionResult, node_builtin_specifier,
+    ExternalPackageDefinition, ExternalPackageExportTarget, ImportStyle, MetadataResolutionOutcome,
+    ModuleDefinition, ModuleDependency, ModuleMetadata, ModuleMetadataTarget, ModulePolicyHook,
+    ModuleRecord, ModuleRequest, ModuleResolver, ModuleSourceKind, ModuleSourceLocation,
+    ModuleSyntax, NativeBuiltinModule, ResolutionContext, ResolutionErrorCode, ResolutionOutcome,
+    ResolutionResult, node_builtin_specifier,
 };
 use frankenengine_engine::runtime_config::RuntimeConfig;
 use frankenengine_extension_host::host_effect_journal::{
@@ -310,15 +309,23 @@ impl ModuleResolver for OpaqueResolver {
         context: &ResolutionContext,
         policy: &dyn ModulePolicyHook,
     ) -> ResolutionResult<MetadataResolutionOutcome> {
-        self.requests.lock().expect("request log").push(request.clone());
-        self.metadata_requests.lock().expect("metadata request log").push(request.clone());
+        self.requests
+            .lock()
+            .expect("request log")
+            .push(request.clone());
+        self.metadata_requests
+            .lock()
+            .expect("metadata request log")
+            .push(request.clone());
         let mut translated = request.clone();
         if let Some(referrer) = translated.referrer.as_mut()
             && let Some(path) = referrer.strip_prefix(ID_PREFIX)
         {
             *referrer = path.to_string();
         }
-        let mut outcome = self.inner.resolve_metadata(&translated, context, &AllowAllPolicy)
+        let mut outcome = self
+            .inner
+            .resolve_metadata(&translated, context, &AllowAllPolicy)
             .map_err(|mut error| {
                 if let Some(code) = self.package_errors.get(&request.specifier) {
                     error.code = *code;
@@ -352,7 +359,8 @@ impl ModuleResolver for OpaqueResolver {
                 };
             }
             Corruption::MetadataMalformedUrl => {
-                outcome.module.metadata.target = ModuleMetadataTarget::AbsoluteUrl("./not-absolute".into());
+                outcome.module.metadata.target =
+                    ModuleMetadataTarget::AbsoluteUrl("./not-absolute".into());
             }
             _ => {}
         }
@@ -440,23 +448,28 @@ impl ModulePolicyHook for RecordingPolicy {
         let count = {
             let mut calls = self.requests.lock().expect("policy log");
             calls.push((request.clone(), context.clone()));
-            calls.iter().filter(|(prior, _)| prior.specifier == request.specifier).count()
+            calls
+                .iter()
+                .filter(|(prior, _)| prior.specifier == request.specifier)
+                .count()
         };
-        let mut policy = CapabilityPolicyHook::new(BTreeSet::from([
-            RuntimeCapability::ModuleLoad,
-        ]));
-        if self.denied.as_ref()
+        let mut policy = CapabilityPolicyHook::new(BTreeSet::from([RuntimeCapability::ModuleLoad]));
+        if self
+            .denied
+            .as_ref()
             .is_some_and(|(specifier, after)| request.specifier == *specifier && count >= *after)
         {
             policy.denied_specifiers.insert(request.specifier.clone());
         }
-        policy.authorize_metadata(request, metadata, context).map_err(|mut error| {
-            if let Some(code) = self.denial_code {
-                error.code = code;
-                error.event.error_code = code.stable_code().to_string();
-            }
-            error
-        })
+        policy
+            .authorize_metadata(request, metadata, context)
+            .map_err(|mut error| {
+                if let Some(code) = self.denial_code {
+                    error.code = code;
+                    error.event.error_code = code.stable_code().to_string();
+                }
+                error
+            })
     }
 }
 
@@ -862,7 +875,9 @@ fn delivered_json_cache_hits_still_require_current_authority() {
             .execute_resolved_entry_with_resolver(&package(), &source, installed)
             .expect_err("cached JSON cannot retain an earlier route grant");
         assert!(
-            error.to_string().contains("closed-world module resolution refused"),
+            error
+                .to_string()
+                .contains("closed-world module resolution refused"),
             "{error}"
         );
         assert_eq!(policy.requests.lock().expect("policy log").len(), 2);
@@ -893,7 +908,10 @@ load();
 load();"#,
                 ),
             ),
-            ("broken", definition(ModuleSyntax::Json, r#"{"items":[1,]}"#)),
+            (
+                "broken",
+                definition(ModuleSyntax::Json, r#"{"items":[1,]}"#),
+            ),
         ]));
         let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
         let installed = ExecutionModuleResolver::new(
@@ -911,10 +929,7 @@ load();"#,
 #[test]
 fn delivered_json_cannot_execute_as_a_javascript_entry() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        let resolver = OpaqueResolver::new(vec![(
-            "data",
-            definition(ModuleSyntax::Json, "42"),
-        )]);
+        let resolver = OpaqueResolver::new(vec![("data", definition(ModuleSyntax::Json, "42"))]);
         let source = resolver
             .resolve(
                 &ModuleRequest::new(format!("{ROOT}/data"), ImportStyle::Require),
@@ -993,13 +1008,18 @@ fn delivered_json_admission_uses_the_original_source_byte_budget() {
             ..OrchestratorConfig::default()
         };
         config.parser_options.budget.max_source_bytes = 64;
-        let mut engine =
-            ExecutionOrchestrator::try_new_lab_with_runtime_config(config, RuntimeConfig::default())
-                .expect("native test runtime");
+        let mut engine = ExecutionOrchestrator::try_new_lab_with_runtime_config(
+            config,
+            RuntimeConfig::default(),
+        )
+        .expect("native test runtime");
         let error = engine
             .execute_resolved_entry_with_resolver(&package(), &source, installed)
             .expect_err("intrinsic JSON initialization preserves source admission");
-        assert!(error.to_string().contains("parser source-byte budget"), "{error}");
+        assert!(
+            error.to_string().contains("parser source-byte budget"),
+            "{error}"
+        );
     }
 }
 
@@ -1288,15 +1308,21 @@ fn metadata_contract_defaults_never_fall_back_to_executable_resolution_or_policy
     }
     let context = ResolutionContext::new("metadata-trace", "metadata-decision", "metadata-policy");
     let request = ModuleRequest::new("/app/asset.node", ImportStyle::Require);
-    let error = SourceOnlyResolver.resolve_metadata(&request, &context, &AllowAllPolicy)
+    let error = SourceOnlyResolver
+        .resolve_metadata(&request, &context, &AllowAllPolicy)
         .expect_err("source-only resolvers explicitly refuse the new contract");
     assert_eq!(error.code, ResolutionErrorCode::UnsupportedSpecifier);
     assert_eq!(error.request_specifier, request.specifier);
 
     let mut resolver = DeterministicModuleResolver::new("/app");
-    resolver.register_workspace_module("asset.node", definition(ModuleSyntax::CommonJs, "not JavaScript"))
+    resolver
+        .register_workspace_module(
+            "asset.node",
+            definition(ModuleSyntax::CommonJs, "not JavaScript"),
+        )
         .unwrap();
-    let error = resolver.resolve_metadata(&request, &context, &SourceOnlyPolicy)
+    let error = resolver
+        .resolve_metadata(&request, &context, &SourceOnlyPolicy)
         .expect_err("source-sensitive policies must explicitly authorize metadata");
     assert_eq!(error.code, ResolutionErrorCode::PolicyDenied);
     assert_eq!(error.trace_id, context.trace_id);
@@ -1305,79 +1331,151 @@ fn metadata_contract_defaults_never_fall_back_to_executable_resolution_or_policy
 #[test]
 fn metadata_lookup_preserves_selection_without_execution_format_or_capability_requirements() {
     let mut resolver = DeterministicModuleResolver::new("/app");
-    resolver.register_workspace_module("main.cjs", definition(ModuleSyntax::CommonJs, ""))
+    resolver
+        .register_workspace_module("main.cjs", definition(ModuleSyntax::CommonJs, ""))
         .unwrap();
     let context = ResolutionContext::new("metadata-trace", "metadata-decision", "metadata-policy");
     let policy = CapabilityPolicyHook::new(BTreeSet::from([RuntimeCapability::ModuleLoad]));
     for (name, syntax, source) in [
         ("bad.cjs", ModuleSyntax::CommonJs, "module.exports = ;"),
-        ("async.mjs", ModuleSyntax::EsModule, "await new Promise(() => {});"),
-        ("addon.node", ModuleSyntax::CommonJs, "not an executable addon"),
+        (
+            "async.mjs",
+            ModuleSyntax::EsModule,
+            "await new Promise(() => {});",
+        ),
+        (
+            "addon.node",
+            ModuleSyntax::CommonJs,
+            "not an executable addon",
+        ),
         ("module.wasm", ModuleSyntax::Wasm, "not WebAssembly bytes"),
     ] {
-        resolver.register_workspace_module(name,
-            definition(syntax, source)
-                .require_capability(RuntimeCapability::FsRead)
-                .with_dependency(ModuleDependency::new("./uncaptured.cjs", ImportStyle::Require)))
+        resolver
+            .register_workspace_module(
+                name,
+                definition(syntax, source)
+                    .require_capability(RuntimeCapability::FsRead)
+                    .with_dependency(ModuleDependency::new(
+                        "./uncaptured.cjs",
+                        ImportStyle::Require,
+                    )),
+            )
             .unwrap();
         let request = ModuleRequest::new(format!("./{name}"), ImportStyle::Require)
             .with_referrer("/app/main.cjs")
             .with_compatibility_mode(CompatibilityMode::NodeCompat);
-        let outcome = resolver.resolve_metadata(&request, &context, &policy).unwrap();
+        let outcome = resolver
+            .resolve_metadata(&request, &context, &policy)
+            .unwrap();
         assert_eq!(outcome.module.metadata.id, format!("/app/{name}"));
-        assert_eq!(outcome.module.metadata.provenance.kind, ModuleSourceKind::Workspace);
-        assert_eq!(outcome.module.metadata.required_capabilities,
-            BTreeSet::from([RuntimeCapability::ModuleLoad]));
+        assert_eq!(
+            outcome.module.metadata.provenance.kind,
+            ModuleSourceKind::Workspace
+        );
+        assert_eq!(
+            outcome.module.metadata.required_capabilities,
+            BTreeSet::from([RuntimeCapability::ModuleLoad])
+        );
         assert_eq!(outcome.module.request_specifier, request.specifier);
         assert_eq!(outcome.event.trace_id, context.trace_id);
-        assert!(resolver.resolve(&request, &context, &policy).is_err(),
-            "metadata success cannot supply format or execution authority: {name}");
+        assert!(
+            resolver.resolve(&request, &context, &policy).is_err(),
+            "metadata success cannot supply format or execution authority: {name}"
+        );
         for denied in [request.specifier.clone(), outcome.module.metadata.id] {
-            assert_eq!(resolver.resolve_metadata(&request, &context,
-                &policy.clone().deny_specifier(denied)).unwrap_err().code,
-                ResolutionErrorCode::PolicyDenied);
+            assert_eq!(
+                resolver
+                    .resolve_metadata(&request, &context, &policy.clone().deny_specifier(denied))
+                    .unwrap_err()
+                    .code,
+                ResolutionErrorCode::PolicyDenied
+            );
         }
     }
-    let request = ModuleRequest::new("./bad.cjs", ImportStyle::Require).with_referrer("/app/main.cjs");
-    assert_eq!(resolver.resolve_metadata(&request, &context,
-        &CapabilityPolicyHook::new(BTreeSet::new())).unwrap_err().code,
-        ResolutionErrorCode::PolicyDenied);
+    let request =
+        ModuleRequest::new("./bad.cjs", ImportStyle::Require).with_referrer("/app/main.cjs");
+    assert_eq!(
+        resolver
+            .resolve_metadata(
+                &request,
+                &context,
+                &CapabilityPolicyHook::new(BTreeSet::new())
+            )
+            .unwrap_err()
+            .code,
+        ResolutionErrorCode::PolicyDenied
+    );
 
     // Neither native provider support nor registration of an executable
     // builtin record is necessary to report a known builtin name.
     for (request, canonical) in [
-        ("http2", "node:http2"), ("node:http2", "node:http2"),
-        ("_http_agent", "node:_http_agent"), ("node:sqlite", "node:sqlite"),
-        ("node:sea", "node:sea"), ("node:test", "node:test"),
+        ("http2", "node:http2"),
+        ("node:http2", "node:http2"),
+        ("_http_agent", "node:_http_agent"),
+        ("node:sqlite", "node:sqlite"),
+        ("node:sea", "node:sea"),
+        ("node:test", "node:test"),
         ("node:test/reporters", "node:test/reporters"),
     ] {
         assert_eq!(node_builtin_specifier(request), Some(canonical));
         let request = ModuleRequest::new(request, ImportStyle::Require);
-        let outcome = resolver.resolve_metadata(&request, &context, &policy).unwrap();
-        assert_eq!(outcome.module.metadata.provenance.kind, ModuleSourceKind::BuiltIn);
+        let outcome = resolver
+            .resolve_metadata(&request, &context, &policy)
+            .unwrap();
+        assert_eq!(
+            outcome.module.metadata.provenance.kind,
+            ModuleSourceKind::BuiltIn
+        );
         assert_eq!(outcome.module.metadata.provenance.origin, canonical);
-        assert_eq!(outcome.module.metadata.required_capabilities,
-            BTreeSet::from([RuntimeCapability::ModuleLoad]));
+        assert_eq!(
+            outcome.module.metadata.required_capabilities,
+            BTreeSet::from([RuntimeCapability::ModuleLoad])
+        );
     }
-    for invalid in ["node:not-a-real-builtin", "fs/unknown", "FS", " fs", "test", "sea", "sqlite"] {
+    for invalid in [
+        "node:not-a-real-builtin",
+        "fs/unknown",
+        "FS",
+        " fs",
+        "test",
+        "sea",
+        "sqlite",
+    ] {
         assert_eq!(node_builtin_specifier(invalid), None, "{invalid}");
     }
-    assert_eq!(resolver.resolve_metadata(
-        &ModuleRequest::new("node:not-a-real-builtin", ImportStyle::Require),
-        &context, &policy).unwrap_err().code, ResolutionErrorCode::ModuleNotFound);
+    assert_eq!(
+        resolver
+            .resolve_metadata(
+                &ModuleRequest::new("node:not-a-real-builtin", ImportStyle::Require),
+                &context,
+                &policy
+            )
+            .unwrap_err()
+            .code,
+        ResolutionErrorCode::ModuleNotFound
+    );
 
-    resolver.register_builtin("custom:resource",
-        definition(ModuleSyntax::CommonJs, "module.exports = 42;")
-            .with_provenance("custom-provider"))
+    resolver
+        .register_builtin(
+            "custom:resource",
+            definition(ModuleSyntax::CommonJs, "module.exports = 42;")
+                .with_provenance("custom-provider"),
+        )
         .unwrap();
     let policy = RecordingPolicy::default();
-    let error = resolver.resolve_metadata(
-        &ModuleRequest::new("custom:resource", ImportStyle::Require), &context, &policy)
+    let error = resolver
+        .resolve_metadata(
+            &ModuleRequest::new("custom:resource", ImportStyle::Require),
+            &context,
+            &policy,
+        )
         .expect_err("custom builtin metadata must satisfy the same canonical-origin contract");
     assert_eq!(error.code, ResolutionErrorCode::UnsupportedSpecifier);
     assert_eq!(error.source_kind, Some(ModuleSourceKind::BuiltIn));
-    assert!(policy.requests.lock().unwrap().is_empty(),
-        "invalid metadata must not reach the policy as an admissible candidate");
+    assert!(
+        policy.requests.lock().unwrap().is_empty(),
+        "invalid metadata must not reach the policy as an admissible candidate"
+    );
 }
 
 #[test]
@@ -1385,7 +1483,11 @@ fn delivered_metadata_resolution_never_materializes_sources_or_builtin_providers
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
         let oversized = "not valid JavaScript ".repeat(1024);
         let mut resolver = OpaqueResolver::new(vec![
-            ("entry.cjs", definition(ModuleSyntax::CommonJs, r#"
+            (
+                "entry.cjs",
+                definition(
+                    ModuleSyntax::CommonJs,
+                    r#"
 console.log(require.resolve('./dep.cjs'));
 console.log(require.resolve('./addon.node'));
 console.log(require.resolve('./invalid.json'));
@@ -1393,14 +1495,34 @@ console.log(require.resolve('./module.wasm'));
 console.log(require.resolve('./async.mjs'));
 console.log(require.resolve('http2'), require.resolve('node:http2'), require.resolve('node:sqlite'));
 console.log(require.resolve('./dep.cjs'));
-"#)),
-            ("dep.cjs", definition(ModuleSyntax::CommonJs, &oversized)
-                .require_capability(RuntimeCapability::FsRead)
-                .with_dependency(ModuleDependency::new("./never-follow.cjs", ImportStyle::Require))),
-            ("addon.node", definition(ModuleSyntax::CommonJs, "not an addon")),
-            ("invalid.json", definition(ModuleSyntax::CommonJs, "{ invalid JSON")),
-            ("module.wasm", definition(ModuleSyntax::Wasm, "not WebAssembly bytes")),
-            ("async.mjs", definition(ModuleSyntax::EsModule, "await new Promise(() => {});")),
+"#,
+                ),
+            ),
+            (
+                "dep.cjs",
+                definition(ModuleSyntax::CommonJs, &oversized)
+                    .require_capability(RuntimeCapability::FsRead)
+                    .with_dependency(ModuleDependency::new(
+                        "./never-follow.cjs",
+                        ImportStyle::Require,
+                    )),
+            ),
+            (
+                "addon.node",
+                definition(ModuleSyntax::CommonJs, "not an addon"),
+            ),
+            (
+                "invalid.json",
+                definition(ModuleSyntax::CommonJs, "{ invalid JSON"),
+            ),
+            (
+                "module.wasm",
+                definition(ModuleSyntax::Wasm, "not WebAssembly bytes"),
+            ),
+            (
+                "async.mjs",
+                definition(ModuleSyntax::EsModule, "await new Promise(() => {});"),
+            ),
         ]);
         // An accidental executable request for dep.cjs also trips the fixture's
         // panic trap before any parser-budget or syntax error can hide it.
@@ -1408,36 +1530,71 @@ console.log(require.resolve('./dep.cjs'));
         let resolver = Arc::new(resolver);
         let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
         let policy = Arc::new(RecordingPolicy::default());
-        let locations = ["dep.cjs", "addon.node", "invalid.json", "module.wasm", "async.mjs"]
-            .into_iter().map(|name| (
+        let locations = [
+            "dep.cjs",
+            "addon.node",
+            "invalid.json",
+            "module.wasm",
+            "async.mjs",
+        ]
+        .into_iter()
+        .map(|name| {
+            (
                 format!("{ID_PREFIX}{ROOT}/{name}"),
                 ModuleSourceLocation {
                     filename: PathBuf::from(format!("/unopened metadata/{name}")),
                     url: format!("file:///unopened%20metadata/{name}?instance=1#kept"),
                 },
-            )).collect();
+            )
+        })
+        .collect();
         let installed = ExecutionModuleResolver::new(
-            &source.module.record.id, resolver.clone(), policy.clone(),
-        ).with_source_locations(locations);
+            &source.module.record.id,
+            resolver.clone(),
+            policy.clone(),
+        )
+        .with_source_locations(locations);
         let mut config = OrchestratorConfig {
-            force_lane: Some(lane), parse_goal: ParseGoal::Script, commonjs_entry: true,
+            force_lane: Some(lane),
+            parse_goal: ParseGoal::Script,
+            commonjs_entry: true,
             ..OrchestratorConfig::default()
         };
         config.parser_options.budget.max_source_bytes = 2048;
-        let mut engine = ExecutionOrchestrator::try_new_lab_with_runtime_config(config, RuntimeConfig::default()).unwrap();
+        let mut engine = ExecutionOrchestrator::try_new_lab_with_runtime_config(
+            config,
+            RuntimeConfig::default(),
+        )
+        .unwrap();
         let mut execution = package();
         execution.capabilities = vec!["module_load".into()];
-        let result = engine.execute_resolved_entry_with_resolver(&execution, &source, installed)
+        let result = engine
+            .execute_resolved_entry_with_resolver(&execution, &source, installed)
             .expect("filenames require neither executable payloads nor native providers");
-        assert_eq!(lines(&result), [
-            "/unopened metadata/dep.cjs", "/unopened metadata/addon.node",
-            "/unopened metadata/invalid.json", "/unopened metadata/module.wasm",
-            "/unopened metadata/async.mjs", "http2 node:http2 node:sqlite",
-            "/unopened metadata/dep.cjs",
-        ], "{lane:?}");
+        assert_eq!(
+            lines(&result),
+            [
+                "/unopened metadata/dep.cjs",
+                "/unopened metadata/addon.node",
+                "/unopened metadata/invalid.json",
+                "/unopened metadata/module.wasm",
+                "/unopened metadata/async.mjs",
+                "http2 node:http2 node:sqlite",
+                "/unopened metadata/dep.cjs",
+            ],
+            "{lane:?}"
+        );
         assert_eq!(resolver.metadata_requests.lock().unwrap().len(), 9);
-        assert_eq!(resolver.requests.lock().unwrap().len(), 10, "only entry admission requested source");
-        assert_eq!(policy.requests.lock().unwrap().len(), 9, "every lookup receives fresh policy authorization");
+        assert_eq!(
+            resolver.requests.lock().unwrap().len(),
+            10,
+            "only entry admission requested source"
+        );
+        assert_eq!(
+            policy.requests.lock().unwrap().len(),
+            9,
+            "every lookup receives fresh policy authorization"
+        );
     }
 }
 
@@ -1445,36 +1602,81 @@ console.log(require.resolve('./dep.cjs'));
 fn delivered_metadata_lookups_recheck_revocation_and_reject_forged_descriptors() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
         let resolver = Arc::new(OpaqueResolver::new(vec![
-            ("entry.cjs", definition(ModuleSyntax::CommonJs,
-                "console.log(require.resolve('./dep.cjs').endsWith('/dep.cjs')); try { require.resolve('./dep.cjs'); } catch (_) { console.log('must not catch policy'); }")),
-            ("dep.cjs", definition(ModuleSyntax::CommonJs, "not JavaScript")),
+            (
+                "entry.cjs",
+                definition(
+                    ModuleSyntax::CommonJs,
+                    "console.log(require.resolve('./dep.cjs').endsWith('/dep.cjs')); try { require.resolve('./dep.cjs'); } catch (_) { console.log('must not catch policy'); }",
+                ),
+            ),
+            (
+                "dep.cjs",
+                definition(ModuleSyntax::CommonJs, "not JavaScript"),
+            ),
         ]));
         let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
         let policy = Arc::new(RecordingPolicy {
-            denied: Some(("./dep.cjs".into(), 2)), ..RecordingPolicy::default()
+            denied: Some(("./dep.cjs".into(), 2)),
+            ..RecordingPolicy::default()
         });
-        let installed = ExecutionModuleResolver::new(&source.module.record.id, resolver.clone(), policy.clone());
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver.clone(),
+            policy.clone(),
+        );
         let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
-        let error = engine.execute_resolved_entry_with_resolver(&package(), &source, installed)
+        let error = engine
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
             .expect_err("an earlier filename lookup never caches authorization");
-        assert!(error.to_string().contains("closed-world module resolution refused"), "{error}");
-        assert_eq!(engine.last_failed_console_output().iter().map(|entry| entry.message.as_str()).collect::<Vec<_>>(), ["true"]);
+        assert!(
+            error
+                .to_string()
+                .contains("closed-world module resolution refused"),
+            "{error}"
+        );
+        assert_eq!(
+            engine
+                .last_failed_console_output()
+                .iter()
+                .map(|entry| entry.message.as_str())
+                .collect::<Vec<_>>(),
+            ["true"]
+        );
         assert_eq!(resolver.metadata_requests.lock().unwrap().len(), 2);
         assert_eq!(policy.requests.lock().unwrap().len(), 2);
 
         for (corruption, message) in [
-            (Corruption::MetadataMissingAuthority, "inconsistent identity or resolution authority"),
-            (Corruption::MetadataRequestMismatch, "inconsistent identity or resolution authority"),
-            (Corruption::MetadataUnknownBuiltin, "exact canonical Node builtin"),
+            (
+                Corruption::MetadataMissingAuthority,
+                "inconsistent identity or resolution authority",
+            ),
+            (
+                Corruption::MetadataRequestMismatch,
+                "inconsistent identity or resolution authority",
+            ),
+            (
+                Corruption::MetadataUnknownBuiltin,
+                "exact canonical Node builtin",
+            ),
         ] {
-            let mut resolver = OpaqueResolver::new(vec![("entry.cjs", definition(ModuleSyntax::CommonJs,
-                "try { require.resolve('fs'); } catch (_) { console.log('must not catch forged metadata'); }"))]);
+            let mut resolver = OpaqueResolver::new(vec![(
+                "entry.cjs",
+                definition(
+                    ModuleSyntax::CommonJs,
+                    "try { require.resolve('fs'); } catch (_) { console.log('must not catch forged metadata'); }",
+                ),
+            )]);
             resolver.corruption = corruption;
             let resolver = Arc::new(resolver);
             let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
-            let installed = ExecutionModuleResolver::new(&source.module.record.id, resolver, Arc::new(AllowAllPolicy));
+            let installed = ExecutionModuleResolver::new(
+                &source.module.record.id,
+                resolver,
+                Arc::new(AllowAllPolicy),
+            );
             let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
-            let error = engine.execute_resolved_entry_with_resolver(&package(), &source, installed)
+            let error = engine
+                .execute_resolved_entry_with_resolver(&package(), &source, installed)
                 .expect_err("metadata descriptors do not bypass runtime consistency checks");
             assert!(error.to_string().contains(message), "{error}");
             assert!(engine.last_failed_console_output().is_empty());
@@ -1484,58 +1686,110 @@ fn delivered_metadata_lookups_recheck_revocation_and_reject_forged_descriptors()
 
 #[test]
 fn url_metadata_selects_unregistered_files_and_explicit_urls_without_execution_authority() {
-    let mut resolver = OpaqueResolver::new(vec![("entry.mjs", definition(ModuleSyntax::EsModule, ""))]);
-    resolver.inner.register_external_package(ExternalPackageDefinition {
-        package_name: "metadata-package".into(),
-        exports: BTreeMap::from([(".".into(), ExternalPackageExportTarget {
-            condition_targets: BTreeMap::from([
-                ("import".into(), "./missing.json?selected=import#asset".into()),
-                ("require".into(), "./different.cjs".into()),
-            ]),
-            fallback_target: None,
-        })]),
-    }).unwrap();
-    resolver.inner.register_external_module("metadata-package/parent.mjs",
-        definition(ModuleSyntax::EsModule, "")).unwrap();
+    let mut resolver =
+        OpaqueResolver::new(vec![("entry.mjs", definition(ModuleSyntax::EsModule, ""))]);
+    resolver
+        .inner
+        .register_external_package(ExternalPackageDefinition {
+            package_name: "metadata-package".into(),
+            exports: BTreeMap::from([(
+                ".".into(),
+                ExternalPackageExportTarget {
+                    condition_targets: BTreeMap::from([
+                        (
+                            "import".into(),
+                            "./missing.json?selected=import#asset".into(),
+                        ),
+                        ("require".into(), "./different.cjs".into()),
+                    ]),
+                    fallback_target: None,
+                },
+            )]),
+        })
+        .unwrap();
+    resolver
+        .inner
+        .register_external_module(
+            "metadata-package/parent.mjs",
+            definition(ModuleSyntax::EsModule, ""),
+        )
+        .unwrap();
     let context = ResolutionContext::new("url-metadata", "select", "policy");
     let policy = CapabilityPolicyHook::new(BTreeSet::from([RuntimeCapability::ModuleLoad]));
     for (specifier, expected) in [
-        ("./missing.json?theme=dark#part", ModuleMetadataTarget::SourceUrl),
+        (
+            "./missing.json?theme=dark#part",
+            ModuleMetadataTarget::SourceUrl,
+        ),
         ("./directory/", ModuleMetadataTarget::SourceUrl),
         ("fs", ModuleMetadataTarget::AbsoluteUrl("node:fs".into())),
-        ("node:not-a-real-builtin", ModuleMetadataTarget::AbsoluteUrl("node:not-a-real-builtin".into())),
-        ("https://EXAMPLE.com:443/a/../asset?q=1#x", ModuleMetadataTarget::AbsoluteUrl("https://example.com/asset?q=1#x".into())),
-        ("data:application/json,%7B%7D", ModuleMetadataTarget::AbsoluteUrl("data:application/json,%7B%7D".into())),
+        (
+            "node:not-a-real-builtin",
+            ModuleMetadataTarget::AbsoluteUrl("node:not-a-real-builtin".into()),
+        ),
+        (
+            "https://EXAMPLE.com:443/a/../asset?q=1#x",
+            ModuleMetadataTarget::AbsoluteUrl("https://example.com/asset?q=1#x".into()),
+        ),
+        (
+            "data:application/json,%7B%7D",
+            ModuleMetadataTarget::AbsoluteUrl("data:application/json,%7B%7D".into()),
+        ),
     ] {
         let request = ModuleRequest::new(specifier, ImportStyle::Import)
             .with_referrer(format!("{ID_PREFIX}{ROOT}/entry.mjs"))
             .with_compatibility_mode(CompatibilityMode::NodeCompat);
-        let outcome = resolver.resolve_metadata(&request, &context, &policy).unwrap();
+        let outcome = resolver
+            .resolve_metadata(&request, &context, &policy)
+            .unwrap();
         assert_eq!(outcome.module.metadata.target, expected, "{specifier}");
-        assert_eq!(outcome.module.metadata.required_capabilities,
-            BTreeSet::from([RuntimeCapability::ModuleLoad]));
+        assert_eq!(
+            outcome.module.metadata.required_capabilities,
+            BTreeSet::from([RuntimeCapability::ModuleLoad])
+        );
         let denied = CapabilityPolicyHook::new(BTreeSet::new());
-        assert_eq!(resolver.resolve_metadata(&request, &context, &denied).unwrap_err().code,
-            ResolutionErrorCode::PolicyDenied);
+        assert_eq!(
+            resolver
+                .resolve_metadata(&request, &context, &denied)
+                .unwrap_err()
+                .code,
+            ResolutionErrorCode::PolicyDenied
+        );
     }
     let original = serde_json::json!({
         "id": "legacy", "required_capabilities": [],
         "provenance": { "kind": "workspace", "origin": "fixture" }
     });
     let metadata: ModuleMetadata = serde_json::from_value(original).unwrap();
-    assert_eq!(metadata.target, ModuleMetadataTarget::Filename,
-        "older descriptors never silently acquire URL authority");
+    assert_eq!(
+        metadata.target,
+        ModuleMetadataTarget::Filename,
+        "older descriptors never silently acquire URL authority"
+    );
     for (specifier, referrer, expected_id) in [
-        ("metadata-package", format!("{ROOT}/entry.mjs"),
-            "external:metadata-package/missing.json?selected=import#asset"),
-        ("./missing.bin?raw=1#x", "external:metadata-package/parent.mjs".into(),
-            "external:metadata-package/missing.bin?raw=1#x"),
+        (
+            "metadata-package",
+            format!("{ROOT}/entry.mjs"),
+            "external:metadata-package/missing.json?selected=import#asset",
+        ),
+        (
+            "./missing.bin?raw=1#x",
+            "external:metadata-package/parent.mjs".into(),
+            "external:metadata-package/missing.bin?raw=1#x",
+        ),
     ] {
         let request = ModuleRequest::new(specifier, ImportStyle::Import)
-            .with_referrer(referrer).with_compatibility_mode(CompatibilityMode::NodeCompat);
-        let outcome = resolver.inner.resolve_metadata(&request, &context, &policy).unwrap();
+            .with_referrer(referrer)
+            .with_compatibility_mode(CompatibilityMode::NodeCompat);
+        let outcome = resolver
+            .inner
+            .resolve_metadata(&request, &context, &policy)
+            .unwrap();
         assert_eq!(outcome.module.metadata.id, expected_id);
-        assert_eq!(outcome.module.metadata.target, ModuleMetadataTarget::SourceUrl);
+        assert_eq!(
+            outcome.module.metadata.target,
+            ModuleMetadataTarget::SourceUrl
+        );
     }
 }
 
@@ -1543,7 +1797,11 @@ fn url_metadata_selects_unregistered_files_and_explicit_urls_without_execution_a
 fn delivered_import_meta_resolve_returns_urls_without_sources_or_builtin_providers() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
         let mut resolver = OpaqueResolver::new(vec![
-            ("entry.mjs", definition(ModuleSyntax::EsModule, r#"
+            (
+                "entry.mjs",
+                definition(
+                    ModuleSyntax::EsModule,
+                    r#"
 const resolve = import.meta.resolve;
 console.log(resolve.name, resolve.length);
 console.log(resolve('./dep.cjs'));
@@ -1556,44 +1814,90 @@ console.log(resolve({ toString() { return './dep.cjs'; } }));
 try { resolve('absent-package'); } catch (error) { console.log(error.code); }
 try { resolve('sealed/hidden'); } catch (error) { console.log(error.code); }
 try { resolve(Symbol('specifier')); } catch (error) { console.log(error instanceof TypeError); }
-"#)),
-            ("dep.cjs", definition(ModuleSyntax::CommonJs, &"not JavaScript ".repeat(4096))
-                .require_capability(RuntimeCapability::FsRead)
-                .with_dependency(ModuleDependency::new("./never-follow.cjs", ImportStyle::Require))),
-        ]).with_missing_route("absent-package")
-            .with_package_error("sealed/hidden", ResolutionErrorCode::PackagePathNotExported);
+"#,
+                ),
+            ),
+            (
+                "dep.cjs",
+                definition(ModuleSyntax::CommonJs, &"not JavaScript ".repeat(4096))
+                    .require_capability(RuntimeCapability::FsRead)
+                    .with_dependency(ModuleDependency::new(
+                        "./never-follow.cjs",
+                        ImportStyle::Require,
+                    )),
+            ),
+        ])
+        .with_missing_route("absent-package")
+        .with_package_error("sealed/hidden", ResolutionErrorCode::PackagePathNotExported);
         resolver.corruption = Corruption::Panic;
         let resolver = Arc::new(resolver);
         let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
         let policy = Arc::new(RecordingPolicy::default());
-        let locations = ["entry.mjs", "dep.cjs", "missing.json?theme=dark#part", "directory/"]
-            .into_iter().map(|name| (
+        let locations = [
+            "entry.mjs",
+            "dep.cjs",
+            "missing.json?theme=dark#part",
+            "directory/",
+        ]
+        .into_iter()
+        .map(|name| {
+            (
                 format!("{ID_PREFIX}{ROOT}/{name}"),
                 ModuleSourceLocation {
                     filename: PathBuf::from(format!("/unopened URLs/{name}")),
                     url: format!("file:///unopened%20URLs/{name}"),
                 },
-            )).collect();
-        let installed = ExecutionModuleResolver::new(&source.module.record.id, resolver.clone(), policy.clone())
-            .with_source_locations(locations);
+            )
+        })
+        .collect();
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver.clone(),
+            policy.clone(),
+        )
+        .with_source_locations(locations);
         let mut config = OrchestratorConfig {
-            force_lane: Some(lane), parse_goal: ParseGoal::Module,
+            force_lane: Some(lane),
+            parse_goal: ParseGoal::Module,
             ..OrchestratorConfig::default()
         };
         config.parser_options.budget.max_source_bytes = 2048;
-        let mut engine = ExecutionOrchestrator::try_new_lab_with_runtime_config(config, RuntimeConfig::default()).unwrap();
-        let result = engine.execute_resolved_entry_with_resolver(&package(), &source, installed)
+        let mut engine = ExecutionOrchestrator::try_new_lab_with_runtime_config(
+            config,
+            RuntimeConfig::default(),
+        )
+        .unwrap();
+        let result = engine
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
             .expect("URL resolution must not parse, evaluate or fetch selected targets");
-        assert_eq!(lines(&result), [
-            "resolve 1", "file:///unopened%20URLs/dep.cjs",
-            "file:///unopened%20URLs/missing.json?theme=dark#part", "file:///unopened%20URLs/directory/",
-            "node:fs node:not-a-real-builtin", "https://example.com/asset?q=1#x",
-            "data:application/json,%7B%7D", "file:///unopened%20URLs/dep.cjs",
-            "ERR_MODULE_NOT_FOUND", "ERR_PACKAGE_PATH_NOT_EXPORTED", "true",
-        ], "{lane:?}");
+        assert_eq!(
+            lines(&result),
+            [
+                "resolve 1",
+                "file:///unopened%20URLs/dep.cjs",
+                "file:///unopened%20URLs/missing.json?theme=dark#part",
+                "file:///unopened%20URLs/directory/",
+                "node:fs node:not-a-real-builtin",
+                "https://example.com/asset?q=1#x",
+                "data:application/json,%7B%7D",
+                "file:///unopened%20URLs/dep.cjs",
+                "ERR_MODULE_NOT_FOUND",
+                "ERR_PACKAGE_PATH_NOT_EXPORTED",
+                "true",
+            ],
+            "{lane:?}"
+        );
         assert_eq!(resolver.metadata_requests.lock().unwrap().len(), 10);
-        assert_eq!(resolver.requests.lock().unwrap().len(), 11, "only entry admission requests source");
-        assert_eq!(policy.requests.lock().unwrap().len(), 8, "every successful metadata lookup is freshly authorized");
+        assert_eq!(
+            resolver.requests.lock().unwrap().len(),
+            11,
+            "only entry admission requests source"
+        );
+        assert_eq!(
+            policy.requests.lock().unwrap().len(),
+            8,
+            "every successful metadata lookup is freshly authorized"
+        );
     }
 }
 
@@ -1601,72 +1905,177 @@ try { resolve(Symbol('specifier')); } catch (error) { console.log(error instance
 fn delivered_import_meta_resolve_retains_defining_module_after_extraction_and_coercion() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
         let resolver = Arc::new(OpaqueResolver::new(vec![
-            ("entry.mjs", definition(ModuleSyntax::EsModule, r#"
+            (
+                "entry.mjs",
+                definition(
+                    ModuleSyntax::EsModule,
+                    r#"
 import { resolve, locate } from './nested/loader.mjs';
 console.log(resolve('./missing'));
 console.log(resolve.call({}, './missing', 'file:///wrong/base.mjs'));
 console.log(resolve({ toString() { return './missing'; } }));
 console.log(locate());
 console.log(import.meta.resolve('./missing'));
-"#).with_dependency(ModuleDependency::new("./nested/loader.mjs", ImportStyle::Import))),
-            ("nested/loader.mjs", definition(ModuleSyntax::EsModule,
-                "export const resolve = import.meta.resolve; export function locate() { return import.meta.resolve('./missing'); }")),
+"#,
+                )
+                .with_dependency(ModuleDependency::new(
+                    "./nested/loader.mjs",
+                    ImportStyle::Import,
+                )),
+            ),
+            (
+                "nested/loader.mjs",
+                definition(
+                    ModuleSyntax::EsModule,
+                    "export const resolve = import.meta.resolve; export function locate() { return import.meta.resolve('./missing'); }",
+                ),
+            ),
         ]));
         let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
-        let locations = ["entry.mjs", "nested/loader.mjs", "nested/missing", "missing"]
-            .into_iter().map(|name| (format!("{ID_PREFIX}{ROOT}/{name}"), ModuleSourceLocation {
-                filename: PathBuf::from(format!("/bound origin/{name}")),
-                url: format!("file:///bound%20origin/{name}"),
-            })).collect();
-        let installed = ExecutionModuleResolver::new(&source.module.record.id, resolver.clone(), Arc::new(AllowAllPolicy))
-            .with_source_locations(locations);
+        let locations = [
+            "entry.mjs",
+            "nested/loader.mjs",
+            "nested/missing",
+            "missing",
+        ]
+        .into_iter()
+        .map(|name| {
+            (
+                format!("{ID_PREFIX}{ROOT}/{name}"),
+                ModuleSourceLocation {
+                    filename: PathBuf::from(format!("/bound origin/{name}")),
+                    url: format!("file:///bound%20origin/{name}"),
+                },
+            )
+        })
+        .collect();
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver.clone(),
+            Arc::new(AllowAllPolicy),
+        )
+        .with_source_locations(locations);
         let result = orchestrator(lane, ModuleSyntax::EsModule)
-            .execute_resolved_entry_with_resolver(&package(), &source, installed).unwrap();
-        assert_eq!(lines(&result), [
-            "file:///bound%20origin/nested/missing", "file:///bound%20origin/nested/missing",
-            "file:///bound%20origin/nested/missing", "file:///bound%20origin/nested/missing",
-            "file:///bound%20origin/missing",
-        ], "{lane:?}");
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .unwrap();
+        assert_eq!(
+            lines(&result),
+            [
+                "file:///bound%20origin/nested/missing",
+                "file:///bound%20origin/nested/missing",
+                "file:///bound%20origin/nested/missing",
+                "file:///bound%20origin/nested/missing",
+                "file:///bound%20origin/missing",
+            ],
+            "{lane:?}"
+        );
         let calls = resolver.metadata_requests.lock().unwrap();
         assert_eq!(calls.len(), 5);
         assert!(calls[..4].iter().all(|request| request.referrer.as_deref()
             == Some(format!("{ID_PREFIX}{ROOT}/nested/loader.mjs").as_str())));
-        assert_eq!(calls[4].referrer.as_deref(), Some(format!("{ID_PREFIX}{ROOT}/entry.mjs").as_str()));
+        assert_eq!(
+            calls[4].referrer.as_deref(),
+            Some(format!("{ID_PREFIX}{ROOT}/entry.mjs").as_str())
+        );
     }
 }
 
 #[test]
 fn delivered_import_meta_resolve_rechecks_policy_and_refuses_malformed_or_cross_purpose_targets() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        let resolver = Arc::new(OpaqueResolver::new(vec![("entry.mjs", definition(ModuleSyntax::EsModule,
-            "console.log(import.meta.resolve('node:fake')); try { import.meta.resolve('node:fake'); } catch (_) { console.log('must not catch denial'); }"))]));
+        let resolver = Arc::new(OpaqueResolver::new(vec![(
+            "entry.mjs",
+            definition(
+                ModuleSyntax::EsModule,
+                "console.log(import.meta.resolve('node:fake')); try { import.meta.resolve('node:fake'); } catch (_) { console.log('must not catch denial'); }",
+            ),
+        )]));
         let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
         let policy = Arc::new(RecordingPolicy {
-            denied: Some(("node:fake".into(), 2)), ..RecordingPolicy::default()
+            denied: Some(("node:fake".into(), 2)),
+            ..RecordingPolicy::default()
         });
-        let installed = ExecutionModuleResolver::new(&source.module.record.id, resolver.clone(), policy.clone());
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver.clone(),
+            policy.clone(),
+        );
         let mut engine = orchestrator(lane, ModuleSyntax::EsModule);
-        let error = engine.execute_resolved_entry_with_resolver(&package(), &source, installed).unwrap_err();
-        assert!(error.to_string().contains("closed-world module resolution refused"), "{error}");
-        assert_eq!(engine.last_failed_console_output().iter().map(|line| line.message.as_str()).collect::<Vec<_>>(), ["node:fake"]);
+        let error = engine
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("closed-world module resolution refused"),
+            "{error}"
+        );
+        assert_eq!(
+            engine
+                .last_failed_console_output()
+                .iter()
+                .map(|line| line.message.as_str())
+                .collect::<Vec<_>>(),
+            ["node:fake"]
+        );
         assert_eq!(policy.requests.lock().unwrap().len(), 2);
         assert_eq!(resolver.metadata_requests.lock().unwrap().len(), 2);
 
         for (syntax, name, code, corruption, message) in [
-            (ModuleSyntax::EsModule, "entry.mjs", "import.meta.resolve('node:fs')", Corruption::MetadataWrongPurpose, "does not match lookup purpose"),
-            (ModuleSyntax::CommonJs, "entry.cjs", "require.resolve('fs')", Corruption::MetadataWrongPurpose, "does not match lookup purpose"),
-            (ModuleSyntax::EsModule, "entry.mjs", "import.meta.resolve('node:fs')", Corruption::MetadataMalformedUrl, "normalized absolute URL"),
-            (ModuleSyntax::EsModule, "entry.mjs", "import.meta.resolve('./missing')", Corruption::None, "no installed source location"),
+            (
+                ModuleSyntax::EsModule,
+                "entry.mjs",
+                "import.meta.resolve('node:fs')",
+                Corruption::MetadataWrongPurpose,
+                "does not match lookup purpose",
+            ),
+            (
+                ModuleSyntax::CommonJs,
+                "entry.cjs",
+                "require.resolve('fs')",
+                Corruption::MetadataWrongPurpose,
+                "does not match lookup purpose",
+            ),
+            (
+                ModuleSyntax::EsModule,
+                "entry.mjs",
+                "import.meta.resolve('node:fs')",
+                Corruption::MetadataMalformedUrl,
+                "normalized absolute URL",
+            ),
+            (
+                ModuleSyntax::EsModule,
+                "entry.mjs",
+                "import.meta.resolve('./missing')",
+                Corruption::None,
+                "no installed source location",
+            ),
         ] {
-            let mut resolver = OpaqueResolver::new(vec![(name, definition(syntax,
-                &format!("try {{ {code}; }} catch (_) {{ console.log('must not catch invalid descriptor'); }}")))]);
+            let mut resolver = OpaqueResolver::new(vec![(
+                name,
+                definition(
+                    syntax,
+                    &format!(
+                        "try {{ {code}; }} catch (_) {{ console.log('must not catch invalid descriptor'); }}"
+                    ),
+                ),
+            )]);
             resolver.corruption = corruption;
             let resolver = Arc::new(resolver);
             let source = entry(&resolver, name, syntax);
-            let installed = ExecutionModuleResolver::new(&source.module.record.id, resolver, Arc::new(AllowAllPolicy));
+            let installed = ExecutionModuleResolver::new(
+                &source.module.record.id,
+                resolver,
+                Arc::new(AllowAllPolicy),
+            );
             let mut engine = orchestrator(lane, syntax);
-            let error = engine.execute_resolved_entry_with_resolver(&package(), &source, installed).unwrap_err();
-            assert!(error.to_string().contains(message), "{lane:?} {code}: {error}");
+            let error = engine
+                .execute_resolved_entry_with_resolver(&package(), &source, installed)
+                .unwrap_err();
+            assert!(
+                error.to_string().contains(message),
+                "{lane:?} {code}: {error}"
+            );
             assert!(engine.last_failed_console_output().is_empty());
         }
     }
@@ -1675,7 +2084,11 @@ fn delivered_import_meta_resolve_rechecks_policy_and_refuses_malformed_or_cross_
 #[test]
 fn delivered_import_meta_resolve_has_stable_object_identity_and_ordinary_property_semantics() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        let resolver = Arc::new(OpaqueResolver::new(vec![("entry.mjs", definition(ModuleSyntax::EsModule, r#"
+        let resolver = Arc::new(OpaqueResolver::new(vec![(
+            "entry.mjs",
+            definition(
+                ModuleSyntax::EsModule,
+                r#"
 const meta = import.meta;
 const saved = meta.resolve;
 console.log(meta === import.meta, saved === import.meta.resolve, Object.getPrototypeOf(meta) === null);
@@ -1688,17 +2101,35 @@ Object.defineProperty(meta, 'resolve', { configurable: true, get() { return save
 console.log(import.meta.resolve('node:fake'));
 try { new saved('node:fake'); } catch (error) { console.log(error instanceof TypeError); }
 try { Reflect.construct(saved, ['node:fake']); } catch (error) { console.log(error instanceof TypeError); }
-"#))]));
+"#,
+            ),
+        )]));
         let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
-        let installed = ExecutionModuleResolver::new(&source.module.record.id, resolver.clone(), Arc::new(AllowAllPolicy));
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver.clone(),
+            Arc::new(AllowAllPolicy),
+        );
         let result = orchestrator(lane, ModuleSyntax::EsModule)
-            .execute_resolved_entry_with_resolver(&package(), &source, installed).unwrap();
-        assert_eq!(lines(&result), [
-            "true true true", "overridden overridden", "data override data override",
-            "true true", "node:fake", "true", "true",
-        ]);
-        assert_eq!(resolver.metadata_requests.lock().unwrap().len(), 1,
-            "overridden calls cannot bypass the current property value");
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .unwrap();
+        assert_eq!(
+            lines(&result),
+            [
+                "true true true",
+                "overridden overridden",
+                "data override data override",
+                "true true",
+                "node:fake",
+                "true",
+                "true",
+            ]
+        );
+        assert_eq!(
+            resolver.metadata_requests.lock().unwrap().len(),
+            1,
+            "overridden calls cannot bypass the current property value"
+        );
     }
 }
 
@@ -1708,20 +2139,31 @@ fn ordinary_import_meta_resolve_preserves_package_urls_without_reading_target_co
     let root = directory.path();
     std::fs::create_dir_all(root.join("node_modules/url-package")).unwrap();
     std::fs::create_dir_all(root.join("node_modules/legacy-package")).unwrap();
-    std::fs::write(root.join("package.json"), r##"{
+    std::fs::write(
+        root.join("package.json"),
+        r##"{
         "name":"url-application",
         "imports":{"#asset":"url-package/asset","#builtin":"fs"}
-    }"##).unwrap();
-    std::fs::write(root.join("node_modules/url-package/package.json"), r#"{
+    }"##,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("node_modules/url-package/package.json"),
+        r#"{
         "name":"url-package",
         "exports":{
             ".":{"require":"./wrong.cjs","import":"./missing.json?condition=import#selected"},
             "./asset":"./missing.bin?raw=1#asset",
             "./directory":"./missing-directory/"
         }
-    }"#).unwrap();
-    std::fs::write(root.join("node_modules/legacy-package/package.json"),
-        r#"{"name":"legacy-package","main":"missing-main.js"}"#).unwrap();
+    }"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("node_modules/legacy-package/package.json"),
+        r#"{"name":"legacy-package","main":"missing-main.js"}"#,
+    )
+    .unwrap();
     std::fs::write(root.join("binary.node"), [0xff, 0x00, 0xfe]).unwrap();
     let source = r#"
 console.log(import.meta.resolve('url-package').endsWith('/url-package/missing.json?condition=import#selected'));
@@ -1739,11 +2181,24 @@ try { import.meta.resolve('legacy-package'); } catch (error) { console.log(error
         execution.source = source.to_string();
         execution.source_file = Some(root.join("entry.mjs").display().to_string());
         execution.module_root = Some(root.display().to_string());
-        let result = orchestrator(lane, ModuleSyntax::EsModule).execute(&execution).unwrap();
-        assert_eq!(lines(&result), [
-            "true", "true", "true", "true", "true", "node:fs",
-            "ERR_PACKAGE_PATH_NOT_EXPORTED", "ERR_PACKAGE_IMPORT_NOT_DEFINED", "ERR_MODULE_NOT_FOUND",
-        ], "{lane:?}");
+        let result = orchestrator(lane, ModuleSyntax::EsModule)
+            .execute(&execution)
+            .unwrap();
+        assert_eq!(
+            lines(&result),
+            [
+                "true",
+                "true",
+                "true",
+                "true",
+                "true",
+                "node:fs",
+                "ERR_PACKAGE_PATH_NOT_EXPORTED",
+                "ERR_PACKAGE_IMPORT_NOT_DEFINED",
+                "ERR_MODULE_NOT_FOUND",
+            ],
+            "{lane:?}"
+        );
     }
 }
 
@@ -1764,10 +2219,13 @@ console.log(import.meta.resolve('./linkdir/').endsWith('/linkdir/'));
 console.log(import.meta.resolve('./linkdir/missing').endsWith('/linkdir/missing'));
 console.log(import.meta.resolve('./linkdir/file?q=1#x').endsWith('/real/file?q=1#x'));
 console.log(import.meta.resolve('./linkfile/').endsWith('/linkfile/'));
-"#.to_string();
+"#
+        .to_string();
         execution.source_file = Some(root.join("entry.mjs").display().to_string());
         execution.module_root = Some(root.display().to_string());
-        let result = orchestrator(lane, ModuleSyntax::EsModule).execute(&execution).unwrap();
+        let result = orchestrator(lane, ModuleSyntax::EsModule)
+            .execute(&execution)
+            .unwrap();
         assert_eq!(lines(&result), ["true"; 5], "{lane:?}");
     }
 }
@@ -3949,14 +4407,15 @@ fs.readFileSync('input.txt', 'utf8');
                 if read_allowed {
                     execution.capabilities.push("fs_read".into());
                 }
-                let outcome = engine.execute_resolved_entry_with_resolver(
-                    &execution,
-                    &source,
-                    installed,
-                );
+                let outcome =
+                    engine.execute_resolved_entry_with_resolver(&execution, &source, installed);
                 if read_allowed {
                     let result = outcome.expect("allowed imported code drains all deferred work");
-                    assert_eq!(lines(&result), ["entry resumed"], "{lane:?}: {entry_source}");
+                    assert_eq!(
+                        lines(&result),
+                        ["entry resumed"],
+                        "{lane:?}: {entry_source}"
+                    );
                     assert_eq!(transcript.len(), 7, "six writes and the allowed read");
                 } else {
                     let error = outcome.expect_err("imported module read authority is denied");
@@ -3971,13 +4430,23 @@ fs.readFileSync('input.txt', 'utf8');
                         "{lane:?}: {entry_source}: {error:?}"
                     );
                     assert!(engine.last_failed_console_output().is_empty());
-                    assert_eq!(transcript.len(), 1, "only the pre-denial write reaches the host");
+                    assert_eq!(
+                        transcript.len(),
+                        1,
+                        "only the pre-denial write reaches the host"
+                    );
                 }
                 assert_eq!(
                     std::fs::read(root.path().join("before.txt")).expect("pre-denial effect"),
                     b"committed"
                 );
-                for path in ["tick.txt", "microtask.txt", "promise.txt", "await.txt", "timer.txt"] {
+                for path in [
+                    "tick.txt",
+                    "microtask.txt",
+                    "promise.txt",
+                    "await.txt",
+                    "timer.txt",
+                ] {
                     assert_eq!(
                         root.path().join(path).exists(),
                         read_allowed,

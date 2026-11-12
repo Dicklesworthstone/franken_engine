@@ -281,6 +281,7 @@ impl std::error::Error for RemoteTransportError {}
 // ---------------------------------------------------------------------------
 
 /// Mock transport that records operations without actual network I/O.
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, Default)]
 pub struct MockRemoteTransport {
     /// Recorded operations.
@@ -292,6 +293,7 @@ pub struct MockRemoteTransport {
 }
 
 /// A recorded operation from the mock transport.
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordedOperation {
     pub operation: RemoteOperationType,
@@ -299,6 +301,7 @@ pub struct RecordedOperation {
     pub payload: Vec<u8>,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl RemoteTransport for MockRemoteTransport {
     fn execute(
         &mut self,

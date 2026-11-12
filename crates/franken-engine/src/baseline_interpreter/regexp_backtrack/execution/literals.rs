@@ -37,7 +37,10 @@ impl LiteralBlocks {
         // Mix block-sized strides as well as low bits. A direct-mapped cache
         // bounds both lookup work and storage even on adversarial bytecode.
         let slot = (pc ^ (pc / LITERAL_WIDTH)) % CACHE_SLOTS;
-        if self.entries[slot].as_ref().is_none_or(|entry| entry.pc != pc) {
+        if self.entries[slot]
+            .as_ref()
+            .is_none_or(|entry| entry.pc != pc)
+        {
             let Inst::Char { backward, .. } = regexp.program.get(pc)? else {
                 return None;
             };
@@ -165,7 +168,10 @@ mod tests {
             );
             assert_eq!(actual.steps_left, reference.steps_left, "exact work charge");
             assert_eq!(actual.slots, reference.slots, "partial capture state");
-            assert_eq!(actual.registers, reference.registers, "partial register state");
+            assert_eq!(
+                actual.registers, reference.registers,
+                "partial register state"
+            );
             assert!(actual.stack.is_empty());
             assert!(actual.capture_seen.iter().all(|seen| !seen));
         }
@@ -190,7 +196,15 @@ mod tests {
             ("(?<=kſΣé😀)(x)", "iu"),
         ] {
             let regexp = BacktrackRegExp::new(pattern, flags).expect(pattern);
-            for text in ["", "abc", "abcdef", "abcdex", "abcdefx", "abcdefabcdefx", "KsςÉ😀x"] {
+            for text in [
+                "",
+                "abc",
+                "abcdef",
+                "abcdex",
+                "abcdefx",
+                "abcdefabcdefx",
+                "KsςÉ😀x",
+            ] {
                 let input = PreparedInput::new(text);
                 for start in 0..=input.char_len() + 1 {
                     for sticky in [false, true] {
@@ -208,21 +222,38 @@ mod tests {
         for length in [2, 3, 7, 31, 32] {
             for backward in [false, true] {
                 let mut regexp = BacktrackRegExp::new("", "").unwrap();
-                let literals: Vec<_> = (0..length).map(|index| char::from(b'a' + (index % 23) as u8)).collect();
-                regexp.program = literals.iter().map(|&c| Inst::Char { c, backward }).collect();
+                let literals: Vec<_> = (0..length)
+                    .map(|index| char::from(b'a' + (index % 23) as u8))
+                    .collect();
+                regexp.program = literals
+                    .iter()
+                    .map(|&c| Inst::Char { c, backward })
+                    .collect();
                 regexp.program.push(Inst::Match);
                 for input_length in 0..=length + 1 {
                     for mismatch in 0..=length {
-                        let mut chars: Vec<_> = literals.iter().copied().take(input_length).collect();
-                        if input_length > length { chars.push('x'); }
-                        if mismatch < chars.len() { chars[mismatch] = '!'; }
-                        if backward { chars.reverse(); }
+                        let mut chars: Vec<_> =
+                            literals.iter().copied().take(input_length).collect();
+                        if input_length > length {
+                            chars.push('x');
+                        }
+                        if mismatch < chars.len() {
+                            chars[mismatch] = '!';
+                        }
+                        if backward {
+                            chars.reverse();
+                        }
                         let position = if backward { chars.len() } else { 0 };
                         let mut blocks = LiteralBlocks::default();
                         let block = blocks.at(&regexp, 0).unwrap();
                         for budget in (1..=length as u64 + 2).chain([u64::MAX]) {
                             let mut remaining = budget - 1;
-                            let actual = block.execute_after_dispatch(&regexp, &chars, position, &mut remaining);
+                            let actual = block.execute_after_dispatch(
+                                &regexp,
+                                &chars,
+                                position,
+                                &mut remaining,
+                            );
                             let mut expected_remaining = budget;
                             let mut expected = Ok(Some(position));
                             for &literal in &literals {
@@ -233,14 +264,20 @@ mod tests {
                                 expected_remaining -= 1;
                                 let at = expected.as_ref().unwrap().unwrap();
                                 let matched = if backward {
-                                    at.checked_sub(1).filter(|&index| chars.get(index) == Some(&literal))
+                                    at.checked_sub(1)
+                                        .filter(|&index| chars.get(index) == Some(&literal))
                                 } else {
                                     (chars.get(at) == Some(&literal)).then_some(at + 1)
                                 };
                                 expected = Ok(matched);
-                                if matched.is_none() { break; }
+                                if matched.is_none() {
+                                    break;
+                                }
                             }
-                            assert_eq!(actual, expected, "len={length} reverse={backward} input={input_length} mismatch={mismatch} budget={budget}");
+                            assert_eq!(
+                                actual, expected,
+                                "len={length} reverse={backward} input={input_length} mismatch={mismatch} budget={budget}"
+                            );
                             assert_eq!(remaining, expected_remaining);
                         }
                     }
@@ -256,10 +293,22 @@ mod tests {
         let block = blocks.at(&regexp, 1).unwrap();
         assert_eq!(block.len, 2);
         regexp.program = vec![
-            Inst::Char { c: 'a', backward: false },
-            Inst::Char { c: 'b', backward: false },
-            Inst::Char { c: 'c', backward: true },
-            Inst::Char { c: 'd', backward: true },
+            Inst::Char {
+                c: 'a',
+                backward: false,
+            },
+            Inst::Char {
+                c: 'b',
+                backward: false,
+            },
+            Inst::Char {
+                c: 'c',
+                backward: true,
+            },
+            Inst::Char {
+                c: 'd',
+                backward: true,
+            },
             Inst::Match,
         ];
         // Each Run owns its immutable program; a different program gets a
@@ -275,7 +324,11 @@ mod tests {
     fn matching_long_literals_reduce_actual_dispatches_without_changing_work() {
         for backwards in [false, true] {
             let literal = "abcdefghijklmnop".repeat(128);
-            let pattern = if backwards { format!("(?<=({literal}))x") } else { format!("({literal})x") };
+            let pattern = if backwards {
+                format!("(?<=({literal}))x")
+            } else {
+                format!("({literal})x")
+            };
             let regexp = BacktrackRegExp::new(&pattern, "").unwrap();
             let text = format!("{literal}x");
             let input = PreparedInput::new(&text);
@@ -286,7 +339,11 @@ mod tests {
             assert_eq!(actual.search(start, true), reference.search(start, true));
             assert_eq!(actual.slots, reference.slots);
             assert_eq!(actual.steps_left, reference.steps_left);
-            assert!(actual.literal_dispatches < 70, "{} literal dispatches", actual.literal_dispatches);
+            assert!(
+                actual.literal_dispatches < 70,
+                "{} literal dispatches",
+                actual.literal_dispatches
+            );
             assert_eq!(reference.literal_dispatches, 2049);
         }
     }
@@ -302,14 +359,23 @@ mod tests {
         assert!(run.search(0, true).unwrap().is_some());
         // A repeated site is a hit; other sites may legitimately collide in
         // the bounded cache. Do not depend on the compiler's block placement.
-        let pc = regexp.program.windows(2).position(|pair| matches!(pair,
-            [Inst::Char { .. }, Inst::Char { .. }])).unwrap();
+        let pc = regexp
+            .program
+            .windows(2)
+            .position(|pair| matches!(pair, [Inst::Char { .. }, Inst::Char { .. }]))
+            .unwrap();
         assert!(run.literal_blocks.at(&regexp, pc).is_some());
         let compiled = run.literal_blocks.compilations;
         assert!(run.literal_blocks.at(&regexp, pc).is_some());
         assert_eq!(run.literal_blocks.compilations, compiled);
         assert!(run.literal_blocks.entries.iter().flatten().count() <= CACHE_SLOTS);
-        assert!(run.literal_blocks.entries.iter().flatten().all(|block| block.len <= LITERAL_WIDTH));
+        assert!(
+            run.literal_blocks
+                .entries
+                .iter()
+                .flatten()
+                .all(|block| block.len <= LITERAL_WIDTH)
+        );
         let fresh = Run::new(&regexp, &input, 100_000);
         assert_eq!(fresh.literal_blocks.compilations, 0);
         assert!(fresh.literal_blocks.entries.iter().all(Option::is_none));
@@ -323,28 +389,39 @@ mod tests {
         type CaptureCase<'a> = (&'a str, &'a str, &'a str, &'a [Option<(usize, usize)>]);
         let cases: &[CaptureCase<'_>] = &[
             (
-                "(abcdefghijklmnop){2}\\1", "",
+                "(abcdefghijklmnop){2}\\1",
+                "",
                 "xxabcdefghijklmnopabcdefghijklmnopabcdefghijklmnop",
                 &[Some((2, 50)), Some((18, 34))],
             ),
             (
-                "(?<=(abcdefghijklmnop))(x)", "", "abcdefghijklmnopx",
+                "(?<=(abcdefghijklmnop))(x)",
+                "",
+                "abcdefghijklmnopx",
                 &[Some((16, 17)), Some((0, 16)), Some((16, 17))],
             ),
             (
-                "(?!(abcdefghijklmnop)q)abcdefghijklmnopx", "", "abcdefghijklmnopx",
+                "(?!(abcdefghijklmnop)q)abcdefghijklmnopx",
+                "",
+                "abcdefghijklmnopx",
                 &[Some((0, 17)), None],
             ),
             (
-                "(abcdefghijklmnop)q|((abcdefghijklmnop)x)", "", "abcdefghijklmnopx",
+                "(abcdefghijklmnop)q|((abcdefghijklmnop)x)",
+                "",
+                "abcdefghijklmnopx",
                 &[Some((0, 17)), None, Some((0, 17)), Some((0, 16))],
             ),
             (
-                "(?=(abcdefghijklmnop)x)abcdefghijklmnopx", "", "abcdefghijklmnopx",
+                "(?=(abcdefghijklmnop)x)abcdefghijklmnopx",
+                "",
+                "abcdefghijklmnopx",
                 &[Some((0, 17)), Some((0, 16))],
             ),
             (
-                "(?<=(kſΣé😀))(x)", "iu", "KsςÉ😀x",
+                "(?<=(kſΣé😀))(x)",
+                "iu",
+                "KsςÉ😀x",
                 &[Some((12, 13)), Some((0, 12)), Some((12, 13))],
             ),
         ];

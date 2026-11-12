@@ -87,7 +87,10 @@ storage.sqlite3
 # Test-generated benchmark and gate artifacts (PID/timestamp-named)
 crates/franken-engine/tests/artifacts/benchmark_e2e/
 crates/franken-engine/tests/artifacts/test262_release_gate/
-/tests/artifacts/
+/tests/artifacts/*
+!/tests/artifacts/perf/
+/tests/artifacts/perf/*
+!/tests/artifacts/perf/baselines/
 
 # Editor/script backup files
 *.backup

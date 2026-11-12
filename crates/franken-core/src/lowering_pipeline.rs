@@ -18,14 +18,15 @@ use crate::flow_lattice::{
 use crate::hash_tiers::ContentHash;
 use crate::ifc_artifacts::{Label, ProofMethod};
 use crate::ir_contract::{
-    AccessorKind, BindingId, BindingKind, CapabilityTag, EffectBoundary, FlowAnnotation, IR_ACCESSOR_GET_PREFIX,
-    IR_ACCESSOR_SET_PREFIX, IR_SUPER_PROTOTYPE_PROPERTY, Ir0Module, Ir1Literal, Ir1Module, Ir1Op,
-    Ir1PropertyKey, Ir2Module, Ir2Op, Ir3FunctionDesc, Ir3Instruction, Ir3Module, IrError, IrLevel,
-    IteratorCloseReason, Reg, RegRange, ResolvedBinding, ScopeId, ScopeKind, ScopeNode,
-    verify_ir1_accessor_definition_schema, verify_ir1_derived_constructor_schema, verify_ir1_generator_boundaries,
-    verify_ir1_method_definition_schema, verify_ir1_source, verify_ir2_derived_constructor_schema,
-    verify_ir2_accessor_definition_schema, verify_ir2_generator_boundaries, verify_ir2_method_definition_schema,
-    verify_ir3_specialization, verify_schema_version,
+    AccessorKind, BindingId, BindingKind, CapabilityTag, EffectBoundary, FlowAnnotation,
+    IR_ACCESSOR_GET_PREFIX, IR_ACCESSOR_SET_PREFIX, IR_SUPER_PROTOTYPE_PROPERTY, Ir0Module,
+    Ir1Literal, Ir1Module, Ir1Op, Ir1PropertyKey, Ir2Module, Ir2Op, Ir3FunctionDesc,
+    Ir3Instruction, Ir3Module, IrError, IrLevel, IteratorCloseReason, Reg, RegRange,
+    ResolvedBinding, ScopeId, ScopeKind, ScopeNode, verify_ir1_accessor_definition_schema,
+    verify_ir1_derived_constructor_schema, verify_ir1_generator_boundaries,
+    verify_ir1_method_definition_schema, verify_ir1_source, verify_ir2_accessor_definition_schema,
+    verify_ir2_derived_constructor_schema, verify_ir2_generator_boundaries,
+    verify_ir2_method_definition_schema, verify_ir3_specialization, verify_schema_version,
 };
 use crate::js_string::JsString;
 use crate::parser::{
@@ -7152,8 +7153,17 @@ pub fn lower_ir2_to_ir3(
                 };
                 let dst = alloc_register(&mut register_cursor);
                 ir3.instructions.push(match receiver {
-                    Some(receiver) => Ir3Instruction::GetPropertyWithReceiver { obj, key: key_reg, receiver, dst },
-                    None => Ir3Instruction::GetProperty { obj, key: key_reg, dst },
+                    Some(receiver) => Ir3Instruction::GetPropertyWithReceiver {
+                        obj,
+                        key: key_reg,
+                        receiver,
+                        dst,
+                    },
+                    None => Ir3Instruction::GetProperty {
+                        obj,
+                        key: key_reg,
+                        dst,
+                    },
                 });
                 value_stack.push(dst);
             }
@@ -7179,8 +7189,17 @@ pub fn lower_ir2_to_ir3(
                     }
                 };
                 ir3.instructions.push(match receiver {
-                    Some(receiver) => Ir3Instruction::SetPropertyWithReceiver { obj, key: key_reg, receiver, val },
-                    None => Ir3Instruction::SetProperty { obj, key: key_reg, val },
+                    Some(receiver) => Ir3Instruction::SetPropertyWithReceiver {
+                        obj,
+                        key: key_reg,
+                        receiver,
+                        val,
+                    },
+                    None => Ir3Instruction::SetProperty {
+                        obj,
+                        key: key_reg,
+                        val,
+                    },
                 });
                 value_stack.push(val);
             }
@@ -7210,7 +7229,11 @@ pub fn lower_ir2_to_ir3(
                         func,
                         kind: *kind,
                     },
-                    _ => Ir3Instruction::DefineMethod { obj, key: key_reg, func },
+                    _ => Ir3Instruction::DefineMethod {
+                        obj,
+                        key: key_reg,
+                        func,
+                    },
                 });
                 value_stack.push(obj);
             }
@@ -8701,8 +8724,17 @@ pub fn lower_ir2_to_ir3(
                     };
                     let dst = alloc_register(&mut fn_reg);
                     ir3.instructions.push(match receiver {
-                        Some(receiver) => Ir3Instruction::GetPropertyWithReceiver { obj, key: key_reg, receiver, dst },
-                        None => Ir3Instruction::GetProperty { obj, key: key_reg, dst },
+                        Some(receiver) => Ir3Instruction::GetPropertyWithReceiver {
+                            obj,
+                            key: key_reg,
+                            receiver,
+                            dst,
+                        },
+                        None => Ir3Instruction::GetProperty {
+                            obj,
+                            key: key_reg,
+                            dst,
+                        },
                     });
                     fn_value_stack.push(dst);
                 }
@@ -8728,8 +8760,17 @@ pub fn lower_ir2_to_ir3(
                         }
                     };
                     ir3.instructions.push(match receiver {
-                        Some(receiver) => Ir3Instruction::SetPropertyWithReceiver { obj, key: key_reg, receiver, val: value },
-                        None => Ir3Instruction::SetProperty { obj, key: key_reg, val: value },
+                        Some(receiver) => Ir3Instruction::SetPropertyWithReceiver {
+                            obj,
+                            key: key_reg,
+                            receiver,
+                            val: value,
+                        },
+                        None => Ir3Instruction::SetProperty {
+                            obj,
+                            key: key_reg,
+                            val: value,
+                        },
                     });
                     fn_value_stack.push(value);
                 }
@@ -8759,7 +8800,11 @@ pub fn lower_ir2_to_ir3(
                             func,
                             kind: *kind,
                         },
-                        _ => Ir3Instruction::DefineMethod { obj, key: key_reg, func },
+                        _ => Ir3Instruction::DefineMethod {
+                            obj,
+                            key: key_reg,
+                            func,
+                        },
                     });
                     fn_value_stack.push(obj);
                 }
@@ -11822,7 +11867,8 @@ fn lower_expression_to_ir1(
                     )?;
                 }
                 let mut arg_count = arguments.len() as u32;
-                if matches!(capability, "timer:setTimeout" | "timer:setInterval") && arg_count == 1 {
+                if matches!(capability, "timer:setTimeout" | "timer:setInterval") && arg_count == 1
+                {
                     ops.push(Ir1Op::LoadLiteral {
                         value: Ir1Literal::Integer(0),
                     });
@@ -11858,7 +11904,9 @@ fn lower_expression_to_ir1(
             let is_method = matches!(callee.as_ref(), Expression::Member { .. });
             if is_method {
                 if let Expression::Member {
-                    object, property, computed,
+                    object,
+                    property,
+                    computed,
                 } = callee.as_ref()
                 {
                     // Push receiver (object) first
@@ -12375,6 +12423,40 @@ fn lower_expression_to_ir1(
                             ObjectPropertyKind::Method => Ir1Op::DefineMethod { key },
                             ObjectPropertyKind::Data => unreachable!("data property handled below"),
                         });
+                    } else if !prop.computed
+                        && !prop.shorthand
+                        && canonical_static_object_property_key(&prop.key)
+                            .is_ok_and(|key| key.as_str() == Some("__proto__"))
+                    {
+                        // Annex B.3.1: non-computed, non-shorthand `__proto__: v`
+                        // mutates [[Prototype]] directly while preserving the
+                        // object literal receiver on the operand stack.
+                        let target_bid = alloc_internal_binding(
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            "object_literal_proto_target",
+                        )?;
+                        ops.push(Ir1Op::StoreBinding {
+                            binding_id: target_bid,
+                        });
+                        lower_expression_to_ir1(
+                            &prop.value,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            label_counter,
+                        )?;
+                        ops.push(Ir1Op::SetProperty {
+                            key: Ir1PropertyKey::Static("__proto__".into()),
+                        });
+                        ops.push(Ir1Op::Pop);
+                        ops.push(Ir1Op::LoadBinding {
+                            binding_id: target_bid,
+                        });
                     } else {
                         // Data property - emit key and value, then merge a
                         // one-property temporary object into the target.
@@ -12445,7 +12527,11 @@ fn lower_expression_to_ir1(
                 });
             }
         }
-        Expression::ArrowFunction { params, body, is_async } => {
+        Expression::ArrowFunction {
+            params,
+            body,
+            is_async,
+        } => {
             // Lower arrow function body with its own fresh scope.
             let mut body_ops = if *is_async {
                 vec![Ir1Op::AsyncFunctionStart]

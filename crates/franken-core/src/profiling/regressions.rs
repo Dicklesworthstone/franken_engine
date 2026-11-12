@@ -10,8 +10,15 @@ fn instructions() -> Vec<Ir3Instruction> {
             dst: 1,
             bits: (-0.0_f64).to_bits(),
         },
-        Ir3Instruction::LoadBool { dst: 2, value: true },
-        Ir3Instruction::Add { dst: 3, lhs: 0, rhs: 1 },
+        Ir3Instruction::LoadBool {
+            dst: 2,
+            value: true,
+        },
+        Ir3Instruction::Add {
+            dst: 3,
+            lhs: 0,
+            rhs: 1,
+        },
         Ir3Instruction::HostCall {
             capability: CapabilityTag("large operand that must not be formatted".repeat(4096)),
             args: RegRange { start: 0, count: 4 },
@@ -30,7 +37,14 @@ fn instructions() -> Vec<Ir3Instruction> {
 
 fn legacy_name(instruction: &Ir3Instruction) -> String {
     let debug = format!("{instruction:?}");
-    debug.split(" {").next().unwrap().split('(').next().unwrap().into()
+    debug
+        .split(" {")
+        .next()
+        .unwrap()
+        .split('(')
+        .next()
+        .unwrap()
+        .into()
 }
 
 #[test]

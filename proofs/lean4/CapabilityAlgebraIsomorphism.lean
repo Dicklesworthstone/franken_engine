@@ -1,140 +1,103 @@
 /-
 # Capability Algebra Isomorphism Proof
 
-Proves that the Rust implementation in crates/franken-engine/src/capability.rs
-is isomorphic to the formal capability algebra specification.
+Proves that the Rust implementation model (`crates/franken-engine/src/capability.rs`)
+is isomorphic to the formal `CapabilityProfile` algebra in
+`CapabilityAlgebraSpecification.lean`, including preservation of `ValidProfile`.
 
-This establishes that:
-1. The Rust RuntimeCapability enum corresponds exactly to our formal RuntimeCapability
-2. The Rust CapabilityProfile.intersect() method implements the formal intersect operation
-3. The Rust CapabilityProfile.subsumes() method implements the formal subsumes relation
-4. The Rust CapabilityProfile.has() method implements the formal has predicate
-5. All algebraic properties proven about the formal specification hold for the Rust implementation
-
-Related: bd-cixqu.7.5, capability algebra security algebra verification
+Related: bd-cixqu.7.5, bd-rc-2026-11-11-epic-g2vrp.10
 -/
 
-import Mathlib.Data.Finset.Basic
-import Mathlib.Data.Fintype.Basic
-import Mathlib.Logic.Equiv.Basic
-
--- Import our formal specification
 import CapabilityAlgebraSpecification
 
 -- =============================================================================
 -- Rust Implementation Model
 -- =============================================================================
 
-/-- Model of the Rust RuntimeCapability enum.
-    This represents the actual implementation in capability.rs -/
 structure RustRuntimeCapability where
-  /-- The discriminant value (0-19 for the 20 capability variants) -/
-  discriminant : Fin 20
+  discriminant : Fin 22
+deriving DecidableEq, Repr
 
 namespace RustRuntimeCapability
 
-/-- All Rust runtime capability constructors -/
-def vmDispatch : RustRuntimeCapability := ⟨0, by norm_num⟩
-def gcInvoke : RustRuntimeCapability := ⟨1, by norm_num⟩
-def irLowering : RustRuntimeCapability := ⟨2, by norm_num⟩
-def policyRead : RustRuntimeCapability := ⟨3, by norm_num⟩
-def policyWrite : RustRuntimeCapability := ⟨4, by norm_num⟩
-def evidenceEmit : RustRuntimeCapability := ⟨5, by norm_num⟩
-def decisionInvoke : RustRuntimeCapability := ⟨6, by norm_num⟩
-def networkEgress : RustRuntimeCapability := ⟨7, by norm_num⟩
-def leaseManagement : RustRuntimeCapability := ⟨8, by norm_num⟩
-def idempotencyDerive : RustRuntimeCapability := ⟨9, by norm_num⟩
-def extensionLifecycle : RustRuntimeCapability := ⟨10, by norm_num⟩
-def heapAllocate : RustRuntimeCapability := ⟨11, by norm_num⟩
-def envRead : RustRuntimeCapability := ⟨12, by norm_num⟩
-def processSpawn : RustRuntimeCapability := ⟨13, by norm_num⟩
-def fsRead : RustRuntimeCapability := ⟨14, by norm_num⟩
-def fsWrite : RustRuntimeCapability := ⟨15, by norm_num⟩
-def moduleLoad : RustRuntimeCapability := ⟨16, by norm_num⟩
-def console : RustRuntimeCapability := ⟨17, by norm_num⟩
-def timer : RustRuntimeCapability := ⟨18, by norm_num⟩
-def builtin : RustRuntimeCapability := ⟨19, by norm_num⟩
-
-instance : DecidableEq RustRuntimeCapability := by
-  intro a b
-  exact decidable_of_iff (a.discriminant = b.discriminant)
-    ⟨fun h => by ext; exact h, fun h => by injection h⟩
+def vmDispatch        : RustRuntimeCapability := ⟨⟨0, by decide⟩⟩
+def gcInvoke          : RustRuntimeCapability := ⟨⟨1, by decide⟩⟩
+def irLowering        : RustRuntimeCapability := ⟨⟨2, by decide⟩⟩
+def policyRead        : RustRuntimeCapability := ⟨⟨3, by decide⟩⟩
+def policyWrite       : RustRuntimeCapability := ⟨⟨4, by decide⟩⟩
+def evidenceEmit      : RustRuntimeCapability := ⟨⟨5, by decide⟩⟩
+def decisionInvoke    : RustRuntimeCapability := ⟨⟨6, by decide⟩⟩
+def networkEgress     : RustRuntimeCapability := ⟨⟨7, by decide⟩⟩
+def leaseManagement   : RustRuntimeCapability := ⟨⟨8, by decide⟩⟩
+def idempotencyDerive : RustRuntimeCapability := ⟨⟨9, by decide⟩⟩
+def extensionLifecycle : RustRuntimeCapability := ⟨⟨10, by decide⟩⟩
+def heapAllocate      : RustRuntimeCapability := ⟨⟨11, by decide⟩⟩
+def envRead           : RustRuntimeCapability := ⟨⟨12, by decide⟩⟩
+def processSpawn      : RustRuntimeCapability := ⟨⟨13, by decide⟩⟩
+def fsRead            : RustRuntimeCapability := ⟨⟨14, by decide⟩⟩
+def fsWrite           : RustRuntimeCapability := ⟨⟨15, by decide⟩⟩
+def moduleLoad        : RustRuntimeCapability := ⟨⟨16, by decide⟩⟩
+def console           : RustRuntimeCapability := ⟨⟨17, by decide⟩⟩
+def timer             : RustRuntimeCapability := ⟨⟨18, by decide⟩⟩
+def builtin           : RustRuntimeCapability := ⟨⟨19, by decide⟩⟩
+def declassify        : RustRuntimeCapability := ⟨⟨20, by decide⟩⟩
+def randomRead        : RustRuntimeCapability := ⟨⟨21, by decide⟩⟩
 
 end RustRuntimeCapability
 
-/-- Model of the Rust CapabilityProfile struct -/
+/-- Model of the Rust `CapabilityProfile` struct with discriminant kind `0..4` and 22-bit set. -/
 structure RustCapabilityProfile where
-  /-- The kind field (discriminant 0-4 for the 5 profile kinds) -/
   kind_discriminant : Fin 5
-  /-- The capabilities field as a set of capability discriminants -/
-  capabilities : Finset (Fin 20)
+  capabilities : BitVec 22
+deriving DecidableEq, Repr
 
 namespace RustCapabilityProfile
 
-/-- Rust profile kind constructors -/
-def fullKind : Fin 5 := ⟨0, by norm_num⟩
-def engineCoreKind : Fin 5 := ⟨1, by norm_num⟩
-def policyKind : Fin 5 := ⟨2, by norm_num⟩
-def remoteKind : Fin 5 := ⟨3, by norm_num⟩
-def computeOnlyKind : Fin 5 := ⟨4, by norm_num⟩
+def fullKind        : Fin 5 := ⟨0, by decide⟩
+def engineCoreKind  : Fin 5 := ⟨1, by decide⟩
+def policyKind      : Fin 5 := ⟨2, by decide⟩
+def remoteKind      : Fin 5 := ⟨3, by decide⟩
+def computeOnlyKind : Fin 5 := ⟨4, by decide⟩
 
-/-- Canonical Rust profiles (match the Rust implementation) -/
-def full : RustCapabilityProfile := {
-  kind_discriminant := fullKind,
-  capabilities := Finset.univ  -- All 20 capabilities
-}
+def full : RustCapabilityProfile :=
+  ⟨fullKind, CapabilityProfile.fullCaps.mask⟩
 
-def engineCore : RustCapabilityProfile := {
-  kind_discriminant := engineCoreKind,
-  capabilities := {⟨0, by norm_num⟩, ⟨1, by norm_num⟩, ⟨2, by norm_num⟩, ⟨11, by norm_num⟩,
-                   ⟨17, by norm_num⟩, ⟨18, by norm_num⟩, ⟨19, by norm_num⟩}
-}
+def engineCore : RustCapabilityProfile :=
+  ⟨engineCoreKind, CapabilityProfile.engineCoreCaps.mask⟩
 
-def policy : RustCapabilityProfile := {
-  kind_discriminant := policyKind,
-  capabilities := {⟨3, by norm_num⟩, ⟨4, by norm_num⟩, ⟨5, by norm_num⟩, ⟨6, by norm_num⟩}
-}
+def policy : RustCapabilityProfile :=
+  ⟨policyKind, CapabilityProfile.policyCaps.mask⟩
 
-def remote : RustCapabilityProfile := {
-  kind_discriminant := remoteKind,
-  capabilities := {⟨7, by norm_num⟩, ⟨8, by norm_num⟩, ⟨9, by norm_num⟩}
-}
+def remote : RustCapabilityProfile :=
+  ⟨remoteKind, CapabilityProfile.remoteCaps.mask⟩
 
-def computeOnly : RustCapabilityProfile := {
-  kind_discriminant := computeOnlyKind,
-  capabilities := ∅
-}
+def computeOnly : RustCapabilityProfile :=
+  ⟨computeOnlyKind, 0#22⟩
 
-/-- The has() method from Rust implementation -/
-def has (profile : RustCapabilityProfile) (cap : Fin 20) : Prop :=
-  cap ∈ profile.capabilities
+def classifyKind (caps : BitVec 22) : Fin 5 :=
+  if caps = 0#22 then computeOnlyKind
+  else if caps = full.capabilities then fullKind
+  else if caps = engineCore.capabilities then engineCoreKind
+  else if caps = policy.capabilities then policyKind
+  else if caps = remote.capabilities then remoteKind
+  else computeOnlyKind
 
-/-- The subsumes() method from Rust implementation -/
+def ValidRustProfile (p : RustCapabilityProfile) : Prop :=
+  p.kind_discriminant = classifyKind p.capabilities
+
+instance decidableValidRustProfile (p : RustCapabilityProfile) :
+    Decidable (ValidRustProfile p) :=
+  inferInstanceAs (Decidable (p.kind_discriminant = classifyKind p.capabilities))
+
+def has (profile : RustCapabilityProfile) (cap : Fin 22) : Prop :=
+  profile.capabilities.getLsbD cap.val = true
+
 def subsumes (a b : RustCapabilityProfile) : Prop :=
-  b.capabilities ⊆ a.capabilities
+  (b.capabilities &&& a.capabilities) = b.capabilities
 
-/-- The intersect() method from Rust implementation -/
 def intersect (a b : RustCapabilityProfile) : RustCapabilityProfile :=
-  let caps := a.capabilities ∩ b.capabilities
-  let kind :=
-    if caps = ∅ then computeOnlyKind
-    else if caps = full.capabilities then fullKind
-    else if caps = engineCore.capabilities then engineCoreKind
-    else if caps = policy.capabilities then policyKind
-    else if caps = remote.capabilities then remoteKind
-    else computeOnlyKind  -- Custom profile
-  {
-    kind_discriminant := kind,
-    capabilities := caps
-  }
-
-instance : DecidablePred₂ has := by
-  intro profile cap
-  exact Finset.decidableMem cap profile.capabilities
-
-instance : DecidablePred₂ subsumes := by
-  intro a b
-  exact Finset.decidableSubset b.capabilities a.capabilities
+  let caps := a.capabilities &&& b.capabilities
+  ⟨classifyKind caps, caps⟩
 
 end RustCapabilityProfile
 
@@ -142,207 +105,195 @@ end RustCapabilityProfile
 -- Isomorphism Functions
 -- =============================================================================
 
-/-- Isomorphism from formal RuntimeCapability to Rust model -/
-def runtimeCapabilityToRust : RuntimeCapability → RustRuntimeCapability
-  | RuntimeCapability.VmDispatch => RustRuntimeCapability.vmDispatch
-  | RuntimeCapability.GcInvoke => RustRuntimeCapability.gcInvoke
-  | RuntimeCapability.IrLowering => RustRuntimeCapability.irLowering
-  | RuntimeCapability.PolicyRead => RustRuntimeCapability.policyRead
-  | RuntimeCapability.PolicyWrite => RustRuntimeCapability.policyWrite
-  | RuntimeCapability.EvidenceEmit => RustRuntimeCapability.evidenceEmit
-  | RuntimeCapability.DecisionInvoke => RustRuntimeCapability.decisionInvoke
-  | RuntimeCapability.NetworkEgress => RustRuntimeCapability.networkEgress
-  | RuntimeCapability.LeaseManagement => RustRuntimeCapability.leaseManagement
-  | RuntimeCapability.IdempotencyDerive => RustRuntimeCapability.idempotencyDerive
-  | RuntimeCapability.ExtensionLifecycle => RustRuntimeCapability.extensionLifecycle
-  | RuntimeCapability.HeapAllocate => RustRuntimeCapability.heapAllocate
-  | RuntimeCapability.EnvRead => RustRuntimeCapability.envRead
-  | RuntimeCapability.ProcessSpawn => RustRuntimeCapability.processSpawn
-  | RuntimeCapability.FsRead => RustRuntimeCapability.fsRead
-  | RuntimeCapability.FsWrite => RustRuntimeCapability.fsWrite
-  | RuntimeCapability.ModuleLoad => RustRuntimeCapability.moduleLoad
-  | RuntimeCapability.Console => RustRuntimeCapability.console
-  | RuntimeCapability.Timer => RustRuntimeCapability.timer
-  | RuntimeCapability.Builtin => RustRuntimeCapability.builtin
+def runtimeCapabilityToRust (c : RuntimeCapability) : RustRuntimeCapability :=
+  ⟨c.index⟩
 
-/-- Isomorphism from Rust model to formal RuntimeCapability -/
-def rustToRuntimeCapability : RustRuntimeCapability → RuntimeCapability := fun r =>
-  match r.discriminant.val with
-  | 0 => RuntimeCapability.VmDispatch
-  | 1 => RuntimeCapability.GcInvoke
-  | 2 => RuntimeCapability.IrLowering
-  | 3 => RuntimeCapability.PolicyRead
-  | 4 => RuntimeCapability.PolicyWrite
-  | 5 => RuntimeCapability.EvidenceEmit
-  | 6 => RuntimeCapability.DecisionInvoke
-  | 7 => RuntimeCapability.NetworkEgress
-  | 8 => RuntimeCapability.LeaseManagement
-  | 9 => RuntimeCapability.IdempotencyDerive
-  | 10 => RuntimeCapability.ExtensionLifecycle
-  | 11 => RuntimeCapability.HeapAllocate
-  | 12 => RuntimeCapability.EnvRead
-  | 13 => RuntimeCapability.ProcessSpawn
-  | 14 => RuntimeCapability.FsRead
-  | 15 => RuntimeCapability.FsWrite
-  | 16 => RuntimeCapability.ModuleLoad
-  | 17 => RuntimeCapability.Console
-  | 18 => RuntimeCapability.Timer
-  | _ => RuntimeCapability.Builtin
+def rustToRuntimeCapability (r : RustRuntimeCapability) : RuntimeCapability :=
+  RuntimeCapability.ofFin r.discriminant
 
-/-- Convert formal capability set to Rust capability set -/
-def capabilitySetToRust (s : CapabilitySet) : Finset (Fin 20) :=
-  s.image (fun cap => (runtimeCapabilityToRust cap).discriminant)
+def profileKindToRust : ProfileKind → Fin 5
+  | ProfileKind.Full        => RustCapabilityProfile.fullKind
+  | ProfileKind.EngineCore  => RustCapabilityProfile.engineCoreKind
+  | ProfileKind.Policy      => RustCapabilityProfile.policyKind
+  | ProfileKind.Remote      => RustCapabilityProfile.remoteKind
+  | ProfileKind.ComputeOnly => RustCapabilityProfile.computeOnlyKind
 
-/-- Convert Rust capability set to formal capability set -/
-def rustToCapabilitySet (s : Finset (Fin 20)) : CapabilitySet :=
-  s.image (fun fin => rustToRuntimeCapability ⟨fin.val, fin.isLt⟩)
+def rustToProfileKind (k : Fin 5) : ProfileKind :=
+  match k.val with
+  | 0 => ProfileKind.Full
+  | 1 => ProfileKind.EngineCore
+  | 2 => ProfileKind.Policy
+  | 3 => ProfileKind.Remote
+  | _ => ProfileKind.ComputeOnly
 
-/-- Isomorphism from formal CapabilityProfile to Rust model -/
-def capabilityProfileToRust : CapabilityProfile → RustCapabilityProfile
-  | ⟨kind, caps⟩ =>
-    let rustKind := match kind with
-      | ProfileKind.Full => RustCapabilityProfile.fullKind
-      | ProfileKind.EngineCore => RustCapabilityProfile.engineCoreKind
-      | ProfileKind.Policy => RustCapabilityProfile.policyKind
-      | ProfileKind.Remote => RustCapabilityProfile.remoteKind
-      | ProfileKind.ComputeOnly => RustCapabilityProfile.computeOnlyKind
-    {
-      kind_discriminant := rustKind,
-      capabilities := capabilitySetToRust caps
-    }
+def capabilityProfileToRust (p : CapabilityProfile) : RustCapabilityProfile :=
+  ⟨profileKindToRust p.kind, p.capabilities.mask⟩
 
-/-- Isomorphism from Rust model to formal CapabilityProfile -/
-def rustToCapabilityProfile : RustCapabilityProfile → CapabilityProfile := fun r =>
-  let formalKind := match r.kind_discriminant.val with
-    | 0 => ProfileKind.Full
-    | 1 => ProfileKind.EngineCore
-    | 2 => ProfileKind.Policy
-    | 3 => ProfileKind.Remote
-    | _ => ProfileKind.ComputeOnly
-  {
-    kind := formalKind,
-    capabilities := rustToCapabilitySet r.capabilities
-  }
+def rustToCapabilityProfile (r : RustCapabilityProfile) : CapabilityProfile :=
+  ⟨rustToProfileKind r.kind_discriminant, ⟨r.capabilities⟩⟩
 
 -- =============================================================================
--- Isomorphism Proofs
+-- Isomorphism & Correspondence Proofs
 -- =============================================================================
 
-/-- The capability isomorphisms are inverses -/
 theorem capability_isomorphism_inverse :
-  (∀ cap : RuntimeCapability, rustToRuntimeCapability (runtimeCapabilityToRust cap) = cap) ∧
-  (∀ r : RustRuntimeCapability, runtimeCapabilityToRust (rustToRuntimeCapability r) = r) := by
-  constructor
-  · intro cap
-    cases cap <;> rfl
-  · intro r
-    simp [rustToRuntimeCapability, runtimeCapabilityToRust]
-    -- Need to handle all 20 cases
-    sorry
+    (∀ cap : RuntimeCapability, rustToRuntimeCapability (runtimeCapabilityToRust cap) = cap) ∧
+    (∀ r : RustRuntimeCapability, runtimeCapabilityToRust (rustToRuntimeCapability r) = r) := by
+  refine ⟨RuntimeCapability.ofFin_index, ?_⟩
+  intro ⟨i⟩
+  simp [runtimeCapabilityToRust, rustToRuntimeCapability, RuntimeCapability.index_ofFin]
 
-/-- Profile isomorphisms are inverses -/
+theorem profileKind_left_inv (k : ProfileKind) :
+    rustToProfileKind (profileKindToRust k) = k := by
+  cases k <;> rfl
+
+theorem profileKind_right_inv (k : Fin 5) :
+    profileKindToRust (rustToProfileKind k) = k := by
+  obtain ⟨v, hv⟩ := k
+  match v with
+  | 0 | 1 | 2 | 3 | 4 => rfl
+  | n + 5 => omega
+
+theorem profile_left_inv (p : CapabilityProfile) :
+    rustToCapabilityProfile (capabilityProfileToRust p) = p := by
+  cases p with | mk k caps =>
+  cases caps with | mk mask =>
+  simp [capabilityProfileToRust, rustToCapabilityProfile, profileKind_left_inv]
+
+theorem profile_right_inv (r : RustCapabilityProfile) :
+    capabilityProfileToRust (rustToCapabilityProfile r) = r := by
+  cases r with | mk k mask =>
+  simp [capabilityProfileToRust, rustToCapabilityProfile, profileKind_right_inv]
+
 theorem profile_isomorphism_inverse :
-  (∀ profile : CapabilityProfile, rustToCapabilityProfile (capabilityProfileToRust profile) = profile) ∧
-  (∀ r : RustCapabilityProfile, capabilityProfileToRust (rustToCapabilityProfile r) = r) := by
+    (∀ profile : CapabilityProfile, rustToCapabilityProfile (capabilityProfileToRust profile) = profile) ∧
+    (∀ r : RustCapabilityProfile, capabilityProfileToRust (rustToCapabilityProfile r) = r) :=
+  ⟨profile_left_inv, profile_right_inv⟩
+
+theorem classifyKind_correspondence (caps : CapabilitySet) :
+    profileKindToRust (CapabilityProfile.classifyKind caps) =
+      RustCapabilityProfile.classifyKind caps.mask := by
+  cases caps with | mk mask =>
+  have hmk : ∀ s : CapabilitySet, (⟨mask⟩ : CapabilitySet) = s ↔ mask = s.mask := by
+    intro s; cases s; simp
+  simp only [CapabilityProfile.classifyKind, RustCapabilityProfile.classifyKind,
+             hmk, CapabilitySet.empty, RustCapabilityProfile.full,
+             RustCapabilityProfile.engineCore, RustCapabilityProfile.policy,
+             RustCapabilityProfile.remote]
+  repeat (split <;> try rfl)
+
+theorem valid_profile_correspondence (p : CapabilityProfile) :
+    CapabilityProfile.ValidProfile p ↔
+      RustCapabilityProfile.ValidRustProfile (capabilityProfileToRust p) := by
+  cases p with | mk k caps =>
+  simp only [CapabilityProfile.ValidProfile, RustCapabilityProfile.ValidRustProfile,
+             capabilityProfileToRust, ← classifyKind_correspondence]
   constructor
-  · intro profile
-    cases profile.kind <;> simp [capabilityProfileToRust, rustToCapabilityProfile] <;> sorry
-  · intro r
-    simp [capabilityProfileToRust, rustToCapabilityProfile]
-    sorry
+  · intro h; rw [h]
+  · intro h
+    have h' := congrArg rustToProfileKind h
+    simpa [profileKind_left_inv] using h'
 
--- =============================================================================
--- Operation Correspondence
--- =============================================================================
-
-/-- Has operation correspondence -/
 theorem has_correspondence (profile : CapabilityProfile) (cap : RuntimeCapability) :
-  CapabilityProfile.has profile cap ↔
-  RustCapabilityProfile.has (capabilityProfileToRust profile) (runtimeCapabilityToRust cap).discriminant := by
-  simp [CapabilityProfile.has, RustCapabilityProfile.has, capabilityProfileToRust, capabilitySetToRust]
-  sorry
+    CapabilityProfile.has profile cap ↔
+      RustCapabilityProfile.has (capabilityProfileToRust profile)
+        (runtimeCapabilityToRust cap).discriminant := by
+  rfl
 
-/-- Subsumes operation correspondence -/
 theorem subsumes_correspondence (a b : CapabilityProfile) :
-  CapabilityProfile.subsumes a b ↔
-  RustCapabilityProfile.subsumes (capabilityProfileToRust a) (capabilityProfileToRust b) := by
-  simp [CapabilityProfile.subsumes, RustCapabilityProfile.subsumes, capabilityProfileToRust]
-  sorry
+    CapabilityProfile.subsumes a b ↔
+      RustCapabilityProfile.subsumes (capabilityProfileToRust a) (capabilityProfileToRust b) := by
+  rfl
 
-/-- Intersect operation correspondence -/
 theorem intersect_correspondence (a b : CapabilityProfile) :
-  capabilityProfileToRust (CapabilityProfile.intersect a b) =
-  RustCapabilityProfile.intersect (capabilityProfileToRust a) (capabilityProfileToRust b) := by
-  simp [CapabilityProfile.intersect, RustCapabilityProfile.intersect, capabilityProfileToRust]
-  sorry
+    capabilityProfileToRust (CapabilityProfile.intersect a b) =
+      RustCapabilityProfile.intersect (capabilityProfileToRust a) (capabilityProfileToRust b) := by
+  simp [CapabilityProfile.intersect, RustCapabilityProfile.intersect,
+        capabilityProfileToRust, CapabilitySet.inter, classifyKind_correspondence]
 
--- =============================================================================
--- Main Isomorphism Theorem
--- =============================================================================
-
-/-- Main theorem: The Rust implementation is a faithful representation
-    of our formal capability algebra specification -/
+/-- Main theorem: The Rust model is bijectively and algebraically isomorphic to `CapabilityProfile`. -/
 theorem rust_capability_algebra_isomorphic :
-  -- Structure preservation
-  (∀ a b : CapabilityProfile,
-     capabilityProfileToRust (CapabilityProfile.intersect a b) =
-     RustCapabilityProfile.intersect (capabilityProfileToRust a) (capabilityProfileToRust b)) ∧
-  -- Relation preservation
-  (∀ a b : CapabilityProfile,
-     CapabilityProfile.subsumes a b ↔
-     RustCapabilityProfile.subsumes (capabilityProfileToRust a) (capabilityProfileToRust b)) ∧
-  -- Predicate preservation
-  (∀ profile : CapabilityProfile, ∀ cap : RuntimeCapability,
-     CapabilityProfile.has profile cap ↔
-     RustCapabilityProfile.has (capabilityProfileToRust profile) (runtimeCapabilityToRust cap).discriminant) ∧
-  -- Bijective correspondence
-  (∀ profile : CapabilityProfile, rustToCapabilityProfile (capabilityProfileToRust profile) = profile) ∧
-  (∀ r : RustCapabilityProfile, capabilityProfileToRust (rustToCapabilityProfile r) = r) := by
-  exact ⟨
-    intersect_correspondence,
-    subsumes_correspondence,
-    has_correspondence,
-    profile_isomorphism_inverse.1,
-    profile_isomorphism_inverse.2
-  ⟩
+    (∀ a b : CapabilityProfile,
+       capabilityProfileToRust (CapabilityProfile.intersect a b) =
+       RustCapabilityProfile.intersect (capabilityProfileToRust a) (capabilityProfileToRust b)) ∧
+    (∀ a b : CapabilityProfile,
+       CapabilityProfile.subsumes a b ↔
+       RustCapabilityProfile.subsumes (capabilityProfileToRust a) (capabilityProfileToRust b)) ∧
+    (∀ profile : CapabilityProfile, ∀ cap : RuntimeCapability,
+       CapabilityProfile.has profile cap ↔
+       RustCapabilityProfile.has (capabilityProfileToRust profile)
+         (runtimeCapabilityToRust cap).discriminant) ∧
+    (∀ profile : CapabilityProfile, rustToCapabilityProfile (capabilityProfileToRust profile) = profile) ∧
+    (∀ r : RustCapabilityProfile, capabilityProfileToRust (rustToCapabilityProfile r) = r) :=
+  ⟨intersect_correspondence,
+   subsumes_correspondence,
+   has_correspondence,
+   profile_left_inv,
+   profile_right_inv⟩
 
--- =============================================================================
--- Correctness Corollaries
--- =============================================================================
-
-/-- Corollary: All algebraic properties proven for the formal specification
-    also hold for the Rust implementation -/
+/-- Corollary: All algebraic properties hold on `RustCapabilityProfile` (with `ValidRustProfile` for idempotence). -/
 theorem rust_satisfies_capability_algebra :
-  -- Intersection properties
-  (∀ a b : RustCapabilityProfile,
-     RustCapabilityProfile.intersect a b = RustCapabilityProfile.intersect b a) ∧
-  (∀ a : RustCapabilityProfile,
-     RustCapabilityProfile.intersect a a = a) ∧
-  (∀ a b : RustCapabilityProfile,
-     let result := RustCapabilityProfile.intersect a b
-     RustCapabilityProfile.subsumes a result ∧ RustCapabilityProfile.subsumes b result) ∧
-  -- Authority partitions disjoint
-  (RustCapabilityProfile.intersect RustCapabilityProfile.engineCore RustCapabilityProfile.policy =
-   RustCapabilityProfile.computeOnly) ∧
-  (RustCapabilityProfile.intersect RustCapabilityProfile.engineCore RustCapabilityProfile.remote =
-   RustCapabilityProfile.computeOnly) ∧
-  (RustCapabilityProfile.intersect RustCapabilityProfile.policy RustCapabilityProfile.remote =
-   RustCapabilityProfile.computeOnly) ∧
-  -- Subsumption properties
-  (∀ profile : RustCapabilityProfile, RustCapabilityProfile.subsumes RustCapabilityProfile.full profile) ∧
-  (∀ profile : RustCapabilityProfile, RustCapabilityProfile.subsumes profile RustCapabilityProfile.computeOnly) := by
-  -- Transfer the formal properties through the isomorphism
-  sorry
+    (∀ a b : RustCapabilityProfile,
+       RustCapabilityProfile.intersect a b = RustCapabilityProfile.intersect b a) ∧
+    (∀ a : RustCapabilityProfile,
+       RustCapabilityProfile.ValidRustProfile a →
+       RustCapabilityProfile.intersect a a = a) ∧
+    (∀ a b c : RustCapabilityProfile,
+       RustCapabilityProfile.intersect (RustCapabilityProfile.intersect a b) c =
+       RustCapabilityProfile.intersect a (RustCapabilityProfile.intersect b c)) ∧
+    (∀ a b : RustCapabilityProfile,
+       let result := RustCapabilityProfile.intersect a b
+       RustCapabilityProfile.subsumes a result ∧ RustCapabilityProfile.subsumes b result) ∧
+    (RustCapabilityProfile.intersect RustCapabilityProfile.engineCore RustCapabilityProfile.policy =
+     RustCapabilityProfile.computeOnly) ∧
+    (RustCapabilityProfile.intersect RustCapabilityProfile.engineCore RustCapabilityProfile.remote =
+     RustCapabilityProfile.computeOnly) ∧
+    (RustCapabilityProfile.intersect RustCapabilityProfile.policy RustCapabilityProfile.remote =
+     RustCapabilityProfile.computeOnly) ∧
+    (∀ profile : RustCapabilityProfile,
+       RustCapabilityProfile.subsumes RustCapabilityProfile.full profile) ∧
+    (∀ profile : RustCapabilityProfile,
+       RustCapabilityProfile.subsumes profile RustCapabilityProfile.computeOnly) := by
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · intro a b
+    have ha := (profile_right_inv a).symm
+    have hb := (profile_right_inv b).symm
+    rw [ha, hb, ← intersect_correspondence, ← intersect_correspondence,
+        CapabilityProfile.intersect_commutative]
+  · intro a hvalid
+    have ha := (profile_right_inv a).symm
+    have hformal : CapabilityProfile.ValidProfile (rustToCapabilityProfile a) := by
+      rw [valid_profile_correspondence, profile_right_inv]
+      exact hvalid
+    calc
+      RustCapabilityProfile.intersect a a
+          = RustCapabilityProfile.intersect
+              (capabilityProfileToRust (rustToCapabilityProfile a))
+              (capabilityProfileToRust (rustToCapabilityProfile a)) := by rw [← ha]
+      _   = capabilityProfileToRust
+              (CapabilityProfile.intersect (rustToCapabilityProfile a) (rustToCapabilityProfile a)) :=
+            (intersect_correspondence _ _).symm
+      _   = capabilityProfileToRust (rustToCapabilityProfile a) := by
+            rw [CapabilityProfile.intersect_idempotent _ hformal]
+      _   = a := profile_right_inv a
+  · intro a b c
+    simp [RustCapabilityProfile.intersect, BitVec.and_assoc]
+  · intro a b
+    exact ⟨CapabilitySet.inter_subsumes_left ⟨a.capabilities⟩ ⟨b.capabilities⟩,
+           CapabilitySet.inter_subsumes_right ⟨a.capabilities⟩ ⟨b.capabilities⟩⟩
+  · decide
+  · decide
+  · decide
+  · intro p
+    exact CapabilitySet.full_subsumes ⟨p.capabilities⟩
+  · intro p
+    exact CapabilitySet.subsumes_empty ⟨p.capabilities⟩
 
--- =============================================================================
--- Verification Summary
--- =============================================================================
-
-/-- Summary theorem documenting the complete capability algebra verification -/
+/-- Non-vacuous capstone verification theorem for the capability algebra. -/
 theorem capability_algebra_implementation_verified :
-  -- The Rust capability.rs implementation correctly implements
-  -- the formal capability algebra specification with mathematical guarantees
-  True := trivial
-
-#check rust_capability_algebra_isomorphic
-#check rust_satisfies_capability_algebra
+    (∀ a : RustCapabilityProfile,
+       RustCapabilityProfile.ValidRustProfile a →
+       RustCapabilityProfile.intersect a a = a) ∧
+    (RustCapabilityProfile.intersect RustCapabilityProfile.engineCore RustCapabilityProfile.policy =
+     RustCapabilityProfile.computeOnly) :=
+  ⟨rust_satisfies_capability_algebra.2.1, rust_satisfies_capability_algebra.2.2.2.2.1⟩

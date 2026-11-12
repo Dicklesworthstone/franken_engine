@@ -1,5 +1,5 @@
-use super::*;
 use super::super::{BacktrackError, Captures, PreparedInput};
+use super::*;
 
 /// Scalar candidate search, deliberately bypassing BOTH start accelerators.
 /// The shared VM remains authoritative for captures, backtracking and refusal.
@@ -17,12 +17,17 @@ fn scalar_search(
     for at in start..=length {
         run.candidate_executions += 1;
         if run.execute(0, at, &mut stack)?.is_some() {
-            return Ok(Some(run.slots.chunks(2).map(|pair| match (pair[0], pair[1]) {
-                (Some(from), Some(to)) => {
-                    Some((run.input.byte_offset(from), run.input.byte_offset(to)))
-                }
-                _ => None,
-            }).collect()));
+            return Ok(Some(
+                run.slots
+                    .chunks(2)
+                    .map(|pair| match (pair[0], pair[1]) {
+                        (Some(from), Some(to)) => {
+                            Some((run.input.byte_offset(from), run.input.byte_offset(to)))
+                        }
+                        _ => None,
+                    })
+                    .collect(),
+            ));
         }
         if sticky {
             break;
@@ -47,10 +52,19 @@ fn assert_search(
     reference.registers.fill(23);
     let result = actual.search(start, sticky);
     let expected = scalar_search(&mut reference, start, sticky);
-    assert_eq!(result, expected, "start={start} sticky={sticky} budget={budget}");
+    assert_eq!(
+        result, expected,
+        "start={start} sticky={sticky} budget={budget}"
+    );
     assert_eq!(actual.steps_left, reference.steps_left, "remaining budget");
-    assert_eq!(actual.slots, reference.slots, "including partial refusal captures");
-    assert_eq!(actual.registers, reference.registers, "including partial refusal registers");
+    assert_eq!(
+        actual.slots, reference.slots,
+        "including partial refusal captures"
+    );
+    assert_eq!(
+        actual.registers, reference.registers,
+        "including partial refusal registers"
+    );
     assert!(actual.stack.is_empty());
 }
 
@@ -76,7 +90,18 @@ fn grouped_classes_anchors_and_unicode_match_at_every_small_budget() {
         ("(?<!x)a", ""),
         ("(a?)*", ""),
     ];
-    let texts = ["", "a", "xxabc", "aAx", "cc", "\nax", "a\rx", "\u{2028}a", "Kx", "x😀z"];
+    let texts = [
+        "",
+        "a",
+        "xxabc",
+        "aAx",
+        "cc",
+        "\nax",
+        "a\rx",
+        "\u{2028}a",
+        "Kx",
+        "x😀z",
+    ];
     for (pattern, flags) in patterns {
         let regexp = BacktrackRegExp::new(pattern, flags).expect(pattern);
         for text in texts {
@@ -97,10 +122,17 @@ fn clear_and_register_costs_keep_every_refusal_state_exact() {
     let mut regexp = BacktrackRegExp::new("(z)", "").unwrap();
     regexp.registers = 2;
     regexp.program = vec![
-        Inst::Save(0), Inst::Save(2), Inst::Mark(0), Inst::CounterReset(1),
+        Inst::Save(0),
+        Inst::Save(2),
+        Inst::Mark(0),
+        Inst::CounterReset(1),
         Inst::Clear { from: 0, to: 4 },
-        Inst::Char { c: 'z', backward: false },
-        Inst::Save(1), Inst::Match,
+        Inst::Char {
+            c: 'z',
+            backward: false,
+        },
+        Inst::Save(1),
+        Inst::Match,
     ];
     let prefix = StartPrefix::new(&regexp).expect("straight prefix");
     assert_eq!(prefix.checks[0].cost, 10);
@@ -140,7 +172,10 @@ fn long_common_prefix_misses_do_not_enter_the_vm_or_change_its_allowance() {
         let input = PreparedInput::new(&format!("{}aaaaabx", "a".repeat(8192)));
         let mut actual = Run::new(&regexp, &input, 1_000_000);
         let mut reference = Run::new(&regexp, &input, 1_000_000);
-        assert_eq!(actual.search(0, false), scalar_search(&mut reference, 0, false));
+        assert_eq!(
+            actual.search(0, false),
+            scalar_search(&mut reference, 0, false)
+        );
         assert_eq!(actual.steps_left, reference.steps_left);
         assert_eq!(actual.slots, reference.slots);
         assert_eq!(actual.candidate_executions, 1);
@@ -175,7 +210,10 @@ fn reused_searches_share_one_budget_and_clear_previous_capture_state() {
         let mut actual = Run::new(&regexp, &input, budget);
         let mut reference = Run::new(&regexp, &input, budget);
         for start in [0, 3, 6, 8, 0, 99] {
-            assert_eq!(actual.search(start, false), scalar_search(&mut reference, start, false));
+            assert_eq!(
+                actual.search(start, false),
+                scalar_search(&mut reference, start, false)
+            );
             assert_eq!(actual.steps_left, reference.steps_left);
             assert_eq!(actual.slots, reference.slots);
             assert_eq!(actual.registers, reference.registers);
@@ -234,7 +272,10 @@ fn alternating_and_optional_prefix_misses_bypass_candidate_execution() {
         let input = PreparedInput::new(&format!("{}{tail}", "x".repeat(4096)));
         let mut actual = Run::new(&regexp, &input, 1_000_000);
         let mut reference = Run::new(&regexp, &input, 1_000_000);
-        assert_eq!(actual.search(0, false), scalar_search(&mut reference, 0, false));
+        assert_eq!(
+            actual.search(0, false),
+            scalar_search(&mut reference, 0, false)
+        );
         assert_eq!(actual.steps_left, reference.steps_left, "{pattern}");
         assert_eq!(actual.slots, reference.slots, "{pattern}");
         assert_eq!(actual.registers, reference.registers, "{pattern}");
@@ -249,18 +290,33 @@ fn branch_rejection_charges_all_failed_paths_without_mutating_state() {
     regexp.registers = 2;
     regexp.program = vec![
         Inst::Save(0),
-        Inst::Split { first: 2, second: 9 },
+        Inst::Split {
+            first: 2,
+            second: 9,
+        },
         Inst::Save(2),
         Inst::Mark(0),
         Inst::CounterReset(1),
         Inst::Clear { from: 0, to: 4 },
-        Inst::Char { c: 'a', backward: false },
-        Inst::Char { c: 'b', backward: false },
+        Inst::Char {
+            c: 'a',
+            backward: false,
+        },
+        Inst::Char {
+            c: 'b',
+            backward: false,
+        },
         Inst::Jump(14),
         Inst::Save(3),
         Inst::Mark(1),
-        Inst::Char { c: 'c', backward: false },
-        Inst::Char { c: 'd', backward: false },
+        Inst::Char {
+            c: 'c',
+            backward: false,
+        },
+        Inst::Char {
+            c: 'd',
+            backward: false,
+        },
         Inst::Jump(14),
         Inst::Save(1),
         Inst::Match,
@@ -269,7 +325,10 @@ fn branch_rejection_charges_all_failed_paths_without_mutating_state() {
     let input = PreparedInput::new(&"x".repeat(1024));
     // First failed arm: Save, Split, Save, Mark, Reset, Clear(+4), Char = 11.
     // Second failed arm: Save, Mark, Char = 3. Undo frames have no step cost.
-    assert_eq!(prefix.rejection_cost(&regexp, &input.chars, 0, 14), Some(14));
+    assert_eq!(
+        prefix.rejection_cost(&regexp, &input.chars, 0, 14),
+        Some(14)
+    );
     assert_eq!(prefix.rejection_cost(&regexp, &input.chars, 0, 13), None);
     let mut run = Run::new(&regexp, &input, u64::MAX);
     run.slots.fill(Some(17));
@@ -299,7 +358,10 @@ fn nullable_branches_and_state_reading_instructions_never_supply_a_rejection() {
         let regexp = BacktrackRegExp::new(pattern, "").unwrap();
         let input = PreparedInput::new(text);
         let prefix = StartPrefix::new(&regexp).unwrap();
-        assert_eq!(prefix.rejection_cost(&regexp, &input.chars, 0, u64::MAX), None);
+        assert_eq!(
+            prefix.rejection_cost(&regexp, &input.chars, 0, u64::MAX),
+            None
+        );
         assert_search(&regexp, &input, 0, false, 10_000);
     }
 }
@@ -312,24 +374,58 @@ fn branch_analysis_limits_fall_back_without_changing_guest_errors() {
     // cycle exceeds the instruction-analysis limit instead. Neither limit
     // replaces the VM's budget error or its partial capture state.
     for program in [
-        vec![Inst::Save(0), Inst::Split { first: 1, second: 2 }, Inst::Match],
-        vec![Inst::Save(0), Inst::Split { first: 2, second: 3 }, Inst::Jump(2), Inst::Match],
+        vec![
+            Inst::Save(0),
+            Inst::Split {
+                first: 1,
+                second: 2,
+            },
+            Inst::Match,
+        ],
+        vec![
+            Inst::Save(0),
+            Inst::Split {
+                first: 2,
+                second: 3,
+            },
+            Inst::Jump(2),
+            Inst::Match,
+        ],
     ] {
         regexp.program = program;
         let prefix = StartPrefix::new(&regexp).unwrap();
-        assert_eq!(prefix.rejection_cost(&regexp, &input.chars, 0, u64::MAX), None);
+        assert_eq!(
+            prefix.rejection_cost(&regexp, &input.chars, 0, u64::MAX),
+            None
+        );
         for budget in 0..=160 {
             assert_search(&regexp, &input, 0, false, budget);
         }
     }
     // A finite program past the analysis limit must still be able to match.
-    regexp.program = vec![Inst::Save(0), Inst::Split { first: 2, second: 2 }];
-    regexp.program.extend((0..MAX_PREFIX_INSTRUCTIONS + 1).map(|_| Inst::Save(0)));
+    regexp.program = vec![
+        Inst::Save(0),
+        Inst::Split {
+            first: 2,
+            second: 2,
+        },
+    ];
+    regexp
+        .program
+        .extend((0..MAX_PREFIX_INSTRUCTIONS + 1).map(|_| Inst::Save(0)));
     regexp.program.extend([
-        Inst::Char { c: 'x', backward: false }, Inst::Save(1), Inst::Match,
+        Inst::Char {
+            c: 'x',
+            backward: false,
+        },
+        Inst::Save(1),
+        Inst::Match,
     ]);
     let prefix = StartPrefix::new(&regexp).unwrap();
-    assert_eq!(prefix.rejection_cost(&regexp, &input.chars, 0, u64::MAX), None);
+    assert_eq!(
+        prefix.rejection_cost(&regexp, &input.chars, 0, u64::MAX),
+        None
+    );
     assert_search(&regexp, &input, 0, false, 10_000);
 }
 
@@ -340,8 +436,18 @@ fn branch_search_reuse_keeps_one_allowance_through_success_failure_and_sticky_ca
     for budget in 0..=256 {
         let mut actual = Run::new(&regexp, &input, budget);
         let mut reference = Run::new(&regexp, &input, budget);
-        for (start, sticky) in [(0, false), (5, false), (7, true), (10, false), (0, true), (99, false)] {
-            assert_eq!(actual.search(start, sticky), scalar_search(&mut reference, start, sticky));
+        for (start, sticky) in [
+            (0, false),
+            (5, false),
+            (7, true),
+            (10, false),
+            (0, true),
+            (99, false),
+        ] {
+            assert_eq!(
+                actual.search(start, sticky),
+                scalar_search(&mut reference, start, sticky)
+            );
             assert_eq!(actual.steps_left, reference.steps_left);
             assert_eq!(actual.slots, reference.slots);
             assert_eq!(actual.registers, reference.registers);

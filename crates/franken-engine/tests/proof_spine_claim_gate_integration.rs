@@ -28,7 +28,11 @@ use frankenengine_engine::translation_validation_proof_carrier::{
 };
 
 fn write_lean_fixture(dir: &Path) {
-    fs::write(dir.join("lakefile.lean"), "import Lake\nopen Lake DSL\n").expect("lakefile");
+    fs::write(
+        dir.join("lakefile.lean"),
+        "import Lake\nopen Lake DSL\n\npackage fixture\n\n@[default_target]\nlean_lib «IFCLatticeIsomorphism» where\n",
+    )
+    .expect("lakefile");
     fs::write(dir.join("lean-toolchain"), "leanprover/lean4:4.7.0\n").expect("toolchain");
     fs::write(
         dir.join("IFCLatticeIsomorphism.lean"),

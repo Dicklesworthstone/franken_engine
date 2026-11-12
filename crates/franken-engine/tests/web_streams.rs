@@ -1,10 +1,10 @@
 //! Default-mode Web Streams on the actual native orchestrator, not a Node shim.
 #![forbid(unsafe_code)]
-use std::collections::BTreeMap;
 use frankenengine_engine::baseline_interpreter::LaneChoice;
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, LabFixtureExecutionOrchestratorExt, OrchestratorConfig,
 };
+use std::collections::BTreeMap;
 
 fn run(source: &str, lane: LaneChoice) -> Vec<String> {
     let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig {
@@ -12,14 +12,24 @@ fn run(source: &str, lane: LaneChoice) -> Vec<String> {
         ..OrchestratorConfig::default()
     });
     let package = ExtensionPackage {
-        extension_id: "web-streams".into(), source: source.into(),
-        source_file: None, module_root: None,
+        extension_id: "web-streams".into(),
+        source: source.into(),
+        source_file: None,
+        module_root: None,
         capabilities: ["vm_dispatch", "heap_allocate", "builtin", "console"]
-            .into_iter().map(str::to_string).collect(),
-        version: "1.0.0".into(), metadata: BTreeMap::new(),
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        version: "1.0.0".into(),
+        metadata: BTreeMap::new(),
     };
-    orchestrator.execute(&package).expect("native stream completion")
-        .console_output.into_iter().map(|entry| entry.message).collect()
+    orchestrator
+        .execute(&package)
+        .expect("native stream completion")
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect()
 }
 
 #[test]
@@ -48,9 +58,18 @@ fn reader_release_preserves_source_and_cancellation_is_exactly_once() {
              console.log('RELEASE',await pending,s.locked);const b=s.getReader();\
              const read=b.read();c.enqueue(42);console.log((await read).value);\
              await b.cancel('stop');await b.cancel('again');b.releaseLock();\
-             console.log('CANCEL_COMPLETE',cancels,s.locked);})();", lane,
+             console.log('CANCEL_COMPLETE',cancels,s.locked);})();",
+            lane,
         );
-        assert_eq!(lines, ["RELEASE true false", "42", "stop", "CANCEL_COMPLETE 1 false"]);
+        assert_eq!(
+            lines,
+            [
+                "RELEASE true false",
+                "42",
+                "stop",
+                "CANCEL_COMPLETE 1 false"
+            ]
+        );
     }
 }
 
@@ -60,7 +79,8 @@ fn default_streams_feed_the_existing_shared_stream_consumer() {
         let lines = run(
             "const {ReadableStream}=require('stream/web');const {text}=require('stream/consumers');\
              text(new ReadableStream({start(c){c.enqueue('hello');c.enqueue(' world');c.close();}}))\
-             .then(value=>console.log('CONSUMER_COMPLETE',value));", lane,
+             .then(value=>console.log('CONSUMER_COMPLETE',value));",
+            lane,
         );
         assert_eq!(lines, ["CONSUMER_COMPLETE hello world"]);
     }
@@ -76,7 +96,8 @@ fn shared_transform_pipeline_finishes_ordered_writes_and_flush_on_both_lanes() {
              flush(c){c.enqueue('end');}});\
              web.ReadableStream.from([1,2,3]).pipeThrough(t).pipeTo(\
              new web.WritableStream({write(value){out.push(value);}}))\
-             .then(()=>console.log('PIPE_COMPLETE',out.join(','),t.readable.locked,t.writable.locked));", lane,
+             .then(()=>console.log('PIPE_COMPLETE',out.join(','),t.readable.locked,t.writable.locked));",
+            lane,
         );
         assert_eq!(lines, ["PIPE_COMPLETE 2,4,6,end false false"]);
     }
@@ -90,9 +111,13 @@ fn signal_cancellation_releases_pipe_ownership_without_a_source_chunk() {
              const r=new web.ReadableStream({cancel(reason){events.push('cancel:'+reason);}},{highWaterMark:0});\
              const w=new web.WritableStream({abort(reason){events.push('abort:'+reason);}});\
              const done=r.pipeTo(w,{signal:controller.signal});controller.abort('stop');\
-             done.catch(reason=>console.log('PIPE_ABORT',reason,events.join(','),r.locked,w.locked));", lane,
+             done.catch(reason=>console.log('PIPE_ABORT',reason,events.join(','),r.locked,w.locked));",
+            lane,
         );
-        assert_eq!(lines, ["PIPE_ABORT stop abort:stop,cancel:stop false false"]);
+        assert_eq!(
+            lines,
+            ["PIPE_ABORT stop abort:stop,cancel:stop false false"]
+        );
     }
 }
 
@@ -103,7 +128,8 @@ fn source_error_after_publication_does_not_drop_an_admitted_pipe_chunk() {
             "const web=require('stream/web');const out=[];\
              const r=new web.ReadableStream({pull(c){c.enqueue(42);c.error('after-read');}},{highWaterMark:0});\
              r.pipeTo(new web.WritableStream({write(value){out.push(value);},abort(reason){out.push(reason);}}))\
-             .catch(reason=>console.log('PIPE_FAILURE',out.join(','),reason,r.locked));", lane,
+             .catch(reason=>console.log('PIPE_FAILURE',out.join(','),reason,r.locked));",
+            lane,
         );
         assert_eq!(lines, ["PIPE_FAILURE 42,after-read after-read false"]);
     }
@@ -120,13 +146,31 @@ fn native_cli_esm_imports_use_the_shared_stream_pipeline() {
     ).expect("write native ESM input");
     let report = root.path().join("report.json");
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_frankenctl"))
-        .args(["run", "--input"]).arg(&entry)
-        .args(["--goal", "module", "--extension-id", "web-streams-esm", "--out"])
-        .arg(&report).output().expect("execute native frankenctl");
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    let payload: serde_json::Value = serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
-    let lines: Vec<_> = payload["console_output"].as_array().unwrap().iter()
-        .map(|line| line["message"].as_str().unwrap()).collect();
+        .args(["run", "--input"])
+        .arg(&entry)
+        .args([
+            "--goal",
+            "module",
+            "--extension-id",
+            "web-streams-esm",
+            "--out",
+        ])
+        .arg(&report)
+        .output()
+        .expect("execute native frankenctl");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
+    let lines: Vec<_> = payload["console_output"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|line| line["message"].as_str().unwrap())
+        .collect();
     assert_eq!(lines, ["ESM_PIPE 40,42"]);
 }
 
@@ -149,11 +193,14 @@ const pair = original.tee();
 })();
 "#;
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        assert_eq!(run(source, lane), [
-            "TEE_IDENTITY true 7",
-            "TEE_VALUES 42 true 42 true",
-            "TEE_COMPLETE true false false",
-        ]);
+        assert_eq!(
+            run(source, lane),
+            [
+                "TEE_IDENTITY true 7",
+                "TEE_VALUES 42 true 42 true",
+                "TEE_COMPLETE true false false",
+            ]
+        );
     }
 }
 
@@ -179,12 +226,15 @@ const pair = original.tee();
 })();
 "#;
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        assert_eq!(run(source, lane), [
-            "TEE_ONE_CANCEL 0",
-            "TEE_REASONS left right",
-            "TEE_CLEANUP true true 1",
-            "TEE_CLOSED true true true",
-        ]);
+        assert_eq!(
+            run(source, lane),
+            [
+                "TEE_ONE_CANCEL 0",
+                "TEE_REASONS left right",
+                "TEE_CLEANUP true true 1",
+                "TEE_CLOSED true true true",
+            ]
+        );
     }
 }
 
@@ -207,7 +257,6 @@ Promise.all([failed,complete]).then(function(values){
         assert_eq!(run(source, lane), ["TEE_PIPE_COMPLETE true 2,4,6 true"]);
     }
 }
-
 
 #[test]
 fn from_sync_records_preserve_values_getter_order_and_completed_value_observation() {
@@ -236,7 +285,9 @@ const input = {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
         assert_eq!(
             run(source, lane),
-            ["SYNC_RECORD 42 next:false,done:false,value:false,next:true,done:true,value:true false"]
+            [
+                "SYNC_RECORD 42 next:false,done:false,value:false,next:true,done:true,value:true false"
+            ]
         );
     }
 }
@@ -402,7 +453,6 @@ finally { delete Object.prototype.start; }
     }
 }
 
-
 #[test]
 fn reentrant_size_close_preserves_the_admitted_final_chunk() {
     let source = r#"
@@ -555,6 +605,9 @@ const web = require('stream/web');
 })();
 "#;
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        assert_eq!(run(source, lane), ["SIZING_READ direct queued true 1 false"]);
+        assert_eq!(
+            run(source, lane),
+            ["SIZING_READ direct queued true 1 false"]
+        );
     }
 }

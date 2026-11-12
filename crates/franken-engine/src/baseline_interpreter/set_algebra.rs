@@ -369,7 +369,10 @@ impl InterpreterCore {
                     got: step.type_name().to_string(),
                 });
             }
-            if self.set_algebra_get(module, &step, &keys.done_key)?.is_truthy() {
+            if self
+                .set_algebra_get(module, &step, &keys.done_key)?
+                .is_truthy()
+            {
                 return Ok(());
             }
             let value = self.set_algebra_get(module, &step, &keys.value_key)?;
@@ -387,7 +390,8 @@ impl InterpreterCore {
         keys: SetRecordKeys,
     ) -> Result<(), InterpreterError> {
         let iterator = keys.iterator;
-        let return_method = self.set_algebra_get(module, &iterator, &Self::set_record_key("return"))?;
+        let return_method =
+            self.set_algebra_get(module, &iterator, &Self::set_record_key("return"))?;
         if matches!(return_method, Value::Undefined | Value::Null) {
             return Ok(());
         }
@@ -397,8 +401,7 @@ impl InterpreterCore {
                 got: return_method.type_name().to_string(),
             });
         }
-        let result =
-            self.set_algebra_call(module, return_method, iterator, Vec::new())?;
+        let result = self.set_algebra_call(module, return_method, iterator, Vec::new())?;
         if !result.is_object_like() {
             return Err(InterpreterError::TypeError {
                 expected: "iterator return result object".to_string(),
@@ -422,8 +425,7 @@ impl InterpreterCore {
                 expected: "Set protocol object".to_string(),
                 got: receiver.type_name().to_string(),
             })?;
-        let value =
-            self.iterator_protocol_property(Some(module), object, key, receiver.clone())?;
+        let value = self.iterator_protocol_property(Some(module), object, key, receiver.clone())?;
         self.observe_scoped_callback_result()?;
         Ok(value)
     }

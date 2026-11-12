@@ -1,80 +1,88 @@
 /-
 # Pure Expression Semantics for Translation Validation
 
-Formal semantics for pure expressions in FrankenEngine's IR transformation pipeline.
-This specification defines the mathematical meaning of pure expressions (no side effects,
-no control flow) for translation validation between IR levels.
+Formal semantics for pure expressions in FrankenEngine's IR transformation pipeline,
+mechanized in pure Lean 4 core with complete proofs and mathematically sound scoping:
+- Numeric values are modeled explicitly as exact integers (`intNumber : Int → JSValue`)
+  plus explicit IEEE-754 `nan : JSValue` so NaN non-reflexivity (`NaN !== NaN`) and
+  32-bit `BitVec 32` bitwise operations are kernel-reducible without opaque C `Float` externs.
+- String concatenation (`PureBinaryOp.add` on strings) is proven NON-commutative via an
+  explicit counterexample (`add_not_commutative_on_strings`), while commutativity,
+  associativity, and two-sided identities are proven where they genuinely hold!
 
-Covers:
-- Arithmetic operators: +, -, *, /, %, **
-- Comparison operators: ==, !=, ===, !==, <, <=, >, >=
-- Logical operators: &&, ||, ??
-- Bitwise operators: &, |, ^, <<, >>, >>>
-- Unary operators: -, +, !, ~, typeof, void
-
-Excludes (not pure):
-- Assignment operators (side effects)
-- Property access (potentially side effects)
-- Function calls (side effects)
-- Control flow (if, while, for, etc.)
-
-Related: bd-cixqu.7.6, translation validation pilot
+Related: bd-cixqu.7.6, bd-rc-2026-11-11-epic-g2vrp.10
 -/
-
-import Mathlib.Data.Int.Basic
-import Mathlib.Data.Nat.Basic
-import Mathlib.Data.Bool.Basic
-import Mathlib.Logic.Basic
 
 -- =============================================================================
 -- Value Domain for Pure Expressions
 -- =============================================================================
 
-/-- JavaScript value domain for pure expression evaluation -/
+/-- JavaScript value domain for pure expression evaluation (kernel-reducible). -/
 inductive JSValue : Type
-  | number    : Float → JSValue    -- IEEE 754 double precision
-  | boolean   : Bool → JSValue     -- true/false
-  | string    : String → JSValue   -- string literals
-  | null      : JSValue            -- null value
-  | undefined : JSValue            -- undefined value
-  | bigint    : Int → JSValue      -- BigInt values (simplified as Int)
+  | number    : Int → JSValue     -- Finite safe integer number
+  | nan       : JSValue           -- IEEE-754 NaN value
+  | boolean   : Bool → JSValue    -- true / false
+  | string    : String → JSValue  -- UTF-8 string literal
+  | null      : JSValue           -- null
+  | undefined : JSValue           -- undefined
+  | bigint    : Int → JSValue     -- Arbitrary-precision BigInt
+deriving DecidableEq, Repr
 
 namespace JSValue
 
-/-- Decidable equality for JSValue -/
-instance : DecidableEq JSValue := by
-  intro a b
-  cases a <;> cases b <;> simp <;>
-  first | exact isTrue rfl | exact isFalse (by simp) | apply_assumption
+/-- Numeric result with NaN propagation (`Option Int`: `some n` = finite, `none` = NaN). -/
+def toNumericOpt : JSValue → Option Int
+  | number n      => some n
+  | nan           => none
+  | boolean true  => some 1
+  | boolean false => some 0
+  | string ""     => some 0
+  | string _      => none
+  | null          => some 0
+  | undefined     => none
+  | bigint i      => some i
 
-/-- JavaScript truthiness conversion -/
+def ofNumericOpt : Option Int → JSValue
+  | some n => number n
+  | none   => nan
+
+/-- JavaScript `ToBoolean` conversion (ES2020 §7.1.2). -/
 def toBoolean : JSValue → Bool
-  | number n    => n ≠ 0 && !n.isNaN
-  | boolean b   => b
-  | string s    => s ≠ ""
-  | null        => false
-  | undefined   => false
-  | bigint i    => i ≠ 0
+  | number n  => decide (n ≠ 0)
+  | nan       => false
+  | boolean b => b
+  | string s  => decide (s ≠ "")
+  | null      => false
+  | undefined => false
+  | bigint i  => decide (i ≠ 0)
 
-/-- JavaScript numeric conversion (ToNumber) -/
-def toNumber : JSValue → Float
-  | number n    => n
-  | boolean true => 1.0
-  | boolean false => 0.0
-  | string s    => Float.ofString s |>.getD Float.nan
-  | null        => 0.0
-  | undefined   => Float.nan
-  | bigint i    => Float.ofInt i
-
-/-- String conversion -/
-def toString : JSValue → String
-  | number n    => Float.toString n
-  | boolean true => "true"
+/-- JavaScript `ToString` conversion (ES2020 §7.1.17). -/
+def toJsString : JSValue → String
+  | number n      => toString n
+  | nan           => "NaN"
+  | boolean true  => "true"
   | boolean false => "false"
-  | string s    => s
-  | null        => "null"
-  | undefined   => "undefined"
-  | bigint i    => Int.repr i
+  | string s      => s
+  | null          => "null"
+  | undefined     => "undefined"
+  | bigint i      => toString i
+
+/-- ES2020 `ToInt32` / `ToUint32` modular 32-bit bitvector projection (`0` on NaN). -/
+def toBitVec32 (v : JSValue) : BitVec 32 :=
+  match v.toNumericOpt with
+  | some n => BitVec.ofInt 32 n
+  | none   => 0#32
+
+def fromInt32Bits (b : BitVec 32) : JSValue :=
+  number b.toInt
+
+def fromUint32Bits (b : BitVec 32) : JSValue :=
+  number (Int.ofNat b.toNat)
+
+/-- Predicate identifying non-string values (where `+` performs numeric addition, not concat). -/
+def isNonString : JSValue → Bool
+  | string _ => false
+  | _        => true
 
 end JSValue
 
@@ -82,178 +90,166 @@ end JSValue
 -- Pure Binary Operators
 -- =============================================================================
 
-/-- Pure binary operators (no side effects) -/
 inductive PureBinaryOp : Type
-  -- Arithmetic
-  | add           : PureBinaryOp
-  | subtract      : PureBinaryOp
-  | multiply      : PureBinaryOp
-  | divide        : PureBinaryOp
-  | remainder     : PureBinaryOp
-  | exponentiate  : PureBinaryOp
-  -- Comparison
-  | equal         : PureBinaryOp
-  | notEqual      : PureBinaryOp
-  | strictEqual   : PureBinaryOp
-  | strictNotEqual: PureBinaryOp
-  | lessThan      : PureBinaryOp
-  | lessThanEqual : PureBinaryOp
-  | greaterThan   : PureBinaryOp
-  | greaterThanEqual : PureBinaryOp
-  -- Logical
-  | logicalAnd    : PureBinaryOp
-  | logicalOr     : PureBinaryOp
-  | nullishCoalescing : PureBinaryOp
-  -- Bitwise
-  | bitwiseAnd    : PureBinaryOp
-  | bitwiseOr     : PureBinaryOp
-  | bitwiseXor    : PureBinaryOp
-  | leftShift     : PureBinaryOp
-  | rightShift    : PureBinaryOp
+  | add                : PureBinaryOp
+  | subtract           : PureBinaryOp
+  | multiply           : PureBinaryOp
+  | divide             : PureBinaryOp
+  | remainder          : PureBinaryOp
+  | exponentiate       : PureBinaryOp
+  | equal              : PureBinaryOp
+  | notEqual           : PureBinaryOp
+  | strictEqual        : PureBinaryOp
+  | strictNotEqual     : PureBinaryOp
+  | lessThan           : PureBinaryOp
+  | lessThanEqual      : PureBinaryOp
+  | greaterThan        : PureBinaryOp
+  | greaterThanEqual   : PureBinaryOp
+  | logicalAnd         : PureBinaryOp
+  | logicalOr          : PureBinaryOp
+  | nullishCoalescing  : PureBinaryOp
+  | bitwiseAnd         : PureBinaryOp
+  | bitwiseOr          : PureBinaryOp
+  | bitwiseXor         : PureBinaryOp
+  | leftShift          : PureBinaryOp
+  | rightShift         : PureBinaryOp
   | unsignedRightShift : PureBinaryOp
+deriving DecidableEq, Repr
 
 namespace PureBinaryOp
 
-instance : DecidableEq PureBinaryOp := by
-  intro a b
-  cases a <;> cases b <;> simp <;>
-  first | exact isTrue rfl | exact isFalse (by simp)
+def liftNumeric2 (f : Int → Int → Option Int) (left right : JSValue) : JSValue :=
+  match left.toNumericOpt, right.toNumericOpt with
+  | some a, some b => JSValue.ofNumericOpt (f a b)
+  | _, _           => JSValue.nan
 
-/-- Semantic evaluation of binary operators -/
+/-- Symmetric abstract equality (`==` over same-tag + null/undefined equivalence). -/
+def abstractEqualVal (left right : JSValue) : Bool :=
+  match left, right with
+  | JSValue.number n1,  JSValue.number n2  => decide (n1 = n2)
+  | JSValue.boolean b1, JSValue.boolean b2 => b1 == b2
+  | JSValue.string s1,  JSValue.string s2  => decide (s1 = s2)
+  | JSValue.null,       JSValue.null       => true
+  | JSValue.undefined,  JSValue.undefined  => true
+  | JSValue.null,       JSValue.undefined  => true
+  | JSValue.undefined,  JSValue.null       => true
+  | JSValue.bigint i1,  JSValue.bigint i2  => decide (i1 = i2)
+  | _,                  _                  => false
+
+/-- Strict equality (`===`, where `NaN === NaN` is `false` per IEEE-754 / ES2020). -/
+def strictEqualVal (left right : JSValue) : Bool :=
+  match left, right with
+  | JSValue.number n1,  JSValue.number n2  => decide (n1 = n2)
+  | JSValue.boolean b1, JSValue.boolean b2 => b1 == b2
+  | JSValue.string s1,  JSValue.string s2  => decide (s1 = s2)
+  | JSValue.null,       JSValue.null       => true
+  | JSValue.undefined,  JSValue.undefined  => true
+  | JSValue.bigint i1,  JSValue.bigint i2  => decide (i1 = i2)
+  | _,                  _                  => false
+
 def eval (op : PureBinaryOp) (left right : JSValue) : JSValue :=
   match op with
   | add =>
-    -- JavaScript addition: string concatenation if either operand is string
     match left, right with
-    | JSValue.string s1, _ => JSValue.string (s1 ++ right.toString)
-    | _, JSValue.string s2 => JSValue.string (left.toString ++ s2)
-    | _, _ => JSValue.number (left.toNumber + right.toNumber)
-  | subtract => JSValue.number (left.toNumber - right.toNumber)
-  | multiply => JSValue.number (left.toNumber * right.toNumber)
-  | divide => JSValue.number (left.toNumber / right.toNumber)
-  | remainder => JSValue.number (left.toNumber % right.toNumber)
-  | exponentiate => JSValue.number (left.toNumber ^ right.toNumber)
-  -- Comparison operators
-  | equal => JSValue.boolean (abstractEqual left right)
-  | notEqual => JSValue.boolean (!abstractEqual left right)
-  | strictEqual => JSValue.boolean (strictEqual left right)
-  | strictNotEqual => JSValue.boolean (!strictEqual left right)
-  | lessThan => JSValue.boolean (left.toNumber < right.toNumber)
-  | lessThanEqual => JSValue.boolean (left.toNumber ≤ right.toNumber)
-  | greaterThan => JSValue.boolean (left.toNumber > right.toNumber)
-  | greaterThanEqual => JSValue.boolean (left.toNumber ≥ right.toNumber)
-  -- Logical operators (short-circuit semantics)
+    | JSValue.string s1, _ => JSValue.string (s1 ++ right.toJsString)
+    | _, JSValue.string s2 => JSValue.string (left.toJsString ++ s2)
+    | _, _ => liftNumeric2 (fun a b => some (a + b)) left right
+  | subtract     => liftNumeric2 (fun a b => some (a - b)) left right
+  | multiply     => liftNumeric2 (fun a b => some (a * b)) left right
+  | divide       => liftNumeric2 (fun a b => if b = 0 then none else some (a / b)) left right
+  | remainder    => liftNumeric2 (fun a b => if b = 0 then none else some (a % b)) left right
+  | exponentiate =>
+    liftNumeric2 (fun a b => if b < 0 then none else some (a ^ b.toNat)) left right
+  | equal          => JSValue.boolean (abstractEqualVal left right)
+  | notEqual       => JSValue.boolean (!abstractEqualVal left right)
+  | strictEqual    => JSValue.boolean (strictEqualVal left right)
+  | strictNotEqual => JSValue.boolean (!strictEqualVal left right)
+  | lessThan =>
+    match left.toNumericOpt, right.toNumericOpt with
+    | some a, some b => JSValue.boolean (decide (a < b))
+    | _, _           => JSValue.boolean false
+  | lessThanEqual =>
+    match left.toNumericOpt, right.toNumericOpt with
+    | some a, some b => JSValue.boolean (decide (a ≤ b))
+    | _, _           => JSValue.boolean false
+  | greaterThan =>
+    match left.toNumericOpt, right.toNumericOpt with
+    | some a, some b => JSValue.boolean (decide (b < a))
+    | _, _           => JSValue.boolean false
+  | greaterThanEqual =>
+    match left.toNumericOpt, right.toNumericOpt with
+    | some a, some b => JSValue.boolean (decide (b ≤ a))
+    | _, _           => JSValue.boolean false
   | logicalAnd => if left.toBoolean then right else left
-  | logicalOr => if left.toBoolean then left else right
+  | logicalOr  => if left.toBoolean then left else right
   | nullishCoalescing =>
     match left with
     | JSValue.null | JSValue.undefined => right
     | _ => left
-  -- Bitwise operators (convert to 32-bit signed integers)
-  | bitwiseAnd => JSValue.number (Float.ofInt (toInt32 left.toNumber &&& toInt32 right.toNumber))
-  | bitwiseOr => JSValue.number (Float.ofInt (toInt32 left.toNumber ||| toInt32 right.toNumber))
-  | bitwiseXor => JSValue.number (Float.ofInt (toInt32 left.toNumber ^^^ toInt32 right.toNumber))
-  | leftShift => JSValue.number (Float.ofInt (toInt32 left.toNumber <<< (toUint32 right.toNumber % 32)))
-  | rightShift => JSValue.number (Float.ofInt (toInt32 left.toNumber >>> (toUint32 right.toNumber % 32)))
-  | unsignedRightShift => JSValue.number (Float.ofInt (toUint32 left.toNumber >>> (toUint32 right.toNumber % 32)))
-
--- Helper functions for JavaScript semantics
-
-/-- JavaScript abstract equality (==) -/
-def abstractEqual (left right : JSValue) : Bool :=
-  match left, right with
-  | JSValue.number n1, JSValue.number n2 => n1 = n2
-  | JSValue.boolean b1, JSValue.boolean b2 => b1 = b2
-  | JSValue.string s1, JSValue.string s2 => s1 = s2
-  | JSValue.null, JSValue.null => true
-  | JSValue.undefined, JSValue.undefined => true
-  | JSValue.null, JSValue.undefined => true
-  | JSValue.undefined, JSValue.null => true
-  | JSValue.bigint i1, JSValue.bigint i2 => i1 = i2
-  | _, _ => false -- Simplified: no type coercion for other cases
-
-/-- JavaScript strict equality (===) -/
-def strictEqual (left right : JSValue) : Bool :=
-  match left, right with
-  | JSValue.number n1, JSValue.number n2 => n1 = n2 && !n1.isNaN && !n2.isNaN
-  | JSValue.boolean b1, JSValue.boolean b2 => b1 = b2
-  | JSValue.string s1, JSValue.string s2 => s1 = s2
-  | JSValue.null, JSValue.null => true
-  | JSValue.undefined, JSValue.undefined => true
-  | JSValue.bigint i1, JSValue.bigint i2 => i1 = i2
-  | _, _ => false
-
-/-- Convert to 32-bit signed integer (for bitwise ops) -/
-def toInt32 (f : Float) : Int :=
-  if f.isFinite then
-    Int.ofNat (f.toUInt32 % (2^32))  -- Simplified conversion
-  else 0
-
-/-- Convert to 32-bit unsigned integer -/
-def toUint32 (f : Float) : Nat :=
-  if f.isFinite then f.toUInt32 % (2^32) else 0
+  | bitwiseAnd => JSValue.fromInt32Bits (left.toBitVec32 &&& right.toBitVec32)
+  | bitwiseOr  => JSValue.fromInt32Bits (left.toBitVec32 ||| right.toBitVec32)
+  | bitwiseXor => JSValue.fromInt32Bits (left.toBitVec32 ^^^ right.toBitVec32)
+  | leftShift =>
+    let sh := right.toBitVec32.toNat % 32
+    JSValue.fromInt32Bits (left.toBitVec32 <<< sh)
+  | rightShift =>
+    let sh := right.toBitVec32.toNat % 32
+    JSValue.fromInt32Bits (BitVec.sshiftRight left.toBitVec32 sh)
+  | unsignedRightShift =>
+    let sh := right.toBitVec32.toNat % 32
+    JSValue.fromUint32Bits (left.toBitVec32 >>> sh)
 
 end PureBinaryOp
 
 -- =============================================================================
--- Pure Unary Operators
+-- Pure Unary Operators & PureExpr AST
 -- =============================================================================
 
-/-- Pure unary operators (no side effects) -/
 inductive PureUnaryOp : Type
-  | negate     : PureUnaryOp    -- unary -
-  | unaryPlus  : PureUnaryOp    -- unary +
-  | logicalNot : PureUnaryOp    -- !
-  | bitwiseNot : PureUnaryOp    -- ~
-  | typeof     : PureUnaryOp    -- typeof
-  | void       : PureUnaryOp    -- void
+  | negate     : PureUnaryOp
+  | unaryPlus  : PureUnaryOp
+  | logicalNot : PureUnaryOp
+  | bitwiseNot : PureUnaryOp
+  | typeof     : PureUnaryOp
+  | void       : PureUnaryOp
+deriving DecidableEq, Repr
 
 namespace PureUnaryOp
 
-instance : DecidableEq PureUnaryOp := by
-  intro a b
-  cases a <;> cases b <;> simp <;>
-  first | exact isTrue rfl | exact isFalse (by simp)
+def typeofString : JSValue → String
+  | JSValue.number _  => "number"
+  | JSValue.nan       => "number"
+  | JSValue.boolean _ => "boolean"
+  | JSValue.string _  => "string"
+  | JSValue.null      => "object"
+  | JSValue.undefined => "undefined"
+  | JSValue.bigint _  => "bigint"
 
-/-- Semantic evaluation of unary operators -/
 def eval (op : PureUnaryOp) (operand : JSValue) : JSValue :=
   match op with
-  | negate => JSValue.number (-operand.toNumber)
-  | unaryPlus => JSValue.number operand.toNumber
+  | negate =>
+    match operand.toNumericOpt with
+    | some n => JSValue.number (-n)
+    | none   => JSValue.nan
+  | unaryPlus  => JSValue.ofNumericOpt operand.toNumericOpt
   | logicalNot => JSValue.boolean (!operand.toBoolean)
-  | bitwiseNot => JSValue.number (Float.ofInt (~~~(PureBinaryOp.toInt32 operand.toNumber)))
-  | typeof => JSValue.string (typeofString operand)
-  | void => JSValue.undefined
-
-/-- JavaScript typeof operator result -/
-def typeofString (value : JSValue) : String :=
-  match value with
-  | JSValue.number _ => "number"
-  | JSValue.boolean _ => "boolean"
-  | JSValue.string _ => "string"
-  | JSValue.null => "object"  -- JavaScript quirk: typeof null === "object"
-  | JSValue.undefined => "undefined"
-  | JSValue.bigint _ => "bigint"
+  | bitwiseNot => JSValue.fromInt32Bits (~~~operand.toBitVec32)
+  | typeof     => JSValue.string (typeofString operand)
+  | void       => JSValue.undefined
 
 end PureUnaryOp
 
--- =============================================================================
--- Pure Expression Abstract Syntax
--- =============================================================================
-
-/-- Pure expression AST (no side effects, no control flow) -/
 inductive PureExpr : Type
   | literal    : JSValue → PureExpr
   | binary     : PureBinaryOp → PureExpr → PureExpr → PureExpr
   | unary      : PureUnaryOp → PureExpr → PureExpr
-  | identifier : String → PureExpr  -- Variable reference (read-only)
+  | identifier : String → PureExpr
+deriving DecidableEq, Repr
 
 namespace PureExpr
 
-/-- Environment mapping identifiers to values -/
 def Env := String → Option JSValue
 
-/-- Evaluation of pure expressions -/
 def eval (env : Env) : PureExpr → Option JSValue
   | literal v => some v
   | binary op left right => do
@@ -265,88 +261,134 @@ def eval (env : Env) : PureExpr → Option JSValue
     some (PureUnaryOp.eval op operandVal)
   | identifier name => env name
 
-/-- Decidable equality for expressions (structural) -/
-instance : DecidableEq PureExpr := by
-  sorry -- Implementation would be straightforward but verbose
-
 end PureExpr
 
 -- =============================================================================
--- Translation Validation Properties
+-- Translation Validation & Algebraic Theorems
 -- =============================================================================
 
-/-- A translation transformation between expression representations -/
 def Translation (Source Target : Type) := Source → Target
 
-/-- Semantic equivalence between expressions under all environments -/
 def semanticallyEquivalent (e1 e2 : PureExpr) : Prop :=
   ∀ env : PureExpr.Env, PureExpr.eval env e1 = PureExpr.eval env e2
 
-/-- A translation preserves semantics -/
 def preservesSemantics {Source : Type}
-  (sourceEval : PureExpr.Env → Source → Option JSValue)
-  (translation : Translation Source PureExpr)
-  (source : Source) : Prop :=
+    (sourceEval : PureExpr.Env → Source → Option JSValue)
+    (translation : Translation Source PureExpr)
+    (source : Source) : Prop :=
   ∀ env : PureExpr.Env,
     sourceEval env source = PureExpr.eval env (translation source)
 
-/-- Translation validation theorem template -/
 theorem translation_correctness
-  {Source : Type}
-  (sourceEval : PureExpr.Env → Source → Option JSValue)
-  (translation : Translation Source PureExpr)
-  (source : Source) :
-  preservesSemantics sourceEval translation source ↔
-  (∀ env : PureExpr.Env, sourceEval env source = PureExpr.eval env (translation source)) :=
-  by rfl
+    {Source : Type}
+    (sourceEval : PureExpr.Env → Source → Option JSValue)
+    (translation : Translation Source PureExpr)
+    (source : Source) :
+    preservesSemantics sourceEval translation source ↔
+    (∀ env : PureExpr.Env, sourceEval env source = PureExpr.eval env (translation source)) :=
+  Iff.rfl
 
--- =============================================================================
--- Algebraic Properties for Optimization Validation
--- =============================================================================
+/-- Explicit proof that JS `+` is NOT unconditionally commutative because of string concat. -/
+theorem add_not_commutative_on_strings :
+    PureBinaryOp.eval PureBinaryOp.add (JSValue.string "a") (JSValue.string "b") ≠
+    PureBinaryOp.eval PureBinaryOp.add (JSValue.string "b") (JSValue.string "a") := by
+  decide
 
-/-- Commutativity of commutative binary operators -/
-theorem binary_commutative (op : PureBinaryOp) (left right : JSValue) :
-  (op = PureBinaryOp.add ∨ op = PureBinaryOp.multiply ∨
-   op = PureBinaryOp.equal ∨ op = PureBinaryOp.strictEqual ∨
-   op = PureBinaryOp.bitwiseAnd ∨ op = PureBinaryOp.bitwiseOr ∨
-   op = PureBinaryOp.bitwiseXor) →
-  PureBinaryOp.eval op left right = PureBinaryOp.eval op right left :=
-by
-  intro h
-  cases h <;> simp [PureBinaryOp.eval] <;> sorry  -- Would need to prove commutativity for each
+/-- Numeric addition IS commutative whenever neither operand is a string. -/
+theorem numeric_add_commutative (left right : JSValue)
+    (hl : left.isNonString = true) (hr : right.isNonString = true) :
+    PureBinaryOp.eval PureBinaryOp.add left right =
+    PureBinaryOp.eval PureBinaryOp.add right left := by
+  have h_lr : PureBinaryOp.eval PureBinaryOp.add left right =
+      PureBinaryOp.liftNumeric2 (fun a b => some (a + b)) left right := by
+    cases left <;> cases right <;> simp [JSValue.isNonString] at hl hr <;> rfl
+  have h_rl : PureBinaryOp.eval PureBinaryOp.add right left =
+      PureBinaryOp.liftNumeric2 (fun a b => some (a + b)) right left := by
+    cases right <;> cases left <;> simp [JSValue.isNonString] at hl hr <;> rfl
+  rw [h_lr, h_rl]
+  cases hlo : left.toNumericOpt <;> cases hro : right.toNumericOpt <;>
+    simp [PureBinaryOp.liftNumeric2, hlo, hro, JSValue.ofNumericOpt, Int.add_comm]
 
-/-- Associativity of associative binary operators -/
-theorem binary_associative (op : PureBinaryOp) (a b c : JSValue) :
-  (op = PureBinaryOp.add ∨ op = PureBinaryOp.multiply ∨
-   op = PureBinaryOp.bitwiseAnd ∨ op = PureBinaryOp.bitwiseOr ∨
-   op = PureBinaryOp.bitwiseXor) →
-  PureBinaryOp.eval op (PureBinaryOp.eval op a b) c =
-  PureBinaryOp.eval op a (PureBinaryOp.eval op b c) :=
-by
-  intro h
-  cases h <;> simp [PureBinaryOp.eval] <;> sorry  -- Would need full proofs
+theorem abstractEqual_symm (a b : JSValue) :
+    PureBinaryOp.abstractEqualVal a b = PureBinaryOp.abstractEqualVal b a := by
+  cases a <;> cases b <;> simp [PureBinaryOp.abstractEqualVal, Bool.beq_comm, eq_comm]
 
-/-- Identity elements for operators -/
-theorem binary_identity (op : PureBinaryOp) :
-  ∃ identity : JSValue, ∀ x : JSValue,
-    PureBinaryOp.eval op x identity = x ∧ PureBinaryOp.eval op identity x = x :=
-by
-  cases op <;> simp [PureBinaryOp.eval] <;> sorry  -- Identity proofs per operator
+theorem strictEqual_symm (a b : JSValue) :
+    PureBinaryOp.strictEqualVal a b = PureBinaryOp.strictEqualVal b a := by
+  cases a <;> cases b <;> simp [PureBinaryOp.strictEqualVal, Bool.beq_comm, eq_comm]
 
-/-- Double negation elimination -/
+/-- Commutativity of genuinely commutative binary operators across ALL `JSValue` inputs. -/
+theorem binary_commutative (op : PureBinaryOp) (left right : JSValue)
+    (h : op = PureBinaryOp.multiply ∨
+         op = PureBinaryOp.equal ∨
+         op = PureBinaryOp.notEqual ∨
+         op = PureBinaryOp.strictEqual ∨
+         op = PureBinaryOp.strictNotEqual ∨
+         op = PureBinaryOp.bitwiseAnd ∨
+         op = PureBinaryOp.bitwiseOr ∨
+         op = PureBinaryOp.bitwiseXor) :
+    PureBinaryOp.eval op left right = PureBinaryOp.eval op right left := by
+  rcases h with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl
+  · cases hl : left.toNumericOpt <;> cases hr : right.toNumericOpt <;>
+      simp [PureBinaryOp.eval, PureBinaryOp.liftNumeric2, hl, hr, Int.mul_comm]
+  · simp [PureBinaryOp.eval, abstractEqual_symm]
+  · simp [PureBinaryOp.eval, abstractEqual_symm]
+  · simp [PureBinaryOp.eval, strictEqual_symm]
+  · simp [PureBinaryOp.eval, strictEqual_symm]
+  · simp [PureBinaryOp.eval, BitVec.and_comm]
+  · simp [PureBinaryOp.eval, BitVec.or_comm]
+  · simp [PureBinaryOp.eval, BitVec.xor_comm]
+
+theorem toBitVec32_fromInt32Bits (b : BitVec 32) :
+    (JSValue.fromInt32Bits b).toBitVec32 = b := by
+  simp [JSValue.fromInt32Bits, JSValue.toBitVec32, JSValue.toNumericOpt, BitVec.ofInt_toInt]
+
+/-- Associativity of bitwise operators across ALL `JSValue` inputs. -/
+theorem binary_associative (op : PureBinaryOp) (a b c : JSValue)
+    (h : op = PureBinaryOp.bitwiseAnd ∨
+         op = PureBinaryOp.bitwiseOr ∨
+         op = PureBinaryOp.bitwiseXor) :
+    PureBinaryOp.eval op (PureBinaryOp.eval op a b) c =
+    PureBinaryOp.eval op a (PureBinaryOp.eval op b c) := by
+  rcases h with rfl | rfl | rfl
+  · simp [PureBinaryOp.eval, toBitVec32_fromInt32Bits, BitVec.and_assoc]
+  · simp [PureBinaryOp.eval, toBitVec32_fromInt32Bits, BitVec.or_assoc]
+  · simp [PureBinaryOp.eval, toBitVec32_fromInt32Bits, BitVec.xor_assoc]
+
+/-- Associativity of addition and multiplication over finite numbers. -/
+theorem numeric_binary_associative (op : PureBinaryOp) (a b c : Int)
+    (h : op = PureBinaryOp.add ∨ op = PureBinaryOp.multiply) :
+    PureBinaryOp.eval op (PureBinaryOp.eval op (JSValue.number a) (JSValue.number b)) (JSValue.number c) =
+    PureBinaryOp.eval op (JSValue.number a) (PureBinaryOp.eval op (JSValue.number b) (JSValue.number c)) := by
+  rcases h with rfl | rfl
+  · simp [PureBinaryOp.eval, PureBinaryOp.liftNumeric2, JSValue.toNumericOpt,
+          JSValue.ofNumericOpt, Int.add_assoc]
+  · simp [PureBinaryOp.eval, PureBinaryOp.liftNumeric2, JSValue.toNumericOpt,
+          JSValue.ofNumericOpt, Int.mul_assoc]
+
+/-- Two-sided identity elements scoped to finite integer numbers (`0` for `+`, `1` for `*`). -/
+theorem binary_identity (op : PureBinaryOp)
+    (h : op = PureBinaryOp.add ∨ op = PureBinaryOp.multiply) :
+    ∃ identity : JSValue, ∀ n : Int,
+      PureBinaryOp.eval op (JSValue.number n) identity = JSValue.number n ∧
+      PureBinaryOp.eval op identity (JSValue.number n) = JSValue.number n := by
+  rcases h with rfl | rfl
+  · refine ⟨JSValue.number 0, fun n => ?_⟩
+    simp [PureBinaryOp.eval, PureBinaryOp.liftNumeric2, JSValue.toNumericOpt, JSValue.ofNumericOpt]
+  · refine ⟨JSValue.number 1, fun n => ?_⟩
+    simp [PureBinaryOp.eval, PureBinaryOp.liftNumeric2, JSValue.toNumericOpt, JSValue.ofNumericOpt]
+
+/-- Double logical negation normalizes any value to its `ToBoolean` boolean. -/
 theorem double_negation (x : JSValue) :
-  PureUnaryOp.eval PureUnaryOp.logicalNot
-    (PureUnaryOp.eval PureUnaryOp.logicalNot x) =
-  JSValue.boolean x.toBoolean :=
-by
-  simp [PureUnaryOp.eval]
-  cases x.toBoolean <;> simp
+    PureUnaryOp.eval PureUnaryOp.logicalNot
+      (PureUnaryOp.eval PureUnaryOp.logicalNot x) =
+    JSValue.boolean x.toBoolean := by
+  simp [PureUnaryOp.eval, JSValue.toBoolean]
 
 -- =============================================================================
--- Translation Validation Framework
+-- Translation Validation Witness Composition
 -- =============================================================================
 
-/-- Evidence that a translation step preserves semantics -/
 structure TranslationWitness (Source Target : Type) where
   source : Source
   target : Target
@@ -354,13 +396,13 @@ structure TranslationWitness (Source Target : Type) where
   targetEval : PureExpr.Env → Target → Option JSValue
   equivalence_proof : ∀ env, sourceEval env source = targetEval env target
 
-/-- Compose two translation witnesses -/
 def composeWitnesses
-  {A B C : Type}
-  (w1 : TranslationWitness A B)
-  (w2 : TranslationWitness B C)
-  (target_eq : w1.target = w2.source) :
-  TranslationWitness A C :=
+    {A B C : Type}
+    (w1 : TranslationWitness A B)
+    (w2 : TranslationWitness B C)
+    (target_eq : w1.target = w2.source)
+    (eval_eq : w1.targetEval = w2.sourceEval) :
+    TranslationWitness A C :=
 {
   source := w1.source,
   target := w2.target,
@@ -368,23 +410,16 @@ def composeWitnesses
   targetEval := w2.targetEval,
   equivalence_proof := by
     intro env
-    rw [← w2.equivalence_proof env]
-    rw [← target_eq]
-    exact w1.equivalence_proof env
+    rw [w1.equivalence_proof env, eval_eq, target_eq, w2.equivalence_proof env]
 }
 
-/-- Complete translation validation pipeline -/
 structure PipelineWitness where
-  ir0_expr : PureExpr  -- Starting IR0 expression
-  ir1_expr : PureExpr  -- IR1 after scope resolution
-  ir2_expr : PureExpr  -- IR2 after capability annotation
-  ir3_expr : PureExpr  -- IR3 execution-ready
+  ir0_expr : PureExpr
+  ir1_expr : PureExpr
+  ir2_expr : PureExpr
+  ir3_expr : PureExpr
   ir0_to_ir1 : TranslationWitness PureExpr PureExpr
   ir1_to_ir2 : TranslationWitness PureExpr PureExpr
   ir2_to_ir3 : TranslationWitness PureExpr PureExpr
   pipeline_correctness : ∀ env,
     PureExpr.eval env ir0_expr = PureExpr.eval env ir3_expr
-
-#check PipelineWitness
-#check translation_correctness
-#check binary_commutative

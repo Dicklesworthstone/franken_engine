@@ -94,16 +94,21 @@ fn exported_declarations_keep_bindings_hoisting_and_initializer_order() {
 
 #[test]
 fn exported_async_generator_declarations_preserve_source_flags_and_names() {
-    let tree = CanonicalEs2020Parser.parse(
-        "export const { x: first, y: second } = { x: 2, y: 3 }; \
+    let tree = CanonicalEs2020Parser
+        .parse(
+            "export const { x: first, y: second } = { x: 2, y: 3 }; \
          export async function* sequence() { yield first; return second; }",
-        ParseGoal::Module,
-    ).unwrap();
+            ParseGoal::Module,
+        )
+        .unwrap();
     assert_eq!(tree.body.len(), 4);
     let Statement::VariableDeclaration(declaration) = &tree.body[0] else {
         panic!("expected the unchanged variable declaration");
     };
-    assert_eq!(declaration.declarations[0].pattern.binding_names(), ["first", "second"]);
+    assert_eq!(
+        declaration.declarations[0].pattern.binding_names(),
+        ["first", "second"]
+    );
     let Statement::Export(export) = &tree.body[1] else {
         panic!("expected the variable export clause");
     };
@@ -124,16 +129,25 @@ fn exported_async_generator_declarations_preserve_source_flags_and_names() {
         ExportKind::NamedClause(clause) if clause.canonical_head() == "{ sequence }",
     ));
     let ir0 = Ir0Module::from_syntax_tree(tree, "export-async-generator");
-    let lowered = lower_ir0_to_ir3(
-        &ir0,
-        &LoweringContext::new("exports", "exports", "exports"),
-    ).unwrap();
-    assert!(lowered.ir3.instructions.iter().any(|instruction| matches!(
-        instruction,
-        Ir3Instruction::CreateAsyncGenerator { .. },
-    )));
-    assert!(CanonicalEs2020Parser.parse("export const value = 1;", ParseGoal::Script).is_err());
-    assert!(CanonicalEs2020Parser.parse("export function () {}", ParseGoal::Module).is_err());
+    let lowered =
+        lower_ir0_to_ir3(&ir0, &LoweringContext::new("exports", "exports", "exports")).unwrap();
+    assert!(
+        lowered
+            .ir3
+            .instructions
+            .iter()
+            .any(|instruction| matches!(instruction, Ir3Instruction::CreateAsyncGenerator { .. },))
+    );
+    assert!(
+        CanonicalEs2020Parser
+            .parse("export const value = 1;", ParseGoal::Script)
+            .is_err()
+    );
+    assert!(
+        CanonicalEs2020Parser
+            .parse("export function () {}", ParseGoal::Module)
+            .is_err()
+    );
 }
 
 #[test]

@@ -64,7 +64,8 @@ impl NativeModuleSource {
     /// Test-only observation of this exact source's production parse path.
     #[cfg(test)]
     pub(super) fn parse_attempt_count(&self) -> usize {
-        self.parse_attempts.load(std::sync::atomic::Ordering::Relaxed)
+        self.parse_attempts
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     fn parse(&self, retain_runtime_sources: bool) -> Result<Expression, ()> {
@@ -123,7 +124,10 @@ mod tests {
     fn fresh_expression(label: &str, source: &str) -> Expression {
         let tree = CanonicalEs2020Parser
             .parse_with_options(
-                ParserSource { label: label.into(), text: source.into() },
+                ParserSource {
+                    label: label.into(),
+                    text: source.into(),
+                },
                 ParseGoal::Script,
                 &ParserOptions::default(),
             )

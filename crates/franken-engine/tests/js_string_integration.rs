@@ -475,8 +475,12 @@ fn pads_measure_target_length_in_code_units() {
 #[test]
 fn case_conversion_preserves_exact_units_for_methods_and_borrowed_functions() {
     let input = r#""\uD800\u00DF\uDC00\u0130\uD801\uDC28\uD800""#;
-    let lower = vec![0xd800, 0x00df, 0xdc00, 0x0069, 0x0307, 0xd801, 0xdc28, 0xd800];
-    let upper = vec![0xd800, 0x0053, 0x0053, 0xdc00, 0x0130, 0xd801, 0xdc00, 0xd800];
+    let lower = vec![
+        0xd800, 0x00df, 0xdc00, 0x0069, 0x0307, 0xd801, 0xdc28, 0xd800,
+    ];
+    let upper = vec![
+        0xd800, 0x0053, 0x0053, 0xdc00, 0x0130, 0xd801, 0xdc00, 0xd800,
+    ];
     for (method, expected) in [
         ("toLowerCase", &lower),
         ("toUpperCase", &upper),
@@ -502,7 +506,9 @@ fn lowercase_keeps_context_within_scalar_spans() {
     );
     assert_eq!(
         result.code_units_vec(),
-        [0xd800, 0x03bf, 0x03c2, 0x0301, 0xdc00, 0x03c3, 0x0061, 0xd800]
+        [
+            0xd800, 0x03bf, 0x03c2, 0x0301, 0xdc00, 0x03c3, 0x0061, 0xd800
+        ]
     );
 }
 
@@ -530,8 +536,11 @@ fn normalization_preserves_surrogates_and_all_four_unicode_forms() {
         }
     }
     assert_eq!(
-        expect_string("normalization-only-surrogates", r#""\uDC00\uD800".normalize();"#)
-            .code_units_vec(),
+        expect_string(
+            "normalization-only-surrogates",
+            r#""\uDC00\uD800".normalize();"#
+        )
+        .code_units_vec(),
         [0xdc00, 0xd800]
     );
     expect_true(

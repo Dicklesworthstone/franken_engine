@@ -60,7 +60,10 @@ fn synchronous_chunks_preserve_encoding_and_private_handle_dispatch() {
     )
     .expect("iterables use private descriptor operations");
     assert_eq!(output, ["-1"]);
-    assert_eq!(std::fs::read(root.path().join("data.txt")).unwrap(), b"ABC!?");
+    assert_eq!(
+        std::fs::read(root.path().join("data.txt")).unwrap(),
+        b"ABC!?"
+    );
 }
 
 #[test]
@@ -90,7 +93,10 @@ fn asynchronous_producer_drains_before_a_requested_close() {
     )
     .expect("the active writer retains descriptor ownership through await");
     assert_eq!(output, ["-1", "EBADF"]);
-    assert_eq!(std::fs::read(root.path().join("data.txt")).unwrap(), b"headtail");
+    assert_eq!(
+        std::fs::read(root.path().join("data.txt")).unwrap(),
+        b"headtail"
+    );
 }
 
 #[test]
@@ -117,7 +123,10 @@ fn invalid_stream_chunk_runs_generator_cleanup_and_keeps_handle_usable() {
     )
     .expect("IteratorClose completes before write rejection");
     assert_eq!(output, ["ERR_INVALID_ARG_TYPE true"]);
-    assert_eq!(std::fs::read(root.path().join("data.txt")).unwrap(), b"firstlast");
+    assert_eq!(
+        std::fs::read(root.path().join("data.txt")).unwrap(),
+        b"firstlast"
+    );
 }
 
 #[test]
@@ -150,7 +159,11 @@ fn abort_of_a_pending_source_does_not_write_its_late_chunk() {
     )
     .expect("cancellation is checked when the source resumes");
     assert_eq!(output, ["ABORT_ERR stop true"]);
-    assert!(std::fs::read(root.path().join("data.txt")).unwrap().is_empty());
+    assert!(
+        std::fs::read(root.path().join("data.txt"))
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -172,7 +185,10 @@ fn iterator_protocol_keys_are_not_taken_from_guest_lexical_symbol() {
     )
     .expect("filesystem iterator keys come from the realm");
     assert_eq!(output, ["guest"]);
-    assert_eq!(std::fs::read(root.path().join("data.txt")).unwrap(), b"onetwo");
+    assert_eq!(
+        std::fs::read(root.path().join("data.txt")).unwrap(),
+        b"onetwo"
+    );
 }
 
 #[test]
@@ -207,7 +223,10 @@ fn pathname_iterables_create_append_and_flush_on_the_native_descriptor_path() {
     )
     .expect("pathname iterable writes reuse native open/write/sync/close");
     assert_eq!(output, ["done"]);
-    assert_eq!(std::fs::read(root.path().join("data.txt")).unwrap(), b"ABC!?");
+    assert_eq!(
+        std::fs::read(root.path().join("data.txt")).unwrap(),
+        b"ABC!?"
+    );
 }
 
 #[test]
@@ -232,7 +251,10 @@ fn pathname_exclusive_creation_and_pre_abort_preserve_existing_contents() {
     )
     .expect("creation flags and cancellation are enforced before truncation");
     assert_eq!(output, ["EEXIST", "ABORT_ERR stop"]);
-    assert_eq!(std::fs::read(root.path().join("data.txt")).unwrap(), b"preserved");
+    assert_eq!(
+        std::fs::read(root.path().join("data.txt")).unwrap(),
+        b"preserved"
+    );
 }
 
 #[test]
@@ -255,7 +277,10 @@ fn pathname_source_failure_is_observable_and_does_not_rollback_written_bytes() {
     )
     .expect("source errors reject the write while later writes remain usable");
     assert_eq!(output, ["producer failed", "done"]);
-    assert_eq!(std::fs::read(root.path().join("data.txt")).unwrap(), b"prefixtail");
+    assert_eq!(
+        std::fs::read(root.path().join("data.txt")).unwrap(),
+        b"prefixtail"
+    );
 }
 
 #[test]
@@ -294,5 +319,8 @@ fn pathname_writer_intrinsics_ignore_guest_lexical_and_public_api_replacements()
     )
     .expect("the writer uses captured realm helpers and private descriptor operations");
     assert_eq!(output, ["guest guest"]);
-    assert_eq!(std::fs::read(root.path().join("data.txt")).unwrap(), b"safe");
+    assert_eq!(
+        std::fs::read(root.path().join("data.txt")).unwrap(),
+        b"safe"
+    );
 }

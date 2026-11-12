@@ -47,15 +47,15 @@ mod iso2022;
 const JIS0208_LENGTH: usize = 11104;
 const JIS0212_LENGTH: usize = 7211;
 const INDEXES: &[u8; (JIS0208_LENGTH + JIS0212_LENGTH) * 2] =
-    &expand_indexes(
-        include_bytes!("jis0208.rle"),
-        include_bytes!("jis0212.rle"),
-    );
+    &expand_indexes(include_bytes!("jis0208.rle"), include_bytes!("jis0212.rle"));
 
 // Only unmapped runs are compressed. Normal words are literal; 0xFFFF is
 // followed by a nonzero u16 run length. All decoding and checks are compile
 // time: malformed generated data is a build error, not a runtime fallback.
-const fn expand_indexes(jis0208: &[u8], jis0212: &[u8]) -> [u8; (JIS0208_LENGTH + JIS0212_LENGTH) * 2] {
+const fn expand_indexes(
+    jis0208: &[u8],
+    jis0212: &[u8],
+) -> [u8; (JIS0208_LENGTH + JIS0212_LENGTH) * 2] {
     let mut output = [0u8; (JIS0208_LENGTH + JIS0212_LENGTH) * 2];
     let mut target = 0;
     let mut plane = 0;
@@ -82,7 +82,14 @@ const fn expand_indexes(jis0208: &[u8], jis0212: &[u8]) -> [u8; (JIS0208_LENGTH 
                 remaining -= 1;
             }
         }
-        assert!(target == if plane == 0 { JIS0208_LENGTH * 2 } else { output.len() });
+        assert!(
+            target
+                == if plane == 0 {
+                    JIS0208_LENGTH * 2
+                } else {
+                    output.len()
+                }
+        );
         plane += 1;
     }
     output
@@ -147,8 +154,7 @@ fn shift_jis_pair(leading: u8, byte: u8) -> Option<char> {
     }
     let leading_offset = if leading < 0xa0 { 0x81 } else { 0xc1 };
     let trailing_offset = if byte < 0x7f { 0x40 } else { 0x41 };
-    let pointer = usize::from(leading - leading_offset) * 188
-        + usize::from(byte - trailing_offset);
+    let pointer = usize::from(leading - leading_offset) * 188 + usize::from(byte - trailing_offset);
     if (8836..=10715).contains(&pointer) {
         // Windows EUDC is algorithmic, not an entry in the JIS index.
         char::from_u32(0xe000 + (pointer - 8836) as u32)
@@ -211,9 +217,7 @@ pub(super) fn decode(
         let mut text = String::new();
         for &byte in bytes {
             if leading != 0 {
-                if encoding == Encoding::EucJp && leading == 0x8f
-                    && matches!(byte, 0xa1..=0xfe)
-                {
+                if encoding == Encoding::EucJp && leading == 0x8f && matches!(byte, 0xa1..=0xfe) {
                     leading = byte;
                     jis0212 = true;
                     continue;
@@ -224,10 +228,13 @@ pub(super) fn decode(
                     Encoding::EucJp if previous == 0x8e && matches!(byte, 0xa1..=0xdf) => {
                         char::from_u32(0xff61 + u32::from(byte - 0xa1))
                     }
-                    Encoding::EucJp if matches!(previous, 0xa1..=0xfe)
-                        && matches!(byte, 0xa1..=0xfe) =>
+                    Encoding::EucJp
+                        if matches!(previous, 0xa1..=0xfe) && matches!(byte, 0xa1..=0xfe) =>
                     {
-                        index(usize::from(previous - 0xa1) * 94 + usize::from(byte - 0xa1), jis0212)
+                        index(
+                            usize::from(previous - 0xa1) * 94 + usize::from(byte - 0xa1),
+                            jis0212,
+                        )
                     }
                     Encoding::EucJp => None,
                     Encoding::Iso2022Jp => return None, // Dispatched before this byte-pair path.
@@ -258,8 +265,16 @@ pub(super) fn decode(
         // or JIS0212 selection can contaminate a subsequent independent call.
         *state = DecodeState::default();
     } else {
-        state.pending = if jis0212 { [0x8f, leading, 0] } else { [leading, 0, 0] };
-        state.pending_len = if jis0212 { 2 } else { usize::from(leading != 0) };
+        state.pending = if jis0212 {
+            [0x8f, leading, 0]
+        } else {
+            [leading, 0, 0]
+        };
+        state.pending_len = if jis0212 {
+            2
+        } else {
+            usize::from(leading != 0)
+        };
         state.bom_seen = false;
         state.streaming = true;
     }

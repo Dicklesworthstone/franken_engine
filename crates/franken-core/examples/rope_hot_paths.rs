@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! Core-only before/after microbenchmark; not an end-to-end V8 comparison.
 //! Run the same example on the base revision and each patch in --release.
 
@@ -49,9 +50,7 @@ fn measure_utf16_repeated(
     expected: u64,
     rounds: usize,
 ) {
-    let inputs = (0..rounds)
-        .map(|_| (left.clone(), right.clone()))
-        .collect();
+    let inputs = (0..rounds).map(|_| (left.clone(), right.clone())).collect();
     measure(name, inputs, expected, |left, right| {
         order_code(left.utf16_cmp(right))
     });
@@ -170,15 +169,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let body = JsString::from("x".repeat(1024 * 1024));
     let a = JsString::from("a".repeat(1024));
     let b = JsString::from("b".repeat(1024));
-    let fresh = || (0..rounds).map(|_| (a.concat(&body), b.concat(&body))).collect();
+    let fresh = || {
+        (0..rounds)
+            .map(|_| (a.concat(&body), b.concat(&body)))
+            .collect()
+    };
     let length = a.utf16_len() + body.utf16_len();
 
-    measure("utf16_count_fresh_rope", fresh(), length as u64, |left, _| {
-        left.encode_utf16().count() as u64
-    });
-    measure("utf16_nth_fresh_rope", fresh(), u64::from(b'x'), |left, _| {
-        u64::from(left.encode_utf16().nth(length - 1).expect("last unit"))
-    });
+    measure(
+        "utf16_count_fresh_rope",
+        fresh(),
+        length as u64,
+        |left, _| left.encode_utf16().count() as u64,
+    );
+    measure(
+        "utf16_nth_fresh_rope",
+        fresh(),
+        u64::from(b'x'),
+        |left, _| u64::from(left.encode_utf16().nth(length - 1).expect("last unit")),
+    );
     measure("byte_order_early_mismatch", fresh(), 0, |left, right| {
         order_code(left.cmp(right))
     });
@@ -191,18 +200,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let unicode_pairs = (0..rounds)
         .map(|_| (astral.concat(&body), bmp.concat(&body)))
         .collect();
-    measure("utf16_order_early_mismatch", unicode_pairs, 0, |left, right| {
-        order_code(left.utf16_cmp(right))
-    });
+    measure(
+        "utf16_order_early_mismatch",
+        unicode_pairs,
+        0,
+        |left, right| order_code(left.utf16_cmp(right)),
+    );
 
     let expected_sum = (1024 * u64::from(b'a')) + (1024 * 1024 * u64::from(b'x'));
-    measure("utf16_fold_complete_rope", fresh(), expected_sum, |left, _| {
-        left.encode_utf16().fold(0_u64, |sum, unit| sum + u64::from(unit))
-    });
+    measure(
+        "utf16_fold_complete_rope",
+        fresh(),
+        expected_sum,
+        |left, _| {
+            left.encode_utf16()
+                .fold(0_u64, |sum, unit| sum + u64::from(unit))
+        },
+    );
 
     let flat_a = JsString::from(format!("{}a", "x".repeat(1024 * 1024)));
     let flat_b = JsString::from(format!("{}b", "x".repeat(1024 * 1024)));
-    let flat_pairs = (0..rounds).map(|_| (flat_a.clone(), flat_b.clone())).collect();
+    let flat_pairs = (0..rounds)
+        .map(|_| (flat_a.clone(), flat_b.clone()))
+        .collect();
     measure("flat_order_control", flat_pairs, 0, |left, right| {
         order_code(left.cmp(right))
     });
@@ -217,9 +237,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let shared_pairs = (0..rounds)
         .map(|_| (prefix.concat(&a), prefix.concat(&b)))
         .collect();
-    measure("byte_order_shared_dag_prefix", shared_pairs, 0, |left, right| {
-        order_code(left.cmp(right))
-    });
+    measure(
+        "byte_order_shared_dag_prefix",
+        shared_pairs,
+        0,
+        |left, right| order_code(left.cmp(right)),
+    );
 
     // Countermetric: equal but independently allocated ropes, repeatedly
     // compared. A flatten-once implementation can amortize its copy here;

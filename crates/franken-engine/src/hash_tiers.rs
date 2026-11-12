@@ -628,7 +628,7 @@ mod tests {
             ),
             (
                 "baseline_interpreter.rs",
-                include_str!("baseline_interpreter.rs"),
+                crate::baseline_interpreter::COMBINED_PRODUCTION_SOURCE,
             ),
         ];
 

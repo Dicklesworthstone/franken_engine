@@ -296,9 +296,11 @@ impl InterpreterCore {
                         .heap
                         .get(source.0 as usize)
                         .and_then(|object| {
-                            object.typed_array.as_ref().map(|view| view.buffer).or_else(|| {
-                                object.data_view.as_ref().map(|view| view.buffer)
-                            })
+                            object
+                                .typed_array
+                                .as_ref()
+                                .map(|view| view.buffer)
+                                .or_else(|| object.data_view.as_ref().map(|view| view.buffer))
                         })
                         .ok_or(InterpreterError::ObjectNotFound { id: source.0 })?;
                     if state.transfer_sources.contains(&source_buffer) {
@@ -329,7 +331,11 @@ impl InterpreterCore {
                             view.bounds,
                         ),
                         (None, Some(view)) => (
-                            self.alloc_data_view_object(buffer, view.byte_offset, view.byte_length)?,
+                            self.alloc_data_view_object(
+                                buffer,
+                                view.byte_offset,
+                                view.byte_length,
+                            )?,
                             view.bounds,
                         ),
                         (None, None) => {
@@ -462,7 +468,9 @@ impl InterpreterCore {
         let primitive = object.primitive_value.as_deref().cloned();
 
         if detached || out_of_bounds {
-            return Err(self.throw_data_clone_error("Detached or out-of-bounds buffer", &state.label));
+            return Err(
+                self.throw_data_clone_error("Detached or out-of-bounds buffer", &state.label)
+            );
         }
 
         if let Some(primitive) = primitive {

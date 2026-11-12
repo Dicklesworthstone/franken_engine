@@ -939,10 +939,13 @@ impl Ir1Op {
             Self::GetPropertyWithReceiver { key } | Self::SetPropertyWithReceiver { key } => {
                 map.insert(
                     "op".to_string(),
-                    CanonicalValue::String(match self {
-                        Self::GetPropertyWithReceiver { .. } => "get_property_with_receiver",
-                        _ => "set_property_with_receiver",
-                    }.to_string()),
+                    CanonicalValue::String(
+                        match self {
+                            Self::GetPropertyWithReceiver { .. } => "get_property_with_receiver",
+                            _ => "set_property_with_receiver",
+                        }
+                        .to_string(),
+                    ),
                 );
                 map.insert("key".to_string(), key.canonical_value());
             }
@@ -1963,9 +1966,19 @@ pub enum Ir3Instruction {
         kind: AccessorKind,
     },
     /// Read through `obj`'s prototype chain while invoking accessors on `receiver`.
-    GetPropertyWithReceiver { obj: Reg, key: Reg, receiver: Reg, dst: Reg },
+    GetPropertyWithReceiver {
+        obj: Reg,
+        key: Reg,
+        receiver: Reg,
+        dst: Reg,
+    },
     /// Look up a setter through `obj`; call it or create a data property on `receiver`.
-    SetPropertyWithReceiver { obj: Reg, key: Reg, receiver: Reg, val: Reg },
+    SetPropertyWithReceiver {
+        obj: Reg,
+        key: Reg,
+        receiver: Reg,
+        val: Reg,
+    },
 }
 
 impl Ir3Instruction {
@@ -2230,7 +2243,12 @@ impl Ir3Instruction {
                 map.insert("key".to_string(), CanonicalValue::U64(u64::from(*key)));
                 map.insert("obj".to_string(), CanonicalValue::U64(u64::from(*obj)));
             }
-            Self::DefineAccessor { obj, key, func, kind } => {
+            Self::DefineAccessor {
+                obj,
+                key,
+                func,
+                kind,
+            } => {
                 map.insert(
                     "op".to_string(),
                     CanonicalValue::String("define_accessor".to_string()),
@@ -2243,18 +2261,40 @@ impl Ir3Instruction {
                     CanonicalValue::String(kind.as_str().to_string()),
                 );
             }
-            Self::GetPropertyWithReceiver { obj, key, receiver, dst } => {
-                map.insert("op".to_string(), CanonicalValue::String("get_property_with_receiver".to_string()));
+            Self::GetPropertyWithReceiver {
+                obj,
+                key,
+                receiver,
+                dst,
+            } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("get_property_with_receiver".to_string()),
+                );
                 map.insert("obj".to_string(), CanonicalValue::U64(u64::from(*obj)));
                 map.insert("key".to_string(), CanonicalValue::U64(u64::from(*key)));
-                map.insert("receiver".to_string(), CanonicalValue::U64(u64::from(*receiver)));
+                map.insert(
+                    "receiver".to_string(),
+                    CanonicalValue::U64(u64::from(*receiver)),
+                );
                 map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
             }
-            Self::SetPropertyWithReceiver { obj, key, receiver, val } => {
-                map.insert("op".to_string(), CanonicalValue::String("set_property_with_receiver".to_string()));
+            Self::SetPropertyWithReceiver {
+                obj,
+                key,
+                receiver,
+                val,
+            } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("set_property_with_receiver".to_string()),
+                );
                 map.insert("obj".to_string(), CanonicalValue::U64(u64::from(*obj)));
                 map.insert("key".to_string(), CanonicalValue::U64(u64::from(*key)));
-                map.insert("receiver".to_string(), CanonicalValue::U64(u64::from(*receiver)));
+                map.insert(
+                    "receiver".to_string(),
+                    CanonicalValue::U64(u64::from(*receiver)),
+                );
                 map.insert("val".to_string(), CanonicalValue::U64(u64::from(*val)));
             }
             Self::DeleteProperty { obj, key, dst } => {
@@ -3767,7 +3807,10 @@ fn ir1_op_uses_accessor_definition_schema(op: &Ir1Op) -> bool {
 }
 
 pub(crate) fn verify_ir1_accessor_definition_schema(module: &Ir1Module) -> Result<(), IrError> {
-    if module.ops.iter().any(ir1_op_uses_accessor_definition_schema)
+    if module
+        .ops
+        .iter()
+        .any(ir1_op_uses_accessor_definition_schema)
         && module.header.schema_version < ACCESSOR_DEFINITION_SCHEMA_VERSION
     {
         return Err(IrError::new(
@@ -3780,7 +3823,10 @@ pub(crate) fn verify_ir1_accessor_definition_schema(module: &Ir1Module) -> Resul
 }
 
 pub(crate) fn verify_ir2_accessor_definition_schema(module: &Ir2Module) -> Result<(), IrError> {
-    if module.ops.iter().any(|op| ir1_op_uses_accessor_definition_schema(&op.inner))
+    if module
+        .ops
+        .iter()
+        .any(|op| ir1_op_uses_accessor_definition_schema(&op.inner))
         && module.header.schema_version < ACCESSOR_DEFINITION_SCHEMA_VERSION
     {
         return Err(IrError::new(
@@ -3794,9 +3840,12 @@ pub(crate) fn verify_ir2_accessor_definition_schema(module: &Ir2Module) -> Resul
 
 fn verify_ir3_accessor_definition_schema(module: &Ir3Module) -> Result<(), IrError> {
     if module.instructions.iter().any(|instruction| {
-        matches!(instruction, Ir3Instruction::DefineAccessor { .. }
-            | Ir3Instruction::GetPropertyWithReceiver { .. }
-            | Ir3Instruction::SetPropertyWithReceiver { .. })
+        matches!(
+            instruction,
+            Ir3Instruction::DefineAccessor { .. }
+                | Ir3Instruction::GetPropertyWithReceiver { .. }
+                | Ir3Instruction::SetPropertyWithReceiver { .. }
+        )
     }) && module.header.schema_version < ACCESSOR_DEFINITION_SCHEMA_VERSION
     {
         return Err(IrError::new(
@@ -5685,7 +5734,7 @@ mod tests {
         assert_eq!(json["outcome"], "Contained");
         assert_eq!(
             json["header"]["schema_version"],
-            serde_json::json!({"major": 0, "minor": 15, "patch": 0})
+            serde_json::json!({"major": 0, "minor": 19, "patch": 0})
         );
         let restored: Ir4Module = serde_json::from_value(json).unwrap();
         assert_eq!(restored, witness);
@@ -5750,7 +5799,11 @@ mod tests {
     #[test]
     fn contained_ir4_rejects_peer_schema_versions_bd_9vouw_7() {
         let ir3_hash = ContentHash::compute(b"contained-ir4-peer");
-        for (minor, reason) in [(14, "skipped core minor"), (16, "unsupported future minor")] {
+        for (minor, reason) in [
+            (14, "skipped core minor"),
+            (16, "skipped core minor"),
+            (20, "unsupported future minor"),
+        ] {
             for patch in [0, u32::MAX] {
                 let mut witness = Ir4Module::new(ir3_hash, "peer.js");
                 witness.header.schema_version = IrSchemaVersion {
@@ -6993,7 +7046,7 @@ mod tests {
     fn schema_version_current_value() {
         let v = IrSchemaVersion::CURRENT;
         assert_eq!(v.major, 0);
-        assert_eq!(v.minor, 15);
+        assert_eq!(v.minor, 19);
         assert_eq!(v.patch, 0);
     }
 

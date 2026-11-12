@@ -300,9 +300,7 @@ mod admission_lifetime_tests {
         let job = pool.reserve(128).unwrap();
         let control = job.task_control();
         let signal = job.execution_cancellation().unwrap();
-        let result = job
-            .execute(&source, config(128), "sync-lifetime")
-            .unwrap();
+        let result = job.execute(&source, config(128), "sync-lifetime").unwrap();
         assert_eq!(result.value, expected.value);
         assert_eq!(result.completion_label, expected.completion_label);
         assert_eq!(result.instructions_executed, expected.instructions_executed);

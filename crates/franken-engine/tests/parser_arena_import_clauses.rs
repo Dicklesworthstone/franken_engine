@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Import clauses must survive the arena without changing binding or lowering
 //! semantics, and every additional owned name must participate in admission.
 
@@ -89,7 +91,7 @@ fn all_six_import_forms_keep_exact_tree_hash_and_lowering_through_arena() {
         for tail in [";", " with { type: 'json' };"] {
             let source = format!("{head}{tail}");
             let original = CanonicalEs2020Parser
-                .parse(&source, ParseGoal::Module)
+                .parse(source.as_str(), ParseGoal::Module)
                 .unwrap_or_else(|error| panic!("{source}: {error}"));
             let retained = arena(&original);
             let restored = retained.to_syntax_tree().unwrap();

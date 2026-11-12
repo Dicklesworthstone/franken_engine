@@ -6,7 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use frankenengine_engine::ast::ParseGoal;
-use frankenengine_engine::authority_footprint::{analyze_authority_footprint, CheckOutcome};
+use frankenengine_engine::authority_footprint::{CheckOutcome, analyze_authority_footprint};
 use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, LabFixtureExecutionOrchestratorExt, OrchestratorConfig,
@@ -25,12 +25,22 @@ fn run(source: &str, root: &Path, capabilities: &[&str]) -> Result<Vec<String>, 
         source: source.into(),
         source_file: None,
         module_root: None,
-        capabilities: capabilities.iter().map(|capability| (*capability).to_string()).collect(),
+        capabilities: capabilities
+            .iter()
+            .map(|capability| (*capability).to_string())
+            .collect(),
         version: "1.0.0".into(),
         metadata: BTreeMap::new(),
     };
-    orchestrator.execute(&package)
-        .map(|result| result.console_output.into_iter().map(|entry| entry.message).collect())
+    orchestrator
+        .execute(&package)
+        .map(|result| {
+            result
+                .console_output
+                .into_iter()
+                .map(|entry| entry.message)
+                .collect()
+        })
         .map_err(|error| format!("{error:?}"))
 }
 
@@ -40,12 +50,19 @@ fn inline_read_has_analyzable_read_only_authority_without_unused_method_flows() 
         let source = format!("require('{specifier}').readFileSync('input.txt', 'utf8');");
         let report = analyze_authority_footprint(&source, "direct-read.js", ParseGoal::Script);
         assert_eq!(report.outcome(), CheckOutcome::Clean, "{report:?}");
-        assert!(report.required_capabilities.iter().any(|requirement| {
-            requirement.capability == Some(RuntimeCapability::FsRead)
-        }));
-        assert!(!report.required_capabilities.iter().any(|requirement| {
-            requirement.capability == Some(RuntimeCapability::FsWrite)
-        }), "unused writer bodies must not pollute the read footprint");
+        assert!(
+            report
+                .required_capabilities
+                .iter()
+                .any(|requirement| { requirement.capability == Some(RuntimeCapability::FsRead) })
+        );
+        assert!(
+            !report
+                .required_capabilities
+                .iter()
+                .any(|requirement| { requirement.capability == Some(RuntimeCapability::FsWrite) }),
+            "unused writer bodies must not pollute the read footprint"
+        );
     }
 }
 
@@ -57,9 +74,13 @@ fn inline_read_uses_real_bytes_without_builtin_or_write_authority() {
         "console.log(require('fs').readFileSync('input.txt', 'utf8'));",
         root.path(),
         &["vm_dispatch", "heap_allocate", "console", "fs_read"],
-    ).expect("direct read");
+    )
+    .expect("direct read");
     assert_eq!(output, ["native bytes"]);
-    assert_eq!(std::fs::read_to_string(root.path().join("input.txt")).unwrap(), "native bytes");
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("input.txt")).unwrap(),
+        "native bytes"
+    );
 }
 
 #[test]
@@ -77,8 +98,12 @@ fn direct_writer_still_requires_write_authority_and_never_fakes_success() {
          require('fs').appendFileSync('allowed.txt', ':second');",
         root.path(),
         &["vm_dispatch", "heap_allocate", "fs_write"],
-    ).expect("authorized writes");
-    assert_eq!(std::fs::read_to_string(root.path().join("allowed.txt")).unwrap(), "first:second");
+    )
+    .expect("authorized writes");
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("allowed.txt")).unwrap(),
+        "first:second"
+    );
 }
 
 #[test]
@@ -93,7 +118,8 @@ fn inline_read_keeps_operand_order_and_catchable_filesystem_errors() {
          catch (error) { console.log(error.code); }",
         root.path(),
         &["vm_dispatch", "heap_allocate", "console", "fs_read"],
-    ).expect("operand order and original exception boundary");
+    )
+    .expect("operand order and original exception boundary");
     assert_eq!(output, ["path", "encoding", "payload", "ENOENT"]);
 }
 
@@ -106,7 +132,8 @@ fn an_observable_module_keeps_method_mutation_visible_to_inline_calls() {
          console.log(require('node:fs').readFileSync('missing.txt'));",
         root.path(),
         &["vm_dispatch", "heap_allocate", "builtin", "console"],
-    ).expect("full module fallback, with no filesystem authority");
+    )
+    .expect("full module fallback, with no filesystem authority");
     assert_eq!(output, ["replacement"]);
 }
 
@@ -118,9 +145,13 @@ fn direct_lowering_does_not_relax_secret_to_filesystem_flow_checks() {
         ParseGoal::Script,
     );
     assert_ne!(report.outcome(), CheckOutcome::Clean);
-    assert!(report.fail_closed_reason.as_deref().is_some_and(|reason| {
-        reason.contains("unauthorized flow")
-    }), "the original IFC gate must refuse the secret flow: {report:?}");
+    assert!(
+        report
+            .fail_closed_reason
+            .as_deref()
+            .is_some_and(|reason| { reason.contains("unauthorized flow") }),
+        "the original IFC gate must refuse the secret flow: {report:?}"
+    );
 }
 
 #[test]
@@ -133,15 +164,35 @@ fn bound_reads_have_only_read_authority_at_the_original_call_sites() {
         let source = format!("{declaration}\n{call}('input.txt', 'utf8');\n{call}('second.txt');");
         let report = analyze_authority_footprint(&source, "bound-read.js", ParseGoal::Script);
         assert_eq!(report.outcome(), CheckOutcome::Clean, "{report:?}");
-        let reads = report.required_capabilities.iter().filter(|requirement| {
-            requirement.capability == Some(RuntimeCapability::FsRead)
-        }).collect::<Vec<_>>();
-        assert_eq!(reads.len(), 1, "read capability is deduplicated: {report:?}");
-        assert_eq!(reads[0].call_sites.iter().map(|site| site.start_line).collect::<Vec<_>>(), [2, 3]);
-        assert!(!report.required_capabilities.iter().any(|requirement| {
-            requirement.capability == Some(RuntimeCapability::FsWrite)
-        }), "no unused writer capability: {report:?}");
-        assert_eq!(report, analyze_authority_footprint(&source, "bound-read.js", ParseGoal::Script));
+        let reads = report
+            .required_capabilities
+            .iter()
+            .filter(|requirement| requirement.capability == Some(RuntimeCapability::FsRead))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            reads.len(),
+            1,
+            "read capability is deduplicated: {report:?}"
+        );
+        assert_eq!(
+            reads[0]
+                .call_sites
+                .iter()
+                .map(|site| site.start_line)
+                .collect::<Vec<_>>(),
+            [2, 3]
+        );
+        assert!(
+            !report
+                .required_capabilities
+                .iter()
+                .any(|requirement| { requirement.capability == Some(RuntimeCapability::FsWrite) }),
+            "no unused writer capability: {report:?}"
+        );
+        assert_eq!(
+            report,
+            analyze_authority_footprint(&source, "bound-read.js", ParseGoal::Script)
+        );
     }
 }
 
@@ -159,11 +210,17 @@ const BOUND_READ_EXPECTED: &str = "native bytes native bytes\ntrue false";
 fn namespace_and_destructured_reads_execute_without_builtin_or_write_grants() {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("input.txt"), "native bytes").unwrap();
-    let actual = run(BOUND_READ_SOURCE, root.path(),
-        &["vm_dispatch", "heap_allocate", "console", "fs_read"])
-        .expect("bound reads use only their original authority");
+    let actual = run(
+        BOUND_READ_SOURCE,
+        root.path(),
+        &["vm_dispatch", "heap_allocate", "console", "fs_read"],
+    )
+    .expect("bound reads use only their original authority");
     assert_eq!(actual.join("\n"), BOUND_READ_EXPECTED);
-    assert_eq!(std::fs::read_to_string(root.path().join("input.txt")).unwrap(), "native bytes");
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("input.txt")).unwrap(),
+        "native bytes"
+    );
 }
 
 const BOUND_WRITE_SOURCE: &str = r#"
@@ -177,13 +234,26 @@ rename('first.txt', 'result.txt');
 #[test]
 fn bound_writers_require_real_write_authority_and_produce_real_disk_contents() {
     let root = tempfile::tempdir().unwrap();
-    assert!(run(BOUND_WRITE_SOURCE, root.path(),
-        &["vm_dispatch", "heap_allocate", "fs_read"]).is_err());
+    assert!(
+        run(
+            BOUND_WRITE_SOURCE,
+            root.path(),
+            &["vm_dispatch", "heap_allocate", "fs_read"]
+        )
+        .is_err()
+    );
     assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
-    run(BOUND_WRITE_SOURCE, root.path(),
-        &["vm_dispatch", "heap_allocate", "fs_write"]).expect("authorized native writes");
+    run(
+        BOUND_WRITE_SOURCE,
+        root.path(),
+        &["vm_dispatch", "heap_allocate", "fs_write"],
+    )
+    .expect("authorized native writes");
     assert!(!root.path().join("first.txt").exists());
-    assert_eq!(std::fs::read_to_string(root.path().join("result.txt")).unwrap(), "first:second");
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("result.txt")).unwrap(),
+        "first:second"
+    );
 }
 
 const BOUND_ORDER_SOURCE: &str = r#"
@@ -201,9 +271,12 @@ const BOUND_ORDER_EXPECTED: &str = "before\nafter\npath\nencoding\n1 2 payload t
 fn alias_expansion_preserves_operand_order_and_catchable_error_boundaries() {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("input.txt"), "payload").unwrap();
-    let actual = run(BOUND_ORDER_SOURCE, root.path(),
-        &["vm_dispatch", "heap_allocate", "console", "fs_read"])
-        .expect("declarations, operand effects and native exception");
+    let actual = run(
+        BOUND_ORDER_SOURCE,
+        root.path(),
+        &["vm_dispatch", "heap_allocate", "console", "fs_read"],
+    )
+    .expect("declarations, operand effects and native exception");
     assert_eq!(actual.join("\n"), BOUND_ORDER_EXPECTED);
 }
 
@@ -217,9 +290,12 @@ const BOUND_MUTATION_EXPECTED: &str = "replacement replacement";
 #[test]
 fn an_alias_method_mutation_keeps_alias_and_inline_calls_on_the_same_object() {
     let root = tempfile::tempdir().unwrap();
-    let actual = run(BOUND_MUTATION_SOURCE, root.path(),
-        &["vm_dispatch", "heap_allocate", "builtin", "console"])
-        .expect("observable module uses retain the original path");
+    let actual = run(
+        BOUND_MUTATION_SOURCE,
+        root.path(),
+        &["vm_dispatch", "heap_allocate", "builtin", "console"],
+    )
+    .expect("observable module uses retain the original path");
     assert_eq!(actual.join("\n"), BOUND_MUTATION_EXPECTED);
     assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
 }
@@ -230,11 +306,16 @@ fn bound_writes_retain_the_secret_flow_refusal() {
         "const fs = require('fs'); const secret = process.env.TOKEN; fs.writeFileSync('out', secret);",
         "const {writeFileSync: write} = require('fs'); const secret = process.env.TOKEN; write('out', secret);",
     ] {
-        let report = analyze_authority_footprint(source, "bound-secret-write.js", ParseGoal::Script);
+        let report =
+            analyze_authority_footprint(source, "bound-secret-write.js", ParseGoal::Script);
         assert_ne!(report.outcome(), CheckOutcome::Clean);
-        assert!(report.fail_closed_reason.as_deref().is_some_and(|reason| {
-            reason.contains("unauthorized flow")
-        }), "the original IFC boundary must reject this data flow: {report:?}");
+        assert!(
+            report
+                .fail_closed_reason
+                .as_deref()
+                .is_some_and(|reason| { reason.contains("unauthorized flow") }),
+            "the original IFC boundary must reject this data flow: {report:?}"
+        );
     }
 }
 

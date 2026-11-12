@@ -24,17 +24,12 @@ pub(super) fn index_of(haystack: &JsString, needle: &JsString, from: usize) -> O
         );
     }
     let needle = needle.code_units_vec();
-    search_utf16_units(haystack.encode_utf16().skip(from), &needle, false)
-        .map(|index| from + index)
+    search_utf16_units(haystack.encode_utf16().skip(from), &needle, false).map(|index| from + index)
 }
 
 /// `end` includes the complete needle at the last permitted starting point,
 /// not merely that starting point. The caller has checked the lengths.
-pub(super) fn last_index_of(
-    haystack: &JsString,
-    needle: &JsString,
-    end: usize,
-) -> Option<usize> {
+pub(super) fn last_index_of(haystack: &JsString, needle: &JsString, end: usize) -> Option<usize> {
     if haystack.is_well_formed()
         && let Some(pattern) = chunks::pattern(needle)
     {
@@ -116,7 +111,10 @@ impl ReverseUnits {
                 return;
             }
         }
-        let text = self.leaf.as_ref().expect("in-range reverse skip needs a leaf");
+        let text = self
+            .leaf
+            .as_ref()
+            .expect("in-range reverse skip needs a leaf");
         let remaining = self.units_left - n;
         let (byte, split_pair) =
             access::utf16_boundary(&text[..self.byte_end], self.units_left, remaining);
@@ -185,9 +183,10 @@ impl Iterator for ReverseUnits {
                     } else {
                         // Another reader joined this node after the first
                         // cache check. Publication always precedes release.
-                        let joined = node.joined.get().expect(
-                            "concatenation parts are released only after publication",
-                        );
+                        let joined = node
+                            .joined
+                            .get()
+                            .expect("concatenation parts are released only after publication");
                         self.byte_end = joined.len();
                         self.leaf = Some(Arc::clone(joined));
                         self.units_left = length;

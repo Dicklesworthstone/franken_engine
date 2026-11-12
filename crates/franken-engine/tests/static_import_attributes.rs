@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Static import attributes survive parsing, persistence and every lowering
 //! stage. Format validation belongs to the resolved loader; dynamic import
 //! options are deliberately outside this contract.
@@ -165,7 +167,7 @@ fn malformed_attributes_and_decoded_duplicate_keys_are_syntax_errors() {
         for head in ["import 'pkg'", "export * from 'pkg'"] {
             let source = format!("{head} {tail};");
             let error = CanonicalEs2020Parser
-                .parse(&source, ParseGoal::Module)
+                .parse(source.as_str(), ParseGoal::Module)
                 .unwrap_err();
             assert_eq!(
                 error.code,
@@ -206,7 +208,7 @@ fn bounded_attributes_refuse_excess_data_and_ill_formed_strings_without_loss() {
         let source = format!("import 'pkg' with {{ {entries} }};");
         assert_eq!(
             CanonicalEs2020Parser
-                .parse(&source, ParseGoal::Module)
+                .parse(source.as_str(), ParseGoal::Module)
                 .unwrap_err()
                 .code,
             ParseErrorCode::UnsupportedSyntax,

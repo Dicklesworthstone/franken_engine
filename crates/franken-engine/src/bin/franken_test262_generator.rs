@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! Test262 Case Vector Generator
 //!
 //! BD-24POU: Generates real Test262 case vectors from the official tc39/test262 suite.

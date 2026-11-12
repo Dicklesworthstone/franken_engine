@@ -24,8 +24,12 @@ impl InterpreterCore {
         }
         if !matches!(
             kind,
-            K::ArrayPush | K::ArrayPop | K::ArrayShift | K::ArrayUnshift
-                | K::ArrayReverse | K::ArrayFill
+            K::ArrayPush
+                | K::ArrayPop
+                | K::ArrayShift
+                | K::ArrayUnshift
+                | K::ArrayReverse
+                | K::ArrayFill
         ) {
             return Ok(false);
         }
@@ -161,8 +165,10 @@ fn range_with_keys(
     // lookups: even a one-element fill must not scan a huge named dictionary.
     let default_attributes = object.property_attributes.is_empty();
     (start..end).all(|index| {
-        !matches!(object.properties.get_index(index), None | Some(Value::Accessor { .. }))
-            && (default_attributes || object.own_property_attributes(&key(index)).writable)
+        !matches!(
+            object.properties.get_index(index),
+            None | Some(Value::Accessor { .. })
+        ) && (default_attributes || object.own_property_attributes(&key(index)).writable)
     })
 }
 
@@ -178,14 +184,19 @@ fn pop_can_use_storage(object: &HeapObject, length: u32) -> bool {
     let Some(last) = length.checked_sub(1) else {
         return true;
     };
-    if matches!(object.properties.get_index(last), None | Some(Value::Accessor { .. })) {
+    if matches!(
+        object.properties.get_index(last),
+        None | Some(Value::Accessor { .. })
+    ) {
         return false;
     }
     // Pop reads and deletes, but does not write this index. A non-writable
     // configurable tail is legal; a non-configurable one must throw in order.
-    !object.is_frozen && (object.property_attributes.is_empty()
-        || object.own_property_attributes(&InterpreterCore::generic_index_key(u64::from(last)))
-            .configurable)
+    !object.is_frozen
+        && (object.property_attributes.is_empty()
+            || object
+                .own_property_attributes(&InterpreterCore::generic_index_key(u64::from(last)))
+                .configurable)
 }
 
 #[cfg(test)]
@@ -195,7 +206,9 @@ mod tests {
     fn array(length: u32) -> HeapObject {
         let mut object = HeapObject::new();
         object.is_array = true;
-        object.properties.insert("length".to_string(), Value::Int(i64::from(length)));
+        object
+            .properties
+            .insert("length".to_string(), Value::Int(i64::from(length)));
         object
     }
 
@@ -538,7 +551,9 @@ mod tests {
         assert!(!append_targets_absent(&object, u32::MAX, 1));
         assert!(!append_targets_absent(&object, u32::MAX - 1, 2));
         for length in [-1, i64::from(u32::MAX) + 1] {
-            object.properties.insert("length".to_string(), Value::Int(length));
+            object
+                .properties
+                .insert("length".to_string(), Value::Int(length));
             assert_eq!(mutation_length(&object), None);
         }
     }
@@ -546,8 +561,10 @@ mod tests {
     fn reference_range(object: &HeapObject, start: u32, end: u32) -> bool {
         (start..end).all(|index| {
             let key = InterpreterCore::generic_index_key(u64::from(index));
-            !matches!(object.own_runtime_property_value(&key), None | Some(Value::Accessor { .. }))
-                && object.own_property_attributes(&key).writable
+            !matches!(
+                object.own_runtime_property_value(&key),
+                None | Some(Value::Accessor { .. })
+            ) && object.own_property_attributes(&key).writable
         })
     }
 
@@ -555,7 +572,9 @@ mod tests {
     fn default_metadata_and_overrides_have_identical_range_semantics() {
         let mut object = array(128);
         for index in 0..128 {
-            object.properties.insert(index.to_string(), Value::Int(index));
+            object
+                .properties
+                .insert(index.to_string(), Value::Int(index));
         }
         // One read-only index among arbitrarily many unrelated descriptors.
         // Range semantics and short-fill work must not depend on dictionary size.
@@ -567,7 +586,10 @@ mod tests {
             let key = RuntimePropertyKey::String(format!("named-{unrelated}").into());
             object.property_attributes.insert(key, attributes);
             for (start, end) in [(0, 64), (0, 128), (64, 65), (65, 66), (128, 128), (9, 3)] {
-                assert_eq!(plain_writable_range(&object, start, end), reference_range(&object, start, end));
+                assert_eq!(
+                    plain_writable_range(&object, start, end),
+                    reference_range(&object, start, end)
+                );
             }
         }
         object.is_frozen = true;
@@ -580,7 +602,9 @@ mod tests {
     fn ordinary_dense_guards_never_request_a_formatted_property_key() {
         let mut object = array(16_384);
         for index in 0..16_384 {
-            object.properties.insert(index.to_string(), Value::Int(index));
+            object
+                .properties
+                .insert(index.to_string(), Value::Int(index));
         }
         assert!(range_with_keys(&object, 0, 16_384, |_| {
             panic!("ordinary numeric storage needs no property-name allocation")
@@ -607,7 +631,9 @@ mod tests {
     #[test]
     fn range_guard_matches_the_previous_property_oracle_over_mixed_layouts() {
         fn next(seed: &mut u64) -> u64 {
-            *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            *seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             *seed >> 32
         }
         let mut checks = 0;
@@ -618,7 +644,9 @@ mod tests {
                 let mut object = array(length);
                 for index in 0..length {
                     if !next(&mut seed).is_multiple_of(5) {
-                        object.properties.insert(index.to_string(), Value::Int(i64::from(index)));
+                        object
+                            .properties
+                            .insert(index.to_string(), Value::Int(i64::from(index)));
                     }
                     if next(&mut seed).is_multiple_of(3) {
                         let key = InterpreterCore::generic_index_key(u64::from(index));
@@ -639,8 +667,11 @@ mod tests {
                 for _ in 0..16 {
                     let start = (next(&mut seed) % u64::from(length + 3)) as u32;
                     let end = (next(&mut seed) % u64::from(length + 3)) as u32;
-                    assert_eq!(plain_writable_range(&object, start, end), reference_range(&object, start, end),
-                        "seed {initial}, range {start}..{end}");
+                    assert_eq!(
+                        plain_writable_range(&object, start, end),
+                        reference_range(&object, start, end),
+                        "seed {initial}, range {start}..{end}"
+                    );
                     checks += 1;
                 }
             }
@@ -655,13 +686,21 @@ mod tests {
         use std::time::Instant;
         let mut object = array(16_384);
         for index in 0..16_384 {
-            object.properties.insert(index.to_string(), Value::Int(index));
+            object
+                .properties
+                .insert(index.to_string(), Value::Int(index));
         }
         // Timing includes only guard calls, not setup. Both sides execute
         // Rust; this is not an engine-versus-Node or end-to-end benchmark.
         for (name, guard) in [
-            ("property_key_oracle", reference_range as fn(&HeapObject, u32, u32) -> bool),
-            ("numeric_metadata_guard", plain_writable_range as fn(&HeapObject, u32, u32) -> bool),
+            (
+                "property_key_oracle",
+                reference_range as fn(&HeapObject, u32, u32) -> bool,
+            ),
+            (
+                "numeric_metadata_guard",
+                plain_writable_range as fn(&HeapObject, u32, u32) -> bool,
+            ),
         ] {
             let start = Instant::now();
             for _ in 0..128 {

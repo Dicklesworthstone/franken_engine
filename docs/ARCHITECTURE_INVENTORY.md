@@ -8,13 +8,13 @@ This file is an exact golden artifact. Update it only by regenerating the invent
 
 | Metric | Count |
 | --- | ---: |
-| Source module files | 622 |
-| lib.rs public module exports | 613 |
+| Source module files | 854 |
+| lib.rs public module exports | 625 |
 | Disabled lib.rs exports | 0 |
 | Gate module files | 62 |
-| Release binary targets | 67 |
+| Release binary targets | 73 |
 | Missing exported source files | 0 |
-| Unexported root module files | 4 |
+| Unexported root module files | 12 |
 
 ## Drift Checks
 
@@ -48,6 +48,10 @@ This file is an exact golden artifact. Update it only by regenerating the invent
 - `ast` — `crates/franken-engine/src/ast.rs`
 - `asupersync_contract_matrix` — `crates/franken-engine/src/asupersync_contract_matrix.rs`
 - `asupersync_leverage_adoption_gate` — `crates/franken-engine/src/asupersync_leverage_adoption_gate.rs`
+- `async_module_graph` — `crates/franken-engine/src/async_module_graph.rs`
+- `async_module_promise_bridge` — `crates/franken-engine/src/async_module_promise_bridge.rs`
+- `async_module_runtime` — `crates/franken-engine/src/async_module_runtime.rs`
+- `async_module_scheduler` — `crates/franken-engine/src/async_module_scheduler.rs`
 - `async_translation_validation` — `crates/franken-engine/src/async_translation_validation.rs`
 - `attack_grammar_synthesizer` — `crates/franken-engine/src/attack_grammar_synthesizer.rs`
 - `attack_surface_game_model` — `crates/franken-engine/src/attack_surface_game_model.rs`
@@ -57,6 +61,138 @@ This file is an exact golden artifact. Update it only by regenerating the invent
 - `authority_footprint` — `crates/franken-engine/src/authority_footprint.rs`
 - `authority_migration` — `crates/franken-engine/src/authority_migration.rs`
 - `baseline_interpreter` — `crates/franken-engine/src/baseline_interpreter.rs`
+- `baseline_interpreter::arguments` — `crates/franken-engine/src/baseline_interpreter/arguments.rs`
+- `baseline_interpreter::array_from` — `crates/franken-engine/src/baseline_interpreter/array_from.rs`
+- `baseline_interpreter::array_from::sync_protocol` — `crates/franken-engine/src/baseline_interpreter/array_from/sync_protocol.rs`
+- `baseline_interpreter::array_generic` — `crates/franken-engine/src/baseline_interpreter/array_generic.rs`
+- `baseline_interpreter::array_generic::flatten` — `crates/franken-engine/src/baseline_interpreter/array_generic/flatten.rs`
+- `baseline_interpreter::array_generic::flatten::tests` — `crates/franken-engine/src/baseline_interpreter/array_generic/flatten/tests.rs`
+- `baseline_interpreter::array_generic::iteration` — `crates/franken-engine/src/baseline_interpreter/array_generic/iteration.rs`
+- `baseline_interpreter::array_generic::iteration::array_tests` — `crates/franken-engine/src/baseline_interpreter/array_generic/iteration/array_tests.rs`
+- `baseline_interpreter::array_generic::iteration::tests` — `crates/franken-engine/src/baseline_interpreter/array_generic/iteration/tests.rs`
+- `baseline_interpreter::array_generic::iterator_tests` — `crates/franken-engine/src/baseline_interpreter/array_generic/iterator_tests.rs`
+- `baseline_interpreter::array_generic::movement` — `crates/franken-engine/src/baseline_interpreter/array_generic/movement.rs`
+- `baseline_interpreter::array_generic::movement::reverse_tests` — `crates/franken-engine/src/baseline_interpreter/array_generic/movement/reverse_tests.rs`
+- `baseline_interpreter::array_generic::movement::tests` — `crates/franken-engine/src/baseline_interpreter/array_generic/movement/tests.rs`
+- `baseline_interpreter::array_generic::mutation` — `crates/franken-engine/src/baseline_interpreter/array_generic/mutation.rs`
+- `baseline_interpreter::array_generic::sorting` — `crates/franken-engine/src/baseline_interpreter/array_generic/sorting.rs`
+- `baseline_interpreter::array_generic::sorting::adaptive` — `crates/franken-engine/src/baseline_interpreter/array_generic/sorting/adaptive.rs`
+- `baseline_interpreter::array_generic::sorting::adaptive::descending_tests` — `crates/franken-engine/src/baseline_interpreter/array_generic/sorting/adaptive/descending_tests.rs`
+- `baseline_interpreter::array_generic::sorting::adaptive::gallop` — `crates/franken-engine/src/baseline_interpreter/array_generic/sorting/adaptive/gallop.rs`
+- `baseline_interpreter::array_generic::sorting::adaptive::tests` — `crates/franken-engine/src/baseline_interpreter/array_generic/sorting/adaptive/tests.rs`
+- `baseline_interpreter::array_generic::sorting::primitive` — `crates/franken-engine/src/baseline_interpreter/array_generic/sorting/primitive.rs`
+- `baseline_interpreter::array_generic::sorting::sparse` — `crates/franken-engine/src/baseline_interpreter/array_generic/sorting/sparse.rs`
+- `baseline_interpreter::array_reduce` — `crates/franken-engine/src/baseline_interpreter/array_reduce.rs`
+- `baseline_interpreter::async_generator` — `crates/franken-engine/src/baseline_interpreter/async_generator.rs`
+- `baseline_interpreter::async_generator::delegation` — `crates/franken-engine/src/baseline_interpreter/async_generator/delegation.rs`
+- `baseline_interpreter::atomics` — `crates/franken-engine/src/baseline_interpreter/atomics.rs`
+- `baseline_interpreter::atomics::tests` — `crates/franken-engine/src/baseline_interpreter/atomics/tests.rs`
+- `baseline_interpreter::bigint_ops` — `crates/franken-engine/src/baseline_interpreter/bigint_ops.rs`
+- `baseline_interpreter::bigint_ops::number` — `crates/franken-engine/src/baseline_interpreter/bigint_ops/number.rs`
+- `baseline_interpreter::bigint_ops::width` — `crates/franken-engine/src/baseline_interpreter/bigint_ops/width.rs`
+- `baseline_interpreter::blob` — `crates/franken-engine/src/baseline_interpreter/blob.rs`
+- `baseline_interpreter::builtin_function_lengths` — `crates/franken-engine/src/baseline_interpreter/builtin_function_lengths.rs`
+- `baseline_interpreter::collation` — `crates/franken-engine/src/baseline_interpreter/collation.rs`
+- `baseline_interpreter::collector` — `crates/franken-engine/src/baseline_interpreter/collector.rs`
+- `baseline_interpreter::collector::ephemerons` — `crates/franken-engine/src/baseline_interpreter/collector/ephemerons.rs`
+- `baseline_interpreter::collector::network` — `crates/franken-engine/src/baseline_interpreter/collector/network.rs`
+- `baseline_interpreter::core_compact_and_promises` — `crates/franken-engine/src/baseline_interpreter/core_compact_and_promises.rs`
+- `baseline_interpreter::core_dispatch_and_arrays` — `crates/franken-engine/src/baseline_interpreter/core_dispatch_and_arrays.rs`
+- `baseline_interpreter::core_event_loop_and_builtins` — `crates/franken-engine/src/baseline_interpreter/core_event_loop_and_builtins.rs`
+- `baseline_interpreter::core_init_and_state` — `crates/franken-engine/src/baseline_interpreter/core_init_and_state.rs`
+- `baseline_interpreter::core_math_and_registers` — `crates/franken-engine/src/baseline_interpreter/core_math_and_registers.rs`
+- `baseline_interpreter::core_objects_and_descriptors` — `crates/franken-engine/src/baseline_interpreter/core_objects_and_descriptors.rs`
+- `baseline_interpreter::core_streams_and_ifc` — `crates/franken-engine/src/baseline_interpreter/core_streams_and_ifc.rs`
+- `baseline_interpreter::date_locale` — `crates/franken-engine/src/baseline_interpreter/date_locale.rs`
+- `baseline_interpreter::event_target` — `crates/franken-engine/src/baseline_interpreter/event_target.rs`
+- `baseline_interpreter::inspect` — `crates/franken-engine/src/baseline_interpreter/inspect.rs`
+- `baseline_interpreter::intl` — `crates/franken-engine/src/baseline_interpreter/intl.rs`
+- `baseline_interpreter::intl_segmenter` — `crates/franken-engine/src/baseline_interpreter/intl_segmenter.rs`
+- `baseline_interpreter::iterator_helpers` — `crates/franken-engine/src/baseline_interpreter/iterator_helpers.rs`
+- `baseline_interpreter::json_module` — `crates/franken-engine/src/baseline_interpreter/json_module.rs`
+- `baseline_interpreter::json_parse` — `crates/franken-engine/src/baseline_interpreter/json_parse.rs`
+- `baseline_interpreter::json_parse::document` — `crates/franken-engine/src/baseline_interpreter/json_parse/document.rs`
+- `baseline_interpreter::json_parse::raw_validation` — `crates/franken-engine/src/baseline_interpreter/json_parse/raw_validation.rs`
+- `baseline_interpreter::json_parse::raw_validation::tests` — `crates/franken-engine/src/baseline_interpreter/json_parse/raw_validation/tests.rs`
+- `baseline_interpreter::json_parse::raw_validation::utf8` — `crates/franken-engine/src/baseline_interpreter/json_parse/raw_validation/utf8.rs`
+- `baseline_interpreter::json_parse::reachable` — `crates/franken-engine/src/baseline_interpreter/json_parse/reachable.rs`
+- `baseline_interpreter::json_parse::reachable::tests` — `crates/franken-engine/src/baseline_interpreter/json_parse/reachable/tests.rs`
+- `baseline_interpreter::json_parse::records` — `crates/franken-engine/src/baseline_interpreter/json_parse/records.rs`
+- `baseline_interpreter::json_parse::tests::depth` — `crates/franken-engine/src/baseline_interpreter/json_parse/tests/depth.rs`
+- `baseline_interpreter::json_parse::tests::lexical_work` — `crates/franken-engine/src/baseline_interpreter/json_parse/tests/lexical_work.rs`
+- `baseline_interpreter::json_parse::tests::source_spans` — `crates/franken-engine/src/baseline_interpreter/json_parse/tests/source_spans.rs`
+- `baseline_interpreter::json_stringify` — `crates/franken-engine/src/baseline_interpreter/json_stringify.rs`
+- `baseline_interpreter::json_stringify::output` — `crates/franken-engine/src/baseline_interpreter/json_stringify/output.rs`
+- `baseline_interpreter::json_stringify::tests::rope_output` — `crates/franken-engine/src/baseline_interpreter/json_stringify/tests/rope_output.rs`
+- `baseline_interpreter::json_stringify::tests::unicode_batches` — `crates/franken-engine/src/baseline_interpreter/json_stringify/tests/unicode_batches.rs`
+- `baseline_interpreter::lane_router` — `crates/franken-engine/src/baseline_interpreter/lane_router.rs`
+- `baseline_interpreter::legacy_regexp` — `crates/franken-engine/src/baseline_interpreter/legacy_regexp.rs`
+- `baseline_interpreter::number_locale` — `crates/franken-engine/src/baseline_interpreter/number_locale.rs`
+- `baseline_interpreter::object_integrity` — `crates/franken-engine/src/baseline_interpreter/object_integrity.rs`
+- `baseline_interpreter::package_resolution` — `crates/franken-engine/src/baseline_interpreter/package_resolution.rs`
+- `baseline_interpreter::packed_taint` — `crates/franken-engine/src/baseline_interpreter/packed_taint.rs`
+- `baseline_interpreter::primitive_conversion` — `crates/franken-engine/src/baseline_interpreter/primitive_conversion.rs`
+- `baseline_interpreter::process_lifecycle_tests` — `crates/franken-engine/src/baseline_interpreter/process_lifecycle_tests.rs`
+- `baseline_interpreter::promise_capability` — `crates/franken-engine/src/baseline_interpreter/promise_capability.rs`
+- `baseline_interpreter::promise_capability::tests` — `crates/franken-engine/src/baseline_interpreter/promise_capability/tests.rs`
+- `baseline_interpreter::prototype_getters` — `crates/franken-engine/src/baseline_interpreter/prototype_getters.rs`
+- `baseline_interpreter::reflect_invocation` — `crates/franken-engine/src/baseline_interpreter/reflect_invocation.rs`
+- `baseline_interpreter::regexp_backtrack` — `crates/franken-engine/src/baseline_interpreter/regexp_backtrack.rs`
+- `baseline_interpreter::regexp_backtrack::execution` — `crates/franken-engine/src/baseline_interpreter/regexp_backtrack/execution.rs`
+- `baseline_interpreter::regexp_backtrack::execution::captured` — `crates/franken-engine/src/baseline_interpreter/regexp_backtrack/execution/captured.rs`
+- `baseline_interpreter::regexp_backtrack::execution::captured::body_tests` — `crates/franken-engine/src/baseline_interpreter/regexp_backtrack/execution/captured/body_tests.rs`
+- `baseline_interpreter::regexp_backtrack::execution::captured::counted_tests` — `crates/franken-engine/src/baseline_interpreter/regexp_backtrack/execution/captured/counted_tests.rs`
+- `baseline_interpreter::regexp_backtrack::execution::captured::optional_tests` — `crates/franken-engine/src/baseline_interpreter/regexp_backtrack/execution/captured/optional_tests.rs`
+- `baseline_interpreter::regexp_backtrack::execution::captured::tests` — `crates/franken-engine/src/baseline_interpreter/regexp_backtrack/execution/captured/tests.rs`
+- `baseline_interpreter::regexp_backtrack::execution::classes` — `crates/franken-engine/src/baseline_interpreter/regexp_backtrack/execution/classes.rs`
+- `baseline_interpreter::regexp_backtrack::execution::classes::tests` — `crates/franken-engine/src/baseline_interpreter/regexp_backtrack/execution/classes/tests.rs`
+- `baseline_interpreter::regexp_backtrack::execution::classes::unicode_tests` — `crates/franken-engine/src/baseline_interpreter/regexp_backtrack/execution/classes/unicode_tests.rs`
+- `baseline_interpreter::regexp_backtrack::execution::counted` — `crates/franken-engine/src/baseline_interpreter/regexp_backtrack/execution/counted.rs`
+- `baseline_interpreter::regexp_backtrack::execution::counted::lazy_tests` — `crates/franken-engine/src/baseline_interpreter/regexp_backtrack/execution/counted/lazy_tests.rs`
+- `baseline_interpreter::regexp_backtrack::execution::counted::literal_tests` — `crates/franken-engine/src/baseline_interpreter/regexp_backtrack/execution/counted/literal_tests.rs`
+- `baseline_interpreter::regexp_backtrack::execution::counted::mixed_tests` — `crates/franken-engine/src/baseline_interpreter/regexp_backtrack/execution/counted/mixed_tests.rs`
+- `baseline_interpreter::regexp_backtrack::execution::counted::optional_tests` — `crates/franken-engine/src/baseline_interpreter/regexp_backtrack/execution/counted/optional_tests.rs`
+- `baseline_interpreter::regexp_backtrack::execution::counted::tests` — `crates/franken-engine/src/baseline_interpreter/regexp_backtrack/execution/counted/tests.rs`
+- `baseline_interpreter::regexp_backtrack::execution::lazy` — `crates/franken-engine/src/baseline_interpreter/regexp_backtrack/execution/lazy.rs`
+- `baseline_interpreter::regexp_backtrack::execution::lazy::tests` — `crates/franken-engine/src/baseline_interpreter/regexp_backtrack/execution/lazy/tests.rs`
+- `baseline_interpreter::regexp_backtrack::execution::literal_repeat` — `crates/franken-engine/src/baseline_interpreter/regexp_backtrack/execution/literal_repeat.rs`
+- `baseline_interpreter::regexp_backtrack::execution::literal_repeat::tests` — `crates/franken-engine/src/baseline_interpreter/regexp_backtrack/execution/literal_repeat/tests.rs`
+- `baseline_interpreter::regexp_backtrack::execution::literals` — `crates/franken-engine/src/baseline_interpreter/regexp_backtrack/execution/literals.rs`
+- `baseline_interpreter::regexp_backtrack::execution::prefix` — `crates/franken-engine/src/baseline_interpreter/regexp_backtrack/execution/prefix.rs`
+- `baseline_interpreter::regexp_backtrack::execution::prefix::tests` — `crates/franken-engine/src/baseline_interpreter/regexp_backtrack/execution/prefix/tests.rs`
+- `baseline_interpreter::regexp_backtrack::execution::repetitions` — `crates/franken-engine/src/baseline_interpreter/regexp_backtrack/execution/repetitions.rs`
+- `baseline_interpreter::regexp_backtrack::execution::search_regressions` — `crates/franken-engine/src/baseline_interpreter/regexp_backtrack/execution/search_regressions.rs`
+- `baseline_interpreter::regexp_backtrack::execution::tests` — `crates/franken-engine/src/baseline_interpreter/regexp_backtrack/execution/tests.rs`
+- `baseline_interpreter::regexp_backtrack::input_tests` — `crates/franken-engine/src/baseline_interpreter/regexp_backtrack/input_tests.rs`
+- `baseline_interpreter::regexp_input` — `crates/franken-engine/src/baseline_interpreter/regexp_input.rs`
+- `baseline_interpreter::regexp_protocol` — `crates/franken-engine/src/baseline_interpreter/regexp_protocol.rs`
+- `baseline_interpreter::regexp_syntax` — `crates/franken-engine/src/baseline_interpreter/regexp_syntax.rs`
+- `baseline_interpreter::resizable_buffers` — `crates/franken-engine/src/baseline_interpreter/resizable_buffers.rs`
+- `baseline_interpreter::resizable_buffers::registry` — `crates/franken-engine/src/baseline_interpreter/resizable_buffers/registry.rs`
+- `baseline_interpreter::resizable_buffers::registry::tests` — `crates/franken-engine/src/baseline_interpreter/resizable_buffers/registry/tests.rs`
+- `baseline_interpreter::resizable_buffers::transfer` — `crates/franken-engine/src/baseline_interpreter/resizable_buffers/transfer.rs`
+- `baseline_interpreter::set_algebra` — `crates/franken-engine/src/baseline_interpreter/set_algebra.rs`
+- `baseline_interpreter::set_algebra::tests` — `crates/franken-engine/src/baseline_interpreter/set_algebra/tests.rs`
+- `baseline_interpreter::structured_clone` — `crates/franken-engine/src/baseline_interpreter/structured_clone.rs`
+- `baseline_interpreter::structured_clone::buffer_copy` — `crates/franken-engine/src/baseline_interpreter/structured_clone/buffer_copy.rs`
+- `baseline_interpreter::structured_clone::transfer` — `crates/franken-engine/src/baseline_interpreter/structured_clone/transfer.rs`
+- `baseline_interpreter::tests_async_runtime` — `crates/franken-engine/src/baseline_interpreter/tests_async_runtime.rs`
+- `baseline_interpreter::tests_async_runtime_part2` — `crates/franken-engine/src/baseline_interpreter/tests_async_runtime_part2.rs`
+- `baseline_interpreter::tests_builtins_and_modules` — `crates/franken-engine/src/baseline_interpreter/tests_builtins_and_modules.rs`
+- `baseline_interpreter::tests_call_apply_and_timers` — `crates/franken-engine/src/baseline_interpreter/tests_call_apply_and_timers.rs`
+- `baseline_interpreter::tests_core_suite` — `crates/franken-engine/src/baseline_interpreter/tests_core_suite.rs`
+- `baseline_interpreter::tests_core_suite_part2` — `crates/franken-engine/src/baseline_interpreter/tests_core_suite_part2.rs`
+- `baseline_interpreter::tests_regressions_and_ifc` — `crates/franken-engine/src/baseline_interpreter/tests_regressions_and_ifc.rs`
+- `baseline_interpreter::text_codec` — `crates/franken-engine/src/baseline_interpreter/text_codec.rs`
+- `baseline_interpreter::text_codec::decoder` — `crates/franken-engine/src/baseline_interpreter/text_codec/decoder.rs`
+- `baseline_interpreter::text_codec::decoder::tests` — `crates/franken-engine/src/baseline_interpreter/text_codec/decoder/tests.rs`
+- `baseline_interpreter::text_codec::encoder` — `crates/franken-engine/src/baseline_interpreter/text_codec/encoder.rs`
+- `baseline_interpreter::text_codec::japanese` — `crates/franken-engine/src/baseline_interpreter/text_codec/japanese.rs`
+- `baseline_interpreter::text_codec::japanese::iso2022` — `crates/franken-engine/src/baseline_interpreter/text_codec/japanese/iso2022.rs`
+- `baseline_interpreter::text_codec::japanese::iso2022::tests` — `crates/franken-engine/src/baseline_interpreter/text_codec/japanese/iso2022/tests.rs`
+- `baseline_interpreter::text_codec::japanese::tests` — `crates/franken-engine/src/baseline_interpreter/text_codec/japanese/tests.rs`
+- `baseline_interpreter::text_codec::prefix_tests` — `crates/franken-engine/src/baseline_interpreter/text_codec/prefix_tests.rs`
+- `baseline_interpreter::text_codec::single_byte` — `crates/franken-engine/src/baseline_interpreter/text_codec/single_byte.rs`
 - `bayesian_error_recovery` — `crates/franken-engine/src/bayesian_error_recovery.rs`
 - `bayesian_posterior` — `crates/franken-engine/src/bayesian_posterior.rs`
 - `behavioral_diff` — `crates/franken-engine/src/behavioral_diff.rs`
@@ -85,9 +221,13 @@ This file is an exact golden artifact. Update it only by regenerating the invent
 - `canonical_evidence_emitter` — `crates/franken-engine/src/canonical_evidence_emitter.rs`
 - `capability` — `crates/franken-engine/src/capability.rs`
 - `capability::trust_zone` — `crates/franken-engine/src/capability/trust_zone.rs`
+- `capability::trust_zone::compat` — `crates/franken-engine/src/capability/trust_zone/compat.rs`
+- `capability::trust_zone::persistence` — `crates/franken-engine/src/capability/trust_zone/persistence.rs`
 - `capability_lease` — `crates/franken-engine/src/capability_lease.rs`
 - `capability_pruned_dispatch` — `crates/franken-engine/src/capability_pruned_dispatch.rs`
 - `capability_token` — `crates/franken-engine/src/capability_token.rs`
+- `capability_token::compat` — `crates/franken-engine/src/capability_token/compat.rs`
+- `capability_token::versioned` — `crates/franken-engine/src/capability_token/versioned.rs`
 - `capability_witness` — `crates/franken-engine/src/capability_witness.rs`
 - `catastrophe_witness_generator` — `crates/franken-engine/src/catastrophe_witness_generator.rs`
 - `catastrophic_tail_tournament_gate` — `crates/franken-engine/src/catastrophic_tail_tournament_gate.rs`
@@ -101,6 +241,7 @@ This file is an exact golden artifact. Update it only by regenerating the invent
 - `causation_graph_schema` — `crates/franken-engine/src/causation_graph_schema.rs`
 - `certified_optimization_governance` — `crates/franken-engine/src/certified_optimization_governance.rs`
 - `certified_rewrite_optimizer` — `crates/franken-engine/src/certified_rewrite_optimizer.rs`
+- `certified_rewrite_optimizer::numeric` — `crates/franken-engine/src/certified_rewrite_optimizer/numeric.rs`
 - `change_point_detector` — `crates/franken-engine/src/change_point_detector.rs`
 - `checkpoint` — `crates/franken-engine/src/checkpoint.rs`
 - `checkpoint_frontier` — `crates/franken-engine/src/checkpoint_frontier.rs`
@@ -154,6 +295,7 @@ This file is an exact golden artifact. Update it only by regenerating the invent
 - `cross_platform_reproducibility` — `crates/franken-engine/src/cross_platform_reproducibility.rs`
 - `cross_repo_contract` — `crates/franken-engine/src/cross_repo_contract.rs`
 - `cross_workload_transfer` — `crates/franken-engine/src/cross_workload_transfer.rs`
+- `crypto_kdf_zeroized` — `crates/franken-engine/src/crypto_kdf_zeroized.rs`
 - `cut_line_automation` — `crates/franken-engine/src/cut_line_automation.rs`
 - `cx_threading` — `crates/franken-engine/src/cx_threading.rs`
 - `dark_matter_saturation_gate` — `crates/franken-engine/src/dark_matter_saturation_gate.rs`
@@ -161,6 +303,8 @@ This file is an exact golden artifact. Update it only by regenerating the invent
 - `declassification_pipeline` — `crates/franken-engine/src/declassification_pipeline.rs`
 - `delegate_cell_harness` — `crates/franken-engine/src/delegate_cell_harness.rs`
 - `delegation_chain` — `crates/franken-engine/src/delegation_chain.rs`
+- `delegation_chain::compat` — `crates/franken-engine/src/delegation_chain/compat.rs`
+- `delegation_chain::versioned` — `crates/franken-engine/src/delegation_chain/versioned.rs`
 - `demo_claim_linkage_gate` — `crates/franken-engine/src/demo_claim_linkage_gate.rs`
 - `demotion_rollback` — `crates/franken-engine/src/demotion_rollback.rs`
 - `descent_certificate_gate` — `crates/franken-engine/src/descent_certificate_gate.rs`
@@ -185,6 +329,10 @@ This file is an exact golden artifact. Update it only by regenerating the invent
 - `e9_shadow_candidate_discovery` — `crates/franken-engine/src/e9_shadow_candidate_discovery.rs`
 - `effect_set` — `crates/franken-engine/src/effect_set.rs`
 - `engine_object_id` — `crates/franken-engine/src/engine_object_id.rs`
+- `engine_object_id::compat` — `crates/franken-engine/src/engine_object_id/compat.rs`
+- `engine_object_id::display` — `crates/franken-engine/src/engine_object_id/display.rs`
+- `engine_object_id::versioned` — `crates/franken-engine/src/engine_object_id/versioned.rs`
+- `engine_object_id::wire` — `crates/franken-engine/src/engine_object_id/wire.rs`
 - `engine_product_blocker_ledger` — `crates/franken-engine/src/engine_product_blocker_ledger.rs`
 - `entropic_policy_morphing` — `crates/franken-engine/src/entropic_policy_morphing.rs`
 - `entropy_evidence_compressor` — `crates/franken-engine/src/entropy_evidence_compressor.rs`
@@ -198,8 +346,10 @@ This file is an exact golden artifact. Update it only by regenerating the invent
 - `esm_cjs_interop_parity` — `crates/franken-engine/src/esm_cjs_interop_parity.rs`
 - `esm_cjs_parity_evidence` — `crates/franken-engine/src/esm_cjs_parity_evidence.rs`
 - `esm_loader` — `crates/franken-engine/src/esm_loader.rs`
+- `esm_loader::tests` — `crates/franken-engine/src/esm_loader/tests.rs`
 - `evidence_contract` — `crates/franken-engine/src/evidence_contract.rs`
 - `evidence_emission` — `crates/franken-engine/src/evidence_emission.rs`
+- `evidence_emission::snapshot` — `crates/franken-engine/src/evidence_emission/snapshot.rs`
 - `evidence_ledger` — `crates/franken-engine/src/evidence_ledger.rs`
 - `evidence_manifest` — `crates/franken-engine/src/evidence_manifest.rs`
 - `evidence_ordering` — `crates/franken-engine/src/evidence_ordering.rs`
@@ -218,6 +368,9 @@ This file is an exact golden artifact. Update it only by regenerating the invent
 - `feature_parity_tracker` — `crates/franken-engine/src/feature_parity_tracker.rs`
 - `federated_posterior_aggregation` — `crates/franken-engine/src/federated_posterior_aggregation.rs`
 - `flamegraph_pipeline` — `crates/franken-engine/src/flamegraph_pipeline.rs`
+- `fleet_checkpoint_recovery` — `crates/franken-engine/src/fleet_checkpoint_recovery.rs`
+- `fleet_checkpoint_store` — `crates/franken-engine/src/fleet_checkpoint_store.rs`
+- `fleet_checkpoint_v2` — `crates/franken-engine/src/fleet_checkpoint_v2.rs`
 - `fleet_convergence` — `crates/franken-engine/src/fleet_convergence.rs`
 - `fleet_convergence_harness` — `crates/franken-engine/src/fleet_convergence_harness.rs`
 - `fleet_counterfactual_report` — `crates/franken-engine/src/fleet_counterfactual_report.rs`
@@ -225,6 +378,7 @@ This file is an exact golden artifact. Update it only by regenerating the invent
 - `fleet_privacy_budget` — `crates/franken-engine/src/fleet_privacy_budget.rs`
 - `fleet_simulator` — `crates/franken-engine/src/fleet_simulator.rs`
 - `fleet_trace_total_order` — `crates/franken-engine/src/fleet_trace_total_order.rs`
+- `fleet_transport` — `crates/franken-engine/src/fleet_transport.rs`
 - `flow_envelope` — `crates/franken-engine/src/flow_envelope.rs`
 - `flow_lattice` — `crates/franken-engine/src/flow_lattice.rs`
 - `forensic_causation_operator` — `crates/franken-engine/src/forensic_causation_operator.rs`
@@ -284,13 +438,17 @@ This file is an exact golden artifact. Update it only by regenerating the invent
 - `ifc_artifacts` — `crates/franken-engine/src/ifc_artifacts.rs`
 - `ifc_label_translation_validator` — `crates/franken-engine/src/ifc_label_translation_validator.rs`
 - `ifc_provenance_index` — `crates/franken-engine/src/ifc_provenance_index.rs`
+- `import_attributes` — `crates/franken-engine/src/import_attributes.rs`
 - `incentive_governance_mechanism` — `crates/franken-engine/src/incentive_governance_mechanism.rs`
 - `incident_replay_bundle` — `crates/franken-engine/src/incident_replay_bundle.rs`
 - `interleaving_explorer` — `crates/franken-engine/src/interleaving_explorer.rs`
 - `intl_surface_contract` — `crates/franken-engine/src/intl_surface_contract.rs`
+- `intrinsics_array_table` — `crates/franken-engine/src/intrinsics_array_table.rs`
 - `intrinsics_codegen` — `crates/franken-engine/src/intrinsics_codegen.rs`
 - `intrinsics_table` — `crates/franken-engine/src/intrinsics_table.rs`
 - `ir_contract` — `crates/franken-engine/src/ir_contract.rs`
+- `ir_contract::canonical` — `crates/franken-engine/src/ir_contract/canonical.rs`
+- `ir_contract::canonical::tests` — `crates/franken-engine/src/ir_contract/canonical/tests.rs`
 - `iterator_protocol` — `crates/franken-engine/src/iterator_protocol.rs`
 - `iterator_protocol_translation_validator` — `crates/franken-engine/src/iterator_protocol_translation_validator.rs`
 - `js_runtime_lane` — `crates/franken-engine/src/js_runtime_lane.rs`
@@ -301,6 +459,9 @@ This file is an exact golden artifact. Update it only by regenerating the invent
 - `kernel_synthesis_contract` — `crates/franken-engine/src/kernel_synthesis_contract.rs`
 - `kernelized_shift_guard` — `crates/franken-engine/src/kernelized_shift_guard.rs`
 - `key_attestation` — `crates/franken-engine/src/key_attestation.rs`
+- `key_attestation::compat` — `crates/franken-engine/src/key_attestation/compat.rs`
+- `key_attestation::strict_store` — `crates/franken-engine/src/key_attestation/strict_store.rs`
+- `key_attestation::versioned` — `crates/franken-engine/src/key_attestation/versioned.rs`
 - `key_derivation` — `crates/franken-engine/src/key_derivation.rs`
 - `kl_rate_limited_adversary` — `crates/franken-engine/src/kl_rate_limited_adversary.rs`
 - `lab_runtime` — `crates/franken-engine/src/lab_runtime.rs`
@@ -317,6 +478,23 @@ This file is an exact golden artifact. Update it only by regenerating the invent
 - `lowering_gap_inventory` — `crates/franken-engine/src/lowering_gap_inventory.rs`
 - `lowering_parity_evidence` — `crates/franken-engine/src/lowering_parity_evidence.rs`
 - `lowering_pipeline` — `crates/franken-engine/src/lowering_pipeline.rs`
+- `lowering_pipeline::diagnostics_channel_module_tests` — `crates/franken-engine/src/lowering_pipeline/diagnostics_channel_module_tests.rs`
+- `lowering_pipeline::esm_core_imports` — `crates/franken-engine/src/lowering_pipeline/esm_core_imports.rs`
+- `lowering_pipeline::flow_and_builtins` — `crates/franken-engine/src/lowering_pipeline/flow_and_builtins.rs`
+- `lowering_pipeline::fs_module` — `crates/franken-engine/src/lowering_pipeline/fs_module.rs`
+- `lowering_pipeline::inline_tests` — `crates/franken-engine/src/lowering_pipeline/inline_tests.rs`
+- `lowering_pipeline::native_module_authority` — `crates/franken-engine/src/lowering_pipeline/native_module_authority.rs`
+- `lowering_pipeline::native_module_loader` — `crates/franken-engine/src/lowering_pipeline/native_module_loader.rs`
+- `lowering_pipeline::native_module_source` — `crates/franken-engine/src/lowering_pipeline/native_module_source.rs`
+- `lowering_pipeline::path_module` — `crates/franken-engine/src/lowering_pipeline/path_module.rs`
+- `lowering_pipeline::readline_cursor` — `crates/franken-engine/src/lowering_pipeline/readline_cursor.rs`
+- `lowering_pipeline::readline_module_tests` — `crates/franken-engine/src/lowering_pipeline/readline_module_tests.rs`
+- `lowering_pipeline::stream_operators` — `crates/franken-engine/src/lowering_pipeline/stream_operators.rs`
+- `lowering_pipeline::stream_web_bridge` — `crates/franken-engine/src/lowering_pipeline/stream_web_bridge.rs`
+- `lowering_pipeline::util_mime` — `crates/franken-engine/src/lowering_pipeline/util_mime.rs`
+- `lowering_pipeline::util_module` — `crates/franken-engine/src/lowering_pipeline/util_module.rs`
+- `lowering_pipeline::with_statement` — `crates/franken-engine/src/lowering_pipeline/with_statement.rs`
+- `lowering_pipeline::zlib_module` — `crates/franken-engine/src/lowering_pipeline/zlib_module.rs`
 - `macos_arm64_worker` — `crates/franken-engine/src/macos_arm64_worker.rs`
 - `marker_stream` — `crates/franken-engine/src/marker_stream.rs`
 - `martingale_decision_ledger` — `crates/franken-engine/src/martingale_decision_ledger.rs`
@@ -335,6 +513,8 @@ This file is an exact golden artifact. Update it only by regenerating the invent
 - `mock_seam_guardrail` — `crates/franken-engine/src/mock_seam_guardrail.rs`
 - `module_async_evaluation` — `crates/franken-engine/src/module_async_evaluation.rs`
 - `module_cache` — `crates/franken-engine/src/module_cache.rs`
+- `module_cache::policies` — `crates/franken-engine/src/module_cache/policies.rs`
+- `module_cache::tests` — `crates/franken-engine/src/module_cache/tests.rs`
 - `module_compatibility_matrix` — `crates/franken-engine/src/module_compatibility_matrix.rs`
 - `module_index_parity_gate` — `crates/franken-engine/src/module_index_parity_gate.rs`
 - `module_live_binding` — `crates/franken-engine/src/module_live_binding.rs`
@@ -387,6 +567,7 @@ This file is an exact golden artifact. Update it only by regenerating the invent
 - `parser_evidence_indexer` — `crates/franken-engine/src/parser_evidence_indexer.rs`
 - `parser_frontier_evidence` — `crates/franken-engine/src/parser_frontier_evidence.rs`
 - `parser_gap_inventory` — `crates/franken-engine/src/parser_gap_inventory.rs`
+- `parser_inline_tests` — `crates/franken-engine/src/parser_inline_tests.rs`
 - `parser_multi_engine_harness` — `crates/franken-engine/src/parser_multi_engine_harness.rs`
 - `parser_oracle` — `crates/franken-engine/src/parser_oracle.rs`
 - `performance_regression_gate` — `crates/franken-engine/src/performance_regression_gate.rs`
@@ -401,7 +582,10 @@ This file is an exact golden artifact. Update it only by regenerating the invent
 - `policy_as_data_security` — `crates/franken-engine/src/policy_as_data_security.rs`
 - `policy_backtest` — `crates/franken-engine/src/policy_backtest.rs`
 - `policy_checkpoint` — `crates/franken-engine/src/policy_checkpoint.rs`
+- `policy_checkpoint::compat` — `crates/franken-engine/src/policy_checkpoint/compat.rs`
+- `policy_checkpoint::versioned` — `crates/franken-engine/src/policy_checkpoint/versioned.rs`
 - `policy_controller` — `crates/franken-engine/src/policy_controller.rs`
+- `policy_controller::decision_input` — `crates/franken-engine/src/policy_controller/decision_input.rs`
 - `policy_controller::operator_safety_copilot` — `crates/franken-engine/src/policy_controller/operator_safety_copilot.rs`
 - `policy_controller::service_endpoint_template` — `crates/franken-engine/src/policy_controller/service_endpoint_template.rs`
 - `policy_theorem_compiler` — `crates/franken-engine/src/policy_theorem_compiler.rs`
@@ -412,11 +596,21 @@ This file is an exact golden artifact. Update it only by regenerating the invent
 - `pre_signed_demotion_fallback` — `crates/franken-engine/src/pre_signed_demotion_fallback.rs`
 - `primitive_adoption_schema` — `crates/franken-engine/src/primitive_adoption_schema.rs`
 - `principal_key_roles` — `crates/franken-engine/src/principal_key_roles.rs`
+- `principal_key_roles::compat` — `crates/franken-engine/src/principal_key_roles/compat.rs`
+- `principal_key_roles::versioned` — `crates/franken-engine/src/principal_key_roles/versioned.rs`
 - `privacy_learning_contract` — `crates/franken-engine/src/privacy_learning_contract.rs`
 - `production_feature_catalog_gate` — `crates/franken-engine/src/production_feature_catalog_gate.rs`
 - `production_hardening_exit_gate` — `crates/franken-engine/src/production_hardening_exit_gate.rs`
 - `profiling` — `crates/franken-engine/src/profiling.rs`
+- `profiling::opcode` — `crates/franken-engine/src/profiling/opcode.rs`
+- `profiling::regressions` — `crates/franken-engine/src/profiling/regressions.rs`
+- `profiling::sampling_regressions` — `crates/franken-engine/src/profiling/sampling_regressions.rs`
 - `promise_model` — `crates/franken-engine/src/promise_model.rs`
+- `promise_model_combinator_regressions` — `crates/franken-engine/src/promise_model_combinator_regressions.rs`
+- `promise_model_fatal_adoption_regressions` — `crates/franken-engine/src/promise_model_fatal_adoption_regressions.rs`
+- `promise_model_ifc_regressions` — `crates/franken-engine/src/promise_model_ifc_regressions.rs`
+- `promise_model_replay_regressions` — `crates/franken-engine/src/promise_model_replay_regressions.rs`
+- `promise_model_restore` — `crates/franken-engine/src/promise_model_restore.rs`
 - `promotion_gate_runner` — `crates/franken-engine/src/promotion_gate_runner.rs`
 - `proof_artifact` — `crates/franken-engine/src/proof_artifact.rs`
 - `proof_backed_compression` — `crates/franken-engine/src/proof_backed_compression.rs`
@@ -431,12 +625,15 @@ This file is an exact golden artifact. Update it only by regenerating the invent
 - `proof_specialization_receipt` — `crates/franken-engine/src/proof_specialization_receipt.rs`
 - `proof_spine_claim_gate` — `crates/franken-engine/src/proof_spine_claim_gate.rs`
 - `quarantine_deescalation` — `crates/franken-engine/src/quarantine_deescalation.rs`
+- `quarantine_deescalation::compat` — `crates/franken-engine/src/quarantine_deescalation/compat.rs`
+- `quarantine_deescalation::versioned` — `crates/franken-engine/src/quarantine_deescalation/versioned.rs`
 - `quarantine_mesh_gate` — `crates/franken-engine/src/quarantine_mesh_gate.rs`
 - `quarantine_propagation` — `crates/franken-engine/src/quarantine_propagation.rs`
 - `queueing_admission_control` — `crates/franken-engine/src/queueing_admission_control.rs`
 - `quickening_feedback_lattice` — `crates/franken-engine/src/quickening_feedback_lattice.rs`
 - `rch_validation_telemetry` — `crates/franken-engine/src/rch_validation_telemetry.rs`
 - `rch_worker_registry` — `crates/franken-engine/src/rch_worker_registry.rs`
+- `react_client_build` — `crates/franken-engine/src/react_client_build.rs`
 - `react_compilation_pipeline` — `crates/franken-engine/src/react_compilation_pipeline.rs`
 - `react_compile_operator_surface` — `crates/franken-engine/src/react_compile_operator_surface.rs`
 - `react_compile_run_parity` — `crates/franken-engine/src/react_compile_run_parity.rs`
@@ -482,6 +679,8 @@ This file is an exact golden artifact. Update it only by regenerating the invent
 - `resource_certificate_governance_gate` — `crates/franken-engine/src/resource_certificate_governance_gate.rs`
 - `resource_escalation_control` — `crates/franken-engine/src/resource_escalation_control.rs`
 - `revocation_chain` — `crates/franken-engine/src/revocation_chain.rs`
+- `revocation_chain::compat` — `crates/franken-engine/src/revocation_chain/compat.rs`
+- `revocation_chain::versioned` — `crates/franken-engine/src/revocation_chain/versioned.rs`
 - `revocation_enforcement` — `crates/franken-engine/src/revocation_enforcement.rs`
 - `revocation_freshness` — `crates/franken-engine/src/revocation_freshness.rs`
 - `rgc_cross_arch_reproducibility` — `crates/franken-engine/src/rgc_cross_arch_reproducibility.rs`
@@ -605,6 +804,7 @@ This file is an exact golden artifact. Update it only by regenerating the invent
 - `tier_up_profiler` — `crates/franken-engine/src/tier_up_profiler.rs`
 - `time_travel_debugger` — `crates/franken-engine/src/time_travel_debugger.rs`
 - `timescale_separation_certificate` — `crates/franken-engine/src/timescale_separation_certificate.rs`
+- `tls_x509_metadata` — `crates/franken-engine/src/tls_x509_metadata.rs`
 - `trace_fusion` — `crates/franken-engine/src/trace_fusion.rs`
 - `trace_fusion_superinstruction` — `crates/franken-engine/src/trace_fusion_superinstruction.rs`
 - `trace_independence` — `crates/franken-engine/src/trace_independence.rs`
@@ -618,8 +818,13 @@ This file is an exact golden artifact. Update it only by regenerating the invent
 - `trust_card` — `crates/franken-engine/src/trust_card.rs`
 - `trust_economics` — `crates/franken-engine/src/trust_economics.rs`
 - `trust_zone` — `crates/franken-engine/src/trust_zone.rs`
+- `trust_zone::compat` — `crates/franken-engine/src/trust_zone/compat.rs`
+- `trust_zone::persistence` — `crates/franken-engine/src/trust_zone/persistence.rs`
 - `ts_module_resolution` — `crates/franken-engine/src/ts_module_resolution.rs`
 - `ts_normalization` — `crates/franken-engine/src/ts_normalization.rs`
+- `ts_normalization::type_erasure` — `crates/franken-engine/src/ts_normalization/type_erasure.rs`
+- `ts_normalization::type_erasure::classes` — `crates/franken-engine/src/ts_normalization/type_erasure/classes.rs`
+- `ts_normalization::type_erasure::expressions` — `crates/franken-engine/src/ts_normalization/type_erasure/expressions.rs`
 - `ts_normalization_evidence` — `crates/franken-engine/src/ts_normalization_evidence.rs`
 - `ts_resolution_manifest` — `crates/franken-engine/src/ts_resolution_manifest.rs`
 - `ts_shipped_path_evidence` — `crates/franken-engine/src/ts_shipped_path_evidence.rs`
@@ -634,7 +839,34 @@ This file is an exact golden artifact. Update it only by regenerating the invent
 - `verification_coverage_contract` — `crates/franken-engine/src/verification_coverage_contract.rs`
 - `version_matrix_lane` — `crates/franken-engine/src/version_matrix_lane.rs`
 - `versioned_rewrite_pack` — `crates/franken-engine/src/versioned_rewrite_pack.rs`
+- `wasm_numeric_vm` — `crates/franken-engine/src/wasm_numeric_vm.rs`
+- `wasm_numeric_vm::activation` — `crates/franken-engine/src/wasm_numeric_vm/activation.rs`
+- `wasm_numeric_vm::control` — `crates/franken-engine/src/wasm_numeric_vm/control.rs`
+- `wasm_numeric_vm::state` — `crates/franken-engine/src/wasm_numeric_vm/state.rs`
+- `wasm_numeric_vm::state::cooperative` — `crates/franken-engine/src/wasm_numeric_vm/state/cooperative.rs`
+- `wasm_numeric_vm::state::data_tests` — `crates/franken-engine/src/wasm_numeric_vm/state/data_tests.rs`
+- `wasm_numeric_vm::state::extended` — `crates/franken-engine/src/wasm_numeric_vm/state/extended.rs`
+- `wasm_numeric_vm::state::extended::tests` — `crates/franken-engine/src/wasm_numeric_vm/state/extended/tests.rs`
+- `wasm_numeric_vm::state::host` — `crates/franken-engine/src/wasm_numeric_vm/state/host.rs`
+- `wasm_numeric_vm::state::prepaid` — `crates/franken-engine/src/wasm_numeric_vm/state/prepaid.rs`
+- `wasm_numeric_vm::tables` — `crates/franken-engine/src/wasm_numeric_vm/tables.rs`
+- `wasm_numeric_vm::tables::tests` — `crates/franken-engine/src/wasm_numeric_vm/tables/tests.rs`
 - `wasm_runtime_lane` — `crates/franken-engine/src/wasm_runtime_lane.rs`
+- `wasm_runtime_lane::command` — `crates/franken-engine/src/wasm_runtime_lane/command.rs`
+- `wasm_runtime_lane::host_replay` — `crates/franken-engine/src/wasm_runtime_lane/host_replay.rs`
+- `wasm_runtime_lane::imports` — `crates/franken-engine/src/wasm_runtime_lane/imports.rs`
+- `wasm_runtime_lane::imports::startup` — `crates/franken-engine/src/wasm_runtime_lane/imports/startup.rs`
+- `wasm_runtime_lane::lane` — `crates/franken-engine/src/wasm_runtime_lane/lane.rs`
+- `wasm_runtime_lane::memory_pool` — `crates/franken-engine/src/wasm_runtime_lane/memory_pool.rs`
+- `wasm_runtime_lane::scheduler` — `crates/franken-engine/src/wasm_runtime_lane/scheduler.rs`
+- `wasm_runtime_lane::wasi_preview1` — `crates/franken-engine/src/wasm_runtime_lane/wasi_preview1.rs`
+- `wasm_runtime_lane::wasi_preview1::clocks` — `crates/franken-engine/src/wasm_runtime_lane/wasi_preview1/clocks.rs`
+- `wasm_runtime_lane::wasi_preview1::command` — `crates/franken-engine/src/wasm_runtime_lane/wasi_preview1/command.rs`
+- `wasm_runtime_lane::wasi_preview1::sources` — `crates/franken-engine/src/wasm_runtime_lane/wasi_preview1/sources.rs`
+- `wasm_runtime_lane::wasi_preview1::stdio` — `crates/franken-engine/src/wasm_runtime_lane/wasi_preview1/stdio.rs`
+- `wasm_runtime_lane::wasi_preview1::stdio::descriptors` — `crates/franken-engine/src/wasm_runtime_lane/wasi_preview1/stdio/descriptors.rs`
+- `wasm_runtime_lane::wasi_preview1::stdio::files` — `crates/franken-engine/src/wasm_runtime_lane/wasi_preview1/stdio/files.rs`
+- `wasm_runtime_lane::work_pool` — `crates/franken-engine/src/wasm_runtime_lane/work_pool.rs`
 - `wave_handoff_contract` — `crates/franken-engine/src/wave_handoff_contract.rs`
 - `windows_x64_worker` — `crates/franken-engine/src/windows_x64_worker.rs`
 - `worker_env_capture` — `crates/franken-engine/src/worker_env_capture.rs`
@@ -649,619 +881,631 @@ This file is an exact golden artifact. Update it only by regenerating the invent
 
 ## lib.rs Public Module Exports
 
-- `aara_resource_certificate` — line 14
-- `aara_resource_consumer` — line 15
-- `acquisition_experiment_oracle` — line 26
-- `activation_lifecycle` — line 27
-- `adversarial_campaign` — line 28
-- `adversarial_coevolution_harness` — line 29
-- `adversarial_supremacy_synthesis` — line 30
-- `adversarial_workload_synthesis` — line 31
-- `agent_sandbox` — line 32
-- `algebraic_effects` — line 33
-- `algebraic_effects_composition_proofs` — line 34
-- `alloc_domain` — line 35
-- `allocation_elision_gate` — line 36
-- `ambient_authority` — line 37
-- `anti_entropy` — line 38
-- `aot_entrygraph_compiler` — line 39
-- `architecture_inventory` — line 40
-- `array_fast_lane` — line 41
-- `artifact_compression_pipeline` — line 42
-- `assumptions_ledger` — line 43
-- `ast` — line 44
-- `asupersync_contract_matrix` — line 45
-- `asupersync_leverage_adoption_gate` — line 46
-- `async_translation_validation` — line 47
-- `attack_grammar_synthesizer` — line 48
-- `attack_surface_game_model` — line 49
-- `attestation_handshake` — line 50
-- `attested_execution_cell` — line 51
-- `audit_closure_matrix` — line 52
-- `authority_footprint` — line 53
-- `baseline_interpreter` — line 54
-- `bayesian_error_recovery` — line 55
-- `bayesian_posterior` — line 56
-- `behavioral_diff` — line 57
-- `benchmark_behavior_equivalence` — line 58
-- `benchmark_coverage_saturation` — line 59
-- `benchmark_coverage_saturation_gate` — line 60
-- `benchmark_denominator` — line 61
-- `benchmark_e2e` — line 62
-- `benchmark_evidence_bundle` — line 63
-- `benchmark_freshness_gate` — line 64
-- `benchmark_publication` — line 65
-- `bifurcation_boundary_scanner` — line 66
-- `bounded_feedback_controller` — line 67
-- `bounded_regret_safety_case` — line 68
-- `budget_propagation_contract` — line 69
-- `budgeted_optimization` — line 70
-- `budgeted_synthesis_engine` — line 71
-- `bulkhead` — line 72
-- `bytecode_vm` — line 73
-- `cache_oblivious_metadata_substrate` — line 74
-- `calibration_sentinel` — line 75
-- `callback_stdlib_dispatch` — line 76
-- `cancel_mask` — line 77
-- `cancellation_lifecycle` — line 78
-- `canonical_encoding` — line 79
-- `canonical_evidence_emitter` — line 80
-- `capability` — line 81
-- `capability_lease` — line 82
-- `capability_pruned_dispatch` — line 83
-- `capability_token` — line 84
-- `capability_witness` — line 85
-- `catastrophe_witness_generator` — line 86
-- `catastrophic_tail_tournament_gate` — line 87
-- `category_shift_report` — line 88
-- `causal_intervention_dag` — line 89
-- `causal_intervention_planner` — line 90
-- `causal_regret_evidence_gate` — line 91
-- `causal_replay` — line 92
-- `causal_uplift_evidence_gate` — line 93
-- `causation_graph` — line 94
-- `causation_graph_schema` — line 95
-- `certified_optimization_governance` — line 96
-- `certified_rewrite_optimizer` — line 97
-- `change_point_detector` — line 98
-- `checkpoint` — line 99
-- `checkpoint_frontier` — line 100
-- `claim_atom_lattice` — line 101
-- `claim_entitlement` — line 102
-- `claim_envelope_contract` — line 103
-- `claim_evidence_lattice` — line 104
-- `claim_evidence_ledger` — line 105
-- `claim_integrity_flow` — line 106
-- `claim_publication_gate` — line 107
-- `cliff_margin_certificate` — line 108
-- `closure_model` — line 109
-- `cold_start_aot_governance` — line 110
-- `cold_start_compilation_lane` — line 111
-- `compatibility_advisory` — line 112
-- `compiler_policy` — line 113
-- `component_shape_catalog` — line 114
-- `composable_gate_framework` — line 115
-- `compounding_red_team_campaign` — line 116
-- `compression_residual_gate` — line 117
-- `compromise_rate_disruptive_floor_metric_gate` — line 118
-- `conformal_calibration` — line 119
-- `conformal_split_independence` — line 120
-- `conformance_catalog` — line 121
-- `conformance_harness` — line 122
-- `conformance_vector_gen` — line 123
-- `constrained_ambient_benchmark_lane` — line 124
-- `containment_executor` — line 125
-- `containment_latency_metric_gate` — line 126
-- `contextual_policy_selector` — line 127
-- `control_plane` — line 128
-- `control_plane_benchmark_split_gate` — line 129
-- `control_plane_mock_inventory` — line 130
-- `control_plane_policy_diagnostics` — line 131
-- `controller_composition_matrix` — line 132
-- `controller_composition_stability_gate` — line 133
-- `controller_interference_guard` — line 134
-- `convergence_slo` — line 135
-- `corpus_promotion` — line 136
-- `counterexample_synthesizer` — line 137
-- `counterfactual_evaluator` — line 138
-- `counterfactual_generation_guard` — line 139
-- `counterfactual_intervention_planner` — line 140
-- `counterfactual_replay_engine` — line 141
-- `coverage_frontier` — line 142
-- `coverage_frontier_filing` — line 143
-- `coverage_frontier_rank` — line 144
-- `coverage_frontier_xref` — line 145
-- `coverage_summary` — line 146
-- `cross_arch_reproducibility` — line 147
-- `cross_platform_reproducibility` — line 148
-- `cross_repo_contract` — line 149
-- `cross_workload_transfer` — line 150
-- `cut_line_automation` — line 151
-- `cx_threading` — line 152
-- `dark_matter_saturation_gate` — line 153
-- `data_contract` — line 154
-- `declassification_pipeline` — line 155
-- `delegate_cell_harness` — line 156
-- `delegation_chain` — line 157
-- `demo_claim_linkage_gate` — line 158
-- `demotion_rollback` — line 159
-- `descent_certificate_gate` — line 160
-- `detection_delay_bound_proof` — line 161
-- `deterministic_probabilistic_telemetry` — line 162
-- `deterministic_replay` — line 163
-- `deterministic_serde` — line 164
-- `deterministic_sim_scheduler` — line 165
-- `differential_oracle` — line 166
-- `differential_oracle_perf` — line 167
-- `differential_privacy_posterior` — line 168
-- `disruption_scorecard` — line 169
-- `disruptive_floor_metric_gate` — line 170
-- `distribution_shift_monitor` — line 171
-- `docs_accuracy_gate` — line 172
-- `dp_budget_accountant` — line 173
-- `dual_backend_parser` — line 174
-- `e2e_harness` — line 175
-- `e8_analyzed_subset` — line 176
-- `e9_equivalence_receipts` — line 177
-- `e9_first_activation` — line 178
-- `e9_shadow_candidate_discovery` — line 179
-- `effect_set` — line 180
-- `engine_object_id` — line 181
-- `engine_product_blocker_ledger` — line 182
-- `entropic_policy_morphing` — line 183
-- `entropy_evidence_compressor` — line 184
-- `epoch_barrier` — line 185
-- `epoch_invalidation` — line 186
-- `eprocess_guardrail` — line 187
-- `erasure_bandwidth_accounting` — line 188
-- `erasure_reconstruction_receipts` — line 189
-- `error_code` — line 190
-- `escape_analysis_certificate` — line 191
-- `esm_cjs_interop_parity` — line 192
-- `esm_cjs_parity_evidence` — line 193
-- `esm_loader` — line 194
-- `evidence_contract` — line 195
-- `evidence_emission` — line 196
-- `evidence_ledger` — line 197
-- `evidence_manifest` — line 198
-- `evidence_ordering` — line 199
-- `evidence_replay_checker` — line 200
-- `exception_translation_validator` — line 201
-- `execution_cell` — line 202
-- `execution_orchestrator` — line 203
-- `execution_truth_ledger` — line 204
-- `expected_info_value_scoring` — line 205
-- `expected_loss_selector` — line 206
-- `extension_host_authority_guard` — line 207
-- `extension_host_lifecycle` — line 208
-- `extension_host_topology_assessment` — line 209
-- `extension_lifecycle_manager` — line 210
-- `extension_registry` — line 211
-- `feature_parity_tracker` — line 212
-- `federated_posterior_aggregation` — line 213
-- `flamegraph_pipeline` — line 214
-- `fleet_convergence` — line 215
-- `fleet_convergence_harness` — line 216
-- `fleet_counterfactual_report` — line 217
-- `fleet_immune_protocol` — line 218
-- `fleet_privacy_budget` — line 219
-- `fleet_simulator` — line 220
-- `fleet_trace_total_order` — line 221
-- `flow_envelope` — line 222
-- `flow_lattice` — line 223
-- `forensic_causation_operator` — line 224
-- `forensic_query_api` — line 225
-- `forensic_replayer` — line 226
-- `fork_detection` — line 227
-- `frankenlab_bridge_contract` — line 228
-- `frankenlab_extension_lifecycle` — line 229
-- `frankenlab_gap_matrix` — line 230
-- `frankenlab_harness_migration` — line 231
-- `frankenlab_release_gate` — line 232
-- `frankenlab_release_gate_promotion` — line 233
-- `frankenlab_surface_gap_matrix` — line 234
-- `frankentui_adapter` — line 235
-- `frir_schema` — line 236
-- `frontier_complex_cartography` — line 237
-- `frontier_demo_gate` — line 238
-- `frontier_hole_governance` — line 239
-- `frx_lockstep_oracle` — line 240
-- `full_ir_translation_validator` — line 241
-- `ga_exit_evidence_package` — line 242
-- `galaxy_brain_explainability` — line 243
-- `gc` — line 244
-- `gc_pause` — line 245
-- `generator_translation_validator` — line 246
-- `global_coherence_checker` — line 247
-- `golden_vectors` — line 248
-- `governance_context` — line 249
-- `governance_hooks` — line 250
-- `governance_mechanism` — line 251
-- `governance_scorecard` — line 252
-- `guardplane_adapter` — line 253
-- `guardplane_calibration` — line 254
-- `guardplane_integration` — line 255
-- `hardware_board_claim_gate` — line 256
-- `hardware_code_layout_gate` — line 257
-- `hardware_code_layout_governance` — line 258
-- `hardware_localization_residual` — line 259
-- `hardware_parameter_manifold` — line 260
-- `hash_tiers` — line 261
-- `hierarchical_delta_debug` — line 262
-- `hindsight_boundary_capture` — line 263
-- `hindsight_escalation_bundle` — line 264
-- `hindsight_trace_escalator` — line 265
-- `hole_witness_generator` — line 266
-- `hook_effect_contract` — line 267
-- `hostcall_batch_transport` — line 268
-- `hostcall_capability_translation_validator` — line 269
-- `hostcall_conformance_governance` — line 270
-- `hostcall_effects_migration` — line 271
-- `hostcall_session_governance_gate` — line 272
-- `hostcall_session_protocol` — line 273
-- `hostcall_telemetry` — line 274
-- `hot_path_telemetry_kernel` — line 275
-- `hybrid_lane_router` — line 276
-- `idempotency_key` — line 277
-- `ifc_artifacts` — line 278
-- `ifc_label_translation_validator` — line 279
-- `ifc_provenance_index` — line 280
-- `incentive_governance_mechanism` — line 281
-- `incident_replay_bundle` — line 282
-- `interleaving_explorer` — line 283
-- `intl_surface_contract` — line 284
-- `intrinsics_codegen` — line 285
-- `intrinsics_table` — line 286
-- `ir_contract` — line 287
-- `iterator_protocol` — line 288
-- `iterator_protocol_translation_validator` — line 289
-- `js_runtime_lane` — line 290
-- `js_string` — line 291
-- `json_capabilities` — line 292
-- `jsx_tsx_parser` — line 293
-- `kernel_shift_monitor` — line 294
-- `kernel_synthesis_contract` — line 295
-- `kernelized_shift_guard` — line 296
-- `key_attestation` — line 297
-- `key_derivation` — line 298
-- `kl_rate_limited_adversary` — line 299
-- `lab_runtime` — line 300
-- `lamport_evidence_annotation` — line 301
-- `lamport_total_order_merger` — line 302
-- `law_mining` — line 303
-- `law_promotion_lifecycle` — line 304
-- `law_promotion_pack` — line 305
-- `law_proof_refutation` — line 306
-- `lean_proof_producer` — line 307
-- `lease_tracker` — line 308
-- `live_revocation_first_gate_example` — line 309
-- `lowering_arena` — line 310
-- `lowering_gap_inventory` — line 311
-- `lowering_parity_evidence` — line 312
-- `lowering_pipeline` — line 313
-- `macos_arm64_worker` — line 314
-- `marker_stream` — line 315
-- `martingale_decision_ledger` — line 316
-- `metadata_locality_governance_gate` — line 317
-- `metadata_substrate_governance` — line 318
-- `metadata_substrate_inventory` — line 319
-- `metadata_substrate_optimized` — line 320
-- `migration_compatibility` — line 321
-- `migration_contract` — line 322
-- `migration_kit` — line 323
-- `milestone_release_test_evidence_integrator` — line 324
-- `minimal_causal_set_inference` — line 325
-- `minimal_causal_set_minimality_gate` — line 326
-- `minimized_repro_extraction` — line 327
-- `mmr_proof` — line 328
-- `mock_seam_guardrail` — line 329
-- `module_async_evaluation` — line 330
-- `module_cache` — line 331
-- `module_compatibility_matrix` — line 332
-- `module_index_parity_gate` — line 333
-- `module_live_binding` — line 334
-- `module_resolver` — line 335
-- `monitor_scheduler` — line 336
-- `moonshot_contract` — line 337
-- `moonshot_disruption_track` — line 338
-- `moonshot_weekly_report` — line 339
-- `native_addon_cohort_gate` — line 340
-- `native_addon_membrane` — line 341
-- `native_addon_parity_gate` — line 342
-- `native_capsule_fixed_probe` — line 344
-- `nitrosketch_telemetry` — line 345
-- `non_use_certificate` — line 346
-- `northstar_scorecard` — line 347
-- `novelty_scoring_contract` — line 348
-- `novelty_synthesis_engine` — line 349
-- `npm_compatibility_matrix` — line 350
-- `object_model` — line 351
-- `obligation_channel` — line 352
-- `obligation_integration` — line 353
-- `obligation_leak_policy` — line 354
-- `observability_channel_model` — line 355
-- `observability_probe_design` — line 356
-- `observability_publication_bundle` — line 357
-- `observability_quality_sentinel` — line 358
-- `obstruction_certificate` — line 359
-- `obstruction_witness_emitter` — line 360
-- `offline_synthesis_pipeline` — line 361
-- `one_lever_policy` — line 362
-- `operator_diagnostic_contract` — line 363
-- `opportunity_matrix` — line 364
-- `optimal_stopping` — line 365
-- `optimization_baseline` — line 366
-- `optimization_proof_carriers` — line 367
-- `optimized_metadata_substrate` — line 368
-- `oracle_release_gate` — line 369
-- `orchestration_context_contract` — line 370
-- `outcome_capability_narrowing` — line 371
-- `pac_bayes_bound` — line 372
-- `package_intake` — line 373
-- `parallel_interference_gate` — line 374
-- `parallel_parser` — line 375
-- `parser` — line 376
-- `parser_api_stability` — line 377
-- `parser_arena` — line 378
-- `parser_error_recovery` — line 379
-- `parser_event_ast_equivalence` — line 380
-- `parser_evidence_indexer` — line 381
-- `parser_frontier_evidence` — line 382
-- `parser_gap_inventory` — line 383
-- `parser_multi_engine_harness` — line 384
-- `parser_oracle` — line 385
-- `performance_regression_gate` — line 386
-- `performance_statistical_validation` — line 387
-- `persistence_homology` — line 388
-- `persistent_cache_contract` — line 389
-- `phase_gate` — line 390
-- `plas_benchmark_bundle` — line 391
-- `plas_burn_in_gate` — line 392
-- `plas_lockstep` — line 393
-- `plas_release_gate` — line 394
-- `policy_as_data_security` — line 395
-- `policy_backtest` — line 396
-- `policy_checkpoint` — line 397
-- `policy_controller` — line 398
-- `policy_theorem_compiler` — line 399
-- `policy_theorem_engine` — line 400
-- `polymorphic_inline_cache` — line 401
-- `portfolio_governor` — line 402
-- `pre_signed_demotion_fallback` — line 403
-- `primitive_adoption_schema` — line 404
-- `principal_key_roles` — line 405
-- `privacy_learning_contract` — line 406
-- `production_feature_catalog_gate` — line 407
-- `production_hardening_exit_gate` — line 408
-- `profiling` — line 409
-- `promise_model` — line 410
-- `promotion_gate_runner` — line 411
-- `proof_artifact` — line 412
-- `proof_backed_compression` — line 413
-- `proof_bundle_status_panel` — line 414
-- `proof_chain_composition` — line 415
-- `proof_evidence_index` — line 416
-- `proof_ingestion` — line 417
-- `proof_obligations` — line 418
-- `proof_release_gate` — line 419
-- `proof_schema` — line 420
-- `proof_specialization_linkage` — line 421
-- `proof_specialization_receipt` — line 422
-- `proof_spine_claim_gate` — line 423
-- `quarantine_deescalation` — line 424
-- `quarantine_mesh_gate` — line 425
-- `quarantine_propagation` — line 426
-- `queueing_admission_control` — line 427
-- `quickening_feedback_lattice` — line 428
-- `rch_validation_telemetry` — line 429
-- `rch_worker_registry` — line 430
-- `react_compilation_pipeline` — line 431
-- `react_compile_operator_surface` — line 432
-- `react_compile_run_parity` — line 433
-- `react_compile_verification` — line 434
-- `react_doctor_preflight` — line 435
-- `react_ecosystem_compatibility` — line 436
-- `react_jsx_lowering` — line 437
-- `react_lane_inference` — line 438
-- `react_mismatch_catalog` — line 439
-- `react_module_graph_verifier` — line 440
-- `react_package_cohort` — line 441
-- `react_repro_triage` — line 442
-- `react_specialization_benchmark_gate` — line 443
-- `react_ssr_verification` — line 444
-- `receipt_verifier_pipeline` — line 445
-- `recovery_artifact` — line 446
-- `red_team_compromise_rate_metric_gate` — line 447
-- `regexp_deterministic_engine` — line 448
-- `regexp_string_governance` — line 449
-- `regexp_string_governance_gate` — line 450
-- `regime_detector` — line 451
-- `regime_shift_detector` — line 452
-- `regime_signature_feature` — line 453
-- `region_lifecycle` — line 454
-- `regret_bounded_router` — line 455
-- `release_checklist_gate` — line 456
-- `release_gate` — line 457
-- `remote_capability_gate` — line 458
-- `remote_computation_registry` — line 459
-- `render_lane_specializer` — line 460
-- `replacement_lineage_log` — line 461
-- `replay_coverage_metric_gate` — line 462
-- `replay_time_travel` — line 463
-- `replay_vaccine` — line 464
-- `replication_checklist` — line 465
-- `replication_claim` — line 466
-- `reproducibility_provenance_pack` — line 467
-- `reputation` — line 468
-- `research_artifact_registry` — line 469
-- `resolver_package_index` — line 470
-- `resource_certificate_consumer` — line 471
-- `resource_certificate_governance` — line 472
-- `resource_certificate_governance_gate` — line 473
-- `resource_escalation_control` — line 474
-- `revocation_chain` — line 475
-- `revocation_enforcement` — line 476
-- `revocation_freshness` — line 477
-- `rgc_cross_arch_reproducibility` — line 478
-- `rgc_execution_waves` — line 479
-- `rgc_planning_track` — line 480
-- `rgc_test_harness` — line 481
-- `rollback_governance_extension` — line 482
-- `rollback_safemode_synthesizer` — line 483
-- `rollout_controller` — line 484
-- `rough_path_regime_geometry` — line 485
-- `runtime_comparison_gate` — line 486
-- `runtime_config` — line 487
-- `runtime_decision_core` — line 488
-- `runtime_decision_theory` — line 489
-- `runtime_diagnostics_cli` — line 490
-- `runtime_explain_bundle` — line 491
-- `runtime_explain_views` — line 492
-- `runtime_hotspot_optimization_campaign` — line 493
-- `runtime_image_contract` — line 494
-- `runtime_kernel_lane_charter` — line 495
-- `runtime_lockstep_helpers` — line 496
-- `runtime_observability` — line 497
-- `s3_fifo_cache_gate` — line 498
-- `safe_mode_fallback` — line 499
-- `safety_decision_router` — line 500
-- `saga_orchestrator` — line 501
-- `scalar_replacement_engine` — line 502
-- `scheduler_invariants` — line 503
-- `scheduler_lane` — line 504
-- `secure_aggregation` — line 505
-- `secure_multi_execution_kernel` — line 506
-- `security_conformance` — line 507
-- `security_e2e` — line 508
-- `security_epoch` — line 509
-- `self_adjusting_resolution_graph` — line 510
-- `self_replacement` — line 511
-- `self_replacement_lineage_operator` — line 512
-- `semantic_canonical_basis` — line 513
-- `semantic_contract_baseline` — line 514
-- `semantic_cover_schema` — line 515
-- `semantic_dark_matter_engine` — line 516
-- `semantic_flattening_inventory` — line 517
-- `semantic_transport_ledger` — line 518
-- `semantic_twin` — line 519
-- `semantic_twin_state_space` — line 520
-- `seqlock_candidate_inventory` — line 521
-- `seqlock_fastpath` — line 522
-- `seqlock_reader_writer_contract` — line 523
-- `seqlock_rollout_guard` — line 524
-- `session_hostcall_channel` — line 525
-- `session_signing_batch` — line 526
-- `shadow_ablation_engine` — line 527
-- `shadow_adoption_gates` — line 528
-- `shadow_decision_composer` — line 529
-- `shadow_evidence_journal` — line 530
-- `shadow_handoff_contracts` — line 531
-- `shadow_replay_fixtures` — line 533
-- `shadow_replay_verifier` — line 534
-- `shadow_service_interface` — line 535
-- `shape_transition_algebra` — line 536
-- `shipped_path_matrix` — line 537
-- `shipped_path_parity_verifier` — line 538
-- `sibling_integration_benchmark_gate` — line 539
-- `sibling_repo_verification` — line 540
-- `signature_drift_gate` — line 541
-- `signature_preimage` — line 542
-- `simd_lexer` — line 543
-- `simd_morsel_kernel` — line 544
-- `slot_differential` — line 545
-- `slot_registry` — line 546
-- `sme` — line 547
-- `sorted_multisig` — line 548
-- `specialization_conformance` — line 549
-- `specialization_index` — line 550
-- `specialization_lane_gate` — line 551
-- `specialization_perf_release_gate` — line 552
-- `specialization_rollback_gate` — line 553
-- `spectral_fleet_convergence` — line 554
-- `stage_envelope_certificate` — line 555
-- `statement_translation_validator` — line 556
-- `static_analysis_graph` — line 557
-- `static_authority_analyzer` — line 558
-- `static_semantics` — line 559
-- `stdlib` — line 560
-- `stdlib_workload_verification` — line 561
-- `storage_adapter` — line 562
-- `structural_causal_model` — line 563
-- `submodular_moonshot_selection` — line 564
-- `succinct_witness_compiler` — line 565
-- `superblock_formation` — line 566
-- `superoptimization_gate` — line 567
-- `supervision` — line 568
-- `support_bundle_export` — line 569
-- `supremacy_cell_matrix` — line 570
-- `supremacy_evidence_bundle` — line 571
-- `supremacy_verdict_engine` — line 572
-- `swarm_control_loop` — line 573
-- `swarm_execution_queue_runner` — line 574
-- `synthesis_budget` — line 575
-- `synthesis_eligibility_envelope` — line 576
-- `synthesis_kernel_promotion` — line 577
-- `tail_latency_control_plane` — line 578
-- `tail_latency_feedback_control` — line 579
-- `technical_report` — line 580
-- `tee_attestation_policy` — line 581
-- `tee_live_quote` — line 582
-- `test262_conformance_runner` — line 583
-- `test262_harness` — line 584
-- `test262_release_gate` — line 585
-- `test_depth_gate` — line 586
-- `test_flake_quarantine_workflow` — line 587
-- `test_harness_deterministic` — line 588
-- `test_logging_schema` — line 589
-- `test_taxonomy` — line 590
-- `third_party_verifier` — line 591
-- `threshold_signing` — line 592
-- `throughput_disruptive_floor_metric_gate` — line 593
-- `tier_eligibility_substrate` — line 594
-- `tier_telemetry_contract` — line 595
-- `tier_up_profiler` — line 596
-- `time_travel_debugger` — line 597
-- `timescale_separation_certificate` — line 598
-- `trace_fusion` — line 599
-- `trace_fusion_superinstruction` — line 600
-- `trace_independence` — line 601
-- `transfer_governance_gate` — line 602
-- `translation_validation` — line 603
-- `translation_validation_proof_carrier` — line 604
-- `translation_validation_receipt` — line 605
-- `transparency_log` — line 606
-- `transport_certificate_ledger` — line 607
-- `tropical_semiring` — line 608
-- `trust_card` — line 609
-- `trust_economics` — line 610
-- `ts_module_resolution` — line 615
-- `ts_normalization` — line 616
-- `ts_normalization_evidence` — line 617
-- `ts_resolution_manifest` — line 618
-- `ts_shipped_path_evidence` — line 619
-- `typed_array_fast_lane` — line 620
-- `typed_persistence_models` — line 621
-- `unified_authority_algebra` — line 622
-- `unit_test_taxonomy` — line 623
-- `universal_dominance_ratchet` — line 624
-- `vectorized_builtin_governance` — line 625
-- `vectorized_lane_contract` — line 626
-- `vectorized_lane_governance_gate` — line 627
-- `verification_coverage_contract` — line 611
-- `version_matrix_lane` — line 628
-- `versioned_rewrite_pack` — line 629
-- `wasm_runtime_lane` — line 630
-- `wave_handoff_contract` — line 631
-- `windows_x64_worker` — line 612
-- `worker_env_capture` — line 613
-- `workload_corpus_gate` — line 632
-- `workload_embedding` — line 633
-- `workload_manifold_transfer` — line 634
-- `workload_policy_manifold` — line 635
-- `workload_preflight_doctor` — line 636
-- `workload_transfer_prior` — line 637
-- `zero_placeholder_gate` — line 638
-- `zero_placeholder_scan` — line 639
+- `aara_resource_certificate` — line 16
+- `aara_resource_consumer` — line 18
+- `acquisition_experiment_oracle` — line 29
+- `activation_lifecycle` — line 31
+- `adversarial_campaign` — line 33
+- `adversarial_coevolution_harness` — line 35
+- `adversarial_supremacy_synthesis` — line 37
+- `adversarial_workload_synthesis` — line 39
+- `agent_sandbox` — line 40
+- `algebraic_effects` — line 41
+- `algebraic_effects_composition_proofs` — line 43
+- `alloc_domain` — line 44
+- `allocation_elision_gate` — line 46
+- `ambient_authority` — line 48
+- `anti_entropy` — line 49
+- `aot_entrygraph_compiler` — line 51
+- `architecture_inventory` — line 52
+- `array_fast_lane` — line 54
+- `artifact_compression_pipeline` — line 56
+- `assumptions_ledger` — line 58
+- `ast` — line 59
+- `asupersync_contract_matrix` — line 61
+- `asupersync_leverage_adoption_gate` — line 63
+- `async_module_graph` — line 65
+- `async_module_promise_bridge` — line 67
+- `async_module_runtime` — line 69
+- `async_module_scheduler` — line 71
+- `async_translation_validation` — line 73
+- `attack_grammar_synthesizer` — line 74
+- `attack_surface_game_model` — line 76
+- `attestation_handshake` — line 78
+- `attested_execution_cell` — line 79
+- `audit_closure_matrix` — line 81
+- `authority_footprint` — line 82
+- `baseline_interpreter` — line 83
+- `bayesian_error_recovery` — line 85
+- `bayesian_posterior` — line 86
+- `behavioral_diff` — line 87
+- `benchmark_behavior_equivalence` — line 89
+- `benchmark_coverage_saturation` — line 91
+- `benchmark_coverage_saturation_gate` — line 93
+- `benchmark_denominator` — line 94
+- `benchmark_e2e` — line 95
+- `benchmark_evidence_bundle` — line 96
+- `benchmark_freshness_gate` — line 98
+- `benchmark_publication` — line 100
+- `bifurcation_boundary_scanner` — line 102
+- `bounded_feedback_controller` — line 103
+- `bounded_regret_safety_case` — line 105
+- `budget_propagation_contract` — line 107
+- `budgeted_optimization` — line 109
+- `budgeted_synthesis_engine` — line 111
+- `bulkhead` — line 112
+- `bytecode_vm` — line 114
+- `cache_oblivious_metadata_substrate` — line 116
+- `calibration_sentinel` — line 118
+- `callback_stdlib_dispatch` — line 120
+- `cancel_mask` — line 121
+- `cancellation_lifecycle` — line 122
+- `canonical_encoding` — line 123
+- `canonical_evidence_emitter` — line 125
+- `capability` — line 126
+- `capability_lease` — line 128
+- `capability_pruned_dispatch` — line 130
+- `capability_token` — line 131
+- `capability_witness` — line 133
+- `catastrophe_witness_generator` — line 135
+- `catastrophic_tail_tournament_gate` — line 137
+- `category_shift_report` — line 139
+- `causal_intervention_dag` — line 141
+- `causal_intervention_planner` — line 143
+- `causal_regret_evidence_gate` — line 145
+- `causal_replay` — line 146
+- `causal_uplift_evidence_gate` — line 148
+- `causation_graph` — line 150
+- `causation_graph_schema` — line 151
+- `certified_optimization_governance` — line 153
+- `certified_rewrite_optimizer` — line 155
+- `change_point_detector` — line 157
+- `checkpoint` — line 158
+- `checkpoint_frontier` — line 159
+- `claim_atom_lattice` — line 161
+- `claim_entitlement` — line 163
+- `claim_envelope_contract` — line 165
+- `claim_evidence_lattice` — line 166
+- `claim_evidence_ledger` — line 168
+- `claim_integrity_flow` — line 170
+- `claim_publication_gate` — line 172
+- `cliff_margin_certificate` — line 174
+- `closure_model` — line 175
+- `cold_start_aot_governance` — line 177
+- `cold_start_compilation_lane` — line 179
+- `compatibility_advisory` — line 180
+- `compiler_policy` — line 182
+- `component_shape_catalog` — line 184
+- `composable_gate_framework` — line 186
+- `compounding_red_team_campaign` — line 187
+- `compression_residual_gate` — line 189
+- `compromise_rate_disruptive_floor_metric_gate` — line 191
+- `conformal_calibration` — line 193
+- `conformal_split_independence` — line 195
+- `conformance_catalog` — line 197
+- `conformance_harness` — line 198
+- `conformance_vector_gen` — line 200
+- `constrained_ambient_benchmark_lane` — line 202
+- `containment_executor` — line 203
+- `containment_latency_metric_gate` — line 204
+- `contextual_policy_selector` — line 206
+- `control_plane` — line 207
+- `control_plane_benchmark_split_gate` — line 209
+- `control_plane_mock_inventory` — line 210
+- `control_plane_policy_diagnostics` — line 212
+- `controller_composition_matrix` — line 214
+- `controller_composition_stability_gate` — line 216
+- `controller_interference_guard` — line 218
+- `convergence_slo` — line 220
+- `corpus_promotion` — line 221
+- `counterexample_synthesizer` — line 222
+- `counterfactual_evaluator` — line 224
+- `counterfactual_generation_guard` — line 226
+- `counterfactual_intervention_planner` — line 228
+- `counterfactual_replay_engine` — line 230
+- `coverage_frontier` — line 231
+- `coverage_frontier_filing` — line 232
+- `coverage_frontier_rank` — line 233
+- `coverage_frontier_xref` — line 234
+- `coverage_summary` — line 235
+- `cross_arch_reproducibility` — line 237
+- `cross_platform_reproducibility` — line 239
+- `cross_repo_contract` — line 241
+- `cross_workload_transfer` — line 243
+- `crypto_kdf_zeroized` — line 244
+- `cut_line_automation` — line 246
+- `cx_threading` — line 247
+- `dark_matter_saturation_gate` — line 249
+- `data_contract` — line 250
+- `declassification_pipeline` — line 251
+- `delegate_cell_harness` — line 253
+- `delegation_chain` — line 255
+- `demo_claim_linkage_gate` — line 257
+- `demotion_rollback` — line 258
+- `descent_certificate_gate` — line 260
+- `detection_delay_bound_proof` — line 262
+- `deterministic_probabilistic_telemetry` — line 264
+- `deterministic_replay` — line 265
+- `deterministic_serde` — line 266
+- `deterministic_sim_scheduler` — line 267
+- `differential_oracle` — line 268
+- `differential_oracle_perf` — line 269
+- `differential_privacy_posterior` — line 271
+- `disruption_scorecard` — line 273
+- `disruptive_floor_metric_gate` — line 274
+- `distribution_shift_monitor` — line 276
+- `docs_accuracy_gate` — line 278
+- `dp_budget_accountant` — line 280
+- `dual_backend_parser` — line 282
+- `e2e_harness` — line 284
+- `e8_analyzed_subset` — line 285
+- `e9_equivalence_receipts` — line 287
+- `e9_first_activation` — line 289
+- `e9_shadow_candidate_discovery` — line 291
+- `effect_set` — line 292
+- `engine_object_id` — line 293
+- `engine_product_blocker_ledger` — line 295
+- `entropic_policy_morphing` — line 297
+- `entropy_evidence_compressor` — line 298
+- `epoch_barrier` — line 299
+- `epoch_invalidation` — line 301
+- `eprocess_guardrail` — line 302
+- `erasure_bandwidth_accounting` — line 303
+- `erasure_reconstruction_receipts` — line 304
+- `error_code` — line 305
+- `escape_analysis_certificate` — line 307
+- `esm_cjs_interop_parity` — line 309
+- `esm_cjs_parity_evidence` — line 311
+- `esm_loader` — line 313
+- `evidence_contract` — line 314
+- `evidence_emission` — line 315
+- `evidence_ledger` — line 316
+- `evidence_manifest` — line 317
+- `evidence_ordering` — line 318
+- `evidence_replay_checker` — line 319
+- `exception_translation_validator` — line 321
+- `execution_cell` — line 322
+- `execution_orchestrator` — line 323
+- `execution_truth_ledger` — line 325
+- `expected_info_value_scoring` — line 327
+- `expected_loss_selector` — line 328
+- `extension_host_authority_guard` — line 330
+- `extension_host_lifecycle` — line 331
+- `extension_host_topology_assessment` — line 333
+- `extension_lifecycle_manager` — line 334
+- `extension_registry` — line 336
+- `feature_parity_tracker` — line 337
+- `federated_posterior_aggregation` — line 339
+- `flamegraph_pipeline` — line 341
+- `fleet_checkpoint_recovery` — line 342
+- `fleet_checkpoint_store` — line 343
+- `fleet_checkpoint_v2` — line 344
+- `fleet_convergence` — line 345
+- `fleet_convergence_harness` — line 347
+- `fleet_counterfactual_report` — line 349
+- `fleet_immune_protocol` — line 350
+- `fleet_privacy_budget` — line 352
+- `fleet_simulator` — line 353
+- `fleet_trace_total_order` — line 354
+- `fleet_transport` — line 356
+- `flow_envelope` — line 358
+- `flow_lattice` — line 359
+- `forensic_causation_operator` — line 360
+- `forensic_query_api` — line 361
+- `forensic_replayer` — line 362
+- `fork_detection` — line 363
+- `frankenlab_bridge_contract` — line 365
+- `frankenlab_extension_lifecycle` — line 366
+- `frankenlab_gap_matrix` — line 368
+- `frankenlab_harness_migration` — line 370
+- `frankenlab_release_gate` — line 371
+- `frankenlab_release_gate_promotion` — line 373
+- `frankenlab_surface_gap_matrix` — line 375
+- `frankentui_adapter` — line 377
+- `frir_schema` — line 379
+- `frontier_complex_cartography` — line 381
+- `frontier_demo_gate` — line 383
+- `frontier_hole_governance` — line 385
+- `frx_lockstep_oracle` — line 386
+- `full_ir_translation_validator` — line 388
+- `ga_exit_evidence_package` — line 390
+- `galaxy_brain_explainability` — line 392
+- `gc` — line 393
+- `gc_pause` — line 395
+- `generator_translation_validator` — line 397
+- `global_coherence_checker` — line 399
+- `golden_vectors` — line 401
+- `governance_context` — line 403
+- `governance_hooks` — line 405
+- `governance_mechanism` — line 407
+- `governance_scorecard` — line 409
+- `guardplane_adapter` — line 410
+- `guardplane_calibration` — line 412
+- `guardplane_integration` — line 414
+- `hardware_board_claim_gate` — line 416
+- `hardware_code_layout_gate` — line 418
+- `hardware_code_layout_governance` — line 420
+- `hardware_localization_residual` — line 422
+- `hardware_parameter_manifold` — line 424
+- `hash_tiers` — line 425
+- `hierarchical_delta_debug` — line 426
+- `hindsight_boundary_capture` — line 427
+- `hindsight_escalation_bundle` — line 429
+- `hindsight_trace_escalator` — line 431
+- `hole_witness_generator` — line 433
+- `hook_effect_contract` — line 435
+- `hostcall_batch_transport` — line 437
+- `hostcall_capability_translation_validator` — line 439
+- `hostcall_conformance_governance` — line 441
+- `hostcall_effects_migration` — line 442
+- `hostcall_session_governance_gate` — line 444
+- `hostcall_session_protocol` — line 446
+- `hostcall_telemetry` — line 447
+- `hot_path_telemetry_kernel` — line 449
+- `hybrid_lane_router` — line 451
+- `idempotency_key` — line 452
+- `ifc_artifacts` — line 453
+- `ifc_label_translation_validator` — line 455
+- `ifc_provenance_index` — line 456
+- `import_attributes` — line 457
+- `incentive_governance_mechanism` — line 459
+- `incident_replay_bundle` — line 460
+- `interleaving_explorer` — line 462
+- `intl_surface_contract` — line 464
+- `intrinsics_codegen` — line 465
+- `intrinsics_table` — line 466
+- `ir_contract` — line 467
+- `iterator_protocol` — line 468
+- `iterator_protocol_translation_validator` — line 470
+- `js_runtime_lane` — line 471
+- `js_string` — line 472
+- `json_capabilities` — line 474
+- `jsx_tsx_parser` — line 475
+- `kernel_shift_monitor` — line 477
+- `kernel_synthesis_contract` — line 478
+- `kernelized_shift_guard` — line 480
+- `key_attestation` — line 482
+- `key_derivation` — line 483
+- `kl_rate_limited_adversary` — line 485
+- `lab_runtime` — line 486
+- `lamport_evidence_annotation` — line 487
+- `lamport_total_order_merger` — line 488
+- `law_mining` — line 489
+- `law_promotion_lifecycle` — line 491
+- `law_promotion_pack` — line 493
+- `law_proof_refutation` — line 495
+- `lean_proof_producer` — line 496
+- `lease_tracker` — line 497
+- `live_revocation_first_gate_example` — line 499
+- `lowering_arena` — line 500
+- `lowering_gap_inventory` — line 501
+- `lowering_parity_evidence` — line 503
+- `lowering_pipeline` — line 504
+- `macos_arm64_worker` — line 506
+- `marker_stream` — line 507
+- `martingale_decision_ledger` — line 508
+- `metadata_locality_governance_gate` — line 510
+- `metadata_substrate_governance` — line 512
+- `metadata_substrate_inventory` — line 514
+- `metadata_substrate_optimized` — line 516
+- `migration_compatibility` — line 517
+- `migration_contract` — line 519
+- `migration_kit` — line 521
+- `milestone_release_test_evidence_integrator` — line 523
+- `minimal_causal_set_inference` — line 524
+- `minimal_causal_set_minimality_gate` — line 526
+- `minimized_repro_extraction` — line 528
+- `mmr_proof` — line 529
+- `mock_seam_guardrail` — line 531
+- `module_async_evaluation` — line 533
+- `module_cache` — line 535
+- `module_compatibility_matrix` — line 536
+- `module_index_parity_gate` — line 538
+- `module_live_binding` — line 540
+- `module_resolver` — line 541
+- `monitor_scheduler` — line 542
+- `moonshot_contract` — line 544
+- `moonshot_disruption_track` — line 546
+- `moonshot_weekly_report` — line 548
+- `native_addon_cohort_gate` — line 550
+- `native_addon_membrane` — line 552
+- `native_addon_parity_gate` — line 554
+- `native_capsule_fixed_probe` — line 556
+- `nitrosketch_telemetry` — line 558
+- `non_use_certificate` — line 559
+- `northstar_scorecard` — line 561
+- `novelty_scoring_contract` — line 562
+- `novelty_synthesis_engine` — line 564
+- `npm_compatibility_matrix` — line 566
+- `object_model` — line 567
+- `obligation_channel` — line 568
+- `obligation_integration` — line 569
+- `obligation_leak_policy` — line 571
+- `observability_channel_model` — line 573
+- `observability_probe_design` — line 575
+- `observability_publication_bundle` — line 577
+- `observability_quality_sentinel` — line 579
+- `obstruction_certificate` — line 581
+- `obstruction_witness_emitter` — line 583
+- `offline_synthesis_pipeline` — line 585
+- `one_lever_policy` — line 587
+- `operator_diagnostic_contract` — line 589
+- `opportunity_matrix` — line 591
+- `optimal_stopping` — line 592
+- `optimization_baseline` — line 594
+- `optimization_proof_carriers` — line 596
+- `optimized_metadata_substrate` — line 598
+- `oracle_release_gate` — line 600
+- `orchestration_context_contract` — line 602
+- `outcome_capability_narrowing` — line 604
+- `pac_bayes_bound` — line 606
+- `package_intake` — line 607
+- `parallel_interference_gate` — line 609
+- `parallel_parser` — line 611
+- `parser` — line 612
+- `parser_api_stability` — line 613
+- `parser_arena` — line 614
+- `parser_error_recovery` — line 616
+- `parser_event_ast_equivalence` — line 618
+- `parser_evidence_indexer` — line 620
+- `parser_frontier_evidence` — line 622
+- `parser_gap_inventory` — line 623
+- `parser_multi_engine_harness` — line 624
+- `parser_oracle` — line 625
+- `performance_regression_gate` — line 627
+- `performance_statistical_validation` — line 629
+- `persistence_homology` — line 631
+- `persistent_cache_contract` — line 633
+- `phase_gate` — line 635
+- `plas_benchmark_bundle` — line 637
+- `plas_burn_in_gate` — line 639
+- `plas_lockstep` — line 641
+- `plas_release_gate` — line 643
+- `policy_as_data_security` — line 645
+- `policy_backtest` — line 647
+- `policy_checkpoint` — line 648
+- `policy_controller` — line 649
+- `policy_theorem_compiler` — line 650
+- `policy_theorem_engine` — line 651
+- `polymorphic_inline_cache` — line 653
+- `portfolio_governor` — line 655
+- `pre_signed_demotion_fallback` — line 656
+- `primitive_adoption_schema` — line 658
+- `principal_key_roles` — line 660
+- `privacy_learning_contract` — line 662
+- `production_feature_catalog_gate` — line 664
+- `production_hardening_exit_gate` — line 666
+- `profiling` — line 667
+- `promise_model` — line 668
+- `promotion_gate_runner` — line 670
+- `proof_artifact` — line 671
+- `proof_backed_compression` — line 673
+- `proof_bundle_status_panel` — line 675
+- `proof_chain_composition` — line 677
+- `proof_evidence_index` — line 679
+- `proof_ingestion` — line 681
+- `proof_obligations` — line 683
+- `proof_release_gate` — line 685
+- `proof_schema` — line 686
+- `proof_specialization_linkage` — line 688
+- `proof_specialization_receipt` — line 689
+- `proof_spine_claim_gate` — line 690
+- `quarantine_deescalation` — line 692
+- `quarantine_mesh_gate` — line 693
+- `quarantine_propagation` — line 694
+- `queueing_admission_control` — line 695
+- `quickening_feedback_lattice` — line 697
+- `rch_validation_telemetry` — line 699
+- `rch_worker_registry` — line 701
+- `react_client_build` — line 702
+- `react_compilation_pipeline` — line 703
+- `react_compile_operator_surface` — line 705
+- `react_compile_run_parity` — line 707
+- `react_compile_verification` — line 709
+- `react_doctor_preflight` — line 710
+- `react_ecosystem_compatibility` — line 712
+- `react_jsx_lowering` — line 713
+- `react_lane_inference` — line 715
+- `react_mismatch_catalog` — line 716
+- `react_module_graph_verifier` — line 718
+- `react_package_cohort` — line 720
+- `react_repro_triage` — line 722
+- `react_specialization_benchmark_gate` — line 724
+- `react_ssr_verification` — line 726
+- `receipt_verifier_pipeline` — line 727
+- `recovery_artifact` — line 728
+- `red_team_compromise_rate_metric_gate` — line 729
+- `regexp_deterministic_engine` — line 731
+- `regexp_string_governance` — line 733
+- `regexp_string_governance_gate` — line 735
+- `regime_detector` — line 736
+- `regime_shift_detector` — line 738
+- `regime_signature_feature` — line 739
+- `region_lifecycle` — line 740
+- `regret_bounded_router` — line 741
+- `release_checklist_gate` — line 743
+- `release_gate` — line 744
+- `remote_capability_gate` — line 745
+- `remote_computation_registry` — line 746
+- `render_lane_specializer` — line 748
+- `replacement_lineage_log` — line 749
+- `replay_coverage_metric_gate` — line 750
+- `replay_time_travel` — line 751
+- `replay_vaccine` — line 753
+- `replication_checklist` — line 755
+- `replication_claim` — line 757
+- `reproducibility_provenance_pack` — line 758
+- `reputation` — line 760
+- `research_artifact_registry` — line 762
+- `resolver_package_index` — line 764
+- `resource_certificate_consumer` — line 765
+- `resource_certificate_governance` — line 767
+- `resource_certificate_governance_gate` — line 769
+- `resource_escalation_control` — line 771
+- `revocation_chain` — line 772
+- `revocation_enforcement` — line 774
+- `revocation_freshness` — line 776
+- `rgc_cross_arch_reproducibility` — line 778
+- `rgc_execution_waves` — line 779
+- `rgc_planning_track` — line 780
+- `rgc_test_harness` — line 781
+- `rollback_governance_extension` — line 783
+- `rollback_safemode_synthesizer` — line 785
+- `rollout_controller` — line 787
+- `rough_path_regime_geometry` — line 789
+- `runtime_comparison_gate` — line 790
+- `runtime_config` — line 791
+- `runtime_decision_core` — line 793
+- `runtime_decision_theory` — line 794
+- `runtime_diagnostics_cli` — line 795
+- `runtime_explain_bundle` — line 796
+- `runtime_explain_views` — line 797
+- `runtime_hotspot_optimization_campaign` — line 799
+- `runtime_image_contract` — line 801
+- `runtime_kernel_lane_charter` — line 803
+- `runtime_lockstep_helpers` — line 804
+- `runtime_observability` — line 805
+- `s3_fifo_cache_gate` — line 807
+- `safe_mode_fallback` — line 808
+- `safety_decision_router` — line 809
+- `saga_orchestrator` — line 810
+- `scalar_replacement_engine` — line 812
+- `scheduler_invariants` — line 814
+- `scheduler_lane` — line 815
+- `secure_aggregation` — line 817
+- `secure_multi_execution_kernel` — line 818
+- `security_conformance` — line 820
+- `security_e2e` — line 821
+- `security_epoch` — line 822
+- `self_adjusting_resolution_graph` — line 824
+- `self_replacement` — line 825
+- `self_replacement_lineage_operator` — line 827
+- `semantic_canonical_basis` — line 829
+- `semantic_contract_baseline` — line 831
+- `semantic_cover_schema` — line 833
+- `semantic_dark_matter_engine` — line 835
+- `semantic_flattening_inventory` — line 837
+- `semantic_transport_ledger` — line 839
+- `semantic_twin` — line 841
+- `semantic_twin_state_space` — line 843
+- `seqlock_candidate_inventory` — line 845
+- `seqlock_fastpath` — line 847
+- `seqlock_reader_writer_contract` — line 849
+- `seqlock_rollout_guard` — line 851
+- `session_hostcall_channel` — line 853
+- `session_signing_batch` — line 854
+- `shadow_ablation_engine` — line 856
+- `shadow_adoption_gates` — line 858
+- `shadow_decision_composer` — line 859
+- `shadow_evidence_journal` — line 860
+- `shadow_handoff_contracts` — line 862
+- `shadow_replay_fixtures` — line 864
+- `shadow_replay_verifier` — line 865
+- `shadow_service_interface` — line 867
+- `shape_transition_algebra` — line 869
+- `shipped_path_matrix` — line 870
+- `shipped_path_parity_verifier` — line 872
+- `sibling_integration_benchmark_gate` — line 874
+- `sibling_repo_verification` — line 876
+- `signature_drift_gate` — line 877
+- `signature_preimage` — line 878
+- `simd_lexer` — line 879
+- `simd_morsel_kernel` — line 881
+- `slot_differential` — line 883
+- `slot_registry` — line 884
+- `sme` — line 885
+- `sorted_multisig` — line 886
+- `specialization_conformance` — line 888
+- `specialization_index` — line 889
+- `specialization_lane_gate` — line 891
+- `specialization_perf_release_gate` — line 893
+- `specialization_rollback_gate` — line 895
+- `spectral_fleet_convergence` — line 896
+- `stage_envelope_certificate` — line 897
+- `statement_translation_validator` — line 899
+- `static_analysis_graph` — line 901
+- `static_authority_analyzer` — line 903
+- `static_semantics` — line 904
+- `stdlib` — line 905
+- `stdlib_workload_verification` — line 907
+- `storage_adapter` — line 908
+- `structural_causal_model` — line 910
+- `submodular_moonshot_selection` — line 912
+- `succinct_witness_compiler` — line 914
+- `superblock_formation` — line 916
+- `superoptimization_gate` — line 918
+- `supervision` — line 920
+- `support_bundle_export` — line 921
+- `supremacy_cell_matrix` — line 923
+- `supremacy_evidence_bundle` — line 925
+- `supremacy_verdict_engine` — line 927
+- `swarm_control_loop` — line 929
+- `swarm_execution_queue_runner` — line 931
+- `synthesis_budget` — line 933
+- `synthesis_eligibility_envelope` — line 935
+- `synthesis_kernel_promotion` — line 937
+- `tail_latency_control_plane` — line 938
+- `tail_latency_feedback_control` — line 940
+- `technical_report` — line 942
+- `tee_attestation_policy` — line 943
+- `tee_live_quote` — line 945
+- `test262_conformance_runner` — line 946
+- `test262_harness` — line 947
+- `test262_release_gate` — line 948
+- `test_depth_gate` — line 950
+- `test_flake_quarantine_workflow` — line 952
+- `test_harness_deterministic` — line 954
+- `test_logging_schema` — line 955
+- `test_taxonomy` — line 957
+- `third_party_verifier` — line 958
+- `threshold_signing` — line 960
+- `throughput_disruptive_floor_metric_gate` — line 962
+- `tier_eligibility_substrate` — line 964
+- `tier_telemetry_contract` — line 966
+- `tier_up_profiler` — line 968
+- `time_travel_debugger` — line 969
+- `timescale_separation_certificate` — line 971
+- `tls_x509_metadata` — line 972
+- `trace_fusion` — line 974
+- `trace_fusion_superinstruction` — line 976
+- `trace_independence` — line 978
+- `transfer_governance_gate` — line 980
+- `translation_validation` — line 982
+- `translation_validation_proof_carrier` — line 983
+- `translation_validation_receipt` — line 985
+- `transparency_log` — line 987
+- `transport_certificate_ledger` — line 988
+- `tropical_semiring` — line 989
+- `trust_card` — line 991
+- `trust_economics` — line 992
+- `ts_module_resolution` — line 1001
+- `ts_normalization` — line 1002
+- `ts_normalization_evidence` — line 1004
+- `ts_resolution_manifest` — line 1006
+- `ts_shipped_path_evidence` — line 1008
+- `typed_array_fast_lane` — line 1010
+- `typed_persistence_models` — line 1011
+- `unified_authority_algebra` — line 1012
+- `unit_test_taxonomy` — line 1014
+- `universal_dominance_ratchet` — line 1016
+- `vectorized_builtin_governance` — line 1018
+- `vectorized_lane_contract` — line 1020
+- `vectorized_lane_governance_gate` — line 1022
+- `verification_coverage_contract` — line 994
+- `version_matrix_lane` — line 1024
+- `versioned_rewrite_pack` — line 1026
+- `wasm_runtime_lane` — line 1027
+- `wave_handoff_contract` — line 1028
+- `windows_x64_worker` — line 996
+- `worker_env_capture` — line 998
+- `workload_corpus_gate` — line 1030
+- `workload_embedding` — line 1032
+- `workload_manifold_transfer` — line 1034
+- `workload_policy_manifold` — line 1036
+- `workload_preflight_doctor` — line 1038
+- `workload_transfer_prior` — line 1040
+- `zero_placeholder_gate` — line 1041
+- `zero_placeholder_scan` — line 1042
 
 ## Disabled lib.rs Exports
 
@@ -1334,73 +1578,79 @@ None.
 
 ## Release Binary Targets
 
-- `emit_track_g_proof_bundles` — `crates/franken-engine/src/bin/emit_track_g_proof_bundles.rs` (auto)
+- `emit_track_g_proof_bundles` — `crates/franken-engine/src/bin/emit_track_g_proof_bundles.rs` (manifest)
 - `franken-architecture-inventory` — `crates/franken-engine/src/bin/franken_architecture_inventory.rs` (manifest)
 - `franken-benchmark-evidence-export` — `crates/franken-engine/src/bin/franken_benchmark_evidence_export.rs` (manifest)
 - `franken-decision-demo` — `crates/franken-engine/src/bin/franken_decision_demo.rs` (manifest)
 - `franken-lsp` — `crates/franken-engine/src/bin/franken_lsp.rs` (manifest)
 - `franken-quarantine-mesh-demo` — `crates/franken-engine/src/bin/franken_quarantine_mesh_demo.rs` (manifest)
 - `franken-react-sidecar` — `crates/franken-engine/src/bin/franken_react_sidecar.rs` (manifest)
-- `franken-verify` — `crates/franken-engine/src/bin/franken-verify.rs` (auto)
-- `franken_adversarial_campaign_gate` — `crates/franken-engine/src/bin/franken_adversarial_campaign_gate.rs` (auto)
-- `franken_ambient_mock_guard` — `crates/franken-engine/src/bin/franken_ambient_mock_guard.rs` (auto)
-- `franken_asupersync_contract_matrix` — `crates/franken-engine/src/bin/franken_asupersync_contract_matrix.rs` (auto)
-- `franken_asupersync_leverage_adoption_gate` — `crates/franken-engine/src/bin/franken_asupersync_leverage_adoption_gate.rs` (auto)
-- `franken_benchmark_gate` — `crates/franken-engine/src/bin/franken_benchmark_gate.rs` (auto)
-- `franken_claim_evidence_ledger` — `crates/franken-engine/src/bin/franken_claim_evidence_ledger.rs` (auto)
-- `franken_closure_report` — `crates/franken-engine/src/bin/franken_closure_report.rs` (auto)
-- `franken_cold_start_compilation_lane` — `crates/franken-engine/src/bin/franken_cold_start_compilation_lane.rs` (auto)
-- `franken_control_plane_benchmark_split_report` — `crates/franken-engine/src/bin/franken_control_plane_benchmark_split_report.rs` (auto)
-- `franken_control_plane_mock_inventory` — `crates/franken-engine/src/bin/franken_control_plane_mock_inventory.rs` (auto)
-- `franken_control_plane_policy_diagnostics` — `crates/franken-engine/src/bin/franken_control_plane_policy_diagnostics.rs` (auto)
-- `franken_coverage_frontier` — `crates/franken-engine/src/bin/franken_coverage_frontier.rs` (auto)
-- `franken_deterministic_sim_scheduler_artifacts` — `crates/franken-engine/src/bin/franken_deterministic_sim_scheduler_artifacts.rs` (auto)
-- `franken_engine_product_blocker_ledger` — `crates/franken-engine/src/bin/franken_engine_product_blocker_ledger.rs` (auto)
-- `franken_evidence_ledger_stitching` — `crates/franken-engine/src/bin/franken_evidence_ledger_stitching.rs` (auto)
-- `franken_evidence_manifest` — `crates/franken-engine/src/bin/franken_evidence_manifest.rs` (auto)
-- `franken_execution_truth_ledger` — `crates/franken-engine/src/bin/franken_execution_truth_ledger.rs` (auto)
-- `franken_extension_host_topology_assessment` — `crates/franken-engine/src/bin/franken_extension_host_topology_assessment.rs` (auto)
-- `franken_ifc_conformance_runner` — `crates/franken-engine/src/bin/franken_ifc_conformance_runner.rs` (auto)
-- `franken_intl_surface_contract` — `crates/franken-engine/src/bin/franken_intl_surface_contract.rs` (auto)
-- `franken_kernel_synthesis_contract` — `crates/franken-engine/src/bin/franken_kernel_synthesis_contract.rs` (auto)
-- `franken_law_mining` — `crates/franken-engine/src/bin/franken_law_mining.rs` (auto)
-- `franken_lean_proof_producer` — `crates/franken-engine/src/bin/franken_lean_proof_producer.rs` (auto)
-- `franken_lockstep_runner` — `crates/franken-engine/src/bin/franken_lockstep_runner.rs` (auto)
-- `franken_lowering_gap_inventory` — `crates/franken-engine/src/bin/franken_lowering_gap_inventory.rs` (auto)
-- `franken_metadata_substrate_evidence` — `crates/franken-engine/src/bin/franken_metadata_substrate_evidence.rs` (auto)
-- `franken_npm_compatibility_matrix` — `crates/franken-engine/src/bin/franken_npm_compatibility_matrix.rs` (auto)
-- `franken_observability_publication_bundle` — `crates/franken-engine/src/bin/franken_observability_publication_bundle.rs` (auto)
-- `franken_orchestrator_context_refactor` — `crates/franken-engine/src/bin/franken_orchestrator_context_refactor.rs` (auto)
-- `franken_parser_gap_inventory` — `crates/franken-engine/src/bin/franken_parser_gap_inventory.rs` (auto)
-- `franken_parser_multi_engine_harness` — `crates/franken-engine/src/bin/franken_parser_multi_engine_harness.rs` (auto)
-- `franken_parser_oracle_report` — `crates/franken-engine/src/bin/franken_parser_oracle_report.rs` (auto)
-- `franken_parser_phase0_report` — `crates/franken-engine/src/bin/franken_parser_phase0_report.rs` (auto)
-- `franken_persistent_cache_contract` — `crates/franken-engine/src/bin/franken_persistent_cache_contract.rs` (auto)
-- `franken_react_package_cohort` — `crates/franken-engine/src/bin/franken_react_package_cohort.rs` (auto)
-- `franken_resource_budget_demo` — `crates/franken-engine/src/bin/franken_resource_budget_demo.rs` (auto)
-- `franken_rgc_planning_track` — `crates/franken-engine/src/bin/franken_rgc_planning_track.rs` (auto)
-- `franken_s3fifo_baseline_comparator` — `crates/franken-engine/src/bin/franken_s3fifo_baseline_comparator.rs` (auto)
-- `franken_security_conformance_runner` — `crates/franken-engine/src/bin/franken_security_conformance_runner.rs` (auto)
-- `franken_seqlock_candidate_inventory` — `crates/franken-engine/src/bin/franken_seqlock_candidate_inventory.rs` (auto)
-- `franken_seqlock_reader_writer_contract` — `crates/franken-engine/src/bin/franken_seqlock_reader_writer_contract.rs` (auto)
-- `franken_seqlock_rollout_guard` — `crates/franken-engine/src/bin/franken_seqlock_rollout_guard.rs` (auto)
-- `franken_shape_lattice_bundle` — `crates/franken-engine/src/bin/franken_shape_lattice_bundle.rs` (auto)
-- `franken_shipped_path_parity` — `crates/franken-engine/src/bin/franken_shipped_path_parity.rs` (auto)
-- `franken_signature_drift_gate` — `crates/franken-engine/src/bin/franken_signature_drift_gate.rs` (auto)
-- `franken_swarm_execution_queue` — `crates/franken-engine/src/bin/franken_swarm_execution_queue.rs` (auto)
-- `franken_tail_latency_control_plane` — `crates/franken-engine/src/bin/franken_tail_latency_control_plane.rs` (auto)
-- `franken_test262_generator` — `crates/franken-engine/src/bin/franken_test262_generator.rs` (auto)
-- `franken_test262_runner` — `crates/franken-engine/src/bin/franken_test262_runner.rs` (auto)
-- `franken_verification_coverage_contract` — `crates/franken-engine/src/bin/franken_verification_coverage_contract.rs` (auto)
-- `franken_workload_corpus_gate` — `crates/franken-engine/src/bin/franken_workload_corpus_gate.rs` (auto)
-- `franken_zero_placeholder_gate` — `crates/franken-engine/src/bin/franken_zero_placeholder_gate.rs` (auto)
-- `franken_zero_placeholder_scan` — `crates/franken-engine/src/bin/franken_zero_placeholder_scan.rs` (auto)
+- `franken-verify` — `crates/franken-engine/src/bin/franken-verify.rs` (manifest)
+- `franken_adversarial_campaign_gate` — `crates/franken-engine/src/bin/franken_adversarial_campaign_gate.rs` (manifest)
+- `franken_ambient_mock_guard` — `crates/franken-engine/src/bin/franken_ambient_mock_guard.rs` (manifest)
+- `franken_asupersync_contract_matrix` — `crates/franken-engine/src/bin/franken_asupersync_contract_matrix.rs` (manifest)
+- `franken_asupersync_leverage_adoption_gate` — `crates/franken-engine/src/bin/franken_asupersync_leverage_adoption_gate.rs` (manifest)
+- `franken_async_module_promise_bridge` — `crates/franken-engine/src/bin/franken_async_module_promise_bridge.rs` (manifest)
+- `franken_async_module_runtime` — `crates/franken-engine/src/bin/franken_async_module_runtime.rs` (manifest)
+- `franken_async_module_scheduler` — `crates/franken-engine/src/bin/franken_async_module_scheduler.rs` (manifest)
+- `franken_benchmark_gate` — `crates/franken-engine/src/bin/franken_benchmark_gate.rs` (manifest)
+- `franken_claim_evidence_ledger` — `crates/franken-engine/src/bin/franken_claim_evidence_ledger.rs` (manifest)
+- `franken_closure_report` — `crates/franken-engine/src/bin/franken_closure_report.rs` (manifest)
+- `franken_cold_start_compilation_lane` — `crates/franken-engine/src/bin/franken_cold_start_compilation_lane.rs` (manifest)
+- `franken_control_plane_benchmark_split_report` — `crates/franken-engine/src/bin/franken_control_plane_benchmark_split_report.rs` (manifest)
+- `franken_control_plane_mock_inventory` — `crates/franken-engine/src/bin/franken_control_plane_mock_inventory.rs` (manifest)
+- `franken_control_plane_policy_diagnostics` — `crates/franken-engine/src/bin/franken_control_plane_policy_diagnostics.rs` (manifest)
+- `franken_coverage_frontier` — `crates/franken-engine/src/bin/franken_coverage_frontier.rs` (manifest)
+- `franken_deterministic_sim_scheduler_artifacts` — `crates/franken-engine/src/bin/franken_deterministic_sim_scheduler_artifacts.rs` (manifest)
+- `franken_engine_object_id_migration` — `crates/franken-engine/src/bin/franken_engine_object_id_migration.rs` (manifest)
+- `franken_engine_product_blocker_ledger` — `crates/franken-engine/src/bin/franken_engine_product_blocker_ledger.rs` (manifest)
+- `franken_evidence_ledger_stitching` — `crates/franken-engine/src/bin/franken_evidence_ledger_stitching.rs` (manifest)
+- `franken_evidence_manifest` — `crates/franken-engine/src/bin/franken_evidence_manifest.rs` (manifest)
+- `franken_execution_truth_ledger` — `crates/franken-engine/src/bin/franken_execution_truth_ledger.rs` (manifest)
+- `franken_extension_host_topology_assessment` — `crates/franken-engine/src/bin/franken_extension_host_topology_assessment.rs` (manifest)
+- `franken_ifc_conformance_runner` — `crates/franken-engine/src/bin/franken_ifc_conformance_runner.rs` (manifest)
+- `franken_intl_surface_contract` — `crates/franken-engine/src/bin/franken_intl_surface_contract.rs` (manifest)
+- `franken_kernel_synthesis_contract` — `crates/franken-engine/src/bin/franken_kernel_synthesis_contract.rs` (manifest)
+- `franken_law_mining` — `crates/franken-engine/src/bin/franken_law_mining.rs` (manifest)
+- `franken_lean_proof_producer` — `crates/franken-engine/src/bin/franken_lean_proof_producer.rs` (manifest)
+- `franken_lockstep_runner` — `crates/franken-engine/src/bin/franken_lockstep_runner.rs` (manifest)
+- `franken_lowering_gap_inventory` — `crates/franken-engine/src/bin/franken_lowering_gap_inventory.rs` (manifest)
+- `franken_metadata_substrate_evidence` — `crates/franken-engine/src/bin/franken_metadata_substrate_evidence.rs` (manifest)
+- `franken_npm_compatibility_matrix` — `crates/franken-engine/src/bin/franken_npm_compatibility_matrix.rs` (manifest)
+- `franken_observability_publication_bundle` — `crates/franken-engine/src/bin/franken_observability_publication_bundle.rs` (manifest)
+- `franken_orchestrator_context_refactor` — `crates/franken-engine/src/bin/franken_orchestrator_context_refactor.rs` (manifest)
+- `franken_parser_gap_inventory` — `crates/franken-engine/src/bin/franken_parser_gap_inventory.rs` (manifest)
+- `franken_parser_multi_engine_harness` — `crates/franken-engine/src/bin/franken_parser_multi_engine_harness.rs` (manifest)
+- `franken_parser_oracle_report` — `crates/franken-engine/src/bin/franken_parser_oracle_report.rs` (manifest)
+- `franken_parser_phase0_report` — `crates/franken-engine/src/bin/franken_parser_phase0_report.rs` (manifest)
+- `franken_persistent_cache_contract` — `crates/franken-engine/src/bin/franken_persistent_cache_contract.rs` (manifest)
+- `franken_react_package_cohort` — `crates/franken-engine/src/bin/franken_react_package_cohort.rs` (manifest)
+- `franken_red_team_harness_gate` — `crates/franken-engine/src/bin/franken_red_team_harness_gate.rs` (manifest)
+- `franken_resource_budget_demo` — `crates/franken-engine/src/bin/franken_resource_budget_demo.rs` (manifest)
+- `franken_rgc_planning_track` — `crates/franken-engine/src/bin/franken_rgc_planning_track.rs` (manifest)
+- `franken_s3fifo_baseline_comparator` — `crates/franken-engine/src/bin/franken_s3fifo_baseline_comparator.rs` (manifest)
+- `franken_security_conformance_runner` — `crates/franken-engine/src/bin/franken_security_conformance_runner.rs` (manifest)
+- `franken_seqlock_candidate_inventory` — `crates/franken-engine/src/bin/franken_seqlock_candidate_inventory.rs` (manifest)
+- `franken_seqlock_reader_writer_contract` — `crates/franken-engine/src/bin/franken_seqlock_reader_writer_contract.rs` (manifest)
+- `franken_seqlock_rollout_guard` — `crates/franken-engine/src/bin/franken_seqlock_rollout_guard.rs` (manifest)
+- `franken_shape_lattice_bundle` — `crates/franken-engine/src/bin/franken_shape_lattice_bundle.rs` (manifest)
+- `franken_shipped_path_parity` — `crates/franken-engine/src/bin/franken_shipped_path_parity.rs` (manifest)
+- `franken_signature_drift_gate` — `crates/franken-engine/src/bin/franken_signature_drift_gate.rs` (manifest)
+- `franken_swarm_execution_queue` — `crates/franken-engine/src/bin/franken_swarm_execution_queue.rs` (manifest)
+- `franken_tail_latency_control_plane` — `crates/franken-engine/src/bin/franken_tail_latency_control_plane.rs` (manifest)
+- `franken_test262_generator` — `crates/franken-engine/src/bin/franken_test262_generator.rs` (manifest)
+- `franken_test262_runner` — `crates/franken-engine/src/bin/franken_test262_runner.rs` (manifest)
+- `franken_verification_coverage_contract` — `crates/franken-engine/src/bin/franken_verification_coverage_contract.rs` (manifest)
+- `franken_wasm_numeric` — `crates/franken-engine/src/bin/franken_wasm_numeric.rs` (manifest)
+- `franken_workload_corpus_gate` — `crates/franken-engine/src/bin/franken_workload_corpus_gate.rs` (manifest)
+- `franken_zero_placeholder_gate` — `crates/franken-engine/src/bin/franken_zero_placeholder_gate.rs` (manifest)
+- `franken_zero_placeholder_scan` — `crates/franken-engine/src/bin/franken_zero_placeholder_scan.rs` (manifest)
 - `frankenctl` — `crates/franken-engine/src/bin/frankenctl.rs` (manifest)
-- `frx_lockstep_oracle` — `crates/franken-engine/src/bin/frx_lockstep_oracle.rs` (auto)
-- `generate_react_goldens` — `crates/franken-engine/src/bin/generate_react_goldens.rs` (auto)
-- `rgc_artifact_validator` — `crates/franken-engine/src/bin/rgc_artifact_validator.rs` (auto)
+- `frx_lockstep_oracle` — `crates/franken-engine/src/bin/frx_lockstep_oracle.rs` (manifest)
+- `generate_react_goldens` — `crates/franken-engine/src/bin/generate_react_goldens.rs` (manifest)
+- `rgc_artifact_validator` — `crates/franken-engine/src/bin/rgc_artifact_validator.rs` (manifest)
 - `runtime-lockstep-orchestrator` — `crates/franken-engine/src/bin/runtime_lockstep_orchestrator.rs` (manifest)
-- `runtime_diagnostics` — `crates/franken-engine/src/bin/runtime_diagnostics.rs` (auto)
+- `runtime_diagnostics` — `crates/franken-engine/src/bin/runtime_diagnostics.rs` (manifest)
 
 ## Missing Exported Source Files
 
@@ -1410,6 +1660,13 @@ None.
 
 - `acceptance_ledger`
 - `authority_migration`
+- `intrinsics_array_table`
 - `moonshot_ranking_report`
+- `parser_inline_tests`
+- `promise_model_combinator_regressions`
+- `promise_model_fatal_adoption_regressions`
+- `promise_model_ifc_regressions`
+- `promise_model_replay_regressions`
+- `promise_model_restore`
 - `trust_zone`
-
+- `wasm_numeric_vm`

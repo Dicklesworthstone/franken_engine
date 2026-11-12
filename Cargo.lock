@@ -1931,6 +1931,9 @@ version = "0.3.0"
 dependencies = [
  "chrono",
  "ed25519-dalek",
+ "franken-decision",
+ "franken-evidence",
+ "franken-kernel",
  "frankenengine-extension-host",
  "hex",
  "hmac 0.12.1",
@@ -1943,7 +1946,6 @@ dependencies = [
  "thiserror",
  "toml",
  "unicode-id-start",
- "uuid",
 ]
 
 [[package]]

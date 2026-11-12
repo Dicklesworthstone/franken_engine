@@ -370,14 +370,23 @@ mod tests {
                 Some(source.clone()),
             )
             .unwrap();
-        assert_eq!(core.current_module_specifier.as_deref(), Some("captured:caller"));
+        assert_eq!(
+            core.current_module_specifier.as_deref(),
+            Some("captured:caller")
+        );
         assert_eq!(core.read_reg(3).unwrap(), Value::Int(99));
         assert_eq!(core.scope_chain.depth(), scope_depth);
         assert_eq!(core.module_snapshot_in_flight_bytes, 0);
-        assert_eq!(core.active_inline_callback_context_label, Some(label.clone()));
+        assert_eq!(
+            core.active_inline_callback_context_label,
+            Some(label.clone())
+        );
         let record = core.module_state.modules.get("captured:data").unwrap();
         assert_eq!(record.exports.len(), 1);
-        assert_eq!(record.exports.get(&JsString::from("default")), Some(&Value::Int(42)));
+        assert_eq!(
+            record.exports.get(&JsString::from("default")),
+            Some(&Value::Int(42))
+        );
         assert!(record.compiled_module.is_none());
         assert_eq!(record.flow_label_ceiling, Some(label.clone()));
         let module_object = record.cjs_module_object.expect("shared CommonJS carrier");
@@ -425,12 +434,14 @@ mod tests {
     #[test]
     fn custom_flow_ceiling_replacement_is_admitted_before_cache_mutation() {
         let mut core = core();
-        core.ensure_module_record(&caller(), "captured:data").unwrap();
+        core.ensure_module_record(&caller(), "captured:data")
+            .unwrap();
         let previous = Label::Custom {
             name: "initial-json-origin".repeat(8),
             level: 8,
         };
-        core.set_module_flow_label_ceiling("captured:data", &previous).unwrap();
+        core.set_module_flow_label_ceiling("captured:data", &previous)
+            .unwrap();
         let baseline = core.estimated_memory_bytes();
         core.config.max_total_memory_bytes = baseline;
         let replacement = Label::Custom {
@@ -442,7 +453,11 @@ mod tests {
             Err(InterpreterError::MemoryBudgetExceeded { .. })
         ));
         assert_eq!(
-            core.module_state.modules.get("captured:data").unwrap().flow_label_ceiling,
+            core.module_state
+                .modules
+                .get("captured:data")
+                .unwrap()
+                .flow_label_ceiling,
             Some(previous)
         );
         assert_eq!(core.estimated_memory_bytes(), baseline);

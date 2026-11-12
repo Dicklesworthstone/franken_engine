@@ -56,7 +56,10 @@ fn file_handle_write_sync_read_and_close_use_real_files() {
     )
     .expect("native descriptor lifecycle");
     assert_eq!(output, ["number", "5 hello", "2 el", "-1"]);
-    assert_eq!(std::fs::read(root.path().join("out.txt")).unwrap(), b"hello");
+    assert_eq!(
+        std::fs::read(root.path().join("out.txt")).unwrap(),
+        b"hello"
+    );
 }
 
 #[test]
@@ -93,8 +96,15 @@ fn file_handle_close_is_idempotent_and_stale_operations_reject() {
         &["fs_read", "fs_write"],
     )
     .expect("closed handles reject without native access");
-    assert_eq!(output, ["-1 true", "EBADF write", "EBADF read", "EBADF fsync"]);
-    assert!(std::fs::read(root.path().join("empty.txt")).unwrap().is_empty());
+    assert_eq!(
+        output,
+        ["-1 true", "EBADF write", "EBADF read", "EBADF fsync"]
+    );
+    assert!(
+        std::fs::read(root.path().join("empty.txt"))
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -112,7 +122,10 @@ fn file_handle_close_during_option_getter_drains_the_active_write() {
     )
     .expect("close cannot release an active descriptor");
     assert_eq!(output, ["4", "-1"]);
-    assert_eq!(std::fs::read(root.path().join("safe.txt")).unwrap(), b"safe");
+    assert_eq!(
+        std::fs::read(root.path().join("safe.txt")).unwrap(),
+        b"safe"
+    );
 }
 
 #[test]
@@ -144,7 +157,10 @@ fn file_handle_globals_are_not_captured_from_guest_lexical_bindings() {
     )
     .expect("facade helpers use realm globals");
     assert_eq!(output, ["2 16384"]);
-    assert_eq!(std::fs::read(root.path().join("shadow.txt")).unwrap(), b"ok");
+    assert_eq!(
+        std::fs::read(root.path().join("shadow.txt")).unwrap(),
+        b"ok"
+    );
 }
 
 #[test]
@@ -169,7 +185,10 @@ fn file_handle_array_buffer_views_use_byte_windows_and_keep_identity() {
     )
     .expect("native ArrayBufferView descriptor operations");
     assert_eq!(output, ["4 true", "2d2d2d626364652d2d2d2d2d", "2 true"]);
-    assert_eq!(std::fs::read(root.path().join("views.txt")).unwrap(), b"cdcdef");
+    assert_eq!(
+        std::fs::read(root.path().join("views.txt")).unwrap(),
+        b"cdcdef"
+    );
 }
 
 #[test]
@@ -198,7 +217,10 @@ fn file_handle_vectors_and_sync_exports_accept_mixed_byte_views() {
     )
     .expect("native mixed view vector operations");
     assert_eq!(output, ["4 true", "4 true", "--AB-BC-", "4 4"]);
-    assert_eq!(std::fs::read(root.path().join("vectors.txt")).unwrap(), b"ABBC");
+    assert_eq!(
+        std::fs::read(root.path().join("vectors.txt")).unwrap(),
+        b"ABBC"
+    );
 }
 
 #[test]
@@ -271,5 +293,8 @@ fn file_handle_single_nonempty_vector_preserves_view_offsets_and_short_read_tail
     )
     .expect("single-window vector descriptor operations");
     assert_eq!(output, ["4 true", "3 true", "--BCD---"]);
-    assert_eq!(std::fs::read(root.path().join("single.txt")).unwrap(), b"ABCD");
+    assert_eq!(
+        std::fs::read(root.path().join("single.txt")).unwrap(),
+        b"ABCD"
+    );
 }

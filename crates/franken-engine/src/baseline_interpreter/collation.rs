@@ -293,7 +293,10 @@ impl<'a> Iterator for AsciiElements<'a> {
 fn ascii_compare(a: &str, b: &str, options: &CollationOptions) -> Ordering {
     let mut left = AsciiElements::new(a, options);
     let mut right = AsciiElements::new(b, options);
-    let compare_case = matches!(options.sensitivity, Sensitivity::Case | Sensitivity::Variant);
+    let compare_case = matches!(
+        options.sensitivity,
+        Sensitivity::Case | Sensitivity::Variant
+    );
     let mut case = Ordering::Equal;
     loop {
         match (left.next(), right.next()) {
@@ -493,10 +496,9 @@ mod tests {
     #[test]
     fn ascii_fast_path_preserves_whole_string_levels_and_numeric_boundaries() {
         let mut texts: Vec<String> = [
-            "", "a", "A", "ab", "Ab", "aB", "AB", "ac", "Ac", "a0", "A00",
-            "a1", "A01", "a10", "A2", "0", "00", "0001", "01", "1", "9", "10",
-            "1-2", "12", "1 2", "1-02", "1\x0b2", "a-b", "ab-", "-AB", "a\0b",
-            "a\x7fb", "\t", "\x0b", "\x0c", "~", "$", "_",
+            "", "a", "A", "ab", "Ab", "aB", "AB", "ac", "Ac", "a0", "A00", "a1", "A01", "a10",
+            "A2", "0", "00", "0001", "01", "1", "9", "10", "1-2", "12", "1 2", "1-02", "1\x0b2",
+            "a-b", "ab-", "-AB", "a\0b", "a\x7fb", "\t", "\x0b", "\x0c", "~", "$", "_",
         ]
         .into_iter()
         .map(str::to_owned)
@@ -540,7 +542,9 @@ mod tests {
             let mut text = String::new();
             for _ in 0..length {
                 state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
-                text.push(char::from(alphabet[(state >> 32) as usize % alphabet.len()]));
+                text.push(char::from(
+                    alphabet[(state >> 32) as usize % alphabet.len()],
+                ));
             }
             text
         };

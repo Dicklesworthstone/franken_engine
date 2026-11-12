@@ -18,13 +18,11 @@ fn eval_value(source: &str) -> String {
 }
 
 #[test]
-#[ignore = "bd-bpf76: Promise global unimplemented; un-ignore when it lands"]
 fn promise_resolve_then_is_function() {
     assert_eq!(eval_value("typeof Promise.resolve(5).then"), "function");
 }
 
 #[test]
-#[ignore = "bd-bpf76: Promise global unimplemented; un-ignore when it lands"]
 fn promise_all_is_function() {
     assert_eq!(eval_value("typeof Promise.all"), "function");
 }
@@ -46,13 +44,11 @@ fn object_rest_value() {
 }
 
 #[test]
-#[ignore = "bd-1trl5: Number() coercion unimplemented; un-ignore when it lands"]
 fn number_coerces_string() {
     assert_eq!(eval_value(r#"Number("42") + 1"#), "43");
 }
 
 #[test]
-#[ignore = "bd-1trl5: Number() coercion unimplemented; un-ignore when it lands"]
 fn number_coerces_bool() {
     assert_eq!(eval_value("Number(true)"), "1");
 }

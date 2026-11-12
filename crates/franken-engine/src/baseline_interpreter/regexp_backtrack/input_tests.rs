@@ -162,7 +162,17 @@ fn native_captures_and_remaining_work_match_dense_inputs_at_every_budget() {
         ("(?<=日)(😀*)", "u"),
     ] {
         let regexp = BacktrackRegExp::new(pattern, flags).unwrap();
-        for text in ["", "a", "aaab", "baabac", "a\nb", "\0ab", "éé", "日😀😀", "Kk!"] {
+        for text in [
+            "",
+            "a",
+            "aaab",
+            "baabac",
+            "a\nb",
+            "\0ab",
+            "éé",
+            "日😀😀",
+            "Kk!",
+        ] {
             let actual = PreparedInput::new(text);
             let reference = dense_input(text);
             for byte in (0..=text.len() + 1).chain([usize::MAX]) {
@@ -172,10 +182,16 @@ fn native_captures_and_remaining_work_match_dense_inputs_at_every_budget() {
                         let mut right = budget;
                         assert_eq!(
                             regexp.exec_at_with_budget(
-                                &actual, actual.char_index_at_byte(byte), sticky, &mut left
+                                &actual,
+                                actual.char_index_at_byte(byte),
+                                sticky,
+                                &mut left
                             ),
                             regexp.exec_at_with_budget(
-                                &reference, reference.char_index_at_byte(byte), sticky, &mut right
+                                &reference,
+                                reference.char_index_at_byte(byte),
+                                sticky,
+                                &mut right
                             ),
                             "/{pattern}/{flags} text={text:?} byte={byte} sticky={sticky} budget={budget}"
                         );
@@ -209,13 +225,16 @@ fn global_matches_keep_byte_spans_when_inputs_change_encoding() {
         }
         assert_eq!(
             compiled
-                .all_captures(text, CaptureRetention::AllGroups, &mut RetentionBudget::new(u64::MAX))
+                .all_captures(
+                    text,
+                    CaptureRetention::AllGroups,
+                    &mut RetentionBudget::new(u64::MAX)
+                )
                 .unwrap(),
             expected
         );
     }
 }
-
 
 #[test]
 fn compact_offsets_match_wide_oracle_at_u32_boundaries() {
@@ -228,7 +247,10 @@ fn compact_offsets_match_wide_oracle_at_u32_boundaries() {
     };
     assert!(matches!(compact.byte_offsets, ByteOffsets::Compact { .. }));
     for byte in (0..=12).chain([usize::MAX]) {
-        assert_eq!(compact.char_index_at_byte(byte), wide.char_index_at_byte(byte));
+        assert_eq!(
+            compact.char_index_at_byte(byte),
+            wide.char_index_at_byte(byte)
+        );
     }
     for character in (0..=6).chain([usize::MAX]) {
         assert_eq!(compact.byte_offset(character), wide.byte_offset(character));
@@ -244,18 +266,18 @@ fn compact_offsets_match_wide_oracle_at_u32_boundaries() {
     assert_eq!(checkpoints.len(), 1);
     assert_eq!(widths.len(), 1);
     assert_eq!(
-        checkpoints.len() * std::mem::size_of::<u32>()
-            + widths.len() * std::mem::size_of::<u64>(),
+        checkpoints.len() * std::mem::size_of::<u32>() + widths.len() * std::mem::size_of::<u64>(),
         12,
         "one 32-scalar block uses one checkpoint and one width word"
     );
 }
 
-
 #[test]
 fn packed_offsets_cross_every_block_boundary_exactly() {
     let alphabet = ['a', 'é', '日', '😀'];
-    let text: String = (0..97).map(|index| alphabet[index % alphabet.len()]).collect();
+    let text: String = (0..97)
+        .map(|index| alphabet[index % alphabet.len()])
+        .collect();
     let actual = PreparedInput::new(&text);
     let reference = dense_input(&text);
     let ByteOffsets::Compact {

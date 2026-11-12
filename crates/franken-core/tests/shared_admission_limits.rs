@@ -226,11 +226,17 @@ fn native_orchestrator_failures_release_capacity_without_erasing_cleanup_or_spen
             assert_eq!(runtime.execution_count(), 0);
         }
         assert_eq!(tenant.remaining(), BUDGET);
-        let result = orchestrator(&root, Some(lane)).execute(&package("42;")).unwrap();
+        let result = orchestrator(&root, Some(lane))
+            .execute(&package("42;"))
+            .unwrap();
         assert_eq!(result.execution_value, "42");
         assert_eq!(root.remaining(), 0);
         assert_eq!(root.outstanding_admissions(), 0);
-        assert_eq!(tenant.remaining(), BUDGET, "sibling work cannot spend tenant credits");
+        assert_eq!(
+            tenant.remaining(),
+            BUDGET,
+            "sibling work cannot spend tenant credits"
+        );
     }
 }
 
@@ -244,7 +250,9 @@ fn cancelled_blocked_worker_still_blocks_sibling_groups_and_ordinary_orchestrati
     let success = module("42;");
     let mut ordinary = orchestrator(&root, Some(LaneChoice::QuickJs));
     let (hook, entered, release) = parked();
-    let id = first.spawn_with_hook(blocked, config(), "blocked", Some(hook)).unwrap();
+    let id = first
+        .spawn_with_hook(blocked, config(), "blocked", Some(hook))
+        .unwrap();
     entered.recv_timeout(WAIT).unwrap();
 
     // Record observations, then release/join before asserting them. A regression
@@ -268,7 +276,9 @@ fn cancelled_blocked_worker_still_blocks_sibling_groups_and_ordinary_orchestrati
     assert!(!prepared.load(Ordering::Acquire));
     assert!(matches!(
         refused,
-        Err(ExecutionGroupStartError::Admission(WorkBudgetError::AdmissionLimit { limit: 1 }))
+        Err(ExecutionGroupStartError::Admission(
+            WorkBudgetError::AdmissionLimit { limit: 1 }
+        ))
     ));
     let error = ordinary_refused.unwrap_err();
     assert!(matches!(
@@ -277,16 +287,31 @@ fn cancelled_blocked_worker_still_blocks_sibling_groups_and_ordinary_orchestrati
     ));
     assert_cell_closed(&error);
     assert_eq!(remaining, (512, 256));
-    assert_eq!(first.retained(), 1, "joining must retain the cancelled result");
+    assert_eq!(
+        first.retained(),
+        1,
+        "joining must retain the cancelled result"
+    );
     assert_eq!(root.outstanding_admissions(), 0);
     assert!(!second.is_closed());
     assert!(!root.is_revoked());
 
-    let peer = second.spawn(module("42;"), config(), "after-release").unwrap();
-    assert_eq!(collect(&mut second, peer).unwrap().unwrap().value.to_string(), "42");
+    let peer = second
+        .spawn(module("42;"), config(), "after-release")
+        .unwrap();
+    assert_eq!(
+        collect(&mut second, peer)
+            .unwrap()
+            .unwrap()
+            .value
+            .to_string(),
+        "42"
+    );
     assert!(matches!(
         first.take_result(id).unwrap(),
-        Ok(Err(WorkBudgetError::Interpreter(InterpreterError::Cancelled)))
+        Ok(Err(WorkBudgetError::Interpreter(
+            InterpreterError::Cancelled
+        )))
     ));
     assert_eq!(first.remaining_instructions(), 128);
     assert_eq!(second.remaining_instructions(), 128);
@@ -308,9 +333,27 @@ fn finished_results_keep_local_backpressure_without_occupying_family_admissions(
         Err(ExecutionGroupStartError::Capacity { limit: 1 })
     ));
     assert_eq!(first.remaining_instructions(), 128);
-    let peer = second.spawn(module("42;"), config(), "independent-retention").unwrap();
-    assert_eq!(collect(&mut second, peer).unwrap().unwrap().value.to_string(), "42");
-    assert_eq!(first.take_result(id).unwrap().unwrap().unwrap().value.to_string(), "7");
+    let peer = second
+        .spawn(module("42;"), config(), "independent-retention")
+        .unwrap();
+    assert_eq!(
+        collect(&mut second, peer)
+            .unwrap()
+            .unwrap()
+            .value
+            .to_string(),
+        "42"
+    );
+    assert_eq!(
+        first
+            .take_result(id)
+            .unwrap()
+            .unwrap()
+            .unwrap()
+            .value
+            .to_string(),
+        "7"
+    );
     assert_eq!(root.outstanding_admissions(), 0);
     first.close_and_join(Duration::ZERO).unwrap();
     second.close_and_join(Duration::ZERO).unwrap();
@@ -321,14 +364,22 @@ fn trusted_preparation_holds_capacity_and_refusal_releases_only_its_slot() {
     let root = ExecutionWorkPool::with_admission_limit(512, 1);
     let mut group = ExecutionTaskGroup::new(&root, 256, 1).unwrap();
     let mut escaped = None;
-    let error = group.spawn_with_preparation(module("7;"), config(), "prepare", |job, _| {
-        assert_eq!(root.outstanding_admissions(), 1);
-        assert!(matches!(root.reserve(1), Err(WorkBudgetError::AdmissionLimit { limit: 1 })));
-        assert_eq!(root.remaining(), 256);
-        escaped = Some(job.task_control());
-        Err(WorkBudgetError::Revoked)
-    }).unwrap_err();
-    assert!(matches!(error, ExecutionGroupStartError::Preparation(WorkBudgetError::Revoked)));
+    let error = group
+        .spawn_with_preparation(module("7;"), config(), "prepare", |job, _| {
+            assert_eq!(root.outstanding_admissions(), 1);
+            assert!(matches!(
+                root.reserve(1),
+                Err(WorkBudgetError::AdmissionLimit { limit: 1 })
+            ));
+            assert_eq!(root.remaining(), 256);
+            escaped = Some(job.task_control());
+            Err(WorkBudgetError::Revoked)
+        })
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        ExecutionGroupStartError::Preparation(WorkBudgetError::Revoked)
+    ));
     assert!(escaped.unwrap().is_cancelled());
     assert_eq!(root.outstanding_admissions(), 0);
     assert_eq!(group.retained(), 0);
@@ -336,7 +387,10 @@ fn trusted_preparation_holds_capacity_and_refusal_releases_only_its_slot() {
     assert!(!group.is_closed());
     assert!(!root.is_revoked());
     let id = group.spawn(module("7;"), config(), "retry").unwrap();
-    assert_eq!(collect(&mut group, id).unwrap().unwrap().value.to_string(), "7");
+    assert_eq!(
+        collect(&mut group, id).unwrap().unwrap().value.to_string(),
+        "7"
+    );
     assert_eq!(root.outstanding_admissions(), 0);
     assert_eq!(group.remaining_instructions(), 0);
     group.close_and_join(Duration::ZERO).unwrap();
@@ -362,7 +416,9 @@ fn setup_unwind_closes_its_group_but_does_not_strand_shared_capacity() {
     assert_eq!(group.remaining_instructions(), 128);
     assert_eq!(root.outstanding_admissions(), 0);
     assert!(!root.is_revoked());
-    let result = orchestrator(&root, Some(LaneChoice::V8)).execute(&package("42;")).unwrap();
+    let result = orchestrator(&root, Some(LaneChoice::V8))
+        .execute(&package("42;"))
+        .unwrap();
     assert_eq!(result.execution_value, "42");
     assert_eq!(root.remaining(), 128);
     assert_eq!(root.outstanding_admissions(), 0);

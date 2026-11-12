@@ -28,7 +28,9 @@ fn steady_readable_preserves_fifo_prepend_and_eof() {
 #[test]
 fn partial_reads_preserve_exact_strings_and_bytes() {
     assert_eq!(
-        console_lines(include_str!("fixtures/stream_buffering/partial_readable.js")),
+        console_lines(include_str!(
+            "fixtures/stream_buffering/partial_readable.js"
+        )),
         "text 4538275 44\nbytes 00100111021203 feff13041405 1506160717081809190a1a0b1b0c1c0d1d0e1e0f1f"
     );
 }
@@ -51,7 +53,9 @@ r.destroy();
 #[test]
 fn buffered_writes_preserve_callbacks_backpressure_and_finish_order() {
     assert_eq!(
-        console_lines(include_str!("fixtures/stream_buffering/buffered_writable.js")),
+        console_lines(include_str!(
+            "fixtures/stream_buffering/buffered_writable.js"
+        )),
         "write 2048 2048 2096128 drain,end-callback,finish"
     );
 }

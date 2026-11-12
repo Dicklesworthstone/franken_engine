@@ -529,9 +529,7 @@ impl JsString {
     pub fn encode_utf16(&self) -> CodeUnits<'_> {
         CodeUnits {
             inner: match &self.shape {
-                Shape::WellFormed { .. }
-                    if matches!(&self.utf8, Text::Concat(node) if node.joined.get().is_none()) =>
-                {
+                Shape::WellFormed { .. } if matches!(&self.utf8, Text::Concat(node) if node.joined.get().is_none()) => {
                     CodeUnitsInner::Rope(rope_units::RopeUnits::new(self))
                 }
                 Shape::WellFormed { .. } if self.is_ascii_text() => {
@@ -2445,25 +2443,30 @@ mod tests {
             .expect("case conversion is infallible");
         assert_eq!(
             lower.code_units_vec(),
-            [0xd800, 0x03bf, 0x03c2, 0x0301, 0xdc00, 0x03c3, 0x0061, 0xd800]
+            [
+                0xd800, 0x03bf, 0x03c2, 0x0301, 0xdc00, 0x03c3, 0x0061, 0xd800
+            ]
         );
 
-        let input = JsString::from_code_units(&[
-            0xd800, 0x00df, 0xdc00, 0x0130, 0xd801, 0xdc28, 0xd800,
-        ]);
+        let input =
+            JsString::from_code_units(&[0xd800, 0x00df, 0xdc00, 0x0130, 0xd801, 0xdc28, 0xd800]);
         let upper = input
             .try_map_unicode_spans::<()>(|text| Ok(text.to_uppercase()))
             .expect("case conversion is infallible");
         assert_eq!(
             upper.code_units_vec(),
-            [0xd800, 0x0053, 0x0053, 0xdc00, 0x0130, 0xd801, 0xdc00, 0xd800]
+            [
+                0xd800, 0x0053, 0x0053, 0xdc00, 0x0130, 0xd801, 0xdc00, 0xd800
+            ]
         );
         let lower = input
             .try_map_unicode_spans::<()>(|text| Ok(text.to_lowercase()))
             .expect("case conversion is infallible");
         assert_eq!(
             lower.code_units_vec(),
-            [0xd800, 0x00df, 0xdc00, 0x0069, 0x0307, 0xd801, 0xdc28, 0xd800]
+            [
+                0xd800, 0x00df, 0xdc00, 0x0069, 0x0307, 0xd801, 0xdc28, 0xd800
+            ]
         );
     }
 

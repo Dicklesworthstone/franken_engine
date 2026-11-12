@@ -100,7 +100,10 @@ fn packed_append_two_pop_drain_does_not_resize_on_every_cycle() {
         let mut values = packed(length);
         let key = values.get(&1).unwrap().0.as_ptr();
         let changes = churn(&mut values, length);
-        assert!(changes <= 16, "{changes} capacity changes for {length} slots");
+        assert!(
+            changes <= 16,
+            "{changes} capacity changes for {length} slots"
+        );
         assert_eq!(values, packed(length / 2));
         assert_eq!(values.get(&1).unwrap().0.as_ptr(), key);
     }
@@ -113,7 +116,10 @@ fn holey_append_two_pop_drain_preserves_absence_and_geometric_headroom() {
         assert_eq!(values.remove(&0), Some(("0".into(), 0)));
         let key = values.get(&1).unwrap().0.as_ptr();
         let changes = churn(&mut values, length);
-        assert!(changes <= 16, "{changes} holey capacity changes for {length} slots");
+        assert!(
+            changes <= 16,
+            "{changes} holey capacity changes for {length} slots"
+        );
         assert!(matches!(values, IndexedValues::Holey(_)));
         assert_eq!(values.len(), length as usize / 2 - 1);
         assert_eq!(values.get(&0), None);
@@ -178,9 +184,8 @@ fn resize_cycles_move_non_clone_values_and_drop_each_ownership_once() {
             payload: Box::new([7; 8]),
             drops: Rc::clone(&drops),
         };
-        let mut values = IndexedValues::Packed(
-            (0..256_u32).map(|i| (i.to_string(), owned(i))).collect(),
-        );
+        let mut values =
+            IndexedValues::Packed((0..256_u32).map(|i| (i.to_string(), owned(i))).collect());
         if holey {
             drop(values.remove(&0));
         }
@@ -188,7 +193,11 @@ fn resize_cycles_move_non_clone_values_and_drop_each_ownership_once() {
         let addresses = (key.as_ptr(), value.payload.as_ptr());
         for (step, top) in (129..=256_u32).rev().enumerate() {
             let identity = 256 + step as u32;
-            assert!(values.insert(top, (top.to_string(), owned(identity))).is_none());
+            assert!(
+                values
+                    .insert(top, (top.to_string(), owned(identity)))
+                    .is_none()
+            );
             let removed = values.remove(&top).unwrap();
             assert_eq!(removed.1.identity, identity);
             check_bound(&values);
@@ -212,13 +221,18 @@ fn removal_normalizes_capacity_before_a_returned_value_destructor_panics() {
     struct PanicOnce(Rc<Cell<bool>>);
     impl Drop for PanicOnce {
         fn drop(&mut self) {
-            assert!(!self.0.replace(false), "deliberate returned-value drop panic");
+            assert!(
+                !self.0.replace(false),
+                "deliberate returned-value drop panic"
+            );
         }
     }
     for holey in [false, true] {
         let trigger = Rc::new(Cell::new(false));
         let mut values = IndexedValues::Packed(
-            (0..256_u32).map(|i| (i.to_string(), PanicOnce(Rc::clone(&trigger)))).collect(),
+            (0..256_u32)
+                .map(|i| (i.to_string(), PanicOnce(Rc::clone(&trigger))))
+                .collect(),
         );
         if holey {
             drop(values.remove(&0));

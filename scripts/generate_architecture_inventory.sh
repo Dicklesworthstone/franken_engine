@@ -4,15 +4,26 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
-if ! command -v rch >/dev/null 2>&1; then
-  echo "rch is required for architecture inventory Cargo execution" >&2
-  exit 2
-fi
-
 export RUSTC_WRAPPER="${RUSTC_WRAPPER:-}"
 export CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}"
-export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
-export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-${repo_root}/target_cod_9}"
 
-command=(rch exec -- env "RUSTC_WRAPPER=${RUSTC_WRAPPER}" "CARGO_INCREMENTAL=${CARGO_INCREMENTAL}" "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}" "CARGO_TARGET_DIR=${CARGO_TARGET_DIR}" cargo run -p frankenengine-engine --bin franken-architecture-inventory -- "$@")
-"${command[@]}"
+run_inventory() {
+  if command -v rch >/dev/null 2>&1; then
+    rch exec -- env "RUSTC_WRAPPER=${RUSTC_WRAPPER}" "CARGO_INCREMENTAL=${CARGO_INCREMENTAL}" \
+      cargo build -p frankenengine-engine --bin franken-architecture-inventory >&2
+    "${repo_root}/target/debug/franken-architecture-inventory" "$@"
+  elif [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    cargo run -q -p frankenengine-engine --bin franken-architecture-inventory -- "$@"
+  else
+    echo "rch is required for architecture inventory Cargo execution" >&2
+    exit 2
+  fi
+}
+
+if [[ $# -eq 0 ]]; then
+  rendered="$(run_inventory --stdout)"
+  printf '%s\n' "$rendered" >"${repo_root}/docs/ARCHITECTURE_INVENTORY.md"
+  echo "wrote ${repo_root}/docs/ARCHITECTURE_INVENTORY.md"
+else
+  run_inventory "$@"
+fi

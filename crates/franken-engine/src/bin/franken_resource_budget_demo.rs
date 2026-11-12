@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! Resource Budget Escalation Demo
 //!
 //! Demonstrates the deterministic resource budget escalation API:

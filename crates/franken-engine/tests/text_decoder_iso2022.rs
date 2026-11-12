@@ -11,10 +11,9 @@ use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3}
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 
 fn execute_fixtures(goal: ParseGoal) {
-    let fixtures: serde_json::Value = serde_json::from_str(include_str!(
-        "fixtures/text_decoder/iso2022.json"
-    ))
-    .expect("ISO-2022-JP fixtures");
+    let fixtures: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/text_decoder/iso2022.json"))
+            .expect("ISO-2022-JP fixtures");
     for fixture in fixtures.as_array().unwrap() {
         let name = fixture["name"].as_str().unwrap();
         let tree = CanonicalEs2020Parser
@@ -34,7 +33,11 @@ fn execute_fixtures(goal: ParseGoal) {
         .expect("ISO-2022-JP program lowers")
         .ir3;
         let expected: Vec<_> = fixture["expected"]
-            .as_array().unwrap().iter().map(|line| line.as_str().unwrap()).collect();
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|line| line.as_str().unwrap())
+            .collect();
         for throughput in [false, true] {
             for stress in [None, Some(1), Some(7)] {
                 let mut config = if throughput {
@@ -55,10 +58,20 @@ fn execute_fixtures(goal: ParseGoal) {
                 let result = core.execute(&module).unwrap_or_else(|error| {
                     panic!("{name}, throughput={throughput}, stress={stress:?}: {error}")
                 });
-                let actual: Vec<_> = result.console_output.iter()
-                    .map(|entry| entry.message.as_str()).collect();
-                assert_eq!(actual, expected, "{name}, throughput={throughput}, stress={stress:?}");
-                assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes(), "{name}");
+                let actual: Vec<_> = result
+                    .console_output
+                    .iter()
+                    .map(|entry| entry.message.as_str())
+                    .collect();
+                assert_eq!(
+                    actual, expected,
+                    "{name}, throughput={throughput}, stress={stress:?}"
+                );
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes(),
+                    "{name}"
+                );
             }
         }
     }

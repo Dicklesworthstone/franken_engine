@@ -64,7 +64,10 @@ console.log('result', emitter.emit('error', original, marker));
 
 #[test]
 fn monitors_run_first_with_the_original_receiver_and_arguments() {
-    assert_events(ORDER, "monitor true true true\nerror true true true\nresult true");
+    assert_events(
+        ORDER,
+        "monitor true true true\nerror true true true\nresult true",
+    );
 }
 
 const UNHANDLED: &str = r#"
@@ -103,7 +106,10 @@ console.log(emitter instanceof E, emitter instanceof Derived);
 
 #[test]
 fn nested_monitors_honor_emit_overrides_and_native_listener_storage() {
-    assert_events(NESTED, "emit error outer\nemit monitor outer\nmonitor outer\nemit error inner\nemit monitor inner\nmonitor inner\nerror inner\nerror outer\ntrue true");
+    assert_events(
+        NESTED,
+        "emit error outer\nemit monitor outer\nmonitor outer\nemit error inner\nemit monitor inner\nmonitor inner\nerror inner\nerror outer\ntrue true",
+    );
 }
 
 const ONCE: &str = r#"

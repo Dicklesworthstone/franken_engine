@@ -144,12 +144,17 @@ fn create_gate_manifest() -> serde_json::Value {
                 "test_name": "micro-1",
                 "value": 1.0,
                 "unit": "ms",
+                "franken_output": "{\"sum\":49995000}",
+                "reference_output": "{\"sum\":49995000}",
                 "metadata": {}
             },
             {
                 "test_name": "app-1",
-                "value": 5.2,
-                "unit": "ms",
+                "value": 0.96,
+                "unit": "ratio",
+                "target": "bun",
+                "franken_output": "ok:items=1024",
+                "reference_output": "ok:items=1024",
                 "metadata": {}
             }
         ]
@@ -365,10 +370,69 @@ fn binary_integrates_with_gate_manifest() {
     // Verify gate integration added parity verdicts
     let output_content = fs::read_to_string(&output_path).unwrap();
     let parsed: EvidenceBundle = serde_json::from_str(&output_content).unwrap();
-    assert!(
-        !parsed.parity_verdicts.is_empty(),
-        "Gate integration should add parity verdicts"
+    assert_eq!(
+        parsed.parity_verdicts.len(),
+        2,
+        "Gate integration should add verified parity verdicts"
     );
+    assert!(parsed.parity_verdicts.iter().all(|v| v.output_equivalent));
+}
+
+#[test]
+fn binary_rejects_gate_manifest_without_parity_transcript_evidence() {
+    let temp_dir = TempDir::new().unwrap();
+    let bundle = create_assembling_test_bundle(false);
+
+    let input_path = temp_dir.path().join("input.json");
+    fs::write(&input_path, serde_json::to_string_pretty(&bundle).unwrap()).unwrap();
+
+    // Timing-only manifest with NO differential transcript or verified parity verdict fields.
+    let gate_path = temp_dir.path().join("timing_only_gate.json");
+    let timing_only = serde_json::json!({
+        "timestamp": "2026-04-20T06:12:00Z",
+        "engine": "node",
+        "results": [
+            {
+                "test_name": "micro-1",
+                "value": 1.0,
+                "unit": "ms",
+                "metadata": {}
+            }
+        ]
+    });
+    fs::write(
+        &gate_path,
+        serde_json::to_string_pretty(&timing_only).unwrap(),
+    )
+    .unwrap();
+
+    let output_path = temp_dir.path().join("output.json");
+    let output = export_binary_command()
+        .args(&[
+            "-i",
+            input_path.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+            "-f",
+            "json",
+            "-t",
+            "bundle",
+            "--gate-integration",
+            gate_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "Timing-only gate manifest must fail closed instead of fabricating output_equivalent=true"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("refusing to fabricate parity"),
+        "Expected fail-closed parity message, got stderr: {stderr}"
+    );
+    assert!(!output_path.exists(), "Failed export must not write output");
 }
 
 // ---------------------------------------------------------------------------

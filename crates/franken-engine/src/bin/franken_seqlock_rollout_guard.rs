@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use frankenengine_engine::seqlock_rollout_guard::{
     ArtifactContext, emit_default_rollout_bundle, render_summary,
 };

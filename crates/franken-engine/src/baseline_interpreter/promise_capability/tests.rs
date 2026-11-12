@@ -38,10 +38,20 @@ fn assert_fixture(source: &str, expected: &str) {
             let mut core = InterpreterCore::new(config(throughput), "combinator-completions");
             core.set_gc_stress_interval(stress);
             let result = core.execute(&module).expect("native execution");
-            let actual = result.console_output.iter().map(|entry| entry.message.as_str())
-                .collect::<Vec<_>>().join("\n");
-            assert_eq!(actual, expected, "throughput={throughput}, stress={stress:?}");
-            assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+            let actual = result
+                .console_output
+                .iter()
+                .map(|entry| entry.message.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert_eq!(
+                actual, expected,
+                "throughput={throughput}, stress={stress:?}"
+            );
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
         }
     }
 }
@@ -180,7 +190,15 @@ fn arbitrary_capabilities_observe_the_original_reason_and_their_own_reject_failu
     assert_fixture(CUSTOM_REJECT_SOURCE, CUSTOM_REJECT_EXPECTED);
 }
 
-fn failure_core(close_body: &str) -> (InterpreterCore, Ir3Module, Value, ObjectId, PromiseCapabilityRecord) {
+fn failure_core(
+    close_body: &str,
+) -> (
+    InterpreterCore,
+    Ir3Module,
+    Value,
+    ObjectId,
+    PromiseCapabilityRecord,
+) {
     let source = format!(
         "const state = {{marker: 9182, closes: 0}}; \
          const iterable = {{[Symbol.iterator]() {{return {{ \
@@ -192,11 +210,18 @@ fn failure_core(close_body: &str) -> (InterpreterCore, Ir3Module, Value, ObjectI
     let module = module(&source);
     let mut core = InterpreterCore::new(config(false), "combinator-failure-injection");
     core.execute(&module).expect("setup executes");
-    let holder = core.heap.iter().find(|entry| entry.properties.get("marker") == Some(&Value::Int(9183)))
+    let holder = core
+        .heap
+        .iter()
+        .find(|entry| entry.properties.get("marker") == Some(&Value::Int(9183)))
         .expect("holder");
     let iterable = holder.properties.get("iterable").unwrap().clone();
-    let Value::Object(state) = holder.properties.get("state").unwrap().clone() else { panic!("state"); };
-    let iterator = core.init_for_of_iterator(Some(&module), iterable).expect("native iterator");
+    let Value::Object(state) = holder.properties.get("state").unwrap().clone() else {
+        panic!("state");
+    };
+    let iterator = core
+        .init_for_of_iterator(Some(&module), iterable)
+        .expect("native iterator");
     let promise = core.create_promise().unwrap();
     let capability = PromiseCapabilityRecord {
         promise: Value::Promise(promise.0),
@@ -212,52 +237,94 @@ fn fatal_step_errors_skip_guest_cleanup_and_rejection_even_at_the_memory_ceiling
     // is a native state-transition test, not a simulated cancellation token.
     for error in [
         InterpreterError::Cancelled,
-        InterpreterError::BudgetExhausted { executed: 3, budget: 2 },
-        InterpreterError::MemoryBudgetExceeded {
-            requested_bytes: 2, max_bytes: 1,
-            requested_heap_objects: 0, max_heap_objects: 1,
+        InterpreterError::BudgetExhausted {
+            executed: 3,
+            budget: 2,
         },
-        InterpreterError::CapabilityDenied { capability: "fs:write".into() },
-        InterpreterError::InternalError { details: "host failed".into() },
+        InterpreterError::MemoryBudgetExceeded {
+            requested_bytes: 2,
+            max_bytes: 1,
+            requested_heap_objects: 0,
+            max_heap_objects: 1,
+        },
+        InterpreterError::CapabilityDenied {
+            capability: "fs:write".into(),
+        },
+        InterpreterError::InternalError {
+            details: "host failed".into(),
+        },
     ] {
-        let (mut core, module, iterator, state, capability) = failure_core("throw 'cleanup must not run';");
-        core.replace_pending_abrupt_slots(Some((Value::Int(9), Label::Secret)), None).unwrap();
+        let (mut core, module, iterator, state, capability) =
+            failure_core("throw 'cleanup must not run';");
+        core.replace_pending_abrupt_slots(Some((Value::Int(9), Label::Secret)), None)
+            .unwrap();
         let expected = format!("{error:?}");
         let heap_len = core.heap.len();
         let promises = core.promise_store.len();
         core.config.max_total_memory_bytes = core.estimated_memory_bytes();
-        let actual = core.reject_combinator_step(&module, &capability, iterator, error).unwrap_err();
+        let actual = core
+            .reject_combinator_step(&module, &capability, iterator, error)
+            .unwrap_err();
         assert_eq!(format!("{actual:?}"), expected);
-        assert_eq!(core.heap[state.0 as usize].properties.get("closes"), Some(&Value::Int(0)));
+        assert_eq!(
+            core.heap[state.0 as usize].properties.get("closes"),
+            Some(&Value::Int(0))
+        );
         let promise = InterpreterCore::capability_native_promise(&capability).unwrap();
-        assert_eq!(core.promise_store.get(promise).unwrap().state, PromiseState::Pending);
+        assert_eq!(
+            core.promise_store.get(promise).unwrap().state,
+            PromiseState::Pending
+        );
         assert_eq!(core.heap.len(), heap_len);
         assert_eq!(core.promise_store.len(), promises);
-        assert_eq!(core.take_pending_exception_slot(), Some((Value::Int(9), Label::Secret)));
-        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        assert_eq!(
+            core.take_pending_exception_slot(),
+            Some((Value::Int(9), Label::Secret))
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 }
 
 #[test]
 fn cleanup_cannot_replace_the_thrown_value_or_erase_its_observation_label() {
     for thrown_label in [Label::Public, Label::Secret] {
-        let (mut core, module, iterator, state, capability) = failure_core("throw {replacement: true};");
+        let (mut core, module, iterator, state, capability) =
+            failure_core("throw {replacement: true};");
         let reason = Value::Object(state);
-        core.replace_pending_abrupt_slots(Some((reason.clone(), thrown_label)), None).unwrap();
-        core.replace_pending_hostcall_result_label(Some(Label::Secret)).unwrap();
-        let result = core.reject_combinator_step(
-            &module, &capability, iterator,
-            InterpreterError::UncaughtException { value: "description is not identity".into() },
-        ).expect("reject original completion");
+        core.replace_pending_abrupt_slots(Some((reason.clone(), thrown_label)), None)
+            .unwrap();
+        core.replace_pending_hostcall_result_label(Some(Label::Secret))
+            .unwrap();
+        let result = core
+            .reject_combinator_step(
+                &module,
+                &capability,
+                iterator,
+                InterpreterError::UncaughtException {
+                    value: "description is not identity".into(),
+                },
+            )
+            .expect("reject original completion");
         assert_eq!(result, capability.promise);
         let promise = InterpreterCore::capability_native_promise(&capability).unwrap();
         let record = core.promise_store.get(promise).unwrap();
-        let PromiseState::Rejected(value) = &record.state else { panic!("must reject"); };
+        let PromiseState::Rejected(value) = &record.state else {
+            panic!("must reject");
+        };
         assert_eq!(core.js_value_to_value(value), reason);
         assert_eq!(record.label, Label::Secret);
-        assert_eq!(core.heap[state.0 as usize].properties.get("closes"), Some(&Value::Int(1)));
+        assert_eq!(
+            core.heap[state.0 as usize].properties.get("closes"),
+            Some(&Value::Int(1))
+        );
         assert!(core.take_pending_exception_slot().is_none());
-        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 }
 
@@ -353,37 +420,71 @@ fn any_retains_input_order_across_out_of_order_and_duplicate_rejections() {
 
 #[test]
 fn any_aggregate_uses_exact_native_values_and_retains_the_shared_label() {
-    let source = "const holder = {marker: 9312, values: [function () {}, [1].values(), 99n, '\\ud800']};";
+    let source =
+        "const holder = {marker: 9312, values: [function () {}, [1].values(), 99n, '\\ud800']};";
     let module = module(source);
     let mut core = InterpreterCore::new(config(false), "any-exact-carriers");
     core.execute(&module).unwrap();
-    let holder = core.heap.iter().find(|entry| entry.properties.get("marker") == Some(&Value::Int(9312)))
+    let holder = core
+        .heap
+        .iter()
+        .find(|entry| entry.properties.get("marker") == Some(&Value::Int(9312)))
         .expect("source holder");
     let values = holder.properties.get("values").unwrap().clone();
     let mut originals = Vec::new();
     for index in 0..4 {
-        originals.push(core.get_v(&module, &values, &InterpreterCore::generic_index_key(index)).unwrap());
+        originals.push(
+            core.get_v(&module, &values, &InterpreterCore::generic_index_key(index))
+                .unwrap(),
+        );
     }
     let promise = core.create_promise().unwrap();
-    let shared = core.alloc_object_with_properties(&[
-        (SHARED_LENGTH, Value::Int(4)),
-        (SHARED_REMAINING, Value::Int(1)),
-        (SHARED_VALUES, values),
-        (CAPABILITY_RESOLVE, core.make_promise_capability(BuiltinFunctionKind::PromiseResolve, promise)),
-        (CAPABILITY_REJECT, core.make_promise_capability(BuiltinFunctionKind::PromiseReject, promise)),
-    ]).unwrap();
-    core.join_direct_object_mutation_label(shared, &Label::Secret).unwrap();
-    core.promise_combinator_element_done(&module, PromiseCombinatorKind::Any, shared).unwrap();
+    let shared = core
+        .alloc_object_with_properties(&[
+            (SHARED_LENGTH, Value::Int(4)),
+            (SHARED_REMAINING, Value::Int(1)),
+            (SHARED_VALUES, values),
+            (
+                CAPABILITY_RESOLVE,
+                core.make_promise_capability(BuiltinFunctionKind::PromiseResolve, promise),
+            ),
+            (
+                CAPABILITY_REJECT,
+                core.make_promise_capability(BuiltinFunctionKind::PromiseReject, promise),
+            ),
+        ])
+        .unwrap();
+    core.join_direct_object_mutation_label(shared, &Label::Secret)
+        .unwrap();
+    core.promise_combinator_element_done(&module, PromiseCombinatorKind::Any, shared)
+        .unwrap();
     let record = core.promise_store.get(promise).unwrap();
-    let PromiseState::Rejected(error) = &record.state else { panic!("any must reject"); };
+    let PromiseState::Rejected(error) = &record.state else {
+        panic!("any must reject");
+    };
     assert_eq!(record.label, Label::Secret);
     let error = core.js_value_to_value(error);
-    let errors = core.get_v(&module, &error, &RuntimePropertyKey::String(JsString::from("errors"))).unwrap();
+    let errors = core
+        .get_v(
+            &module,
+            &error,
+            &RuntimePropertyKey::String(JsString::from("errors")),
+        )
+        .unwrap();
     for (index, original) in originals.into_iter().enumerate() {
-        let actual = core.get_v(&module, &errors, &InterpreterCore::generic_index_key(index as u64)).unwrap();
+        let actual = core
+            .get_v(
+                &module,
+                &errors,
+                &InterpreterCore::generic_index_key(index as u64),
+            )
+            .unwrap();
         assert_eq!(actual, original);
     }
-    assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
 }
 
 const NATIVE_RESOLUTION_0_SOURCE: &str = r#"
@@ -634,7 +735,8 @@ fn pending_native_resolution_fixture(
     );
     let module = module(&source);
     let mut core = InterpreterCore::new(config(false), "native-combinator-resolution");
-    core.execute(&module).expect("pending native aggregate setup");
+    core.execute(&module)
+        .expect("pending native aggregate setup");
     assert_eq!(
         core.promise_combinators.len(),
         1,
@@ -773,8 +875,7 @@ fn object_like_resolution_getters_preserve_the_input_label_for_effects() {
                  }});"
             );
             let module = module(&source);
-            let mut core =
-                InterpreterCore::new(config(false), "object-like-resolution-label");
+            let mut core = InterpreterCore::new(config(false), "object-like-resolution-label");
             core.execute(&module).expect("object-like resolution setup");
             let holder = core
                 .heap
@@ -834,14 +935,8 @@ fn native_primitive_carriers_are_reused_without_payload_copies() {
         let carriers_before = core.promise_value_carriers.len();
         let next_before = core.next_promise_value_carrier;
         core.config.max_total_memory_bytes = before;
-        core.resolve_native_combinator_result(
-            None,
-            result,
-            carrier.clone(),
-            Label::Public,
-            false,
-        )
-        .expect("primitive winner needs no extra payload ownership");
+        core.resolve_native_combinator_result(None, result, carrier.clone(), Label::Public, false)
+            .expect("primitive winner needs no extra payload ownership");
         assert_eq!(
             core.promise_store.get(result).unwrap().state,
             PromiseState::Fulfilled(carrier)
@@ -879,7 +974,10 @@ fn native_object_like_carrier_copies_are_preflighted_before_resolution() {
         InterpreterError::MemoryBudgetExceeded { requested_bytes, max_bytes, .. }
             if requested_bytes == required && max_bytes == required - 1
     ));
-    assert_eq!(core.promise_store.get(result).unwrap().state, PromiseState::Pending);
+    assert_eq!(
+        core.promise_store.get(result).unwrap().state,
+        PromiseState::Pending
+    );
     assert_eq!(core.promise_value_carriers.len(), carriers_before);
     assert_eq!(core.next_promise_value_carrier, next_before);
     assert!(core.active_inline_callback_context_label.is_none());

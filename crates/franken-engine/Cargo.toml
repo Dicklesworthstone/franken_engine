@@ -2,22 +2,13 @@
 name = "frankenengine-engine"
 version = "0.3.0"
 edition = "2024"
+license = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+repository = "https://github.com/Dicklesworthstone/franken_engine"
 build = "build.rs"
+autobins = false
 
 [lib]
 path = "src/lib.rs"
-
-[[bin]]
-name = "franken-react-sidecar"
-path = "src/bin/franken_react_sidecar.rs"
-
-[[bin]]
-name = "franken-benchmark-evidence-export"
-path = "src/bin/franken_benchmark_evidence_export.rs"
-
-[[bin]]
-name = "franken-architecture-inventory"
-path = "src/bin/franken_architecture_inventory.rs"
 
 [[bin]]
 name = "frankenctl"
@@ -28,16 +19,343 @@ name = "franken-lsp"
 path = "src/bin/franken_lsp.rs"
 
 [[bin]]
+name = "franken-react-sidecar"
+path = "src/bin/franken_react_sidecar.rs"
+
+[[bin]]
+name = "franken_test262_runner"
+path = "src/bin/franken_test262_runner.rs"
+
+[[bin]]
+name = "franken_zero_placeholder_scan"
+path = "src/bin/franken_zero_placeholder_scan.rs"
+
+[[bin]]
+name = "franken_signature_drift_gate"
+path = "src/bin/franken_signature_drift_gate.rs"
+
+[[bin]]
+name = "franken_lockstep_runner"
+path = "src/bin/franken_lockstep_runner.rs"
+
+[[bin]]
+name = "franken_ifc_conformance_runner"
+path = "src/bin/franken_ifc_conformance_runner.rs"
+
+[[bin]]
+name = "franken_shipped_path_parity"
+path = "src/bin/franken_shipped_path_parity.rs"
+
+[[bin]]
+name = "franken-benchmark-evidence-export"
+path = "src/bin/franken_benchmark_evidence_export.rs"
+
+[[bin]]
 name = "franken-decision-demo"
 path = "src/bin/franken_decision_demo.rs"
+
+[[bin]]
+name = "runtime-lockstep-orchestrator"
+path = "src/bin/runtime_lockstep_orchestrator.rs"
+
+[[bin]]
+name = "franken-architecture-inventory"
+path = "src/bin/franken_architecture_inventory.rs"
+
+[[bin]]
+name = "franken_red_team_harness_gate"
+path = "src/bin/franken_red_team_harness_gate.rs"
+
+[[bin]]
+name = "franken_engine_object_id_migration"
+path = "src/bin/franken_engine_object_id_migration.rs"
+
+[[bin]]
+name = "franken_coverage_frontier"
+path = "src/bin/franken_coverage_frontier.rs"
 
 [[bin]]
 name = "franken-quarantine-mesh-demo"
 path = "src/bin/franken_quarantine_mesh_demo.rs"
 
 [[bin]]
-name = "runtime-lockstep-orchestrator"
-path = "src/bin/runtime_lockstep_orchestrator.rs"
+name = "emit_track_g_proof_bundles"
+path = "src/bin/emit_track_g_proof_bundles.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken-verify"
+path = "src/bin/franken-verify.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_adversarial_campaign_gate"
+path = "src/bin/franken_adversarial_campaign_gate.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_ambient_mock_guard"
+path = "src/bin/franken_ambient_mock_guard.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_asupersync_contract_matrix"
+path = "src/bin/franken_asupersync_contract_matrix.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_asupersync_leverage_adoption_gate"
+path = "src/bin/franken_asupersync_leverage_adoption_gate.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_async_module_promise_bridge"
+path = "src/bin/franken_async_module_promise_bridge.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_async_module_runtime"
+path = "src/bin/franken_async_module_runtime.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_async_module_scheduler"
+path = "src/bin/franken_async_module_scheduler.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_benchmark_gate"
+path = "src/bin/franken_benchmark_gate.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_claim_evidence_ledger"
+path = "src/bin/franken_claim_evidence_ledger.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_closure_report"
+path = "src/bin/franken_closure_report.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_cold_start_compilation_lane"
+path = "src/bin/franken_cold_start_compilation_lane.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_control_plane_benchmark_split_report"
+path = "src/bin/franken_control_plane_benchmark_split_report.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_control_plane_mock_inventory"
+path = "src/bin/franken_control_plane_mock_inventory.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_control_plane_policy_diagnostics"
+path = "src/bin/franken_control_plane_policy_diagnostics.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_deterministic_sim_scheduler_artifacts"
+path = "src/bin/franken_deterministic_sim_scheduler_artifacts.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_engine_product_blocker_ledger"
+path = "src/bin/franken_engine_product_blocker_ledger.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_evidence_ledger_stitching"
+path = "src/bin/franken_evidence_ledger_stitching.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_evidence_manifest"
+path = "src/bin/franken_evidence_manifest.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_execution_truth_ledger"
+path = "src/bin/franken_execution_truth_ledger.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_extension_host_topology_assessment"
+path = "src/bin/franken_extension_host_topology_assessment.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_intl_surface_contract"
+path = "src/bin/franken_intl_surface_contract.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_kernel_synthesis_contract"
+path = "src/bin/franken_kernel_synthesis_contract.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_law_mining"
+path = "src/bin/franken_law_mining.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_lean_proof_producer"
+path = "src/bin/franken_lean_proof_producer.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_lowering_gap_inventory"
+path = "src/bin/franken_lowering_gap_inventory.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_metadata_substrate_evidence"
+path = "src/bin/franken_metadata_substrate_evidence.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_npm_compatibility_matrix"
+path = "src/bin/franken_npm_compatibility_matrix.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_observability_publication_bundle"
+path = "src/bin/franken_observability_publication_bundle.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_orchestrator_context_refactor"
+path = "src/bin/franken_orchestrator_context_refactor.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_parser_gap_inventory"
+path = "src/bin/franken_parser_gap_inventory.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_parser_multi_engine_harness"
+path = "src/bin/franken_parser_multi_engine_harness.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_parser_oracle_report"
+path = "src/bin/franken_parser_oracle_report.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_parser_phase0_report"
+path = "src/bin/franken_parser_phase0_report.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_persistent_cache_contract"
+path = "src/bin/franken_persistent_cache_contract.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_react_package_cohort"
+path = "src/bin/franken_react_package_cohort.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_resource_budget_demo"
+path = "src/bin/franken_resource_budget_demo.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_rgc_planning_track"
+path = "src/bin/franken_rgc_planning_track.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_s3fifo_baseline_comparator"
+path = "src/bin/franken_s3fifo_baseline_comparator.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_security_conformance_runner"
+path = "src/bin/franken_security_conformance_runner.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_seqlock_candidate_inventory"
+path = "src/bin/franken_seqlock_candidate_inventory.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_seqlock_reader_writer_contract"
+path = "src/bin/franken_seqlock_reader_writer_contract.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_seqlock_rollout_guard"
+path = "src/bin/franken_seqlock_rollout_guard.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_shape_lattice_bundle"
+path = "src/bin/franken_shape_lattice_bundle.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_swarm_execution_queue"
+path = "src/bin/franken_swarm_execution_queue.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_tail_latency_control_plane"
+path = "src/bin/franken_tail_latency_control_plane.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_test262_generator"
+path = "src/bin/franken_test262_generator.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_verification_coverage_contract"
+path = "src/bin/franken_verification_coverage_contract.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_wasm_numeric"
+path = "src/bin/franken_wasm_numeric.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_workload_corpus_gate"
+path = "src/bin/franken_workload_corpus_gate.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "franken_zero_placeholder_gate"
+path = "src/bin/franken_zero_placeholder_gate.rs"
+
+[[bin]]
+name = "frx_lockstep_oracle"
+path = "src/bin/frx_lockstep_oracle.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "generate_react_goldens"
+path = "src/bin/generate_react_goldens.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "rgc_artifact_validator"
+path = "src/bin/rgc_artifact_validator.rs"
+required-features = ["governance-surfaces"]
+
+[[bin]]
+name = "runtime_diagnostics"
+path = "src/bin/runtime_diagnostics.rs"
+required-features = ["governance-surfaces"]
 
 [[example]]
 name = "live_guardplane_decision_example"
@@ -50,6 +368,12 @@ path = "../../examples/live_ifc_declassification_example.rs"
 [[example]]
 name = "self_replacement_lineage_replay"
 path = "../../examples/self_replacement_lineage_replay.rs"
+required-features = ["governance-surfaces"]
+
+[[example]]
+name = "live_revocation_first_gate"
+path = "examples/live_revocation_first_gate.rs"
+required-features = ["governance-surfaces"]
 
 [[bench]]
 name = "comparative_node"
@@ -86,6 +410,7 @@ name = "erasure_vs_replication"
 path = "benches/erasure_vs_replication.rs"
 harness = false
 
+
 [[test]]
 name = "buffer_value_bd_9vouw_104"
 path = "tests/buffer_value_bd_9vouw_104.rs"
@@ -120,10 +445,6 @@ required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
 name = "cx_threading_integration"
 path = "tests/cx_threading_integration.rs"
 required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
-
-[[test]]
-name = "erasure_bandwidth_accounting_integration"
-path = "tests/erasure_bandwidth_accounting_integration.rs"
 
 [[test]]
 name = "evidence_emission_enrichment_integration"
@@ -220,12 +541,4211 @@ name = "safety_decision_router_integration"
 path = "tests/safety_decision_router_integration.rs"
 required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
 
+[[test]]
+name = "aara_resource_certificate_deep_integration"
+path = "tests/aara_resource_certificate_deep_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "aara_resource_certificate_enrichment_integration"
+path = "tests/aara_resource_certificate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "aara_resource_certificate_integration"
+path = "tests/aara_resource_certificate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "aara_resource_consumer_enrichment_integration"
+path = "tests/aara_resource_consumer_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "aara_resource_consumer_integration"
+path = "tests/aara_resource_consumer_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "activation_lifecycle"
+path = "tests/activation_lifecycle.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "activation_lifecycle_enrichment_integration"
+path = "tests/activation_lifecycle_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "activation_lifecycle_integration"
+path = "tests/activation_lifecycle_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "adversarial_campaign_edge_cases"
+path = "tests/adversarial_campaign_edge_cases.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "adversarial_campaign_enrichment_integration"
+path = "tests/adversarial_campaign_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "adversarial_campaign_gate_cli"
+path = "tests/adversarial_campaign_gate_cli.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "adversarial_campaign_generator"
+path = "tests/adversarial_campaign_generator.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "adversarial_campaign_integration"
+path = "tests/adversarial_campaign_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "adversarial_coevolution_harness_enrichment_integration"
+path = "tests/adversarial_coevolution_harness_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "adversarial_coevolution_harness_integration"
+path = "tests/adversarial_coevolution_harness_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "adversarial_supremacy_synthesis_enrichment_integration"
+path = "tests/adversarial_supremacy_synthesis_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "adversarial_supremacy_synthesis_integration"
+path = "tests/adversarial_supremacy_synthesis_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "adversarial_workload_synthesis_enrichment_integration"
+path = "tests/adversarial_workload_synthesis_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "adversarial_workload_synthesis_integration"
+path = "tests/adversarial_workload_synthesis_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "allocation_elision_gate_enrichment_integration"
+path = "tests/allocation_elision_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "allocation_elision_gate_integration"
+path = "tests/allocation_elision_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "ambient_authority_enrichment_integration"
+path = "tests/ambient_authority_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "ambient_authority_guard_conformance"
+path = "tests/ambient_authority_guard_conformance.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "ambient_authority_integration"
+path = "tests/ambient_authority_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "ambient_mock_guard"
+path = "tests/ambient_mock_guard.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "aot_entrygraph_compiler_enrichment_integration"
+path = "tests/aot_entrygraph_compiler_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "aot_entrygraph_compiler_integration"
+path = "tests/aot_entrygraph_compiler_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "array_fast_lane_enrichment_integration"
+path = "tests/array_fast_lane_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "array_fast_lane_integration"
+path = "tests/array_fast_lane_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "artifact_compression_pipeline_enrichment_integration"
+path = "tests/artifact_compression_pipeline_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "artifact_compression_pipeline_integration"
+path = "tests/artifact_compression_pipeline_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "assumptions_ledger_enrichment_integration"
+path = "tests/assumptions_ledger_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "assumptions_ledger_integration"
+path = "tests/assumptions_ledger_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "asupersync_contract_matrix_enrichment_integration"
+path = "tests/asupersync_contract_matrix_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "asupersync_contract_matrix_integration"
+path = "tests/asupersync_contract_matrix_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "asupersync_leverage_adoption_gate_cli"
+path = "tests/asupersync_leverage_adoption_gate_cli.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "async_module_execution_barriers"
+path = "tests/async_module_execution_barriers.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "async_module_fulfilled_await"
+path = "tests/async_module_fulfilled_await.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "async_module_graph_registration"
+path = "tests/async_module_graph_registration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "async_module_promise_bridge_e2e"
+path = "tests/async_module_promise_bridge_e2e.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "async_module_runtime_cancellation"
+path = "tests/async_module_runtime_cancellation.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "async_module_runtime_e2e"
+path = "tests/async_module_runtime_e2e.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "async_module_scheduler_e2e"
+path = "tests/async_module_scheduler_e2e.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "async_module_scheduler_sync_rejection_e2e"
+path = "tests/async_module_scheduler_sync_rejection_e2e.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "async_module_sync_rejection"
+path = "tests/async_module_sync_rejection.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "async_translation_validation_integration"
+path = "tests/async_translation_validation_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "attack_surface_game_model_enrichment_integration"
+path = "tests/attack_surface_game_model_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "attack_surface_game_model_integration"
+path = "tests/attack_surface_game_model_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "attestation_handshake_enrichment_integration"
+path = "tests/attestation_handshake_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "attestation_handshake_integration"
+path = "tests/attestation_handshake_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "audit_closure_matrix"
+path = "tests/audit_closure_matrix.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "bayesian_error_recovery_enrichment_integration"
+path = "tests/bayesian_error_recovery_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "bayesian_error_recovery_integration"
+path = "tests/bayesian_error_recovery_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "benchmark_behavior_equivalence"
+path = "tests/benchmark_behavior_equivalence.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "benchmark_behavior_equivalence_enrichment_integration"
+path = "tests/benchmark_behavior_equivalence_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "benchmark_behavior_equivalence_golden"
+path = "tests/benchmark_behavior_equivalence_golden.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "benchmark_behavior_equivalence_integration"
+path = "tests/benchmark_behavior_equivalence_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "benchmark_ci_surface_conformance"
+path = "tests/benchmark_ci_surface_conformance.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "benchmark_coverage_saturation_enrichment_integration"
+path = "tests/benchmark_coverage_saturation_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "benchmark_coverage_saturation_gate_enrichment_integration"
+path = "tests/benchmark_coverage_saturation_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "benchmark_coverage_saturation_gate_integration"
+path = "tests/benchmark_coverage_saturation_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "benchmark_coverage_saturation_integration"
+path = "tests/benchmark_coverage_saturation_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "benchmark_freshness_gate_enrichment_integration"
+path = "tests/benchmark_freshness_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "benchmark_freshness_gate_integration"
+path = "tests/benchmark_freshness_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "benchmark_gate_integration"
+path = "tests/benchmark_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "bifurcation_boundary_scanner_enrichment_integration"
+path = "tests/bifurcation_boundary_scanner_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "bifurcation_boundary_scanner_integration"
+path = "tests/bifurcation_boundary_scanner_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "bounded_regret_safety_case_enrichment_integration"
+path = "tests/bounded_regret_safety_case_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "bounded_regret_safety_case_integration"
+path = "tests/bounded_regret_safety_case_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "budget_propagation_contract_enrichment_integration"
+path = "tests/budget_propagation_contract_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "budget_propagation_contract_integration"
+path = "tests/budget_propagation_contract_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "budgeted_optimization_enrichment_integration"
+path = "tests/budgeted_optimization_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "budgeted_optimization_integration"
+path = "tests/budgeted_optimization_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "budgeted_synthesis_engine_enrichment_integration"
+path = "tests/budgeted_synthesis_engine_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "budgeted_synthesis_engine_integration"
+path = "tests/budgeted_synthesis_engine_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "bytecode_vm"
+path = "tests/bytecode_vm.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "bytecode_vm_enrichment_integration"
+path = "tests/bytecode_vm_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "bytecode_vm_integration"
+path = "tests/bytecode_vm_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "cache_oblivious_metadata_substrate_integration"
+path = "tests/cache_oblivious_metadata_substrate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "calibration_sentinel_enrichment_integration"
+path = "tests/calibration_sentinel_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "calibration_sentinel_integration"
+path = "tests/calibration_sentinel_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "callback_stdlib_dispatch_enrichment_integration"
+path = "tests/callback_stdlib_dispatch_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "callback_stdlib_dispatch_integration"
+path = "tests/callback_stdlib_dispatch_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "canonical_evidence_emitter_enrichment_integration"
+path = "tests/canonical_evidence_emitter_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "canonical_evidence_emitter_integration"
+path = "tests/canonical_evidence_emitter_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "capability_lease_integration"
+path = "tests/capability_lease_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "capability_pruned_dispatch_enrichment_integration"
+path = "tests/capability_pruned_dispatch_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "capability_pruned_dispatch_integration"
+path = "tests/capability_pruned_dispatch_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "capability_typed_ambient_authority_proof"
+path = "tests/capability_typed_ambient_authority_proof.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "capability_witness"
+path = "tests/capability_witness.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "capability_witness_edge_cases"
+path = "tests/capability_witness_edge_cases.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "capability_witness_enrichment_integration"
+path = "tests/capability_witness_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "capability_witness_integration"
+path = "tests/capability_witness_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "capability_witness_publication"
+path = "tests/capability_witness_publication.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "catastrophe_witness_generator_enrichment_integration"
+path = "tests/catastrophe_witness_generator_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "catastrophe_witness_generator_integration"
+path = "tests/catastrophe_witness_generator_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "catastrophic_tail_tournament_gate_enrichment_integration"
+path = "tests/catastrophic_tail_tournament_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "catastrophic_tail_tournament_gate_integration"
+path = "tests/catastrophic_tail_tournament_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "category_shift_report_enrichment_integration"
+path = "tests/category_shift_report_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "category_shift_report_integration"
+path = "tests/category_shift_report_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "causal_intervention_dag_enrichment_integration"
+path = "tests/causal_intervention_dag_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "causal_intervention_dag_integration"
+path = "tests/causal_intervention_dag_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "causal_intervention_planner_enrichment_integration"
+path = "tests/causal_intervention_planner_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "causal_intervention_planner_integration"
+path = "tests/causal_intervention_planner_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "causal_regret_evidence_gate_enrichment_integration"
+path = "tests/causal_regret_evidence_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "causal_regret_evidence_gate_integration"
+path = "tests/causal_regret_evidence_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "causal_uplift_evidence_gate_enrichment_integration"
+path = "tests/causal_uplift_evidence_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "causal_uplift_evidence_gate_integration"
+path = "tests/causal_uplift_evidence_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "cei_e3_evidence_signing_calibration_regression"
+path = "tests/cei_e3_evidence_signing_calibration_regression.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "certificate_golden_tests"
+path = "tests/certificate_golden_tests.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "certified_optimization_governance_enrichment_integration"
+path = "tests/certified_optimization_governance_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "certified_optimization_governance_integration"
+path = "tests/certified_optimization_governance_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "certified_rewrite_optimizer_integration"
+path = "tests/certified_rewrite_optimizer_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "claim_atom_lattice_enrichment_integration"
+path = "tests/claim_atom_lattice_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "claim_atom_lattice_integration"
+path = "tests/claim_atom_lattice_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "claim_entitlement_enrichment_integration"
+path = "tests/claim_entitlement_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "claim_entitlement_integration"
+path = "tests/claim_entitlement_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "claim_envelope_contract_deep_integration"
+path = "tests/claim_envelope_contract_deep_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "claim_envelope_contract_enrichment_integration"
+path = "tests/claim_envelope_contract_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "claim_envelope_contract_integration"
+path = "tests/claim_envelope_contract_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "claim_evidence_ledger_integration"
+path = "tests/claim_evidence_ledger_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "claim_integrity_flow_integration"
+path = "tests/claim_integrity_flow_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "claim_publication_gate_enrichment_integration"
+path = "tests/claim_publication_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "claim_publication_gate_integration"
+path = "tests/claim_publication_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "cliff_margin_certificate_enrichment_integration"
+path = "tests/cliff_margin_certificate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "cliff_margin_certificate_integration"
+path = "tests/cliff_margin_certificate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "cold_start_aot_governance_enrichment_integration"
+path = "tests/cold_start_aot_governance_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "cold_start_aot_governance_integration"
+path = "tests/cold_start_aot_governance_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "cold_start_aot_governance_proptest"
+path = "tests/cold_start_aot_governance_proptest.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "cold_start_compilation_lane"
+path = "tests/cold_start_compilation_lane.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "cold_start_compilation_lane_integration"
+path = "tests/cold_start_compilation_lane_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "compiler_policy_edge_cases"
+path = "tests/compiler_policy_edge_cases.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "compiler_policy_enrichment_integration"
+path = "tests/compiler_policy_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "compiler_policy_integration"
+path = "tests/compiler_policy_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "component_shape_catalog_enrichment_integration"
+path = "tests/component_shape_catalog_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "component_shape_catalog_integration"
+path = "tests/component_shape_catalog_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "composable_gate_framework_conformance_integration"
+path = "tests/composable_gate_framework_conformance_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "composable_gate_framework_integration"
+path = "tests/composable_gate_framework_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "compression_residual_gate_enrichment_integration"
+path = "tests/compression_residual_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "compression_residual_gate_integration"
+path = "tests/compression_residual_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "compromise_rate_disruptive_floor_metric_integration"
+path = "tests/compromise_rate_disruptive_floor_metric_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "conformal_split_independence_negative"
+path = "tests/conformal_split_independence_negative.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "conformance_catalog_edge_cases"
+path = "tests/conformance_catalog_edge_cases.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "conformance_catalog_enrichment_integration"
+path = "tests/conformance_catalog_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "conformance_catalog_integration"
+path = "tests/conformance_catalog_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "conformance_suite"
+path = "tests/conformance_suite.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "conformance_vector_gen_edge_cases"
+path = "tests/conformance_vector_gen_edge_cases.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "conformance_vector_gen_enrichment_integration"
+path = "tests/conformance_vector_gen_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "conformance_vector_gen_integration"
+path = "tests/conformance_vector_gen_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "constrained_ambient_benchmark_lane"
+path = "tests/constrained_ambient_benchmark_lane.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "constrained_ambient_benchmark_lane_enrichment_integration"
+path = "tests/constrained_ambient_benchmark_lane_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "constrained_ambient_benchmark_lane_integration"
+path = "tests/constrained_ambient_benchmark_lane_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "contextual_policy_selector_enrichment_integration"
+path = "tests/contextual_policy_selector_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "contextual_policy_selector_integration"
+path = "tests/contextual_policy_selector_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "control_plane_benchmark_split_gate"
+path = "tests/control_plane_benchmark_split_gate.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "control_plane_benchmark_split_gate_enrichment_integration"
+path = "tests/control_plane_benchmark_split_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "control_plane_benchmark_split_gate_integration"
+path = "tests/control_plane_benchmark_split_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "control_plane_mock_inventory_integration"
+path = "tests/control_plane_mock_inventory_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "control_plane_policy_diagnostics_cli"
+path = "tests/control_plane_policy_diagnostics_cli.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "control_plane_policy_diagnostics_deep_integration"
+path = "tests/control_plane_policy_diagnostics_deep_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "control_plane_policy_diagnostics_enrichment_integration"
+path = "tests/control_plane_policy_diagnostics_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "control_plane_policy_diagnostics_integration"
+path = "tests/control_plane_policy_diagnostics_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "controller_composition_matrix_enrichment_integration"
+path = "tests/controller_composition_matrix_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "controller_composition_matrix_integration"
+path = "tests/controller_composition_matrix_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "controller_composition_stability_gate_enrichment_integration"
+path = "tests/controller_composition_stability_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "controller_composition_stability_gate_integration"
+path = "tests/controller_composition_stability_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "controller_interference"
+path = "tests/controller_interference.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "controller_interference_guard_deep_integration"
+path = "tests/controller_interference_guard_deep_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "controller_interference_guard_enrichment_integration"
+path = "tests/controller_interference_guard_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "controller_interference_guard_integration"
+path = "tests/controller_interference_guard_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "convergence_slo_gate_negative_integration"
+path = "tests/convergence_slo_gate_negative_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "convergence_slo_integration"
+path = "tests/convergence_slo_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "counterfactual_evaluator_enrichment_integration"
+path = "tests/counterfactual_evaluator_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "counterfactual_evaluator_integration"
+path = "tests/counterfactual_evaluator_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "counterfactual_incompatible_policy_negative"
+path = "tests/counterfactual_incompatible_policy_negative.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "counterfactual_intervention_planner_enrichment_integration"
+path = "tests/counterfactual_intervention_planner_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "counterfactual_intervention_planner_integration"
+path = "tests/counterfactual_intervention_planner_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "counterfactual_replay_engine_enrichment_integration"
+path = "tests/counterfactual_replay_engine_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "counterfactual_replay_engine_integration"
+path = "tests/counterfactual_replay_engine_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "cross_platform_reproducibility_integration"
+path = "tests/cross_platform_reproducibility_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "cross_repo_contract_edge_cases"
+path = "tests/cross_repo_contract_edge_cases.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "cross_repo_contract_enrichment_integration"
+path = "tests/cross_repo_contract_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "cross_repo_contract_integration"
+path = "tests/cross_repo_contract_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "cross_repo_integration_suite"
+path = "tests/cross_repo_integration_suite.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "cross_workload_transfer_enrichment_integration"
+path = "tests/cross_workload_transfer_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "cross_workload_transfer_integration"
+path = "tests/cross_workload_transfer_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "cut_line_automation_enrichment_integration"
+path = "tests/cut_line_automation_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "cut_line_automation_integration"
+path = "tests/cut_line_automation_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "dark_matter_saturation_gate_enrichment_integration"
+path = "tests/dark_matter_saturation_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "dark_matter_saturation_gate_integration"
+path = "tests/dark_matter_saturation_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "decision_determinism_metamorphic"
+path = "tests/decision_determinism_metamorphic.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "delegate_cell_harness_enrichment_integration"
+path = "tests/delegate_cell_harness_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "delegate_cell_harness_integration"
+path = "tests/delegate_cell_harness_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "delegation_chain"
+path = "tests/delegation_chain.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "delegation_chain_enrichment_integration"
+path = "tests/delegation_chain_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "delegation_chain_integration"
+path = "tests/delegation_chain_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "demo_claim_linkage_gate_enrichment_integration"
+path = "tests/demo_claim_linkage_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "demo_claim_linkage_gate_integration"
+path = "tests/demo_claim_linkage_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "descent_certificate_gate_enrichment_integration"
+path = "tests/descent_certificate_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "descent_certificate_gate_integration"
+path = "tests/descent_certificate_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "detection_delay_bound_proof"
+path = "tests/detection_delay_bound_proof.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "deterministic_probabilistic_telemetry_enrichment_integration"
+path = "tests/deterministic_probabilistic_telemetry_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "deterministic_probabilistic_telemetry_integration"
+path = "tests/deterministic_probabilistic_telemetry_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "deterministic_sim_scheduler_artifacts"
+path = "tests/deterministic_sim_scheduler_artifacts.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "differential_privacy_posterior_integration"
+path = "tests/differential_privacy_posterior_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "disruption_scorecard_enrichment_integration"
+path = "tests/disruption_scorecard_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "disruption_scorecard_integration"
+path = "tests/disruption_scorecard_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "distribution_shift_monitor_enrichment_integration"
+path = "tests/distribution_shift_monitor_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "distribution_shift_monitor_integration"
+path = "tests/distribution_shift_monitor_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "docs_accuracy_gate_integration"
+path = "tests/docs_accuracy_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "docs_accuracy_gate_smoke_integration"
+path = "tests/docs_accuracy_gate_smoke_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "dp_budget_accountant_enrichment_integration"
+path = "tests/dp_budget_accountant_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "dp_budget_accountant_integration"
+path = "tests/dp_budget_accountant_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "dual_backend_parser_enrichment_integration"
+path = "tests/dual_backend_parser_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "dual_backend_parser_integration"
+path = "tests/dual_backend_parser_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "e2_denominator_freshness_integration"
+path = "tests/e2_denominator_freshness_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "e2e_harness_enrichment_integration"
+path = "tests/e2e_harness_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "e2e_harness_integration"
+path = "tests/e2e_harness_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "e9_equivalence_receipts_integration"
+path = "tests/e9_equivalence_receipts_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "e9_first_activation_integration"
+path = "tests/e9_first_activation_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "e9_replay_identity_integration"
+path = "tests/e9_replay_identity_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "e9_shadow_candidate_discovery_integration"
+path = "tests/e9_shadow_candidate_discovery_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "engine_product_blocker_ledger"
+path = "tests/engine_product_blocker_ledger.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "engine_product_blocker_ledger_integration"
+path = "tests/engine_product_blocker_ledger_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "entropic_policy_morphing_enrichment_integration"
+path = "tests/entropic_policy_morphing_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "entropic_policy_morphing_integration"
+path = "tests/entropic_policy_morphing_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "epoch_invalidation_enrichment_integration"
+path = "tests/epoch_invalidation_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "epoch_invalidation_integration"
+path = "tests/epoch_invalidation_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "escape_analysis_certificate_enrichment_integration"
+path = "tests/escape_analysis_certificate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "escape_analysis_certificate_integration"
+path = "tests/escape_analysis_certificate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "esm_cjs_interop_parity_enrichment_integration"
+path = "tests/esm_cjs_interop_parity_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "esm_cjs_interop_parity_integration"
+path = "tests/esm_cjs_interop_parity_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "esm_cjs_parity_evidence_enrichment_integration"
+path = "tests/esm_cjs_parity_evidence_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "esm_cjs_parity_evidence_integration"
+path = "tests/esm_cjs_parity_evidence_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "esm_evaluation_recovery"
+path = "tests/esm_evaluation_recovery.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "esm_import_reexports"
+path = "tests/esm_import_reexports.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "esm_linking_recovery"
+path = "tests/esm_linking_recovery.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "esm_loader_enrichment_integration"
+path = "tests/esm_loader_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "esm_loader_integration"
+path = "tests/esm_loader_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "evidence_ledger_integration"
+path = "tests/evidence_ledger_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "exception_semantics_conformance"
+path = "tests/exception_semantics_conformance.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "exception_translation_validation_integration"
+path = "tests/exception_translation_validation_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "execution_truth_ledger_integration"
+path = "tests/execution_truth_ledger_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "extension_host_authority_guard_edge_cases"
+path = "tests/extension_host_authority_guard_edge_cases.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "extension_host_authority_guard_enrichment_integration"
+path = "tests/extension_host_authority_guard_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "extension_host_authority_guard_integration"
+path = "tests/extension_host_authority_guard_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "extension_host_topology_assessment_cli"
+path = "tests/extension_host_topology_assessment_cli.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "extension_host_topology_assessment_integration"
+path = "tests/extension_host_topology_assessment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "extension_registry_enrichment_integration"
+path = "tests/extension_registry_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "extension_registry_integration"
+path = "tests/extension_registry_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "federated_posterior_aggregation_integration"
+path = "tests/federated_posterior_aggregation_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "flamegraph_pipeline"
+path = "tests/flamegraph_pipeline.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "flamegraph_pipeline_enrichment_integration"
+path = "tests/flamegraph_pipeline_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "flamegraph_pipeline_integration"
+path = "tests/flamegraph_pipeline_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "fleet_authenticated_ingress_v2"
+path = "tests/fleet_authenticated_ingress_v2.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "fleet_checkpoint_recovery"
+path = "tests/fleet_checkpoint_recovery.rs"
+
+[[test]]
+name = "fleet_convergence_harness_integration"
+path = "tests/fleet_convergence_harness_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "fleet_privacy_budget_refusal_integration"
+path = "tests/fleet_privacy_budget_refusal_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "fleet_transport_ingress"
+path = "tests/fleet_transport_ingress.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "flow_envelope_edge_cases"
+path = "tests/flow_envelope_edge_cases.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "flow_envelope_enrichment_integration"
+path = "tests/flow_envelope_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "flow_envelope_integration"
+path = "tests/flow_envelope_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "franken_closure_report"
+path = "tests/franken_closure_report.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "franken_node_handoff_bundle"
+path = "tests/franken_node_handoff_bundle.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "frankenlab_bridge_contract_enrichment_integration"
+path = "tests/frankenlab_bridge_contract_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "frankenlab_bridge_contract_integration"
+path = "tests/frankenlab_bridge_contract_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "frankenlab_gap_matrix_enrichment_integration"
+path = "tests/frankenlab_gap_matrix_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "frankenlab_gap_matrix_integration"
+path = "tests/frankenlab_gap_matrix_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "frankenlab_harness_migration_enrichment_integration"
+path = "tests/frankenlab_harness_migration_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "frankenlab_harness_migration_integration"
+path = "tests/frankenlab_harness_migration_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "frankenlab_release_gate_promotion_enrichment_integration"
+path = "tests/frankenlab_release_gate_promotion_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "frankenlab_release_gate_promotion_integration"
+path = "tests/frankenlab_release_gate_promotion_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "frankenlab_surface_gap_matrix_enrichment_integration"
+path = "tests/frankenlab_surface_gap_matrix_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "frankenlab_surface_gap_matrix_integration"
+path = "tests/frankenlab_surface_gap_matrix_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "frankentui_adapter"
+path = "tests/frankentui_adapter.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "frankentui_adapter_enrichment_integration"
+path = "tests/frankentui_adapter_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "frankentui_adapter_integration"
+path = "tests/frankentui_adapter_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "frankentui_adapter_live_panels_integration"
+path = "tests/frankentui_adapter_live_panels_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "fresh_clone_evidence_verification"
+path = "tests/fresh_clone_evidence_verification.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "frir_artifact_golden"
+path = "tests/frir_artifact_golden.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "frir_schema_enrichment_integration"
+path = "tests/frir_schema_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "frir_schema_integration"
+path = "tests/frir_schema_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "frontier_complex_cartography_enrichment_integration"
+path = "tests/frontier_complex_cartography_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "frontier_complex_cartography_integration"
+path = "tests/frontier_complex_cartography_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "frontier_demo_gate_enrichment_integration"
+path = "tests/frontier_demo_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "frontier_demo_gate_integration"
+path = "tests/frontier_demo_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "frontier_hole_governance_enrichment_integration"
+path = "tests/frontier_hole_governance_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "frontier_hole_governance_integration"
+path = "tests/frontier_hole_governance_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "frx_end_to_end_scenario_matrix"
+path = "tests/frx_end_to_end_scenario_matrix.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "frx_milestone_release_test_evidence_integrator"
+path = "tests/frx_milestone_release_test_evidence_integrator.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "frx_online_regret_change_point_demotion_controller"
+path = "tests/frx_online_regret_change_point_demotion_controller.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "frx_unit_test_taxonomy_contract"
+path = "tests/frx_unit_test_taxonomy_contract.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "full_ir_translation_validator_feature_classes"
+path = "tests/full_ir_translation_validator_feature_classes.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "full_ir_translation_validator_integration"
+path = "tests/full_ir_translation_validator_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "fuzz_adversarial"
+path = "tests/fuzz_adversarial.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "ga_exit_evidence_package_integration"
+path = "tests/ga_exit_evidence_package_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "galaxy_brain_explainability_enrichment_integration"
+path = "tests/galaxy_brain_explainability_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "galaxy_brain_explainability_integration"
+path = "tests/galaxy_brain_explainability_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "gc_pause_enrichment_integration"
+path = "tests/gc_pause_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "gc_pause_integration"
+path = "tests/gc_pause_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "generator_translation_validator_integration"
+path = "tests/generator_translation_validator_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "global_coherence_checker_enrichment_integration"
+path = "tests/global_coherence_checker_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "global_coherence_checker_integration"
+path = "tests/global_coherence_checker_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "golden_vectors_enrichment_integration"
+path = "tests/golden_vectors_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "golden_vectors_integration"
+path = "tests/golden_vectors_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "governance_audit_ledger_lifecycle"
+path = "tests/governance_audit_ledger_lifecycle.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "governance_hooks_enrichment_integration"
+path = "tests/governance_hooks_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "governance_hooks_integration"
+path = "tests/governance_hooks_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "governance_mechanism_enrichment_integration"
+path = "tests/governance_mechanism_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "governance_mechanism_integration"
+path = "tests/governance_mechanism_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "governance_scorecard"
+path = "tests/governance_scorecard.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "governance_scorecard_enrichment_integration"
+path = "tests/governance_scorecard_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "governance_scorecard_integration"
+path = "tests/governance_scorecard_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "guardplane_calibration_enrichment_integration"
+path = "tests/guardplane_calibration_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "guardplane_calibration_integration"
+path = "tests/guardplane_calibration_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "guardplane_evidence_conformance"
+path = "tests/guardplane_evidence_conformance.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "guardplane_integration_tests"
+path = "tests/guardplane_integration_tests.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "hardware_board_claim_gate_enrichment_integration"
+path = "tests/hardware_board_claim_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "hardware_board_claim_gate_integration"
+path = "tests/hardware_board_claim_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "hardware_code_layout_gate_enrichment_integration"
+path = "tests/hardware_code_layout_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "hardware_code_layout_gate_integration"
+path = "tests/hardware_code_layout_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "hardware_code_layout_governance_enrichment_integration"
+path = "tests/hardware_code_layout_governance_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "hardware_code_layout_governance_integration"
+path = "tests/hardware_code_layout_governance_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "hardware_localization_residual_enrichment_integration"
+path = "tests/hardware_localization_residual_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "hardware_localization_residual_integration"
+path = "tests/hardware_localization_residual_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "hardware_parameter_manifold_enrichment_integration"
+path = "tests/hardware_parameter_manifold_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "hardware_parameter_manifold_integration"
+path = "tests/hardware_parameter_manifold_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "hindsight_escalation_bundle_enrichment_integration"
+path = "tests/hindsight_escalation_bundle_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "hindsight_escalation_bundle_integration"
+path = "tests/hindsight_escalation_bundle_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "hindsight_trace_escalator_enrichment_integration"
+path = "tests/hindsight_trace_escalator_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "hindsight_trace_escalator_integration"
+path = "tests/hindsight_trace_escalator_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "hole_witness_generator_enrichment_integration"
+path = "tests/hole_witness_generator_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "hole_witness_generator_integration"
+path = "tests/hole_witness_generator_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "hook_effect_contract_enrichment_integration"
+path = "tests/hook_effect_contract_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "hook_effect_contract_integration"
+path = "tests/hook_effect_contract_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "hook_effect_fallback_contract_integration"
+path = "tests/hook_effect_fallback_contract_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "hostcall_batch_transport_enrichment_integration"
+path = "tests/hostcall_batch_transport_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "hostcall_batch_transport_integration"
+path = "tests/hostcall_batch_transport_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "hostcall_capability_translation_validation_integration"
+path = "tests/hostcall_capability_translation_validation_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "hostcall_conformance_governance_enrichment_integration"
+path = "tests/hostcall_conformance_governance_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "hostcall_conformance_governance_integration"
+path = "tests/hostcall_conformance_governance_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "hostcall_session_governance_gate_enrichment_integration"
+path = "tests/hostcall_session_governance_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "hostcall_session_governance_gate_integration"
+path = "tests/hostcall_session_governance_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "hostcall_session_protocol_enrichment_integration"
+path = "tests/hostcall_session_protocol_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "hostcall_session_protocol_integration"
+path = "tests/hostcall_session_protocol_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "hot_path_telemetry_kernel_enrichment_integration"
+path = "tests/hot_path_telemetry_kernel_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "hot_path_telemetry_kernel_integration"
+path = "tests/hot_path_telemetry_kernel_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "hybrid_lane_router_enrichment_integration"
+path = "tests/hybrid_lane_router_enrichment_integration.rs"
+
+[[test]]
+name = "hybrid_lane_router_integration"
+path = "tests/hybrid_lane_router_integration.rs"
+
+[[test]]
+name = "ifc_label_translation_validation_integration"
+path = "tests/ifc_label_translation_validation_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "incentive_governance_mechanism_enrichment_integration"
+path = "tests/incentive_governance_mechanism_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "incentive_governance_mechanism_integration"
+path = "tests/incentive_governance_mechanism_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "interleaving_explorer_enrichment_integration"
+path = "tests/interleaving_explorer_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "interleaving_explorer_integration"
+path = "tests/interleaving_explorer_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "intl_surface_contract_integration"
+path = "tests/intl_surface_contract_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "iterator_protocol_translation_validation_integration"
+path = "tests/iterator_protocol_translation_validation_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "json_capabilities_integration"
+path = "tests/json_capabilities_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "kernel_shift_monitor_deep_integration"
+path = "tests/kernel_shift_monitor_deep_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "kernel_shift_monitor_enrichment_integration"
+path = "tests/kernel_shift_monitor_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "kernel_shift_monitor_integration"
+path = "tests/kernel_shift_monitor_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "kernel_synthesis_contract_integration"
+path = "tests/kernel_synthesis_contract_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "kernelized_shift_guard_integration"
+path = "tests/kernelized_shift_guard_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "key_attestation_edge_cases"
+path = "tests/key_attestation_edge_cases.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "key_attestation_enrichment_integration"
+path = "tests/key_attestation_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "key_attestation_integration"
+path = "tests/key_attestation_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "kl_rate_limited_adversary_integration"
+path = "tests/kl_rate_limited_adversary_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "law_mining_cli"
+path = "tests/law_mining_cli.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "law_mining_enrichment_integration"
+path = "tests/law_mining_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "law_promotion_lifecycle_enrichment_integration"
+path = "tests/law_promotion_lifecycle_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "law_promotion_lifecycle_integration"
+path = "tests/law_promotion_lifecycle_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "law_promotion_pack_enrichment_integration"
+path = "tests/law_promotion_pack_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "law_promotion_pack_integration"
+path = "tests/law_promotion_pack_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "law_proof_refutation_enrichment_integration"
+path = "tests/law_proof_refutation_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "law_proof_refutation_integration"
+path = "tests/law_proof_refutation_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "live_revocation_first_gate_example"
+path = "tests/live_revocation_first_gate_example.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "local_semantic_atlas_integration"
+path = "tests/local_semantic_atlas_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "lowering_gap_inventory_cli"
+path = "tests/lowering_gap_inventory_cli.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "lowering_gap_inventory_integration"
+path = "tests/lowering_gap_inventory_integration.rs"
+
+[[test]]
+name = "lowering_parity_evidence_deep_integration"
+path = "tests/lowering_parity_evidence_deep_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "lowering_parity_evidence_enrichment_integration"
+path = "tests/lowering_parity_evidence_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "lowering_parity_evidence_integration"
+path = "tests/lowering_parity_evidence_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "martingale_substrate_metamorphic"
+path = "tests/martingale_substrate_metamorphic.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "metadata_locality_governance_gate_enrichment_integration"
+path = "tests/metadata_locality_governance_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "metadata_locality_governance_gate_integration"
+path = "tests/metadata_locality_governance_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "metadata_substrate_evidence_cli"
+path = "tests/metadata_substrate_evidence_cli.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "metadata_substrate_governance_enrichment_integration"
+path = "tests/metadata_substrate_governance_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "metadata_substrate_governance_integration"
+path = "tests/metadata_substrate_governance_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "metadata_substrate_inventory_enrichment_integration"
+path = "tests/metadata_substrate_inventory_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "metadata_substrate_inventory_integration"
+path = "tests/metadata_substrate_inventory_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "metadata_substrate_optimized_enrichment_integration"
+path = "tests/metadata_substrate_optimized_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "metadata_substrate_optimized_integration"
+path = "tests/metadata_substrate_optimized_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "migration_contract"
+path = "tests/migration_contract.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "migration_contract_enrichment_integration"
+path = "tests/migration_contract_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "migration_contract_integration"
+path = "tests/migration_contract_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "migration_kit_enrichment_integration"
+path = "tests/migration_kit_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "migration_kit_integration"
+path = "tests/migration_kit_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "milestone_release_test_evidence_integrator_enrichment_integration"
+path = "tests/milestone_release_test_evidence_integrator_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "milestone_release_test_evidence_integrator_integration"
+path = "tests/milestone_release_test_evidence_integrator_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "minimized_repro_extraction_enrichment_integration"
+path = "tests/minimized_repro_extraction_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "minimized_repro_extraction_integration"
+path = "tests/minimized_repro_extraction_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "mock_seam_guardrail_enrichment_integration"
+path = "tests/mock_seam_guardrail_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "mock_seam_guardrail_integration"
+path = "tests/mock_seam_guardrail_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "module_async_evaluation_enrichment_integration"
+path = "tests/module_async_evaluation_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "module_async_evaluation_integration"
+path = "tests/module_async_evaluation_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "module_cache"
+path = "tests/module_cache.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "module_cache_enrichment_integration"
+path = "tests/module_cache_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "module_cache_integration"
+path = "tests/module_cache_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "module_cache_snapshot_boundary"
+path = "tests/module_cache_snapshot_boundary.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "module_cache_trust_restoration"
+path = "tests/module_cache_trust_restoration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "module_compatibility_matrix_enrichment_integration"
+path = "tests/module_compatibility_matrix_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "module_compatibility_matrix_integration"
+path = "tests/module_compatibility_matrix_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "module_index_parity_gate_enrichment_integration"
+path = "tests/module_index_parity_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "module_index_parity_gate_integration"
+path = "tests/module_index_parity_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "module_live_binding_enrichment_integration"
+path = "tests/module_live_binding_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "module_live_binding_integration"
+path = "tests/module_live_binding_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "module_resolution_index"
+path = "tests/module_resolution_index.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "moonshot_contract_enrichment_integration"
+path = "tests/moonshot_contract_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "moonshot_contract_integration"
+path = "tests/moonshot_contract_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "moonshot_disruption_track_integration"
+path = "tests/moonshot_disruption_track_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "native_addon_cohort_gate_enrichment_integration"
+path = "tests/native_addon_cohort_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "native_addon_cohort_gate_integration"
+path = "tests/native_addon_cohort_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "native_addon_membrane_enrichment_integration"
+path = "tests/native_addon_membrane_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "native_addon_membrane_integration"
+path = "tests/native_addon_membrane_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "native_addon_parity_gate_enrichment_integration"
+path = "tests/native_addon_parity_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "native_addon_parity_gate_integration"
+path = "tests/native_addon_parity_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "nitrosketch_telemetry_enrichment_integration"
+path = "tests/nitrosketch_telemetry_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "nitrosketch_telemetry_integration"
+path = "tests/nitrosketch_telemetry_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "northstar_scorecard_enrichment_integration"
+path = "tests/northstar_scorecard_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "northstar_scorecard_integration"
+path = "tests/northstar_scorecard_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "novelty_synthesis_engine_enrichment_integration"
+path = "tests/novelty_synthesis_engine_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "novelty_synthesis_engine_integration"
+path = "tests/novelty_synthesis_engine_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "npm_compatibility_matrix_cli"
+path = "tests/npm_compatibility_matrix_cli.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "npm_compatibility_matrix_enrichment_integration"
+path = "tests/npm_compatibility_matrix_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "npm_compatibility_matrix_integration"
+path = "tests/npm_compatibility_matrix_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "obligation_leak_policy_enrichment2_integration"
+path = "tests/obligation_leak_policy_enrichment2_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "obligation_leak_policy_enrichment_integration"
+path = "tests/obligation_leak_policy_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "obligation_leak_policy_integration"
+path = "tests/obligation_leak_policy_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "observability_channel_model"
+path = "tests/observability_channel_model.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "observability_channel_model_enrichment_integration"
+path = "tests/observability_channel_model_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "observability_channel_model_integration"
+path = "tests/observability_channel_model_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "observability_probe_design_enrichment_integration"
+path = "tests/observability_probe_design_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "observability_probe_design_integration"
+path = "tests/observability_probe_design_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "observability_publication_bundle_enrichment_integration"
+path = "tests/observability_publication_bundle_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "observability_publication_bundle_integration"
+path = "tests/observability_publication_bundle_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "observability_quality_sentinel_enrichment_integration"
+path = "tests/observability_quality_sentinel_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "observability_quality_sentinel_integration"
+path = "tests/observability_quality_sentinel_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "obstruction_certificate_deep_integration"
+path = "tests/obstruction_certificate_deep_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "obstruction_certificate_enrichment_integration"
+path = "tests/obstruction_certificate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "obstruction_certificate_integration"
+path = "tests/obstruction_certificate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "obstruction_witness_emitter_enrichment_integration"
+path = "tests/obstruction_witness_emitter_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "obstruction_witness_emitter_integration"
+path = "tests/obstruction_witness_emitter_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "offline_synthesis_pipeline_deep_integration"
+path = "tests/offline_synthesis_pipeline_deep_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "offline_synthesis_pipeline_enrichment_integration"
+path = "tests/offline_synthesis_pipeline_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "offline_synthesis_pipeline_integration"
+path = "tests/offline_synthesis_pipeline_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "one_lever_policy"
+path = "tests/one_lever_policy.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "one_lever_policy_enrichment_integration"
+path = "tests/one_lever_policy_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "one_lever_policy_integration"
+path = "tests/one_lever_policy_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "operator_diagnostic_contract_deep_integration"
+path = "tests/operator_diagnostic_contract_deep_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "operator_diagnostic_contract_enrichment_integration"
+path = "tests/operator_diagnostic_contract_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "operator_diagnostic_contract_integration"
+path = "tests/operator_diagnostic_contract_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "opportunity_matrix"
+path = "tests/opportunity_matrix.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "opportunity_matrix_enrichment_integration"
+path = "tests/opportunity_matrix_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "opportunity_matrix_integration"
+path = "tests/opportunity_matrix_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "optimization_baseline_enrichment_integration"
+path = "tests/optimization_baseline_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "optimization_baseline_integration"
+path = "tests/optimization_baseline_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "optimization_proof_carriers_integration"
+path = "tests/optimization_proof_carriers_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "optimized_metadata_substrate_enrichment_integration"
+path = "tests/optimized_metadata_substrate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "optimized_metadata_substrate_integration"
+path = "tests/optimized_metadata_substrate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "oracle_release_gate_enrichment_integration"
+path = "tests/oracle_release_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "oracle_release_gate_integration"
+path = "tests/oracle_release_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "orchestration_context_contract_enrichment_integration"
+path = "tests/orchestration_context_contract_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "orchestration_context_contract_integration"
+path = "tests/orchestration_context_contract_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "outcome_capability_narrowing_deep_integration"
+path = "tests/outcome_capability_narrowing_deep_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "outcome_capability_narrowing_enrichment_integration"
+path = "tests/outcome_capability_narrowing_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "outcome_capability_narrowing_integration"
+path = "tests/outcome_capability_narrowing_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "owner_key_bundle_v2_integration"
+path = "tests/owner_key_bundle_v2_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "parallel_interference_gate_enrichment_integration"
+path = "tests/parallel_interference_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "parallel_interference_gate_integration"
+path = "tests/parallel_interference_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "parallel_parser_enrichment_integration"
+path = "tests/parallel_parser_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "parallel_parser_integration"
+path = "tests/parallel_parser_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "parser_error_recovery_conformance"
+path = "tests/parser_error_recovery_conformance.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "parser_error_recovery_enrichment_integration"
+path = "tests/parser_error_recovery_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "parser_error_recovery_integration"
+path = "tests/parser_error_recovery_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "parser_event_ast_equivalence"
+path = "tests/parser_event_ast_equivalence.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "parser_event_ast_equivalence_enrichment_integration"
+path = "tests/parser_event_ast_equivalence_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "parser_event_ast_equivalence_integration"
+path = "tests/parser_event_ast_equivalence_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "parser_evidence_indexer"
+path = "tests/parser_evidence_indexer.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "parser_evidence_indexer_enrichment_integration"
+path = "tests/parser_evidence_indexer_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "parser_evidence_indexer_integration"
+path = "tests/parser_evidence_indexer_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "parser_frontier_evidence_deep_integration"
+path = "tests/parser_frontier_evidence_deep_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "parser_frontier_evidence_enrichment_integration"
+path = "tests/parser_frontier_evidence_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "parser_frontier_evidence_integration"
+path = "tests/parser_frontier_evidence_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "parser_frontier_harness"
+path = "tests/parser_frontier_harness.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "parser_gap_inventory_cli"
+path = "tests/parser_gap_inventory_cli.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "parser_metamorphic_invariance"
+path = "tests/parser_metamorphic_invariance.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "parser_multi_engine_harness_integration"
+path = "tests/parser_multi_engine_harness_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "parser_phase0_flamegraph_replacement_integration"
+path = "tests/parser_phase0_flamegraph_replacement_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "parser_user_impact_baseline_dashboard"
+path = "tests/parser_user_impact_baseline_dashboard.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "parser_user_impact_regression_alarms"
+path = "tests/parser_user_impact_regression_alarms.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "pdf_compliance_export"
+path = "tests/pdf_compliance_export.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "pdf_compliance_real_export"
+path = "tests/pdf_compliance_real_export.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "performance_regression_gate_enrichment_integration"
+path = "tests/performance_regression_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "performance_regression_gate_integration"
+path = "tests/performance_regression_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "performance_statistical_validation_enrichment_integration"
+path = "tests/performance_statistical_validation_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "performance_statistical_validation_integration"
+path = "tests/performance_statistical_validation_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "persistent_cache_contract"
+path = "tests/persistent_cache_contract.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "persistent_cache_contract_deep_integration"
+path = "tests/persistent_cache_contract_deep_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "persistent_cache_contract_enrichment_integration"
+path = "tests/persistent_cache_contract_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "persistent_cache_contract_integration"
+path = "tests/persistent_cache_contract_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "phase_gate_enrichment_integration"
+path = "tests/phase_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "phase_gate_integration"
+path = "tests/phase_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "plas_benchmark_bundle"
+path = "tests/plas_benchmark_bundle.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "plas_benchmark_bundle_enrichment_integration"
+path = "tests/plas_benchmark_bundle_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "plas_benchmark_bundle_integration"
+path = "tests/plas_benchmark_bundle_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "plas_burn_in_gate_enrichment_integration"
+path = "tests/plas_burn_in_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "plas_burn_in_gate_integration"
+path = "tests/plas_burn_in_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "plas_lockstep_enrichment_integration"
+path = "tests/plas_lockstep_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "plas_lockstep_integration"
+path = "tests/plas_lockstep_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "plas_release_gate_enrichment_integration"
+path = "tests/plas_release_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "plas_release_gate_integration"
+path = "tests/plas_release_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "policy_as_data_security_enrichment_integration"
+path = "tests/policy_as_data_security_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "policy_as_data_security_integration"
+path = "tests/policy_as_data_security_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "policy_backtest_integration"
+path = "tests/policy_backtest_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "polymorphic_inline_cache_enrichment_integration"
+path = "tests/polymorphic_inline_cache_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "polymorphic_inline_cache_integration"
+path = "tests/polymorphic_inline_cache_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "portfolio_governor_edge_cases"
+path = "tests/portfolio_governor_edge_cases.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "portfolio_governor_enrichment_integration"
+path = "tests/portfolio_governor_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "portfolio_governor_integration"
+path = "tests/portfolio_governor_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "primitive_adoption_schema_enrichment_integration"
+path = "tests/primitive_adoption_schema_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "primitive_adoption_schema_integration"
+path = "tests/primitive_adoption_schema_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "principal_key_roles_enrichment_integration"
+path = "tests/principal_key_roles_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "principal_key_roles_integration"
+path = "tests/principal_key_roles_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "privacy_learning_contract"
+path = "tests/privacy_learning_contract.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "privacy_learning_contract_edge_cases"
+path = "tests/privacy_learning_contract_edge_cases.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "privacy_learning_contract_enrichment_integration"
+path = "tests/privacy_learning_contract_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "privacy_learning_contract_integration"
+path = "tests/privacy_learning_contract_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "privacy_preserving_fleet_learning_integration"
+path = "tests/privacy_preserving_fleet_learning_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "privacy_preserving_reconstruction_attack"
+path = "tests/privacy_preserving_reconstruction_attack.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "production_feature_catalog_gate_integration"
+path = "tests/production_feature_catalog_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "production_hardening_exit_gate"
+path = "tests/production_hardening_exit_gate.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "production_hardening_exit_gate_integration"
+path = "tests/production_hardening_exit_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "promotion_gate_runner_enrichment_integration"
+path = "tests/promotion_gate_runner_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "promotion_gate_runner_integration"
+path = "tests/promotion_gate_runner_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "proof_backed_compression_enrichment_integration"
+path = "tests/proof_backed_compression_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "proof_backed_compression_integration"
+path = "tests/proof_backed_compression_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "proof_evidence_index_integration"
+path = "tests/proof_evidence_index_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "proof_ingestion_enrichment_integration"
+path = "tests/proof_ingestion_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "proof_ingestion_integration"
+path = "tests/proof_ingestion_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "proof_obligations_enrichment2_integration"
+path = "tests/proof_obligations_enrichment2_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "proof_obligations_enrichment_integration"
+path = "tests/proof_obligations_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "proof_obligations_integration"
+path = "tests/proof_obligations_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "proof_release_gate_enrichment_integration"
+path = "tests/proof_release_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "proof_release_gate_integration"
+path = "tests/proof_release_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "proof_specialization_linkage_enrichment_integration"
+path = "tests/proof_specialization_linkage_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "proof_specialization_linkage_integration"
+path = "tests/proof_specialization_linkage_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "quarantine_deescalation_integration"
+path = "tests/quarantine_deescalation_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "quickening_feedback_lattice_enrichment_integration"
+path = "tests/quickening_feedback_lattice_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "quickening_feedback_lattice_integration"
+path = "tests/quickening_feedback_lattice_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "react_compile_operator_surface_enrichment_integration"
+path = "tests/react_compile_operator_surface_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "react_compile_operator_surface_integration"
+path = "tests/react_compile_operator_surface_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "react_compile_run_parity_enrichment_integration"
+path = "tests/react_compile_run_parity_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "react_compile_run_parity_integration"
+path = "tests/react_compile_run_parity_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "react_compile_verification_enrichment_integration"
+path = "tests/react_compile_verification_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "react_compile_verification_integration"
+path = "tests/react_compile_verification_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "react_ecosystem_compatibility_integration"
+path = "tests/react_ecosystem_compatibility_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "react_lane_inference_enrichment2_integration"
+path = "tests/react_lane_inference_enrichment2_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "react_lane_inference_enrichment_integration"
+path = "tests/react_lane_inference_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "react_lane_inference_integration"
+path = "tests/react_lane_inference_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "react_module_graph_verifier_enrichment_integration"
+path = "tests/react_module_graph_verifier_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "react_module_graph_verifier_integration"
+path = "tests/react_module_graph_verifier_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "react_package_cohort_enrichment_integration"
+path = "tests/react_package_cohort_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "react_package_cohort_integration"
+path = "tests/react_package_cohort_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "react_repro_triage_enrichment_integration"
+path = "tests/react_repro_triage_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "react_repro_triage_integration"
+path = "tests/react_repro_triage_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "react_specialization_benchmark_gate_enrichment_integration"
+path = "tests/react_specialization_benchmark_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "react_specialization_benchmark_gate_integration"
+path = "tests/react_specialization_benchmark_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "react_ssr_verification_enrichment_integration"
+path = "tests/react_ssr_verification_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "react_ssr_verification_integration"
+path = "tests/react_ssr_verification_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "receipt_verifier_pipeline"
+path = "tests/receipt_verifier_pipeline.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "regexp_deterministic_engine_deep_integration"
+path = "tests/regexp_deterministic_engine_deep_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "regexp_deterministic_engine_enrichment_integration"
+path = "tests/regexp_deterministic_engine_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "regexp_deterministic_engine_integration"
+path = "tests/regexp_deterministic_engine_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "regexp_string_governance_enrichment_integration"
+path = "tests/regexp_string_governance_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "regexp_string_governance_gate_enrichment_integration"
+path = "tests/regexp_string_governance_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "regexp_string_governance_gate_integration"
+path = "tests/regexp_string_governance_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "regexp_string_governance_integration"
+path = "tests/regexp_string_governance_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "regime_shift_detector_enrichment_integration"
+path = "tests/regime_shift_detector_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "regime_shift_detector_integration"
+path = "tests/regime_shift_detector_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "release_checklist_gate"
+path = "tests/release_checklist_gate.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "release_checklist_gate_enrichment_integration"
+path = "tests/release_checklist_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "release_checklist_gate_integration"
+path = "tests/release_checklist_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "render_lane_specializer_enrichment_integration"
+path = "tests/render_lane_specializer_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "render_lane_specializer_enrichment_integration2"
+path = "tests/render_lane_specializer_enrichment_integration2.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "render_lane_specializer_integration"
+path = "tests/render_lane_specializer_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "replacement_lineage_log"
+path = "tests/replacement_lineage_log.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "replay_vaccine_integration"
+path = "tests/replay_vaccine_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "replication_checklist_integration"
+path = "tests/replication_checklist_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "reputation_enrichment_integration"
+path = "tests/reputation_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "reputation_integration"
+path = "tests/reputation_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "research_artifact_registry"
+path = "tests/research_artifact_registry.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "resolver_package_index_enrichment_integration"
+path = "tests/resolver_package_index_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "resolver_package_index_integration"
+path = "tests/resolver_package_index_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "resource_certificate_governance_deep_integration"
+path = "tests/resource_certificate_governance_deep_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "resource_certificate_governance_enrichment_integration"
+path = "tests/resource_certificate_governance_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "resource_certificate_governance_gate_enrichment_integration"
+path = "tests/resource_certificate_governance_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "resource_certificate_governance_gate_integration"
+path = "tests/resource_certificate_governance_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "resource_certificate_governance_integration"
+path = "tests/resource_certificate_governance_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "resource_escalation_control_integration"
+path = "tests/resource_escalation_control_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "revocation_enforcement_enrichment_integration"
+path = "tests/revocation_enforcement_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "revocation_enforcement_enrichment_integration2"
+path = "tests/revocation_enforcement_enrichment_integration2.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "revocation_enforcement_integration"
+path = "tests/revocation_enforcement_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "revocation_freshness_enrichment_integration"
+path = "tests/revocation_freshness_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "revocation_freshness_integration"
+path = "tests/revocation_freshness_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "rgc_certified_optimization_harness"
+path = "tests/rgc_certified_optimization_harness.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "rgc_cli_operator_workflow_verification_pack"
+path = "tests/rgc_cli_operator_workflow_verification_pack.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "rgc_cross_arch_reproducibility_integration"
+path = "tests/rgc_cross_arch_reproducibility_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "rgc_fleet_counterfactual_metamorphic"
+path = "tests/rgc_fleet_counterfactual_metamorphic.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "rgc_fleet_counterfactual_replay"
+path = "tests/rgc_fleet_counterfactual_replay.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "rgc_incident_narration"
+path = "tests/rgc_incident_narration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "rgc_observability_channel_policy"
+path = "tests/rgc_observability_channel_policy.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "rgc_performance_regression_gate"
+path = "tests/rgc_performance_regression_gate.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "rgc_planning_track_integration"
+path = "tests/rgc_planning_track_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "rgc_react_doctor_preflight"
+path = "tests/rgc_react_doctor_preflight.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "rgc_react_repro_triage"
+path = "tests/rgc_react_repro_triage.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "rgc_statistical_validation_pipeline"
+path = "tests/rgc_statistical_validation_pipeline.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "rollback_safemode_synthesizer_enrichment_integration"
+path = "tests/rollback_safemode_synthesizer_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "rollback_safemode_synthesizer_integration"
+path = "tests/rollback_safemode_synthesizer_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "rough_path_regime_geometry_integration"
+path = "tests/rough_path_regime_geometry_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "runtime_decision_core_enrichment_integration"
+path = "tests/runtime_decision_core_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "runtime_decision_core_integration"
+path = "tests/runtime_decision_core_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "runtime_diagnostics_cli"
+path = "tests/runtime_diagnostics_cli.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "runtime_hotspot_optimization_campaign"
+path = "tests/runtime_hotspot_optimization_campaign.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "runtime_hotspot_optimization_campaign_enrichment_integration"
+path = "tests/runtime_hotspot_optimization_campaign_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "runtime_hotspot_optimization_campaign_integration"
+path = "tests/runtime_hotspot_optimization_campaign_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "runtime_image_contract_deep_integration"
+path = "tests/runtime_image_contract_deep_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "runtime_image_contract_enrichment_integration"
+path = "tests/runtime_image_contract_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "runtime_image_contract_integration"
+path = "tests/runtime_image_contract_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "runtime_kernel_lane_charter_enrichment_integration"
+path = "tests/runtime_kernel_lane_charter_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "runtime_kernel_lane_charter_integration"
+path = "tests/runtime_kernel_lane_charter_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "s3_fifo_cache_gate_enrichment_integration"
+path = "tests/s3_fifo_cache_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "s3_fifo_cache_gate_integration"
+path = "tests/s3_fifo_cache_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "scalar_replacement_engine_enrichment_integration"
+path = "tests/scalar_replacement_engine_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "scalar_replacement_engine_integration"
+path = "tests/scalar_replacement_engine_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "scheduler_invariants_enrichment_integration"
+path = "tests/scheduler_invariants_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "scheduler_invariants_integration"
+path = "tests/scheduler_invariants_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "scheduler_replay_metamorphic"
+path = "tests/scheduler_replay_metamorphic.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "secure_aggregation_protocol_integration"
+path = "tests/secure_aggregation_protocol_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "security_conformance_enrichment_integration"
+path = "tests/security_conformance_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "security_conformance_integration"
+path = "tests/security_conformance_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "security_conformance_runner_cli"
+path = "tests/security_conformance_runner_cli.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "security_hardening_enrichment_integration"
+path = "tests/security_hardening_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "self_adjusting_resolution_graph_enrichment_integration"
+path = "tests/self_adjusting_resolution_graph_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "self_adjusting_resolution_graph_integration"
+path = "tests/self_adjusting_resolution_graph_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "self_replacement_lineage_operator"
+path = "tests/self_replacement_lineage_operator.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "semantic_canonical_basis_enrichment_integration"
+path = "tests/semantic_canonical_basis_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "semantic_canonical_basis_integration"
+path = "tests/semantic_canonical_basis_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "semantic_contract_baseline_enrichment_integration"
+path = "tests/semantic_contract_baseline_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "semantic_contract_baseline_integration"
+path = "tests/semantic_contract_baseline_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "semantic_cover_schema_enrichment_integration"
+path = "tests/semantic_cover_schema_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "semantic_cover_schema_integration"
+path = "tests/semantic_cover_schema_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "semantic_dark_matter_engine_integration"
+path = "tests/semantic_dark_matter_engine_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "semantic_flattening_inventory_deep_integration"
+path = "tests/semantic_flattening_inventory_deep_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "semantic_flattening_inventory_enrichment_integration"
+path = "tests/semantic_flattening_inventory_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "semantic_flattening_inventory_golden"
+path = "tests/semantic_flattening_inventory_golden.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "semantic_flattening_inventory_integration"
+path = "tests/semantic_flattening_inventory_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "semantic_transport_ledger_enrichment_integration"
+path = "tests/semantic_transport_ledger_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "semantic_transport_ledger_integration"
+path = "tests/semantic_transport_ledger_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "semantic_twin_enrichment_integration"
+path = "tests/semantic_twin_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "semantic_twin_integration"
+path = "tests/semantic_twin_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "semantic_twin_state_space"
+path = "tests/semantic_twin_state_space.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "semantic_twin_state_space_enrichment_integration"
+path = "tests/semantic_twin_state_space_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "semantic_twin_state_space_integration"
+path = "tests/semantic_twin_state_space_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "seqlock_candidate_inventory"
+path = "tests/seqlock_candidate_inventory.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "seqlock_candidate_inventory_enrichment_integration"
+path = "tests/seqlock_candidate_inventory_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "seqlock_candidate_inventory_integration"
+path = "tests/seqlock_candidate_inventory_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "seqlock_fastpath_enrichment_integration"
+path = "tests/seqlock_fastpath_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "seqlock_fastpath_golden"
+path = "tests/seqlock_fastpath_golden.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "seqlock_fastpath_integration"
+path = "tests/seqlock_fastpath_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "seqlock_reader_writer_contract"
+path = "tests/seqlock_reader_writer_contract.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "seqlock_reader_writer_contract_enrichment_integration"
+path = "tests/seqlock_reader_writer_contract_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "seqlock_reader_writer_contract_integration"
+path = "tests/seqlock_reader_writer_contract_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "seqlock_rollout_guard"
+path = "tests/seqlock_rollout_guard.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "seqlock_rollout_guard_enrichment_integration"
+path = "tests/seqlock_rollout_guard_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "seqlock_rollout_guard_integration"
+path = "tests/seqlock_rollout_guard_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "session_hostcall_channel_deep_integration"
+path = "tests/session_hostcall_channel_deep_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "session_hostcall_channel_enrichment_integration"
+path = "tests/session_hostcall_channel_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "session_hostcall_channel_integration"
+path = "tests/session_hostcall_channel_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "shadow_ablation_engine"
+path = "tests/shadow_ablation_engine.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "shadow_ablation_engine_enrichment_integration"
+path = "tests/shadow_ablation_engine_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "shadow_ablation_engine_integration"
+path = "tests/shadow_ablation_engine_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "shadow_adoption_gate_validation"
+path = "tests/shadow_adoption_gate_validation.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "shadow_evaluation_gate"
+path = "tests/shadow_evaluation_gate.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "shadow_handoff_contracts_integration"
+path = "tests/shadow_handoff_contracts_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "shape_transition_algebra_deep_integration"
+path = "tests/shape_transition_algebra_deep_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "shape_transition_algebra_enrichment_integration"
+path = "tests/shape_transition_algebra_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "shape_transition_algebra_integration"
+path = "tests/shape_transition_algebra_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "shape_transition_lattice_cli"
+path = "tests/shape_transition_lattice_cli.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "shipped_path_parity_verifier_enrichment_integration"
+path = "tests/shipped_path_parity_verifier_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "shipped_path_parity_verifier_integration"
+path = "tests/shipped_path_parity_verifier_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "sibling_integration_benchmark_gate"
+path = "tests/sibling_integration_benchmark_gate.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "sibling_integration_benchmark_gate_enrichment_integration"
+path = "tests/sibling_integration_benchmark_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "sibling_integration_benchmark_gate_integration"
+path = "tests/sibling_integration_benchmark_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "sibling_repo_verification_integration"
+path = "tests/sibling_repo_verification_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "simd_morsel_kernel_enrichment_integration"
+path = "tests/simd_morsel_kernel_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "simd_morsel_kernel_integration"
+path = "tests/simd_morsel_kernel_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "slot_differential_enrichment_integration"
+path = "tests/slot_differential_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "slot_differential_gate_integration"
+path = "tests/slot_differential_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "slot_differential_integration"
+path = "tests/slot_differential_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "sme_label_propagation_equivalence"
+path = "tests/sme_label_propagation_equivalence.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "specialization_conformance_enrichment_integration"
+path = "tests/specialization_conformance_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "specialization_conformance_integration"
+path = "tests/specialization_conformance_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "specialization_lane_gate_enrichment_integration"
+path = "tests/specialization_lane_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "specialization_lane_gate_integration"
+path = "tests/specialization_lane_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "specialization_perf_release_gate_enrichment_integration"
+path = "tests/specialization_perf_release_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "specialization_perf_release_gate_integration"
+path = "tests/specialization_perf_release_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "specialization_rollback_gate_enrichment_integration"
+path = "tests/specialization_rollback_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "specialization_rollback_gate_integration"
+path = "tests/specialization_rollback_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "statement_translation_validation_integration"
+path = "tests/statement_translation_validation_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "static_analysis_graph_enrichment_integration"
+path = "tests/static_analysis_graph_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "static_analysis_graph_integration"
+path = "tests/static_analysis_graph_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "static_authority_analyzer_enrichment_integration"
+path = "tests/static_authority_analyzer_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "static_authority_analyzer_integration"
+path = "tests/static_authority_analyzer_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "stdlib_workload_verification_enrichment_integration"
+path = "tests/stdlib_workload_verification_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "stdlib_workload_verification_integration"
+path = "tests/stdlib_workload_verification_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "structural_causal_model_enrichment_integration"
+path = "tests/structural_causal_model_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "structural_causal_model_integration"
+path = "tests/structural_causal_model_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "succinct_witness_compiler_enrichment_integration"
+path = "tests/succinct_witness_compiler_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "succinct_witness_compiler_integration"
+path = "tests/succinct_witness_compiler_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "superblock_formation_enrichment_integration"
+path = "tests/superblock_formation_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "superblock_formation_integration"
+path = "tests/superblock_formation_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "superoptimization_gate_integration"
+path = "tests/superoptimization_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "supervision_enrichment_integration"
+path = "tests/supervision_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "supervision_integration"
+path = "tests/supervision_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "supremacy_cell_matrix"
+path = "tests/supremacy_cell_matrix.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "supremacy_cell_matrix_enrichment_integration"
+path = "tests/supremacy_cell_matrix_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "supremacy_cell_matrix_integration"
+path = "tests/supremacy_cell_matrix_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "supremacy_evidence_bundle_enrichment_integration"
+path = "tests/supremacy_evidence_bundle_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "supremacy_evidence_bundle_integration"
+path = "tests/supremacy_evidence_bundle_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "supremacy_verdict_engine_enrichment_integration"
+path = "tests/supremacy_verdict_engine_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "supremacy_verdict_engine_integration"
+path = "tests/supremacy_verdict_engine_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "swarm_control_loop_enrichment_integration"
+path = "tests/swarm_control_loop_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "swarm_control_loop_integration"
+path = "tests/swarm_control_loop_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "swarm_execution_queue_runner_integration"
+path = "tests/swarm_execution_queue_runner_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "swarm_validation_control_plane_e2e"
+path = "tests/swarm_validation_control_plane_e2e.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "synthesis_budget_enrichment_integration"
+path = "tests/synthesis_budget_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "synthesis_budget_integration"
+path = "tests/synthesis_budget_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "synthesis_eligibility_envelope_enrichment_integration"
+path = "tests/synthesis_eligibility_envelope_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "synthesis_eligibility_envelope_integration"
+path = "tests/synthesis_eligibility_envelope_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "synthesis_kernel_promotion_enrichment_integration"
+path = "tests/synthesis_kernel_promotion_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "synthesis_kernel_promotion_integration"
+path = "tests/synthesis_kernel_promotion_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "tail_latency_control_plane_integration"
+path = "tests/tail_latency_control_plane_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "tail_latency_feedback_control_enrichment_integration"
+path = "tests/tail_latency_feedback_control_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "tail_latency_feedback_control_integration"
+path = "tests/tail_latency_feedback_control_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "tee_attestation_integration"
+path = "tests/tee_attestation_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "test_audit_bypass"
+path = "tests/test_audit_bypass.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "test_depth_gate_enrichment_integration"
+path = "tests/test_depth_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "test_depth_gate_integration"
+path = "tests/test_depth_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "test_flake_quarantine_workflow_enrichment_integration"
+path = "tests/test_flake_quarantine_workflow_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "test_flake_quarantine_workflow_integration"
+path = "tests/test_flake_quarantine_workflow_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "test_harness_deterministic_integration"
+path = "tests/test_harness_deterministic_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "test_taxonomy_enrichment_integration"
+path = "tests/test_taxonomy_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "test_taxonomy_integration"
+path = "tests/test_taxonomy_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "third_party_verifier"
+path = "tests/third_party_verifier.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "threshold_signing_edge_cases"
+path = "tests/threshold_signing_edge_cases.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "threshold_signing_enrichment_integration"
+path = "tests/threshold_signing_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "threshold_signing_integration"
+path = "tests/threshold_signing_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "throughput_disruptive_floor_metric_integration"
+path = "tests/throughput_disruptive_floor_metric_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "tier_eligibility_substrate_enrichment_integration"
+path = "tests/tier_eligibility_substrate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "tier_eligibility_substrate_integration"
+path = "tests/tier_eligibility_substrate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "tier_telemetry_contract_enrichment_integration"
+path = "tests/tier_telemetry_contract_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "tier_telemetry_contract_integration"
+path = "tests/tier_telemetry_contract_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "tier_up_profiler"
+path = "tests/tier_up_profiler.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "tier_up_profiler_deep_integration"
+path = "tests/tier_up_profiler_deep_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "tier_up_profiler_enrichment_integration"
+path = "tests/tier_up_profiler_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "tier_up_profiler_integration"
+path = "tests/tier_up_profiler_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "timescale_separation_certificate_deep_integration"
+path = "tests/timescale_separation_certificate_deep_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "timescale_separation_certificate_enrichment_integration"
+path = "tests/timescale_separation_certificate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "timescale_separation_certificate_integration"
+path = "tests/timescale_separation_certificate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "top_level_await_integration"
+path = "tests/top_level_await_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "trace_fusion_enrichment_integration"
+path = "tests/trace_fusion_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "trace_fusion_integration"
+path = "tests/trace_fusion_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "trace_fusion_superinstruction_enrichment_integration"
+path = "tests/trace_fusion_superinstruction_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "trace_fusion_superinstruction_integration"
+path = "tests/trace_fusion_superinstruction_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "transfer_governance_gate_enrichment_integration"
+path = "tests/transfer_governance_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "transfer_governance_gate_integration"
+path = "tests/transfer_governance_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "translation_validation_edge_cases"
+path = "tests/translation_validation_edge_cases.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "translation_validation_enrichment_integration"
+path = "tests/translation_validation_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "translation_validation_integration"
+path = "tests/translation_validation_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "translation_validation_receipt_enrichment_integration"
+path = "tests/translation_validation_receipt_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "translation_validation_receipt_integration"
+path = "tests/translation_validation_receipt_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "transparency_log_integration"
+path = "tests/transparency_log_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "trust_card_edge_cases"
+path = "tests/trust_card_edge_cases.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "trust_card_enrichment_integration"
+path = "tests/trust_card_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "trust_card_integration"
+path = "tests/trust_card_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "ts_module_resolution_enrichment_integration"
+path = "tests/ts_module_resolution_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "ts_module_resolution_integration"
+path = "tests/ts_module_resolution_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "ts_module_resolution_parity"
+path = "tests/ts_module_resolution_parity.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "ts_normalization_evidence_enrichment_integration"
+path = "tests/ts_normalization_evidence_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "ts_normalization_evidence_integration"
+path = "tests/ts_normalization_evidence_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "ts_resolution_manifest_enrichment_integration"
+path = "tests/ts_resolution_manifest_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "ts_resolution_manifest_integration"
+path = "tests/ts_resolution_manifest_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "ts_shipped_path_evidence_enrichment_integration"
+path = "tests/ts_shipped_path_evidence_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "ts_shipped_path_evidence_integration"
+path = "tests/ts_shipped_path_evidence_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "typed_array_fast_lane_enrichment_integration"
+path = "tests/typed_array_fast_lane_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "typed_array_fast_lane_integration"
+path = "tests/typed_array_fast_lane_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "unit_test_taxonomy_enrichment_integration"
+path = "tests/unit_test_taxonomy_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "unit_test_taxonomy_integration"
+path = "tests/unit_test_taxonomy_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "universal_dominance_ratchet_enrichment_integration"
+path = "tests/universal_dominance_ratchet_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "universal_dominance_ratchet_integration"
+path = "tests/universal_dominance_ratchet_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "vectorized_builtin_governance_enrichment_integration"
+path = "tests/vectorized_builtin_governance_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "vectorized_builtin_governance_integration"
+path = "tests/vectorized_builtin_governance_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "vectorized_lane_contract_enrichment_integration"
+path = "tests/vectorized_lane_contract_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "vectorized_lane_contract_integration"
+path = "tests/vectorized_lane_contract_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "vectorized_lane_governance_gate_enrichment_integration"
+path = "tests/vectorized_lane_governance_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "vectorized_lane_governance_gate_integration"
+path = "tests/vectorized_lane_governance_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "verification_coverage_contract_integration"
+path = "tests/verification_coverage_contract_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "version_matrix_lane_enrichment_integration"
+path = "tests/version_matrix_lane_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "version_matrix_lane_integration"
+path = "tests/version_matrix_lane_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "versioned_rewrite_pack_enrichment_integration"
+path = "tests/versioned_rewrite_pack_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "versioned_rewrite_pack_integration"
+path = "tests/versioned_rewrite_pack_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "wasm_module_loader"
+path = "tests/wasm_module_loader.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "wasm_numeric_vm_e2e"
+path = "tests/wasm_numeric_vm_e2e.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "wasm_start_functions"
+path = "tests/wasm_start_functions.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "workload_corpus_gate_enrichment_integration"
+path = "tests/workload_corpus_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "workload_corpus_gate_integration"
+path = "tests/workload_corpus_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "workload_embedding_enrichment_integration"
+path = "tests/workload_embedding_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "workload_embedding_integration"
+path = "tests/workload_embedding_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "workload_manifold_transfer_enrichment_integration"
+path = "tests/workload_manifold_transfer_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "workload_manifold_transfer_integration"
+path = "tests/workload_manifold_transfer_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "workload_policy_manifold_enrichment_integration"
+path = "tests/workload_policy_manifold_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "workload_policy_manifold_integration"
+path = "tests/workload_policy_manifold_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "workload_transfer_prior_enrichment_integration"
+path = "tests/workload_transfer_prior_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "workload_transfer_prior_integration"
+path = "tests/workload_transfer_prior_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "y4_proof_bundle_operator_surface_integration"
+path = "tests/y4_proof_bundle_operator_surface_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "zero_placeholder_gate_enrichment_integration"
+path = "tests/zero_placeholder_gate_enrichment_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "zero_placeholder_gate_integration"
+path = "tests/zero_placeholder_gate_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
+name = "algebraic_effects_integration"
+path = "tests/algebraic_effects_integration.rs"
+required-features = ["test-support"]
+
+[[test]]
+name = "remote_capability_gate_integration"
+path = "tests/remote_capability_gate_integration.rs"
+required-features = ["test-support"]
+
+[[test]]
+name = "remote_capability_gate_enrichment_integration"
+path = "tests/remote_capability_gate_enrichment_integration.rs"
+required-features = ["test-support"]
+
 [features]
 default = [
     "asupersync-integration",
     "sibling-persistence",
     "sibling-service-api",
-    "sibling-dataframes",
+]
+# Opt-in governance, synthesis, meta-gate, and offline scorecard surfaces.
+governance-surfaces = [
+    "dep:proptest",
+    "dep:syn",
+    "dep:proc-macro2",
+    "dep:lz4_flex",
+    "dep:zstd",
+    "dep:dp",
 ]
 asupersync-integration = [
     "dep:franken-kernel",
@@ -259,6 +4779,7 @@ sibling-service-api = ["dep:fastapi-core"]
 # frankenpandas evidence-frame primitives.
 # Gates: the Parquet evidence-export path in governance_hooks.
 sibling-dataframes = [
+    "governance-surfaces",
     "dep:fp-io",
     "dep:fp-frame",
     "dep:fp-columnar",
@@ -290,6 +4811,10 @@ _h4_profile = []
 # package activates it on its dev-dependency; the engine has no self
 # dev-dependency, so library unit tests need not first build a second engine lib.
 tee-test-mock = []
+# Test-only: exposes in-memory test-double handlers/transports (`MockFsHandler`,
+# `MockRemoteTransport`, `RecordedOperation`) to cross-crate/integration tests
+# without shipping mock implementations in default production builds.
+test-support = []
 # Real hardware-backed TEE quote path for `tee_live_quote`. OFF by default
 # because no Intel SGX / AMD SEV / Intel TDX SDK is integrated yet. With this
 # feature OFF, `TeeQuoteGenerator::generate_quote` only ever yields
@@ -305,8 +4830,8 @@ serde = { version = "1.0", features = ["derive", "rc"] }
 # Canonical evidence hashes require f64 -> JSON -> f64 to preserve every bit;
 # the default best-effort float parser can invalidate genuine checkpoints.
 serde_json = { version = "1.0", features = ["unbounded_depth", "float_roundtrip"] }
-proc-macro2 = { version = "1.0", features = ["span-locations"] }
-proptest = "1.6"
+proc-macro2 = { version = "1.0", features = ["span-locations"], optional = true }
+proptest = { version = "1.6", optional = true }
 regex = "1.0"
 ryu-js = "1.0"
 # BigInt arithmetic (bd-9vouw.54). Already locked (0.4.6) as a transitive
@@ -331,8 +4856,8 @@ ctr = "0.9.2"
 zeroize = "1.8"
 flate2 = "1.1"
 zlib-rs = { version = "0.6.3", default-features = false, features = ["std", "rust-allocator"] }
-lz4_flex = "0.14"
-zstd = "0.14"
+lz4_flex = { version = "0.14", optional = true }
+zstd = { version = "0.14", optional = true }
 brotli = "9.0"
 subtle = "2.6"
 ed25519-dalek = "2.0"
@@ -346,9 +4871,8 @@ hex = "0.4"
 base64 = "0.23"
 mimalloc = { version = "0.1", default-features = false }
 chrono = { version = "0.4", features = ["serde"] }
-thiserror = "2.0"
-uuid = { version = "1.16", features = ["v7", "serde"] }
-syn = { version = "2.0", features = ["full", "visit"] }
+thiserror.workspace = true
+syn = { version = "2.0", features = ["full", "visit"], optional = true }
 toml = "1"
 clap = { version = "4.5", features = ["derive"] }
 # Keep the SQLModel family coherent while consuming the upstream numeric-FULL
@@ -385,9 +4909,13 @@ fp-types = { version = "0.2.0", optional = true }
 # Bonawitz 2017 secure aggregation primitive (T.3). The QQ.2 protocol module
 # (`secure_aggregation.rs`) wraps this vetted sibling crate rather than inlining
 # ad-hoc cryptography.
-dp = { path = "../dp" }
+dp = { path = "../dp", optional = true }
 
 [dev-dependencies]
+uuid = { version = "1.16", features = ["v7", "serde"] }
+proptest = "1.6"
+syn = { version = "2.0", features = ["full", "visit"] }
+proc-macro2 = { version = "1.0", features = ["span-locations"] }
 criterion = { version = "0.8", features = ["html_reports"] }
 tempfile = "3.0"
 tracing = "0.1"

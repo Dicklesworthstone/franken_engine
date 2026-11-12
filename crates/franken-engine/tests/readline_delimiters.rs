@@ -59,7 +59,9 @@ fn run(goal: ParseGoal, imports: &str) {
                 .collect();
             assert_eq!(
                 lines,
-                ["readline delimiters: long lines, CRLF, UTF-16, UTF-8, reentry, question, iteration"],
+                [
+                    "readline delimiters: long lines, CRLF, UTF-16, UTF-8, reentry, question, iteration"
+                ],
                 "asynchronous completion must execute",
             );
             assert_eq!(

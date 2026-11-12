@@ -82,7 +82,17 @@ try { data.getUint8(0); } catch (e) { console.log(e.name); }
 
 #[test]
 fn transfers_keep_graph_aliases_and_detach_all_original_views() {
-    check(GRAPH, &["0 0 0 0", "true true true", "true true", "2 3 3,4,5", "true 1 2", "TypeError"]);
+    check(
+        GRAPH,
+        &[
+            "0 0 0 0",
+            "true true true",
+            "true true",
+            "2 3 3,4,5",
+            "true 1 2",
+            "TypeError",
+        ],
+    );
 }
 
 const LATE_BYTES: &str = r#"
@@ -103,7 +113,14 @@ try { structuredClone(empty, { transfer: [empty] }); } catch (e) { console.log(e
 
 #[test]
 fn transferred_bytes_are_read_after_all_graph_getters() {
-    check(LATE_BYTES, &["first,nested,last 0 17,23,0,42", "0 true", "DataCloneError 25"]);
+    check(
+        LATE_BYTES,
+        &[
+            "first,nested,last 0 17,23,0,42",
+            "0 true",
+            "DataCloneError 25",
+        ],
+    );
 }
 
 const RESIZABLE: &str = r#"
@@ -130,7 +147,17 @@ console.log(earlyClone.view.buffer.resizable, earlyClone.view.length, earlyClone
 
 #[test]
 fn resizable_buffers_keep_maximum_and_tracking_view_bounds() {
-    check(RESIZABLE, &["0 0 0", "true 24 12", "2 10 11 91", "2 14 15", "2 18 19 16", "true 6 12 0"]);
+    check(
+        RESIZABLE,
+        &[
+            "0 0 0",
+            "true 24 12",
+            "2 10 11 91",
+            "2 14 15",
+            "2 18 19 16",
+            "true 6 12 0",
+        ],
+    );
 }
 
 const FAILURES: &str = r#"
@@ -154,7 +181,19 @@ catch (e) { console.log(e.name, e.code, reads, buffer.byteLength); }
 
 #[test]
 fn invalid_lists_and_serialization_errors_do_not_detach_valid_sources() {
-    check(FAILURES, &["DataCloneError 25 0 4", "DataCloneError 25 0 4", "DataCloneError 25 0 4", "DataCloneError 25 0 4", "DataCloneError 25 0 4", "true 4", "DataCloneError 25 4", "DataCloneError 25 0 4"]);
+    check(
+        FAILURES,
+        &[
+            "DataCloneError 25 0 4",
+            "DataCloneError 25 0 4",
+            "DataCloneError 25 0 4",
+            "DataCloneError 25 0 4",
+            "DataCloneError 25 0 4",
+            "true 4",
+            "DataCloneError 25 4",
+            "DataCloneError 25 0 4",
+        ],
+    );
 }
 
 const ITERATOR: &str = r#"
@@ -191,7 +230,13 @@ catch (e) { console.log(e === boom, graphReads); }
 
 #[test]
 fn options_and_iterator_protocol_are_observable_once_before_serialization() {
-    check(ITERATOR, &["transfer,receiver,next0,next1,next2,graph 1 1 0 0 2", "true 0"]);
+    check(
+        ITERATOR,
+        &[
+            "transfer,receiver,next0,next1,next2,graph 1 1 0 0 2",
+            "true 0",
+        ],
+    );
 }
 
 const OPTIONS: &str = r#"
@@ -208,7 +253,21 @@ catch (e) { console.log(e.name, e.code); }
 
 #[test]
 fn dictionary_and_sequence_validation_do_not_accept_array_like_fallbacks() {
-    check(OPTIONS, &["7 8 9", "TypeError ERR_INVALID_ARG_TYPE", "TypeError ERR_INVALID_ARG_TYPE", "TypeError ERR_INVALID_ARG_TYPE", "TypeError ERR_INVALID_ARG_TYPE", "TypeError ERR_INVALID_ARG_TYPE", "TypeError ERR_INVALID_ARG_TYPE", "TypeError ERR_INVALID_ARG_TYPE", "TypeError ERR_INVALID_ARG_TYPE", "TypeError ERR_INVALID_ARG_TYPE"]);
+    check(
+        OPTIONS,
+        &[
+            "7 8 9",
+            "TypeError ERR_INVALID_ARG_TYPE",
+            "TypeError ERR_INVALID_ARG_TYPE",
+            "TypeError ERR_INVALID_ARG_TYPE",
+            "TypeError ERR_INVALID_ARG_TYPE",
+            "TypeError ERR_INVALID_ARG_TYPE",
+            "TypeError ERR_INVALID_ARG_TYPE",
+            "TypeError ERR_INVALID_ARG_TYPE",
+            "TypeError ERR_INVALID_ARG_TYPE",
+            "TypeError ERR_INVALID_ARG_TYPE",
+        ],
+    );
 }
 
 const DIRECT_TRANSFER: &str = r#"
@@ -240,5 +299,19 @@ console.log(held.byteLength, clone.held.byteLength, new Uint8Array(clone.held)[1
 
 #[test]
 fn direct_transfers_and_structured_transfers_share_buffer_semantics() {
-    check(DIRECT_TRANSFER, &["transfer 0 0 0 true 8 ", "transfer 2 0 0 true 8 1,2", "transfer 4 0 0 true 8 1,2,3,4", "transfer 8 0 0 true 8 1,2,3,4,0,0,0,0", "transferToFixedLength 0 0 0 false 0 ", "transferToFixedLength 2 0 0 false 2 1,2", "transferToFixedLength 4 0 0 false 4 1,2,3,4", "transferToFixedLength 8 0 0 false 8 1,2,3,4,0,0,0,0", "0,0,0,0,0,9,0,0 0", "0 1024 71"]);
+    check(
+        DIRECT_TRANSFER,
+        &[
+            "transfer 0 0 0 true 8 ",
+            "transfer 2 0 0 true 8 1,2",
+            "transfer 4 0 0 true 8 1,2,3,4",
+            "transfer 8 0 0 true 8 1,2,3,4,0,0,0,0",
+            "transferToFixedLength 0 0 0 false 0 ",
+            "transferToFixedLength 2 0 0 false 2 1,2",
+            "transferToFixedLength 4 0 0 false 4 1,2,3,4",
+            "transferToFixedLength 8 0 0 false 8 1,2,3,4,0,0,0,0",
+            "0,0,0,0,0,9,0,0 0",
+            "0 1024 71",
+        ],
+    );
 }

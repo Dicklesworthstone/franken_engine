@@ -5,10 +5,7 @@ use crate::ir_contract::{CapabilityTag, RegRange};
 
 fn instructions() -> Vec<Ir3Instruction> {
     vec![
-        Ir3Instruction::LoadInt {
-            dst: 0,
-            value: -1,
-        },
+        Ir3Instruction::LoadInt { dst: 0, value: -1 },
         Ir3Instruction::LoadFloat {
             dst: 1,
             bits: (-0.0_f64).to_bits(),
@@ -80,17 +77,9 @@ fn instructions() -> Vec<Ir3Instruction> {
             kind: 1,
             preserve_state: true,
         },
-        Ir3Instruction::ModuleAwaitValue {
-            promise_reg: 0,
-        },
-        Ir3Instruction::Inc {
-            dst: 0,
-            src: 1,
-        },
-        Ir3Instruction::Dec {
-            dst: 0,
-            src: 1,
-        },
+        Ir3Instruction::ModuleAwaitValue { promise_reg: 0 },
+        Ir3Instruction::Inc { dst: 0, src: 1 },
+        Ir3Instruction::Dec { dst: 0, src: 1 },
         Ir3Instruction::Halt,
         Ir3Instruction::EndTry,
         Ir3Instruction::EnterFinally,

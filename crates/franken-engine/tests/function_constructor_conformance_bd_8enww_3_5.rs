@@ -564,17 +564,29 @@ fn generated_constructor_audit_preserves_source_budget_and_safe_grants() {
         .iter()
         .filter(|entry| entry.kind == GeneratedCodeEventKind::Invoked)
         .collect();
-    assert_eq!(invoked.len(), 2, "new and Reflect.construct are both audited");
+    assert_eq!(
+        invoked.len(),
+        2,
+        "new and Reflect.construct are both audited"
+    );
     for entry in invoked {
         assert_eq!(entry.source_id, constructed.source_id);
         assert_eq!(entry.source_hash, constructed.source_hash);
         assert_eq!(entry.outcome, "completed");
         assert!(entry.instructions_consumed > 0);
         assert!(entry.instructions_consumed <= outcome.instructions_executed);
-        assert!(entry.granted_capabilities.iter().any(|grant| grant == "builtin"));
+        assert!(
+            entry
+                .granted_capabilities
+                .iter()
+                .any(|grant| grant == "builtin")
+        );
         for forbidden in ["fs_read", "fs_write", "process_spawn", "network_egress"] {
             assert!(
-                !entry.granted_capabilities.iter().any(|grant| grant == forbidden),
+                !entry
+                    .granted_capabilities
+                    .iter()
+                    .any(|grant| grant == forbidden),
                 "generated construction must never be granted {forbidden}"
             );
         }

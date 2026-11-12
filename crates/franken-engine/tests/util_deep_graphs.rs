@@ -56,7 +56,9 @@ fn run(goal: ParseGoal, imports: &str) {
                 .collect();
             assert_eq!(
                 lines,
-                ["util deep graphs: chains, cycles, partners, rollback, getters, exceptions, reentry"],
+                [
+                    "util deep graphs: chains, cycles, partners, rollback, getters, exceptions, reentry"
+                ],
             );
             assert_eq!(
                 core.estimated_memory_bytes(),

@@ -75,7 +75,9 @@ impl<V> IndexedValues<V> {
                             slots,
                             live: entries.len() + 1,
                         });
-                        prepared.slots.extend(std::mem::take(entries).into_iter().map(Some));
+                        prepared
+                            .slots
+                            .extend(std::mem::take(entries).into_iter().map(Some));
                         prepared.slots.resize_with(offset, || None);
                         prepared.slots.push(Some(entry));
                         *self = Self::Holey(prepared);
@@ -86,10 +88,16 @@ impl<V> IndexedValues<V> {
             Self::Holey(entries) => {
                 debug_assert!(offset > entries.slots.len());
                 if let Some(capacity) = gap_capacity(
-                    entries.live, entries.slots.len(), offset, entries.slots.capacity(),
+                    entries.live,
+                    entries.slots.len(),
+                    offset,
+                    entries.slots.capacity(),
                 ) {
                     let admitted = capacity <= entries.slots.capacity()
-                        || entries.slots.try_reserve_exact(capacity - entries.slots.len()).is_ok();
+                        || entries
+                            .slots
+                            .try_reserve_exact(capacity - entries.slots.len())
+                            .is_ok();
                     if admitted && entries.slots.capacity() <= capacity {
                         entries.slots.resize_with(offset, || None);
                         entries.slots.push(Some(entry));
@@ -177,7 +185,6 @@ fn gap_capacity(live: usize, span: usize, offset: usize, capacity: usize) -> Opt
     (required <= growth_threshold).then_some(limit)
 }
 
-
 // A storage probe may inspect at most this many holey slots. Return the next
 // unproved index at the bound instead of scanning an unbounded hole run before
 // the runtime regains control of its work/cancellation meter.
@@ -219,19 +226,33 @@ impl<V> IndexedValues<V> {
         match self {
             Self::Packed(entries) => {
                 let end = (range.end as usize).min(entries.len());
-                let index = ((range.start as usize) < end)
-                    .then(|| if backwards { (end - 1) as u32 } else { range.start });
+                let index = ((range.start as usize) < end).then(|| {
+                    if backwards {
+                        (end - 1) as u32
+                    } else {
+                        range.start
+                    }
+                });
                 (index, 1)
             }
             Self::Queue(entries) => {
                 let end = (range.end as usize).min(entries.len());
-                let index = ((range.start as usize) < end)
-                    .then(|| if backwards { (end - 1) as u32 } else { range.start });
+                let index = ((range.start as usize) < end).then(|| {
+                    if backwards {
+                        (end - 1) as u32
+                    } else {
+                        range.start
+                    }
+                });
                 (index, 1)
             }
             Self::Dictionary(entries) => {
                 let mut range = entries.range(range);
-                let entry = if backwards { range.next_back() } else { range.next() };
+                let entry = if backwards {
+                    range.next_back()
+                } else {
+                    range.next()
+                };
                 (entry.map(|(&index, _)| index), 1)
             }
             Self::Holey(entries) => {

@@ -18,7 +18,11 @@ const EXPECTED: &str =
 
 fn run(shadow_array: bool) {
     for (goal, imports) in [(ParseGoal::Script, COMMONJS), (ParseGoal::Module, ESM)] {
-        let shadow = if shadow_array { "const Array = null;\n" } else { "" };
+        let shadow = if shadow_array {
+            "const Array = null;\n"
+        } else {
+            ""
+        };
         let source = format!(
             "{imports}{shadow}{}\n\
              verifyReadlineFragments(__readline, __EventEmitter).then(\

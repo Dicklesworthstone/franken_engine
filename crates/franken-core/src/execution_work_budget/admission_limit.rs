@@ -82,11 +82,7 @@ impl ExecutionWorkPool {
     /// is cooperative, not a hard thread kill, provider drain or OS isolation.
     /// Plain `new`/`with_admission_limit` remain deadline-free. These live host
     /// limits are not a deterministic replay clock or serialized authority.
-    pub fn with_deadline(
-        instruction_limit: u64,
-        max_admissions: usize,
-        deadline: Instant,
-    ) -> Self {
+    pub fn with_deadline(instruction_limit: u64, max_admissions: usize, deadline: Instant) -> Self {
         Self::with_cancellation(
             instruction_limit,
             max_admissions,
@@ -139,12 +135,18 @@ mod tests {
     #[test]
     fn zero_and_full_limits_refuse_before_instruction_debit() {
         let zero = ExecutionWorkPool::with_admission_limit(100, 0);
-        assert!(matches!(zero.reserve(1), Err(WorkBudgetError::AdmissionLimit { limit: 0 })));
+        assert!(matches!(
+            zero.reserve(1),
+            Err(WorkBudgetError::AdmissionLimit { limit: 0 })
+        ));
         assert_eq!(zero.remaining(), 100);
         assert_eq!(zero.outstanding_admissions(), 0);
         let pool = ExecutionWorkPool::with_admission_limit(100, 1);
         let job = pool.reserve(10).unwrap();
-        assert!(matches!(pool.reserve(20), Err(WorkBudgetError::AdmissionLimit { limit: 1 })));
+        assert!(matches!(
+            pool.reserve(20),
+            Err(WorkBudgetError::AdmissionLimit { limit: 1 })
+        ));
         assert_eq!(pool.remaining(), 90);
         drop(job);
         assert_eq!(pool.outstanding_admissions(), 0);
@@ -164,9 +166,20 @@ mod tests {
         let second = b.reserve(20).unwrap();
         for scope in [&root, &a, &b, &leaf, &alias] {
             assert_eq!(scope.outstanding_admissions(), 2);
-            assert!(matches!(scope.reserve(1), Err(WorkBudgetError::AdmissionLimit { limit: 2 })));
+            assert!(matches!(
+                scope.reserve(1),
+                Err(WorkBudgetError::AdmissionLimit { limit: 2 })
+            ));
         }
-        assert_eq!((root.remaining(), a.remaining(), b.remaining(), leaf.remaining()), (200, 100, 180, 90));
+        assert_eq!(
+            (
+                root.remaining(),
+                a.remaining(),
+                b.remaining(),
+                leaf.remaining()
+            ),
+            (200, 100, 180, 90)
+        );
         drop(first);
         let third = root.reserve(30).unwrap();
         assert_eq!(root.outstanding_admissions(), 2);
@@ -179,13 +192,22 @@ mod tests {
     #[test]
     fn invalid_or_unfunded_reservation_releases_any_provisional_slot() {
         let pool = ExecutionWorkPool::with_admission_limit(10, 1);
-        assert!(matches!(pool.reserve(0), Err(WorkBudgetError::ZeroInstructionBudget)));
-        assert!(matches!(pool.reserve(11), Err(WorkBudgetError::Exhausted { .. })));
+        assert!(matches!(
+            pool.reserve(0),
+            Err(WorkBudgetError::ZeroInstructionBudget)
+        ));
+        assert!(matches!(
+            pool.reserve(11),
+            Err(WorkBudgetError::Exhausted { .. })
+        ));
         assert_eq!(pool.outstanding_admissions(), 0);
         let job = pool.reserve(10).unwrap();
         assert_eq!(pool.outstanding_admissions(), 1);
         drop(job);
-        assert!(matches!(pool.reserve(1), Err(WorkBudgetError::Exhausted { .. })));
+        assert!(matches!(
+            pool.reserve(1),
+            Err(WorkBudgetError::Exhausted { .. })
+        ));
         assert_eq!(pool.outstanding_admissions(), 0);
         assert_eq!(pool.committed(), 10);
     }
@@ -222,7 +244,10 @@ mod tests {
         job.task_control().cancel();
         assert_eq!(root.outstanding_admissions(), 1);
         assert!(matches!(a.reserve(1), Err(WorkBudgetError::Revoked)));
-        assert!(matches!(b.reserve(10), Err(WorkBudgetError::AdmissionLimit { limit: 1 })));
+        assert!(matches!(
+            b.reserve(10),
+            Err(WorkBudgetError::AdmissionLimit { limit: 1 })
+        ));
         assert_eq!(b.remaining(), 20);
         drop(job);
         let _peer = b.reserve(10).unwrap();
@@ -250,17 +275,19 @@ mod tests {
         let ready = Arc::new(Barrier::new(33));
         let held = Arc::new(Barrier::new(33));
         let release = Arc::new(Barrier::new(33));
-        let workers: Vec<_> = (0..32).map(|_| {
-            let child = root.partition(10).unwrap();
-            let (ready, held, release) = (ready.clone(), held.clone(), release.clone());
-            std::thread::spawn(move || {
-                ready.wait();
-                let result = child.reserve(1);
-                held.wait();
-                release.wait();
-                result
+        let workers: Vec<_> = (0..32)
+            .map(|_| {
+                let child = root.partition(10).unwrap();
+                let (ready, held, release) = (ready.clone(), held.clone(), release.clone());
+                std::thread::spawn(move || {
+                    ready.wait();
+                    let result = child.reserve(1);
+                    held.wait();
+                    release.wait();
+                    result
+                })
             })
-        }).collect();
+            .collect();
         ready.wait();
         held.wait();
         let observed = root.outstanding_admissions();
@@ -269,7 +296,7 @@ mod tests {
         for worker in workers {
             match worker.join().unwrap() {
                 Ok(job) => admitted.push(job),
-                Err(WorkBudgetError::AdmissionLimit { limit: 3 }) => {},
+                Err(WorkBudgetError::AdmissionLimit { limit: 3 }) => {}
                 other => panic!("unexpected reservation: {other:?}"),
             }
         }
@@ -289,7 +316,10 @@ mod tests {
         });
         let slot = AdmissionSlot::acquire(&slots).unwrap();
         assert_eq!(slots.occupied.load(Ordering::Acquire), usize::MAX);
-        assert!(matches!(AdmissionSlot::acquire(&slots), Err(WorkBudgetError::AdmissionLimit { limit: usize::MAX })));
+        assert!(matches!(
+            AdmissionSlot::acquire(&slots),
+            Err(WorkBudgetError::AdmissionLimit { limit: usize::MAX })
+        ));
         drop(slot);
         assert_eq!(slots.occupied.load(Ordering::Acquire), usize::MAX - 1);
         let first = ExecutionWorkPool::with_admission_limit(10, 1);
@@ -317,7 +347,8 @@ mod tests {
         drop(held);
         let source = module("40 + 2;");
         let expected = InterpreterCore::new(config(128), "work-budget")
-            .execute(&source).unwrap();
+            .execute(&source)
+            .unwrap();
         let actual = runtime.execute(&source).unwrap();
         assert_eq!(actual.value, expected.value);
         assert_eq!(actual.completion_label, expected.completion_label);
@@ -345,7 +376,9 @@ mod tests {
         let job = root.reserve(128).unwrap();
         assert!(matches!(
             job.execute(&module("throw 7;"), config(128), "trap"),
-            Err(WorkBudgetError::Interpreter(InterpreterError::UncaughtException { .. }))
+            Err(WorkBudgetError::Interpreter(
+                InterpreterError::UncaughtException { .. }
+            ))
         ));
         assert_eq!(root.outstanding_admissions(), 0);
         let job = root.reserve(128).unwrap();
@@ -359,10 +392,15 @@ mod tests {
         denied.granted_capabilities.clear();
         assert!(matches!(
             job.execute(&module("7;"), denied, "denied"),
-            Err(WorkBudgetError::Interpreter(InterpreterError::CapabilityDenied { .. }))
+            Err(WorkBudgetError::Interpreter(
+                InterpreterError::CapabilityDenied { .. }
+            ))
         ));
         assert_eq!(root.outstanding_admissions(), 0);
-        root.reserve(128).unwrap().execute(&module("7;"), config(128), "success").unwrap();
+        root.reserve(128)
+            .unwrap()
+            .execute(&module("7;"), config(128), "success")
+            .unwrap();
         assert_eq!(root.outstanding_admissions(), 0);
         assert_eq!(root.remaining(), 0);
     }
@@ -378,15 +416,24 @@ mod tests {
         runtime.set_hook(Arc::new(PanickingHook));
         assert!(catch_unwind(AssertUnwindSafe(|| runtime.execute(&source))).is_err());
         assert_eq!(root.outstanding_admissions(), 0);
-        assert!(matches!(runtime.execute(&source), Err(WorkBudgetError::Interrupted)));
+        assert!(matches!(
+            runtime.execute(&source),
+            Err(WorkBudgetError::Interrupted)
+        ));
         assert_eq!(root.remaining(), 384);
         let job = root.reserve(128).unwrap();
-        assert!(catch_unwind(AssertUnwindSafe(|| {
-            job.execute_with_hook(&source, config(128), "panic", Some(Arc::new(PanickingHook)))
-        })).is_err());
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                job.execute_with_hook(&source, config(128), "panic", Some(Arc::new(PanickingHook)))
+            }))
+            .is_err()
+        );
         assert_eq!(root.outstanding_admissions(), 0);
         assert_eq!(root.remaining(), 256);
-        root.reserve(128).unwrap().execute(&module("7;"), config(128), "peer").unwrap();
+        root.reserve(128)
+            .unwrap()
+            .execute(&module("7;"), config(128), "peer")
+            .unwrap();
         assert_eq!(root.outstanding_admissions(), 0);
         assert_eq!(root.remaining(), 128);
     }
@@ -407,7 +454,9 @@ mod tests {
         let job = root.reserve(128).unwrap();
         assert!(matches!(
             job.spawn(module("7;"), config(0), "invalid"),
-            Err(ExecutionTaskStartError::Admission(WorkBudgetError::ZeroInstructionBudget))
+            Err(ExecutionTaskStartError::Admission(
+                WorkBudgetError::ZeroInstructionBudget
+            ))
         ));
         assert_eq!(root.outstanding_admissions(), 0);
         assert_eq!(root.remaining(), 0);

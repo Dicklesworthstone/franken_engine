@@ -382,20 +382,21 @@ fn async_markers_survive_ir1_serialization_without_changing_sync_functions() {
             );
         }
     }
-    let module = lower_ir0_to_ir3(
-        &ir0,
-        &LoweringContext::new("async", "async", "async"),
-    )
-    .unwrap()
-    .ir3;
+    let module = lower_ir0_to_ir3(&ir0, &LoweringContext::new("async", "async", "async"))
+        .unwrap()
+        .ir3;
     assert_eq!(
-        module.instructions.iter()
+        module
+            .instructions
+            .iter()
             .filter(|op| matches!(op, Ir3Instruction::CreateAsyncFunction { .. }))
             .count(),
         1,
     );
     assert_eq!(
-        module.instructions.iter()
+        module
+            .instructions
+            .iter()
             .filter(|op| matches!(op, Ir3Instruction::AwaitValue { .. }))
             .count(),
         1,
@@ -422,7 +423,9 @@ fn class_async_grammar_distinguishes_modifiers_and_rejects_invalid_parameters() 
         "const object = { async task(await) {} };",
     ] {
         assert!(
-            CanonicalEs2020Parser.parse(source, ParseGoal::Script).is_err(),
+            CanonicalEs2020Parser
+                .parse(source, ParseGoal::Script)
+                .is_err(),
             "{source}",
         );
     }

@@ -97,7 +97,10 @@ fn native_json_modules_share_the_require_value_and_only_export_default_in_both_o
             let root = tempfile::tempdir().expect("module root");
             std::fs::write(
                 root.path().join("data.json"),
-                concat!("\u{feff}", r#"{"answer":42,"__proto__":9,"items":[true,null]}"#),
+                concat!(
+                    "\u{feff}",
+                    r#"{"answer":42,"__proto__":9,"items":[true,null]}"#
+                ),
             )
             .expect("original JSON data");
             std::fs::write(

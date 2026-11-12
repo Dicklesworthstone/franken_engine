@@ -115,8 +115,21 @@ fn constructor_abort_preserves_reason_and_destroys_both_duplex_halves_once() {
             })();"#,
             lane,
         );
-        assert_eq!(lines, ["Readable true", "1 1", "Writable true", "1 1",
-            "Duplex true", "1 1", "Transform true", "1 1", "PassThrough true", "1 1"]);
+        assert_eq!(
+            lines,
+            [
+                "Readable true",
+                "1 1",
+                "Writable true",
+                "1 1",
+                "Duplex true",
+                "1 1",
+                "Transform true",
+                "1 1",
+                "PassThrough true",
+                "1 1"
+            ]
+        );
     }
 }
 
@@ -139,7 +152,10 @@ fn pipeline_cancellation_preserves_accepted_file_prefix_without_finalization() {
             lane,
         );
         assert_eq!(lines, ["ABORT_ERR true true true"]);
-        assert_eq!(std::fs::read(root.path().join("out.txt")).unwrap(), b"accepted\n");
+        assert_eq!(
+            std::fs::read(root.path().join("out.txt")).unwrap(),
+            b"accepted\n"
+        );
         assert!(!root.path().join("unexpected.txt").exists());
     }
 }
@@ -205,7 +221,10 @@ fn async_cursor_getters_publish_each_record_once_through_the_native_pipeline() {
             lane,
         );
         assert_eq!(lines, ["CURSOR_COMPLETE 3 1 true"]);
-        assert_eq!(std::fs::read(root.path().join("records.txt")).unwrap(), b"first\nsecond\nthird\n");
+        assert_eq!(
+            std::fs::read(root.path().join("records.txt")).unwrap(),
+            b"first\nsecond\nthird\n"
+        );
     }
 }
 
@@ -297,11 +316,14 @@ fn web_adapters_cancel_acquired_endpoints_before_reporting_pre_aborted_close() {
             })();"#,
             lane,
         );
-        assert_eq!(lines, [
-            "ADOPTED Readable 1 1 true true",
-            "ADOPTED Writable 1 1 true true",
-            "ADOPTED Duplex 2 1 true true",
-        ]);
+        assert_eq!(
+            lines,
+            [
+                "ADOPTED Readable 1 1 true true",
+                "ADOPTED Writable 1 1 true true",
+                "ADOPTED Duplex 2 1 true true",
+            ]
+        );
     }
 }
 
@@ -324,8 +346,14 @@ fn pre_aborted_web_pipeline_waits_for_the_owned_file_release() {
             })();"#,
             lane,
         );
-        assert_eq!(lines, ["WEB_CANCEL ABORT_ERR true true true", "RELEASED closed"]);
-        assert_eq!(std::fs::read(root.path().join("released.txt")).unwrap(), b"closed\n");
+        assert_eq!(
+            lines,
+            ["WEB_CANCEL ABORT_ERR true true true", "RELEASED closed"]
+        );
+        assert_eq!(
+            std::fs::read(root.path().join("released.txt")).unwrap(),
+            b"closed\n"
+        );
         assert!(!root.path().join("unexpected.txt").exists());
     }
 }
@@ -370,7 +398,10 @@ fn web_pipeline_preserves_admitted_bytes_before_reporting_source_failure() {
             lane,
         );
         assert_eq!(lines, ["ADMITTED_COMPLETE true 1 true true"]);
-        assert_eq!(std::fs::read(root.path().join("partial.txt")).unwrap(), b"accepted\n");
+        assert_eq!(
+            std::fs::read(root.path().join("partial.txt")).unwrap(),
+            b"accepted\n"
+        );
         assert!(!root.path().join("unexpected.txt").exists());
     }
 }

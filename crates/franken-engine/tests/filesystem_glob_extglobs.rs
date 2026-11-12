@@ -37,9 +37,15 @@ fn run(source: &str, root: &Path, caps: &[&str], lane: LaneChoice) -> Result<Run
         version: "1.0.0".into(),
         metadata: BTreeMap::new(),
     };
-    let result = runtime.execute(&package).map_err(|error| format!("{error:?}"))?;
+    let result = runtime
+        .execute(&package)
+        .map_err(|error| format!("{error:?}"))?;
     Ok((
-        result.console_output.into_iter().map(|entry| entry.message).collect(),
+        result
+            .console_output
+            .into_iter()
+            .map(|entry| entry.message)
+            .collect(),
         recording.entries(),
     ))
 }
@@ -74,16 +80,31 @@ fn extglob_workspace_and_source_discovery_share_native_read_only_traversal() {
             console.log('DISCOVERY_COMPLETE');"#,
             root.path(), &["fs_read"], lane,
         ).expect("native extglob discovery completes");
-        assert_eq!(lines, [
-            "MANIFESTS apps/ui/package.json|packages/alpha/package.json",
-            "INPUTS src/index.ts|src/main.js",
-            "DISCOVERY_COMPLETE",
-        ]);
-        assert!(effects.iter().all(|(request, _)| {
-            request.required_capability() == HostIoCapability::FsRead
-        }));
-        let directories = effects.iter().filter(|(request, _)| matches!(request,
-            HostIoRequest::FsMeta { operation: FsOperation::ReadDir, .. })).count();
+        assert_eq!(
+            lines,
+            [
+                "MANIFESTS apps/ui/package.json|packages/alpha/package.json",
+                "INPUTS src/index.ts|src/main.js",
+                "DISCOVERY_COMPLETE",
+            ]
+        );
+        assert!(
+            effects
+                .iter()
+                .all(|(request, _)| { request.required_capability() == HostIoCapability::FsRead })
+        );
+        let directories = effects
+            .iter()
+            .filter(|(request, _)| {
+                matches!(
+                    request,
+                    HostIoRequest::FsMeta {
+                        operation: FsOperation::ReadDir,
+                        ..
+                    }
+                )
+            })
+            .count();
         // Five snapshots discover manifests. Six discover source files, never
         // opening either excluded tree or the unrelated src tree on pass one.
         assert_eq!(directories, 11);
@@ -110,9 +131,14 @@ fn typed_callback_and_async_discovery_drive_a_complete_build() {
             root.path(), &["fs_read", "fs_write"], lane,
         ).expect("native callback and iterator build completes");
         assert_eq!(lines, ["BUILD_COMPLETE 2 2"]);
-        assert_eq!(std::fs::read(root.path().join("bundle.txt")).unwrap(), b"beta\nalpha\n");
-        assert_eq!(std::fs::read(root.path().join("manifest-index.txt")).unwrap(),
-            b"apps/ui/package.json\npackages/alpha/package.json\n");
+        assert_eq!(
+            std::fs::read(root.path().join("bundle.txt")).unwrap(),
+            b"beta\nalpha\n"
+        );
+        assert_eq!(
+            std::fs::read(root.path().join("manifest-index.txt")).unwrap(),
+            b"apps/ui/package.json\npackages/alpha/package.json\n"
+        );
     }
 }
 
@@ -131,13 +157,27 @@ fn positive_extglobs_preserve_preflight_limits_and_do_not_grant_read_authority()
             console.log('PREFLIGHT_COMPLETE');"#,
             root.path(), &[], lane,
         ).expect("preflight performs no filesystem operation");
-        assert_eq!(lines, ["ERR_FS_GLOB_UNSUPPORTED", "ERR_FS_GLOB_UNSUPPORTED",
-            "ERR_FS_GLOB_LIMIT", "ERR_FS_GLOB_LIMIT", "PREFLIGHT_COMPLETE"]);
+        assert_eq!(
+            lines,
+            [
+                "ERR_FS_GLOB_UNSUPPORTED",
+                "ERR_FS_GLOB_UNSUPPORTED",
+                "ERR_FS_GLOB_LIMIT",
+                "ERR_FS_GLOB_LIMIT",
+                "PREFLIGHT_COMPLETE"
+            ]
+        );
         assert!(effects.is_empty());
-        assert!(run(
-            "require('fs').globSync('src/*.@(js|ts)');console.log('UNAUTHORIZED_SUCCESS');",
-            root.path(), &[], lane,
-        ).is_err(), "positive extglobs cannot bypass filesystem capability checks");
+        assert!(
+            run(
+                "require('fs').globSync('src/*.@(js|ts)');console.log('UNAUTHORIZED_SUCCESS');",
+                root.path(),
+                &[],
+                lane,
+            )
+            .is_err(),
+            "positive extglobs cannot bypass filesystem capability checks"
+        );
     }
 }
 
@@ -153,8 +193,14 @@ fn repeated_and_nested_alternatives_do_not_expand_pattern_combinations() {
             console.log('ALTERNATIVES',fs.globSync('@(a|b)'.repeat(32)+'.js').length);
             console.log('NULLABLE',fs.globSync('*(@(|a)|?(b))c').join('|'));
             console.log('MACHINE_COMPLETE');"#,
-            root.path(), &["fs_read"], lane,
-        ).expect("native compact matching completes within ordinary budgets");
-        assert_eq!(lines, ["ALTERNATIVES 1", "NULLABLE abac", "MACHINE_COMPLETE"]);
+            root.path(),
+            &["fs_read"],
+            lane,
+        )
+        .expect("native compact matching completes within ordinary budgets");
+        assert_eq!(
+            lines,
+            ["ALTERNATIVES 1", "NULLABLE abac", "MACHINE_COMPLETE"]
+        );
     }
 }

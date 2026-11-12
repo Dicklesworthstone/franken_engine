@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! Promise static methods through the public IR3 execution boundary.
 //! These tests exercise the core hostcall API, including queued reactions and
 //! allSettled, independently of the main engine's source-level Promise API.
@@ -10,7 +11,9 @@ use frankenengine_core::baseline_interpreter::{
 use frankenengine_core::capability::RuntimeCapability;
 use frankenengine_core::hash_tiers::ContentHash;
 use frankenengine_core::ifc_artifacts::Label;
-use frankenengine_core::ir_contract::{CapabilityTag, Ir3Instruction, Ir3Module, RegRange};
+use frankenengine_core::ir_contract::{
+    CapabilityTag, Ir3FunctionDesc, Ir3Instruction, Ir3Module, RegRange,
+};
 
 fn core() -> InterpreterCore {
     let mut config = InterpreterConfig::quickjs_defaults();
@@ -65,35 +68,119 @@ fn resolve_preserves_identity_in_every_source_state() {
 fn static_methods_cannot_settle_a_pending_argument() {
     for method in ["resolve", "reject"] {
         let mut core = core();
+        let mut pending_probe = module(vec![
+            call("constructor", 0, 0, 1),
+            Ir3Instruction::LoadInt { dst: 2, value: 99 },
+            call(method, 1, 2, 3),
+            Ir3Instruction::StrictEq {
+                dst: 0,
+                lhs: 1,
+                rhs: 3,
+            },
+            Ir3Instruction::NewObject { dst: 4 },
+            Ir3Instruction::Move { dst: 10, src: 1 },
+            Ir3Instruction::Move { dst: 11, src: 4 },
+            Ir3Instruction::CreateAsyncFunction {
+                dst: 5,
+                function_index: 0,
+                capture_count: 0,
+            },
+            Ir3Instruction::Call {
+                callee: 5,
+                args: RegRange {
+                    start: 10,
+                    count: 2,
+                },
+                dst: 6,
+            },
+            Ir3Instruction::Halt,
+            Ir3Instruction::NewArray { dst: 2 },
+            Ir3Instruction::ArrayPush {
+                array: 2,
+                element: 0,
+            },
+            call("allSettled", 2, 1, 3),
+            Ir3Instruction::AwaitValue { promise_reg: 3 },
+            Ir3Instruction::LoadStr {
+                dst: 4,
+                pool_index: 0,
+            },
+            Ir3Instruction::LoadBool {
+                dst: 5,
+                value: true,
+            },
+            Ir3Instruction::SetProperty {
+                obj: 1,
+                key: 4,
+                val: 5,
+            },
+            Ir3Instruction::Return { value: 5 },
+        ]);
+        pending_probe.function_table = vec![Ir3FunctionDesc {
+            entry: 10,
+            arity: 2,
+            frame_size: 8,
+            name: Some("observe_pending_settlement".to_string()),
+            is_generator: false,
+            rest_param_index: None,
+        }];
+        core.execute(&pending_probe)
+            .unwrap_or_else(|error| panic!("{method} pending probe failed: {error:?}"));
+        assert_eq!(core.get_registers()[0], Value::Bool(method == "resolve"));
+
+        core.write_register(2, Value::Undefined);
+        let observed = core
+            .execute(&module(vec![
+                Ir3Instruction::LoadStr {
+                    dst: 5,
+                    pool_index: 0,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 4,
+                    key: 5,
+                    dst: 0,
+                },
+                Ir3Instruction::Halt,
+            ]))
+            .unwrap();
+        assert_eq!(
+            observed.value,
+            Value::Undefined,
+            "{method} must not acquire settlement authority"
+        );
+
+        core.write_register(2, Value::Int(1));
         let error = core
             .execute(&module(vec![
-                call("constructor", 0, 0, 1),
-                Ir3Instruction::LoadInt { dst: 2, value: 99 },
-                call(method, 1, 2, 3),
-                Ir3Instruction::StrictEq {
-                    dst: 0,
-                    lhs: 1,
-                    rhs: 3,
-                },
-                // At this public IR boundary a pending await needs an async
-                // frame. A fulfilled/rejected argument would take a different
-                // path, so this also observes that it remains pending.
                 Ir3Instruction::AwaitValue { promise_reg: 1 },
                 Ir3Instruction::Halt,
             ]))
-            .expect_err("the source must remain pending");
+            .expect_err("top-level AwaitValue outside an async activation must fail");
         assert!(
             matches!(error, InterpreterError::TypeError { expected, got }
-                if expected == "await only in async function"
-                    && got == "await outside async function context"),
-            "{method} must not acquire settlement authority"
+                if expected == "await in an async activation"
+                    && got == "await outside an async function"),
+            "unexpected AwaitValue error for {method}"
         );
-        assert_eq!(core.get_registers()[0], Value::Bool(method == "resolve"));
     }
 }
 
-fn inspect_rejection_reason() -> Ir3Module {
-    module(vec![
+fn inspect_rejection_reason(
+    core: &mut InterpreterCore,
+) -> frankenengine_core::baseline_interpreter::ExecutionResult {
+    let mut async_probe = module(vec![
+        Ir3Instruction::NewObject { dst: 1 },
+        Ir3Instruction::CreateAsyncFunction {
+            dst: 3,
+            function_index: 0,
+            capture_count: 0,
+        },
+        Ir3Instruction::Call {
+            callee: 3,
+            args: RegRange { start: 0, count: 2 },
+            dst: 4,
+        },
+        Ir3Instruction::Halt,
         Ir3Instruction::NewArray { dst: 4 },
         Ir3Instruction::ArrayPush {
             array: 4,
@@ -114,10 +201,38 @@ fn inspect_rejection_reason() -> Ir3Module {
         Ir3Instruction::GetProperty {
             obj: 7,
             key: 8,
+            dst: 9,
+        },
+        Ir3Instruction::SetProperty {
+            obj: 1,
+            key: 8,
+            val: 9,
+        },
+        Ir3Instruction::Return { value: 9 },
+    ]);
+    async_probe.function_table = vec![Ir3FunctionDesc {
+        entry: 4,
+        arity: 2,
+        frame_size: 12,
+        name: Some("inspect_rejection_reason".to_string()),
+        is_generator: false,
+        rest_param_index: None,
+    }];
+    core.execute(&async_probe).unwrap();
+    core.write_register(2, Value::Int(1));
+    core.execute(&module(vec![
+        Ir3Instruction::LoadStr {
+            dst: 8,
+            pool_index: 0,
+        },
+        Ir3Instruction::GetProperty {
+            obj: 1,
+            key: 8,
             dst: 0,
         },
         Ir3Instruction::Halt,
-    ])
+    ]))
+    .unwrap()
 }
 
 #[test]
@@ -143,7 +258,7 @@ fn rejection_retains_promise_identity_through_aggregation_and_queued_reactions()
             // Updating the public execution seed starts a new invocation from
             // these handles rather than replaying the previous invocation.
             core.write_register(0, rejected);
-            let result = core.execute(&inspect_rejection_reason()).unwrap();
+            let result = inspect_rejection_reason(&mut core);
             assert_eq!(result.value, source, "source {method}, queued {queued}");
         }
     }
@@ -179,7 +294,7 @@ fn rejection_carries_the_reason_label_and_ignores_extra_arguments() {
 
     // Force a distinct seed while preserving the returned handle in register0.
     core.write_register(2, Value::Undefined);
-    let result = core.execute(&inspect_rejection_reason()).unwrap();
+    let result = inspect_rejection_reason(&mut core);
     assert_eq!(result.value, source);
     assert_eq!(result.completion_label, Label::Secret);
 }

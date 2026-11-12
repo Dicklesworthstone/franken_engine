@@ -8,7 +8,11 @@ fn check(source: &str, expected: &str) {
     let outcome = HybridRouter::default()
         .eval(source)
         .unwrap_or_else(|error| panic!("evaluation failed: {error}"));
-    let lines: Vec<_> = outcome.console_output.iter().map(|entry| entry.message.as_str()).collect();
+    let lines: Vec<_> = outcome
+        .console_output
+        .iter()
+        .map(|entry| entry.message.as_str())
+        .collect();
     assert_eq!(lines, [expected]);
 }
 

@@ -30,7 +30,6 @@ fn eval_value(source: &str) -> String {
 }
 
 #[test]
-#[ignore = "bd-rjxpx: blocked on parser.rs computed-key bracket-strip fix; un-ignore when landed"]
 fn computed_key_string_concat_is_evaluated() {
     // The key expression `"a" + "b"` must evaluate to "ab", not parse as the
     // array literal `["ab"]`.
@@ -38,14 +37,12 @@ fn computed_key_string_concat_is_evaluated() {
 }
 
 #[test]
-#[ignore = "bd-rjxpx: blocked on parser.rs computed-key bracket-strip fix; un-ignore when landed"]
 fn computed_key_numeric_expr_is_evaluated() {
     // A numeric computed key `[1 + 2]` becomes property "3".
     assert_eq!(eval_value(r#"let o = { [1 + 2]: "x" }; o[3]"#), "x");
 }
 
 #[test]
-#[ignore = "bd-rjxpx: blocked on parser.rs computed-key bracket-strip fix; un-ignore when landed"]
 fn computed_key_identifier_expr_is_evaluated() {
     // An identifier-expression key `[k]` uses the runtime value of `k`.
     assert_eq!(
@@ -55,7 +52,6 @@ fn computed_key_identifier_expr_is_evaluated() {
 }
 
 #[test]
-#[ignore = "bd-rjxpx: blocked on parser.rs computed-key bracket-strip fix; un-ignore when landed"]
 fn computed_key_does_not_leak_array_object_key() {
     // Guard against the exact bug: the property must NOT be stored under an
     // array-object key, so a plain non-computed lookup of the literal bracket

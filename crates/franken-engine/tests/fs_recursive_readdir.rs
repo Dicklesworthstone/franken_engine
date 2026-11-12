@@ -18,7 +18,13 @@ use frankenengine_extension_host::host_io::{
 
 type Run = (Vec<String>, Vec<(HostIoRequest, HostIoOutcome)>);
 
-fn run(source: &str, root: &Path, caps: &[&str], lane: LaneChoice, goal: ParseGoal) -> Result<Run, String> {
+fn run(
+    source: &str,
+    root: &Path,
+    caps: &[&str],
+    lane: LaneChoice,
+    goal: ParseGoal,
+) -> Result<Run, String> {
     let provider = Arc::new(SandboxedHostIo::with_root(root).expect("sandbox provider"));
     let recording = Arc::new(InMemoryHostIoTranscript::recording());
     let recorder: Arc<dyn HostIoRecorder> = recording.clone();
@@ -39,8 +45,17 @@ fn run(source: &str, root: &Path, caps: &[&str], lane: LaneChoice, goal: ParseGo
         version: "1.0.0".into(),
         metadata: BTreeMap::new(),
     };
-    let result = orchestrator.execute(&package).map_err(|error| format!("{error:?}"))?;
-    Ok((result.console_output.into_iter().map(|entry| entry.message).collect(), recording.entries()))
+    let result = orchestrator
+        .execute(&package)
+        .map_err(|error| format!("{error:?}"))?;
+    Ok((
+        result
+            .console_output
+            .into_iter()
+            .map(|entry| entry.message)
+            .collect(),
+        recording.entries(),
+    ))
 }
 
 fn tree(root: &Path) {
@@ -60,13 +75,27 @@ fn inline_namespace_and_named_calls_all_visit_the_complete_tree_without_write_au
             ("const fs = require('node:fs');", "fs.readdirSync"),
             ("const {readdirSync: scan} = require('fs');", "scan"),
         ] {
-            let root = tempfile::tempdir().unwrap(); tree(root.path());
-            let source = format!("{prefix} console.log({call}('tree', {{recursive:true}}).sort().join('|'));");
+            let root = tempfile::tempdir().unwrap();
+            tree(root.path());
+            let source = format!(
+                "{prefix} console.log({call}('tree', {{recursive:true}}).sort().join('|'));"
+            );
             let (lines, effects) = run(&source, root.path(), &["fs_read"], lane, ParseGoal::Script)
                 .expect("recursive collector must not be erased by synchronous lowering");
             assert_eq!(lines, [expected]);
-            assert_eq!(effects.iter().filter(|(request, _)| matches!(request,
-                HostIoRequest::FsMeta { operation: FsOperation::ReadDir, .. })).count(), 4);
+            assert_eq!(
+                effects
+                    .iter()
+                    .filter(|(request, _)| matches!(
+                        request,
+                        HostIoRequest::FsMeta {
+                            operation: FsOperation::ReadDir,
+                            ..
+                        }
+                    ))
+                    .count(),
+                4
+            );
         }
     }
 }
@@ -74,7 +103,8 @@ fn inline_namespace_and_named_calls_all_visit_the_complete_tree_without_write_au
 #[test]
 fn esm_promise_discovery_protects_globals_and_exposes_lexical_parent_paths() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        let root = tempfile::tempdir().unwrap(); tree(root.path());
+        let root = tempfile::tempdir().unwrap();
+        tree(root.path());
         let (lines, _) = run(
             "import { readdir } from 'node:fs/promises'; const Object='guest'; const Array='guest'; \
              readdir('tree',{recursive:true,withFileTypes:true}).then(entries=>{ \
@@ -83,14 +113,21 @@ fn esm_promise_discovery_protects_globals_and_exposes_lexical_parent_paths() {
              });",
             root.path(), &["fs_read"], lane, ParseGoal::Module,
         ).expect("ESM uses the same directory collector");
-        assert_eq!(lines, ["tree/a/deep/alpha.json|tree/b/beta.json|tree/top.txt", "DISCOVERY_COMPLETE"]);
+        assert_eq!(
+            lines,
+            [
+                "tree/a/deep/alpha.json|tree/b/beta.json|tree/top.txt",
+                "DISCOVERY_COMPLETE"
+            ]
+        );
     }
 }
 
 #[test]
 fn callback_discovery_completes_and_failure_never_reports_a_partial_array() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        let root = tempfile::tempdir().unwrap(); tree(root.path());
+        let root = tempfile::tempdir().unwrap();
+        tree(root.path());
         let (lines, _) = run(
             "const fs=require('fs'); fs.readdir('tree',{recursive:true},(error,entries)=>{ \
                if(error) throw error; console.log(entries.sort().join('|')); \
@@ -98,9 +135,20 @@ fn callback_discovery_completes_and_failure_never_reports_a_partial_array() {
                  console.log(failure.code,typeof partial); console.log('CALLBACK_COMPLETE'); \
                }); \
              });",
-            root.path(), &["fs_read"], lane, ParseGoal::Script,
-        ).expect("callback errors and complete success");
-        assert_eq!(lines, ["a|a/deep|a/deep/alpha.json|b|b/beta.json|top.txt", "ENOENT undefined", "CALLBACK_COMPLETE"]);
+            root.path(),
+            &["fs_read"],
+            lane,
+            ParseGoal::Script,
+        )
+        .expect("callback errors and complete success");
+        assert_eq!(
+            lines,
+            [
+                "a|a/deep|a/deep/alpha.json|b|b/beta.json|top.txt",
+                "ENOENT undefined",
+                "CALLBACK_COMPLETE"
+            ]
+        );
     }
 }
 
@@ -108,7 +156,8 @@ fn callback_discovery_completes_and_failure_never_reports_a_partial_array() {
 #[test]
 fn directory_aliases_remain_distinct_but_ancestor_cycles_fail_explicitly() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        let root = tempfile::tempdir().unwrap(); tree(root.path());
+        let root = tempfile::tempdir().unwrap();
+        tree(root.path());
         std::os::unix::fs::symlink("a", root.path().join("tree/alias")).unwrap();
         let (lines, _) = run(
             "const fs=require('fs'); const names=fs.readdirSync('tree',{recursive:true}); \
@@ -128,10 +177,17 @@ fn directory_aliases_remain_distinct_but_ancestor_cycles_fail_explicitly() {
 
 #[test]
 fn write_authority_does_not_authorize_recursive_discovery() {
-    let root = tempfile::tempdir().unwrap(); tree(root.path());
+    let root = tempfile::tempdir().unwrap();
+    tree(root.path());
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        let error = run("require('fs').readdirSync('tree',{recursive:true});", root.path(),
-            &["fs_write"], lane, ParseGoal::Script).expect_err("read authority is still required");
+        let error = run(
+            "require('fs').readdirSync('tree',{recursive:true});",
+            root.path(),
+            &["fs_write"],
+            lane,
+            ParseGoal::Script,
+        )
+        .expect_err("read authority is still required");
         assert!(error.to_ascii_lowercase().contains("capabil"), "{error}");
     }
 }
@@ -150,13 +206,39 @@ fn callback_directory_cursor_reuses_read_authority_and_completes_recursive_work(
                    console.log(files.sort().join('|'));console.log('CURSOR_COMPLETE');});return;} \
                  if(entry.isFile())files.push(entry.parentPath+'/'+entry.name);dir.read(next); \
                }dir.read(next);});sync=false;",
-            root.path(), &["fs_read"], lane, ParseGoal::Script,
-        ).expect("callback enumeration must reach the native queue and complete");
-        assert_eq!(lines, ["OPEN false true", "tree/a/deep/alpha.json|tree/b/beta.json|tree/top.txt", "CURSOR_COMPLETE"]);
-        assert_eq!(effects.iter().filter(|(request, _)| matches!(request,
-            HostIoRequest::FsMeta { operation: FsOperation::ReadDir, .. })).count(), 4);
-        assert!(effects.iter().all(|(request, _)| request.required_capability()
-            == frankenengine_extension_host::host_io::HostIoCapability::FsRead));
+            root.path(),
+            &["fs_read"],
+            lane,
+            ParseGoal::Script,
+        )
+        .expect("callback enumeration must reach the native queue and complete");
+        assert_eq!(
+            lines,
+            [
+                "OPEN false true",
+                "tree/a/deep/alpha.json|tree/b/beta.json|tree/top.txt",
+                "CURSOR_COMPLETE"
+            ]
+        );
+        assert_eq!(
+            effects
+                .iter()
+                .filter(|(request, _)| matches!(
+                    request,
+                    HostIoRequest::FsMeta {
+                        operation: FsOperation::ReadDir,
+                        ..
+                    }
+                ))
+                .count(),
+            4
+        );
+        assert!(
+            effects
+                .iter()
+                .all(|(request, _)| request.required_capability()
+                    == frankenengine_extension_host::host_io::HostIoCapability::FsRead)
+        );
     }
 }
 
@@ -176,7 +258,15 @@ fn callback_and_promise_directory_reads_share_one_position_and_close_barrier() {
              });",
             root.path(), &["fs_read"], lane, ParseGoal::Script,
         ).expect("callback and Promise requests must drain before close");
-        assert_eq!(lines, ["EOF true", "a|b|top.txt", "ERR_DIR_CLOSED", "MIXED_COMPLETE"]);
+        assert_eq!(
+            lines,
+            [
+                "EOF true",
+                "a|b|top.txt",
+                "ERR_DIR_CLOSED",
+                "MIXED_COMPLETE"
+            ]
+        );
     }
 }
 
@@ -191,8 +281,12 @@ fn esm_callback_open_supports_promisification_and_reports_missing_roots() {
                catch(error){console.log(error.code);}const dir=await open('tree'); \
                const entry=await promisify(dir.read).call(dir);console.log(typeof entry.name); \
                await promisify(dir.close).call(dir);console.log('ESM_CURSOR_COMPLETE');})();",
-            root.path(), &["fs_read"], lane, ParseGoal::Module,
-        ).expect("ESM and promisification must invoke the same directory owner");
+            root.path(),
+            &["fs_read"],
+            lane,
+            ParseGoal::Module,
+        )
+        .expect("ESM and promisification must invoke the same directory owner");
         assert_eq!(lines, ["ENOENT", "string", "ESM_CURSOR_COMPLETE"]);
     }
 }
@@ -205,13 +299,22 @@ fn callback_open_rejects_invalid_callbacks_before_effects_without_adding_authori
         let (lines, effects) = run(
             "const fs=require('fs');try{fs.opendir('tree',{},null);} \
              catch(error){console.log(error.code);}console.log('PREFLIGHT_COMPLETE');",
-            root.path(), &[], lane, ParseGoal::Script,
-        ).expect("callback validation is not a filesystem operation");
+            root.path(),
+            &[],
+            lane,
+            ParseGoal::Script,
+        )
+        .expect("callback validation is not a filesystem operation");
         assert_eq!(lines, ["ERR_INVALID_ARG_TYPE", "PREFLIGHT_COMPLETE"]);
         assert!(effects.is_empty());
-        let error = run("require('fs').opendir('tree',()=>{});", root.path(),
-            &["fs_write"], lane, ParseGoal::Script)
-            .expect_err("asynchronous acquisition still requires read authority");
+        let error = run(
+            "require('fs').opendir('tree',()=>{});",
+            root.path(),
+            &["fs_write"],
+            lane,
+            ParseGoal::Script,
+        )
+        .expect_err("asynchronous acquisition still requires read authority");
         assert!(error.to_ascii_lowercase().contains("capabil"), "{error}");
     }
 }

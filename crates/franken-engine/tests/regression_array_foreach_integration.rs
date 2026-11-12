@@ -9,7 +9,7 @@
 use frankenengine_engine::{JsEngine, QuickJsInspiredNativeEngine};
 
 fn baseline_interpreter_source() -> &'static str {
-    include_str!("../src/baseline_interpreter.rs")
+    frankenengine_engine::baseline_interpreter::COMBINED_PRODUCTION_SOURCE
 }
 
 fn eval_fail_closed(source: &str) {
@@ -78,5 +78,7 @@ fn array_foreach_builtin_id_consistency() {
     // shared helper after duplicate removal.
     let source = baseline_interpreter_source();
     assert!(source.contains("builtin:ArrayPrototypeForEach"));
-    assert!(source.contains("validate_array_callback_args(args, \"Array.prototype.forEach\")"));
+    assert!(
+        source.contains("validate_array_callback_structure(args, \"Array.prototype.forEach\")")
+    );
 }

@@ -581,7 +581,8 @@ pub fn node_builtin_specifier(specifier: &str) -> Option<&'static str> {
 /// rechecks the complete descriptor before dispatching the real realm object;
 /// no source text or filesystem fallback is used to manufacture a builtin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NativeBuiltinModule {    Buffer,
+pub enum NativeBuiltinModule {
+    Buffer,
     Crypto,
     Zlib,
     Fs,
@@ -1901,8 +1902,11 @@ impl ExecutionModuleResolver {
         request: &ModuleRequest,
         context: &ResolutionContext,
     ) -> ResolutionResult<ResolutionOutcome> {
-        self.resolver
-            .resolve(request, context, &ExecutionModulePolicy(self.policy.as_ref()))
+        self.resolver.resolve(
+            request,
+            context,
+            &ExecutionModulePolicy(self.policy.as_ref()),
+        )
     }
 
     pub fn resolve_shared(
@@ -2076,25 +2080,41 @@ impl DeterministicModuleResolver {
         context: &ResolutionContext,
     ) -> ResolutionResult<(String, ModuleMetadata, Vec<String>)> {
         let failed = |code, message: &str| {
-            Box::new(ResolutionError::new(code, message, context)
-                .with_resolution_attempt(request.specifier.clone(), None, None,
-                    vec![request.specifier.clone()]))
+            Box::new(
+                ResolutionError::new(code, message, context).with_resolution_attempt(
+                    request.specifier.clone(),
+                    None,
+                    None,
+                    vec![request.specifier.clone()],
+                ),
+            )
         };
         let specifier = request.specifier.as_str();
         if specifier.is_empty() {
-            return Err(failed(ResolutionErrorCode::ModuleNotFound, "empty package URL specifier"));
+            return Err(failed(
+                ResolutionErrorCode::ModuleNotFound,
+                "empty package URL specifier",
+            ));
         }
         let parsed_absolute = match url::Url::parse(specifier) {
             Ok(url) => Some(url),
             Err(url::ParseError::RelativeUrlWithoutBase) => None,
-            Err(_) => return Err(failed(ResolutionErrorCode::UnsupportedSpecifier, "invalid metadata URL")),
+            Err(_) => {
+                return Err(failed(
+                    ResolutionErrorCode::UnsupportedSpecifier,
+                    "invalid metadata URL",
+                ));
+            }
         };
         let absolute = node_builtin_specifier(specifier)
             .map(str::to_string)
             .or_else(|| parsed_absolute.map(|url| url.to_string()));
         let parsed = if let Some(absolute) = absolute {
             let url = url::Url::parse(&absolute).map_err(|_| {
-                failed(ResolutionErrorCode::UnsupportedSpecifier, "invalid metadata URL")
+                failed(
+                    ResolutionErrorCode::UnsupportedSpecifier,
+                    "invalid metadata URL",
+                )
             })?;
             if url.scheme() != "file" {
                 let metadata = ModuleMetadata {
@@ -2115,12 +2135,15 @@ impl DeterministicModuleResolver {
                 return Ok((absolute, metadata, vec![specifier.to_string()]));
             }
             Some(url)
-        } else if specifier.starts_with("./") || specifier.starts_with("../")
+        } else if specifier.starts_with("./")
+            || specifier.starts_with("../")
             || specifier.starts_with('/')
         {
             let referrer = request.referrer.as_deref().ok_or_else(|| {
-                failed(ResolutionErrorCode::InvalidReferrer,
-                    "relative metadata URL requires a registered referrer")
+                failed(
+                    ResolutionErrorCode::InvalidReferrer,
+                    "relative metadata URL requires a registered referrer",
+                )
             })?;
             if let Some(external) = referrer.strip_prefix("external:")
                 && !specifier.starts_with('/')
@@ -2129,50 +2152,95 @@ impl DeterministicModuleResolver {
                 if external_referrer_must_be_registered(&external)
                     && !self.external_modules.contains_key(&external)
                 {
-                    return Err(failed(ResolutionErrorCode::InvalidReferrer,
-                        "external URL referrer is not registered"));
+                    return Err(failed(
+                        ResolutionErrorCode::InvalidReferrer,
+                        "external URL referrer is not registered",
+                    ));
                 }
                 let root = external_package_root(&external);
-                let base = url::Url::from_directory_path(
-                    format!("/{}", external_referrer_directory(&external)),
-                ).map_err(|()| failed(ResolutionErrorCode::InvalidReferrer, "invalid external URL base"))?;
+                let base = url::Url::from_directory_path(format!(
+                    "/{}",
+                    external_referrer_directory(&external)
+                ))
+                .map_err(|()| {
+                    failed(
+                        ResolutionErrorCode::InvalidReferrer,
+                        "invalid external URL base",
+                    )
+                })?;
                 let selected = base.join(specifier).map_err(|_| {
-                    failed(ResolutionErrorCode::UnsupportedSpecifier, "invalid external metadata URL")
+                    failed(
+                        ResolutionErrorCode::UnsupportedSpecifier,
+                        "invalid external metadata URL",
+                    )
                 })?;
                 let path = selected.to_file_path().map_err(|()| {
-                    failed(ResolutionErrorCode::UnsupportedSpecifier, "invalid external metadata path")
+                    failed(
+                        ResolutionErrorCode::UnsupportedSpecifier,
+                        "invalid external metadata path",
+                    )
                 })?;
-                let path = path.to_str().ok_or_else(|| {
-                    failed(ResolutionErrorCode::UnsupportedSpecifier, "non-UTF-8 external metadata path")
-                })?.trim_start_matches('/');
+                let path = path
+                    .to_str()
+                    .ok_or_else(|| {
+                        failed(
+                            ResolutionErrorCode::UnsupportedSpecifier,
+                            "non-UTF-8 external metadata path",
+                        )
+                    })?
+                    .trim_start_matches('/');
                 if !is_within_external_package_root(&root, path) {
-                    return Err(failed(ResolutionErrorCode::UnsupportedSpecifier,
-                        "metadata URL escapes external package root"));
+                    return Err(failed(
+                        ResolutionErrorCode::UnsupportedSpecifier,
+                        "metadata URL escapes external package root",
+                    ));
                 }
                 let encoded = selected.path().to_ascii_lowercase();
                 if encoded.contains("%2f") || encoded.contains("%5c") || encoded.contains("%00") {
-                    return Err(failed(ResolutionErrorCode::UnsupportedSpecifier,
-                        "metadata file URL contains an encoded separator or NUL"));
+                    return Err(failed(
+                        ResolutionErrorCode::UnsupportedSpecifier,
+                        "metadata file URL contains an encoded separator or NUL",
+                    ));
                 }
                 let mut canonical = path.to_string();
-                if selected.path().ends_with('/') && !canonical.ends_with('/') { canonical.push('/'); }
-                if let Some(query) = selected.query() { canonical.push('?'); canonical.push_str(query); }
-                if let Some(fragment) = selected.fragment() { canonical.push('#'); canonical.push_str(fragment); }
+                if selected.path().ends_with('/') && !canonical.ends_with('/') {
+                    canonical.push('/');
+                }
+                if let Some(query) = selected.query() {
+                    canonical.push('?');
+                    canonical.push_str(query);
+                }
+                if let Some(fragment) = selected.fragment() {
+                    canonical.push('#');
+                    canonical.push_str(fragment);
+                }
                 let id = format!("external:{canonical}");
-                return Ok((canonical.clone(), ModuleMetadata {
-                    id: id.clone(),
-                    required_capabilities: BTreeSet::from([RuntimeCapability::ModuleLoad]),
-                    provenance: ModuleProvenance { kind: ModuleSourceKind::ExternalRegistry, origin: id },
-                    target: ModuleMetadataTarget::SourceUrl,
-                }, vec![canonical]));
+                return Ok((
+                    canonical.clone(),
+                    ModuleMetadata {
+                        id: id.clone(),
+                        required_capabilities: BTreeSet::from([RuntimeCapability::ModuleLoad]),
+                        provenance: ModuleProvenance {
+                            kind: ModuleSourceKind::ExternalRegistry,
+                            origin: id,
+                        },
+                        target: ModuleMetadataTarget::SourceUrl,
+                    },
+                    vec![canonical],
+                ));
             } else {
                 let directory = self.referrer_directory(referrer, context)?;
                 let base = url::Url::from_directory_path(&directory).map_err(|()| {
-                    failed(ResolutionErrorCode::InvalidReferrer,
-                        "metadata referrer has no absolute URL base")
+                    failed(
+                        ResolutionErrorCode::InvalidReferrer,
+                        "metadata referrer has no absolute URL base",
+                    )
                 })?;
                 Some(base.join(specifier).map_err(|_| {
-                    failed(ResolutionErrorCode::UnsupportedSpecifier, "invalid metadata URL")
+                    failed(
+                        ResolutionErrorCode::UnsupportedSpecifier,
+                        "invalid metadata URL",
+                    )
                 })?)
             }
         } else {
@@ -2180,21 +2248,32 @@ impl DeterministicModuleResolver {
         };
         if let Some(url) = parsed {
             let encoded_path = url.path().to_ascii_lowercase();
-            if encoded_path.contains("%2f") || encoded_path.contains("%5c")
+            if encoded_path.contains("%2f")
+                || encoded_path.contains("%5c")
                 || encoded_path.contains("%00")
             {
-                return Err(failed(ResolutionErrorCode::UnsupportedSpecifier,
-                    "metadata file URL contains an encoded separator or NUL"));
+                return Err(failed(
+                    ResolutionErrorCode::UnsupportedSpecifier,
+                    "metadata file URL contains an encoded separator or NUL",
+                ));
             }
             let path = url.to_file_path().map_err(|()| {
-                failed(ResolutionErrorCode::UnsupportedSpecifier, "invalid metadata file URL")
+                failed(
+                    ResolutionErrorCode::UnsupportedSpecifier,
+                    "invalid metadata file URL",
+                )
             })?;
             let path = path.to_str().ok_or_else(|| {
-                failed(ResolutionErrorCode::UnsupportedSpecifier, "non-UTF-8 metadata path")
+                failed(
+                    ResolutionErrorCode::UnsupportedSpecifier,
+                    "non-UTF-8 metadata path",
+                )
             })?;
             if !is_within_workspace_root(&self.root_dir, path) {
-                return Err(failed(ResolutionErrorCode::UnsupportedSpecifier,
-                    "metadata file URL escapes resolver root"));
+                return Err(failed(
+                    ResolutionErrorCode::UnsupportedSpecifier,
+                    "metadata file URL escapes resolver root",
+                ));
             }
             let mut id = path.to_string();
             if url.path().ends_with('/') && !id.ends_with('/') {
@@ -2220,51 +2299,81 @@ impl DeterministicModuleResolver {
             return Ok((id.clone(), metadata, vec![id]));
         }
         if specifier.trim() != specifier {
-            return Err(failed(ResolutionErrorCode::UnsupportedSpecifier,
-                "unregistered whitespace-bearing package URL specifier"));
+            return Err(failed(
+                ResolutionErrorCode::UnsupportedSpecifier,
+                "unregistered whitespace-bearing package URL specifier",
+            ));
         }
         // Package export selection is authoritative even if no executable
         // record exists at the selected target. Do not fall back to another
         // export condition or package merely because its payload is absent.
-        if let Some(selected) = self.resolve_external_package_candidate(specifier, ImportStyle::Import) {
+        if let Some(selected) =
+            self.resolve_external_package_candidate(specifier, ImportStyle::Import)
+        {
             let (canonical, id, provenance, probes) = match selected {
-                Ok((canonical, record, probes)) => {
-                    (canonical, record.id.clone(), record.provenance.clone(), probes)
-                }
-                Err(error) if error.code == ResolutionErrorCode::ModuleNotFound
-                    && error.resolved_candidate.is_some() =>
+                Ok((canonical, record, probes)) => (
+                    canonical,
+                    record.id.clone(),
+                    record.provenance.clone(),
+                    probes,
+                ),
+                Err(error)
+                    if error.code == ResolutionErrorCode::ModuleNotFound
+                        && error.resolved_candidate.is_some() =>
                 {
                     let canonical = error.resolved_candidate.ok_or_else(|| {
-                        failed(ResolutionErrorCode::UnsupportedSpecifier, "missing selected package identity")
+                        failed(
+                            ResolutionErrorCode::UnsupportedSpecifier,
+                            "missing selected package identity",
+                        )
                     })?;
                     let id = format!("external:{canonical}");
                     let provenance = ModuleProvenance {
-                        kind: ModuleSourceKind::ExternalRegistry, origin: id.clone(),
+                        kind: ModuleSourceKind::ExternalRegistry,
+                        origin: id.clone(),
                     };
                     (canonical, id, provenance, error.probe_sequence)
                 }
-                Err(error) => return Err(Box::new(
-                    ResolutionError::new(error.code, error.message, context)
-                        .with_resolution_attempt(request.specifier.clone(), error.resolved_candidate,
-                            Some(ModuleSourceKind::ExternalRegistry), error.probe_sequence),
-                )),
+                Err(error) => {
+                    return Err(Box::new(
+                        ResolutionError::new(error.code, error.message, context)
+                            .with_resolution_attempt(
+                                request.specifier.clone(),
+                                error.resolved_candidate,
+                                Some(ModuleSourceKind::ExternalRegistry),
+                                error.probe_sequence,
+                            ),
+                    ));
+                }
             };
-            return Ok((canonical, ModuleMetadata {
-                id, required_capabilities: BTreeSet::from([RuntimeCapability::ModuleLoad]),
-                provenance, target: ModuleMetadataTarget::SourceUrl,
-            }, probes));
+            return Ok((
+                canonical,
+                ModuleMetadata {
+                    id,
+                    required_capabilities: BTreeSet::from([RuntimeCapability::ModuleLoad]),
+                    provenance,
+                    target: ModuleMetadataTarget::SourceUrl,
+                },
+                probes,
+            ));
         }
         let (canonical, record, probes) = self.resolve_candidate(request, context)?;
         if record.provenance.kind == ModuleSourceKind::BuiltIn {
-            return Err(failed(ResolutionErrorCode::UnsupportedSpecifier,
-                "custom builtin has no URL metadata contract"));
+            return Err(failed(
+                ResolutionErrorCode::UnsupportedSpecifier,
+                "custom builtin has no URL metadata contract",
+            ));
         }
-        Ok((canonical, ModuleMetadata {
-            id: record.id.clone(),
-            required_capabilities: BTreeSet::from([RuntimeCapability::ModuleLoad]),
-            provenance: record.provenance.clone(),
-            target: ModuleMetadataTarget::SourceUrl,
-        }, probes))
+        Ok((
+            canonical,
+            ModuleMetadata {
+                id: record.id.clone(),
+                required_capabilities: BTreeSet::from([RuntimeCapability::ModuleLoad]),
+                provenance: record.provenance.clone(),
+                target: ModuleMetadataTarget::SourceUrl,
+            },
+            probes,
+        ))
     }
 
     fn resolve_candidate<'a>(
@@ -2901,11 +3010,10 @@ impl DeterministicModuleResolver {
             let parent = outcomes[parent_index].record;
             parent_index += 1;
             for dependency in &parent.dependencies {
-                let request =
-                    ModuleRequest::new(dependency.specifier.clone(), dependency.style)
-                        .with_referrer(parent.id.as_str())
-                        .with_compatibility_mode(entry_request.compatibility_mode)
-                        .with_import_attributes(dependency.import_attributes.clone());
+                let request = ModuleRequest::new(dependency.specifier.clone(), dependency.style)
+                    .with_referrer(parent.id.as_str())
+                    .with_compatibility_mode(entry_request.compatibility_mode)
+                    .with_import_attributes(dependency.import_attributes.clone());
                 // Duplicate edges, cycles and differently styled aliases still
                 // perform their complete lookup, format and policy checks.
                 let outcome = self.resolve_authorized(&request, context, policy)?;
@@ -2960,7 +3068,8 @@ impl ModuleResolver for DeterministicModuleResolver {
                     .get(&request.specifier)
                     .or_else(|| self.builtins.get(canonical))
                     .or_else(|| {
-                        canonical.strip_prefix("node:")
+                        canonical
+                            .strip_prefix("node:")
                             .and_then(|bare| self.builtins.get(bare))
                     });
                 (
@@ -3027,14 +3136,16 @@ impl ModuleResolver for DeterministicModuleResolver {
                     probes,
                 )
             };
-        policy.authorize_metadata(request, &metadata, context).map_err(|error| {
-            Box::new((*error).into_policy_denial().with_resolution_attempt(
-                request.specifier.clone(),
-                Some(canonical_specifier.clone()),
-                Some(metadata.provenance.kind),
-                probe_sequence.clone(),
-            ))
-        })?;
+        policy
+            .authorize_metadata(request, &metadata, context)
+            .map_err(|error| {
+                Box::new((*error).into_policy_denial().with_resolution_attempt(
+                    request.specifier.clone(),
+                    Some(canonical_specifier.clone()),
+                    Some(metadata.provenance.kind),
+                    probe_sequence.clone(),
+                ))
+            })?;
         Ok(MetadataResolutionOutcome {
             module: ResolvedModuleMetadata {
                 request_specifier: request.specifier.clone(),
@@ -4346,7 +4457,11 @@ mod tests {
                 _resolved: &ModuleRecord,
                 context: &ResolutionContext,
             ) -> ResolutionResult<()> {
-                Err(Box::new(ResolutionError::new(self.0, "hidden resource", context)))
+                Err(Box::new(ResolutionError::new(
+                    self.0,
+                    "hidden resource",
+                    context,
+                )))
             }
         }
 
@@ -4371,7 +4486,10 @@ mod tests {
                 .resolve(&request, &context(), &Refuse(code))
                 .expect_err("a hook refusal is always a policy refusal");
             assert_eq!(error.code, ResolutionErrorCode::PolicyDenied);
-            assert_eq!(error.event.error_code, ResolutionErrorCode::PolicyDenied.stable_code());
+            assert_eq!(
+                error.event.error_code,
+                ResolutionErrorCode::PolicyDenied.stable_code()
+            );
             assert_eq!(error.request_specifier, "/app/dep.cjs");
             assert!(error.message.contains("hidden resource"));
             if code != ResolutionErrorCode::PolicyDenied {

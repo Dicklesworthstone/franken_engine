@@ -5,7 +5,8 @@ root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root_dir"
 
 mode="${1:-ci}"
-toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
+default_toolchain="$(sed -n 's/^channel = "\(.*\)"/\1/p' "${root_dir}/rust-toolchain.toml" 2>/dev/null | head -n 1)"
+toolchain="${RUSTUP_TOOLCHAIN:-${default_toolchain:-nightly-2026-09-21}}"
 target_dir="${CARGO_TARGET_DIR:-/tmp/rch_target_franken_engine_test262_gate}"
 artifact_root="${TEST262_GATE_ARTIFACT_ROOT:-artifacts/test262_es2020_gate}"
 timestamp="$(date -u +"%Y%m%dT%H%M%SZ")"
@@ -32,7 +33,14 @@ canonical_hwm_path="${run_dir}/test262_hwm.json"
 mkdir -p "$logs_dir"
 
 run_rch() {
-  timeout "${rch_timeout_seconds}" rch exec -- env "RUSTUP_TOOLCHAIN=${toolchain}" "CARGO_TARGET_DIR=${target_dir}" "$@"
+  if command -v rch >/dev/null 2>&1; then
+    timeout "${rch_timeout_seconds}" rch exec -- env "RUSTUP_TOOLCHAIN=${toolchain}" "CARGO_TARGET_DIR=${target_dir}" "$@"
+  elif [[ "${GITHUB_ACTIONS:-false}" == "true" ]]; then
+    timeout "${rch_timeout_seconds}" env "RUSTUP_TOOLCHAIN=${toolchain}" "CARGO_TARGET_DIR=${target_dir}" "$@"
+  else
+    echo "rch is required for test262 ES2020 gate heavy commands" >&2
+    return 2
+  fi
 }
 
 json_escape() {

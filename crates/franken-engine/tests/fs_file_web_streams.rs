@@ -11,7 +11,8 @@ use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, LabFixtureExecutionOrchestratorExt, OrchestratorConfig,
 };
 use frankenengine_extension_host::host_io::{
-    FsOperation, HostIoOutcome, HostIoRecorder, HostIoRequest, InMemoryHostIoTranscript, SandboxedHostIo,
+    FsOperation, HostIoOutcome, HostIoRecorder, HostIoRequest, InMemoryHostIoTranscript,
+    SandboxedHostIo,
 };
 
 type Run = (Vec<String>, Vec<(HostIoRequest, HostIoOutcome)>);
@@ -36,9 +37,15 @@ fn run(source: &str, root: &Path, caps: &[&str], lane: LaneChoice) -> Result<Run
         version: "1.0.0".into(),
         metadata: BTreeMap::new(),
     };
-    let output = orchestrator.execute(&package).map_err(|error| format!("{error:?}"))?;
+    let output = orchestrator
+        .execute(&package)
+        .map_err(|error| format!("{error:?}"))?;
     Ok((
-        output.console_output.into_iter().map(|entry| entry.message).collect(),
+        output
+            .console_output
+            .into_iter()
+            .map(|entry| entry.message)
+            .collect(),
         recording.entries(),
     ))
 }
@@ -58,18 +65,29 @@ fn file_bytes_use_the_shared_web_constructor_and_bounded_descriptor_reads() {
                 bytes+=chunk.byteLength;for(const byte of chunk)total+=byte;
               }console.log('FILE_STREAM',bytes,total,h.fd);
             })();"#,
-            root.path(), &["fs_read", "fs_write"], lane,
-        ).expect("native byte stream completes");
+            root.path(),
+            &["fs_read", "fs_write"],
+            lane,
+        )
+        .expect("native byte stream completes");
         assert_eq!(lines, ["true", "FILE_STREAM 40007 3280574 -1"]);
         let mut reads = 0;
         let mut opens = 0;
         let mut closes = 0;
         for (request, _) in effects {
-            if let HostIoRequest::FsMeta { operation, arguments, .. } = request {
+            if let HostIoRequest::FsMeta {
+                operation,
+                arguments,
+                ..
+            } = request
+            {
                 match operation {
                     FsOperation::ReadFd => {
                         reads += 1;
-                        let length = arguments.iter().find_map(|value| value.strip_prefix("length=")).unwrap();
+                        let length = arguments
+                            .iter()
+                            .find_map(|value| value.strip_prefix("length="))
+                            .unwrap();
                         assert!(length.parse::<usize>().unwrap() <= 16384);
                     }
                     FsOperation::Open => opens += 1,
@@ -122,13 +140,35 @@ fn cancellation_and_manual_close_do_not_read_or_close_a_descriptor_twice() {
               const r=s2.getReader({mode:'byob'});await h2.close();
               console.log('MANUAL',(await r.read(new Uint8Array(8))).done);r.releaseLock();
             })();"#,
-            root.path(), &["fs_read", "fs_write"], lane,
-        ).expect("native cancellation before demand");
-        assert_eq!(lines, ["ONCE ERR_INVALID_STATE", "CANCELLED -1", "MANUAL true"]);
-        assert!(!effects.iter().any(|(request, _)| matches!(request,
-            HostIoRequest::FsMeta { operation: FsOperation::ReadFd, .. })));
-        assert_eq!(effects.iter().filter(|(request, _)| matches!(request,
-            HostIoRequest::FsMeta { operation: FsOperation::CloseFd, .. })).count(), 2);
+            root.path(),
+            &["fs_read", "fs_write"],
+            lane,
+        )
+        .expect("native cancellation before demand");
+        assert_eq!(
+            lines,
+            ["ONCE ERR_INVALID_STATE", "CANCELLED -1", "MANUAL true"]
+        );
+        assert!(!effects.iter().any(|(request, _)| matches!(
+            request,
+            HostIoRequest::FsMeta {
+                operation: FsOperation::ReadFd,
+                ..
+            }
+        )));
+        assert_eq!(
+            effects
+                .iter()
+                .filter(|(request, _)| matches!(
+                    request,
+                    HostIoRequest::FsMeta {
+                        operation: FsOperation::CloseFd,
+                        ..
+                    }
+                ))
+                .count(),
+            2
+        );
     }
 }
 

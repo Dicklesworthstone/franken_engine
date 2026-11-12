@@ -1,25 +1,36 @@
 //! Duplex interop through the native orchestrator and CLI. The host-only
 //! scripts/tests/stream_web_duplex.cjs suite cannot prove these native paths.
 #![forbid(unsafe_code)]
-use std::collections::BTreeMap;
 use frankenengine_engine::baseline_interpreter::LaneChoice;
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, LabFixtureExecutionOrchestratorExt, OrchestratorConfig,
 };
+use std::collections::BTreeMap;
 
 fn run(source: &str, lane: LaneChoice) -> Vec<String> {
     let mut engine = ExecutionOrchestrator::new(OrchestratorConfig {
-        force_lane: Some(lane), ..OrchestratorConfig::default()
+        force_lane: Some(lane),
+        ..OrchestratorConfig::default()
     });
     let package = ExtensionPackage {
-        extension_id: "stream-web-duplex".into(), source: source.into(),
-        source_file: None, module_root: None,
+        extension_id: "stream-web-duplex".into(),
+        source: source.into(),
+        source_file: None,
+        module_root: None,
         capabilities: ["vm_dispatch", "heap_allocate", "builtin", "console"]
-            .into_iter().map(str::to_string).collect(),
-        version: "1.0.0".into(), metadata: BTreeMap::new(),
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        version: "1.0.0".into(),
+        metadata: BTreeMap::new(),
     };
-    engine.execute(&package).expect("native duplex completion")
-        .console_output.into_iter().map(|entry| entry.message).collect()
+    engine
+        .execute(&package)
+        .expect("native duplex completion")
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect()
 }
 
 const ROUNDTRIP: &str = r#"
@@ -51,7 +62,10 @@ d.write(40);d.end(41);
 #[test]
 fn destructured_duplex_reuses_explicit_web_endpoints_and_observes_flush() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        assert_eq!(run(EXPLICIT, lane), ["DUPLEX_WEB_COMPLETE 41,42,done true true"]);
+        assert_eq!(
+            run(EXPLICIT, lane),
+            ["DUPLEX_WEB_COMPLETE 41,42,done true true"]
+        );
     }
 }
 
@@ -68,7 +82,10 @@ d.destroy(new Error('stop'));
 #[test]
 fn duplex_destruction_completes_both_endpoint_lifetimes() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        assert_eq!(run(CLEANUP, lane), ["DUPLEX_CLEANUP cancel:stop,abort:stop,error:stop true true"]);
+        assert_eq!(
+            run(CLEANUP, lane),
+            ["DUPLEX_CLEANUP cancel:stop,abort:stop,error:stop true true"]
+        );
     }
 }
 
@@ -88,12 +105,30 @@ fn esm_named_duplex_imports_execute_on_the_native_cli() {
     std::fs::write(&entry, ESM).expect("write source");
     let report = root.path().join("report.json");
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_frankenctl"))
-        .args(["run", "--input"]).arg(entry)
-        .args(["--goal", "module", "--extension-id", "stream-web-duplex", "--out"])
-        .arg(&report).output().expect("native CLI");
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    let payload: serde_json::Value = serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
-    let lines: Vec<_> = payload["console_output"].as_array().unwrap().iter()
-        .map(|entry| entry["message"].as_str().unwrap()).collect();
+        .args(["run", "--input"])
+        .arg(entry)
+        .args([
+            "--goal",
+            "module",
+            "--extension-id",
+            "stream-web-duplex",
+            "--out",
+        ])
+        .arg(&report)
+        .output()
+        .expect("native CLI");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
+    let lines: Vec<_> = payload["console_output"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["message"].as_str().unwrap())
+        .collect();
     assert_eq!(lines, ["ESM_DUPLEX 42"]);
 }

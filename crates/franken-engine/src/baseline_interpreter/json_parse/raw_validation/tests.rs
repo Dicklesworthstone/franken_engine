@@ -34,21 +34,72 @@ fn assert_released(core: &InterpreterCore, inherited: u64) {
 #[test]
 fn scanner_recognizes_only_complete_unpadded_primitive_tokens() {
     let accepted = [
-        "null", "true", "false", "0", "-0", "1", "-123", "0.0", "-0.10",
-        "12.3400e+005", "0E-0", "1e400", "1e999999999999999999999",
-        r#""""#, r#""a\"b\\c\/d\b\f\n\r\t\u0000\uD800""#,
+        "null",
+        "true",
+        "false",
+        "0",
+        "-0",
+        "1",
+        "-123",
+        "0.0",
+        "-0.10",
+        "12.3400e+005",
+        "0E-0",
+        "1e400",
+        "1e999999999999999999999",
+        r#""""#,
+        r#""a\"b\\c\/d\b\f\n\r\t\u0000\uD800""#,
         "\"日😀\u{2028}\u{2029}\"",
     ];
     for text in accepted {
         assert!(scan(text.encode_utf16()), "{text:?}");
     }
     let rejected = [
-        "", " ", " null", "null ", "true\n", "false\t", "0\r", "\u{feff}0",
-        "[]", "{}", "[0]", "{\"x\":1}", "undefined", "NaN", "Infinity", "-Infinity",
-        "+0", "00", "-01", ".5", "1.", "1.e0", "1e", "1e+", "1e-", "1e+-1",
-        "1_000", "0x10", "0b1", "0o1", "tru", "TRUE", "nul", "nullnull",
-        "true false", "1 2", "\"x\"\"y\"", "\"open", "\"x\\", "\"\n\"",
-        r#""\x41""#, r#""\v""#, r#""\0""#, r#""\u123""#, r#""\u12xz""#,
+        "",
+        " ",
+        " null",
+        "null ",
+        "true\n",
+        "false\t",
+        "0\r",
+        "\u{feff}0",
+        "[]",
+        "{}",
+        "[0]",
+        "{\"x\":1}",
+        "undefined",
+        "NaN",
+        "Infinity",
+        "-Infinity",
+        "+0",
+        "00",
+        "-01",
+        ".5",
+        "1.",
+        "1.e0",
+        "1e",
+        "1e+",
+        "1e-",
+        "1e+-1",
+        "1_000",
+        "0x10",
+        "0b1",
+        "0o1",
+        "tru",
+        "TRUE",
+        "nul",
+        "nullnull",
+        "true false",
+        "1 2",
+        "\"x\"\"y\"",
+        "\"open",
+        "\"x\\",
+        "\"\n\"",
+        r#""\x41""#,
+        r#""\v""#,
+        r#""\0""#,
+        r#""\u123""#,
+        r#""\u12xz""#,
     ];
     for text in rejected {
         assert!(!scan(text.encode_utf16()), "{text:?}");
@@ -150,7 +201,10 @@ fn flat_and_exact_validation_need_no_temporary_memory_or_heap_objects() {
 fn rope_validation_keeps_shared_backing_and_state_across_escape_boundaries() {
     let cases = [
         (format!("\"{}\\u", "a".repeat(1024)), "D800\"".to_string()),
-        (format!("\"{}\\", "é日😀".repeat(256)), "\"tail\"".to_string()),
+        (
+            format!("\"{}\\", "é日😀".repeat(256)),
+            "\"tail\"".to_string(),
+        ),
         (format!("1{}.", "0".repeat(1024)), "25e+9999".to_string()),
         (format!("1{}e-", "0".repeat(1024)), "123".to_string()),
         (format!("\"{}\\u", "a".repeat(1024)), "D80x\"".to_string()),
@@ -208,7 +262,10 @@ fn deep_frontier_refusal_keeps_inherited_scratch_and_allows_retry() {
 
 #[test]
 fn cancellation_and_work_refusal_bound_both_leaf_and_deep_structural_scans() {
-    for text in [deep_text(), JsString::from(format!("\"{}\"", "a".repeat(4096)))] {
+    for text in [
+        deep_text(),
+        JsString::from(format!("\"{}\"", "a".repeat(4096))),
+    ] {
         let mut core = core();
         core.json_reserve_temporary(77).unwrap();
         let before = core.estimated_memory_bytes();
@@ -235,8 +292,8 @@ fn cancellation_and_work_refusal_bound_both_leaf_and_deep_structural_scans() {
 
 #[test]
 fn raw_builtin_keeps_original_spelling_brand_and_secret_provenance() {
-    let text = JsString::from(format!("1{}", "2".repeat(2048)))
-        .concat(&JsString::from(".3400e+99999"));
+    let text =
+        JsString::from(format!("1{}", "2".repeat(2048))).concat(&JsString::from(".3400e+99999"));
     assert!(text.unjoined_concat_children().is_some());
     let mut core = core();
     core.seed_register(0, Value::Str(text.clone())).unwrap();
@@ -254,14 +311,29 @@ fn raw_builtin_keeps_original_spelling_brand_and_secret_provenance() {
         core.heap[object.0 as usize].properties.get("rawJSON"),
         Some(&Value::Str(text.clone()))
     );
-    assert_eq!(core.object_mutation_labels.get(&object), Some(&Label::Secret));
+    assert_eq!(
+        core.object_mutation_labels.get(&object),
+        Some(&Label::Secret)
+    );
     assert!(text.unjoined_concat_children().is_some());
     assert_released(&core, 0);
 }
 
 #[test]
 fn invalid_raw_text_keeps_the_original_parser_diagnostic() {
-    for text in ["", " 0", "0 ", "[]", "{}", "-", "00", "1e+", "true false", r#""\u12xz""#, "\"open"] {
+    for text in [
+        "",
+        " 0",
+        "0 ",
+        "[]",
+        "{}",
+        "-",
+        "00",
+        "1e+",
+        "true false",
+        r#""\u12xz""#,
+        "\"open",
+    ] {
         let mut actual = core();
         let mut expected = core();
         for core in [&mut actual, &mut expected] {
@@ -269,9 +341,8 @@ fn invalid_raw_text_keeps_the_original_parser_diagnostic() {
         }
         let got = actual.json_raw_json_builtin(None, RegRange { start: 0, count: 1 });
         let units: Vec<u16> = text.encode_utf16().collect();
-        let padded = |unit: Option<&u16>| {
-            unit.is_none_or(|unit| matches!(unit, 0x09 | 0x0a | 0x0d | 0x20))
-        };
+        let padded =
+            |unit: Option<&u16>| unit.is_none_or(|unit| matches!(unit, 0x09 | 0x0a | 0x0d | 0x20));
         let want = if padded(units.first())
             || padded(units.last())
             || matches!(units.first(), Some(0x7b | 0x5b))
@@ -333,7 +404,11 @@ fn raw_validation_preserves_coercion_reentrancy_and_callback_exception_identity(
     let tree = crate::parser_api_stability::parse_script(source).unwrap();
     let lowered = crate::lowering_pipeline::lower_ir0_to_ir3(
         &crate::ir_contract::Ir0Module::from_syntax_tree(tree, "raw-validation.js"),
-        &crate::lowering_pipeline::LoweringContext::new("raw-validation", "callbacks", "builtin-only"),
+        &crate::lowering_pipeline::LoweringContext::new(
+            "raw-validation",
+            "callbacks",
+            "builtin-only",
+        ),
     )
     .unwrap();
     let mut core = core();

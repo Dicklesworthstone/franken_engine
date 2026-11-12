@@ -8,8 +8,11 @@ fn check(source: &str, expected: &[&str]) {
     let outcome = HybridRouter::default()
         .eval(source)
         .unwrap_or_else(|error| panic!("evaluation failed: {error}"));
-    let lines: Vec<_> = outcome.console_output.iter()
-        .map(|entry| entry.message.as_str()).collect();
+    let lines: Vec<_> = outcome
+        .console_output
+        .iter()
+        .map(|entry| entry.message.as_str())
+        .collect();
     assert_eq!(lines, expected);
 }
 
@@ -53,11 +56,14 @@ for (var i = 0; i < 512; i++) {
 }
 console.log(sparse[0] + '|' + presentUndefined + '|' + holes + '|' + copyUndefined + '|' + Object.keys(sparse).length + '|' + Object.keys(denseCopy).length);
 "#;
-    check(source, &[
-        "1024|true|true|true",
-        "455|97,233,55296,55357,56320,57344,65533|2|65533",
-        "1000|32|30|62|483|512",
-    ]);
+    check(
+        source,
+        &[
+            "1024|true|true|true",
+            "455|97,233,55296,55357,56320,57344,65533|2|65533",
+            "1000|32|30|62|483|512",
+        ],
+    );
 }
 
 #[test]
@@ -88,9 +94,12 @@ var refused = false;
 try { Array.prototype.sort.call(symbols); } catch (error) { refused = error instanceof TypeError; }
 console.log(refused + '|' + (typeof symbols[299] === 'symbol'));
 "#;
-    check(source, &[
-        "true|512|513|512|0|1000|1127",
-        "true|true|true",
-        "true|true",
-    ]);
+    check(
+        source,
+        &[
+            "true|512|513|512|0|1000|1127",
+            "true|true|true",
+            "true|true",
+        ],
+    );
 }

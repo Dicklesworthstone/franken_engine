@@ -30,9 +30,7 @@ fn cmp_utf16_common_prefix(left: &str, right: &str) -> Ordering {
     let limit = left.len().min(right.len());
     let mut offset = 0;
     while limit - offset >= BLOCK_BYTES {
-        if left_bytes[offset..offset + BLOCK_BYTES]
-            != right_bytes[offset..offset + BLOCK_BYTES]
-        {
+        if left_bytes[offset..offset + BLOCK_BYTES] != right_bytes[offset..offset + BLOCK_BYTES] {
             break;
         }
         offset += BLOCK_BYTES;
@@ -274,9 +272,11 @@ impl ByteCursor {
             self.pending.push(left.utf8);
         } else {
             // Publication can win after the cache check but before parts().
-            self.pending.push(Text::Flat(Arc::clone(node.joined.get().expect(
-                "concatenation parts are released only after publication",
-            ))));
+            self.pending.push(Text::Flat(Arc::clone(
+                node.joined
+                    .get()
+                    .expect("concatenation parts are released only after publication"),
+            )));
         }
     }
 
@@ -541,7 +541,14 @@ mod tests {
     #[test]
     fn all_small_contents_and_different_piece_boundaries_match_flat_order() {
         let texts = [
-            "", "a", "ab", "abc", "\u{e9}", "\u{65e5}", "\u{1f600}", "a\u{1f600}z",
+            "",
+            "a",
+            "ab",
+            "abc",
+            "\u{e9}",
+            "\u{65e5}",
+            "\u{1f600}",
+            "a\u{1f600}z",
         ];
         for left in texts {
             for right in texts {
@@ -763,17 +770,27 @@ mod tests {
     #[test]
     fn deterministic_shared_dags_match_flat_bytes_and_exact_units() {
         fn next(state: &mut u64) -> usize {
-            *state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            *state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
             (*state >> 32) as usize
         }
 
         for seed in 0..16_u64 {
             let mut state = seed + 1;
-            let mut values: Vec<(JsString, String)> =
-                ["", "a", "b", "\0", "\u{e9}", "\u{65e5}", "\u{1f600}", "\u{ffff}"]
-                    .into_iter()
-                    .map(|text| (JsString::from(text), text.to_owned()))
-                    .collect();
+            let mut values: Vec<(JsString, String)> = [
+                "",
+                "a",
+                "b",
+                "\0",
+                "\u{e9}",
+                "\u{65e5}",
+                "\u{1f600}",
+                "\u{ffff}",
+            ]
+            .into_iter()
+            .map(|text| (JsString::from(text), text.to_owned()))
+            .collect();
             for _ in 0..96 {
                 let a = next(&mut state) % values.len();
                 let b = next(&mut state) % values.len();
@@ -882,8 +899,18 @@ mod tests {
     #[test]
     fn utf16_mismatch_order_matches_flat_units_at_every_scalar_partition() {
         let scalars = [
-            '\0', 'a', '\u{7ff}', '\u{800}', '\u{d7ff}', '\u{e000}',
-            '\u{fffd}', '\u{ffff}', '\u{10000}', '\u{103ff}', '\u{10400}', '\u{10ffff}',
+            '\0',
+            'a',
+            '\u{7ff}',
+            '\u{800}',
+            '\u{d7ff}',
+            '\u{e000}',
+            '\u{fffd}',
+            '\u{ffff}',
+            '\u{10000}',
+            '\u{103ff}',
+            '\u{10400}',
+            '\u{10ffff}',
         ];
         for a in scalars {
             for b in scalars {
@@ -915,7 +942,9 @@ mod tests {
     fn utf16_shared_flat_storage_requires_equal_scalar_offsets() {
         let backing = JsString::from("\u{e9}\u{1f600}\u{e000}\u{1f600}");
         let text = backing.as_str().unwrap();
-        let boundaries: Vec<_> = (0..=text.len()).filter(|i| text.is_char_boundary(*i)).collect();
+        let boundaries: Vec<_> = (0..=text.len())
+            .filter(|i| text.is_char_boundary(*i))
+            .collect();
         for &a in &boundaries {
             for &b in &boundaries {
                 let mut left = ByteCursor::new(&backing.utf8);
@@ -932,8 +961,18 @@ mod tests {
 
     #[test]
     fn utf16_rope_comparisons_keep_lone_surrogates_on_the_exact_path() {
-        let ropes = [rope("\u{e9}", "\u{1f600}"), rope("a", "\u{e000}"), rope("", "\u{fffd}")];
-        for units in [vec![0xd800], vec![0xdbff], vec![0xdc00], vec![0xdfff], vec![0x61, 0xd800]] {
+        let ropes = [
+            rope("\u{e9}", "\u{1f600}"),
+            rope("a", "\u{e000}"),
+            rope("", "\u{fffd}"),
+        ];
+        for units in [
+            vec![0xd800],
+            vec![0xdbff],
+            vec![0xdc00],
+            vec![0xdfff],
+            vec![0x61, 0xd800],
+        ] {
             let exact = JsString::from_code_units(&units);
             assert!(!exact.is_well_formed());
             for value in &ropes {
@@ -948,9 +987,20 @@ mod tests {
     #[test]
     fn utf16_byte_blocks_restore_scalars_at_every_alignment() {
         let scalars = [
-            '\0', '\u{7f}', '\u{80}', '\u{7ff}', '\u{800}', '\u{d7ff}',
-            '\u{e000}', '\u{ffff}', '\u{10000}', '\u{103ff}', '\u{10400}',
-            '\u{1f600}', '\u{1f601}', '\u{10ffff}',
+            '\0',
+            '\u{7f}',
+            '\u{80}',
+            '\u{7ff}',
+            '\u{800}',
+            '\u{d7ff}',
+            '\u{e000}',
+            '\u{ffff}',
+            '\u{10000}',
+            '\u{103ff}',
+            '\u{10400}',
+            '\u{1f600}',
+            '\u{1f601}',
+            '\u{10ffff}',
         ];
         for padding in 0..132 {
             let prefix = format!("{}\u{e9}\u{1f600}", "x".repeat(padding));

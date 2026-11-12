@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! Live example of generating a signed decision receipt.
 //!
 //! This example demonstrates the complete workflow for generating an externally-verifiable
@@ -77,8 +78,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Run manifest written to: {}", manifest_path);
 
     println!("\nTo verify this receipt:");
-    println!("  frankenctl verify receipt --input {} --receipt-id {}",
-             receipt_path, receipt.receipt_id);
+    println!(
+        "  frankenctl verify receipt --input {} --receipt-id {}",
+        receipt_path, receipt.receipt_id
+    );
 
     Ok(())
 }
@@ -120,7 +123,10 @@ fn generate_sample_receipt() -> ReceiptRecord {
 
     // Create decision action with parameters
     let mut action_parameters = BTreeMap::new();
-    action_parameters.insert("reason".to_string(), "expected_loss_below_threshold".to_string());
+    action_parameters.insert(
+        "reason".to_string(),
+        "expected_loss_below_threshold".to_string(),
+    );
     action_parameters.insert("threshold".to_string(), "0.5".to_string());
 
     let action = DecisionAction {
@@ -180,8 +186,7 @@ fn generate_mock_evidence_hash() -> String {
     // SHA-256 hash = 64 hex characters
     format!(
         "{}{}",
-        "deadbeefcafebabe1234567890abcdef",
-        "fedcba0987654321beefdaedabefaced"
+        "deadbeefcafebabe1234567890abcdef", "fedcba0987654321beefdaedabefaced"
     )
 }
 

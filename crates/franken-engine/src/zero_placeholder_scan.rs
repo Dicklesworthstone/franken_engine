@@ -296,6 +296,175 @@ struct DocsHelpSurfaceAuditContract {
     banned_readme_fragments: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourcePlaceholderHit {
+    pub relative_path: String,
+    pub line: usize,
+    pub pattern: String,
+}
+
+/// Live source-tree scanner that strips Rust comments, string literals, and trailing
+/// `#[cfg(test)] mod ...` blocks, returning any production `todo!()` or `unimplemented!()`
+/// macro invocations under `src_root`.
+pub fn scan_production_source_placeholders(
+    src_root: &Path,
+) -> Result<Vec<SourcePlaceholderHit>, io::Error> {
+    let mut rs_files = Vec::new();
+    collect_rs_files(src_root, &mut rs_files)?;
+    rs_files.sort();
+
+    let mut hits = Vec::new();
+    for path in rs_files {
+        let source = fs::read_to_string(&path)?;
+        let sanitized = sanitize_production_rust_source(&source);
+        let rel = path
+            .strip_prefix(src_root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        for (idx, line) in sanitized.lines().enumerate() {
+            for pattern in ["todo!(", "unimplemented!("] {
+                if contains_macro_token(line, pattern) {
+                    hits.push(SourcePlaceholderHit {
+                        relative_path: rel.clone(),
+                        line: idx + 1,
+                        pattern: pattern.trim_end_matches('(').to_string(),
+                    });
+                }
+            }
+        }
+    }
+    Ok(hits)
+}
+
+fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), io::Error> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let ft = entry.file_type()?;
+        if ft.is_dir() {
+            collect_rs_files(&path, out)?;
+        } else if ft.is_file() && path.extension().is_some_and(|ext| ext == "rs") {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn contains_macro_token(line: &str, needle: &str) -> bool {
+    let mut search_from = 0usize;
+    while let Some(pos) = line[search_from..].find(needle) {
+        let abs = search_from + pos;
+        let prev_ok = abs == 0
+            || !line[..abs]
+                .chars()
+                .next_back()
+                .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+        if prev_ok {
+            return true;
+        }
+        search_from = abs + needle.len();
+    }
+    false
+}
+
+fn sanitize_production_rust_source(source: &str) -> String {
+    let prod_prefix = truncate_at_cfg_test_mod(source);
+    let bytes = prod_prefix.as_bytes();
+    let mut out = String::with_capacity(prod_prefix.len());
+    let mut i = 0usize;
+    let mut block_comment_depth = 0usize;
+    let mut in_line_comment = false;
+    let mut in_string = false;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        if in_line_comment {
+            if b == b'\n' {
+                in_line_comment = false;
+                out.push('\n');
+            } else {
+                out.push(' ');
+            }
+            i += 1;
+            continue;
+        }
+        if block_comment_depth > 0 {
+            if i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'*' {
+                block_comment_depth += 1;
+                out.push_str("  ");
+                i += 2;
+            } else if i + 1 < bytes.len() && bytes[i] == b'*' && bytes[i + 1] == b'/' {
+                block_comment_depth -= 1;
+                out.push_str("  ");
+                i += 2;
+            } else {
+                out.push(if b == b'\n' { '\n' } else { ' ' });
+                i += 1;
+            }
+            continue;
+        }
+        if in_string {
+            if b == b'\\' && i + 1 < bytes.len() {
+                out.push(' ');
+                out.push(if bytes[i + 1] == b'\n' { '\n' } else { ' ' });
+                i += 2;
+            } else if b == b'"' {
+                in_string = false;
+                out.push(' ');
+                i += 1;
+            } else {
+                out.push(if b == b'\n' { '\n' } else { ' ' });
+                i += 1;
+            }
+            continue;
+        }
+        if i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'/' {
+            in_line_comment = true;
+            out.push_str("  ");
+            i += 2;
+            continue;
+        }
+        if i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'*' {
+            block_comment_depth = 1;
+            out.push_str("  ");
+            i += 2;
+            continue;
+        }
+        if b == b'"' {
+            in_string = true;
+            out.push(' ');
+            i += 1;
+            continue;
+        }
+        out.push(b as char);
+        i += 1;
+    }
+    out
+}
+
+fn truncate_at_cfg_test_mod(source: &str) -> &str {
+    let lines: Vec<&str> = source.lines().collect();
+    let mut offset = 0usize;
+    for idx in 0..lines.len() {
+        let trimmed = lines[idx].trim();
+        if trimmed == "#[cfg(test)]"
+            && lines
+                .get(idx + 1)
+                .is_some_and(|next| next.trim_start().starts_with("mod "))
+        {
+            return &source[..offset];
+        }
+        offset += lines[idx].len();
+        if source[offset..].starts_with("\r\n") {
+            offset += 2;
+        } else if source[offset..].starts_with('\n') {
+            offset += 1;
+        }
+    }
+    source
+}
+
 pub fn zero_placeholder_scan_inventory() -> ZeroPlaceholderInventory {
     let parser_inventory = parser_gap_inventory::parser_gap_inventory();
     let lowering_inventory = lowering_gap_inventory::lowering_gap_inventory();
@@ -2622,5 +2791,35 @@ mod tests {
             assert_eq!(event.trace_id, "t-schema");
             assert_eq!(event.decision_id, "d-schema");
         }
+    }
+
+    #[test]
+    fn source_placeholder_scanner_detects_live_macros_and_ignores_comments_strings_and_tests() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            dir.path().join("clean.rs"),
+            "// todo!() in comment\nconst MSG: &str = \"unimplemented!()\";\npub fn ok() -> u32 { 7 }\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn allowed_in_test() { todo!() }\n}\n",
+        )
+        .expect("write clean.rs");
+        assert!(
+            scan_production_source_placeholders(dir.path())
+                .expect("scan clean")
+                .is_empty()
+        );
+
+        fs::write(
+            dir.path().join("stubbed.rs"),
+            "pub fn bad() {\n    unimplemented!(\"gap\");\n}\n",
+        )
+        .expect("write stubbed.rs");
+        let hits = scan_production_source_placeholders(dir.path()).expect("scan stubbed");
+        assert_eq!(
+            hits,
+            vec![SourcePlaceholderHit {
+                relative_path: "stubbed.rs".to_string(),
+                line: 2,
+                pattern: "unimplemented!".to_string(),
+            }]
+        );
     }
 }

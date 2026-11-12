@@ -529,8 +529,7 @@ impl JsString {
                     0
                 };
                 let middle = &rest[middle_start..stop];
-                let replacement_bytes =
-                    '\u{fffd}'.len_utf8() * (skipped + usize::from(split_end));
+                let replacement_bytes = '\u{fffd}'.len_utf8() * (skipped + usize::from(split_end));
                 let mut projection = String::with_capacity(middle.len() + replacement_bytes);
                 if second {
                     projection.push('\u{fffd}');
@@ -716,7 +715,10 @@ mod tests {
         let Text::Concat(node) = &string.utf8 else {
             panic!("fixture must be a concatenation");
         };
-        assert!(node.joined.get().is_none(), "indexed read flattened the rope");
+        assert!(
+            node.joined.get().is_none(),
+            "indexed read flattened the rope"
+        );
         assert!(node.parts().is_some());
     }
 
@@ -745,7 +747,11 @@ mod tests {
         let units: Vec<u16> = texts.concat().encode_utf16().collect();
         let retained = rope.retained_bytes(24);
         for index in (0..=units.len()).chain(std::iter::once(usize::MAX)) {
-            assert_eq!(rope.code_unit_at(index), units.get(index).copied(), "{index}");
+            assert_eq!(
+                rope.code_unit_at(index),
+                units.get(index).copied(),
+                "{index}"
+            );
             assert_eq!(
                 rope.code_point_at(index),
                 reference_point(&units, index),
@@ -822,11 +828,7 @@ mod tests {
                         rope.concat(&piece)
                     };
                 }
-                let index = if prepend {
-                    rope.utf16_len() - 1
-                } else {
-                    0
-                };
+                let index = if prepend { rope.utf16_len() - 1 } else { 0 };
                 assert_unjoined(&rope);
                 if point {
                     assert_eq!(rope.code_point_at(index), Some(u32::from(b'x')));
@@ -887,8 +889,8 @@ mod tests {
 
     #[test]
     fn empty_and_whole_slices_do_not_materialize_a_rope() {
-        let rope = JsString::from("a".repeat(1100))
-            .concat(&JsString::from("\u{1f600}".repeat(300)));
+        let rope =
+            JsString::from("a".repeat(1100)).concat(&JsString::from("\u{1f600}".repeat(300)));
         let length = rope.utf16_len();
         for (start, end) in [(0, 0), (8, 3), (length, length), (usize::MAX, usize::MAX)] {
             assert!(rope.utf16_slice(start, end).is_empty());
@@ -964,7 +966,11 @@ mod tests {
                     continue;
                 }
                 let slice = rope.utf16_slice(start, end);
-                assert_eq!(slice.code_units_vec(), expected[start..end], "{start}..{end}");
+                assert_eq!(
+                    slice.code_units_vec(),
+                    expected[start..end],
+                    "{start}..{end}"
+                );
                 assert_eq!(
                     slice.is_well_formed(),
                     String::from_utf16(&expected[start..end]).is_ok()
@@ -1010,7 +1016,10 @@ mod tests {
             let Text::Concat(node) = &rope.utf8 else {
                 unreachable!()
             };
-            let joined = node.joined.get().expect("bounded fallback must settle root");
+            let joined = node
+                .joined
+                .get()
+                .expect("bounded fallback must settle root");
             assert!(node.parts().is_none());
             assert_eq!(rope.utf16_slice(2, 4).as_str(), Some("xx"));
             assert!(Arc::ptr_eq(joined, node.joined.get().unwrap()));
@@ -1064,10 +1073,7 @@ mod tests {
                                 assert_eq!(text[byte..].chars().next().unwrap().len_utf16(), 2);
                             }
                             assert_eq!(string.code_unit_at(index), units.get(index).copied());
-                            assert_eq!(
-                                string.code_point_at(index),
-                                reference_point(&units, index)
-                            );
+                            assert_eq!(string.code_point_at(index), reference_point(&units, index));
                             for end in index..=units.len() {
                                 let slice = string.utf16_slice(index, end);
                                 assert_eq!(slice.code_units_vec(), units[index..end]);

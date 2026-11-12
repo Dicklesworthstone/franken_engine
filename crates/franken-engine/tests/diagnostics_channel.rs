@@ -1,24 +1,35 @@
 //! Actual native orchestrator tests. Host-factory tests do not prove these pass.
 #![forbid(unsafe_code)]
-use std::collections::BTreeMap;
 use frankenengine_engine::baseline_interpreter::LaneChoice;
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, LabFixtureExecutionOrchestratorExt, OrchestratorConfig,
 };
+use std::collections::BTreeMap;
 
 fn run(source: &str, lane: LaneChoice) -> Vec<String> {
     let mut engine = ExecutionOrchestrator::new(OrchestratorConfig {
-        force_lane: Some(lane), ..OrchestratorConfig::default()
+        force_lane: Some(lane),
+        ..OrchestratorConfig::default()
     });
     let package = ExtensionPackage {
-        extension_id: "diagnostics-channel".into(), source: source.into(),
-        source_file: None, module_root: None,
+        extension_id: "diagnostics-channel".into(),
+        source: source.into(),
+        source_file: None,
+        module_root: None,
         capabilities: ["vm_dispatch", "heap_allocate", "builtin", "console"]
-            .into_iter().map(str::to_string).collect(),
-        version: "1.0.0".into(), metadata: BTreeMap::new(),
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        version: "1.0.0".into(),
+        metadata: BTreeMap::new(),
     };
-    engine.execute(&package).expect("native diagnostics completion")
-        .console_output.into_iter().map(|line| line.message).collect()
+    engine
+        .execute(&package)
+        .expect("native diagnostics completion")
+        .console_output
+        .into_iter()
+        .map(|line| line.message)
+        .collect()
 }
 
 const CHANNELS: &str = r#"
@@ -58,17 +69,20 @@ console.log('TRACE',result,context.result,current,events.join(','));
 #[test]
 fn channels_preserve_identity_and_protected_realm_helpers_on_both_lanes() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        assert_eq!(run(CHANNELS,lane), [
-            "CHANNELS true true example:40,example:41 42",
-            "UNSUBSCRIBE true true true false false",
-        ]);
+        assert_eq!(
+            run(CHANNELS, lane),
+            [
+                "CHANNELS true true example:40,example:41 42",
+                "UNSUBSCRIBE true true true false false",
+            ]
+        );
     }
 }
 
 #[test]
 fn reentrant_publication_uses_stable_subscriber_snapshots_on_both_lanes() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        assert_eq!(run(REENTRANT,lane), ["REENTRANT a1,a2,d2,b1,a3,d3"]);
+        assert_eq!(run(REENTRANT, lane), ["REENTRANT a1,a2,d2,b1,a3,d3"]);
     }
 }
 
@@ -119,8 +133,14 @@ fn subscriber_snapshots_resist_inherited_indices_and_species_on_both_lanes() {
 #[test]
 fn store_scopes_and_sync_tracing_preserve_result_receiver_and_falsy_errors() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        assert_eq!(run(STORES,lane), ["INSIDE task 42", "ERROR true",
-            "TRACE 42 42 outside start:task:task,end:task:task,start:fail:fail,error:fail:fail,end:fail:fail"]);
+        assert_eq!(
+            run(STORES, lane),
+            [
+                "INSIDE task 42",
+                "ERROR true",
+                "TRACE 42 42 outside start:task:task,end:task:task,start:fail:fail,error:fail:fail,end:fail:fail"
+            ]
+        );
     }
 }
 
@@ -154,18 +174,24 @@ Promise.resolve().then(function(){callback.call(callbackReceiver,null,42,'extra'
 #[test]
 fn promise_traces_observe_settlement_and_preserve_original_falsy_rejections() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        assert_eq!(run(PROMISE_TRACES, lane), [
-            "PROMISE_TRACE 42 42 true true start:ok,end:ok,asyncStart:ok,asyncEnd:ok,start:bad,end:bad,error:bad,asyncStart:bad,asyncEnd:bad",
-        ]);
+        assert_eq!(
+            run(PROMISE_TRACES, lane),
+            [
+                "PROMISE_TRACE 42 42 true true start:ok,end:ok,asyncStart:ok,asyncEnd:ok,start:bad,end:bad,error:bad,asyncStart:bad,asyncEnd:bad",
+            ]
+        );
     }
 }
 
 #[test]
 fn callback_traces_restore_scopes_and_keep_both_receivers_and_all_arguments() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        assert_eq!(run(CALLBACK_TRACES, lane), [
-            "CALLBACK_TRACE 42 42 outer start:outer,end:outer,asyncStart:42,callback:callback:42:extra,asyncEnd:42",
-        ]);
+        assert_eq!(
+            run(CALLBACK_TRACES, lane),
+            [
+                "CALLBACK_TRACE 42 42 outer start:outer,end:outer,asyncStart:42,callback:callback:42:extra,asyncEnd:42",
+            ]
+        );
     }
 }
 
@@ -185,12 +211,30 @@ fn esm_default_and_named_imports_execute_the_canonical_diagnostics_factory() {
     std::fs::write(&entry, ESM_TRACES).expect("write ESM program");
     let report = root.path().join("report.json");
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_frankenctl"))
-        .args(["run", "--input"]).arg(&entry)
-        .args(["--goal", "module", "--extension-id", "diagnostics-esm", "--out"])
-        .arg(&report).output().expect("execute native frankenctl");
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    let payload: serde_json::Value = serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
-    let lines: Vec<_> = payload["console_output"].as_array().unwrap().iter()
-        .map(|line| line["message"].as_str().unwrap()).collect();
+        .args(["run", "--input"])
+        .arg(&entry)
+        .args([
+            "--goal",
+            "module",
+            "--extension-id",
+            "diagnostics-esm",
+            "--out",
+        ])
+        .arg(&report)
+        .output()
+        .expect("execute native frankenctl");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
+    let lines: Vec<_> = payload["console_output"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|line| line["message"].as_str().unwrap())
+        .collect();
     assert_eq!(lines, ["ESM_DIAGNOSTICS true 42 end:job,done:42"]);
 }

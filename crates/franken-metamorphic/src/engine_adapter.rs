@@ -59,6 +59,8 @@ pub struct EngineEval {
     /// lowering failed. Two sources that lower to byte-identical IR3 share a
     /// digest; any lowering change (what the `ir_*` relations guard) changes it.
     pub ir_digest: Option<String>,
+    /// Sorted capability tags emitted on lowered `Ir3Module::required_capabilities`.
+    pub required_capabilities: Vec<String>,
     /// Normalized [`HybridRouter::eval`] value, or `None` if evaluation errored.
     pub exec_value: Option<String>,
 }
@@ -76,16 +78,27 @@ impl EngineEvalAdapter {
         Self
     }
 
+    /// Validate ES2020 script syntax via the real [`CanonicalEs2020Parser`].
+    #[must_use]
+    pub fn validate_syntax(source: &str) -> bool {
+        let parser = CanonicalEs2020Parser;
+        let options = ParserOptions::default();
+        parser
+            .parse_with_options(source, ParseGoal::Script, &options)
+            .is_ok()
+    }
+
     /// Parse, lower, and execute `source` through the real engine and return the
     /// normalized verdict triple. Never panics: engine errors map to
     /// `Rejected` / `None`.
     #[must_use]
     pub fn evaluate(&self, source: &str) -> EngineEval {
-        let (parse_outcome, ir_digest) = parse_and_lower(source);
+        let (parse_outcome, ir_digest, required_capabilities) = parse_and_lower(source);
         let exec_value = execute(source);
         EngineEval {
             parse_outcome,
             ir_digest,
+            required_capabilities,
             exec_value,
         }
     }
@@ -93,13 +106,13 @@ impl EngineEvalAdapter {
 
 /// Parse via the canonical parser and, on success, lower through the real
 /// pipeline, returning the parse verdict and (if lowering succeeded) an IR3
-/// digest.
-fn parse_and_lower(source: &str) -> (ParseOutcome, Option<String>) {
+/// digest and sorted required capabilities.
+fn parse_and_lower(source: &str) -> (ParseOutcome, Option<String>, Vec<String>) {
     let parser = CanonicalEs2020Parser;
     let options = ParserOptions::default();
     let tree = match parser.parse_with_options(source, ParseGoal::Script, &options) {
         Ok(tree) => tree,
-        Err(_) => return (ParseOutcome::Rejected, None),
+        Err(_) => return (ParseOutcome::Rejected, None, Vec::new()),
     };
 
     let ir0 = Ir0Module::from_syntax_tree(tree, "metamorphic-engine-adapter");
@@ -108,11 +121,20 @@ fn parse_and_lower(source: &str) -> (ParseOutcome, Option<String>) {
         "metamorphic-adapter",
         "metamorphic-adapter",
     );
-    let ir_digest = match lower_ir0_to_ir3(&ir0, &context) {
-        Ok(output) => Some(digest_ir3(&output.ir3)),
-        Err(_) => None,
-    };
-    (ParseOutcome::Parsed, ir_digest)
+    match lower_ir0_to_ir3(&ir0, &context) {
+        Ok(output) => {
+            let mut caps: Vec<String> = output
+                .ir3
+                .required_capabilities
+                .iter()
+                .map(|cap| cap.0.clone())
+                .collect();
+            caps.sort();
+            caps.dedup();
+            (ParseOutcome::Parsed, Some(digest_ir3(&output.ir3)), caps)
+        }
+        Err(_) => (ParseOutcome::Parsed, None, Vec::new()),
+    }
 }
 
 /// Execute via the hybrid router, returning the normalized value (or `None` on

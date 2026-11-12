@@ -60,7 +60,11 @@ pub(super) fn sort<E>(
         while pending >= 2 && runs[pending - 2].level() <= runs[pending - 1].level() {
             merge_top(order, scratch, &mut runs, &mut pending, compare)?;
         }
-        debug_assert!(runs[..pending].windows(2).all(|pair| pair[0].level() > pair[1].level()));
+        debug_assert!(
+            runs[..pending]
+                .windows(2)
+                .all(|pair| pair[0].level() > pair[1].level())
+        );
     }
     while pending > 1 {
         merge_top(order, scratch, &mut runs, &mut pending, compare)?;
@@ -207,7 +211,11 @@ fn emit_descending_groups<E>(
             descending_checkpoint(&mut remaining, end - 1, compare)?;
             let word = (before - 1) / BOUNDARY_WORD_BITS;
             let used = (before - 1) % BOUNDARY_WORD_BITS + 1;
-            let bits = if word < saved_from { uniform } else { boundaries[word] };
+            let bits = if word < saved_from {
+                uniform
+            } else {
+                boundaries[word]
+            };
             let bits = bits & (usize::MAX >> (BOUNDARY_WORD_BITS - used));
             if bits != 0 {
                 start = word * BOUNDARY_WORD_BITS
@@ -388,7 +396,8 @@ fn merge<E>(
                 // higher output positions. Its winning suffix is >= pivot.
                 let pivot = order[left - 1];
                 let span = winning_span(right, |offset| {
-                    compare(pivot, scratch[right - 1 - offset]).map(|order| order != Ordering::Greater)
+                    compare(pivot, scratch[right - 1 - offset])
+                        .map(|order| order != Ordering::Greater)
                 })?;
                 order[output - span..output].copy_from_slice(&scratch[right - span..right]);
                 right -= span;

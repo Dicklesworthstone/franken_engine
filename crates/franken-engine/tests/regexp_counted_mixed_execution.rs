@@ -6,16 +6,21 @@
 use frankenengine_engine::HybridRouter;
 
 fn check(source: &str, expected: &str) {
-    let outcome = HybridRouter::default().eval(source)
+    let outcome = HybridRouter::default()
+        .eval(source)
         .unwrap_or_else(|error| panic!("evaluation failed: {error}"));
-    let lines: Vec<_> = outcome.console_output.iter()
-        .map(|entry| entry.message.as_str()).collect();
+    let lines: Vec<_> = outcome
+        .console_output
+        .iter()
+        .map(|entry| entry.message.as_str())
+        .collect();
     assert_eq!(lines, [expected]);
 }
 
 #[test]
 fn counted_mixed_execution_and_backtracking() {
-    check(r#"
+    check(
+        r#"
 var out = [];
 function shape(re, text) {
   var m = re.exec(text);
@@ -49,12 +54,15 @@ out.push(shape(/(?=)((?:[0-9].){0,32}?)/, twenty));
 out.push(shape(/^(?:a[0-9].){17,20}(?=!)/, 'a7z'.repeat(21) + '!'));
 out.push(shape(/^((?:[a-z]\d.){512})(?=!)/, 'a7z'.repeat(512) + '!'));
 console.log(JSON.stringify(out));
-"#, r#"[[0,60,57],[0,54,51],[60,1,60],[60,1,51],[0,114,57],[0,57,57],[[0,60,57,60],[62,54,51,116]],0,null,0,[0,60,60],60,"x[57:57]!y",[0,54,1,57,1],[54,57],[0,0,0],null,[0,1536,1536]]"#);
+"#,
+        r#"[[0,60,57],[0,54,51],[60,1,60],[60,1,51],[0,114,57],[0,57,57],[[0,60,57,60],[62,54,51,116]],0,null,0,[0,60,60],60,"x[57:57]!y",[0,54,1,57,1],[54,57],[0,0,0],null,[0,1536,1536]]"#,
+    );
 }
 
 #[test]
 fn counted_mixed_unicode_and_observable_regex_protocols() {
-    check(r#"
+    check(
+        r#"
 var out = [];
 function shape(re, text) {
   var m = re.exec(text);
@@ -81,5 +89,7 @@ for (var i = 0; i < endings.length; i++) {
 }
 out.push(dotChecks);
 console.log(JSON.stringify(out));
-"#, r#"[[80,1,68],[80,1,80],[0,80,76],[0,51,51],null,null,[60,1,51],[0,51,51],[0,51,51],[0,51,3],[0,34,null],[0,17,17],[[false,true],[false,true],[false,true],[false,true]]]"#);
+"#,
+        r#"[[80,1,68],[80,1,80],[0,80,76],[0,51,51],null,null,[60,1,51],[0,51,51],[0,51,51],[0,51,3],[0,34,null],[0,17,17],[[false,true],[false,true],[false,true],[false,true]]]"#,
+    );
 }

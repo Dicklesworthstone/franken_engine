@@ -247,7 +247,10 @@ impl CancellationToken {
     /// deserialized token is not a replacement for the original authority.
     pub fn with_deadline(&self, deadline: Instant) -> Self {
         let mut child = self.child_token();
-        child.deadline = Some(self.deadline.map_or(deadline, |parent| parent.min(deadline)));
+        child.deadline = Some(
+            self.deadline
+                .map_or(deadline, |parent| parent.min(deadline)),
+        );
         child
     }
 
@@ -268,7 +271,9 @@ impl CancellationToken {
                 .parents
                 .iter()
                 .any(|signal| signal.load(Ordering::Acquire))
-            || self.deadline.is_some_and(|deadline| Instant::now() >= deadline)
+            || self
+                .deadline
+                .is_some_and(|deadline| Instant::now() >= deadline)
     }
 
     /// Reset this token's local signal (for reuse after drain/finalize).

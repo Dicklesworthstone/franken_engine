@@ -9,7 +9,8 @@ timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 uid="$(id -u)"
 artifact_root="${RGC_ZERO_PLACEHOLDER_GATE_ARTIFACT_ROOT:-artifacts/rgc_zero_placeholder_gate}"
 out_dir="${RGC_ZERO_PLACEHOLDER_GATE_OUT_DIR:-${artifact_root}/${timestamp}_uid${uid}_${mode}_$$}"
-toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
+default_toolchain="$(sed -n 's/^channel = "\(.*\)"/\1/p' "${root_dir}/rust-toolchain.toml" 2>/dev/null | head -n 1)"
+toolchain="${RUSTUP_TOOLCHAIN:-${default_toolchain:-nightly-2026-09-21}}"
 target_namespace="${mode}_$$"
 target_dir="${CARGO_TARGET_DIR:-${root_dir}/target_rch_rgc_zero_placeholder_gate_${target_namespace}}"
 cargo_build_jobs="${CARGO_BUILD_JOBS:-1}"
@@ -18,9 +19,14 @@ waivers_path="${RGC_ZERO_PLACEHOLDER_GATE_WAIVERS:-}"
 epoch_raw="${RGC_ZERO_PLACEHOLDER_GATE_EPOCH:-100}"
 staged_waivers_path=""
 
+use_local_ci_runner=false
 if ! command -v rch >/dev/null 2>&1; then
-  echo "rch is required for zero-placeholder gate execution" >&2
-  exit 2
+  if [[ "${GITHUB_ACTIONS:-false}" == "true" ]]; then
+    use_local_ci_runner=true
+  else
+    echo "rch is required for zero-placeholder gate execution" >&2
+    exit 2
+  fi
 fi
 
 mkdir -p "$out_dir"
@@ -137,13 +143,24 @@ if [[ -n "$staged_waivers_path" ]]; then
 fi
 
 set +e
-timeout "${rch_timeout_seconds}" \
-  rch exec --color never -- env \
-  "RUSTUP_TOOLCHAIN=${toolchain}" \
-  "CARGO_BUILD_JOBS=${cargo_build_jobs}" \
-  "CARGO_TARGET_DIR=${target_dir}" \
-  "${cmd[@]}" 2>&1 | tee "$rch_output"
-run_status=$?
+if [[ "$use_local_ci_runner" == true ]]; then
+  timeout "${rch_timeout_seconds}" \
+    env \
+    "RUSTUP_TOOLCHAIN=${toolchain}" \
+    "CARGO_BUILD_JOBS=${cargo_build_jobs}" \
+    "CARGO_TARGET_DIR=${target_dir}" \
+    "${cmd[@]}" 2>&1 | tee "$rch_output"
+  run_status="${PIPESTATUS[0]}"
+  printf 'Remote command finished: exit=%s\n' "$run_status" >>"$rch_output"
+else
+  timeout "${rch_timeout_seconds}" \
+    rch exec --color never -- env \
+    "RUSTUP_TOOLCHAIN=${toolchain}" \
+    "CARGO_BUILD_JOBS=${cargo_build_jobs}" \
+    "CARGO_TARGET_DIR=${target_dir}" \
+    "${cmd[@]}" 2>&1 | tee "$rch_output"
+  run_status="${PIPESTATUS[0]}"
+fi
 set -e
 
 remote_exit_code="$(rch_remote_exit_code "$rch_output" || true)"
@@ -179,26 +196,28 @@ if [[ "$remote_exit_code" != "0" ]]; then
   exit 1
 fi
 
-worker="$(rch_selected_worker_id "$rch_output" || true)"
-capture_selected_worker "$rch_output"
-if [[ -z "$worker" ]]; then
-  echo "failed to determine rch worker for artifact sync" >&2
-  exit 1
-fi
+if [[ "$use_local_ci_runner" != true ]]; then
+  worker="$(rch_selected_worker_id "$rch_output" || true)"
+  capture_selected_worker "$rch_output"
+  if [[ -z "$worker" ]]; then
+    echo "failed to determine rch worker for artifact sync" >&2
+    exit 1
+  fi
 
-if [[ -z "$last_worker_user" || -z "$last_worker_host" || -z "$last_worker_identity_file" ]]; then
-  echo "failed to resolve zero-placeholder gate worker SSH identity for artifact sync" >&2
-  exit 1
-fi
+  if [[ -z "$last_worker_user" || -z "$last_worker_host" || -z "$last_worker_identity_file" ]]; then
+    echo "failed to resolve zero-placeholder gate worker SSH identity for artifact sync" >&2
+    exit 1
+  fi
 
-if ! scp -q -r \
-  -i "$last_worker_identity_file" \
-  -o BatchMode=yes \
-  -o StrictHostKeyChecking=no \
-  "${last_worker_user}@${last_worker_host}:${out_dir}/." \
-  "$out_dir/"; then
-  echo "failed to sync zero-placeholder gate artifacts from rch worker ${last_worker_id}" >&2
-  exit 1
+  if ! scp -q -r \
+    -i "$last_worker_identity_file" \
+    -o BatchMode=yes \
+    -o StrictHostKeyChecking=no \
+    "${last_worker_user}@${last_worker_host}:${out_dir}/." \
+    "$out_dir/"; then
+    echo "failed to sync zero-placeholder gate artifacts from rch worker ${last_worker_id}" >&2
+    exit 1
+  fi
 fi
 
 test -f "$out_dir/placeholder_gate_report.json"

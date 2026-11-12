@@ -17,7 +17,8 @@ resolver = "2"
 edition = "2024"
 version = "0.1.0"
 authors = ["Franken Engine Contributors"]
-license = "MIT"
+license = "LicenseRef-MIT-OpenAI-Anthropic-Rider"
+repository = "https://github.com/Dicklesworthstone/franken_engine"
 
 [workspace.dependencies]
 anyhow = "1.0"

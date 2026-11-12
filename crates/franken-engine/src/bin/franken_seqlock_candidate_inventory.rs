@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 #[path = "../seqlock_candidate_inventory.rs"]
 mod seqlock_candidate_inventory;
 

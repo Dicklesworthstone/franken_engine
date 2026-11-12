@@ -4955,7 +4955,7 @@ fn regression_matrix_case_coverage_fails_on_untested_cases() {
 // ---------------------------------------------------------------------------
 
 fn baseline_interpreter_source() -> &'static str {
-    include_str!("../src/baseline_interpreter.rs")
+    frankenengine_engine::baseline_interpreter::COMBINED_PRODUCTION_SOURCE
 }
 
 fn eval_value(source: &str) -> String {

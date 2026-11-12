@@ -46,11 +46,17 @@ fn fixture(throughput: bool) -> (InterpreterCore, TypedArrayView, TypedArrayView
 }
 
 fn queue(core: &InterpreterCore) -> Vec<PromiseHandle> {
-    core.atomics_async_waiters.iter().map(|w| w.promise).collect()
+    core.atomics_async_waiters
+        .iter()
+        .map(|w| w.promise)
+        .collect()
 }
 
 fn pending(core: &InterpreterCore, promise: PromiseHandle) {
-    assert_eq!(core.promise_store.get(promise).unwrap().state, PromiseState::Pending);
+    assert_eq!(
+        core.promise_store.get(promise).unwrap().state,
+        PromiseState::Pending
+    );
 }
 
 fn fulfilled(core: &InterpreterCore, promise: PromiseHandle, value: &str) {
@@ -62,7 +68,10 @@ fn fulfilled(core: &InterpreterCore, promise: PromiseHandle, value: &str) {
 
 fn accounted(core: &InterpreterCore) {
     assert_eq!(core.json_parse_temporary_bytes, 0);
-    assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
 }
 
 #[test]
@@ -76,21 +85,49 @@ fn partial_notifications_preserve_fifo_across_interleaved_buffers_and_offsets() 
                 1 => (&b, 0),
                 _ => (&a, 1),
             };
-            original.push(core.atomics_add_async_waiter(view, offset, f64::INFINITY).unwrap());
+            original.push(
+                core.atomics_add_async_waiter(view, offset, f64::INFINITY)
+                    .unwrap(),
+            );
         }
-        assert_eq!(core.notify_atomics_waiters(a.buffer, 0, 3.0, &Label::Public).unwrap(), 3);
-        let expected: Vec<_> = original.iter().enumerate()
-            .filter(|(i, _)| ![0, 3, 6].contains(i)).map(|(_, p)| *p).collect();
+        assert_eq!(
+            core.notify_atomics_waiters(a.buffer, 0, 3.0, &Label::Public)
+                .unwrap(),
+            3
+        );
+        let expected: Vec<_> = original
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| ![0, 3, 6].contains(i))
+            .map(|(_, p)| *p)
+            .collect();
         assert_eq!(queue(&core), expected);
         for (index, promise) in original.iter().enumerate() {
-            if [0, 3, 6].contains(&index) { fulfilled(&core, *promise, "ok"); }
-            else { pending(&core, *promise); }
+            if [0, 3, 6].contains(&index) {
+                fulfilled(&core, *promise, "ok");
+            } else {
+                pending(&core, *promise);
+            }
         }
-        assert_eq!(core.notify_atomics_waiters(a.buffer, 4, f64::INFINITY, &Label::Public).unwrap(), 12);
-        assert_eq!(core.notify_atomics_waiters(b.buffer, 0, f64::INFINITY, &Label::Public).unwrap(), 12);
-        assert_eq!(core.notify_atomics_waiters(a.buffer, 0, f64::INFINITY, &Label::Public).unwrap(), 9);
+        assert_eq!(
+            core.notify_atomics_waiters(a.buffer, 4, f64::INFINITY, &Label::Public)
+                .unwrap(),
+            12
+        );
+        assert_eq!(
+            core.notify_atomics_waiters(b.buffer, 0, f64::INFINITY, &Label::Public)
+                .unwrap(),
+            12
+        );
+        assert_eq!(
+            core.notify_atomics_waiters(a.buffer, 0, f64::INFINITY, &Label::Public)
+                .unwrap(),
+            9
+        );
         assert!(core.atomics_async_waiters.is_empty());
-        for promise in original { fulfilled(&core, promise, "ok"); }
+        for promise in original {
+            fulfilled(&core, promise, "ok");
+        }
         accounted(&core);
     }
 }
@@ -105,12 +142,21 @@ fn notification_reuses_the_queue_allocation_and_releases_all_waiter_charges() {
         }
         let pointer = core.atomics_async_waiters.as_ptr();
         let capacity = core.atomics_async_waiters.capacity();
-        assert_eq!(core.atomics_async_waiters_memory_bytes(), 512 * ATOMICS_WAITER_BYTES);
-        assert_eq!(core.notify_atomics_waiters(a.buffer, 0, f64::INFINITY, &Label::Public).unwrap(), 512);
+        assert_eq!(
+            core.atomics_async_waiters_memory_bytes(),
+            512 * ATOMICS_WAITER_BYTES
+        );
+        assert_eq!(
+            core.notify_atomics_waiters(a.buffer, 0, f64::INFINITY, &Label::Public)
+                .unwrap(),
+            512
+        );
         assert_eq!(core.atomics_async_waiters.as_ptr(), pointer);
         assert_eq!(core.atomics_async_waiters.capacity(), capacity);
         assert_eq!(core.atomics_async_waiters_memory_bytes(), 0);
-        for promise in promises { fulfilled(&core, promise, "ok"); }
+        for promise in promises {
+            fulfilled(&core, promise, "ok");
+        }
         accounted(&core);
     }
 }
@@ -127,8 +173,17 @@ fn completed_waiters_retire_both_timer_indexes_but_leave_live_timeouts_owned() {
         let expired_timer = core.atomics_async_waiters.last().unwrap().timer_id.unwrap();
         // Inject the timer's actual terminal promise state, without relying on
         // wall-clock sleeps or pretending this unit test drives the event loop.
-        core.fulfill_promise(expired, crate::object_model::JsValue::Str("timed-out".into()), Label::Public).unwrap();
-        assert_eq!(core.notify_atomics_waiters(a.buffer, 0, f64::INFINITY, &Label::Public).unwrap(), 1);
+        core.fulfill_promise(
+            expired,
+            crate::object_model::JsValue::Str("timed-out".into()),
+            Label::Public,
+        )
+        .unwrap();
+        assert_eq!(
+            core.notify_atomics_waiters(a.buffer, 0, f64::INFINITY, &Label::Public)
+                .unwrap(),
+            1
+        );
         fulfilled(&core, first, "ok");
         fulfilled(&core, expired, "timed-out");
         pending(&core, other);
@@ -141,7 +196,11 @@ fn completed_waiters_retire_both_timer_indexes_but_leave_live_timeouts_owned() {
         assert!(core.unref_timer_ids.contains(&other_timer));
         let before = core.estimated_memory_bytes();
         core.prune_settled_atomics_waiters();
-        assert_eq!(core.estimated_memory_bytes(), before, "retirement is idempotent");
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            before,
+            "retirement is idempotent"
+        );
         accounted(&core);
     }
 }
@@ -155,14 +214,21 @@ fn work_refusal_does_not_unlink_a_pending_waiter_or_cancel_its_timeout() {
         let limit = core.config.instruction_budget;
         core.config.instruction_budget = 0;
         let outcome = core.notify_atomics_waiters(a.buffer, 0, f64::INFINITY, &Label::Public);
-        assert!(matches!(outcome, Err(InterpreterError::BudgetExhausted { .. })), "{outcome:?}");
+        assert!(
+            matches!(outcome, Err(InterpreterError::BudgetExhausted { .. })),
+            "{outcome:?}"
+        );
         assert_eq!(queue(&core), [promise]);
         pending(&core, promise);
         assert!(core.active_timers.contains_key(&timer));
         assert!(core.unref_timer_ids.contains(&timer));
         assert!(core.pending_exception.is_none());
         core.config.instruction_budget = limit;
-        assert_eq!(core.notify_atomics_waiters(a.buffer, 0, 1.0, &Label::Public).unwrap(), 1);
+        assert_eq!(
+            core.notify_atomics_waiters(a.buffer, 0, 1.0, &Label::Public)
+                .unwrap(),
+            1
+        );
         fulfilled(&core, promise, "ok");
         accounted(&core);
     }
@@ -176,18 +242,31 @@ fn settlement_admission_failure_keeps_the_waiter_available_for_retry() {
         let timer = core.atomics_async_waiters[0].timer_id.unwrap();
         let limit = core.config.max_total_memory_bytes;
         core.config.max_total_memory_bytes = core.estimated_memory_bytes();
-        let label = Label::Custom { name: "notification-context".repeat(1024), level: 2 };
+        let label = Label::Custom {
+            name: "notification-context".repeat(1024),
+            level: 2,
+        };
         let outcome = core.notify_atomics_waiters(a.buffer, 0, 1.0, &label);
-        assert!(matches!(outcome, Err(InterpreterError::MemoryBudgetExceeded { .. })), "{outcome:?}");
+        assert!(
+            matches!(outcome, Err(InterpreterError::MemoryBudgetExceeded { .. })),
+            "{outcome:?}"
+        );
         assert_eq!(queue(&core), [promise]);
         pending(&core, promise);
         assert!(core.active_timers.contains_key(&timer));
         assert!(core.unref_timer_ids.contains(&timer));
         assert!(core.pending_exception.is_none());
         core.config.max_total_memory_bytes = limit;
-        assert_eq!(core.notify_atomics_waiters(a.buffer, 0, 1.0, &Label::Secret).unwrap(), 1);
+        assert_eq!(
+            core.notify_atomics_waiters(a.buffer, 0, 1.0, &Label::Secret)
+                .unwrap(),
+            1
+        );
         fulfilled(&core, promise, "ok");
-        assert_eq!(core.promise_store.get(promise).unwrap().label, Label::Secret);
+        assert_eq!(
+            core.promise_store.get(promise).unwrap().label,
+            Label::Secret
+        );
         accounted(&core);
     }
 }
@@ -196,12 +275,15 @@ fn settlement_admission_failure_keeps_the_waiter_available_for_retry() {
 fn zero_count_never_settles_a_live_waiter() {
     let (mut core, a, _) = fixture(false);
     let promise = core.atomics_add_async_waiter(&a, 0, f64::INFINITY).unwrap();
-    assert_eq!(core.notify_atomics_waiters(a.buffer, 0, 0.0, &Label::Public).unwrap(), 0);
+    assert_eq!(
+        core.notify_atomics_waiters(a.buffer, 0, 0.0, &Label::Public)
+            .unwrap(),
+        0
+    );
     assert_eq!(queue(&core), [promise]);
     pending(&core, promise);
     accounted(&core);
 }
-
 
 #[test]
 fn enormous_finite_wait_timeout_cannot_saturate_the_virtual_clock() {

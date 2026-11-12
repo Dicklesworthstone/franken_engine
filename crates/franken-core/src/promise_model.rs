@@ -118,7 +118,10 @@ pub(crate) fn estimate_microtask_payload_memory_bytes(task: &Microtask) -> u64 {
         } => estimate_js_value_memory_bytes(thenable)
             .saturating_add(estimate_label_memory_bytes(label)),
         Microtask::ResolveThenableValue {
-            then, thenable, label, ..
+            then,
+            thenable,
+            label,
+            ..
         } => estimate_js_value_memory_bytes(then)
             .saturating_add(estimate_js_value_memory_bytes(thenable))
             .saturating_add(estimate_label_memory_bytes(label)),

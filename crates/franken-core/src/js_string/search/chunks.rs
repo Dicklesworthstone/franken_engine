@@ -149,9 +149,7 @@ impl<'a> Matcher<'a> {
             } else {
                 consumed
             }];
-            if self.matched == width
-                || (self.matched != 0 && byte != self.byte(self.matched))
-            {
+            if self.matched == width || (self.matched != 0 && byte != self.byte(self.matched)) {
                 self.prepare_failure();
                 let remaining = if self.backwards {
                     &bytes[..bytes.len() - consumed]
@@ -336,9 +334,11 @@ impl Iterator for Leaves {
                         }
                         continue;
                     } else {
-                        Arc::clone(node.joined.get().expect(
-                            "concatenation parts are released only after publication",
-                        ))
+                        Arc::clone(
+                            node.joined
+                                .get()
+                                .expect("concatenation parts are released only after publication"),
+                        )
                     }
                 }
             };

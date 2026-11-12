@@ -1238,7 +1238,10 @@ impl InterpreterCore {
         // Parameter maps are strong only from their arguments object. A
         // captured parameter cell must not keep a dead arguments object alive
         // through the weak reverse alias; release that alias before sweeping.
-        let dead_arguments = self.mapped_argument_bindings.keys().copied()
+        let dead_arguments = self
+            .mapped_argument_bindings
+            .keys()
+            .copied()
             .filter(|object| !marker.objects.is_marked(object.0 as usize))
             .collect::<Vec<_>>();
         let before_arguments = self.estimated_memory_bytes;
@@ -1956,7 +1959,10 @@ impl InterpreterCore {
             containment_evidence: _,
             decision_receipts: _,
             nondeterminism_trace: _,
+            // Scalar enqueue count + 32-byte ContentHash digest; holds no heap references.
+            microtask_enqueue_witness: _,
             register_labels: _,
+            all_register_labels_public: _,
             // Weak side tables: entries for reclaimed ids are unreachable
             // and ids are never reused. `collect_garbage` purges the
             // mutation labels of reclaimed objects.
@@ -2985,5 +2991,14 @@ mod tests {
             std::mem::size_of::<Option<Box<HeapObject>>>(),
             std::mem::size_of::<usize>()
         );
+    }
+
+    #[test]
+    fn collect_garbage_preserves_scalar_microtask_enqueue_witness() {
+        let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "gc-witness");
+        let expected_hash = ContentHash::compute(b"microtask-witness-rc-a0");
+        core.microtask_enqueue_witness = Some((7, expected_hash));
+        core.collect_garbage();
+        assert_eq!(core.microtask_enqueue_witness, Some((7, expected_hash)));
     }
 }

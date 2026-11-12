@@ -92,7 +92,11 @@ use crate::saga_orchestrator::{
 };
 use crate::security_epoch::SecurityEpoch;
 use crate::signature_preimage::VerificationKey;
-use crate::storage_adapter::{EventContext, InMemoryStorageAdapter};
+#[cfg(feature = "sibling-persistence")]
+use crate::storage_adapter::DurableFrankensqliteStorageAdapter;
+use crate::storage_adapter::{
+    EventContext, InMemoryStorageAdapter, StorageAdapter, StorageError, StoreKind,
+};
 use crate::tropical_semiring::{
     InstructionCostGraph, InstructionNode, ScheduleOptimizer, TropicalError, TropicalWeight,
 };
@@ -1949,6 +1953,10 @@ pub struct ExecutionOrchestrator {
     /// Flow edges recorded by the data-contract ingress guard for the most
     /// recent `execute` (mirrors what was inserted into the provenance index).
     data_contract_flow_events: Vec<FlowEventRecord>,
+    /// Pluggable control-plane storage adapter (`g2vrp.13`); defaults to
+    /// deterministic in-memory storage and upgrades to FrankenSQLite via
+    /// [`Self::open_state_db`].
+    storage_adapter: Box<dyn StorageAdapter + Send>,
     #[cfg(test)]
     evidence_compression_status_override: Option<EvidenceCompressionStatus>,
     #[cfg(test)]
@@ -2231,6 +2239,7 @@ impl ExecutionOrchestrator {
             cancellation_token: None,
             data_contract_ingress: None,
             data_contract_flow_events: Vec::new(),
+            storage_adapter: Box::new(InMemoryStorageAdapter::new()),
             #[cfg(test)]
             evidence_compression_status_override: None,
             #[cfg(test)]
@@ -2254,6 +2263,34 @@ impl ExecutionOrchestrator {
     /// ingress label fail-closed and records a flow edge per declared sink.
     pub fn set_data_contract_ingress(&mut self, ingress: DataContractIfcIngress) {
         self.data_contract_ingress = Some(ingress);
+    }
+
+    /// Install a custom [`StorageAdapter`] backing IFC provenance and replay-index records.
+    pub fn set_storage_adapter<A: StorageAdapter + Send + 'static>(&mut self, adapter: A) {
+        self.storage_adapter = Box::new(adapter);
+    }
+
+    /// Mutable access to the active [`StorageAdapter`].
+    pub fn storage_adapter_mut(&mut self) -> &mut (dyn StorageAdapter + Send) {
+        &mut *self.storage_adapter
+    }
+
+    /// Bind a durable FrankenSQLite control-plane database (`frankenctl run --state-db`).
+    pub fn open_state_db(&mut self, path: impl AsRef<std::path::Path>) -> Result<(), StorageError> {
+        #[cfg(feature = "sibling-persistence")]
+        {
+            let adapter = DurableFrankensqliteStorageAdapter::open_durable_file(path)?;
+            self.set_storage_adapter(adapter);
+            Ok(())
+        }
+        #[cfg(not(feature = "sibling-persistence"))]
+        {
+            let _ = path;
+            Err(StorageError::BackendUnavailable {
+                backend: "frankensqlite".to_string(),
+                detail: "durable --state-db requires the `sibling-persistence` feature".to_string(),
+            })
+        }
     }
 
     /// Flow edges recorded by the data-contract ingress guard during the most
@@ -3272,6 +3309,34 @@ impl ExecutionOrchestrator {
 
         match (pipeline_result, close_result) {
             (Ok(mut result), Ok(finalize_result)) => {
+                if let Err(storage_error) = self.persist_replay_index_entry(&result) {
+                    let uncommitted_evidence_chain = self
+                        .build_uncommitted_evidence_chain_evidence(
+                            result.evidence_entries.clone(),
+                            result.evidence_chain_receipt.clone(),
+                            result.containment_receipt.clone(),
+                            result.saga_id.clone(),
+                        );
+                    let cleanup = CellCleanupEvidence {
+                        cell_id,
+                        trace_id,
+                        cancel_reason: cell_cancel_reason,
+                        cell_events,
+                        cell_execution_transcript,
+                        finalize_result: Some(finalize_result),
+                        close_error: None,
+                    };
+                    return Err(OrchestratorError::PostCellFailure(Box::new(
+                        PostCellFailure {
+                            primary_error: Box::new(storage_error),
+                            additional_errors: Vec::new(),
+                            committed_evidence_chain: None,
+                            uncommitted_evidence_chain: Some(uncommitted_evidence_chain),
+                            containment_saga_failure: None,
+                            cleanup,
+                        },
+                    )));
+                }
                 if let Err(ledger_error) = self.commit_evidence_chain_batch(
                     result.evidence_entries.clone(),
                     result.evidence_chain_receipt.clone(),
@@ -4110,6 +4175,49 @@ impl ExecutionOrchestrator {
     /// and every checked flow is recorded as a flow edge in the run's IFC
     /// provenance index (Blocked edges included; denial without evidence
     /// would be indistinguishable from misconfiguration).
+    fn persist_replay_index_entry(
+        &mut self,
+        result: &OrchestratorResult,
+    ) -> Result<(), OrchestratorError> {
+        let ctx = EventContext::new(
+            &result.trace_id,
+            &result.decision_id,
+            self.config.policy_id.clone(),
+        )
+        .map_err(|err| OrchestratorError::WitnessSealing {
+            detail: format!("replay-index persistence: invalid event context: {err}"),
+        })?;
+        let ir4_hash_hex = result.ir4_witness.content_hash().to_hex();
+        let payload = serde_json::to_vec(&serde_json::json!({
+            "extension_id": result.extension_id,
+            "trace_id": result.trace_id,
+            "decision_id": result.decision_id,
+            "lane": result.lane.to_string(),
+            "instructions_executed": result.instructions_executed,
+            "containment_action": result.containment_action.to_string(),
+            "ir4_witness_hash": ir4_hash_hex,
+        }))
+        .map_err(|err| OrchestratorError::WitnessSealing {
+            detail: format!("replay-index persistence: serialization failed: {err}"),
+        })?;
+        let mut metadata = BTreeMap::new();
+        metadata.insert("extension_id".to_string(), result.extension_id.clone());
+        metadata.insert("decision_id".to_string(), result.decision_id.clone());
+        metadata.insert("ir4_witness_hash".to_string(), ir4_hash_hex);
+        self.storage_adapter
+            .put(
+                StoreKind::ReplayIndex,
+                format!("runs/{}", result.trace_id),
+                payload,
+                metadata,
+                &ctx,
+            )
+            .map(|_| ())
+            .map_err(|err| OrchestratorError::WitnessSealing {
+                detail: format!("replay-index persistence failed: {err}"),
+            })
+    }
+
     fn phase_enforce_data_contract_ingress(
         &mut self,
         trace_id: &str,
@@ -4124,7 +4232,7 @@ impl ExecutionOrchestrator {
                 detail: format!("data-contract ingress: invalid event context: {err}"),
             },
         )?;
-        let mut index = IfcProvenanceIndex::new(InMemoryStorageAdapter::new());
+        let mut index = IfcProvenanceIndex::new(&mut self.storage_adapter);
         let mut blocked_details = Vec::new();
 
         for sink in &ingress.sinks {

@@ -6,8 +6,13 @@ fn rope(left: JsString, right: JsString) -> JsString {
 }
 
 fn unjoined(text: &JsString) {
-    let Text::Concat(node) = &text.utf8 else { panic!("expected rope") };
-    assert!(node.joined.get().is_none(), "search must not publish a flat copy");
+    let Text::Concat(node) = &text.utf8 else {
+        panic!("expected rope")
+    };
+    assert!(
+        node.joined.get().is_none(),
+        "search must not publish a flat copy"
+    );
 }
 
 fn check(haystack: &JsString, needle: &JsString) {
@@ -20,19 +25,27 @@ fn check(haystack: &JsString, needle: &JsString) {
         } else if pattern.len() > text.len() - start {
             None
         } else {
-            (start..=text.len() - pattern.len())
-                .find(|&i| text[i..i + pattern.len()] == pattern)
+            (start..=text.len() - pattern.len()).find(|&i| text[i..i + pattern.len()] == pattern)
         };
         let last = if pattern.is_empty() {
             Some(start)
         } else if pattern.len() > text.len() {
             None
         } else {
-            (0..=start.min(text.len() - pattern.len())).rev()
+            (0..=start.min(text.len() - pattern.len()))
+                .rev()
                 .find(|&i| text[i..i + pattern.len()] == pattern)
         };
-        assert_eq!(haystack.utf16_index_of(needle, from), first, "forward {text:?} {pattern:?} {from}");
-        assert_eq!(haystack.utf16_last_index_of(needle, from), last, "reverse {text:?} {pattern:?} {from}");
+        assert_eq!(
+            haystack.utf16_index_of(needle, from),
+            first,
+            "forward {text:?} {pattern:?} {from}"
+        );
+        assert_eq!(
+            haystack.utf16_last_index_of(needle, from),
+            last,
+            "reverse {text:?} {pattern:?} {from}"
+        );
     }
     unjoined(haystack);
 }
@@ -89,12 +102,19 @@ fn matches_cross_many_small_leaves_without_losing_overlaps() {
 
 #[test]
 fn crossing_matches_precede_local_matches_in_both_directions() {
-    let forward = rope(JsString::from(format!("{}ab", "x".repeat(256))),
-        JsString::from(format!("c{}abc", "x".repeat(256))));
+    let forward = rope(
+        JsString::from(format!("{}ab", "x".repeat(256))),
+        JsString::from(format!("c{}abc", "x".repeat(256))),
+    );
     assert_eq!(forward.utf16_index_of(&JsString::from("abc"), 0), Some(256));
-    let backwards = rope(JsString::from(format!("abc{}ab", "x".repeat(256))),
-        JsString::from(format!("c{}", "x".repeat(256))));
-    assert_eq!(backwards.utf16_last_index_of(&JsString::from("abc"), usize::MAX), Some(259));
+    let backwards = rope(
+        JsString::from(format!("abc{}ab", "x".repeat(256))),
+        JsString::from(format!("c{}", "x".repeat(256))),
+    );
+    assert_eq!(
+        backwards.utf16_last_index_of(&JsString::from("abc"), usize::MAX),
+        Some(259)
+    );
     unjoined(&forward);
     unjoined(&backwards);
 }
@@ -111,14 +131,19 @@ fn large_leaf_search_leaves_only_bounded_scalar_match_work() {
         assert!(matcher.fed_bytes - before < 2 * matcher.text.len());
         let mut one = Matcher::new("z", backwards);
         assert!(one.in_leaf(&text).is_none());
-        assert_eq!(one.fed_bytes, 0, "single-byte leaf misses use bulk search only");
+        assert_eq!(
+            one.fed_bytes, 0,
+            "single-byte leaf misses use bulk search only"
+        );
     }
 }
 
 #[test]
 fn bounds_and_early_hits_skip_shared_gigabyte_subtrees() {
     let mut huge = JsString::from("x".repeat(1024));
-    for _ in 0..20 { huge = rope(huge.clone(), huge); }
+    for _ in 0..20 {
+        huge = rope(huge.clone(), huge);
+    }
     let value = rope(huge.clone(), JsString::from("😀needle"));
     let start = huge.utf16_len();
     for backwards in [false, true] {
@@ -129,11 +154,20 @@ fn bounds_and_early_hits_skip_shared_gigabyte_subtrees() {
         assert!(leaves.next().is_none());
         assert_eq!(leaves.visited, 2, "root plus chosen leaf only");
     }
-    assert_eq!(value.utf16_index_of(&JsString::from("needle"), start), Some(start + 2));
-    assert_eq!(value.utf16_last_index_of(&JsString::from("needle"), usize::MAX), Some(start + 2));
+    assert_eq!(
+        value.utf16_index_of(&JsString::from("needle"), start),
+        Some(start + 2)
+    );
+    assert_eq!(
+        value.utf16_last_index_of(&JsString::from("needle"), usize::MAX),
+        Some(start + 2)
+    );
     let head = rope(JsString::from("needle😀"), huge.clone());
     assert_eq!(head.utf16_index_of(&JsString::from("needle"), 0), Some(0));
-    assert_eq!(head.utf16_last_index_of(&JsString::from("needle"), 0), Some(0));
+    assert_eq!(
+        head.utf16_last_index_of(&JsString::from("needle"), 0),
+        Some(0)
+    );
     unjoined(&value);
     unjoined(&head);
     unjoined(&huge);
@@ -145,16 +179,26 @@ fn directional_matcher_agrees_for_every_pattern_width() {
         let needle = format!("{}b", "a".repeat(width - 1));
         let haystack = format!("{}{}{}{}", "a".repeat(129), needle, "a".repeat(131), needle);
         for chunk in [1, 2, 7, 63, 64, 65, 129, 1024] {
-            let pieces: Vec<&str> = haystack.as_bytes().chunks(chunk)
-                .map(|bytes| std::str::from_utf8(bytes).unwrap()).collect();
+            let pieces: Vec<&str> = haystack
+                .as_bytes()
+                .chunks(chunk)
+                .map(|bytes| std::str::from_utf8(bytes).unwrap())
+                .collect();
             for backwards in [false, true] {
                 let mut matcher = Matcher::new(&needle, backwards);
                 let mut boundary = if backwards { haystack.len() } else { 0 };
                 let mut result = None;
-                let ordered: Vec<_> = if backwards { pieces.iter().rev().copied().collect() }
-                    else { pieces.clone() };
+                let ordered: Vec<_> = if backwards {
+                    pieces.iter().rev().copied().collect()
+                } else {
+                    pieces.clone()
+                };
                 for piece in ordered {
-                    let start = if backwards { boundary - piece.len() } else { boundary };
+                    let start = if backwards {
+                        boundary - piece.len()
+                    } else {
+                        boundary
+                    };
                     if let Some(found) = matcher.in_leaf(piece) {
                         result = Some(match found {
                             LeafMatch::Local(byte) => start + byte,
@@ -163,10 +207,21 @@ fn directional_matcher_agrees_for_every_pattern_width() {
                         });
                         break;
                     }
-                    boundary = if backwards { start } else { boundary + piece.len() };
+                    boundary = if backwards {
+                        start
+                    } else {
+                        boundary + piece.len()
+                    };
                 }
-                let expected = if backwards { haystack.rfind(&needle) } else { haystack.find(&needle) };
-                assert_eq!(result, expected, "width={width} chunk={chunk} backwards={backwards}");
+                let expected = if backwards {
+                    haystack.rfind(&needle)
+                } else {
+                    haystack.find(&needle)
+                };
+                assert_eq!(
+                    result, expected,
+                    "width={width} chunk={chunk} backwards={backwards}"
+                );
             }
         }
     }
@@ -174,9 +229,15 @@ fn directional_matcher_agrees_for_every_pattern_width() {
 
 #[test]
 fn long_needles_and_unjoined_needles_preserve_streaming_semantics() {
-    let value = rope(JsString::from("a".repeat(96)), JsString::from("b".repeat(96)));
+    let value = rope(
+        JsString::from("a".repeat(96)),
+        JsString::from("b".repeat(96)),
+    );
     for width in [63, 64, 65, 80] {
-        check(&value, &JsString::from(format!("{}b", "a".repeat(width - 1))));
+        check(
+            &value,
+            &JsString::from(format!("{}b", "a".repeat(width - 1))),
+        );
     }
     let needle = rope(JsString::from("aaa"), JsString::from("bbb"));
     check(&value, &needle);
@@ -208,11 +269,7 @@ fn long_unicode_needles_preserve_every_utf16_start_boundary() {
         let spelling = format!("{}b", repeated.repeat(33));
         let needle = JsString::from(spelling.clone());
         assert!(pattern(&needle).is_some());
-        for split in spelling
-            .char_indices()
-            .map(|(byte, _)| byte)
-            .step_by(11)
-        {
+        for split in spelling.char_indices().map(|(byte, _)| byte).step_by(11) {
             let value = rope(
                 JsString::from(format!("😀{}", &spelling[..split])),
                 JsString::from(format!("{}😀{spelling}", &spelling[split..])),
@@ -263,8 +320,13 @@ fn leaf_local_hits_do_not_build_any_failure_table() {
         let leaf = format!("{}{}{}", "x".repeat(width), needle, "x".repeat(width));
         for backwards in [false, true] {
             let mut matcher = Matcher::new(&needle, backwards);
-            assert!(matches!(matcher.in_leaf(&leaf), Some(LeafMatch::Local(index)) if index == width));
-            assert!(matcher.failure.is_none(), "a local hit must not prepare a table");
+            assert!(
+                matches!(matcher.in_leaf(&leaf), Some(LeafMatch::Local(index)) if index == width)
+            );
+            assert!(
+                matcher.failure.is_none(),
+                "a local hit must not prepare a table"
+            );
             assert_eq!(matcher.fed_bytes, 0);
         }
     }
@@ -305,12 +367,18 @@ fn lazy_long_crossing_match_still_precedes_a_leaf_local_match() {
     let mut forward = Matcher::new(&needle, false);
     assert!(forward.in_leaf(&"a".repeat(127)).is_none());
     let leaf = format!("z{}{needle}", "x".repeat(512));
-    assert!(matches!(forward.in_leaf(&leaf), Some(LeafMatch::Consumed(1))));
+    assert!(matches!(
+        forward.in_leaf(&leaf),
+        Some(LeafMatch::Consumed(1))
+    ));
 
     let mut backwards = Matcher::new(&needle, true);
     assert!(backwards.in_leaf("z").is_none());
     let leaf = format!("{needle}{}{}", "x".repeat(512), "a".repeat(127));
-    assert!(matches!(backwards.in_leaf(&leaf), Some(LeafMatch::Consumed(127))));
+    assert!(matches!(
+        backwards.in_leaf(&leaf),
+        Some(LeafMatch::Consumed(127))
+    ));
 }
 
 #[test]
@@ -340,7 +408,10 @@ fn shared_subtree_needles_keep_every_logical_occurrence() {
     unjoined(&part);
     unjoined(&doubled);
     unjoined(&needle);
-    let value = rope(JsString::from(format!("x{spelling}")), JsString::from(spelling));
+    let value = rope(
+        JsString::from(format!("x{spelling}")),
+        JsString::from(spelling),
+    );
     check(&value, &needle);
     // A published root and children must not invalidate already-owned bytes.
     let _ = needle.as_utf8_projection();
@@ -354,7 +425,10 @@ fn rope_needle_early_hits_skip_a_shared_gigabyte_haystack() {
     for _ in 0..20 {
         huge = rope(huge.clone(), huge);
     }
-    let needle = rope(JsString::from("long".repeat(40)), JsString::from("😀needle"));
+    let needle = rope(
+        JsString::from("long".repeat(40)),
+        JsString::from("😀needle"),
+    );
     let start = huge.utf16_len();
     let tail = rope(huge.clone(), needle.clone());
     let head = rope(needle.clone(), huge.clone());

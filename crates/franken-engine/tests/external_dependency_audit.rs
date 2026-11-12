@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 #![allow(
     clippy::field_reassign_with_default,
     clippy::assertions_on_constants,
@@ -144,17 +145,18 @@ fn dependency_isolation_contract_documents_registry_backed_surface() {
     let feature_gates = contract["feature_gates"]
         .as_array()
         .expect("feature_gates should be an array");
-    for feature in [
-        "asupersync-integration",
-        "sibling-persistence",
-        "sibling-service-api",
-        "sibling-dataframes",
+    for (feature, expected_default) in [
+        ("asupersync-integration", true),
+        ("sibling-persistence", true),
+        ("sibling-service-api", true),
+        ("sibling-dataframes", false),
     ] {
         assert!(
             feature_gates
                 .iter()
-                .any(|gate| gate["feature"] == feature && gate["default_enabled"] == true),
-            "contract should document default-enabled feature {feature}"
+                .any(|gate| gate["feature"] == feature
+                    && gate["default_enabled"] == expected_default),
+            "contract should document feature {feature} with default_enabled={expected_default}"
         );
     }
 
@@ -162,18 +164,33 @@ fn dependency_isolation_contract_documents_registry_backed_surface() {
         .as_array()
         .expect("dependencies should be an array");
     let expected_dependencies = [
-        ("franken-kernel", "asupersync-integration", "0.3.4"),
-        ("franken-decision", "asupersync-integration", "0.3.4"),
-        ("franken-evidence", "asupersync-integration", "0.3.4"),
-        ("sqlmodel", "sibling-persistence", "0.3.1"),
-        ("sqlmodel-core", "sibling-persistence", "0.3.1"),
-        ("sqlmodel-frankensqlite", "sibling-persistence", "0.3.1"),
-        ("fastapi-core", "sibling-service-api", "0.3.1"),
-        ("fp-io", "sibling-dataframes", "0.2.0"),
-        ("fp-frame", "sibling-dataframes", "0.2.0"),
-        ("fp-columnar", "sibling-dataframes", "0.2.0"),
-        ("fp-index", "sibling-dataframes", "0.2.0"),
-        ("fp-types", "sibling-dataframes", "0.2.0"),
+        (
+            "franken-kernel",
+            "asupersync-integration",
+            "crates.io",
+            "0.5.0",
+        ),
+        (
+            "franken-decision",
+            "asupersync-integration",
+            "crates.io",
+            "0.5.0",
+        ),
+        (
+            "franken-evidence",
+            "asupersync-integration",
+            "crates.io",
+            "0.5.0",
+        ),
+        ("sqlmodel", "sibling-persistence", "git", "*"),
+        ("sqlmodel-core", "sibling-persistence", "git", "*"),
+        ("sqlmodel-frankensqlite", "sibling-persistence", "git", "*"),
+        ("fastapi-core", "sibling-service-api", "git", "0.4.4"),
+        ("fp-io", "sibling-dataframes", "crates.io", "0.2.0"),
+        ("fp-frame", "sibling-dataframes", "crates.io", "0.2.0"),
+        ("fp-columnar", "sibling-dataframes", "crates.io", "0.2.0"),
+        ("fp-index", "sibling-dataframes", "crates.io", "0.2.0"),
+        ("fp-types", "sibling-dataframes", "crates.io", "0.2.0"),
     ];
     assert_eq!(
         dependencies.len(),
@@ -181,14 +198,22 @@ fn dependency_isolation_contract_documents_registry_backed_surface() {
         "contract should inventory every direct optional cross-repo dependency"
     );
 
-    for (dependency_key, feature_gate, version) in expected_dependencies {
+    for (dependency_key, feature_gate, source_kind, version) in expected_dependencies {
         let dependency = dependencies
             .iter()
             .find(|entry| entry["dependency_key"] == dependency_key)
             .unwrap_or_else(|| panic!("missing dependency {dependency_key}"));
         assert_eq!(dependency["feature_gate"].as_str(), Some(feature_gate));
-        assert_eq!(dependency["source_kind"].as_str(), Some("crates.io"));
+        assert_eq!(dependency["source_kind"].as_str(), Some(source_kind));
         assert_eq!(dependency["version_requirement"].as_str(), Some(version));
+        if source_kind == "git" {
+            assert!(
+                dependency["git_revision"]
+                    .as_str()
+                    .is_some_and(|rev| rev.len() == 40),
+                "git dependency {dependency_key} must pin an immutable 40-char git_revision"
+            );
+        }
     }
 
     assert_eq!(
@@ -266,42 +291,68 @@ fn dependency_isolation_contract_matches_workspace_feature_gates() {
     let feature_gates = contract["feature_gates"]
         .as_array()
         .expect("feature_gates should be an array");
-    let expected_gates: &[(&str, &[(&str, &str)])] = &[
+    type ExpectedDepSpec = (&'static str, Option<&'static str>, Option<&'static str>);
+    type ExpectedGateSpec = (&'static str, bool, &'static [ExpectedDepSpec]);
+    let expected_gates: &[ExpectedGateSpec] = &[
         (
             "asupersync-integration",
+            true,
             &[
-                ("franken-kernel", "0.3.4"),
-                ("franken-decision", "0.3.4"),
-                ("franken-evidence", "0.3.4"),
+                ("franken-kernel", Some("0.5.0"), None),
+                ("franken-decision", Some("0.5.0"), None),
+                ("franken-evidence", Some("0.5.0"), None),
             ],
         ),
         (
             "sibling-persistence",
+            true,
             &[
-                ("sqlmodel", "0.3.1"),
-                ("sqlmodel-core", "0.3.1"),
-                ("sqlmodel-frankensqlite", "0.3.1"),
+                (
+                    "sqlmodel",
+                    None,
+                    Some("7f432ff690260ef85aca5227e2372b2eb63230c9"),
+                ),
+                (
+                    "sqlmodel-core",
+                    None,
+                    Some("7f432ff690260ef85aca5227e2372b2eb63230c9"),
+                ),
+                (
+                    "sqlmodel-frankensqlite",
+                    None,
+                    Some("7f432ff690260ef85aca5227e2372b2eb63230c9"),
+                ),
             ],
         ),
-        ("sibling-service-api", &[("fastapi-core", "0.3.1")]),
+        (
+            "sibling-service-api",
+            true,
+            &[(
+                "fastapi-core",
+                Some("0.4.4"),
+                Some("fb15fa5025cfdc23ab99344db5e2a4939dbcf38e"),
+            )],
+        ),
         (
             "sibling-dataframes",
+            false,
             &[
-                ("fp-io", "0.2.0"),
-                ("fp-frame", "0.2.0"),
-                ("fp-columnar", "0.2.0"),
-                ("fp-index", "0.2.0"),
-                ("fp-types", "0.2.0"),
+                ("fp-io", Some("0.2.0"), None),
+                ("fp-frame", Some("0.2.0"), None),
+                ("fp-columnar", Some("0.2.0"), None),
+                ("fp-index", Some("0.2.0"), None),
+                ("fp-types", Some("0.2.0"), None),
             ],
         ),
     ];
 
-    for &(feature, dependencies) in expected_gates {
-        assert!(
+    for &(feature, should_be_default, dependencies) in expected_gates {
+        assert_eq!(
             default_features
                 .iter()
                 .any(|value| value.as_str() == Some(feature)),
-            "engine Cargo.toml should default-enable feature {feature}"
+            should_be_default,
+            "engine Cargo.toml default-enable mismatch for feature {feature}"
         );
         let manifest_feature_dependencies = manifest_features[feature]
             .as_array()
@@ -314,7 +365,7 @@ fn dependency_isolation_contract_matches_workspace_feature_gates() {
             .as_array()
             .expect("enables_dependencies should be an array");
 
-        for &(dependency_key, version) in dependencies {
+        for &(dependency_key, version, git_rev) in dependencies {
             let feature_dependency = format!("dep:{dependency_key}");
             assert!(
                 manifest_feature_dependencies
@@ -330,8 +381,13 @@ fn dependency_isolation_contract_matches_workspace_feature_gates() {
                 manifest_dependency
                     .get("version")
                     .and_then(toml::Value::as_str),
-                Some(version),
+                version,
                 "registry version for {dependency_key}"
+            );
+            assert_eq!(
+                manifest_dependency.get("rev").and_then(toml::Value::as_str),
+                git_rev,
+                "git rev for {dependency_key}"
             );
             assert_eq!(
                 manifest_dependency
@@ -351,5 +407,97 @@ fn dependency_isolation_contract_matches_workspace_feature_gates() {
                 "contract should list {dependency_key} in feature gate {feature}"
             );
         }
+    }
+}
+
+#[test]
+fn workspace_manifests_spdx_edition_and_production_tree_hygiene() {
+    let root = repo_root();
+    let doc = read_repo_text("docs/CROSS_REPO_DEPENDENCY_ISOLATION_V1.md");
+    assert!(
+        doc.contains("## Release Packaging & Publish Resolution")
+            && doc.contains("franken-native-capsule-worker")
+            && doc.contains("7af57e2c43d42e77eff569b133b263c4e2a858f9"),
+        "dependency isolation doc must document git-only optional sibling publish resolution"
+    );
+
+    let meta_out = Command::new("cargo")
+        .args(["metadata", "--no-deps", "--format-version", "1"])
+        .current_dir(&root)
+        .output()
+        .expect("run cargo metadata --no-deps");
+    assert!(
+        meta_out.status.success(),
+        "cargo metadata failed: {}",
+        String::from_utf8_lossy(&meta_out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&meta_out.stderr);
+    assert!(
+        !stderr.contains("unused manifest key") && !stderr.contains("unused workspace dependency"),
+        "unexpected Cargo manifest warning: {stderr}"
+    );
+
+    let meta: serde_json::Value =
+        serde_json::from_slice(&meta_out.stdout).expect("parse cargo metadata JSON");
+    let packages = meta["packages"]
+        .as_array()
+        .expect("packages array in cargo metadata");
+    assert_eq!(packages.len(), 10, "expected all 10 workspace packages");
+    for pkg in packages {
+        let name = pkg["name"].as_str().unwrap_or("<unknown>");
+        assert_eq!(
+            pkg["license"].as_str(),
+            Some("LicenseRef-MIT-OpenAI-Anthropic-Rider"),
+            "workspace package {name} must declare LicenseRef-MIT-OpenAI-Anthropic-Rider"
+        );
+        assert_eq!(
+            pkg["edition"].as_str(),
+            Some("2024"),
+            "workspace package {name} must declare Rust edition 2024"
+        );
+        assert_eq!(
+            pkg["repository"].as_str(),
+            Some("https://github.com/Dicklesworthstone/franken_engine"),
+            "workspace package {name} must declare canonical GitHub repository URL"
+        );
+    }
+
+    let tree_out = Command::new("cargo")
+        .args([
+            "tree",
+            "-e",
+            "normal,no-proc-macro",
+            "-p",
+            "frankenengine-engine",
+        ])
+        .current_dir(&root)
+        .output()
+        .expect("run cargo tree -e normal,no-proc-macro");
+    assert!(
+        tree_out.status.success(),
+        "cargo tree failed: {}",
+        String::from_utf8_lossy(&tree_out.stderr)
+    );
+    let tree_text = String::from_utf8_lossy(&tree_out.stdout);
+    for banned in [
+        "proptest ",
+        "rusty-fork ",
+        "syn ",
+        "proc-macro2 ",
+        "arrow-",
+        "parquet ",
+        "rust_xlsxwriter ",
+        "serde-pickle ",
+        "markup5ever ",
+        "cssparser ",
+        "uuid ",
+        "lz4_flex ",
+        "zstd ",
+        " dp v",
+    ] {
+        assert!(
+            !tree_text.contains(banned),
+            "banned crate `{banned}` leaked into default production normal dependency tree"
+        );
     }
 }

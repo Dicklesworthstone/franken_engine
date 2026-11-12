@@ -157,20 +157,20 @@ impl Test262Profile {
     }
 
     pub fn classify(&self, test_id: &str) -> ProfileDecision {
-        if let Some(rule) = self
-            .excludes
-            .iter()
-            .find(|rule| wildcard_match(rule.pattern.as_str(), test_id))
-        {
+        let canonical_id = test_id.strip_suffix("#strict").unwrap_or(test_id);
+        if let Some(rule) = self.excludes.iter().find(|rule| {
+            wildcard_match(rule.pattern.as_str(), test_id)
+                || wildcard_match(rule.pattern.as_str(), canonical_id)
+        }) {
             return ProfileDecision::Excluded {
                 rationale: rule.rationale.clone(),
             };
         }
 
-        let included = self
-            .includes
-            .iter()
-            .any(|rule| wildcard_match(rule.pattern.as_str(), test_id));
+        let included = self.includes.iter().any(|rule| {
+            wildcard_match(rule.pattern.as_str(), test_id)
+                || wildcard_match(rule.pattern.as_str(), canonical_id)
+        });
         if !included {
             return ProfileDecision::NotSelected;
         }
@@ -304,9 +304,11 @@ impl Test262WaiverSet {
     }
 
     fn find_active(&self, test_id: &str, run_date: &str) -> Option<&Test262Waiver> {
-        self.waivers
-            .iter()
-            .find(|waiver| waiver.test_id == test_id && waiver.expiry_date.as_str() >= run_date)
+        let canonical_id = test_id.strip_suffix("#strict").unwrap_or(test_id);
+        self.waivers.iter().find(|waiver| {
+            (waiver.test_id == test_id || waiver.test_id == canonical_id)
+                && waiver.expiry_date.as_str() >= run_date
+        })
     }
 }
 

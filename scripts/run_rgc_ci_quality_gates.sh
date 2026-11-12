@@ -8,7 +8,8 @@ source "${root_dir}/scripts/e2e/parser_deterministic_env.sh"
 parser_frontier_bootstrap_env
 
 mode="${1:-ci}"
-toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
+default_toolchain="$(sed -n 's/^channel = "\(.*\)"/\1/p' "${root_dir}/rust-toolchain.toml" 2>/dev/null | head -n 1)"
+toolchain="${RUSTUP_TOOLCHAIN:-${default_toolchain:-nightly-2026-09-21}}"
 artifact_root="${RGC_CI_QUALITY_GATES_ARTIFACT_ROOT:-artifacts/rgc_ci_quality_gates}"
 rch_timeout_seconds="${RCH_EXEC_TIMEOUT_SECONDS:-900}"
 rch_build_timeout_sec="${RCH_BUILD_TIMEOUT_SEC:-${RCH_BUILD_TIMEOUT_SECONDS:-900}}"
@@ -44,9 +45,14 @@ replay_command="./scripts/e2e/rgc_ci_quality_gates_replay.sh ${mode}"
 mkdir -p "$run_dir"
 mkdir -p "$step_logs_dir"
 
+use_local_ci_runner=false
 if ! command -v rch >/dev/null 2>&1; then
-  echo "rch is required for RGC CI quality gate heavy commands" >&2
-  exit 2
+  if [[ "${GITHUB_ACTIONS:-false}" == "true" ]]; then
+    use_local_ci_runner=true
+  else
+    echo "rch is required for RGC CI quality gate heavy commands" >&2
+    exit 2
+  fi
 fi
 
 if ! command -v jq >/dev/null 2>&1; then
@@ -55,6 +61,17 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 run_rch() {
+  if [[ "$use_local_ci_runner" == true ]]; then
+    local rc=0
+    timeout --kill-after=30 "${rch_timeout_seconds}" \
+      env \
+      "RUSTUP_TOOLCHAIN=${toolchain}" \
+      "CARGO_TARGET_DIR=${target_dir}" \
+      "CARGO_BUILD_JOBS=${cargo_build_jobs}" \
+      "$@" || rc=$?
+    printf 'Remote command finished: exit=%s\n' "$rc"
+    return "$rc"
+  fi
   RCH_BUILD_TIMEOUT_SEC="${rch_build_timeout_sec}" \
     RCH_BUILD_TIMEOUT_SECONDS="${rch_build_timeout_sec}" \
     timeout --kill-after=30 "${rch_timeout_seconds}" \

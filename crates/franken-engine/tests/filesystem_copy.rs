@@ -18,7 +18,13 @@ use frankenengine_extension_host::host_io::{
 
 type Run = (Vec<String>, Vec<(HostIoRequest, HostIoOutcome)>);
 
-fn run(source: &str, root: &Path, caps: &[&str], lane: LaneChoice, goal: ParseGoal) -> Result<Run, String> {
+fn run(
+    source: &str,
+    root: &Path,
+    caps: &[&str],
+    lane: LaneChoice,
+    goal: ParseGoal,
+) -> Result<Run, String> {
     let provider = Arc::new(SandboxedHostIo::with_root(root).expect("sandbox provider"));
     let recording = Arc::new(InMemoryHostIoTranscript::recording());
     let recorder: Arc<dyn HostIoRecorder> = recording.clone();
@@ -39,8 +45,17 @@ fn run(source: &str, root: &Path, caps: &[&str], lane: LaneChoice, goal: ParseGo
         version: "1.0.0".into(),
         metadata: BTreeMap::new(),
     };
-    let output = orchestrator.execute(&package).map_err(|e| format!("{e:?}"))?;
-    Ok((output.console_output.into_iter().map(|entry| entry.message).collect(), recording.entries()))
+    let output = orchestrator
+        .execute(&package)
+        .map_err(|e| format!("{e:?}"))?;
+    Ok((
+        output
+            .console_output
+            .into_iter()
+            .map(|entry| entry.message)
+            .collect(),
+        recording.entries(),
+    ))
 }
 
 #[test]
@@ -55,24 +70,44 @@ fn commonjs_copy_uses_bounded_native_descriptor_effects_and_preserves_bytes() {
             root.path(), &["fs_read", "fs_write"], lane, ParseGoal::Script,
         ).expect("native copy completes");
         assert_eq!(lines, ["COPY_COMPLETE"]);
-        assert_eq!(std::fs::read(root.path().join("dst/deep/data.bin")).unwrap(), bytes);
-        assert_eq!(std::fs::read(root.path().join("src/deep/data.bin")).unwrap(), bytes);
+        assert_eq!(
+            std::fs::read(root.path().join("dst/deep/data.bin")).unwrap(),
+            bytes
+        );
+        assert_eq!(
+            std::fs::read(root.path().join("src/deep/data.bin")).unwrap(),
+            bytes
+        );
         let mut reads = 0;
         let mut writes = 0;
         let mut opens = 0;
         let mut closes = 0;
         for (request, _) in effects {
-            if let HostIoRequest::FsMeta { operation, arguments, data, .. } = request {
+            if let HostIoRequest::FsMeta {
+                operation,
+                arguments,
+                data,
+                ..
+            } = request
+            {
                 match operation {
                     FsOperation::ReadFd => {
                         reads += 1;
-                        let length = arguments.iter().find_map(|a| a.strip_prefix("length=")).unwrap();
+                        let length = arguments
+                            .iter()
+                            .find_map(|a| a.strip_prefix("length="))
+                            .unwrap();
                         assert!(length.parse::<usize>().unwrap() <= 16384);
                     }
-                    FsOperation::WriteFd => { writes += 1; assert!(data.len() <= 16384); }
+                    FsOperation::WriteFd => {
+                        writes += 1;
+                        assert!(data.len() <= 16384);
+                    }
                     FsOperation::Open => opens += 1,
                     FsOperation::CloseFd => closes += 1,
-                    FsOperation::CopyFile => panic!("must not delegate a whole unbounded file copy"),
+                    FsOperation::CopyFile => {
+                        panic!("must not delegate a whole unbounded file copy")
+                    }
                     _ => {}
                 }
             }
@@ -97,7 +132,10 @@ fn promise_copy_awaits_filters_and_does_not_visit_excluded_subtrees() {
             root.path(), &["fs_read", "fs_write"], lane, ParseGoal::Script,
         ).expect("promise and protected module globals");
         assert_eq!(lines, ["FILTERED_COPY_COMPLETE"]);
-        assert_eq!(std::fs::read(root.path().join("dst/keep")).unwrap(), b"kept");
+        assert_eq!(
+            std::fs::read(root.path().join("dst/keep")).unwrap(),
+            b"kept"
+        );
         assert!(!root.path().join("dst/skip").exists());
     }
 }
@@ -116,7 +154,10 @@ fn self_copy_conflicts_and_unsupported_metadata_never_report_completion() {
         assert_eq!(lines, ["ERR_FS_CP_EINVAL", "ERR_FS_CP_UNSUPPORTED"]);
         assert!(!root.path().join("src/out").exists());
         assert!(!root.path().join("other").exists());
-        assert_eq!(std::fs::read(root.path().join("src/file")).unwrap(), b"retained");
+        assert_eq!(
+            std::fs::read(root.path().join("src/file")).unwrap(),
+            b"retained"
+        );
     }
 }
 
@@ -125,7 +166,13 @@ fn neither_read_nor_write_authority_can_be_inferred_from_the_other() {
     for caps in [&["fs_read"][..], &["fs_write"][..]] {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("source"), b"private").unwrap();
-        let result = run("require('fs').cpSync('source','destination');", root.path(), caps, LaneChoice::QuickJs, ParseGoal::Script);
+        let result = run(
+            "require('fs').cpSync('source','destination');",
+            root.path(),
+            caps,
+            LaneChoice::QuickJs,
+            ParseGoal::Script,
+        );
         let error = result.expect_err("both capability classes remain required");
         assert!(error.to_ascii_lowercase().contains("capabil"), "{error}");
         assert!(!root.path().join("destination").exists());

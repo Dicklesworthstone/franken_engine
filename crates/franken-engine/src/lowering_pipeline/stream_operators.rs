@@ -13,8 +13,8 @@
 use std::collections::BTreeSet;
 
 use super::{
-    BindingPattern, Expression, Outcome, PureModule, Statement, Walk, builtin_require_member, walk_expression,
-    walk_statement,
+    BindingPattern, Expression, Outcome, PureModule, Statement, Walk, builtin_require_member,
+    walk_expression, walk_statement,
 };
 
 pub(super) fn requires_stream_module(body: &[Statement]) -> bool {
@@ -27,14 +27,23 @@ pub(super) fn requires_stream_module(body: &[Statement]) -> bool {
         if let Statement::VariableDeclaration(declaration) = statement {
             for declarator in &declaration.declarations {
                 if let Some(initializer) = &declarator.initializer
-                    && matches!(builtin_require_member(initializer), Some((PureModule::Stream, None)))
+                    && matches!(
+                        builtin_require_member(initializer),
+                        Some((PureModule::Stream, None))
+                    )
                     && let BindingPattern::ObjectPattern(properties) = &declarator.pattern
                 {
                     for property in properties {
                         if !property.computed
                             && matches!(
                                 super::super::well_formed_static_name(&property.key),
-                                Some("Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough")
+                                Some(
+                                    "Readable"
+                                        | "Writable"
+                                        | "Duplex"
+                                        | "Transform"
+                                        | "PassThrough"
+                                )
                             )
                             && let BindingPattern::Identifier(local) = &property.value
                         {
@@ -45,7 +54,10 @@ pub(super) fn requires_stream_module(body: &[Statement]) -> bool {
             }
         }
     }
-    let mut search = OperatorUse { found: false, constructors };
+    let mut search = OperatorUse {
+        found: false,
+        constructors,
+    };
     // The canonical walker accepts mutable nodes; it does not change them.
     // Fail toward the full module if a future AST form cannot be walked.
     search.statements(&mut body.to_vec()).is_err() || search.found
@@ -59,22 +71,33 @@ struct OperatorUse {
 impl OperatorUse {
     fn has_constructor_options(&self, expression: &Expression) -> bool {
         let (callee, arguments) = match expression {
-            Expression::New { callee, arguments, .. }
-            | Expression::Call { callee, arguments, .. } => (callee.as_ref(), arguments),
+            Expression::New {
+                callee, arguments, ..
+            }
+            | Expression::Call {
+                callee, arguments, ..
+            } => (callee.as_ref(), arguments),
             _ => return false,
         };
         let option_index = match callee {
             Expression::Identifier(local) if self.constructors.contains(local) => 0,
-            Expression::Member { object, property, .. }
-                if matches!(object.as_ref(), Expression::Identifier(local) if self.constructors.contains(local))
-                    && super::super::well_formed_static_name(property) == Some("from") => 1,
+            Expression::Member {
+                object, property, ..
+            } if matches!(object.as_ref(), Expression::Identifier(local) if self.constructors.contains(local))
+                && super::super::well_formed_static_name(property) == Some("from") =>
+            {
+                1
+            }
             _ => return false,
         };
         // Spread can place options at either position. Dynamic values and
         // nonempty objects can supply signal through getters/prototypes/spread;
         // constructor-form recognition is not a proof of their lifecycle.
         // Keep the existing absent/null/undefined/empty-literal fast path.
-        if arguments.iter().any(|argument| matches!(argument, Expression::SpreadElement(_))) {
+        if arguments
+            .iter()
+            .any(|argument| matches!(argument, Expression::SpreadElement(_)))
+        {
             return true;
         }
         match arguments.get(option_index) {
@@ -97,7 +120,10 @@ impl Walk for OperatorUse {
         if let Statement::VariableDeclaration(declaration) = &*statement {
             for declarator in &declaration.declarations {
                 if let Some(initializer) = &declarator.initializer
-                    && matches!(builtin_require_member(initializer), Some((PureModule::Stream, None)))
+                    && matches!(
+                        builtin_require_member(initializer),
+                        Some((PureModule::Stream, None))
+                    )
                     && let BindingPattern::ObjectPattern(properties) = &declarator.pattern
                     && properties.iter().any(|property| {
                         matches!(
@@ -137,8 +163,12 @@ impl Walk for OperatorUse {
             self.found = true;
             return Ok(());
         }
-        if let Expression::Member { property, computed, .. }
-        | Expression::OptionalMember { property, computed, .. } = &*expression
+        if let Expression::Member {
+            property, computed, ..
+        }
+        | Expression::OptionalMember {
+            property, computed, ..
+        } = &*expression
         {
             let name = match (*computed, property.as_ref()) {
                 (false, Expression::Identifier(name)) => Some(name.as_str()),
@@ -154,8 +184,21 @@ impl Walk for OperatorUse {
             self.found = matches!(
                 name,
                 Some(
-                    "map" | "filter" | "flatMap" | "toArray" | "forEach"
-                        | "some" | "every" | "find" | "reduce" | "take" | "drop" | "Duplex" | "duplexPair" | "addAbortSignal" | "compose"
+                    "map"
+                        | "filter"
+                        | "flatMap"
+                        | "toArray"
+                        | "forEach"
+                        | "some"
+                        | "every"
+                        | "find"
+                        | "reduce"
+                        | "take"
+                        | "drop"
+                        | "Duplex"
+                        | "duplexPair"
+                        | "addAbortSignal"
+                        | "compose"
                 )
             );
             if self.found {
@@ -168,8 +211,8 @@ impl Walk for OperatorUse {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::{is_module_declaration, rewrite_util_requires};
+    use super::*;
     use crate::ast::{ParseGoal, SyntaxTree};
     use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 
@@ -204,11 +247,19 @@ mod tests {
                 .expect("rewrite succeeds")
                 .expect("operators must not be claimed by the legacy facade");
             assert_eq!(
-                rewritten.body.iter().filter(|s| is_module_declaration(s)).count(),
+                rewritten
+                    .body
+                    .iter()
+                    .filter(|s| is_module_declaration(s))
+                    .count(),
                 3,
                 "one events, string_decoder and stream module: {source}"
             );
-            assert!(rewrite_util_requires(&rewritten).expect("idempotent rewrite").is_none());
+            assert!(
+                rewrite_util_requires(&rewritten)
+                    .expect("idempotent rewrite")
+                    .is_none()
+            );
         }
     }
 
@@ -222,9 +273,23 @@ mod tests {
         ] {
             let tree = parse(source);
             assert!(requires_stream_module(&tree.body), "{source}");
-            let rewritten = rewrite_util_requires(&tree).expect("duplex rewrite").expect("full stream module");
-            assert_eq!(rewritten.body.iter().filter(|s| is_module_declaration(s)).count(), 3, "{source}");
-            assert!(rewrite_util_requires(&rewritten).expect("idempotent rewrite").is_none());
+            let rewritten = rewrite_util_requires(&tree)
+                .expect("duplex rewrite")
+                .expect("full stream module");
+            assert_eq!(
+                rewritten
+                    .body
+                    .iter()
+                    .filter(|s| is_module_declaration(s))
+                    .count(),
+                3,
+                "{source}"
+            );
+            assert!(
+                rewrite_util_requires(&rewritten)
+                    .expect("idempotent rewrite")
+                    .is_none()
+            );
         }
     }
 
@@ -241,11 +306,19 @@ mod tests {
                 .expect("paired transport rewrite")
                 .expect("complete stream module");
             assert_eq!(
-                rewritten.body.iter().filter(|s| is_module_declaration(s)).count(),
+                rewritten
+                    .body
+                    .iter()
+                    .filter(|s| is_module_declaration(s))
+                    .count(),
                 3,
                 "{source}"
             );
-            assert!(rewrite_util_requires(&rewritten).expect("second pass").is_none());
+            assert!(
+                rewrite_util_requires(&rewritten)
+                    .expect("second pass")
+                    .is_none()
+            );
         }
     }
 
@@ -262,11 +335,19 @@ mod tests {
                 .expect("cancellation rewrite")
                 .expect("complete stream module");
             assert_eq!(
-                rewritten.body.iter().filter(|s| is_module_declaration(s)).count(),
+                rewritten
+                    .body
+                    .iter()
+                    .filter(|s| is_module_declaration(s))
+                    .count(),
                 3,
                 "{source}"
             );
-            assert!(rewrite_util_requires(&rewritten).expect("second pass").is_none());
+            assert!(
+                rewrite_util_requires(&rewritten)
+                    .expect("second pass")
+                    .is_none()
+            );
         }
     }
 
@@ -278,7 +359,10 @@ mod tests {
         ] {
             let tree = parse(source);
             assert!(!requires_stream_module(&tree.body), "{source}");
-            assert!(rewrite_util_requires(&tree).expect("rewrite").is_none(), "{source}");
+            assert!(
+                rewrite_util_requires(&tree).expect("rewrite").is_none(),
+                "{source}"
+            );
         }
     }
 
@@ -299,8 +383,20 @@ mod tests {
             let rewritten = rewrite_util_requires(&tree)
                 .expect("constructor lifecycle rewrite")
                 .expect("complete stream module");
-            assert_eq!(rewritten.body.iter().filter(|s| is_module_declaration(s)).count(), 3, "{source}");
-            assert!(rewrite_util_requires(&rewritten).expect("second pass").is_none());
+            assert_eq!(
+                rewritten
+                    .body
+                    .iter()
+                    .filter(|s| is_module_declaration(s))
+                    .count(),
+                3,
+                "{source}"
+            );
+            assert!(
+                rewrite_util_requires(&rewritten)
+                    .expect("second pass")
+                    .is_none()
+            );
         }
     }
 
@@ -316,7 +412,12 @@ mod tests {
             "const require=custom; const {Writable:W}=require('stream'); new W({signal});",
             "function f(require){const {Readable:R}=require('stream'); return R.from([1],{signal});}",
         ] {
-            assert!(rewrite_util_requires(&parse(source)).expect("scoped loader").is_none(), "{source}");
+            assert!(
+                rewrite_util_requires(&parse(source))
+                    .expect("scoped loader")
+                    .is_none(),
+                "{source}"
+            );
         }
     }
 
@@ -340,32 +441,52 @@ mod tests {
     #[test]
     fn consumers_materialize_once_and_keep_stream_sources_on_the_complete_path() {
         for (source, count) in [
-            ("const a = require('stream/consumers'); const b = require('node:stream/consumers');", 1),
-            ("const { Readable } = require('stream'); const c = require('stream/consumers'); c.text(Readable.from(['a']));", 4),
+            (
+                "const a = require('stream/consumers'); const b = require('node:stream/consumers');",
+                1,
+            ),
+            (
+                "const { Readable } = require('stream'); const c = require('stream/consumers'); c.text(Readable.from(['a']));",
+                4,
+            ),
         ] {
             let tree = parse(source);
             let rewritten = rewrite_util_requires(&tree)
                 .expect("consumer rewrite")
                 .expect("consumer module is materialized");
             assert_eq!(
-                rewritten.body.iter().filter(|s| is_module_declaration(s)).count(),
+                rewritten
+                    .body
+                    .iter()
+                    .filter(|s| is_module_declaration(s))
+                    .count(),
                 count,
                 "{source}"
             );
-            assert!(rewrite_util_requires(&rewritten).expect("second pass").is_none());
+            assert!(
+                rewrite_util_requires(&rewritten)
+                    .expect("second pass")
+                    .is_none()
+            );
         }
         for source in [
             "function f(require) { return require('stream/consumers'); }",
             "const name = 'stream/consumers'; require(name);",
             "require('stream/consumers/unknown');",
         ] {
-            assert!(rewrite_util_requires(&parse(source)).expect("rewrite").is_none());
+            assert!(
+                rewrite_util_requires(&parse(source))
+                    .expect("rewrite")
+                    .is_none()
+            );
         }
     }
 
     #[test]
     fn consumer_source_protects_all_realm_globals_without_host_authority() {
-        use super::super::{STREAM_CONSUMERS_GLOBALS, module_source, parse_module_source, tests::free_names};
+        use super::super::{
+            STREAM_CONSUMERS_GLOBALS, module_source, parse_module_source, tests::free_names,
+        };
         use std::collections::BTreeSet;
 
         let expected: BTreeSet<String> = STREAM_CONSUMERS_GLOBALS
@@ -377,7 +498,10 @@ mod tests {
             expected
         );
         assert_eq!(
-            free_names(&mut module_source(&expected, PureModule::StreamConsumers).expect("protected source")),
+            free_names(
+                &mut module_source(&expected, PureModule::StreamConsumers)
+                    .expect("protected source")
+            ),
             BTreeSet::from(["globalThis".to_string()])
         );
     }
@@ -394,11 +518,19 @@ mod tests {
                 .expect("pipeline lowering")
                 .expect("complete stream and Web module");
             assert_eq!(
-                rewritten.body.iter().filter(|s| is_module_declaration(s)).count(),
+                rewritten
+                    .body
+                    .iter()
+                    .filter(|s| is_module_declaration(s))
+                    .count(),
                 4,
                 "one events, decoder, Web and Node stream factory: {source}"
             );
-            assert!(rewrite_util_requires(&rewritten).expect("idempotent").is_none());
+            assert!(
+                rewrite_util_requires(&rewritten)
+                    .expect("idempotent")
+                    .is_none()
+            );
         }
     }
 
@@ -416,11 +548,19 @@ mod tests {
                 .expect("composition lowering")
                 .expect("complete stream module");
             assert_eq!(
-                rewritten.body.iter().filter(|s| is_module_declaration(s)).count(),
+                rewritten
+                    .body
+                    .iter()
+                    .filter(|s| is_module_declaration(s))
+                    .count(),
                 3,
                 "one events, decoder and stream module: {source}"
             );
-            assert!(rewrite_util_requires(&rewritten).expect("idempotent").is_none());
+            assert!(
+                rewrite_util_requires(&rewritten)
+                    .expect("idempotent")
+                    .is_none()
+            );
         }
     }
 }

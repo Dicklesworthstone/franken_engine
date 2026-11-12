@@ -10,7 +10,11 @@ fn check(map: &OrderedStringMap<u32>, front: u32, back: u32, reverse: bool) {
     assert!(work <= MAX_INDEX_PROBE_SLOTS);
     if let Some(index) = candidate {
         assert!(front <= index && index < back);
-        let skipped = if reverse { index + 1..back } else { front..index };
+        let skipped = if reverse {
+            index + 1..back
+        } else {
+            front..index
+        };
         assert!(skipped.into_iter().all(|i| map.get_index(i).is_none()));
     } else {
         assert!((front..back).all(|i| map.get_index(i).is_none()));
@@ -48,14 +52,18 @@ fn packed_and_dictionary_seek_use_numeric_order_without_visiting_the_prefix() {
 #[test]
 fn hole_runs_return_an_unproved_boundary_before_work_becomes_unbounded() {
     let mut map = dense(512);
-    for index in 128..256 { map.remove(&index.to_string()); }
+    for index in 128..256 {
+        map.remove(&index.to_string());
+    }
     assert!(matches!(map.array_entries, IndexedValues::Holey(_)));
     assert_eq!(map.probe_index_key(128..256, false), (Some(192), 64));
     assert_eq!(map.probe_index_key(128..256, true), (Some(191), 64));
     assert_eq!(map.probe_index_key(192..256, false), (None, 64));
     assert_eq!(map.probe_index_key(128..192, true), (None, 64));
     assert_eq!(map.probe_index_key(512..u32::MAX, false), (None, 0));
-    for reverse in [false, true] { check(&map, 120, 264, reverse); }
+    for reverse in [false, true] {
+        check(&map, 120, 264, reverse);
+    }
 }
 
 #[test]
@@ -70,7 +78,9 @@ fn every_storage_form_has_a_conservative_frontier_for_all_small_ranges() {
             }
             for front in 0..=length + 2 {
                 for back in front..=length + 2 {
-                    for reverse in [false, true] { check(&map, front, back, reverse); }
+                    for reverse in [false, true] {
+                        check(&map, front, back, reverse);
+                    }
                 }
             }
         }
@@ -81,7 +91,9 @@ fn every_storage_form_has_a_conservative_frontier_for_all_small_ranges() {
 fn seeking_excludes_non_index_and_exact_only_keys_and_preserves_key_backing() {
     use crate::js_string::JsString;
     let mut map = dense(128);
-    for name in ["01", "-0", "4294967295", "z"] { map.insert(name.into(), 900); }
+    for name in ["01", "-0", "4294967295", "z"] {
+        map.insert(name.into(), 900);
+    }
     map.insert_exact(JsString::from_code_units(&[0xd800]), 901);
     let pointer = map.array_entries.get(&127).unwrap().0.as_ptr();
     map.remove("3");
@@ -91,7 +103,10 @@ fn seeking_excludes_non_index_and_exact_only_keys_and_preserves_key_backing() {
     assert_ne!(pointer, replacement_pointer);
     assert_eq!(map.probe_index_key(127..u32::MAX, false), (Some(127), 1));
     assert_eq!(map.probe_index_key(128..u32::MAX, false), (None, 0));
-    assert_eq!(map.array_entries.get(&127).unwrap().0.as_ptr(), replacement_pointer);
+    assert_eq!(
+        map.array_entries.get(&127).unwrap().0.as_ptr(),
+        replacement_pointer
+    );
 }
 
 #[test]
@@ -112,7 +127,9 @@ fn successive_seeks_are_live_under_delete_reinsert_and_direction_changes() {
 fn seeking_neither_clones_nor_moves_owned_payloads() {
     struct Owned(Box<u8>); // Intentionally no Clone.
     let mut map = OrderedStringMap::new();
-    for index in 0..16 { map.insert(index.to_string(), Owned(Box::new(index as u8))); }
+    for index in 0..16 {
+        map.insert(index.to_string(), Owned(Box::new(index as u8)));
+    }
     map.remove("7");
     let payload = map.get_index(15).unwrap().0.as_ref() as *const u8;
     for _ in 0..256 {

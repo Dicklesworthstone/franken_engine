@@ -247,14 +247,14 @@ The orchestrated extension path composes capability, security-epoch, evidence, a
 
 | Surface | Count / size (tracked HEAD, verified 2026-09-22) |
 |---|---|
-| Source modules in `crates/franken-engine/src/` | 628 top-level `.rs` files / 619 `pub mod` declarations in `lib.rs` (`baseline_interpreter.rs` alone is ~5.7 MB / 136,293 LoC). The generated companion [`docs/ARCHITECTURE_INVENTORY.md`](./docs/ARCHITECTURE_INVENTORY.md) counts module files recursively (excluding `lib.rs` itself). |
+| Source modules in `crates/franken-engine/src/` | 636 top-level `.rs` files / 625 `pub mod` declarations in `lib.rs` (`baseline_interpreter.rs` alone is ~0.6 MB / 16,604 LoC). The generated companion [`docs/ARCHITECTURE_INVENTORY.md`](./docs/ARCHITECTURE_INVENTORY.md) counts module files recursively (excluding `lib.rs` itself). |
 | Internal operator binaries in `crates/franken-engine/src/bin/` | 73 `.rs` files in total (6 of them are the release binaries listed above; 67 are internal operator tools) |
-| Integration tests in `crates/franken-engine/tests/` | 1,719 top-level `.rs` files (41 are RGC gate tests) |
+| Integration tests in `crates/franken-engine/tests/` | 2,247 top-level `.rs` files (41 are RGC gate tests) |
 | Operator gate scripts in `scripts/run_*.sh` | 295 (RGC, parser, and FRX families plus claim/evidence/build plumbing) |
 | Replay wrappers in `scripts/e2e/*_replay.sh` | 186 (some are exact `<gate>_replay.sh` partners to a `run_<gate>.sh`; the rest cover composite or sub-gate replay shapes) |
 | Architecture / contract docs in `docs/` | 737 top-level files (`*.md` + `*.json` contracts) plus `docs/architecture/`, `docs/adr/`, `docs/plans/`, `docs/planning/` (janitor-relocated root reports: `HASHER_AUDIT_FIXED_LAYOUT_MIGRATION.md`, `REVIEW_SUMMARY.md`), `docs/templates/`, `docs/operator-gates/` |
 | Impossible-by-default demos under `examples/` | 13 impossible-by-default *capabilities* across 24 numbered directories (`01_…` through `26_…`, with gaps at `08_…` and `10_…`). The 13 capabilities are the originally-scoped set; the remaining dirs cover live-runtime variants and integration smokes that sit alongside but are not themselves separate capability claims. |
-| Tracked beads in `.beads/issues.jsonl` | ≈4,554 records (open + closed); closed-bead history with reasons is the durable journal (historical session journals are not checked in) |
+| Tracked beads in `.beads/issues.jsonl` | ≈5,122 records (open + closed); closed-bead history with reasons is the durable journal (historical session journals are not checked in) |
 | Cargo fuzz harnesses | 33 across two trees: 17 in top-level `fuzz/fuzz_targets/` + 16 in `crates/franken-engine/fuzz/fuzz_targets/` |
 | Benchmark suites in `benchmarks/` | `macro/`, `micro/`, `runtime_comparison/` |
 
@@ -1467,7 +1467,7 @@ Honest comparison across six JavaScript / WebAssembly runtimes targeting differe
 | Capability-typed extension contract | Selected runtime capability gates; compile-time TS-to-IR contract is not shipped | Not native to runtime | Not native to runtime | Permission flags at process scope (`--allow-net`, etc.); not capability-typed at IR level | Bindings-mediated capabilities; not IR-typed | WASI capability surface; bound to imports, not source-level types |
 | Information-flow control with signed declassification receipts | OBSERVED (finite IFC lattice + signed declassification receipts) | Not in core | Not in core | Not in core | Not in core | Not in core |
 | Cross-runtime lockstep oracle | OBSERVED (differential Node/Bun harness with divergence classification) | N/A | N/A | N/A | N/A | N/A |
-| Unsafe in the implementation language | Forbidden in production crate source (`#![forbid(unsafe_code)]`); selected integration/adversarial tests use `unsafe` | V8 is C++ (extensive unsafe by design) | JavaScriptCore is C++, Zig wrapper | V8 is C++; Deno's Rust core uses `unsafe` selectively | V8 C++ + workerd C++/Rust mix | Rust with controlled `unsafe` (audited) |
+| Unsafe in the implementation language | Forbidden across all workspace crates and targets (`#![forbid(unsafe_code)]`; enforced by source + crate-root gates) | V8 is C++ (extensive unsafe by design) | JavaScriptCore is C++, Zig wrapper | V8 is C++; Deno's Rust core uses `unsafe` selectively | V8 C++ + workerd C++/Rust mix | Rust with controlled `unsafe` (audited) |
 | Primary intended workload | Adversarial extension hosting with auditable forensics | General-purpose server-side JS | High-throughput server-side JS + tooling | Server-side JS with permission-system UX | Edge-deployed isolated workers | WebAssembly host embedding |
 
 The five other runtimes are excellent at the workloads they were built for; FrankenEngine targets a narrower envelope (auditable adversarial-extension execution) where the constitutional rules pay for themselves.
@@ -1591,7 +1591,7 @@ FRANKENCTL_BIN=./target/release/frankenctl \
 
 ## Command Reference
 
-The `frankenctl` CLI is the primary operator surface. 33 subcommands ship in total; the *Quick Reference Card* below lists the seven that cover ~90% of routine operator use, and the full table that follows lists every shipped subcommand with production-relevant flags. Run `frankenctl help <command>` for the complete flag set.
+The `frankenctl` CLI is the primary operator surface. 41 leaf subcommands across 24 top-level commands ship in total; the *Quick Reference Card* below lists the seven that cover ~90% of routine operator use, and the full table that follows lists every shipped leaf subcommand with production-relevant flags. Run `frankenctl help <command>` for the complete flag set.
 
 ### Quick Reference Card
 
@@ -1617,20 +1617,32 @@ These seven cover binary checks, compile/run artifacts, strict replay, and diagn
 | `frankenctl run --input <path> --extension-id <id> [--goal …] [--instruction-budget <n>] [--out <path>]` | Execute source through the orchestrator and emit an execution report. Without `--goal`, a `.mjs` or `.mts` input runs as an ES module and a `.cjs` or `.cts` input as a CommonJS module; a `.js` or `.ts` input runs as an ES module when its nearest package.json says `"type": "module"`; anything else as a script. The default instruction budget is the 100,000-instruction containment default; `--instruction-budget` (1 to 10,000,000,000) raises it for ordinary programs, is recorded in the report's `replay_input`, and is reused by `replay run`. |
 | `frankenctl check <file> [--goal script\|module] [--format human\|json] [--out <dir>]` | Static authority footprint for one file: minimal required capabilities + ambient-authority/IFC findings (`FE-CAP-0001/0002/0003`). |
 | `frankenctl onboard <pkg-dir\|entry> [--root <dir>] [--goal module\|script] [--format human\|json] [--out <dir>]` | Package-level capability/IFC intake: manifest, least-authority capability profile, denied-ambient list, IFC inventory, per-compatibility-mode resolution. |
+| `frankenctl diff-behavior <before-pkg\|entry> <after-pkg\|entry> [--format human\|json] [--out <dir>]` | Supply-chain behavioral delta over two package or file authority/IFC intake reports. |
+| `frankenctl evidence init --producer-id <id> --key-out <private.seed> --trust-out <public.json> [--epoch <u64>]` | Initialize an Ed25519 runtime signing seed and pinned public trust snapshot for authenticated replay. |
+| `frankenctl agent-sandbox --manifest <manifest.json> --input <generated.js> [--goal script\|module] [--data-contract <contract.json>] [--purpose <purpose>] [--certificate-out <dir>] [--out <report.json>]` | Execute agent-generated source under manifest-declared tool authority and emit a signed containment/certificate bundle. |
+| `frankenctl explain <bundle.json> [--format summary\|json] [--out <path>] [--emit-bundle <dir>]` | Render causal decision explanations, evidence graphs, and counterfactual replay summaries from an explainability bundle. |
+| `frankenctl claims explain <FE-CLAIM-NNN> [--format human\|json] [--out <path>]` | Inspect a claim-to-proof matrix entry's posture, evidence links, and freshness tier without mutating evidence. |
 | `frankenctl doctor --input <runtime_input.json> [--summary] [--out-dir …] [--workload-id …] [--package-name …] [--target-platform …] [--signals …] [--advisories …] [--redact-key …] …` | Analyze runtime diagnostics input and emit operator artifacts. |
 | `frankenctl verify compile-artifact --input <path> [--output <path>]` | Validate compile artifact integrity and schema invariants. |
 | `frankenctl verify receipt --input <path> --receipt-id <id> [--output <path>] [--summary]` | Verify a receipt bundle against a specific receipt id. |
-| `frankenctl benchmark run [--run-id …] [--run-date YYYY-MM-DD] [--seed …] [--out-dir …] [--profile small\|medium\|large] [--family <name> …]` | Run bundled benchmark families and emit evidence artifacts. |
-| `frankenctl benchmark compare --manifest <path> [--out-dir …] [--run-id …] [--run-date …]` | Compare runs against a manifest. |
+| `frankenctl benchmark run [--run-id …] [--run-date YYYY-MM-DD] [--seed …] [--out-dir …] [--profile small\|medium\|large] [--family <name> …]` | Run synthetic extension-lifecycle control-plane benchmark families (`measured_surface = "extension_lifecycle_control_plane"`, `js_runtime_execution_included = false`) and emit evidence artifacts. |
+| `frankenctl benchmark compare --manifest <path> [--out-dir …] [--run-id …] [--run-date …]` | Compare live runtime benchmark commands declared in a comparison manifest. |
 | `frankenctl benchmark score --input <path> [--output …] [--trace-id …] [--decision-id …] [--policy-id …]` | Score a publication-gate input against Node/Bun comparisons. |
 | `frankenctl benchmark verify --bundle <dir> [--output …] [--summary]` | Verify a benchmark claim bundle and render a verdict report. |
 | `frankenctl replay run --trace <path> [--compare-trace <path>] [--mode strict\|best-effort\|validate] [--out <path>] [--trust-snapshot <path> --expected-trust-digest <64hex>]` | Re-execute a run report, optionally authenticating its evidence and recorded inputs against an independently pinned runtime trust snapshot. With `--compare-trace`, compare two nondeterminism traces instead. |
+| `frankenctl replay debug --trace <path> [--script <commands.jsonl>] [--out <transcript.jsonl>]` | Step deterministically through a recorded replay trace and emit an interactive or scripted debug transcript. |
+| `frankenctl differential-oracle run --input <source.js> [--case-id <id>] [--timeout-ms <u64>] [--engine-budget <u64>] [--out <report.json>]` | Execute one JS fixture differentially across Node, Bun, FrankenEngine, and the baseline core lane. |
+| `frankenctl differential-oracle perf --manifest <manifest.json> [--out <report.json>] [--events <events.jsonl>] [--warmup <u32>] [--samples <u32>] [--tier-control]` | Measure steady-state corpus throughput across FrankenEngine, Node, and Bun with fairness and matched-control arms. |
+| `frankenctl oracle run <input.js> [--engines franken,node,bun,core] [--bundle <dir>] [--case-id <id>] [--timeout-ms <u64>] [--out <report.json>] [--json]` | Operator-facing differential oracle that emits a content-addressed evidence bundle (`0` consensus, `3` divergence, `4` degraded). |
+| `frankenctl oracle report <bundle-dir\|manifest.json> [--json]` | Validate a differential oracle bundle's SHA-256 content addresses and render its recorded verdict. |
 | `frankenctl react compile --input <path> --source-form jsx\|tsx\|jsx-fragment --runtime classic\|automatic [--out …] …` | Compile a React component source under a specific runtime. |
 | `frankenctl react build --entry <path> --target ssr\|client\|hydration [--out …] …` | Build a React target through the FRX pipeline. |
 | `frankenctl react doctor --catalog <path> [--summary] [--current-epoch …] [--min-severity …] [--target …] [--include-resolved] …` | Diagnose a React component catalog. |
 | `frankenctl react contract [--out …]` | Emit the React compile/build contract artifact. |
 | `frankenctl gates zero-placeholder --out-dir <dir> [--waivers <path>]` | Enforce release-time placeholder/mock/stub absence. |
 | `frankenctl gates signature-drift --out-dir <dir> [--config <path>]` | Detect signature drift across release artifacts. |
+| `frankenctl gates compounding-red-team --out-dir <dir> [--config <path>]` | Run the compounding red-team regression gate. |
+| `frankenctl gates erasure-bandwidth --out-dir <dir> [--config <path>]` | Run the erasure-bandwidth verification gate. |
 | `frankenctl reports parser-oracle [--partition …] [--gate-mode …] [--seed …] [--fixture-catalog …] [--trace-id …] [--decision-id …] [--policy-id …] [--out …]` | Emit a parser-oracle report directly from the documented options. |
 | `frankenctl reports lowering-gap [--out …]` | Emit lowering-gap inventory report. |
 | `frankenctl test test262 --out-dir <dir> [--suite-path <path>]` | Run the real Test262 conformance harness. |

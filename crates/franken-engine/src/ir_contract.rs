@@ -207,7 +207,10 @@ impl Ir0Module {
                 ("tree", self.tree.canonical_value()),
             ]
             .into_iter()
-            .chain(self.script_strict.map(|strict| ("script_strict", CanonicalValue::Bool(strict)))),
+            .chain(
+                self.script_strict
+                    .map(|strict| ("script_strict", CanonicalValue::Bool(strict))),
+            ),
         )
     }
 
@@ -881,7 +884,10 @@ impl Ir1Op {
             Self::Return => {
                 CanonicalValue::map_from_entries([("op", CanonicalValue::str("return"))])
             }
-            Self::ImportModule { specifier, import_attributes } => {
+            Self::ImportModule {
+                specifier,
+                import_attributes,
+            } => {
                 let mut entries = vec![
                     ("op", CanonicalValue::str("import_module")),
                     ("specifier", canonical_js_string_value(specifier)),
@@ -2580,7 +2586,11 @@ impl Ir3Instruction {
                 ("kind", CanonicalValue::U64(u64::from(*kind))),
                 ("preserve_state", CanonicalValue::Bool(*preserve_state)),
             ]),
-            Self::ImportModule { specifier, dst, import_attributes } => {
+            Self::ImportModule {
+                specifier,
+                dst,
+                import_attributes,
+            } => {
                 let mut entries = vec![
                     ("op", CanonicalValue::str("import_module")),
                     ("specifier", CanonicalValue::U64(u64::from(*specifier))),
@@ -3301,14 +3311,21 @@ pub fn verify_ir3_specialization(module: &Ir3Module) -> Result<(), IrError> {
     let mut global_prelude = true;
     let mut global_names = std::collections::BTreeSet::new();
     for instruction in &module.instructions {
-        if let Ir3Instruction::DeclareBinding { name_pool_index, kind } = instruction
-            && matches!(*kind, GLOBAL_VAR_BINDING_KIND | GLOBAL_FUNCTION_BINDING_KIND)
+        if let Ir3Instruction::DeclareBinding {
+            name_pool_index,
+            kind,
+        } = instruction
+            && matches!(
+                *kind,
+                GLOBAL_VAR_BINDING_KIND | GLOBAL_FUNCTION_BINDING_KIND
+            )
         {
             require_script_global_schema(&module.header)?;
             let name = module.constant_pool.get(*name_pool_index as usize);
             if !global_prelude
                 || name.is_none_or(|name| {
-                    name.as_str().is_none_or(|name| name.is_empty() || name.contains('\0'))
+                    name.as_str()
+                        .is_none_or(|name| name.is_empty() || name.contains('\0'))
                 })
                 || !global_names.insert(name)
             {
@@ -3580,7 +3597,10 @@ pub(crate) fn verify_script_global_scope_schema(
     header: &IrHeader,
     scopes: &[ScopeNode],
 ) -> Result<(), IrError> {
-    if scopes.iter().any(|scope| scope.kind == ScopeKind::StrictGlobal) {
+    if scopes
+        .iter()
+        .any(|scope| scope.kind == ScopeKind::StrictGlobal)
+    {
         require_script_global_schema(header)?;
     }
     Ok(())
@@ -3588,7 +3608,9 @@ pub(crate) fn verify_script_global_scope_schema(
 
 fn ir1_op_uses_script_global_schema(op: &Ir1Op) -> bool {
     match op {
-        Ir1Op::AssignOp { strict: Some(_), .. } => true,
+        Ir1Op::AssignOp {
+            strict: Some(_), ..
+        } => true,
         Ir1Op::DeclareFunction { body_ops, .. } | Ir1Op::CreateFunction { body_ops, .. } => {
             body_ops.iter().any(ir1_op_uses_script_global_schema)
         }
@@ -4134,7 +4156,9 @@ mod tests {
         ir2.header.schema_version = legacy;
         ir2.scopes.push(scope);
         assert_eq!(
-            verify_script_global_scope_schema(&ir2.header, &ir2.scopes).unwrap_err().code,
+            verify_script_global_scope_schema(&ir2.header, &ir2.scopes)
+                .unwrap_err()
+                .code,
             IrErrorCode::SchemaVersionMismatch,
         );
 
@@ -4165,7 +4189,10 @@ mod tests {
         for kind in [GLOBAL_VAR_BINDING_KIND, GLOBAL_FUNCTION_BINDING_KIND] {
             let mut ir3 = Ir3Module::new(source_hash, "script.js");
             ir3.constant_pool.push("globalName".into());
-            ir3.instructions.push(Ir3Instruction::DeclareBinding { name_pool_index: 0, kind });
+            ir3.instructions.push(Ir3Instruction::DeclareBinding {
+                name_pool_index: 0,
+                kind,
+            });
             verify_ir3_specialization(&ir3).expect("current global prelude");
             ir3.header.schema_version = legacy;
             assert_eq!(
@@ -4200,7 +4227,10 @@ mod tests {
     fn ir0_preserves_exact_script_directives_in_serialization_and_hashes() {
         for (source, expected) in [
             ("'use strict'; var value = 1;", true),
-            ("/* lead */ 'other'; /* gap */ 'use strict'; var value = 1;", true),
+            (
+                "/* lead */ 'other'; /* gap */ 'use strict'; var value = 1;",
+                true,
+            ),
             ("'use strict'\nvar value = 1;", true),
             ("'use\\x20strict'; var value = 1;", false),
             ("('use strict'); var value = 1;", false),

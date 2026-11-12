@@ -15,18 +15,31 @@ fn runtime() -> InterpreterCore {
 fn buffer(core: &mut InterpreterCore, shared: bool) -> ObjectId {
     let id = core.alloc_buffer_object(16, shared).unwrap();
     core.mutate_heap(|heap| {
-        heap[id.0 as usize].array_buffer.as_deref_mut().unwrap().max_byte_length = Some(64);
+        heap[id.0 as usize]
+            .array_buffer
+            .as_deref_mut()
+            .unwrap()
+            .max_byte_length = Some(64);
     });
     id
 }
 
-fn view(core: &mut InterpreterCore, buffer: ObjectId, offset: usize, fixed: Option<usize>) -> ObjectId {
+fn view(
+    core: &mut InterpreterCore,
+    buffer: ObjectId,
+    offset: usize,
+    fixed: Option<usize>,
+) -> ObjectId {
     let length = fixed.unwrap_or(16 - offset);
     let id = core.alloc_data_view_object(buffer, offset, length).unwrap();
-    core.register_buffer_view(id, Some(ViewBounds {
-        fixed_length: fixed,
-        out_of_bounds: false,
-    })).unwrap();
+    core.register_buffer_view(
+        id,
+        Some(ViewBounds {
+            fixed_length: fixed,
+            out_of_bounds: false,
+        }),
+    )
+    .unwrap();
     id
 }
 
@@ -40,15 +53,25 @@ fn reference(core: &mut InterpreterCore, buffer: ObjectId) -> Result<(), Interpr
 fn set_length(core: &mut InterpreterCore, buffer: ObjectId, length: usize) {
     core.mutate_heap(|heap| {
         let object = &mut heap[buffer.0 as usize];
-        object.array_buffer.as_deref_mut().unwrap().bytes.resize(length, 0);
-        object.properties.insert("byteLength".to_string(), Value::Int(length as i64));
+        object
+            .array_buffer
+            .as_deref_mut()
+            .unwrap()
+            .bytes
+            .resize(length, 0);
+        object
+            .properties
+            .insert("byteLength".to_string(), Value::Int(length as i64));
     });
     core.sync_estimated_memory_bytes().unwrap();
 }
 
 fn assert_accounted(core: &InterpreterCore) {
     assert_eq!(core.json_parse_temporary_bytes, 0);
-    assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
     assert!(core.pending_exception.is_none());
 }
 
@@ -77,8 +100,10 @@ fn compare_views(actual: &InterpreterCore, expected: &InterpreterCore, ids: &[Ob
         assert_eq!(av.byte_offset, bv.byte_offset);
         assert_eq!(av.byte_length, bv.byte_length);
         assert_eq!(
-            av.bounds.map(|bounds| (bounds.fixed_length, bounds.out_of_bounds)),
-            bv.bounds.map(|bounds| (bounds.fixed_length, bounds.out_of_bounds))
+            av.bounds
+                .map(|bounds| (bounds.fixed_length, bounds.out_of_bounds)),
+            bv.bounds
+                .map(|bounds| (bounds.fixed_length, bounds.out_of_bounds))
         );
         for key in ["byteLength", "byteOffset"] {
             assert_eq!(a.properties.get(key), b.properties.get(key));
@@ -97,18 +122,31 @@ fn registered_refresh_matches_old_views_order_and_accounting_through_resize_cycl
         assert_eq!(ids, reference_ids);
         let pointer = actual.buffer_backing(a).unwrap().views.as_ptr();
         let capacity = actual.buffer_backing(a).unwrap().views.capacity();
-        let lengths = if shared { vec![16, 24, 32, 64] } else { vec![12, 8, 4, 0, 17, 32, 16] };
+        let lengths = if shared {
+            vec![16, 24, 32, 64]
+        } else {
+            vec![12, 8, 4, 0, 17, 32, 16]
+        };
         for length in lengths {
             set_length(&mut actual, a, length);
             set_length(&mut expected, b, length);
             actual.refresh_buffer_views(a).unwrap();
             reference(&mut expected, b).unwrap();
             compare_views(&actual, &expected, &ids);
-            assert_eq!(actual.buffer_backing(a).unwrap().views, vec![ids[0], ids[1], ids[0], ids[2]]);
-            assert_eq!(actual.buffer_backing(a).unwrap().views, expected.buffer_backing(b).unwrap().views);
+            assert_eq!(
+                actual.buffer_backing(a).unwrap().views,
+                vec![ids[0], ids[1], ids[0], ids[2]]
+            );
+            assert_eq!(
+                actual.buffer_backing(a).unwrap().views,
+                expected.buffer_backing(b).unwrap().views
+            );
             assert_eq!(actual.buffer_backing(a).unwrap().views.as_ptr(), pointer);
             assert_eq!(actual.buffer_backing(a).unwrap().views.capacity(), capacity);
-            assert_eq!(actual.estimated_memory_bytes(), expected.estimated_memory_bytes());
+            assert_eq!(
+                actual.estimated_memory_bytes(),
+                expected.estimated_memory_bytes()
+            );
             assert_accounted(&actual);
             assert_accounted(&expected);
         }
@@ -120,7 +158,8 @@ fn all_stale_registry_compacts_in_place_and_accepts_new_registration() {
     let mut core = runtime();
     let id = buffer(&mut core, false);
     let ordinary = core.alloc_object_with_prototype(None).unwrap();
-    core.set_buffer_view_registry(id, vec![ordinary, ObjectId(u32::MAX), ordinary]).unwrap();
+    core.set_buffer_view_registry(id, vec![ordinary, ObjectId(u32::MAX), ordinary])
+        .unwrap();
     let pointer = core.buffer_backing(id).unwrap().views.as_ptr();
     let capacity = core.buffer_backing(id).unwrap().views.capacity();
     core.refresh_buffer_views(id).unwrap();
@@ -130,7 +169,14 @@ fn all_stale_registry_compacts_in_place_and_accepts_new_registration() {
     let new = view(&mut core, id, 0, None);
     assert_eq!(core.buffer_backing(id).unwrap().views, vec![new]);
     core.resize_buffer_bytes(id, 24).unwrap();
-    assert_eq!(core.heap[new.0 as usize].data_view.as_ref().unwrap().byte_length, 24);
+    assert_eq!(
+        core.heap[new.0 as usize]
+            .data_view
+            .as_ref()
+            .unwrap()
+            .byte_length,
+        24
+    );
     assert_eq!(core.buffer_backing(id).unwrap().views.as_ptr(), pointer);
     assert_accounted(&core);
 }
@@ -179,13 +225,19 @@ fn failed_view_readmission_keeps_original_registry_and_old_partial_effects() {
     let original = actual.buffer_backing(a).unwrap().views.clone();
     let got = actual.refresh_buffer_views(a);
     let want = reference(&mut expected, b);
-    assert!(matches!(got, Err(InterpreterError::MemoryBudgetExceeded { .. })));
+    assert!(matches!(
+        got,
+        Err(InterpreterError::MemoryBudgetExceeded { .. })
+    ));
     assert_eq!(got, want);
     assert_eq!(actual.buffer_backing(a).unwrap().views, original);
     assert_eq!(expected.buffer_backing(b).unwrap().views, original);
     compare_views(&actual, &expected, &ids);
     assert_eq!(actual.json_parse_temporary_bytes, 77);
-    assert_eq!(actual.estimated_memory_bytes(), expected.estimated_memory_bytes());
+    assert_eq!(
+        actual.estimated_memory_bytes(),
+        expected.estimated_memory_bytes()
+    );
     assert!(actual.pending_exception.is_none());
     // The original implementation mutates a view before its accounting delta
     // can refuse. This test preserves that behavior, not a new atomicity claim.
@@ -201,7 +253,10 @@ fn registered_detachment_matches_old_path_and_fixed_buffer_discovery_survives() 
     expected.detach_array_buffer_storage(b).unwrap();
     reference(&mut expected, b).unwrap();
     compare_views(&actual, &expected, &ids);
-    assert_eq!(actual.buffer_backing(a).unwrap().views, expected.buffer_backing(b).unwrap().views);
+    assert_eq!(
+        actual.buffer_backing(a).unwrap().views,
+        expected.buffer_backing(b).unwrap().views
+    );
     assert_accounted(&actual);
     assert_accounted(&expected);
 
@@ -209,8 +264,21 @@ fn registered_detachment_matches_old_path_and_fixed_buffer_discovery_survives() 
     let view = actual.alloc_data_view_object(id, 4, 4).unwrap();
     assert!(actual.buffer_backing(id).unwrap().views.is_empty());
     actual.detach_array_buffer(id).unwrap();
-    assert!(actual.heap[view.0 as usize].data_view.as_ref().unwrap().bounds.unwrap().out_of_bounds);
-    assert!(actual.heap[view.0 as usize].properties.get("byteLength").is_none());
+    assert!(
+        actual.heap[view.0 as usize]
+            .data_view
+            .as_ref()
+            .unwrap()
+            .bounds
+            .unwrap()
+            .out_of_bounds
+    );
+    assert!(
+        actual.heap[view.0 as usize]
+            .properties
+            .get("byteLength")
+            .is_none()
+    );
     assert_accounted(&actual);
 }
 
@@ -256,7 +324,8 @@ fn public_resize_transfer_and_grow_keep_all_typed_view_and_coercion_semantics() 
     let lowered = crate::lowering_pipeline::lower_ir0_to_ir3(
         &crate::ir_contract::Ir0Module::from_syntax_tree(tree, "registered-buffer-views.js"),
         &crate::lowering_pipeline::LoweringContext::new("registry", "resize", "builtin-only"),
-    ).unwrap();
+    )
+    .unwrap();
     let mut core = runtime();
     let result = core.execute(&lowered.ir3).unwrap();
     assert_eq!(result.value, Value::str("11|55|1|0|24|12|20"));

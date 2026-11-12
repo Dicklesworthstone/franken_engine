@@ -127,8 +127,14 @@ impl InterpreterCore {
                 // The intrinsic iterator retains this box. In particular,
                 // borrowed Array iteration of a string visits UTF-16 units,
                 // not the code points of String.prototype's own iterator.
-                Some(primitive @ (Value::Bool(_) | Value::Int(_) | Value::Float(_)
-                    | Value::Str(_) | Value::BigInt(_) | Value::Symbol(_))) => {
+                Some(
+                    primitive @ (Value::Bool(_)
+                    | Value::Int(_)
+                    | Value::Float(_)
+                    | Value::Str(_)
+                    | Value::BigInt(_)
+                    | Value::Symbol(_)),
+                ) => {
                     return Ok(Some(self.alloc_primitive_wrapper(primitive.clone())?));
                 }
                 _ => {}
@@ -321,8 +327,7 @@ impl InterpreterCore {
         let Some(Value::Int(length)) = object.properties.get("length") else {
             return false;
         };
-        u32::try_from(*length)
-            .is_ok_and(|length| mutation::plain_writable_range(object, 0, length))
+        u32::try_from(*length).is_ok_and(|length| mutation::plain_writable_range(object, 0, length))
     }
 
     /// Whether concat on the Array `receiver` must spread generically: an

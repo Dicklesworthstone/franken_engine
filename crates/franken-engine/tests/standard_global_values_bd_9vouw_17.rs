@@ -560,7 +560,10 @@ fn immutable_global_names_remain_ordinary_property_names() {
         "function f(NaN) { const o = { [NaN]: 4 }; return o[NaN]; } f('key');",
         "4",
     );
-    check("(function (undefined) { return undef\\u0069ned; })(7);", "7");
+    check(
+        "(function (undefined) { return undef\\u0069ned; })(7);",
+        "7",
+    );
 }
 
 #[test]

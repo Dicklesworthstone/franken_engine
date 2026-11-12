@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! Self-replacement lineage chain replay example.
 //!
 //! This example demonstrates end-to-end replay of a multi-replacement

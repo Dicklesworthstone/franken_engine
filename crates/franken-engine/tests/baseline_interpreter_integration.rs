@@ -12064,7 +12064,6 @@ fn test_array_prototype_some_fail_closed_validation() {
 }
 
 #[test]
-#[ignore = "test asserts non-spec behavior: line 10607 expects `'ABC'.charAt(-1) == 'A'` (claiming -1 normalizes to 0), but JS spec returns '' for negative indices. The eval shim IS wired correctly — direct-runtime coverage in regression_tests_charat_utf16_integration.rs::test_charat_utf16_out_of_bounds_regression confirms charAt(-1) == ''. Test bodies need rewriting to match spec before re-enabling (bd-lnkmc)"]
 fn test_string_char_at_utf16_indexing() {
     // Regression test for commit 3b448a39: charAt UTF-16 indexing semantics
     let mut interpreter = make_default_interpreter();
@@ -12083,15 +12082,15 @@ fn test_string_char_at_utf16_indexing() {
         Value::str("C")
     );
 
-    // Out of bounds returns empty string
+    // Out of bounds (including negative indices per ES2020 §21.1.3.1) returns empty string
     assert_eq!(
         interpreter.evaluate_expression("'ABC'.charAt(3)").unwrap(),
         Value::str("")
     );
     assert_eq!(
         interpreter.evaluate_expression("'ABC'.charAt(-1)").unwrap(),
-        Value::str("A")
-    ); // -1 normalizes to 0
+        Value::str("")
+    );
 
     // UTF-16 surrogate pair handling (emoji should return individual surrogates)
     // Note: This test assumes the implementation correctly handles surrogates
@@ -12121,7 +12120,6 @@ fn test_string_char_at_utf16_indexing() {
 }
 
 #[test]
-#[ignore = "test asserts non-spec behavior: line 10678 expects `'ABC'.charCodeAt(-1) == 65` (claiming -1 normalizes to 0), but JS spec returns NaN for negative indices. The eval shim IS wired correctly — direct-runtime coverage in regression_tests_charcodeat_utf16_integration.rs confirms spec semantics. Test bodies need rewriting to match spec before re-enabling (bd-lnkmc)"]
 fn test_string_char_code_at_utf16_indexing() {
     // Regression test for commit 5ab2773a: charCodeAt UTF-16 code unit semantics
     let mut interpreter = make_default_interpreter();
@@ -12155,13 +12153,14 @@ fn test_string_char_code_at_utf16_indexing() {
         _ => panic!("charCodeAt out of bounds should return NaN Float"),
     }
 
-    // Negative index normalization
-    assert_eq!(
-        interpreter
-            .evaluate_expression("'ABC'.charCodeAt(-1)")
-            .unwrap(),
-        Value::Int(65)
-    ); // -1 normalizes to 0
+    // Negative index returns NaN per ES2020 §21.1.3.2
+    let neg_result = interpreter
+        .evaluate_expression("'ABC'.charCodeAt(-1)")
+        .unwrap();
+    match neg_result {
+        Value::Float(f) => assert!(f.inner().is_nan(), "Negative index should return NaN"),
+        _ => panic!("charCodeAt negative index should return NaN Float"),
+    }
 
     // UTF-16 surrogate pair handling
     let result = interpreter.evaluate_expression("'😀'.charCodeAt(0)");
@@ -12200,26 +12199,18 @@ fn test_string_char_code_at_utf16_indexing() {
 }
 
 #[test]
-#[ignore = "test design issue, not an eval-path gap: the local `evaluate_expression` trait impl (line 127) builds a *fresh* QuickJsInspiredNativeEngine on every call, so the `interpreter1`/`interpreter2` InterpreterCore instances and the `let z = 42` divergence have no effect on the eval engine's PRNG seed — the test would need either (a) a session-scoped engine that threads state across evaluate_expression calls, or (b) rewriting to compare deterministic single-shot outputs (which is what baseline_interpreter_refactor_coverage.rs::math_random_uses_deterministic_xorshift64_prng already covers). The xorshift64 PRNG behavior is wired correctly; this test asserts a property the harness can't observe (bd-lnkmc)"]
 fn test_math_random_deterministic_replay() {
-    // Regression test for commit 8df95361: SHA-256 deterministic replay
-    let config = InterpreterConfig::quickjs_defaults();
-    let mut interpreter1 = InterpreterCore::new(config.clone(), "integ-trace-1");
-    let mut interpreter2 = InterpreterCore::new(config, "integ-trace-2");
+    // Regression test for commit 8df95361: SHA-256 deterministic replay within a single program
+    let mut interpreter1 = make_default_interpreter();
+    let mut interpreter2 = make_default_interpreter();
 
-    // Execute identical operations to get to same execution state
-    interpreter1.evaluate_expression("let x = 1 + 1").unwrap();
-    interpreter2.evaluate_expression("let x = 1 + 1").unwrap();
+    let identical_program = "let x = 1 + 1; let y = x * 2; Math.random() + Math.random()";
+    let diverged_program =
+        "let x = 1 + 1; let y = x * 2; let z = 42; Math.random() + Math.random()";
 
-    interpreter1.evaluate_expression("let y = x * 2").unwrap();
-    interpreter2.evaluate_expression("let y = x * 2").unwrap();
-
-    // Math.random should now produce identical sequences
-    let random1a = interpreter1.evaluate_expression("Math.random()").unwrap();
-    let random2a = interpreter2.evaluate_expression("Math.random()").unwrap();
-
-    // Should be identical due to deterministic SHA-256 seeding
-    match (random1a, random2a) {
+    let random1a = interpreter1.evaluate_expression(identical_program).unwrap();
+    let random2a = interpreter2.evaluate_expression(identical_program).unwrap();
+    match (&random1a, &random2a) {
         (Value::Float(f1), Value::Float(f2)) => {
             assert!(
                 (f1.inner() - f2.inner()).abs() < f64::EPSILON,
@@ -12228,31 +12219,14 @@ fn test_math_random_deterministic_replay() {
                 f2.inner()
             );
         }
-        _ => panic!("Math.random should return Float values"),
+        _ => panic!("Math.random sum should return Float values"),
     }
 
-    // Second random call should also be identical
-    let random1b = interpreter1.evaluate_expression("Math.random()").unwrap();
-    let random2b = interpreter2.evaluate_expression("Math.random()").unwrap();
+    let random1b = interpreter1.evaluate_expression(identical_program).unwrap();
+    assert_eq!(random1a, random1b);
 
-    match (random1b, random2b) {
-        (Value::Float(f1), Value::Float(f2)) => {
-            assert!(
-                (f1.inner() - f2.inner()).abs() < f64::EPSILON,
-                "Second random call should also be deterministic: {} vs {}",
-                f1.inner(),
-                f2.inner()
-            );
-        }
-        _ => panic!("Math.random should return Float values"),
-    }
-
-    // Different execution states should produce different values
-    interpreter1.evaluate_expression("let z = 42").unwrap(); // Change execution state
-
-    let random1c = interpreter1.evaluate_expression("Math.random()").unwrap();
-    let random2c = interpreter2.evaluate_expression("Math.random()").unwrap();
-
+    let random1c = interpreter1.evaluate_expression(diverged_program).unwrap();
+    let random2c = interpreter2.evaluate_expression(identical_program).unwrap();
     match (random1c, random2c) {
         (Value::Float(f1), Value::Float(f2)) => {
             assert!(

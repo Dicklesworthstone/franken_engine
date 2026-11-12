@@ -32,7 +32,14 @@ fn forward_gaps_keep_numeric_identity_and_existing_key_backing() {
     for index in 0..64_u32 {
         let (key, value) = values.get(&index).unwrap();
         assert_eq!(*value, u64::from(index));
-        assert_eq!(key.as_ptr(), if index == 7 { changed_address } else { addresses[index as usize] });
+        assert_eq!(
+            key.as_ptr(),
+            if index == 7 {
+                changed_address
+            } else {
+                addresses[index as usize]
+            }
+        );
     }
     assert!(values.get(&64).is_none());
     assert!(values.get(&65).is_none());
@@ -53,7 +60,9 @@ fn forward_gaps_keep_numeric_identity_and_existing_key_backing() {
 fn mostly_dense_forward_builders_grow_geometrically_and_keep_real_holes() {
     for start_holey in [false, true] {
         let mut values = dense(64);
-        if start_holey { values.remove(&7); }
+        if start_holey {
+            values.remove(&7);
+        }
         let mut previous_capacity = 0;
         let mut growths = 0;
         let mut last = 63_u32;
@@ -63,12 +72,19 @@ fn mostly_dense_forward_builders_grow_geometrically_and_keep_real_holes() {
             last += if step % 8 == 0 { 2 } else { 1 };
             values.insert(last, (last.to_string(), u64::from(last)));
             let (_, capacity) = bounds(&values);
-            if capacity != previous_capacity { growths += 1; }
+            if capacity != previous_capacity {
+                growths += 1;
+            }
             previous_capacity = capacity;
             assert_eq!(*values.get(&last).unwrap().1, u64::from(last));
-            if step % 8 == 0 { assert!(values.get(&(last - 1)).is_none()); }
+            if step % 8 == 0 {
+                assert!(values.get(&(last - 1)).is_none());
+            }
         }
-        assert!(growths < 20, "geometric growth, not an allocation per gap: {growths}");
+        assert!(
+            growths < 20,
+            "geometric growth, not an allocation per gap: {growths}"
+        );
         assert_eq!(values.len(), 4160 - usize::from(start_holey));
     }
 }
@@ -81,7 +97,10 @@ fn capacity_plans_refuse_remote_sparse_and_overflow_requests_before_allocation()
     // reallocate at that density after headroom runs out.
     assert_eq!(gap_capacity(64, 67, 100, 67), None);
     assert_eq!(gap_capacity(64, 64, 131, 0), None);
-    assert_eq!(gap_capacity(4096, 4096, 4096 + MAX_FORWARD_GAP + 1, 0), None);
+    assert_eq!(
+        gap_capacity(4096, 4096, 4096 + MAX_FORWARD_GAP + 1, 0),
+        None
+    );
     assert_eq!(gap_capacity(0, 0, usize::MAX, 0), None);
     assert_eq!(gap_capacity(usize::MAX, usize::MAX, usize::MAX, 0), None);
     assert_eq!(gap_capacity(usize::MAX / 2, 0, 1, 0), None);
@@ -107,8 +126,13 @@ fn refused_gaps_preserve_payloads_in_dictionary_and_do_not_oscillate() {
     for start_holey in [false, true] {
         for target in [131_u32, 10_000, u32::MAX - 1, u32::MAX] {
             let mut values = dense(64);
-            if start_holey { values.remove(&7); }
-            let before: Vec<_> = values.values().map(|(key, value)| (key.clone(), *value)).collect();
+            if start_holey {
+                values.remove(&7);
+            }
+            let before: Vec<_> = values
+                .values()
+                .map(|(key, value)| (key.clone(), *value))
+                .collect();
             assert_eq!(values.insert(target, (target.to_string(), 99)), None);
             assert!(matches!(values, IndexedValues::Dictionary(_)));
             assert_eq!(values.len(), before.len() + 1);
@@ -141,11 +165,15 @@ fn gap_storage_preserves_all_iterators_and_range_writes() {
             let mut a = actual.clone();
             let mut b = oracle.clone();
             for map in [&mut a, &mut b] {
-                for (_, value) in map.range_values_mut(start..end).rev() { *value += 100; }
+                for (_, value) in map.range_values_mut(start..end).rev() {
+                    *value += 100;
+                }
                 let mut iter = map.values_mut();
                 while let Some((_, value)) = iter.next() {
                     *value += 1;
-                    if let Some((_, value)) = iter.next_back() { *value += 2; }
+                    if let Some((_, value)) = iter.next_back() {
+                        *value += 2;
+                    }
                 }
             }
             assert_eq!(a, b);
@@ -153,8 +181,11 @@ fn gap_storage_preserves_all_iterators_and_range_writes() {
             let mut b = b.into_values();
             for step in 0..50 {
                 assert_eq!(a.len(), b.len());
-                if step % 2 == 0 { assert_eq!(a.next(), b.next()); }
-                else { assert_eq!(a.next_back(), b.next_back()); }
+                if step % 2 == 0 {
+                    assert_eq!(a.next(), b.next());
+                } else {
+                    assert_eq!(a.next_back(), b.next_back());
+                }
             }
         }
     }
@@ -162,8 +193,11 @@ fn gap_storage_preserves_all_iterators_and_range_writes() {
     let mut b = oracle.values();
     for step in 0..50 {
         assert_eq!(a.size_hint(), b.size_hint());
-        if step % 2 == 0 { assert_eq!(a.next(), b.next()); }
-        else { assert_eq!(a.next_back(), b.next_back()); }
+        if step % 2 == 0 {
+            assert_eq!(a.next(), b.next());
+        } else {
+            assert_eq!(a.next_back(), b.next_back());
+        }
     }
 }
 
@@ -171,27 +205,51 @@ fn gap_storage_preserves_all_iterators_and_range_writes() {
 fn gap_conversion_and_fallback_move_non_clone_values_without_extra_drops() {
     use std::cell::Cell;
     use std::rc::Rc;
-    struct Owned { data: Box<u64>, drops: Rc<Cell<usize>> }
+    struct Owned {
+        data: Box<u64>,
+        drops: Rc<Cell<usize>>,
+    }
     impl Drop for Owned {
-        fn drop(&mut self) { self.drops.set(self.drops.get() + 1); }
+        fn drop(&mut self) {
+            self.drops.set(self.drops.get() + 1);
+        }
     }
     let drops = Rc::new(Cell::new(0));
     let mut values = IndexedValues::new();
     for index in 0..32_u32 {
-        values.insert(index, (index.to_string(), Owned {
-            data: Box::new(u64::from(index)), drops: Rc::clone(&drops),
-        }));
+        values.insert(
+            index,
+            (
+                index.to_string(),
+                Owned {
+                    data: Box::new(u64::from(index)),
+                    drops: Rc::clone(&drops),
+                },
+            ),
+        );
     }
-    let addresses: Vec<_> = values.values()
-        .map(|(key, value)| (key.as_ptr(), &*value.data as *const u64)).collect();
+    let addresses: Vec<_> = values
+        .values()
+        .map(|(key, value)| (key.as_ptr(), &*value.data as *const u64))
+        .collect();
     for index in [34_u32, 37, u32::MAX - 1] {
-        values.insert(index, (index.to_string(), Owned {
-            data: Box::new(u64::from(index)), drops: Rc::clone(&drops),
-        }));
+        values.insert(
+            index,
+            (
+                index.to_string(),
+                Owned {
+                    data: Box::new(u64::from(index)),
+                    drops: Rc::clone(&drops),
+                },
+            ),
+        );
         assert_eq!(drops.get(), 0);
         for index in 0..32_u32 {
             let (key, value) = values.get(&index).unwrap();
-            assert_eq!((key.as_ptr(), &*value.data as *const u64), addresses[index as usize]);
+            assert_eq!(
+                (key.as_ptr(), &*value.data as *const u64),
+                addresses[index as usize]
+            );
         }
     }
     assert!(matches!(values, IndexedValues::Dictionary(_)));
@@ -207,31 +265,53 @@ fn forward_gap_churn_matches_btree_without_weakening_existing_retain_contracts()
         let mut random = seed;
         let mut actual = dense(64);
         let mut expected: BTreeMap<_, _> = (0..64_u32)
-            .map(|i| (i, (i.to_string(), u64::from(i)))).collect();
+            .map(|i| (i, (i.to_string(), u64::from(i))))
+            .collect();
         let mut last = 63_u32;
         for step in 0..512_u32 {
             random = random.wrapping_mul(6364136223846793005).wrapping_add(1);
             let index = if step < 256 {
                 last += if step % 8 == 0 { 2 } else { 1 };
                 last
-            } else { ((random >> 32) as u32) % (last + 4) };
+            } else {
+                ((random >> 32) as u32) % (last + 4)
+            };
             match if step < 256 { 0 } else { random as u32 % 5 } {
                 0 | 1 => {
                     let entry = (index.to_string(), random);
-                    let before = expected.insert(index, entry.clone()).map(|(_, value)| value);
+                    let before = expected
+                        .insert(index, entry.clone())
+                        .map(|(_, value)| value);
                     assert_eq!(actual.insert(index, entry), before);
                 }
                 2 => assert_eq!(actual.remove(&index), expected.remove(&index)),
                 3 => {
-                    actual.retain(|key, (_, value)| { *value ^= 7; key % 13 != index % 13 });
-                    expected.retain(|key, (_, value)| { *value ^= 7; key % 13 != index % 13 });
+                    actual.retain(|key, (_, value)| {
+                        *value ^= 7;
+                        key % 13 != index % 13
+                    });
+                    expected.retain(|key, (_, value)| {
+                        *value ^= 7;
+                        key % 13 != index % 13
+                    });
                 }
-                _ => assert_eq!(actual.get(&index), expected.get(&index).map(|(key, value)| (key, value))),
+                _ => assert_eq!(
+                    actual.get(&index),
+                    expected.get(&index).map(|(key, value)| (key, value))
+                ),
             }
             assert_eq!(actual.len(), expected.len(), "seed {seed}, step {step}");
-            assert_eq!(actual.values().collect::<Vec<_>>(), expected.values().map(|(key, value)| (key, value)).collect::<Vec<_>>());
+            assert_eq!(
+                actual.values().collect::<Vec<_>>(),
+                expected
+                    .values()
+                    .map(|(key, value)| (key, value))
+                    .collect::<Vec<_>>()
+            );
             assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
-            if step < 256 { bounds(&actual); }
+            if step < 256 {
+                bounds(&actual);
+            }
         }
     }
 }
@@ -241,7 +321,9 @@ fn parent_wire_exact_names_and_dense_moves_survive_forward_gap_repair() {
     use crate::js_string::JsString;
     use crate::object_model::OrderedStringMap;
     let mut map = OrderedStringMap::new();
-    for index in 0..16 { map.insert(index.to_string(), index); }
+    for index in 0..16 {
+        map.insert(index.to_string(), index);
+    }
     let lone = JsString::from_code_units(&[0xd800]);
     map.insert("z".into(), 90);
     map.insert_exact(lone.clone(), 91);
@@ -257,9 +339,14 @@ fn parent_wire_exact_names_and_dense_moves_survive_forward_gap_repair() {
     map.insert("17".into(), 17);
     assert_eq!(map.shift_dense_index_values(19), Some(0));
     map.unshift_dense_index_values(18, vec![30]).unwrap();
-    assert_eq!(map.splice_dense_index_values(19, 1, 3, vec![40]), Ok(vec![1, 2, 3]));
-    assert_eq!(map.index_values().copied().collect::<Vec<_>>(),
-        [30, 40, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
+    assert_eq!(
+        map.splice_dense_index_values(19, 1, 3, vec![40]),
+        Ok(vec![1, 2, 3])
+    );
+    assert_eq!(
+        map.index_values().copied().collect::<Vec<_>>(),
+        [30, 40, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
+    );
     assert_eq!(map.get_exact(&lone), Some(&91));
     assert_eq!(map.get("01"), Some(&92));
     let wire = serde_json::to_string(&map).unwrap();

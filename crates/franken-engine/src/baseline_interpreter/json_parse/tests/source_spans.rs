@@ -22,7 +22,10 @@ fn primitive_record_needs_only_fixed_metadata_even_for_large_source() {
             .unwrap();
         assert_eq!(pos, units.len());
         assert_eq!(record.root.source, Some(0..units.len()));
-        assert_eq!(record.root.source_units(&units).unwrap().as_ptr(), units.as_ptr());
+        assert_eq!(
+            record.root.source_units(&units).unwrap().as_ptr(),
+            units.as_ptr()
+        );
         assert_eq!(charged, bytes, "source spelling must not be copied here");
         assert_eq!(core.json_parse_temporary_bytes, bytes);
         drop(record);
@@ -56,7 +59,10 @@ fn wide_records_borrow_distinct_original_spans_and_preserve_last_duplicate() {
         let child = record.nodes[child.unwrap()].as_ref().unwrap();
         let start = 1 + index * 12;
         assert_eq!(child.source, Some(start..start + 11));
-        assert_eq!(child.source_units(&units).unwrap(), &units[start..start + 11]);
+        assert_eq!(
+            child.source_units(&units).unwrap(),
+            &units[start..start + 11]
+        );
         assert_eq!(
             child.source_units(&units).unwrap().as_ptr(),
             units[start..].as_ptr()
@@ -86,8 +92,8 @@ fn wide_records_borrow_distinct_original_spans_and_preserve_last_duplicate() {
 #[test]
 fn exact_source_spans_remain_code_unit_offsets_after_astral_text_and_escapes() {
     let units = [
-        0x5b, 0x22, 0xd83d, 0xde00, 0x22, 0x2c, 0x22, 0xd800, 0x5c, 0x22,
-        0xdc00, 0x22, 0x2c, 0x2d, 0x30, 0x5d,
+        0x5b, 0x22, 0xd83d, 0xde00, 0x22, 0x2c, 0x22, 0xd800, 0x5c, 0x22, 0xdc00, 0x22, 0x2c, 0x2d,
+        0x30, 0x5d,
     ];
     let mut core = core();
     let value = core.json_parse_document(&units).unwrap();
@@ -121,7 +127,11 @@ fn source_publication_admits_before_copying_and_releases_only_its_own_scratch() 
         core.json_store_reviver_source(object, &units),
         Err(InterpreterError::MemoryBudgetExceeded { .. })
     ));
-    assert!(!core.heap[object.0 as usize].properties.contains_key("source"));
+    assert!(
+        !core.heap[object.0 as usize]
+            .properties
+            .contains_key("source")
+    );
     assert_eq!(core.json_parse_temporary_bytes, 77);
     assert_eq!(core.estimated_memory_bytes(), baseline);
     assert!(core.pending_exception.is_none());
@@ -138,7 +148,10 @@ fn source_publication_admits_before_copying_and_releases_only_its_own_scratch() 
     assert_eq!(core.own_property_label(object, "source"), Label::Secret);
     assert_eq!(core.json_parse_temporary_bytes, 77);
     core.json_release_temporary(77);
-    assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
 }
 
 #[test]
@@ -163,7 +176,9 @@ fn reviver_source_contexts_survive_reentrancy_replacement_and_input_lifetime() {
             seen.join('|') + '/' + saved.map(function (c) { return c.source; }).join(',');
             "#,
         ),
-        Value::str("a:1.00|b:undefined|c:undefined|x:undefined|d:undefined|dup:6.00|:undefined/1.00,5.00,,,,,6.00,")
+        Value::str(
+            "a:1.00|b:undefined|c:undefined|x:undefined|d:undefined|dup:6.00|:undefined/1.00,5.00,,,,,6.00,"
+        )
     );
 }
 
@@ -186,7 +201,9 @@ fn reviver_source_keeps_samevalue_rules_holes_and_exact_source_spelling() {
             JSON.stringify(seen) + '/' + saved[5].source;
             "#,
         ),
-        Value::str(r#"["0:1.00","1:2e0","2:undefined","3:9007199254740993","4:1e999","5:\"\\ud800\"","6:\"😀\"",":undefined"]/"\ud800""#)
+        Value::str(
+            r#"["0:1.00","1:2e0","2:undefined","3:9007199254740993","4:1e999","5:\"\\ud800\"","6:\"😀\"",":undefined"]/"\ud800""#
+        )
     );
 }
 

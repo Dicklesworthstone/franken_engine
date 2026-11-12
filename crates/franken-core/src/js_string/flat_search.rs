@@ -70,12 +70,7 @@ pub(super) fn last_index_of(
 /// A split pair rounds UP for indexOf, DOWN for lastIndexOf. The canonical
 /// boundary routine already proves its byte start; an astral scalar always
 /// occupies four UTF-8 bytes and two UTF-16 units. No second prefix scan.
-fn search_boundary(
-    text: &Text,
-    length: usize,
-    position: usize,
-    round_up: bool,
-) -> (usize, usize) {
+fn search_boundary(text: &Text, length: usize, position: usize, round_up: bool) -> (usize, usize) {
     let (byte, split_pair) = text.utf16_search_boundary(text.as_str(), length, position);
     if !split_pair {
         (byte, position)
@@ -139,11 +134,21 @@ mod tests {
                     access::utf16_boundary(text, length, position),
                     access::utf16_search_boundary(text, length, position)
                 );
-                let boundaries: Vec<_> = text.char_indices().map(|(byte, _)| {
-                    (byte, text[..byte].encode_utf16().count())
-                }).chain([(text.len(), length)]).collect();
-                let down = boundaries.iter().rfind(|(_, unit)| *unit <= position).copied().unwrap();
-                let up = boundaries.iter().find(|(_, unit)| *unit >= position).copied().unwrap();
+                let boundaries: Vec<_> = text
+                    .char_indices()
+                    .map(|(byte, _)| (byte, text[..byte].encode_utf16().count()))
+                    .chain([(text.len(), length)])
+                    .collect();
+                let down = boundaries
+                    .iter()
+                    .rfind(|(_, unit)| *unit <= position)
+                    .copied()
+                    .unwrap();
+                let up = boundaries
+                    .iter()
+                    .find(|(_, unit)| *unit >= position)
+                    .copied()
+                    .unwrap();
                 assert_eq!(search_boundary(&value.utf8, length, position, false), down);
                 assert_eq!(search_boundary(&value.utf8, length, position, true), up);
             }
@@ -154,22 +159,34 @@ mod tests {
     fn every_match_and_anchor_counts_only_the_shortest_known_span() {
         for text in ["aé中😀\u{10ffff}é中a", "😀😀😀", "éaéaé"] {
             let length = text.encode_utf16().count();
-            let boundaries: Vec<_> = text.char_indices().map(|(byte, _)| byte)
-                .chain([text.len()]).collect();
+            let boundaries: Vec<_> = text
+                .char_indices()
+                .map(|(byte, _)| byte)
+                .chain([text.len()])
+                .collect();
             for (at, &found) in boundaries.iter().enumerate().take(boundaries.len() - 1) {
                 for &end in &boundaries[at + 1..] {
                     let pattern_units = text[found..end].encode_utf16().count();
                     for &anchor_byte in &boundaries {
                         let anchor_unit = text[..anchor_byte].encode_utf16().count();
                         let mut counted = None;
-                        let result = match_index(text, length, end - found, pattern_units,
-                            found, (anchor_byte, anchor_unit), |span| {
+                        let result = match_index(
+                            text,
+                            length,
+                            end - found,
+                            pattern_units,
+                            found,
+                            (anchor_byte, anchor_unit),
+                            |span| {
                                 counted = Some(span.len());
                                 span.encode_utf16().count()
-                            });
+                            },
+                        );
                         assert_eq!(result, text[..found].encode_utf16().count());
-                        assert_eq!(counted, Some(found.min(found.abs_diff(anchor_byte))
-                            .min(text.len() - end)));
+                        assert_eq!(
+                            counted,
+                            Some(found.min(found.abs_diff(anchor_byte)).min(text.len() - end))
+                        );
                     }
                 }
             }
@@ -183,11 +200,13 @@ mod tests {
             for (found, end) in [(0, text.len()), (text.len() - 3, text.len())] {
                 // The mixed fixture ends in an astral scalar: choose its start.
                 let mut found = found;
-                while !text.is_char_boundary(found) { found -= 1; }
+                while !text.is_char_boundary(found) {
+                    found -= 1;
+                }
                 let units = text[found..end].encode_utf16().count();
                 let mut bytes = 0;
-                let result = match_index(&text, length, end - found, units,
-                    found, (0, 0), |span| {
+                let result =
+                    match_index(&text, length, end - found, units, found, (0, 0), |span| {
                         bytes += span.len();
                         span.encode_utf16().count()
                     });
@@ -209,10 +228,15 @@ mod tests {
                     let width = width.min(length - position);
                     for anchor in [0, length / 2, length] {
                         assert_eq!(
-                            match_index(&text, length, width * 3, width,
-                                position * 3, (anchor * 3, anchor), |_| {
-                                    panic!("cached three-byte width must avoid decoding")
-                                }),
+                            match_index(
+                                &text,
+                                length,
+                                width * 3,
+                                width,
+                                position * 3,
+                                (anchor * 3, anchor),
+                                |_| { panic!("cached three-byte width must avoid decoding") }
+                            ),
                             position
                         );
                     }
@@ -237,7 +261,8 @@ mod tests {
     #[test]
     fn mixed_width_match_positions_cannot_use_an_average_byte_ratio() {
         for text in [
-            "a中".repeat(513), "é😀".repeat(513),
+            "a中".repeat(513),
+            "é😀".repeat(513),
             format!("{}a{}", "中".repeat(513), "中".repeat(513)),
             format!("{}😀{}", "中".repeat(513), "中".repeat(513)),
         ] {
@@ -245,10 +270,18 @@ mod tests {
             assert_ne!(length.checked_mul(3), Some(text.len()));
             for (found, scalar) in text.char_indices() {
                 let expected = text[..found].encode_utf16().count();
-                assert_eq!(match_index(&text, length, scalar.len_utf8(),
-                    scalar.len_utf16(), found, (0, 0), |span| {
-                        span.encode_utf16().count()
-                    }), expected);
+                assert_eq!(
+                    match_index(
+                        &text,
+                        length,
+                        scalar.len_utf8(),
+                        scalar.len_utf16(),
+                        found,
+                        (0, 0),
+                        |span| { span.encode_utf16().count() }
+                    ),
+                    expected
+                );
             }
         }
     }
@@ -259,18 +292,29 @@ mod tests {
             let value = JsString::from(text);
             let length = text.encode_utf16().count();
             let units: Vec<_> = text.encode_utf16().collect();
-            let bounds: Vec<_> = text.char_indices().map(|(byte, _)| byte)
-                .chain([text.len()]).collect();
+            let bounds: Vec<_> = text
+                .char_indices()
+                .map(|(byte, _)| byte)
+                .chain([text.len()])
+                .collect();
             for (at, &start) in bounds.iter().enumerate().take(bounds.len() - 1) {
                 for &end in &bounds[at + 1..] {
                     let needle = &text[start..end];
                     let needle_units: Vec<_> = needle.encode_utf16().collect();
                     for from in 0..=length - needle_units.len() {
-                        let first = units.windows(needle_units.len()).enumerate()
-                            .find(|(i, candidate)| *i >= from && *candidate == needle_units.as_slice())
+                        let first = units
+                            .windows(needle_units.len())
+                            .enumerate()
+                            .find(|(i, candidate)| {
+                                *i >= from && *candidate == needle_units.as_slice()
+                            })
                             .map(|(i, _)| i);
-                        let last = units.windows(needle_units.len()).enumerate()
-                            .rfind(|(i, candidate)| *i <= from && *candidate == needle_units.as_slice())
+                        let last = units
+                            .windows(needle_units.len())
+                            .enumerate()
+                            .rfind(|(i, candidate)| {
+                                *i <= from && *candidate == needle_units.as_slice()
+                            })
                             .map(|(i, _)| i);
                         assert_eq!(
                             index_of(&value.utf8, length, needle, needle_units.len(), from),

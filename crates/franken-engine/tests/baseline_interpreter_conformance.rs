@@ -10,16 +10,21 @@ use frankenengine_engine::ir_contract::{
     CapabilityTag, Ir3Instruction, Ir3Module, IrHeader, IrLevel, IrSchemaVersion, RegRange,
 };
 
-const BASELINE_INTERPRETER: &str = include_str!("../src/baseline_interpreter.rs");
+const BASELINE_INTERPRETER: &str =
+    frankenengine_engine::baseline_interpreter::COMBINED_PRODUCTION_SOURCE;
 
 fn render_dispatch_arm_snapshot(source: &str) -> String {
-    let dispatch_source = source
-        .split_once("    fn dispatch_builtin_hostcall_inner(")
+    let dispatch_tail = source
+        .split_once("fn dispatch_builtin_hostcall_inner(")
         .expect("baseline interpreter must define dispatch_builtin_hostcall_inner")
-        .1
-        .split_once("\n    fn ")
-        .expect("dispatch_builtin_hostcall_inner must be followed by another method")
-        .0;
+        .1;
+    let next_fn_pos = dispatch_tail
+        .find("\n    pub(super) fn ")
+        .into_iter()
+        .chain(dispatch_tail.find("\n    fn "))
+        .min()
+        .expect("dispatch_builtin_hostcall_inner must be followed by another method");
+    let dispatch_source = &dispatch_tail[..next_fn_pos];
     let mut capabilities = Vec::new();
     for line in dispatch_source.lines() {
         // rustfmt indents the direct `match cap` arms by twelve spaces. Keep

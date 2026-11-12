@@ -55,16 +55,6 @@ fn green_lake_build_yields_passed_artifact_for_fe_claim_016() {
         return;
     }
     let proof_dir = repo_proof_dir();
-    if !proof_dir.join(".lake/packages/mathlib").is_dir() {
-        eprintln!(
-            "SKIP: mathlib package cache absent under {} — cold fetch is a network \
-             dependency this suite refuses; run `lake build` there once (or \
-             scripts/run_lean_proof_check.sh ci) to enable this lane",
-            proof_dir.display()
-        );
-        return;
-    }
-
     let out_dir = tempfile::tempdir().expect("tempdir");
     let out_path = out_dir.path().join("FE-CLAIM-016.proof.json");
     let mut config = LeanProofProducerConfig::new(&proof_dir);
@@ -84,11 +74,17 @@ fn green_lake_build_yields_passed_artifact_for_fe_claim_016() {
     validate_proof_producer_artifact(&report.artifact)
         .expect("strict schema must accept a Passed artifact from the real corpus");
 
-    // The flagship isomorphism theorems must be part of the checked corpus.
+    // The flagship IFC + capability + translation-validation theorems must ALL be in the checked corpus.
     for theorem in [
+        "flow_respects_ordering",
         "rust_implementation_isomorphic",
         "rust_satisfies_lattice_axioms",
         "rust_flow_properties",
+        "capability_profile_security_algebra",
+        "rust_satisfies_capability_algebra",
+        "numeric_add_commutative",
+        "pipeline_correctness",
+        "phi_branch_join_sound",
     ] {
         assert!(
             report.theorem_ids.iter().any(|id| id == theorem),

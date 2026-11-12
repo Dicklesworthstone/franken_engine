@@ -80,9 +80,7 @@ impl RawScanner {
 
 #[cfg(test)]
 mod tests {
-    use super::super::super::{
-        CancellationToken, InterpreterConfig, JsString, RuntimeCapability,
-    };
+    use super::super::super::{CancellationToken, InterpreterConfig, JsString, RuntimeCapability};
     use super::*;
 
     fn core() -> InterpreterCore {
@@ -157,13 +155,19 @@ mod tests {
     #[test]
     fn runs_preserve_every_lexical_transition_and_partial_budget_state() {
         let prefixes = [
-            "", "-", "0", "1", "1.", "1.2", "1e", "1e+", "1e1", "\"", "\"\\", "\"\\u",
-            "\"\\u0", "\"\\u00", "\"\\u000", "t", "tr", "tru", "true", "f", "fa", "fal", "fals",
-            "n", "nu", "nul", "[", "\"done\"",
+            "", "-", "0", "1", "1.", "1.2", "1e", "1e+", "1e1", "\"", "\"\\", "\"\\u", "\"\\u0",
+            "\"\\u00", "\"\\u000", "t", "tr", "tru", "true", "f", "fa", "fal", "fals", "n", "nu",
+            "nul", "[", "\"done\"",
         ];
         for prefix in prefixes {
             for text in [
-                "", "0", "12345.6E-7", "日😀abc\"", "\\uD800\"", "true", "\n",
+                "",
+                "0",
+                "12345.6E-7",
+                "日😀abc\"",
+                "\\uD800\"",
+                "true",
+                "\n",
             ] {
                 for remaining in [0, 1, 2, 255] {
                     for budget in [0, 1, 4] {
@@ -257,7 +261,11 @@ mod tests {
         let rope = JsString::from(left.clone()).concat(&JsString::from(right));
         assert!(rope.unjoined_concat_children().is_some());
         let exact = JsString::from_code_units(&[0x22, 0xd800, 0x61, 0xdc00, 0x22]);
-        for input in [JsString::from(format!("{left}{right}")), rope.clone(), exact] {
+        for input in [
+            JsString::from(format!("{left}{right}")),
+            rope.clone(),
+            exact,
+        ] {
             let mut expected = RawScanner::default();
             for unit in input.encode_utf16() {
                 assert!(expected.feed(unit));

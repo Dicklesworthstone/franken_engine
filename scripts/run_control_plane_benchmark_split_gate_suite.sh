@@ -5,7 +5,8 @@ root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root_dir"
 
 mode="${1:-ci}"
-toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
+default_toolchain="$(sed -n 's/^channel = "\(.*\)"/\1/p' "${root_dir}/rust-toolchain.toml" 2>/dev/null | head -n 1)"
+toolchain="${RUSTUP_TOOLCHAIN:-${default_toolchain:-nightly-2026-09-21}}"
 rch_timeout_seconds="${RCH_EXEC_TIMEOUT_SECONDS:-900}"
 seed="${CONTROL_PLANE_BENCHMARK_SPLIT_SEED:-control-plane-benchmark-split-seed-v1}"
 artifact_root="${CONTROL_PLANE_BENCHMARK_SPLIT_ARTIFACT_ROOT:-artifacts/control_plane_benchmark_split_gate}"
@@ -34,12 +35,24 @@ report_command="cargo run -p frankenengine-engine --bin franken_control_plane_be
 
 mkdir -p "$run_dir" "$step_logs_dir"
 
+use_local_ci_runner=false
 if ! command -v rch >/dev/null 2>&1; then
-  echo "rch is required for control-plane benchmark split heavy commands" >&2
-  exit 2
+  if [[ "${GITHUB_ACTIONS:-false}" == "true" ]]; then
+    use_local_ci_runner=true
+  else
+    echo "rch is required for control-plane benchmark split heavy commands" >&2
+    exit 2
+  fi
 fi
 
 run_rch() {
+  if [[ "$use_local_ci_runner" == true ]]; then
+    local rc=0
+    timeout "${rch_timeout_seconds}" \
+      env "RUSTUP_TOOLCHAIN=$toolchain" "CARGO_TARGET_DIR=$target_dir" "$@" || rc=$?
+    printf 'Remote command finished: exit=%s\n' "$rc"
+    return "$rc"
+  fi
   RCH_EXEC_TIMEOUT_SECONDS="${rch_timeout_seconds}" \
   timeout "${rch_timeout_seconds}" \
     rch exec -- env "RUSTUP_TOOLCHAIN=$toolchain" "CARGO_TARGET_DIR=$target_dir" "$@"

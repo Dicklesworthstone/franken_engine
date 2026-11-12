@@ -5,7 +5,8 @@ root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root_dir"
 
 mode="${1:-ci}"
-toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
+default_toolchain="$(sed -n 's/^channel = "\(.*\)"/\1/p' "${root_dir}/rust-toolchain.toml" 2>/dev/null | head -n 1)"
+toolchain="${RUSTUP_TOOLCHAIN:-${default_toolchain:-nightly-2026-09-21}}"
 target_dir="${CARGO_TARGET_DIR:-/tmp/rch_target_franken_engine_version_matrix}"
 lanes_csv="${VERSION_MATRIX_LANES:-n,n_minus_1,n_plus_1}"
 artifact_root="${VERSION_MATRIX_ARTIFACT_ROOT:-artifacts/version_matrix_lane}"
@@ -30,7 +31,14 @@ mkdir -p "$logs_dir"
 IFS=',' read -r -a lanes <<<"$lanes_csv"
 
 run_rch() {
-  rch exec -- env "RUSTUP_TOOLCHAIN=${toolchain}" "CARGO_TARGET_DIR=${target_dir}" "$@"
+  if command -v rch >/dev/null 2>&1; then
+    rch exec -- env "RUSTUP_TOOLCHAIN=${toolchain}" "CARGO_TARGET_DIR=${target_dir}" "$@"
+  elif [[ "${GITHUB_ACTIONS:-false}" == "true" ]]; then
+    env "RUSTUP_TOOLCHAIN=${toolchain}" "CARGO_TARGET_DIR=${target_dir}" "$@"
+  else
+    echo "rch is required for version-matrix lane heavy commands" >&2
+    return 2
+  fi
 }
 
 json_escape() {

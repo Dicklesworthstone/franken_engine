@@ -350,12 +350,48 @@ fn extract_export_specifier_names(clause: &str) -> Vec<String> {
     names
 }
 
-fn is_reserved_binding(name: &str, is_module: bool) -> bool {
-    // Module code is always strict
-    if is_module && STRICT_RESERVED_WORDS.contains(&name) {
+fn is_reserved_binding(name: &str, in_strict_mode: bool) -> bool {
+    if in_strict_mode && STRICT_RESERVED_WORDS.contains(&name) {
         return true;
     }
     KEYWORD_BINDINGS.contains(&name)
+}
+
+fn has_ast_use_strict_directive(stmts: &[Statement]) -> bool {
+    for stmt in stmts {
+        let Statement::Expression(expr_stmt) = stmt else {
+            break;
+        };
+        let Expression::StringLiteral(literal) = &expr_stmt.expression else {
+            break;
+        };
+        if literal.as_str() == Some("use strict") {
+            return true;
+        }
+    }
+    false
+}
+
+fn arrow_source_has_use_strict(
+    source_text: Option<&crate::ast::FunctionSourceText>,
+    stmts: &[Statement],
+) -> bool {
+    if let Some(src) = source_text {
+        if let Some((_, after_arrow)) = src.as_str().split_once("=>") {
+            let trimmed = after_arrow.trim_start();
+            if let Some(inner) = trimmed.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
+                return crate::parser::source_has_use_strict_directive(inner, ParseGoal::Script);
+            }
+        }
+        return false;
+    }
+    has_ast_use_strict_directive(stmts)
+}
+
+fn is_simple_parameter_list(params: &[crate::ast::FunctionParam]) -> bool {
+    params
+        .iter()
+        .all(|p| matches!(p.pattern, crate::ast::BindingPattern::Identifier(_)))
 }
 
 // ---------------------------------------------------------------------------
@@ -367,6 +403,7 @@ struct AnalyzerState {
     bindings: Vec<ResolvedBinding>,
     errors: Vec<StaticError>,
     is_module: bool,
+    in_strict_mode: bool,
     next_binding_id: BindingId,
     next_scope_index: u32,
     /// Export names seen so far (for duplicate detection).
@@ -381,6 +418,12 @@ struct AnalyzerState {
     in_loop: bool,
     /// Whether we are currently inside a switch statement.
     in_switch: bool,
+    /// Whether the current statement list is a nested block/switch/try/loop scope.
+    in_block_scope: bool,
+    /// Simple catch parameter name for ES2020 Annex B.3.5 `var` allowance in direct catch body.
+    catch_simple_param: Option<String>,
+    /// Whether the immediately visited `Expression::Function` is an object concise method/accessor.
+    in_concise_method_fn: bool,
     /// Whether the module contains top-level await expressions.
     has_top_level_await: bool,
     /// Whether `await` is valid in the current syntactic context.
@@ -388,12 +431,13 @@ struct AnalyzerState {
 }
 
 impl AnalyzerState {
-    fn new(is_module: bool) -> Self {
+    fn new(is_module: bool, in_strict_mode: bool) -> Self {
         Self {
             scopes: Vec::new(),
             bindings: Vec::new(),
             errors: Vec::new(),
             is_module,
+            in_strict_mode,
             next_binding_id: 0,
             next_scope_index: 0,
             export_names: BTreeSet::new(),
@@ -402,6 +446,9 @@ impl AnalyzerState {
             in_function: false,
             in_loop: false,
             in_switch: false,
+            in_block_scope: false,
+            catch_simple_param: None,
+            in_concise_method_fn: false,
             has_top_level_await: false,
             await_allowed: is_module,
         }
@@ -437,7 +484,16 @@ impl AnalyzerState {
 /// The caller should check `result.passed()` before proceeding to lowering.
 pub fn analyze(tree: &SyntaxTree) -> StaticAnalysisResult {
     let is_module = tree.goal == ParseGoal::Module;
-    let mut state = AnalyzerState::new(is_module);
+    let script_strict = is_module || has_ast_use_strict_directive(&tree.body);
+    analyze_with_strict_mode(tree, script_strict)
+}
+
+/// Run static-semantic analysis with explicit top-level strictness (e.g. from
+/// exact source directive-prologue scanning so escaped `"use\\x20strict"` is
+/// not misclassified as a strict directive).
+pub fn analyze_with_strict_mode(tree: &SyntaxTree, script_strict: bool) -> StaticAnalysisResult {
+    let is_module = tree.goal == ParseGoal::Module;
+    let mut state = AnalyzerState::new(is_module, is_module || script_strict);
 
     // Create top-level scope
     let top_scope_kind = if is_module {
@@ -630,7 +686,10 @@ fn analyze_statement(
             let block_scope_id = state.alloc_scope_id(scope_id.depth + 1);
             let mut block_bindings: Vec<ResolvedBinding> = Vec::new();
             let mut block_lex: BTreeMap<String, SourceSpan> = BTreeMap::new();
-            let mut block_var: BTreeMap<String, SourceSpan> = var_names.clone();
+            let mut block_var: BTreeMap<String, SourceSpan> = BTreeMap::new();
+            let prev_in_block = state.in_block_scope;
+            let prev_catch_param = state.catch_simple_param.take();
+            state.in_block_scope = true;
             for child in &block.body {
                 analyze_statement(
                     state,
@@ -641,6 +700,9 @@ fn analyze_statement(
                     &mut block_var,
                 );
             }
+            state.in_block_scope = prev_in_block;
+            state.catch_simple_param = prev_catch_param;
+            hoist_block_vars(state, &block_var, lexical_names, var_names);
             let block_scope = ScopeNode {
                 scope_id: block_scope_id,
                 parent: Some(scope_id),
@@ -670,7 +732,10 @@ fn analyze_statement(
             let for_scope_id = state.alloc_scope_id(scope_id.depth + 1);
             let mut for_bindings: Vec<ResolvedBinding> = Vec::new();
             let mut for_lex: BTreeMap<String, SourceSpan> = BTreeMap::new();
-            let mut for_var: BTreeMap<String, SourceSpan> = var_names.clone();
+            let mut for_var: BTreeMap<String, SourceSpan> = BTreeMap::new();
+            let prev_in_block = state.in_block_scope;
+            let prev_catch_param = state.catch_simple_param.take();
+            state.in_block_scope = true;
             if let Some(ref init) = for_stmt.init {
                 analyze_statement(
                     state,
@@ -698,6 +763,9 @@ fn analyze_statement(
                 &mut for_var,
             );
             state.in_loop = prev_in_loop;
+            state.in_block_scope = prev_in_block;
+            state.catch_simple_param = prev_catch_param;
+            hoist_block_vars(state, &for_var, lexical_names, var_names);
             let for_scope = ScopeNode {
                 scope_id: for_scope_id,
                 parent: Some(scope_id),
@@ -756,15 +824,26 @@ fn analyze_statement(
         }
 
         Statement::TryCatch(tc) => {
-            for child in &tc.block.body {
-                analyze_statement(state, child, scope_id, bindings, lexical_names, var_names);
+            {
+                let mut try_lex: BTreeMap<String, SourceSpan> = BTreeMap::new();
+                let mut try_var: BTreeMap<String, SourceSpan> = BTreeMap::new();
+                let prev_in_block = state.in_block_scope;
+                let prev_catch_param = state.catch_simple_param.take();
+                state.in_block_scope = true;
+                for child in &tc.block.body {
+                    analyze_statement(state, child, scope_id, bindings, &mut try_lex, &mut try_var);
+                }
+                state.in_block_scope = prev_in_block;
+                state.catch_simple_param = prev_catch_param;
+                hoist_block_vars(state, &try_var, lexical_names, var_names);
             }
             if let Some(ref handler) = tc.handler {
                 let catch_scope_id = state.alloc_scope_id(scope_id.depth + 1);
                 let mut catch_bindings: Vec<ResolvedBinding> = Vec::new();
                 let mut catch_lex: BTreeMap<String, SourceSpan> = BTreeMap::new();
-                let mut catch_var: BTreeMap<String, SourceSpan> = var_names.clone();
+                let mut catch_var: BTreeMap<String, SourceSpan> = BTreeMap::new();
                 if let Some(ref param) = handler.parameter {
+                    check_reserved(state, param, &handler.span);
                     let bid = state.alloc_binding_id();
                     catch_bindings.push(ResolvedBinding {
                         name: param.clone(),
@@ -774,6 +853,10 @@ fn analyze_statement(
                     });
                     catch_lex.insert(param.clone(), handler.span);
                 }
+                let prev_in_block = state.in_block_scope;
+                let prev_catch_param =
+                    std::mem::replace(&mut state.catch_simple_param, handler.parameter.clone());
+                state.in_block_scope = true;
                 for child in &handler.body.body {
                     analyze_statement(
                         state,
@@ -784,6 +867,9 @@ fn analyze_statement(
                         &mut catch_var,
                     );
                 }
+                state.in_block_scope = prev_in_block;
+                state.catch_simple_param = prev_catch_param;
+                hoist_block_vars(state, &catch_var, lexical_names, var_names);
                 let catch_scope = ScopeNode {
                     scope_id: catch_scope_id,
                     parent: Some(scope_id),
@@ -794,25 +880,41 @@ fn analyze_statement(
                 state.bindings.extend(catch_bindings);
             }
             if let Some(ref finalizer) = tc.finalizer {
+                let mut fin_lex: BTreeMap<String, SourceSpan> = BTreeMap::new();
+                let mut fin_var: BTreeMap<String, SourceSpan> = BTreeMap::new();
+                let prev_in_block = state.in_block_scope;
+                let prev_catch_param = state.catch_simple_param.take();
+                state.in_block_scope = true;
                 for child in &finalizer.body {
-                    analyze_statement(state, child, scope_id, bindings, lexical_names, var_names);
+                    analyze_statement(state, child, scope_id, bindings, &mut fin_lex, &mut fin_var);
                 }
+                state.in_block_scope = prev_in_block;
+                state.catch_simple_param = prev_catch_param;
+                hoist_block_vars(state, &fin_var, lexical_names, var_names);
             }
         }
 
         Statement::Switch(sw) => {
             check_await_in_expression(state, &sw.discriminant, &sw.span);
             let prev_in_switch = state.in_switch;
+            let prev_in_block = state.in_block_scope;
+            let prev_catch_param = state.catch_simple_param.take();
             state.in_switch = true;
+            state.in_block_scope = true;
+            let mut sw_lex: BTreeMap<String, SourceSpan> = BTreeMap::new();
+            let mut sw_var: BTreeMap<String, SourceSpan> = BTreeMap::new();
             for case in &sw.cases {
                 if let Some(ref test) = case.test {
                     check_await_in_expression(state, test, &sw.span);
                 }
                 for child in &case.consequent {
-                    analyze_statement(state, child, scope_id, bindings, lexical_names, var_names);
+                    analyze_statement(state, child, scope_id, bindings, &mut sw_lex, &mut sw_var);
                 }
             }
             state.in_switch = prev_in_switch;
+            state.in_block_scope = prev_in_block;
+            state.catch_simple_param = prev_catch_param;
+            hoist_block_vars(state, &sw_var, lexical_names, var_names);
         }
 
         Statement::Break(brk) => {
@@ -856,79 +958,104 @@ fn analyze_statement(
             if let Some(ref name) = func.name {
                 check_reserved(state, name, &func.span);
                 let bid = state.alloc_binding_id();
+                let is_lexical_fn = state.in_block_scope || (state.is_module && !state.in_function);
                 bindings.push(ResolvedBinding {
                     name: name.clone(),
                     binding_id: bid,
                     scope: scope_id,
-                    kind: BindingKind::Var,
+                    kind: if is_lexical_fn {
+                        BindingKind::Let
+                    } else {
+                        BindingKind::Var
+                    },
                 });
-                if let Some(prev_span) = var_names.get(name) {
-                    let _ = prev_span;
-                }
-                var_names.insert(name.clone(), func.span);
-            }
-            let func_scope_id = state.alloc_scope_id(scope_id.depth + 1);
-            let mut func_bindings: Vec<ResolvedBinding> = Vec::new();
-            let mut func_lex: BTreeMap<String, SourceSpan> = BTreeMap::new();
-            let mut func_var: BTreeMap<String, SourceSpan> = BTreeMap::new();
-            let mut seen_params: BTreeSet<String> = BTreeSet::new();
-            for param in &func.params {
-                for bound_name in param.pattern.binding_names() {
-                    check_reserved(state, bound_name, &param.span);
-                    if !seen_params.insert(bound_name.to_string()) && state.is_module {
+                if state.in_block_scope {
+                    // ES2020 §13.2.13 / Annex B.3.3: block-level function declarations
+                    // collide with `let`/`const`/`class`/`var` in the same block, and
+                    // duplicate block functions collide in strict mode or for async/generator.
+                    if let Some(prev_span) = var_names.get(name) {
                         state.push_error(
-                            StaticErrorKind::DuplicateParameter,
-                            format!("duplicate parameter name '{}'", bound_name),
-                            param.span,
+                            StaticErrorKind::LexicalVarCollision,
+                            format!(
+                                "function '{}' collides with var declaration at line {}",
+                                name, prev_span.start_line
+                            ),
+                            func.span,
                         );
                     }
-                    let bid = state.alloc_binding_id();
-                    func_bindings.push(ResolvedBinding {
-                        name: bound_name.to_string(),
-                        binding_id: bid,
-                        scope: func_scope_id,
-                        kind: BindingKind::Parameter,
-                    });
+                    if let Some(prev_span) = lexical_names.get(name) {
+                        if state.in_strict_mode || func.is_async || func.is_generator {
+                            state.push_error(
+                                StaticErrorKind::DuplicateBinding,
+                                format!(
+                                    "identifier '{}' has already been declared at line {}",
+                                    name, prev_span.start_line
+                                ),
+                                func.span,
+                            );
+                        }
+                    } else if state.in_strict_mode || func.is_async || func.is_generator {
+                        lexical_names.insert(name.clone(), func.span);
+                    }
+                } else if state.is_module && !state.in_function {
+                    if let Some(prev_span) = lexical_names.get(name) {
+                        state.push_error(
+                            StaticErrorKind::DuplicateBinding,
+                            format!(
+                                "identifier '{}' has already been declared at line {}",
+                                name, prev_span.start_line
+                            ),
+                            func.span,
+                        );
+                    } else {
+                        lexical_names.insert(name.clone(), func.span);
+                    }
+                    if let Some(prev_span) = var_names.get(name) {
+                        state.push_error(
+                            StaticErrorKind::LexicalVarCollision,
+                            format!(
+                                "function '{}' collides with var declaration at line {}",
+                                name, prev_span.start_line
+                            ),
+                            func.span,
+                        );
+                    }
+                } else {
+                    if let Some(prev_span) = lexical_names.get(name) {
+                        state.push_error(
+                            StaticErrorKind::LexicalVarCollision,
+                            format!(
+                                "function '{}' collides with lexical declaration at line {}",
+                                name, prev_span.start_line
+                            ),
+                            func.span,
+                        );
+                    }
+                    var_names.insert(name.clone(), func.span);
                 }
             }
-            let prev_in_function = state.in_function;
-            let prev_in_loop = state.in_loop;
-            let prev_in_switch = state.in_switch;
-            let prev_const_bindings = state.const_bindings.clone();
-            let prev_await_allowed = state.await_allowed;
-            state.in_function = true;
-            state.in_loop = false;
-            state.in_switch = false;
-            state.const_bindings = BTreeSet::new();
-            state.await_allowed = func.is_async;
-            for child in &func.body.body {
-                analyze_statement(
-                    state,
-                    child,
-                    func_scope_id,
-                    &mut func_bindings,
-                    &mut func_lex,
-                    &mut func_var,
-                );
-            }
-            state.in_function = prev_in_function;
-            state.in_loop = prev_in_loop;
-            state.in_switch = prev_in_switch;
-            state.const_bindings = prev_const_bindings;
-            state.await_allowed = prev_await_allowed;
-            let func_scope = ScopeNode {
-                scope_id: func_scope_id,
-                parent: Some(scope_id),
-                kind: ScopeKind::Function,
-                bindings: func_bindings.clone(),
-            };
-            state.scopes.push(func_scope);
-            state.bindings.extend(func_bindings);
+            analyze_function_like(
+                state,
+                Some(scope_id),
+                scope_id.depth + 1,
+                None,
+                &func.params,
+                &func.body,
+                func.is_async,
+                func.is_generator,
+                func.strict,
+                func.source_text.is_some(),
+                false,
+                &func.span,
+            );
         }
 
         Statement::ClassDeclaration(class_decl) => {
             if let Some(ref name) = class_decl.name {
+                let prev_strict = state.in_strict_mode;
+                state.in_strict_mode = true;
                 check_reserved(state, name, &class_decl.span);
+                state.in_strict_mode = prev_strict;
 
                 if let Some(prev_span) = lexical_names.get(name) {
                     state.push_error(
@@ -974,74 +1101,15 @@ fn analyze_statement(
                 });
             }
 
-            if let Some(super_class) = &class_decl.super_class {
-                check_await_in_expression(state, super_class, &class_decl.span);
-            }
-
-            for method in &class_decl.body {
-                check_await_in_expression(state, &method.key, &method.span);
-
-                let method_scope_id = state.alloc_scope_id(scope_id.depth + 1);
-                let mut method_bindings: Vec<ResolvedBinding> = Vec::new();
-                let mut method_lex: BTreeMap<String, SourceSpan> = BTreeMap::new();
-                let mut method_var: BTreeMap<String, SourceSpan> = BTreeMap::new();
-                let mut seen_params: BTreeSet<String> = BTreeSet::new();
-
-                for param in &method.params {
-                    for bound_name in param.pattern.binding_names() {
-                        check_reserved(state, bound_name, &param.span);
-                        if !seen_params.insert(bound_name.to_string()) && state.is_module {
-                            state.push_error(
-                                StaticErrorKind::DuplicateParameter,
-                                format!("duplicate parameter name '{}'", bound_name),
-                                param.span,
-                            );
-                        }
-                        let bid = state.alloc_binding_id();
-                        method_bindings.push(ResolvedBinding {
-                            name: bound_name.to_string(),
-                            binding_id: bid,
-                            scope: method_scope_id,
-                            kind: BindingKind::Parameter,
-                        });
-                    }
-                    check_destructuring_duplicates(state, &param.pattern, &param.span);
-                }
-
-                let prev_in_function = state.in_function;
-                let prev_in_loop = state.in_loop;
-                let prev_in_switch = state.in_switch;
-                let prev_const_bindings = state.const_bindings.clone();
-                state.in_function = true;
-                state.in_loop = false;
-                state.in_switch = false;
-                state.const_bindings = BTreeSet::new();
-
-                for child in &method.body.body {
-                    analyze_statement(
-                        state,
-                        child,
-                        method_scope_id,
-                        &mut method_bindings,
-                        &mut method_lex,
-                        &mut method_var,
-                    );
-                }
-
-                state.in_function = prev_in_function;
-                state.in_loop = prev_in_loop;
-                state.in_switch = prev_in_switch;
-                state.const_bindings = prev_const_bindings;
-
-                let method_scope = ScopeNode {
-                    scope_id: method_scope_id,
-                    parent: Some(scope_id),
-                    kind: ScopeKind::Function,
-                    bindings: method_bindings.clone(),
-                };
-                state.scopes.push(method_scope);
-                state.bindings.extend(method_bindings);
-            }
+            analyze_class_elements(
+                state,
+                Some(scope_id),
+                scope_id.depth + 1,
+                None,
+                class_decl.super_class.as_deref(),
+                &class_decl.body,
+                &class_decl.span,
+            );
         }
 
         Statement::ForIn(for_in_stmt) => {
@@ -1063,7 +1131,7 @@ fn analyze_statement(
             let for_in_scope_id = state.alloc_scope_id(scope_id.depth + 1);
             let mut for_in_bindings: Vec<ResolvedBinding> = Vec::new();
             let mut for_in_lex: BTreeMap<String, SourceSpan> = BTreeMap::new();
-            let mut for_in_var: BTreeMap<String, SourceSpan> = var_names.clone();
+            let mut for_in_var: BTreeMap<String, SourceSpan> = BTreeMap::new();
             if let Some(ref kind) = for_in_stmt.binding_kind {
                 let bk = match kind {
                     VariableDeclarationKind::Var => BindingKind::Var,
@@ -1072,9 +1140,13 @@ fn analyze_statement(
                 };
                 let mut declared_var_names = BTreeSet::new();
                 for bound_name in for_in_stmt.binding.binding_names() {
-                    if bk == BindingKind::Var && !declared_var_names.insert(bound_name.to_string())
-                    {
-                        continue;
+                    if bk == BindingKind::Var {
+                        for_in_var.insert(bound_name.to_string(), for_in_stmt.span);
+                        if !declared_var_names.insert(bound_name.to_string()) {
+                            continue;
+                        }
+                    } else {
+                        for_in_lex.insert(bound_name.to_string(), for_in_stmt.span);
                     }
                     let bid = state.alloc_binding_id();
                     for_in_bindings.push(ResolvedBinding {
@@ -1086,7 +1158,10 @@ fn analyze_statement(
                 }
             }
             let prev_in_loop = state.in_loop;
+            let prev_in_block = state.in_block_scope;
+            let prev_catch_param = state.catch_simple_param.take();
             state.in_loop = true;
+            state.in_block_scope = true;
             analyze_statement(
                 state,
                 &for_in_stmt.body,
@@ -1096,6 +1171,9 @@ fn analyze_statement(
                 &mut for_in_var,
             );
             state.in_loop = prev_in_loop;
+            state.in_block_scope = prev_in_block;
+            state.catch_simple_param = prev_catch_param;
+            hoist_block_vars(state, &for_in_var, lexical_names, var_names);
             let for_in_scope = ScopeNode {
                 scope_id: for_in_scope_id,
                 parent: Some(scope_id),
@@ -1125,7 +1203,7 @@ fn analyze_statement(
             let for_of_scope_id = state.alloc_scope_id(scope_id.depth + 1);
             let mut for_of_bindings: Vec<ResolvedBinding> = Vec::new();
             let mut for_of_lex: BTreeMap<String, SourceSpan> = BTreeMap::new();
-            let mut for_of_var: BTreeMap<String, SourceSpan> = var_names.clone();
+            let mut for_of_var: BTreeMap<String, SourceSpan> = BTreeMap::new();
             if let Some(ref kind) = for_of_stmt.binding_kind {
                 let bk = match kind {
                     VariableDeclarationKind::Var => BindingKind::Var,
@@ -1134,9 +1212,13 @@ fn analyze_statement(
                 };
                 let mut declared_var_names = BTreeSet::new();
                 for bound_name in for_of_stmt.binding.binding_names() {
-                    if bk == BindingKind::Var && !declared_var_names.insert(bound_name.to_string())
-                    {
-                        continue;
+                    if bk == BindingKind::Var {
+                        for_of_var.insert(bound_name.to_string(), for_of_stmt.span);
+                        if !declared_var_names.insert(bound_name.to_string()) {
+                            continue;
+                        }
+                    } else {
+                        for_of_lex.insert(bound_name.to_string(), for_of_stmt.span);
                     }
                     let bid = state.alloc_binding_id();
                     for_of_bindings.push(ResolvedBinding {
@@ -1148,7 +1230,10 @@ fn analyze_statement(
                 }
             }
             let prev_in_loop = state.in_loop;
+            let prev_in_block = state.in_block_scope;
+            let prev_catch_param = state.catch_simple_param.take();
             state.in_loop = true;
+            state.in_block_scope = true;
             analyze_statement(
                 state,
                 &for_of_stmt.body,
@@ -1158,6 +1243,9 @@ fn analyze_statement(
                 &mut for_of_var,
             );
             state.in_loop = prev_in_loop;
+            state.in_block_scope = prev_in_block;
+            state.catch_simple_param = prev_catch_param;
+            hoist_block_vars(state, &for_of_var, lexical_names, var_names);
             let for_of_scope = ScopeNode {
                 scope_id: for_of_scope_id,
                 parent: Some(scope_id),
@@ -1181,6 +1269,209 @@ fn analyze_statement(
             );
         }
     }
+}
+
+fn hoist_block_vars(
+    state: &mut AnalyzerState,
+    child_var: &BTreeMap<String, SourceSpan>,
+    parent_lex: &BTreeMap<String, SourceSpan>,
+    parent_var: &mut BTreeMap<String, SourceSpan>,
+) {
+    for (name, span) in child_var {
+        if state.catch_simple_param.as_deref() != Some(name.as_str())
+            && let Some(prev_span) = parent_lex.get(name.as_str())
+        {
+            state.push_error(
+                StaticErrorKind::LexicalVarCollision,
+                format!(
+                    "var '{}' collides with lexical declaration at line {}",
+                    name, prev_span.start_line
+                ),
+                *span,
+            );
+        }
+        parent_var.entry(name.clone()).or_insert(*span);
+    }
+}
+
+fn walk_pattern_defaults(
+    state: &mut AnalyzerState,
+    pattern: &crate::ast::BindingPattern,
+    span: &SourceSpan,
+) {
+    match pattern {
+        crate::ast::BindingPattern::Identifier(_) => {}
+        crate::ast::BindingPattern::ObjectPattern(props) => {
+            for prop in props {
+                if prop.computed {
+                    walk_expression(state, &prop.key, span);
+                }
+                walk_pattern_defaults(state, &prop.value, span);
+            }
+        }
+        crate::ast::BindingPattern::ArrayPattern(elems) => {
+            for elem in elems.iter().flatten() {
+                walk_pattern_defaults(state, elem, span);
+            }
+        }
+        crate::ast::BindingPattern::Rest(inner) => walk_pattern_defaults(state, inner, span),
+        crate::ast::BindingPattern::AssignmentPattern { left, right } => {
+            walk_pattern_defaults(state, left, span);
+            walk_expression(state, right, span);
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn analyze_function_like(
+    state: &mut AnalyzerState,
+    parent_scope: Option<ScopeId>,
+    scope_depth: u32,
+    self_expr_name: Option<&str>,
+    params: &[crate::ast::FunctionParam],
+    body: &crate::ast::BlockStatement,
+    is_async: bool,
+    is_generator: bool,
+    func_strict: bool,
+    has_source_text: bool,
+    is_concise_method: bool,
+    span: &SourceSpan,
+) {
+    let fn_strict = state.in_strict_mode
+        || func_strict
+        || (!has_source_text && has_ast_use_strict_directive(&body.body));
+    let forbid_dup_params = fn_strict
+        || is_async
+        || is_generator
+        || is_concise_method
+        || !is_simple_parameter_list(params);
+
+    let func_scope_id = state.alloc_scope_id(scope_depth);
+    let mut func_bindings: Vec<ResolvedBinding> = Vec::new();
+    let mut func_lex: BTreeMap<String, SourceSpan> = BTreeMap::new();
+    let mut func_var: BTreeMap<String, SourceSpan> = BTreeMap::new();
+    let mut seen_params: BTreeSet<String> = BTreeSet::new();
+
+    let prev_strict = state.in_strict_mode;
+    let prev_in_function = state.in_function;
+    let prev_in_loop = state.in_loop;
+    let prev_in_switch = state.in_switch;
+    let prev_in_block = state.in_block_scope;
+    let prev_catch_param = state.catch_simple_param.take();
+    let prev_const_bindings = state.const_bindings.clone();
+    let prev_await_allowed = state.await_allowed;
+    let prev_concise = state.in_concise_method_fn;
+
+    state.in_strict_mode = fn_strict;
+    state.in_function = true;
+    state.in_loop = false;
+    state.in_switch = false;
+    state.in_block_scope = false;
+    state.in_concise_method_fn = false;
+    state.const_bindings = BTreeSet::new();
+
+    if let Some(name) = self_expr_name {
+        check_reserved(state, name, span);
+    }
+
+    // ES2020 §14.1.2 / §14.7.1: `await` is disallowed inside FormalParameters.
+    state.await_allowed = false;
+    for param in params {
+        for bound_name in param.pattern.binding_names() {
+            check_reserved(state, bound_name, &param.span);
+            if !seen_params.insert(bound_name.to_string()) && forbid_dup_params {
+                state.push_error(
+                    StaticErrorKind::DuplicateParameter,
+                    format!("duplicate parameter name '{}'", bound_name),
+                    param.span,
+                );
+            }
+            let bid = state.alloc_binding_id();
+            func_bindings.push(ResolvedBinding {
+                name: bound_name.to_string(),
+                binding_id: bid,
+                scope: func_scope_id,
+                kind: BindingKind::Parameter,
+            });
+        }
+        if forbid_dup_params {
+            check_destructuring_duplicates(state, &param.pattern, &param.span);
+        }
+        walk_pattern_defaults(state, &param.pattern, &param.span);
+    }
+
+    state.await_allowed = is_async;
+    for child in &body.body {
+        analyze_statement(
+            state,
+            child,
+            func_scope_id,
+            &mut func_bindings,
+            &mut func_lex,
+            &mut func_var,
+        );
+    }
+
+    state.in_strict_mode = prev_strict;
+    state.in_function = prev_in_function;
+    state.in_loop = prev_in_loop;
+    state.in_switch = prev_in_switch;
+    state.in_block_scope = prev_in_block;
+    state.catch_simple_param = prev_catch_param;
+    state.const_bindings = prev_const_bindings;
+    state.await_allowed = prev_await_allowed;
+    state.in_concise_method_fn = prev_concise;
+
+    let func_scope = ScopeNode {
+        scope_id: func_scope_id,
+        parent: parent_scope,
+        kind: ScopeKind::Function,
+        bindings: func_bindings.clone(),
+    };
+    state.scopes.push(func_scope);
+    state.bindings.extend(func_bindings);
+}
+
+fn analyze_class_elements(
+    state: &mut AnalyzerState,
+    parent_scope: Option<ScopeId>,
+    method_depth: u32,
+    self_expr_name: Option<&str>,
+    super_class: Option<&Expression>,
+    body: &[crate::ast::MethodDefinition],
+    span: &SourceSpan,
+) {
+    // ES2020 §10.2.1: all parts of a ClassDeclaration or ClassExpression are strict mode code.
+    let prev_strict = state.in_strict_mode;
+    state.in_strict_mode = true;
+
+    if let Some(name) = self_expr_name {
+        check_reserved(state, name, span);
+    }
+
+    if let Some(super_expr) = super_class {
+        check_await_in_expression(state, super_expr, span);
+    }
+
+    for method in body {
+        check_await_in_expression(state, &method.key, &method.span);
+        analyze_function_like(
+            state,
+            parent_scope,
+            method_depth,
+            None,
+            &method.params,
+            &method.body,
+            method.is_async,
+            method.is_generator,
+            true,
+            method.source_text.is_some(),
+            true,
+            &method.span,
+        );
+    }
+
+    state.in_strict_mode = prev_strict;
 }
 
 fn analyze_variable_declaration(
@@ -1221,8 +1512,11 @@ fn analyze_variable_declaration(
             check_reserved(state, bound_name, &declarator.span);
         }
 
-        // Check for duplicate names within a single destructuring pattern
-        check_destructuring_duplicates(state, &declarator.pattern, &declarator.span);
+        // Check for duplicate names within a single lexical destructuring pattern;
+        // `var { a, a } = obj` is valid in ES2020 (§13.3.2).
+        if is_lexical {
+            check_destructuring_duplicates(state, &declarator.pattern, &declarator.span);
+        }
 
         // const without initializer
         if decl.kind == VariableDeclarationKind::Const && declarator.initializer.is_none() {
@@ -1297,8 +1591,10 @@ fn analyze_variable_declaration(
                     );
                 }
             } else {
-                // var declaration
-                if let Some(prev_span) = lexical_names.get(*name) {
+                // var declaration (ES2020 Annex B.3.5 allows `var e` for simple catch parameter `e`)
+                if state.catch_simple_param.as_deref() != Some(*name)
+                    && let Some(prev_span) = lexical_names.get(*name)
+                {
                     state.push_error(
                         StaticErrorKind::LexicalVarCollision,
                         format!(
@@ -1329,11 +1625,12 @@ fn analyze_variable_declaration(
         if let Some(ref init_expr) = declarator.initializer {
             check_await_in_expression(state, init_expr, &declarator.span);
         }
+        walk_pattern_defaults(state, &declarator.pattern, &declarator.span);
     }
 }
 
 fn check_reserved(state: &mut AnalyzerState, name: &str, span: &SourceSpan) {
-    if is_reserved_binding(name, state.is_module) {
+    if is_reserved_binding(name, state.in_strict_mode) {
         state.push_error(
             StaticErrorKind::ReservedWordBinding,
             format!(
@@ -1344,7 +1641,7 @@ fn check_reserved(state: &mut AnalyzerState, name: &str, span: &SourceSpan) {
         );
     }
     // ES2020 §12.1.1: 'eval' and 'arguments' cannot be binding names in strict mode
-    if state.is_module && (name == "eval" || name == "arguments") {
+    if state.in_strict_mode && (name == "eval" || name == "arguments") {
         state.push_error(
             StaticErrorKind::EvalArgumentsBinding,
             format!("'{}' cannot be used as a binding name in strict mode", name),
@@ -1376,8 +1673,8 @@ fn check_destructuring_duplicates(
 }
 
 /// Recursively walk an expression tree, checking for:
-/// - `await` outside module context
-/// - `delete` of a bare identifier in module (strict) mode
+/// - `await` outside async/module context
+/// - `delete` of a bare identifier in strict mode
 /// - Assignment to const-declared bindings
 fn walk_expression(state: &mut AnalyzerState, expr: &Expression, span: &SourceSpan) {
     match expr {
@@ -1409,12 +1706,9 @@ fn walk_expression(state: &mut AnalyzerState, expr: &Expression, span: &SourceSp
         Expression::Unary {
             operator, argument, ..
         } => {
-            if matches!(
-                operator,
-                crate::ast::UnaryOperator::Delete | crate::ast::UnaryOperator::StrictDelete
-            ) && state.is_module
-                && matches!(argument.as_ref(), Expression::Identifier(_))
-            {
+            let is_strict_delete = matches!(operator, crate::ast::UnaryOperator::StrictDelete)
+                || (matches!(operator, crate::ast::UnaryOperator::Delete) && state.in_strict_mode);
+            if is_strict_delete && matches!(argument.as_ref(), Expression::Identifier(_)) {
                 state.push_error(
                     StaticErrorKind::DeleteOfIdentifier,
                     "delete of a bare identifier is not allowed in strict mode",
@@ -1481,42 +1775,60 @@ fn walk_expression(state: &mut AnalyzerState, expr: &Expression, span: &SourceSp
         Expression::ObjectLiteral(props) => {
             for prop in props {
                 walk_expression(state, &prop.key, span);
+                let prev_concise = state.in_concise_method_fn;
+                state.in_concise_method_fn = prop.kind != crate::ast::ObjectPropertyKind::Data;
                 walk_expression(state, &prop.value, span);
+                state.in_concise_method_fn = prev_concise;
             }
         }
         Expression::ArrowFunction {
             params,
             body,
             is_async,
-            ..
+            source_text,
         } => {
-            // Check for duplicate parameter names in strict mode (module code)
-            if state.is_module {
-                let mut seen_params: BTreeSet<String> = BTreeSet::new();
-                for param in params {
-                    for bound_name in param.pattern.binding_names() {
-                        check_reserved(state, bound_name, &param.span);
-                        if !seen_params.insert(bound_name.to_string()) {
-                            state.push_error(
-                                StaticErrorKind::DuplicateParameter,
-                                format!("duplicate parameter name '{}'", bound_name),
-                                param.span,
-                            );
-                        }
+            let arrow_strict = state.in_strict_mode
+                || match body {
+                    crate::ast::ArrowBody::Block(block) => {
+                        arrow_source_has_use_strict(source_text.as_ref(), &block.body)
                     }
-                }
-            }
-            // Check for duplicate binding names within destructuring patterns
-            for param in params {
-                check_destructuring_duplicates(state, &param.pattern, &param.span);
-            }
+                    crate::ast::ArrowBody::Expression(_) => false,
+                };
+            let prev_strict = state.in_strict_mode;
             let prev_in_function = state.in_function;
             let prev_in_loop = state.in_loop;
             let prev_in_switch = state.in_switch;
+            let prev_in_block = state.in_block_scope;
+            let prev_catch_param = state.catch_simple_param.take();
             let prev_await_allowed = state.await_allowed;
+            let prev_concise = state.in_concise_method_fn;
+
+            state.in_strict_mode = arrow_strict;
+            state.in_concise_method_fn = false;
+            state.await_allowed = false;
+
+            // ES2020 §14.2.1: ArrowParameters ALWAYS forbid duplicate parameter names
+            // even in non-strict script mode.
+            let mut seen_params: BTreeSet<String> = BTreeSet::new();
+            for param in params {
+                for bound_name in param.pattern.binding_names() {
+                    check_reserved(state, bound_name, &param.span);
+                    if !seen_params.insert(bound_name.to_string()) {
+                        state.push_error(
+                            StaticErrorKind::DuplicateParameter,
+                            format!("duplicate parameter name '{}'", bound_name),
+                            param.span,
+                        );
+                    }
+                }
+                check_destructuring_duplicates(state, &param.pattern, &param.span);
+                walk_pattern_defaults(state, &param.pattern, &param.span);
+            }
+
             state.in_function = true;
             state.in_loop = false;
             state.in_switch = false;
+            state.in_block_scope = false;
             state.await_allowed = *is_async;
             match body {
                 crate::ast::ArrowBody::Expression(inner) => {
@@ -1551,10 +1863,14 @@ fn walk_expression(state: &mut AnalyzerState, expr: &Expression, span: &SourceSp
                     state.bindings.extend(arrow_bindings);
                 }
             }
+            state.in_strict_mode = prev_strict;
             state.in_function = prev_in_function;
             state.in_loop = prev_in_loop;
             state.in_switch = prev_in_switch;
+            state.in_block_scope = prev_in_block;
+            state.catch_simple_param = prev_catch_param;
             state.await_allowed = prev_await_allowed;
+            state.in_concise_method_fn = prev_concise;
         }
         Expression::New { callee, arguments } => {
             walk_expression(state, callee, span);
@@ -1567,21 +1883,46 @@ fn walk_expression(state: &mut AnalyzerState, expr: &Expression, span: &SourceSp
                 walk_expression(state, expr, span);
             }
         }
-        Expression::Function { body, .. } => {
-            for stmt in &body.body {
-                let fn_scope_id = state.alloc_scope_id(0);
-                let mut fn_bindings = Vec::new();
-                let mut fn_lex = BTreeMap::new();
-                let mut fn_var = BTreeMap::new();
-                analyze_statement(
-                    state,
-                    stmt,
-                    fn_scope_id,
-                    &mut fn_bindings,
-                    &mut fn_lex,
-                    &mut fn_var,
-                );
-            }
+        Expression::Function {
+            name,
+            params,
+            body,
+            is_async,
+            is_generator,
+            source_text,
+            strict,
+        } => {
+            let is_concise_method = state.in_concise_method_fn;
+            analyze_function_like(
+                state,
+                None,
+                0,
+                name.as_deref(),
+                params,
+                body,
+                *is_async,
+                *is_generator,
+                *strict,
+                source_text.is_some(),
+                is_concise_method,
+                span,
+            );
+        }
+        Expression::ClassExpression {
+            name,
+            super_class,
+            body,
+            ..
+        } => {
+            analyze_class_elements(
+                state,
+                None,
+                1,
+                name.as_deref(),
+                super_class.as_deref(),
+                body,
+                span,
+            );
         }
         Expression::Identifier(_)
         | Expression::StringLiteral(_)
@@ -1597,8 +1938,7 @@ fn walk_expression(state: &mut AnalyzerState, expr: &Expression, span: &SourceSp
         | Expression::ImportMeta
         | Expression::Super
         | Expression::Raw(_)
-        | Expression::RegExpLiteral { .. }
-        | Expression::ClassExpression { .. } => {}
+        | Expression::RegExpLiteral { .. } => {}
     }
 }
 
@@ -6385,5 +6725,92 @@ mod tests {
                 .any(|e| e.kind == StaticErrorKind::DuplicateDestructuringBinding),
             "duplicate 'x' in for-of destructuring pattern should be detected"
         );
+    }
+
+    #[test]
+    fn use_strict_script_enforces_reserved_eval_delete_and_duplicate_params() {
+        use crate::parser::{CanonicalEs2020Parser, Es2020Parser};
+        let parser = CanonicalEs2020Parser;
+
+        for (src, expected) in [
+            (
+                "\"use strict\"; var implements = 1;",
+                StaticErrorKind::ReservedWordBinding,
+            ),
+            (
+                "\"use strict\"; var eval = 1;",
+                StaticErrorKind::EvalArgumentsBinding,
+            ),
+            (
+                "function f(a, a) { \"use strict\"; return a; }",
+                StaticErrorKind::DuplicateParameter,
+            ),
+            ("(a, a) => a;", StaticErrorKind::DuplicateParameter),
+        ] {
+            if let Ok(tree) = parser.parse(src, ParseGoal::Script) {
+                let res = analyze(&tree);
+                assert!(
+                    res.errors.iter().any(|e| e.kind == expected),
+                    "expected {expected:?} on `{src}`, got {:?}",
+                    res.errors
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn function_and_class_expressions_enforce_boundaries_and_allow_async_await() {
+        use crate::parser::{CanonicalEs2020Parser, Es2020Parser};
+        let parser = CanonicalEs2020Parser;
+
+        // `break` inside nested FunctionExpression must NOT inherit outer loop
+        let bad_break = parser
+            .parse(
+                "while (false) { const f = function() { break; }; }",
+                ParseGoal::Script,
+            )
+            .expect("parses");
+        let res = analyze(&bad_break);
+        assert!(
+            res.errors
+                .iter()
+                .any(|e| e.kind == StaticErrorKind::BreakOutsideLoop),
+            "break inside FunctionExpression must not inherit outer loop"
+        );
+
+        // `return` inside FunctionExpression and async await inside ClassExpression / async method must pass
+        for valid_src in [
+            "const f = function(x) { return x + 1; };",
+            "const g = async function() { return await 1; };",
+            "class C { async m() { return await 2; } }",
+            "const D = class { async m() { return await 3; } };",
+            "var { a, a } = { a: 1 };",
+            "var x = 1; { let x = 2; }",
+            "try { let x = 1; } catch (e) { var e = 2; } finally { let x = 3; }",
+        ] {
+            let tree = parser
+                .parse(valid_src, ParseGoal::Script)
+                .unwrap_or_else(|err| panic!("expected `{valid_src}` to parse: {err:?}"));
+            let res = analyze(&tree);
+            assert!(
+                res.errors.is_empty(),
+                "expected zero static errors for `{valid_src}`, got {:?}",
+                res.errors
+            );
+        }
+
+        // `let x = 1; { var x = 2; }` and `{ var x = 2; } let x = 1;` must fail with LexicalVarCollision
+        for collision_src in ["let x = 1; { var x = 2; }", "{ var x = 2; } let x = 1;"] {
+            if let Ok(tree) = parser.parse(collision_src, ParseGoal::Script) {
+                let res = analyze(&tree);
+                assert!(
+                    res.errors
+                        .iter()
+                        .any(|e| e.kind == StaticErrorKind::LexicalVarCollision),
+                    "expected LexicalVarCollision for `{collision_src}`, got {:?}",
+                    res.errors
+                );
+            }
+        }
     }
 }

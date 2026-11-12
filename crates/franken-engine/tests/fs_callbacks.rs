@@ -32,8 +32,14 @@ fn run(source: &str, root: &Path, lane: LaneChoice, caps: &[&str]) -> Result<Vec
         version: "1.0.0".into(),
         metadata: BTreeMap::new(),
     };
-    let result = runtime.execute(&package).map_err(|error| format!("{error:?}"))?;
-    Ok(result.console_output.into_iter().map(|line| line.message).collect())
+    let result = runtime
+        .execute(&package)
+        .map_err(|error| format!("{error:?}"))?;
+    Ok(result
+        .console_output
+        .into_iter()
+        .map(|line| line.message)
+        .collect())
 }
 
 #[test]
@@ -61,11 +67,19 @@ returned=true;
         let root = tempfile::tempdir().expect("sandbox");
         let output = run(source, root.path(), lane, &["fs_read", "fs_write"])
             .expect("native descriptor callbacks complete");
-        assert_eq!(output, [
-            "OPEN_CALLBACK true number", "WRITE_CALLBACK 5 true",
-            "READ_CALLBACK 5 true _hello_", "FD_COMPLETE",
-        ]);
-        assert_eq!(std::fs::read(root.path().join("result.txt")).unwrap(), b"hello");
+        assert_eq!(
+            output,
+            [
+                "OPEN_CALLBACK true number",
+                "WRITE_CALLBACK 5 true",
+                "READ_CALLBACK 5 true _hello_",
+                "FD_COMPLETE",
+            ]
+        );
+        assert_eq!(
+            std::fs::read(root.path().join("result.txt")).unwrap(),
+            b"hello"
+        );
     }
 }
 
@@ -86,10 +100,14 @@ const fs=require('fs');const {promisify}=require('util');
 "#;
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
         let root = tempfile::tempdir().expect("sandbox");
-        assert_eq!(run(source, root.path(), lane, &["fs_read", "fs_write"]).unwrap(), [
-            "VECTOR_CALLBACKS 4 true 4 true abcd__", "VECTOR_COMPLETE",
-        ]);
-        assert_eq!(std::fs::read(root.path().join("vector.txt")).unwrap(), b"abcd");
+        assert_eq!(
+            run(source, root.path(), lane, &["fs_read", "fs_write"]).unwrap(),
+            ["VECTOR_CALLBACKS 4 true 4 true abcd__", "VECTOR_COMPLETE",]
+        );
+        assert_eq!(
+            std::fs::read(root.path().join("vector.txt")).unwrap(),
+            b"abcd"
+        );
     }
 }
 
@@ -114,9 +132,14 @@ const fs=require('fs');const {promisify}=require('util');
         std::fs::create_dir(root.path().join("input")).unwrap();
         std::fs::write(root.path().join("input/keep.txt"), b"data").unwrap();
         std::fs::write(root.path().join("input/skip.txt"), b"also").unwrap();
-        assert_eq!(run(source, root.path(), lane, &["fs_read", "fs_write"]).unwrap(),
-            ["METADATA_COMPLETE 4 data false"]);
-        assert_eq!(std::fs::read(root.path().join("output/result.txt")).unwrap(), b"data");
+        assert_eq!(
+            run(source, root.path(), lane, &["fs_read", "fs_write"]).unwrap(),
+            ["METADATA_COMPLETE 4 data false"]
+        );
+        assert_eq!(
+            std::fs::read(root.path().join("output/result.txt")).unwrap(),
+            b"data"
+        );
         assert!(!root.path().join("output/skip.txt").exists());
     }
 }
@@ -144,9 +167,16 @@ const fs=require('fs');
 try{fs.open('keep.txt','w',null);}catch(error){console.log('INVALID_CALLBACK',error.code);}
 console.log('VALIDATION_COMPLETE',fs.readFileSync('keep.txt','utf8'));
 "#;
-        assert_eq!(run(source, root.path(), lane, &["fs_read", "fs_write"]).unwrap(), [
-            "INVALID_CALLBACK ERR_INVALID_ARG_TYPE", "VALIDATION_COMPLETE original",
-        ]);
-        assert_eq!(std::fs::read(root.path().join("keep.txt")).unwrap(), b"original");
+        assert_eq!(
+            run(source, root.path(), lane, &["fs_read", "fs_write"]).unwrap(),
+            [
+                "INVALID_CALLBACK ERR_INVALID_ARG_TYPE",
+                "VALIDATION_COMPLETE original",
+            ]
+        );
+        assert_eq!(
+            std::fs::read(root.path().join("keep.txt")).unwrap(),
+            b"original"
+        );
     }
 }

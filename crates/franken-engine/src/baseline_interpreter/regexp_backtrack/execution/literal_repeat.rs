@@ -115,7 +115,9 @@ impl Run<'_> {
         let start = position;
         let old = self.registers[repeat.register];
         // Resolve the existing cache once for the entire scan, not per body.
-        let block = self.literal_blocks.at(self.regexp, repeat.body)
+        let block = self
+            .literal_blocks
+            .at(self.regexp, repeat.body)
             .expect("the immutable literal body was proved before execution");
         while let Some(next) = repeat.advance(
             self.regexp,
@@ -128,7 +130,10 @@ impl Run<'_> {
             position = next;
         }
         if position != start {
-            stack.push(Frame::Register { register: repeat.register, old });
+            stack.push(Frame::Register {
+                register: repeat.register,
+                old,
+            });
             stack.push(Frame::LiteralGreedy {
                 pc,
                 position: repeat.previous(position),
@@ -167,7 +172,9 @@ impl Run<'_> {
         };
         let repeat = LiteralRepeat::at(self.regexp, pc, &mut self.literal_blocks)
             .expect("a saved literal loop belongs to the immutable program");
-        let block = self.literal_blocks.at(self.regexp, repeat.body)
+        let block = self
+            .literal_blocks
+            .at(self.regexp, repeat.body)
             .expect("the immutable literal body was proved before execution");
         let Some(position) = repeat.advance(
             self.regexp,
@@ -176,7 +183,8 @@ impl Run<'_> {
             position,
             &mut self.registers[repeat.register],
             &mut self.steps_left,
-        )? else {
+        )?
+        else {
             self.registers[repeat.register] = old;
             return Ok(None);
         };
@@ -192,7 +200,12 @@ impl Run<'_> {
         frame: Frame,
         stack: &mut Vec<Frame>,
     ) -> (usize, usize) {
-        let Frame::LiteralGreedy { pc, position, start } = frame else {
+        let Frame::LiteralGreedy {
+            pc,
+            position,
+            start,
+        } = frame
+        else {
             unreachable!("only a literal repetition range resumes here");
         };
         let repeat = LiteralRepeat::at(self.regexp, pc, &mut self.literal_blocks)
@@ -207,7 +220,11 @@ impl Run<'_> {
         } else {
             let previous = repeat.previous(position);
             self.registers[repeat.register] = previous;
-            stack.push(Frame::LiteralGreedy { pc, position: previous, start });
+            stack.push(Frame::LiteralGreedy {
+                pc,
+                position: previous,
+                start,
+            });
         }
         (repeat.exit, position)
     }

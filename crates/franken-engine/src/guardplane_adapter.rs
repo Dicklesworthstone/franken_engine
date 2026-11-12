@@ -493,7 +493,11 @@ impl GuardplaneAdapter {
         epoch: SecurityEpoch,
     ) -> Self {
         Self::from_runtime_config_with_instruction_hooks(
-            context, loss_matrix, runtime_config, epoch, true,
+            context,
+            loss_matrix,
+            runtime_config,
+            epoch,
+            true,
         )
     }
 
@@ -508,7 +512,11 @@ impl GuardplaneAdapter {
         epoch: SecurityEpoch,
     ) -> Self {
         Self::from_runtime_config_with_instruction_hooks(
-            context, loss_matrix, runtime_config, epoch, false,
+            context,
+            loss_matrix,
+            runtime_config,
+            epoch,
+            false,
         )
     }
 
@@ -565,7 +573,11 @@ impl GuardplaneAdapter {
             Box::new(ThresholdLikelihoodRatio {
                 threshold_millionths: 500_000,    // 0.5 risk threshold
                 high_ratio_millionths: 2_000_000, // 2.0 ratio when above threshold
-                low_ratio_millionths: 500_000,    // 0.5 ratio when below threshold
+                // Ville-neutral baseline under H_0: benign observations leave
+                // the accumulated martingale e-value unchanged (L_t = 1.0) so
+                // an adversary cannot halve prior suspicion by interleaving
+                // ordinary operations between probes (bd-rc-2026-11-11-epic-g2vrp.18).
+                low_ratio_millionths: 1_000_000,
             }),
         );
         unified_guardrail_registry.add(unified_guardrail);
@@ -1701,5 +1713,31 @@ mod tests {
             size_hint: 1,
         };
         assert_eq!(ordinary.rate_millionths(0), ordinary.rate_millionths(1));
+    }
+
+    #[test]
+    fn interleaved_ordinary_operations_do_not_suppress_unified_guardrail_e_value() {
+        let adapter = adapter_with_metadata(&[("guardplane.enable_instruction_hooks", "true")]);
+        for probe in 0..5u64 {
+            {
+                let mut state = adapter.lock_state("test_interleaved_high_risk_probe");
+                let errors = state
+                    .unified_guardrail_registry
+                    .update_stream("guardplane-decisions", 600_000);
+                assert!(errors.is_empty(), "unexpected guardrail errors: {errors:?}");
+            }
+            for pad in 1..=20 {
+                ordinary_round(&adapter, probe * 100 + pad);
+            }
+        }
+        let action = adapter.pre_property_access(
+            &test_hook_context(999),
+            &ObjectId(1),
+            &"value".to_string(),
+        );
+        assert!(
+            matches!(action, HookAction::Terminate(_)),
+            "interleaved benign operations must not decay accumulated e-value below threshold, got {action:?}"
+        );
     }
 }

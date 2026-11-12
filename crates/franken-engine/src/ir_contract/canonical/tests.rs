@@ -226,9 +226,8 @@ fn opcode_corpus(seed: u32) -> Vec<Ir3Instruction> {
             dst: b,
         },
         ImportModule {
-            import_attributes: serde_json::from_str(
-                r#"{"type":"json","opaque:key":"a,b:☃"}"#,
-            ).unwrap(),
+            import_attributes: serde_json::from_str(r#"{"type":"json","opaque:key":"a,b:☃"}"#)
+                .unwrap(),
             specifier: a,
             dst: b,
         },

@@ -5,7 +5,7 @@
 use super::*;
 
 fn nested_document(depth: usize, objects: bool, mixed: bool, leaf: &str) -> String {
-    let is_object = |level: usize| objects || (mixed && level % 2 != 0);
+    let is_object = |level: usize| objects || (mixed && !level.is_multiple_of(2));
     let mut text = String::new();
     for level in 0..depth {
         text.push_str(if is_object(level) { r#"{"x":"# } else { "[" });
@@ -112,7 +112,11 @@ fn malformed_deep_suffixes_roll_back_the_unpublished_heap() {
             core.json_parse_document(&units),
             Err(InterpreterError::UncaughtException { .. })
         ));
-        assert_eq!(core.heap.len(), heap_before + 1, "only the error may escape");
+        assert_eq!(
+            core.heap.len(),
+            heap_before + 1,
+            "only the error may escape"
+        );
         let Some(Value::Object(error)) = core.pending_exception.as_ref() else {
             panic!("invalid JSON must retain its language exception");
         };

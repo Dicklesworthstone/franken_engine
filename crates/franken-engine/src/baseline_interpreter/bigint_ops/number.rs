@@ -72,7 +72,10 @@ struct DecimalBuffer<const N: usize> {
 
 impl<const N: usize> DecimalBuffer<N> {
     fn new() -> Self {
-        Self { bytes: [0; N], len: 0 }
+        Self {
+            bytes: [0; N],
+            len: 0,
+        }
     }
 
     fn text(&self) -> Option<&str> {
@@ -92,8 +95,8 @@ impl<const N: usize> Write for DecimalBuffer<N> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::{compare_with_number, parse};
+    use super::*;
     use num_bigint::BigInt;
 
     // The former implementation, retained independently of both fast paths.
@@ -102,7 +105,11 @@ mod tests {
             return None;
         }
         if number.is_infinite() {
-            return Some(if number > 0.0 { Ordering::Less } else { Ordering::Greater });
+            return Some(if number > 0.0 {
+                Ordering::Less
+            } else {
+                Ordering::Greater
+            });
         }
         let floor = number.floor();
         let ordering = super::super::compare(bigint, &format!("{floor:.0}"));
@@ -120,7 +127,11 @@ mod tests {
             return None;
         }
         if number.is_infinite() {
-            return Some(if number.is_sign_negative() { Ordering::Greater } else { Ordering::Less });
+            return Some(if number.is_sign_negative() {
+                Ordering::Greater
+            } else {
+                Ordering::Less
+            });
         }
         let raw = number.to_bits();
         let exponent = ((raw >> 52) & 0x7ff) as i32;
@@ -145,37 +156,76 @@ mod tests {
     #[test]
     fn machine_boundaries_preserve_adjacent_bigints_fractions_and_subnormals() {
         let numbers = [
-            f64::NEG_INFINITY, -f64::MAX,
-            -f64::from_bits(I128_BOUNDARY.to_bits() + 1), -I128_BOUNDARY,
-            -f64::from_bits(I128_BOUNDARY.to_bits() - 1), -9007199254740992.0,
-            -1.5, -1.0, -f64::from_bits(1), -0.0, 0.0, f64::from_bits(1),
-            1.0, 1.5, 9007199254740992.0,
-            f64::from_bits(I128_BOUNDARY.to_bits() - 1), I128_BOUNDARY,
-            f64::from_bits(I128_BOUNDARY.to_bits() + 1), f64::MAX,
-            f64::INFINITY, f64::NAN,
+            f64::NEG_INFINITY,
+            -f64::MAX,
+            -f64::from_bits(I128_BOUNDARY.to_bits() + 1),
+            -I128_BOUNDARY,
+            -f64::from_bits(I128_BOUNDARY.to_bits() - 1),
+            -9007199254740992.0,
+            -1.5,
+            -1.0,
+            -f64::from_bits(1),
+            -0.0,
+            0.0,
+            f64::from_bits(1),
+            1.0,
+            1.5,
+            9007199254740992.0,
+            f64::from_bits(I128_BOUNDARY.to_bits() - 1),
+            I128_BOUNDARY,
+            f64::from_bits(I128_BOUNDARY.to_bits() + 1),
+            f64::MAX,
+            f64::INFINITY,
+            f64::NAN,
         ];
         for integer in [
-            i128::MIN, i128::MIN + 1, -9007199254740993, -9007199254740992,
-            -1, 0, 1, 9007199254740992, 9007199254740993, i128::MAX - 1, i128::MAX,
+            i128::MIN,
+            i128::MIN + 1,
+            -9007199254740993,
+            -9007199254740992,
+            -1,
+            0,
+            1,
+            9007199254740992,
+            9007199254740993,
+            i128::MAX - 1,
+            i128::MAX,
         ] {
             let text = integer.to_string();
             for number in numbers {
                 let expected = rational(&text, number);
-                assert_eq!(compare_with_number(&text, number), expected, "{text} vs {number:?}");
+                assert_eq!(
+                    compare_with_number(&text, number),
+                    expected,
+                    "{text} vs {number:?}"
+                );
                 assert_eq!(compare_with_number(&text, number), original(&text, number));
                 if number.is_finite() {
                     assert!(machine_floor_order(&text, number.floor()).is_some());
                 }
             }
         }
-        assert_eq!(machine_floor_order(&i128::MAX.to_string(), I128_BOUNDARY), Some(Ordering::Less));
-        assert_eq!(machine_floor_order(&i128::MIN.to_string(), -I128_BOUNDARY), Some(Ordering::Equal));
+        assert_eq!(
+            machine_floor_order(&i128::MAX.to_string(), I128_BOUNDARY),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            machine_floor_order(&i128::MIN.to_string(), -I128_BOUNDARY),
+            Some(Ordering::Equal)
+        );
     }
 
     #[test]
     fn stack_formatter_matches_original_across_all_finite_binary_exponents() {
         for exponent in 0..2047u64 {
-            for fraction in [0, 1, (1u64 << 51) - 1, 1u64 << 51, (1u64 << 52) - 2, (1u64 << 52) - 1] {
+            for fraction in [
+                0,
+                1,
+                (1u64 << 51) - 1,
+                1u64 << 51,
+                (1u64 << 52) - 2,
+                (1u64 << 52) - 1,
+            ] {
                 for sign in [0, 1u64 << 63] {
                     let number = f64::from_bits(sign | (exponent << 52) | fraction);
                     let floor = number.floor();
@@ -201,13 +251,19 @@ mod tests {
                 BigInt::from(0u8)
             };
             for integer in [
-                &near - 1, near.clone(), &near + 1,
+                &near - 1,
+                near.clone(),
+                &near + 1,
                 BigInt::from(seed as i64),
                 BigInt::from(seed) << ((seed >> 32) % 2048) as u32,
             ] {
                 let text = integer.to_string();
                 let expected = rational(&text, number);
-                assert_eq!(compare_with_number(&text, number), expected, "{text} vs {number:?}");
+                assert_eq!(
+                    compare_with_number(&text, number),
+                    expected,
+                    "{text} vs {number:?}"
+                );
                 assert_eq!(compare_with_number(&text, number), original(&text, number));
             }
         }
@@ -218,8 +274,18 @@ mod tests {
         let huge = "9".repeat(8192);
         let zero_prefixed = format!("{}1", "0".repeat(8192));
         let values = [
-            "", "+", "-", "--1", "1_0", "0x10", "１２", "1.5", "-0", "+001",
-            huge.as_str(), zero_prefixed.as_str(),
+            "",
+            "+",
+            "-",
+            "--1",
+            "1_0",
+            "0x10",
+            "１２",
+            "1.5",
+            "-0",
+            "+001",
+            huge.as_str(),
+            zero_prefixed.as_str(),
         ];
         for text in values {
             for number in [-f64::MAX, -1.5, -0.0, 0.0, 0.5, 1.0, 10.0, f64::MAX] {

@@ -34,7 +34,6 @@ fn proxy_empty_handler_passthrough() {
 }
 
 #[test]
-#[ignore = "bd-9j3zw: BigInt literals unsupported; un-ignore when they land"]
 fn bigint_typeof() {
     assert_eq!(eval_value("typeof 1n"), "bigint");
 }

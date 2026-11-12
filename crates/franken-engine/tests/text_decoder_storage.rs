@@ -94,9 +94,15 @@ fn run(source: &str, expected: &[&str]) {
     std::fs::write(&entry, source).expect("write source");
     let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
         .args([
-            "run", "--input", entry.to_str().expect("UTF-8 path"),
-            "--extension-id", "decoder-storage", "--instruction-budget", "2000000000",
-            "--out", report.to_str().expect("UTF-8 path"),
+            "run",
+            "--input",
+            entry.to_str().expect("UTF-8 path"),
+            "--extension-id",
+            "decoder-storage",
+            "--instruction-budget",
+            "2000000000",
+            "--out",
+            report.to_str().expect("UTF-8 path"),
         ])
         .output()
         .expect("run frankenctl");
@@ -120,18 +126,29 @@ fn run(source: &str, expected: &[&str]) {
 
 #[test]
 fn unicode_decoder_returns_owned_text_for_exact_view_ranges() {
-    run(WHOLE, &[
-        "utf-8 4098 16", "utf-16le 4098 16", "utf-16be 4098 16",
-        "5 8364 8218 376 255",
-    ]);
+    run(
+        WHOLE,
+        &[
+            "utf-8 4098 16",
+            "utf-16le 4098 16",
+            "utf-16be 4098 16",
+            "5 8364 8218 376 255",
+        ],
+    );
 }
 
 #[test]
 fn every_streamed_piece_and_surrogate_flush_preserves_decoding() {
-    run(CHUNKS, &[
-        "utf-8 24 1288", "utf-16le 24 1288", "utf-16be 24 1288",
-        "utf-16le 1 65533 TypeError R", "utf-16be 1 65533 TypeError R",
-    ]);
+    run(
+        CHUNKS,
+        &[
+            "utf-8 24 1288",
+            "utf-16le 24 1288",
+            "utf-16be 24 1288",
+            "utf-16le 1 65533 TypeError R",
+            "utf-16be 1 65533 TypeError R",
+        ],
+    );
 }
 
 const BORROWING: &str = r#"var decoder = new TextDecoder('utf-8', {fatal:true});
@@ -172,5 +189,8 @@ console.log(joined.length, joined.codePointAt(0), joined.charCodeAt(joined.lengt
 
 #[test]
 fn borrowed_decode_preserves_reentry_carry_and_shared_input_independence() {
-    run(BORROWING, &["€C 2 get|", "true €", "XY XY", "131074 128512 65"]);
+    run(
+        BORROWING,
+        &["€C 2 get|", "true €", "XY XY", "131074 128512 65"],
+    );
 }

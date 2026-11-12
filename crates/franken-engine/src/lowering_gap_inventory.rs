@@ -8,6 +8,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::ast::ParseGoal;
+use crate::ir_contract::{Ir0Module, Ir3Instruction};
+use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+use crate::parser::{CanonicalEs2020Parser, ParserOptions};
+
 pub const LOWERING_GAP_INVENTORY_SCHEMA_VERSION: &str = "franken-engine.lowering-gap-inventory.v1";
 pub const LOWERING_GAP_RUN_MANIFEST_SCHEMA_VERSION: &str =
     "franken-engine.lowering-gap-inventory.run-manifest.v1";
@@ -304,6 +309,136 @@ impl LoweringGapSiteId {
             }
         }
     }
+
+    pub fn from_site_id(site_id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|site| site.as_str() == site_id)
+    }
+
+    pub const fn probe_source(self) -> &'static str {
+        match self {
+            Self::BinaryNonArithmeticAddPlaceholder => "const r = (1 < 2) && ((3 | 4) === 7);",
+            Self::ForInStatementPlaceholder => {
+                "let acc = ''; for (const k in { a: 1, b: 2 }) { acc = acc + k; }"
+            }
+            Self::ForOfStatementPlaceholder => {
+                "let sum = 0; for (const v of [1, 2, 3]) { sum = sum + v; }"
+            }
+            Self::NewExpressionCallPlaceholder => {
+                "function Box(x) { this.x = x; } const b = new Box(7);"
+            }
+            Self::NonIdentifierAssignmentNopPlaceholder => {
+                "const obj = {}; obj.key = 42; obj['dyn'] = 99;"
+            }
+            Self::TemplateLiteralRawPlaceholder => "const x = 5; const s = `val=${x + 1}`;",
+            Self::TryCatchFinallySemantics => {
+                "let r = 0; try { throw 1; } catch (e) { r = e; } finally { r = r + 1; }"
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LoweringGapLiveProbeResult {
+    pub site_id: String,
+    pub parser_ready_syntax: bool,
+    pub execution_ready_semantics: bool,
+    pub observed_instruction_count: usize,
+}
+
+pub fn verify_lowering_gap_site_live(site: LoweringGapSiteId) -> LoweringGapLiveProbeResult {
+    let source = site.probe_source();
+    let label = format!("lowering-gap-probe://{}", site.as_str());
+    let parser = CanonicalEs2020Parser;
+    let Ok(syntax_tree) =
+        parser.parse_with_options(source, ParseGoal::Script, &ParserOptions::default())
+    else {
+        return LoweringGapLiveProbeResult {
+            site_id: site.as_str().to_string(),
+            parser_ready_syntax: false,
+            execution_ready_semantics: false,
+            observed_instruction_count: 0,
+        };
+    };
+
+    let ir0 = Ir0Module::from_syntax_tree_with_source(syntax_tree, &label, source);
+    let ctx = LoweringContext::new(
+        "lowering-gap-live-probe".to_string(),
+        "lowering-gap-live-probe".to_string(),
+        LOWERING_GAP_POLICY_ID.to_string(),
+    );
+    let Ok(lowered) = lower_ir0_to_ir3(&ir0, &ctx) else {
+        return LoweringGapLiveProbeResult {
+            site_id: site.as_str().to_string(),
+            parser_ready_syntax: true,
+            execution_ready_semantics: false,
+            observed_instruction_count: 0,
+        };
+    };
+
+    let insts = &lowered.ir3.instructions;
+    let shape_verified = match site {
+        LoweringGapSiteId::BinaryNonArithmeticAddPlaceholder => {
+            insts
+                .iter()
+                .any(|inst| matches!(inst, Ir3Instruction::Lt { .. }))
+                && insts
+                    .iter()
+                    .any(|inst| matches!(inst, Ir3Instruction::BitOr { .. }))
+        }
+        LoweringGapSiteId::ForInStatementPlaceholder => {
+            insts
+                .iter()
+                .any(|inst| matches!(inst, Ir3Instruction::ForInInit { .. }))
+                && insts
+                    .iter()
+                    .any(|inst| matches!(inst, Ir3Instruction::ForInNext { .. }))
+        }
+        LoweringGapSiteId::ForOfStatementPlaceholder => {
+            insts
+                .iter()
+                .any(|inst| matches!(inst, Ir3Instruction::ForOfInit { .. }))
+                && insts
+                    .iter()
+                    .any(|inst| matches!(inst, Ir3Instruction::ForOfNext { .. }))
+        }
+        LoweringGapSiteId::NewExpressionCallPlaceholder => insts
+            .iter()
+            .any(|inst| matches!(inst, Ir3Instruction::Construct { .. })),
+        LoweringGapSiteId::NonIdentifierAssignmentNopPlaceholder => insts.iter().any(|inst| {
+            matches!(
+                inst,
+                Ir3Instruction::SetProperty { .. } | Ir3Instruction::SetPropertySloppy { .. }
+            )
+        }),
+        LoweringGapSiteId::TemplateLiteralRawPlaceholder => insts
+            .iter()
+            .any(|inst| matches!(inst, Ir3Instruction::TemplateLiteral { .. })),
+        LoweringGapSiteId::TryCatchFinallySemantics => {
+            insts
+                .iter()
+                .any(|inst| matches!(inst, Ir3Instruction::EnterCatch { .. }))
+                && insts
+                    .iter()
+                    .any(|inst| matches!(inst, Ir3Instruction::EnterFinally))
+                && insts
+                    .iter()
+                    .any(|inst| matches!(inst, Ir3Instruction::EndFinally))
+        }
+    };
+
+    LoweringGapLiveProbeResult {
+        site_id: site.as_str().to_string(),
+        parser_ready_syntax: true,
+        execution_ready_semantics: shape_verified,
+        observed_instruction_count: insts.len(),
+    }
+}
+
+pub fn verify_lowering_gap_sites_live() -> Vec<LoweringGapLiveProbeResult> {
+    LoweringGapSiteId::ALL
+        .into_iter()
+        .map(verify_lowering_gap_site_live)
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -326,19 +461,25 @@ pub struct LoweringGapSiteDescriptor {
 
 impl LoweringGapSiteDescriptor {
     pub fn from_site(site: LoweringGapSiteId) -> Self {
+        let live = verify_lowering_gap_site_live(site);
+        let status = match (live.parser_ready_syntax, live.execution_ready_semantics) {
+            (true, true) => site.status(),
+            (true, false) => LoweringGapStatus::OpenPlaceholder,
+            (false, _) => LoweringGapStatus::FailClosed,
+        };
         Self {
             site_id: site.as_str().to_string(),
             diagnostic_code: site.diagnostic_code().to_string(),
             stage: site.stage(),
-            status: site.status(),
+            status,
             owner: site.owner().to_string(),
             ast_node_family: site.ast_node_family().to_string(),
             emitted_ir_shape: site.emitted_ir_shape().to_string(),
             execution_consequence: site.execution_consequence().to_string(),
             user_visible_divergence: site.user_visible_divergence().to_string(),
             target_replacement_strategy: site.target_replacement_strategy().to_string(),
-            parser_ready_syntax: site.parser_ready_syntax(),
-            execution_ready_semantics: site.execution_ready_semantics(),
+            parser_ready_syntax: live.parser_ready_syntax,
+            execution_ready_semantics: live.execution_ready_semantics,
             source_reference: site.source_reference().to_string(),
             regression_test_hint: site.regression_test_hint().to_string(),
         }
@@ -673,8 +814,26 @@ fn parity_record_for_consumer(
     site: &LoweringGapSiteDescriptor,
     consumer_name: &str,
 ) -> LoweringGapTruthConsumerParityRecord {
-    let zero_placeholder_status = site.status.as_str().to_string();
-    let parity_ok = site.parser_ready_syntax == site.status.parser_ready_syntax()
+    let zero_placeholder_status = if consumer_name == ZERO_PLACEHOLDER_SCAN_CONSUMER {
+        let finding_id = format!("lowering::{}", site.site_id);
+        crate::zero_placeholder_scan::zero_placeholder_scan_inventory()
+            .findings
+            .into_iter()
+            .find(|finding| finding.finding_id == finding_id)
+            .map(|finding| finding.status.as_str().to_string())
+            .unwrap_or_else(|| site.status.as_str().to_string())
+    } else {
+        site.status.as_str().to_string()
+    };
+    let live_parity_ok = LoweringGapSiteId::from_site_id(&site.site_id)
+        .map(|known_site| {
+            let live = verify_lowering_gap_site_live(known_site);
+            live.parser_ready_syntax == site.parser_ready_syntax
+                && live.execution_ready_semantics == site.execution_ready_semantics
+        })
+        .unwrap_or(true);
+    let parity_ok = live_parity_ok
+        && site.parser_ready_syntax == site.status.parser_ready_syntax()
         && site.execution_ready_semantics == site.status.execution_ready_semantics()
         && zero_placeholder_status == site.status.as_str();
 
@@ -2078,6 +2237,29 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn live_lowering_gap_probes_verify_real_parser_and_ir3_instructions() {
+        let probes = verify_lowering_gap_sites_live();
+        assert_eq!(probes.len(), LoweringGapSiteId::ALL.len());
+        for probe in &probes {
+            assert!(
+                probe.parser_ready_syntax,
+                "live parser probe failed for {}",
+                probe.site_id
+            );
+            assert!(
+                probe.execution_ready_semantics,
+                "live IR3 instruction shape probe failed for {}",
+                probe.site_id
+            );
+            assert!(
+                probe.observed_instruction_count > 0,
+                "live IR3 instruction count should be non-zero for {}",
+                probe.site_id
+            );
         }
     }
 }

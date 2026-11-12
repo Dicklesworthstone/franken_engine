@@ -584,12 +584,7 @@ impl InterpreterCore {
                     if let Some(handler) =
                         this.promise_reaction_handler_from_value(then, "thenable then")?
                     {
-                        this.enqueue_resolve_thenable(
-                            promise,
-                            handler,
-                            value,
-                            label.clone(),
-                        )?;
+                        this.enqueue_resolve_thenable(promise, handler, value, label.clone())?;
                     } else {
                         // A non-callable then still fulfills with the original
                         // object, without invoking a guest .call property.
@@ -1879,7 +1874,10 @@ mod tests {
                 .async_generator_thenable_source(id, Value::Object(object), &Label::Public)
                 .unwrap();
             assert_eq!(label, Label::Secret);
-            assert_eq!(core.promise_store.get(source).unwrap().state, PromiseState::Pending);
+            assert_eq!(
+                core.promise_store.get(source).unwrap().state,
+                PromiseState::Pending
+            );
             assert_eq!(core.event_loop.microtasks.pending_count(), 1);
             assert!(core.active_inline_callback_context_label.is_none());
             assert_accounting(&core);
@@ -2114,10 +2112,16 @@ async function* values() { return yield* iterable; }
              input.then = function (resolve) { resolve(42); }; \
              const holder = { marker: 2871, input };",
         );
-        let holder = core.heap.iter().find(|entry| {
-            entry.properties.get("marker") == Some(&Value::Int(2871))
-        }).expect("native holder object");
-        let input = holder.properties.get("input").expect("callable value").clone();
+        let holder = core
+            .heap
+            .iter()
+            .find(|entry| entry.properties.get("marker") == Some(&Value::Int(2871)))
+            .expect("native holder object");
+        let input = holder
+            .properties
+            .get("input")
+            .expect("callable value")
+            .clone();
         assert!(input.is_object_like());
         assert!(!matches!(input, Value::Object(_) | Value::Promise(_)));
         (core, id, request, input)
@@ -2128,20 +2132,35 @@ async function* values() { return yield* iterable; }
         use crate::promise_model::Microtask;
 
         let (mut core, id, request, input) = callable_value_request_core();
-        core.await_async_generator_value(
-            id, AwaitKind::Yield, input.clone(), Label::Secret,
-        ).expect("callable value await");
-        let context = core.async_generator_runtime.continuations.values().next()
+        core.await_async_generator_value(id, AwaitKind::Yield, input.clone(), Label::Secret)
+            .expect("callable value await");
+        let context = core
+            .async_generator_runtime
+            .continuations
+            .values()
+            .next()
             .expect("owned await continuation");
-        assert!(context.exact_value.is_none(), "a callable is not a primitive shortcut");
+        assert!(
+            context.exact_value.is_none(),
+            "a callable is not a primitive shortcut"
+        );
         let source = context.owned_source.expect("PromiseResolve source");
         let ticket = context.ticket.expect("reaction ticket");
-        assert_eq!(core.promise_store.get(source).unwrap().state, PromiseState::Pending);
+        assert_eq!(
+            core.promise_store.get(source).unwrap().state,
+            PromiseState::Pending
+        );
         assert_eq!(core.event_loop.microtasks.pending_count(), 1);
         assert_accounting(&core);
-        let Microtask::ResolveThenable { promise, thenable, label, .. } =
-            core.event_loop.microtasks.dequeue().expect("thenable job")
-        else { panic!("callable await must assimilate, not fulfill with a function"); };
+        let Microtask::ResolveThenable {
+            promise,
+            thenable,
+            label,
+            ..
+        } = core.event_loop.microtasks.dequeue().expect("thenable job")
+        else {
+            panic!("callable await must assimilate, not fulfill with a function");
+        };
         assert_eq!(promise, source);
         assert_eq!(core.js_value_to_value(&thenable), input);
         assert_eq!(label, Label::Secret);
@@ -2152,7 +2171,10 @@ async function* values() { return yield* iterable; }
         for handle in [source, ticket] {
             assert!(core.promise_store.get(handle).unwrap().state.is_rejected());
         }
-        assert_eq!(core.promise_store.get(request).unwrap().label, Label::Secret);
+        assert_eq!(
+            core.promise_store.get(request).unwrap().label,
+            Label::Secret
+        );
         assert_accounting(&core);
     }
 
@@ -2170,8 +2192,14 @@ async function* values() { return yield* iterable; }
         ));
         assert_aborted(&core, id, request);
         assert_eq!(core.promise_store.len(), count);
-        assert_eq!(serde_json::to_value(&core.event_loop.microtasks).unwrap(), queue);
-        assert_eq!(core.take_pending_exception_slot(), Some((Value::Int(9), Label::Secret)));
+        assert_eq!(
+            serde_json::to_value(&core.event_loop.microtasks).unwrap(),
+            queue
+        );
+        assert_eq!(
+            core.take_pending_exception_slot(),
+            Some((Value::Int(9), Label::Secret))
+        );
         assert!(core.active_inline_callback_context_label.is_none());
         assert_accounting(&core);
     }
@@ -2416,7 +2444,6 @@ async function* empty() {}
             &[],
         );
     }
-
 
     const EVENT_GETTER_ROOTS_SOURCE: &str = r#"
 let gets = 0;

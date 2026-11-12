@@ -3,17 +3,22 @@
 
 use std::collections::BTreeSet;
 
-use super::super::{MODULE_BINDING, ModuleRenamer, NativeModuleSource};
 use super::super::super::with_statement::{Outcome, Walk, lexical_names, var_names};
+use super::super::{MODULE_BINDING, ModuleRenamer, NativeModuleSource};
 use crate::ast::{BindingPattern, Expression, Statement, SyntaxTree};
 
 const GLOBALS: [&str; 8] = [
-    "Array", "Map", "Object", "Reflect", "String", "Symbol", "TypeError", "WeakMap",
+    "Array",
+    "Map",
+    "Object",
+    "Reflect",
+    "String",
+    "Symbol",
+    "TypeError",
+    "WeakMap",
 ];
-static INSTALLER: NativeModuleSource = NativeModuleSource::new(
-    "franken:util/mime",
-    include_str!("util_mime.js"),
-);
+static INSTALLER: NativeModuleSource =
+    NativeModuleSource::new("franken:util/mime", include_str!("util_mime.js"));
 
 pub(super) fn compose(tree: &mut SyntaxTree, bindings: &BTreeSet<String>) -> Outcome {
     if !bindings.contains(MODULE_BINDING) {
@@ -24,7 +29,13 @@ pub(super) fn compose(tree: &mut SyntaxTree, bindings: &BTreeSet<String>) -> Out
     lexical_names(&tree.body, &mut names);
     for statement in &tree.body {
         if let Statement::Import(import) = statement {
-            names.extend(import.clause.binding_names().into_iter().map(str::to_string));
+            names.extend(
+                import
+                    .clause
+                    .binding_names()
+                    .into_iter()
+                    .map(str::to_string),
+            );
         }
     }
     let mut installer = INSTALLER.expression()?;
@@ -61,17 +72,22 @@ pub(super) fn compose(tree: &mut SyntaxTree, bindings: &BTreeSet<String>) -> Out
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::super::{rewrite_module_objects, rewrite_util_requires, tests::free_names};
+    use super::*;
     use crate::ast::ParseGoal;
     use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 
     fn parse(text: &str, goal: ParseGoal) -> SyntaxTree {
-        CanonicalEs2020Parser.parse_with_options(
-            ParserSource { label: "mime-module.js".into(), text: text.into() },
-            goal,
-            &ParserOptions::default(),
-        ).expect("MIME fixture parses")
+        CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource {
+                    label: "mime-module.js".into(),
+                    text: text.into(),
+                },
+                goal,
+                &ParserOptions::default(),
+            )
+            .expect("MIME fixture parses")
     }
 
     #[test]
@@ -80,8 +96,15 @@ mod tests {
         let pristine = source.clone();
         let globals: BTreeSet<String> = GLOBALS.iter().map(|name| (*name).into()).collect();
         assert_eq!(free_names(&mut source), globals);
-        ModuleRenamer { through_global_object: globals }.expression(&mut source).unwrap();
-        assert_eq!(free_names(&mut source), BTreeSet::from(["globalThis".into()]));
+        ModuleRenamer {
+            through_global_object: globals,
+        }
+        .expression(&mut source)
+        .unwrap();
+        assert_eq!(
+            free_names(&mut source),
+            BTreeSet::from(["globalThis".into()])
+        );
         assert_eq!(INSTALLER.expression().unwrap(), pristine);
     }
 
@@ -109,12 +132,20 @@ mod tests {
             "export {MIMEType as ContentType,MIMEParams} from 'node:util';",
         ] {
             let original = parse(source, ParseGoal::Module);
-            let imported = super::super::super::super::esm_core_imports::rewrite_core_module_imports(&original)
+            let imported =
+                super::super::super::super::esm_core_imports::rewrite_core_module_imports(
+                    &original,
+                )
                 .expect("util ESM import");
             let rewritten = rewrite_util_requires(&imported).unwrap().unwrap();
-            assert_eq!(rewritten.body.iter().filter(|statement| {
-                super::super::super::is_module_declaration(statement)
-            }).count(), 1);
+            assert_eq!(
+                rewritten
+                    .body
+                    .iter()
+                    .filter(|statement| { super::super::super::is_module_declaration(statement) })
+                    .count(),
+                1
+            );
             assert!(rewrite_util_requires(&rewritten).unwrap().is_none());
         }
     }
@@ -122,7 +153,8 @@ mod tests {
     #[test]
     fn unrelated_modules_and_user_loaders_do_not_initialize_mime() {
         for source in [
-            "console.log(1);", "function f(require){return require('util');}",
+            "console.log(1);",
+            "function f(require){return require('util');}",
             "const name='util';require(name);",
         ] {
             let mut tree = parse(source, ParseGoal::Script);

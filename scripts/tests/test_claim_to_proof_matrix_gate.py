@@ -202,6 +202,62 @@ class ClaimGatePortability(unittest.TestCase):
                 for events in (ci, release):
                     self.assertEqual(events["stale-release"]["decision"], "downgrade_stale_proof")
 
+    def test_unpromoted_claim_rejects_closed_owning_bead(self):
+        beads_path = self.work / "beads_owner_check.jsonl"
+        beads_path.write_text(
+            json.dumps({"id": "bd-closed-owner", "status": "closed"}) + "\n"
+            + json.dumps({"id": "bd-open-owner", "status": "open"}) + "\n"
+        )
+        closed_row = copy.deepcopy(self.template)
+        closed_row.update(
+            claim_id="FE-CLAIM-UNPROMOTED-CLOSED",
+            allowed_state="target",
+            actual_wording_state="target",
+            artifact_path=None,
+            freshness_days=None,
+            downgrade_text="Target: pending capability delivery.",
+            owning_bead="bd-closed-owner",
+        )
+        open_row = copy.deepcopy(closed_row)
+        open_row.update(
+            claim_id="FE-CLAIM-UNPROMOTED-OPEN",
+            owning_bead="bd-open-owner",
+        )
+        for shell in self.shells:
+            with self.subTest(shell=shell):
+                outdir = self.work / "closed-owner" / shell.parent.parent.name
+                outdir.mkdir(parents=True, exist_ok=True)
+                matrix_path = outdir / "matrix.json"
+                matrix_path.write_text(json.dumps({
+                    "schema_version": "franken-engine.claim-to-proof-matrix.v1",
+                    "claims": [closed_row, open_row],
+                }))
+                env = dict(
+                    os.environ,
+                    CLAIM_TO_PROOF_MATRIX_PATH=str(matrix_path),
+                    CLAIM_TO_PROOF_BEADS_ISSUES_PATH=str(beads_path),
+                    CLAIM_TO_PROOF_MATRIX_ARTIFACT_ROOT=str(outdir / "output"),
+                )
+                result = subprocess.run(
+                    [str(shell), str(GATE), "ci"],
+                    cwd=ROOT,
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=45,
+                )
+                self.assertEqual(result.returncode, 1)
+                reports = list((outdir / "output").glob("*/claim_to_proof_gate_report.json"))
+                self.assertEqual(len(reports), 1)
+                report = json.loads(reports[0].read_text())
+                events = {event["claim_id"]: event for event in report["events"]}
+                self.assertEqual(events["FE-CLAIM-UNPROMOTED-CLOSED"]["status"], "fail")
+                self.assertIn(
+                    "ClaimMatrixError::ClosedOwningBeadOnUnpromotedClaim",
+                    events["FE-CLAIM-UNPROMOTED-CLOSED"]["reason"],
+                )
+                self.assertEqual(events["FE-CLAIM-UNPROMOTED-OPEN"]["status"], "pass")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

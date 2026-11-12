@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use std::fs;
 
 use frankenengine_engine::cold_start_compilation_lane::{

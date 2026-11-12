@@ -10,18 +10,32 @@ fn native_search_retries_preserve_observable_captures() {
     std::fs::write(&entry, include_str!("fixtures/regexp_search/search.js")).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
         .args([
-            "run", "--input", entry.to_str().unwrap(),
-            "--extension-id", "regexp-search-retries",
-            "--instruction-budget", "2000000000",
-            "--out", report.to_str().unwrap(),
+            "run",
+            "--input",
+            entry.to_str().unwrap(),
+            "--extension-id",
+            "regexp-search-retries",
+            "--instruction-budget",
+            "2000000000",
+            "--out",
+            report.to_str().unwrap(),
         ])
         .output()
         .expect("run frankenctl");
-    assert!(output.status.success(), "stdout={} stderr={}",
-        String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
-    let report: serde_json::Value = serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
-    let actual = report["console_output"].as_array().unwrap().iter()
-        .map(|entry| entry["message"].as_str().unwrap()).collect::<Vec<_>>();
+    assert!(
+        output.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
+    let actual = report["console_output"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["message"].as_str().unwrap())
+        .collect::<Vec<_>>();
     let expected = [
         r#"16384 needle 1025  "#,
         r#"0 ["ab","a"]"#,

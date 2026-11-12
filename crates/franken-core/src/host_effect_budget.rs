@@ -34,9 +34,9 @@ pub use hierarchy::MAX_HOST_EFFECT_POOL_DEPTH;
 pub use process::BudgetedProcessSpawn;
 
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
 mod admission_tests;
+#[cfg(test)]
+mod tests;
 
 /// A provider can live for a tenant pool or exactly one prepaid execution.
 /// Both bindings retain live ancestor revocation; neither can reset a scope.

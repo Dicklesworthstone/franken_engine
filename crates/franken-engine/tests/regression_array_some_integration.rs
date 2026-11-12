@@ -34,6 +34,6 @@ fn array_some_empty_array_handling() {
 
 #[test]
 fn array_some_builtin_id_consistency() {
-    let source = include_str!("../src/baseline_interpreter.rs");
+    let source = frankenengine_engine::baseline_interpreter::COMBINED_PRODUCTION_SOURCE;
     assert!(source.contains("builtin:ArrayPrototypeSome"));
 }

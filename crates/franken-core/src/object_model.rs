@@ -185,9 +185,10 @@ impl NamedStringTombstones {
         let word_index = position / Self::WORD_BITS;
         let bit = position % Self::WORD_BITS;
         let preceding = self.prefix_words(word_index);
-        let within_word = self.words.get(word_index).map_or(0, |word| {
-            (word & ((1u64 << bit) - 1)).count_ones() as usize
-        });
+        let within_word = self
+            .words
+            .get(word_index)
+            .map_or(0, |word| (word & ((1u64 << bit) - 1)).count_ones() as usize);
         preceding + within_word
     }
 
@@ -425,7 +426,9 @@ impl<V: PartialEq> PartialEq for OrderedStringMap<V> {
     fn eq(&self, other: &Self) -> bool {
         self.by_key == other.by_key
             && self.array_entries == other.array_entries
-            && self.live_named_string_keys().eq(other.live_named_string_keys())
+            && self
+                .live_named_string_keys()
+                .eq(other.live_named_string_keys())
             && Sidecars::equal(self.sidecars.as_deref(), other.sidecars.as_deref())
     }
 }
@@ -618,9 +621,11 @@ impl<V> OrderedStringMap<V> {
             // Remove from the tail so packed storage never observes an
             // interior hole. Restore the deleted values' ascending order.
             let tail_start = removed.len();
-            removed.extend((new_len..len).rev().filter_map(|index| {
-                self.array_entries.remove(&index).map(|(_, value)| value)
-            }));
+            removed.extend(
+                (new_len..len)
+                    .rev()
+                    .filter_map(|index| self.array_entries.remove(&index).map(|(_, value)| value)),
+            );
             removed[tail_start..].reverse();
         }
         Ok(removed)
@@ -695,9 +700,7 @@ impl<V> OrderedStringMap<V> {
             .string_insertion_order
             .iter()
             .enumerate()
-            .filter(|(position, _)| {
-                tombstones.is_none_or(|deleted| !deleted.contains(position))
-            })
+            .filter(|(position, _)| tombstones.is_none_or(|deleted| !deleted.contains(position)))
             .map(|(position, key)| (key.clone(), position))
             .collect();
         self.sidecars_mut().named_string_positions = Some(positions);
@@ -1144,9 +1147,10 @@ impl<V> OrderedStringMap<V> {
                         .map_or_else(|| exact_only_by_key.contains_key(key), still_present)
                 });
             }
-            if let (Some(order), Some(old_keys)) =
-                (sidecars.baseline_string_key_order.as_mut(), old_keys.as_ref())
-            {
+            if let (Some(order), Some(old_keys)) = (
+                sidecars.baseline_string_key_order.as_mut(),
+                old_keys.as_ref(),
+            ) {
                 order.retain(|key| {
                     key.as_str()
                         .is_none_or(|key| !old_keys.contains(key) || still_present(key))
@@ -4800,7 +4804,10 @@ mod tests {
         // Re-adding a tombstoned key appends it and updates both directions.
         map.insert("key-3".to_string(), 999);
         let last = map.len() - 1;
-        assert_eq!(map.insertion_key_at(last).map(String::as_str), Some("key-3"));
+        assert_eq!(
+            map.insertion_key_at(last).map(String::as_str),
+            Some("key-3")
+        );
         assert_eq!(map.insertion_key_position("key-3"), Some(last));
         assert_eq!(map.get("key-3"), Some(&999));
     }
@@ -4813,10 +4820,8 @@ mod tests {
         }
         tombstoned.remove("b");
         tombstoned.remove("d");
-        let rebuilt = OrderedStringMap::from_iter([
-            ("a".to_string(), 1usize),
-            ("c".to_string(), 1usize),
-        ]);
+        let rebuilt =
+            OrderedStringMap::from_iter([("a".to_string(), 1usize), ("c".to_string(), 1usize)]);
         assert_eq!(tombstoned, rebuilt);
         assert_eq!(
             serde_json::to_string(&tombstoned).unwrap(),

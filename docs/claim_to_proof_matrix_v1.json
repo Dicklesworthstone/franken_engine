@@ -97,7 +97,7 @@
       "decision": "downgrade_until_live_proof",
       "downgrade_text": "Hypothesis: TEE attestation is simulated by default (no Intel SGX / AMD SEV / Intel TDX SDK is wired); every quote is sha256-simulated and the tee-real-sdk path fails closed rather than fabricating a Success. Promotes to OBSERVED only when a real TEE SDK plus live-quote proof artifacts ship.",
       "freshness_days": null,
-      "owning_bead": "bd-sde5e.3.1",
+      "owning_bead": "bd-performance-conformance-bridge-tu32j.25.14",
       "reason": "tee_live_quote.rs module docs (lines 6-24) self-document that every quote is simulated unless the unwired tee-real-sdk feature is enabled, and TeeQuoteResult::Success is only reachable from a real SDK-backed quote. Split out of FE-CLAIM-004 by CEI-C.1 so the genuinely-observed signing + transparency-log surface is not overstated by the unobserved TEE attestation.",
       "source_path": "README.md",
       "source_span": {
@@ -119,7 +119,7 @@
       "freshness_days": 90,
       "freshness_tier": "standard",
       "freshness_tier_rationale": "fleet convergence SLO; live measured percentiles are not preserved by the published verification command",
-      "owning_bead": "bd-cixqu.2.5",
+      "owning_bead": "bd-performance-conformance-bridge-tu32j.24.7",
       "reason": "The SLO contract, N-node harness, partition profiles, and source-level checks exist, but scripts/run_rgc_fleet_convergence_slo_gate.sh ci explicitly does not run Cargo or measure convergence percentiles. Contract-shape validation is not live convergence evidence.",
       "source_path": "README.md",
       "source_span": {
@@ -160,7 +160,7 @@
       "decision": "downgrade_until_live_proof",
       "downgrade_text": "Targeted: the shipped test262_release_gate runs a provisional checked-in vector subset (docs/test262_compatibility_pass_rate_v1.json declares full_suite_claim_allowed=false); full tc39/test262 corpus conformance is a documented goal, not an observed result.",
       "freshness_days": null,
-      "owning_bead": "bd-sde5e.4.1",
+      "owning_bead": "bd-performance-conformance-bridge-tu32j.13.8",
       "reason": "docs/test262_compatibility_pass_rate_v1.json (the project's own machine-readable posture) sets proof_state=checked_in_vectors_provisional and full_suite_claim_allowed=false with a small checked-in denominator. CEI-D.1 reframes the README wording from 'Test262 conformance (real, not fake fixtures)' to a bounded provisional-subset statement so the claim does not exceed the posture.",
       "source_path": "README.md",
       "source_span": {
@@ -208,9 +208,9 @@
       "reason": "The support boundary is a documentation policy claim and the source span is validated by this gate.",
       "source_path": "README.md",
       "source_span": {
-        "end_line": 2408,
+        "end_line": 2500,
         "must_contain": "Unsupported-surface usage voids reproduction assistance",
-        "start_line": 2408
+        "start_line": 2500
       },
       "verification_command": "./scripts/run_claim_to_proof_matrix_gate.sh ci"
     },
@@ -245,7 +245,7 @@
       "decision": "stay_target_measured_below_3x_floor",
       "downgrade_text": "Target: >= 3x throughput versus Node and Bun under the declared benchmark denominator contract.",
       "freshness_days": null,
-      "owning_bead": "bd-y6v8s",
+      "owning_bead": "bd-rc-2026-11-11-epic-g2vrp.16",
       "reason": "The preserved June 2026 bundle records dirty-worktree, unweighted admitted-case ratios of 920 millionths of Node and 791 millionths of Bun. It links a 31-case manifest but contains 28 results, measures asymmetric lifecycles, and its repro.lock reproduces correctness rather than timing. It is a non-normative historical baseline; the weighted >= 3x claim remains target.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
@@ -267,7 +267,7 @@
       "freshness_days": 90,
       "freshness_tier": "standard",
       "freshness_tier_rationale": "exact red-team scenario-corpus comparison; the producer and verifier are stable, but the adversarial corpus and pinned runtime identities may evolve, so the evidence must not sit at the frozen window",
-      "owning_bead": "bd-1vwza",
+      "owning_bead": "bd-0lim8",
       "reason": "The exact v2 path now executes pinned FrankenEngine, Node, and Bun binaries over ten contract-declared security-critical scenarios, requires at least 100 receipt-bound stability/replay repetitions per runtime/scenario pair, rejects mixed outcomes and identity drift, and applies a one-scenario zero-cell guard before the sole Rust verdict gate computes the conservative corpus floor. The repetitions are stability evidence, not independent population samples. FE-CLAIM-011 remains target because no current non-fixture v2 campaign plus passing franken_red_team_harness_gate verdict is preserved and linked from this matrix.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
@@ -287,7 +287,7 @@
       "decision": "downgrade_target",
       "downgrade_text": "Target: <= 250ms median containment latency under declared workload conditions.",
       "freshness_days": null,
-      "owning_bead": "bd-38mby",
+      "owning_bead": "bd-9vouw.7",
       "reason": "Downgraded observed->target under CEI B.2 (bd-sde5e.2.2): the containment-latency gate fails closed without a measured CONTAINMENT_LATENCY_METRIC_INPUT, the matrix verification_command omits it, and no production-measured latency artifact is committed (the only input is a rev-under-test fixture). 'Real latency artifacts' was over-claimed.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
@@ -499,9 +499,9 @@
       "reason": "Complete lockstep oracle pipeline implemented (I.1-I.4) with Node/Bun runtime integration, divergence classification taxonomy, RGC gate script, replay wrapper, and operator documentation.",
       "source_path": "README.md",
       "source_span": {
-        "end_line": 1393,
+        "end_line": 1469,
         "must_contain": "Cross-runtime lockstep oracle",
-        "start_line": 1393
+        "start_line": 1469
       },
       "verification_command": "./scripts/run_rgc_lockstep_oracle_pipeline.sh ci"
     },
@@ -515,13 +515,13 @@
       "decision": "downgrade_target",
       "downgrade_text": "Target: cross-platform reproducibility (Linux×x64, macOS×arm64, Windows×x64 identical content hashes); single-host runs validate the Linux×x64 lane only — full cross-platform identical-hash evidence requires the multi-platform CI matrix.",
       "freshness_days": null,
-      "owning_bead": "bd-cixqu.11.7",
+      "owning_bead": "bd-rc-2026-11-11-epic-g2vrp.4",
       "reason": "Downgraded observed->target under CEI B.2 (bd-sde5e.2.2, SwiftSquirrel): the identical-hash claim spans Linux/macOS/Windows × x64/arm64, but a single host can only produce the Linux×x64 manifest. The committed receipt was backfill/pending (never a live multi-platform pass) and evaluate_matrix requires per-target manifests from a real 6-platform CI matrix. The gate logic is correct (run_mode recursion fixed in 24d79417) and would pass in CI, but OBSERVED cannot be honestly backed single-host. Precedent: FE-CLAIM-012.",
       "source_path": "README.md",
       "source_span": {
-        "end_line": 1753,
+        "end_line": 1845,
         "must_contain": "Cross-platform matrix",
-        "start_line": 1753
+        "start_line": 1845
       },
       "verification_command": "./scripts/run_rgc_cross_platform_matrix_gate.sh ci"
     },
@@ -540,9 +540,9 @@
       "reason": "Sibling repo reuse contract is now machine-enforced. M.1 (bd-cixqu.13.1, commit 87418e94) added a full-integration lane to scripts/test_standalone_build.sh that records pass/skipped/failed for each of the six declared siblings; the smoke at scripts/e2e/sibling_integration_smoke.sh asserts the lane's structured output. Reproducibility bundle at docs/evidence/FE-CLAIM-024/ self-attests via env.json + manifest.json + repro.lock per docs/REPRODUCIBILITY_CONTRACT.md.",
       "source_path": "README.md",
       "source_span": {
-        "end_line": 2102,
+        "end_line": 2194,
         "must_contain": "Sibling Repositories (Binding Reuse Contract)",
-        "start_line": 2102
+        "start_line": 2194
       },
       "verification_command": "./scripts/test_standalone_build.sh full-integration"
     },
@@ -562,9 +562,9 @@
       "reason": "CEI H.2: the claim-evidence integrity capstone (scripts/run_claim_evidence_integrity_capstone.sh) composes the A.1/A.3 bidirectional lattice, the H.1 Merkle-committed Claim-Evidence Ledger, the claim-to-proof wording gate, and the D.3 Test262 posture gate. FE-CLAIM-025's own row is committed in that ledger, the A.5 adversarial corpus rejects over-promotion fixtures, and the G.3 no-mock drill (scripts/e2e/claim_evidence_integrity_capstone_drift.sh) demonstrates the capstone goes red on any injected over-promotion and green only when all sub-gates hold. H.4 (bd-sde5e.8.4) additionally machine-checks in Lean 4 the meta-soundness lemma the whole gate rests on: proofs/lean4/ClaimEvidenceSoundness.lean proves that the asserted state never exceeds the evidence ceiling under the gate's corrective transition (gate_transition_sound), that ceiling is monotone in the evidence tier (ceiling_monotone), that soundness can only strengthen with committed evidence (sound_monotone_in_tier, tier_monotone), and that this is exactly the H.3 Biba integrity verdict (flow_legal_iff_sound) -- re-checked sorryAx-free by scripts/run_cei_soundness_lean_proof.sh ci.",
       "source_path": "README.md",
       "source_span": {
-        "end_line": 2477,
+        "end_line": 2569,
         "must_contain": "Reflexive claim-evidence integrity",
-        "start_line": 2477
+        "start_line": 2569
       },
       "verification_command": "cargo test -p frankenengine-engine --test claim_evidence_adversarial_corpus"
     },
@@ -578,7 +578,7 @@
       "decision": "stay_target_conservative_lower_bound",
       "downgrade_text": "Target: execute a high fraction of the ES2020 observable surface. The published figure is a conservative lower bound and stays a target until coverage is materially higher.",
       "freshness_days": null,
-      "owning_bead": "bd-fqlfw.7.4",
+      "owning_bead": "bd-performance-conformance-bridge-tu32j.13.8",
       "reason": "A reproducible, content-addressed weighted coverage summary is linked (docs/coverage/es2020_coverage_summary_bundle_v1, bd-fqlfw.7.4). On the ES2020-normative tc39/test262 profile (language/* + built-ins/*) the engine EXECUTES 6201/47514 = 130508 millionths (~13.0508%) of the observable surface, where executed = evaluated without an engine error (positive) or correctly rejected (negative); assertion outcomes are not verified, so this is an execution-coverage measure, NOT a conformance pass-rate (the stricter harness-based ES2020 conformance pass-rate is far lower, ~0.25%, docs/test262_real_corpus_pass_rate_v1.json). Weakest view 'builtin' at 16664 millionths. Six weighted views plus the floor prevent a single gamed percentage; stays target. Gated by ./scripts/run_coverage_summary_bundle_gate.sh ci.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {

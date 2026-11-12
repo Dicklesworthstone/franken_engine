@@ -45,22 +45,13 @@ impl DecodeState {
             // A suffix retains at most three bytes. Four fresh bytes guarantee
             // progress beyond the old carry, even for malformed input.
             debug_assert!(end > carried);
-            let first = decode_string(
-                encoding,
-                &bridge[..end],
-                fatal,
-                ignore_bom || self.bom_seen,
-            )?;
+            let first =
+                decode_string(encoding, &bridge[..end], fatal, ignore_bom || self.bom_seen)?;
             self.bom_seen |= end != 0;
             // Bytes after the selected boundary still belong to the original
             // slice. Revisit them there, not from a copied intermediate tail.
-            let rest = self.decode_part(
-                encoding,
-                &bytes[end - carried..],
-                fatal,
-                ignore_bom,
-                stream,
-            )?;
+            let rest =
+                self.decode_part(encoding, &bytes[end - carried..], fatal, ignore_bom, stream)?;
             Some(first.concat(&rest))
         })();
         if decoded.is_none() {
@@ -133,8 +124,10 @@ pub(super) fn decode_string(
             let text: String = bytes
                 .iter()
                 .map(|&byte| match byte {
-                    0x80..=0x9f => char::from_u32(u32::from(WINDOWS_1252_HIGH[usize::from(byte - 0x80)]))
-                        .expect("windows-1252 mappings are Unicode scalars"),
+                    0x80..=0x9f => {
+                        char::from_u32(u32::from(WINDOWS_1252_HIGH[usize::from(byte - 0x80)]))
+                            .expect("windows-1252 mappings are Unicode scalars")
+                    }
                     other => char::from(other),
                 })
                 .collect();
@@ -156,12 +149,7 @@ pub(super) fn decode_string(
     }
 }
 
-fn decode_utf16(
-    bytes: &[u8],
-    big_endian: bool,
-    fatal: bool,
-    ignore_bom: bool,
-) -> Option<JsString> {
+fn decode_utf16(bytes: &[u8], big_endian: bool, fatal: bool, ignore_bom: bool) -> Option<JsString> {
     let read = |offset| {
         let pair = [bytes[offset], bytes[offset + 1]];
         if big_endian {
@@ -198,8 +186,7 @@ fn decode_utf16(
             }
             let low = read(offset + 2);
             if (0xdc00..=0xdfff).contains(&low) {
-                let scalar = 0x10000 + ((u32::from(unit) - 0xd800) << 10)
-                    + u32::from(low) - 0xdc00;
+                let scalar = 0x10000 + ((u32::from(unit) - 0xd800) << 10) + u32::from(low) - 0xdc00;
                 text.push(char::from_u32(scalar).expect("surrogate pair is a Unicode scalar"));
                 offset += 4;
                 continue;

@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use frankenengine_engine::evidence_ledger::{
     StitchingArtifactContext, emit_default_stitching_bundle, render_stitching_summary,
 };

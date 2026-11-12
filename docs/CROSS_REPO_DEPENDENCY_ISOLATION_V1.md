@@ -9,11 +9,13 @@ verification posture.
 `frankenengine-engine` carries four external dependency families behind
 feature gates:
 
-- asupersync: `franken-kernel`, `franken-decision`, `franken-evidence` at `0.3.4`
+- asupersync: `franken-kernel`, `franken-decision`, `franken-evidence` at `0.5.0`
 - persistence: `sqlmodel`, `sqlmodel-core`, `sqlmodel-frankensqlite` at upstream
   Git revision `7f432ff690260ef85aca5227e2372b2eb63230c9` (package version `0.5.0`)
-- service API: `fastapi-core` at `0.3.1`
+- service API: `fastapi-core` at upstream Git revision
+  `fb15fa5025cfdc23ab99344db5e2a4939dbcf38e` (package version `0.4.4`)
 - dataframes: `fp-io`, `fp-frame`, `fp-columnar`, `fp-index`, `fp-types` at `0.2.0`
+  (opt-in via `sibling-dataframes`, off by default so Arrow/Parquet stay out of core runtime builds)
 
 These dependencies are optional at the Cargo layer, enabled by default through
 four explicit feature gates, and consumed as registry crates or an immutable
@@ -45,7 +47,7 @@ and operator commands.
 `crates/franken-engine/Cargo.toml` defines:
 
 - default feature set: `["asupersync-integration", "sibling-persistence",
-  "sibling-service-api", "sibling-dataframes"]`
+  "sibling-service-api"]` (`sibling-dataframes` and `governance-surfaces` are opt-in)
 - gated sibling dependencies: the four families listed above
 
 The supported operator build modes are:
@@ -124,6 +126,29 @@ Heavy Rust verification for this lane must stay remote:
 ```
 
 Both scripts are expected to route heavy Cargo commands through `rch`.
+
+## Release Packaging & Publish Resolution
+
+Release binary archives (`dist.yml` `frankenctl` tarballs) build reproducibly from
+`Cargo.lock` against immutable 40-character upstream Git revisions:
+
+- `sqlmodel`, `sqlmodel-core`, `sqlmodel-frankensqlite` (`rev = "7f432ff690260ef85aca5227e2372b2eb63230c9"`, `sibling-persistence`)
+- `fastapi-core` (`version = "0.4.4"`, `rev = "fb15fa5025cfdc23ab99344db5e2a4939dbcf38e"`, `sibling-service-api`)
+- `franken-native-capsule-worker` (`rev = "7af57e2c43d42e77eff569b133b263c4e2a858f9"`, opt-in `native-capsule-worker`)
+
+For crates.io registry publication (`cargo publish`), Cargo rejects `git`-sourced
+dependency entries unless accompanied by a qualified registry version (and
+requires `git` keys to be dropped or published upstream first):
+
+1. Publish qualified upstream crates (`sqlmodel` `>= 0.5.1` carrying the numeric
+   `PRAGMA synchronous` readback fix, `fastapi-core` `>= 0.4.5`, and
+   `franken-native-capsule-worker` `>= 0.1.0`) to crates.io in dependency order:
+   `franken-engine-deterministic-trait` -> `franken-engine-deterministic-derive` /
+   `franken-engine-fixed-layout-derive` -> `frankenengine-extension-host` /
+   `frankenengine-core` -> `frankenengine-engine`.
+2. Until those upstream crates.io cuts land, standalone consumers build and embed
+   `frankenengine-engine` with `default-features = false, features = ["asupersync-integration"]`
+   (pure registry dependencies) or via Git revision pin matching `Cargo.lock`.
 
 ## Historical Sibling Checkout Inventory (2026-05-21)
 

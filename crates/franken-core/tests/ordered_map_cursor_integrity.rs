@@ -58,7 +58,10 @@ fn cursor_ranks_exclude_numeric_and_exact_only_properties() {
     assert_eq!(map.insertion_key_position("2"), None);
     assert_eq!(map.insertion_key_position("4294967294"), None);
     assert_eq!(map.insertion_key_at(0).map(String::as_str), Some("b"));
-    assert_eq!(map.insertion_key_at(3).map(String::as_str), Some("4294967295"));
+    assert_eq!(
+        map.insertion_key_at(3).map(String::as_str),
+        Some("4294967295")
+    );
     for key in ["b", "01", "\u{fffd}", "4294967295"] {
         map.remove(key);
         assert_ranks(&map);
@@ -82,8 +85,7 @@ fn retained_cloned_and_restored_maps_have_the_same_cursor_ranks() {
     let copy = map.clone();
     assert_ranks(&copy);
     let wire = serde_json::to_string(&map).expect("serialize carrier");
-    let restored: OrderedStringMap<usize> =
-        serde_json::from_str(&wire).expect("restore carrier");
+    let restored: OrderedStringMap<usize> = serde_json::from_str(&wire).expect("restore carrier");
     assert_eq!(restored, map);
     assert_ranks(&restored);
     assert_eq!(

@@ -5,7 +5,8 @@ root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root_dir"
 
 mode="${1:-ci}"
-toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
+default_toolchain="$(sed -n 's/^channel = "\(.*\)"/\1/p' "${root_dir}/rust-toolchain.toml" 2>/dev/null | head -n 1)"
+toolchain="${RUSTUP_TOOLCHAIN:-${default_toolchain:-nightly-2026-09-21}}"
 target_dir="${CARGO_TARGET_DIR:-/tmp/rch_target_franken_engine_fuzz_adversarial}"
 fuzz_time_seconds="${FUZZ_TIME_SECONDS:-60}"
 rss_limit_mb="${FUZZ_RSS_LIMIT_MB:-2048}"
@@ -17,13 +18,22 @@ events_path="$run_dir/events.jsonl"
 
 mkdir -p "$run_dir"
 
+use_local_ci_runner=false
 if ! command -v rch >/dev/null 2>&1; then
-  echo "error: rch is required for fuzz adversarial target commands" >&2
-  exit 1
+  if [[ "${GITHUB_ACTIONS:-false}" == "true" ]]; then
+    use_local_ci_runner=true
+  else
+    echo "error: rch is required for fuzz adversarial target commands" >&2
+    exit 1
+  fi
 fi
 
 run_rch() {
-  rch exec -- env "RUSTUP_TOOLCHAIN=$toolchain" "CARGO_TARGET_DIR=$target_dir" "$@"
+  if [[ "$use_local_ci_runner" == true ]]; then
+    env "RUSTUP_TOOLCHAIN=$toolchain" "CARGO_TARGET_DIR=$target_dir" "$@"
+  else
+    rch exec -- env "RUSTUP_TOOLCHAIN=$toolchain" "CARGO_TARGET_DIR=$target_dir" "$@"
+  fi
 }
 
 rch_reject_local_fallback() {

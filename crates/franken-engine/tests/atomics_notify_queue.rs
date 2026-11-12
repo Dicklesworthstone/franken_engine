@@ -2,11 +2,11 @@
 #![forbid(unsafe_code)]
 
 use frankenengine_engine::ast::ParseGoal;
-use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore};
 use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::ir_contract::Ir0Module;
 use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 
 #[test]
 fn notifications_preserve_address_identity_fifo_and_reentrant_completion() {
@@ -14,7 +14,10 @@ fn notifications_preserve_address_identity_fifo_and_reentrant_completion() {
     let expected = include_str!("fixtures/atomics/notify_queue.expected").trim_end();
     let tree = CanonicalEs2020Parser
         .parse_with_options(
-            ParserSource { label: "atomics-notify-queue.js".into(), text: source.into() },
+            ParserSource {
+                label: "atomics-notify-queue.js".into(),
+                text: source.into(),
+            },
             ParseGoal::Script,
             &ParserOptions::default(),
         )
@@ -45,10 +48,20 @@ fn notifications_preserve_address_identity_fifo_and_reentrant_completion() {
             let result = core.execute(&module).unwrap_or_else(|error| {
                 panic!("throughput={throughput}, stress={stress:?}: {error}")
             });
-            let output = result.console_output.iter().map(|entry| entry.message.as_str())
-                .collect::<Vec<_>>().join("\n");
-            assert_eq!(output, expected, "throughput={throughput}, stress={stress:?}");
-            assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+            let output = result
+                .console_output
+                .iter()
+                .map(|entry| entry.message.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert_eq!(
+                output, expected,
+                "throughput={throughput}, stress={stress:?}"
+            );
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
         }
     }
 }

@@ -21,6 +21,11 @@ report_path="${run_dir}/claim_to_proof_gate_report.json"
 commands_path="${run_dir}/commands.txt"
 matrix_path="${CLAIM_TO_PROOF_MATRIX_PATH:-docs/claim_to_proof_matrix_v1.json}"
 human_report_path="docs/CLAIM_TO_PROOF_MATRIX_V1.md"
+beads_issues_path="${CLAIM_TO_PROOF_BEADS_ISSUES_PATH:-.beads/issues.jsonl}"
+enforce_bead_owners=0
+if [[ -n "${CLAIM_TO_PROOF_BEADS_ISSUES_PATH:-}" || "$matrix_path" == "docs/claim_to_proof_matrix_v1.json" || "$matrix_path" == "${root_dir}/docs/claim_to_proof_matrix_v1.json" || "$matrix_path" == "crates/franken-engine/docs/claim_to_proof_matrix_v1.json" || "$matrix_path" == "${root_dir}/crates/franken-engine/docs/claim_to_proof_matrix_v1.json" ]]; then
+  enforce_bead_owners=1
+fi
 
 mkdir -p "$run_dir"
 
@@ -50,6 +55,60 @@ jq -e '
   and (.claims | type == "array")
   and (.claims | length > 0)
 ' "$matrix_path" >/dev/null
+
+owner_errors_path="${run_dir}/unpromoted_owner_errors.json"
+if [[ "$enforce_bead_owners" == "1" ]]; then
+  if [[ ! -f "$beads_issues_path" ]]; then
+    echo "missing beads issues file for claim owner verification: $beads_issues_path" >&2
+    exit 1
+  fi
+  python3 - "$matrix_path" "$beads_issues_path" "$owner_errors_path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+matrix = json.loads(Path(sys.argv[1]).read_text())
+beads = {}
+for raw_line in Path(sys.argv[2]).read_text().splitlines():
+    line = raw_line.strip()
+    if not line:
+        continue
+    row = json.loads(line)
+    bead_id = row.get("id")
+    if isinstance(bead_id, str) and bead_id:
+        beads[bead_id] = row.get("status", "")
+
+errors = {}
+for claim in matrix.get("claims", []):
+    allowed_state = claim.get("allowed_state", "")
+    if allowed_state == "observed":
+        continue
+    claim_id = claim.get("claim_id", "")
+    owning_bead = claim.get("owning_bead", "")
+    if not isinstance(owning_bead, str) or not owning_bead.strip():
+        errors[claim_id] = (
+            f"ClaimMatrixError::ClosedOwningBeadOnUnpromotedClaim: non-observed claim {claim_id} "
+            f"(allowed_state={allowed_state}) has an empty owning_bead"
+        )
+        continue
+    bead_status = beads.get(owning_bead)
+    if bead_status is None:
+        errors[claim_id] = (
+            f"ClaimMatrixError::ClosedOwningBeadOnUnpromotedClaim: non-observed claim {claim_id} "
+            f"(allowed_state={allowed_state}) names unknown owning_bead {owning_bead}"
+        )
+    elif bead_status == "closed":
+        errors[claim_id] = (
+            f"ClaimMatrixError::ClosedOwningBeadOnUnpromotedClaim: non-observed claim {claim_id} "
+            f"(allowed_state={allowed_state}) names closed owning_bead {owning_bead}; "
+            f"un-promoted claims must point to an active open capability-delivery bead"
+        )
+
+Path(sys.argv[3]).write_text(json.dumps(errors, sort_keys=True))
+PY
+else
+  printf '{}\n' >"$owner_errors_path"
+fi
 
 state_rank() {
   case "$1" in
@@ -769,6 +828,11 @@ while IFS= read -r claim; do
     if [[ -z "$downgrade_text" ]]; then
       status="fail"
       local_reason="non-observed claim must include downgrade_text"
+    fi
+    owner_error="$(jq -r --arg cid "$claim_id" '.[$cid] // empty' "$owner_errors_path")"
+    if [[ -n "$owner_error" ]]; then
+      status="fail"
+      local_reason="$owner_error"
     fi
   fi
 

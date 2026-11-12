@@ -27,7 +27,10 @@ fn uninterrupted_cross_leaf_matches_need_no_failure_table() {
                 while !remaining.is_empty() {
                     let count = chunk.min(remaining.len());
                     let (piece, rest) = if backwards {
-                        (&remaining[remaining.len() - count..], &remaining[..remaining.len() - count])
+                        (
+                            &remaining[remaining.len() - count..],
+                            &remaining[..remaining.len() - count],
+                        )
                     } else {
                         (&remaining[..count], &remaining[count..])
                     };
@@ -123,8 +126,13 @@ fn deferred_matching_remains_connected_to_exact_rope_search() {
         }
         let needle = JsString::from(word);
         assert_eq!(value.utf16_index_of(&needle, 0), Some(1));
-        assert_eq!(value.utf16_last_index_of(&needle, usize::MAX), Some(word.encode_utf16().count() + 2));
-        let Text::Concat(node) = &value.utf8 else { panic!("expected rope") };
+        assert_eq!(
+            value.utf16_last_index_of(&needle, usize::MAX),
+            Some(word.encode_utf16().count() + 2)
+        );
+        let Text::Concat(node) = &value.utf8 else {
+            panic!("expected rope")
+        };
         assert!(node.joined.get().is_none());
     }
 }

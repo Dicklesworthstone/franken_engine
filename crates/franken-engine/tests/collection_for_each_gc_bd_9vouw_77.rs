@@ -34,7 +34,7 @@ fn run(source: String, stress_interval: Option<u64>, throughput: bool) -> Run {
                 .parse_with_options(
                     ParserSource {
                         label: "collection-for-each-gc.js".into(),
-                        text: source.into(),
+                        text: source,
                     },
                     ParseGoal::Script,
                     &ParserOptions::default(),

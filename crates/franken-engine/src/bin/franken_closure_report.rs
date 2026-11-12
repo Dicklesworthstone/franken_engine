@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 /*!
 FrankenEngine Closure Report Generator
 

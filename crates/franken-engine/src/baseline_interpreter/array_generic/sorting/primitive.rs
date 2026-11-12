@@ -99,8 +99,10 @@ pub(super) fn compare(left: &Value, right: &Value) -> Option<Ordering> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::{
+        InterpreterConfig, InterpreterCore, InterpreterError, Label, ObjectId, RuntimeCapability,
+    };
     use super::*;
-    use super::super::{InterpreterConfig, InterpreterCore, InterpreterError, Label, ObjectId, RuntimeCapability};
     use std::sync::Arc;
 
     fn reference(core: &InterpreterCore, value: &Value) -> JsString {
@@ -129,23 +131,48 @@ mod tests {
             Value::BigInt(Arc::from("\u{1f600}")),
             Value::BigInt(Arc::from("\u{e000}")),
         ];
-        for text in ["", "0", "00", "false", "null", "undefined", "\u{e9}", "\u{1f600}", "\u{e000}"] {
+        for text in [
+            "",
+            "0",
+            "00",
+            "false",
+            "null",
+            "undefined",
+            "\u{e9}",
+            "\u{1f600}",
+            "\u{e000}",
+        ] {
             values.push(Value::Str(JsString::from(text)));
         }
         for units in [&[0xd800][..], &[0xdc00], &[0xd83d, 0xde00, 0xd800]] {
             values.push(Value::Str(JsString::from_code_units(units)));
         }
         for number in [
-            -0.0, 0.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY,
-            f64::MAX, f64::MIN_POSITIVE, f64::from_bits(1),
-            -1e-7, 1e-6, 1e20, 1e21, 0.1, 9007199254740992.0,
+            -0.0,
+            0.0,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::MAX,
+            f64::MIN_POSITIVE,
+            f64::from_bits(1),
+            -1e-7,
+            1e-6,
+            1e20,
+            1e21,
+            0.1,
+            9007199254740992.0,
         ] {
             values.push(Value::Float(number.into()));
         }
         for left in &values {
             for right in &values {
                 let expected = reference(&core, left).utf16_cmp(&reference(&core, right));
-                assert_eq!(compare(left, right), Some(expected), "{left:?} vs {right:?}");
+                assert_eq!(
+                    compare(left, right),
+                    Some(expected),
+                    "{left:?} vs {right:?}"
+                );
             }
         }
     }
@@ -156,7 +183,10 @@ mod tests {
         let mut bits = 0x6a09e667f3bcc909_u64;
         for _ in 0..16384 {
             bits = bits.wrapping_mul(6364136223846793005).wrapping_add(1);
-            for value in [Value::Float(f64::from_bits(bits).into()), Value::Int(bits as i64)] {
+            for value in [
+                Value::Float(f64::from_bits(bits).into()),
+                Value::Int(bits as i64),
+            ] {
                 let mut buffer = KeyBuffer::new();
                 let Some(Key::Utf8(text)) = key(&value, &mut buffer) else {
                     panic!("current primitive formatter must fit its bounded buffer");
@@ -171,11 +201,19 @@ mod tests {
         let text = Value::Str(JsString::from_code_units(&[0x61, 0xd800]));
         let digits = Value::BigInt(Arc::from("9".repeat(32768)));
         let mut buffer = KeyBuffer::new();
-        let Value::Str(original) = &text else { unreachable!() };
-        let Some(Key::Exact(borrowed)) = key(&text, &mut buffer) else { panic!("exact key") };
+        let Value::Str(original) = &text else {
+            unreachable!()
+        };
+        let Some(Key::Exact(borrowed)) = key(&text, &mut buffer) else {
+            panic!("exact key")
+        };
         assert!(std::ptr::eq(borrowed, original));
-        let Value::BigInt(original) = &digits else { unreachable!() };
-        let Some(Key::Utf8(borrowed)) = key(&digits, &mut buffer) else { panic!("decimal key") };
+        let Value::BigInt(original) = &digits else {
+            unreachable!()
+        };
+        let Some(Key::Utf8(borrowed)) = key(&digits, &mut buffer) else {
+            panic!("decimal key")
+        };
         assert_eq!(borrowed.as_ptr(), original.as_ptr());
         assert_eq!(borrowed.len(), original.len());
         assert_eq!(buffer.used, 0);
@@ -184,8 +222,12 @@ mod tests {
     #[test]
     fn objects_and_callable_carriers_are_never_treated_as_primitive_keys() {
         for value in [
-            Value::Object(ObjectId(0)), Value::Function(0), Value::Closure(0),
-            Value::Iterator(0), Value::Generator(0), Value::Promise(0),
+            Value::Object(ObjectId(0)),
+            Value::Function(0),
+            Value::Closure(0),
+            Value::Iterator(0),
+            Value::Generator(0),
+            Value::Promise(0),
         ] {
             assert!(compare(&value, &Value::Int(1)).is_none());
             assert!(compare(&Value::Int(1), &value).is_none());
@@ -204,16 +246,27 @@ mod tests {
 
     #[test]
     fn native_primitive_comparisons_need_no_additional_heap_headroom() {
-        for mut config in [InterpreterConfig::quickjs_defaults(), InterpreterConfig::v8_defaults()] {
+        for mut config in [
+            InterpreterConfig::quickjs_defaults(),
+            InterpreterConfig::v8_defaults(),
+        ] {
             config.granted_capabilities = [
-                RuntimeCapability::VmDispatch, RuntimeCapability::HeapAllocate, RuntimeCapability::Builtin,
-            ].into_iter().collect();
+                RuntimeCapability::VmDispatch,
+                RuntimeCapability::HeapAllocate,
+                RuntimeCapability::Builtin,
+            ]
+            .into_iter()
+            .collect();
             let mut core = InterpreterCore::new(config, "sort-borrowed-budget");
             core.json_observe_label(Label::Public).unwrap();
-            core.write_reg(0, Value::Str(JsString::from("a".repeat(4096)))).unwrap();
-            core.write_reg(1, Value::Str(JsString::from("b".repeat(4096)))).unwrap();
-            core.write_reg(2, Value::BigInt(Arc::from("9".repeat(4096)))).unwrap();
-            core.write_reg(3, Value::BigInt(Arc::from("1".repeat(4096)))).unwrap();
+            core.write_reg(0, Value::Str(JsString::from("a".repeat(4096))))
+                .unwrap();
+            core.write_reg(1, Value::Str(JsString::from("b".repeat(4096))))
+                .unwrap();
+            core.write_reg(2, Value::BigInt(Arc::from("9".repeat(4096))))
+                .unwrap();
+            core.write_reg(3, Value::BigInt(Arc::from("1".repeat(4096))))
+                .unwrap();
             let before = core.recompute_estimated_memory_bytes();
             assert_eq!(core.estimated_memory_bytes(), before);
             core.config.max_total_memory_bytes = before;
@@ -221,14 +274,19 @@ mod tests {
                 let a = core.read_reg(left).unwrap();
                 let b = core.read_reg(right).unwrap();
                 let reads = core.native_hole_reads.get();
-                assert_eq!(core.generic_sort_compare(None, a, b, &Value::Undefined).unwrap(), expected);
+                assert_eq!(
+                    core.generic_sort_compare(None, a, b, &Value::Undefined)
+                        .unwrap(),
+                    expected
+                );
                 assert_eq!(core.native_hole_reads.get(), reads + 1);
                 assert_eq!(core.json_parse_temporary_bytes, 0);
                 assert_eq!(core.estimated_memory_bytes(), before);
                 assert_eq!(core.recompute_estimated_memory_bytes(), before);
             }
             // Borrowing key storage does not bypass comparison fuel admission.
-            core.config.instruction_budget = core.instructions_executed + core.native_hole_reads.get();
+            core.config.instruction_budget =
+                core.instructions_executed + core.native_hole_reads.get();
             assert!(matches!(
                 core.generic_sort_compare(None, Value::Int(2), Value::Int(10), &Value::Undefined),
                 Err(InterpreterError::BudgetExhausted { .. })
@@ -238,16 +296,25 @@ mod tests {
 
     #[test]
     fn native_primitive_comparison_retains_pending_callback_observations() {
-        let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "sort-observation");
+        let mut core =
+            InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "sort-observation");
         core.json_observe_label(Label::Public).unwrap();
-        core.replace_pending_hostcall_result_label(Some(Label::Secret)).unwrap();
+        core.replace_pending_hostcall_result_label(Some(Label::Secret))
+            .unwrap();
         assert_eq!(
-            core.compare_sort_strings(None, Value::Int(2), Value::Int(10)).unwrap(),
+            core.compare_sort_strings(None, Value::Int(2), Value::Int(10))
+                .unwrap(),
             Ordering::Greater
         );
-        assert_eq!(core.active_inline_callback_context_label, Some(Label::Secret));
+        assert_eq!(
+            core.active_inline_callback_context_label,
+            Some(Label::Secret)
+        );
         assert_eq!(core.json_parse_temporary_bytes, 0);
-        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]

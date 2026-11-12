@@ -153,11 +153,16 @@ impl Test262Harness {
     }
 
     /// Convert Test262 test cases to case vectors for franken_test262_runner.
+    ///
+    /// Per the official Test262 runner specification, non-`raw`, non-`module`
+    /// tests without `onlyStrict` or `noStrict` execute in BOTH sloppy mode and
+    /// `"use strict"` mode (`#strict` vector suffix).
     pub fn generate_case_vectors(&self, test_cases: &[Test262TestCase]) -> Vec<Test262CaseVector> {
-        test_cases
-            .iter()
-            .map(|test| self.test_case_to_vector(test))
-            .collect()
+        let mut vectors = Vec::with_capacity(test_cases.len() * 2);
+        for test in test_cases {
+            vectors.extend(self.test_case_to_vectors(test));
+        }
+        vectors
     }
 
     /// Write case vectors to JSONL file for franken_test262_runner.
@@ -301,12 +306,11 @@ impl Test262Harness {
             file_path: relative_path,
             es_clause: metadata
                 .get("esid")
-                .unwrap_or(&"unknown".to_string())
-                .clone(),
-            description: metadata
-                .get("description")
-                .unwrap_or(&"".to_string())
-                .clone(),
+                .or_else(|| metadata.get("es6id"))
+                .or_else(|| metadata.get("es5id"))
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string()),
+            description: metadata.get("description").cloned().unwrap_or_default(),
             source,
             expected_outcome: self.determine_expected_outcome(&metadata),
             features: self.parse_list_field(&metadata, "features"),
@@ -348,23 +352,87 @@ impl Test262Harness {
         Ok((frontmatter, source))
     }
 
-    /// Parse YAML-like frontmatter into key-value map.
+    /// Parse YAML-like Test262 frontmatter (supporting inline scalars/lists/maps,
+    /// indented block mappings like `negative:\n  phase: parse\n  type: SyntaxError`,
+    /// and indented `- item` block sequences for `includes`/`flags`/`features`).
     fn parse_frontmatter(
         &self,
         frontmatter: &str,
     ) -> Result<BTreeMap<String, String>, Test262HarnessError> {
-        let mut metadata = BTreeMap::new();
+        let mut metadata: BTreeMap<String, String> = BTreeMap::new();
+        let mut current_section: Option<String> = None;
 
-        for line in frontmatter.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
+        for raw_line in frontmatter.lines() {
+            let trimmed = raw_line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
                 continue;
             }
+            let indent = raw_line.len() - raw_line.trim_start().len();
 
-            if let Some((key, value)) = line.split_once(':') {
+            if indent > 0
+                && let Some(section) = current_section.as_deref()
+            {
+                if let Some(item) = trimmed.strip_prefix('-') {
+                    let item = item.trim().trim_matches(|c| c == '"' || c == '\'');
+                    if !item.is_empty() {
+                        let entry = metadata.entry(section.to_string()).or_default();
+                        if !entry.is_empty() {
+                            entry.push_str(", ");
+                        }
+                        entry.push_str(item);
+                    }
+                    continue;
+                }
+                if let Some((sub_key, sub_val)) = trimmed.split_once(':') {
+                    let sub_key = sub_key.trim();
+                    let sub_val = sub_val.trim().trim_matches(|c| c == '"' || c == '\'');
+                    if section == "negative" {
+                        metadata.insert(format!("negative.{sub_key}"), sub_val.to_string());
+                        metadata
+                            .entry("negative".to_string())
+                            .or_insert_with(|| "present".to_string());
+                        continue;
+                    }
+                }
+                if matches!(section, "description" | "info") {
+                    let entry = metadata.entry(section.to_string()).or_default();
+                    if !entry.is_empty() {
+                        entry.push(' ');
+                    }
+                    entry.push_str(trimmed);
+                    continue;
+                }
+            }
+
+            if let Some((key, value)) = trimmed.split_once(':') {
                 let key = key.trim().to_string();
-                let value = value.trim().to_string();
-                metadata.insert(key, value);
+                let value = value.trim();
+                if value.is_empty()
+                    || value == ">"
+                    || value == "|"
+                    || value == ">-"
+                    || value == "|-"
+                {
+                    current_section = Some(key.clone());
+                    metadata.entry(key).or_default();
+                } else {
+                    current_section = None;
+                    if key == "negative" && value.starts_with('{') && value.ends_with('}') {
+                        let inner = &value[1..value.len() - 1];
+                        for pair in inner.split(',') {
+                            if let Some((k, v)) = pair.split_once(':') {
+                                metadata.insert(
+                                    format!("negative.{}", k.trim()),
+                                    v.trim().trim_matches(|c| c == '"' || c == '\'').to_string(),
+                                );
+                            }
+                        }
+                    }
+                    metadata.insert(
+                        key,
+                        value.trim_matches(|c| c == '"' || c == '\'').to_string(),
+                    );
+                }
             }
         }
 
@@ -376,10 +444,13 @@ impl Test262Harness {
         metadata
             .get(field)
             .map(|s| {
-                // Simple CSV parsing - Test262 uses [item1, item2] format
                 s.trim_matches(|c| c == '[' || c == ']')
                     .split(',')
-                    .map(|item| item.trim().to_string())
+                    .map(|item| {
+                        item.trim()
+                            .trim_matches(|c| c == '"' || c == '\'')
+                            .to_string()
+                    })
                     .filter(|item| !item.is_empty())
                     .collect()
             })
@@ -388,16 +459,16 @@ impl Test262Harness {
 
     /// Parse negative test configuration.
     fn parse_negative_field(&self, metadata: &BTreeMap<String, String>) -> Option<Test262Negative> {
-        if let Some(negative_str) = metadata.get("negative") {
-            // Parse YAML-like negative field
-            // Format: { phase: parse, type: SyntaxError }
-            // For simplicity, use basic string parsing
-            if negative_str.contains("phase") && negative_str.contains("type") {
-                return Some(Test262Negative {
-                    phase: "parse".to_string(),            // Simplified
-                    error_type: "SyntaxError".to_string(), // Simplified
-                });
-            }
+        if let (Some(phase), Some(error_type)) = (
+            metadata.get("negative.phase"),
+            metadata.get("negative.type"),
+        ) && !phase.is_empty()
+            && !error_type.is_empty()
+        {
+            return Some(Test262Negative {
+                phase: phase.clone(),
+                error_type: error_type.clone(),
+            });
         }
         None
     }
@@ -407,40 +478,210 @@ impl Test262Harness {
         &self,
         metadata: &BTreeMap<String, String>,
     ) -> Test262ExpectedOutcome {
-        if metadata.contains_key("negative") {
-            // Negative test - should throw error
-            Test262ExpectedOutcome::ThrowError {
-                error_type: "Error".to_string(), // Simplified
+        if let Some(neg) = self.parse_negative_field(metadata) {
+            if matches!(neg.phase.as_str(), "parse" | "early") {
+                Test262ExpectedOutcome::ParseError
+            } else {
+                Test262ExpectedOutcome::ThrowError {
+                    error_type: neg.error_type,
+                }
             }
         } else if metadata
             .get("flags")
-            .is_some_and(|flags| flags.contains("early"))
+            .is_some_and(|flags| flags.split(',').any(|f| f.trim() == "early"))
         {
-            // Early error - parse error
             Test262ExpectedOutcome::ParseError
         } else {
-            // Normal test - should pass
             Test262ExpectedOutcome::Pass
         }
     }
 
-    /// Convert Test262TestCase to Test262CaseVector.
-    fn test_case_to_vector(&self, test: &Test262TestCase) -> Test262CaseVector {
-        let expected_value = match &test.expected_outcome {
-            Test262ExpectedOutcome::Pass => "undefined".to_string(), // Default for passing tests
-            Test262ExpectedOutcome::ThrowError { error_type } => {
-                format!("THROW:{}", error_type)
+    fn build_harness_prelude(&self, test: &Test262TestCase) -> String {
+        if test.flags.iter().any(|f| f == "raw") {
+            return String::new();
+        }
+        const HOST_262_PRELUDE: &str = r#"var $262 = {
+  global: globalThis,
+  createRealm: function() { return $262; },
+  detachArrayBuffer: function() {},
+  gc: function() {},
+  evalScript: function(code) { return eval(code); }
+};
+"#;
+        const FALLBACK_ASSERT_STA: &str = r#"function Test262Error(message) {
+  this.name = "Test262Error";
+  this.message = message === undefined ? "" : String(message);
+}
+Test262Error.prototype.toString = function() {
+  return "Test262Error: " + this.message;
+};
+Test262Error.thrower = function(message) {
+  throw new Test262Error(message);
+};
+function $ERROR(message) {
+  throw new Test262Error(message);
+}
+function $DONOTEVALUATE() {
+  throw "Test262: This statement should not be evaluated.";
+}
+function assert(mustBeTrue, message) {
+  if (mustBeTrue === true) {
+    return;
+  }
+  throw new Test262Error(message === undefined ? "Expected true but got " + String(mustBeTrue) : message);
+}
+assert._isSameValue = function(a, b) {
+  if (a === b) {
+    return a !== 0 || 1 / a === 1 / b;
+  }
+  return a !== a && b !== b;
+};
+assert.sameValue = function(actual, expected, message) {
+  if (assert._isSameValue(actual, expected)) {
+    return;
+  }
+  throw new Test262Error((message ? message + " " : "") + "Expected SameValue(" + String(actual) + ", " + String(expected) + ") to be true");
+};
+assert.notSameValue = function(actual, unexpected, message) {
+  if (!assert._isSameValue(actual, unexpected)) {
+    return;
+  }
+  throw new Test262Error((message ? message + " " : "") + "Expected SameValue(" + String(actual) + ", " + String(unexpected) + ") to be false");
+};
+assert.throws = function(expectedErrorConstructor, func, message) {
+  if (typeof func !== "function") {
+    throw new Test262Error("assert.throws requires a function");
+  }
+  var thrown = false;
+  try {
+    func();
+  } catch (err) {
+    thrown = true;
+    if (typeof err !== "object" || err === null) {
+      throw new Test262Error((message ? message + " " : "") + "Thrown value was not an object");
+    }
+    if (err.constructor !== expectedErrorConstructor && !(err instanceof expectedErrorConstructor)) {
+      throw new Test262Error((message ? message + " " : "") + "Unexpected error constructor");
+    }
+    return;
+  }
+  if (!thrown) {
+    throw new Test262Error((message ? message + " " : "") + "Expected function to throw");
+  }
+};
+"#;
+        let mut prelude = String::from(HOST_262_PRELUDE);
+        let harness_dir = self.test262_path.join("harness");
+        let sta_path = harness_dir.join("sta.js");
+        let assert_path = harness_dir.join("assert.js");
+        if let (Ok(sta), Ok(assert_js)) = (
+            fs::read_to_string(&sta_path),
+            fs::read_to_string(&assert_path),
+        ) {
+            prelude.push_str(&sta);
+            prelude.push('\n');
+            prelude.push_str(&assert_js);
+            prelude.push('\n');
+        } else {
+            prelude.push_str(FALLBACK_ASSERT_STA);
+        }
+        for include in &test.includes {
+            if matches!(include.as_str(), "sta.js" | "assert.js") {
+                continue;
             }
+            let include_path = harness_dir.join(include);
+            if let Ok(helper_src) = fs::read_to_string(&include_path) {
+                prelude.push_str(&helper_src);
+                prelude.push('\n');
+            }
+        }
+        prelude
+    }
+
+    fn expected_value_for_case(&self, test: &Test262TestCase) -> String {
+        if let Some(neg) = &test.negative {
+            return format!("NEGATIVE:{}:{}", neg.phase, neg.error_type);
+        }
+        match &test.expected_outcome {
+            Test262ExpectedOutcome::Pass => "TEST262_PASS".to_string(),
+            Test262ExpectedOutcome::ThrowError { error_type } => format!("THROW:{error_type}"),
             Test262ExpectedOutcome::ParseError => "PARSE_ERROR".to_string(),
+        }
+    }
+
+    fn deterministic_seed_for_id(test_id: &str) -> u64 {
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        for byte in test_id.as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0100_0000_01b3);
+        }
+        hash
+    }
+
+    /// Convert a `Test262TestCase` into its sloppy and/or strict `Test262CaseVector`s.
+    fn test_case_to_vectors(&self, test: &Test262TestCase) -> Vec<Test262CaseVector> {
+        if test.source.trim().is_empty() {
+            return Vec::new();
+        }
+        let expected_value = self.expected_value_for_case(test);
+        let prelude = self.build_harness_prelude(test);
+        let has_flag = |flag: &str| test.flags.iter().any(|f| f == flag);
+        let is_raw = has_flag("raw");
+        let is_module = has_flag("module");
+        let only_strict = has_flag("onlyStrict");
+        let no_strict = has_flag("noStrict");
+
+        let compose_source = |strict_prefix: bool| -> String {
+            let mut out = String::with_capacity(prelude.len() + test.source.len() + 20);
+            if strict_prefix {
+                out.push_str("\"use strict\";\n");
+            }
+            out.push_str(&prelude);
+            out.push_str(&test.source);
+            out
         };
 
-        Test262CaseVector {
-            test_id: test.file_path.clone(),
-            es2020_clause: test.es_clause.clone(),
-            source: test.source.clone(),
-            expected_value,
-            runtime_lane: "hybrid".to_string(),
-            deterministic_seed: 0, // Could hash test_id for determinism
+        if is_raw || is_module || no_strict {
+            let id = test.file_path.clone();
+            vec![Test262CaseVector {
+                deterministic_seed: Self::deterministic_seed_for_id(&id),
+                test_id: id,
+                es2020_clause: test.es_clause.clone(),
+                source: compose_source(false),
+                expected_value,
+                runtime_lane: "hybrid".to_string(),
+            }]
+        } else if only_strict {
+            let id = test.file_path.clone();
+            vec![Test262CaseVector {
+                deterministic_seed: Self::deterministic_seed_for_id(&id),
+                test_id: id,
+                es2020_clause: test.es_clause.clone(),
+                source: compose_source(true),
+                expected_value,
+                runtime_lane: "hybrid".to_string(),
+            }]
+        } else {
+            let sloppy_id = test.file_path.clone();
+            let strict_id = format!("{}#strict", test.file_path);
+            vec![
+                Test262CaseVector {
+                    deterministic_seed: Self::deterministic_seed_for_id(&sloppy_id),
+                    test_id: sloppy_id,
+                    es2020_clause: test.es_clause.clone(),
+                    source: compose_source(false),
+                    expected_value: expected_value.clone(),
+                    runtime_lane: "hybrid".to_string(),
+                },
+                Test262CaseVector {
+                    deterministic_seed: Self::deterministic_seed_for_id(&strict_id),
+                    test_id: strict_id,
+                    es2020_clause: test.es_clause.clone(),
+                    source: compose_source(true),
+                    expected_value,
+                    runtime_lane: "hybrid".to_string(),
+                },
+            ]
         }
     }
 }
@@ -566,5 +807,63 @@ mod tests {
         // Body between the two markers is empty.
         assert_eq!(front, "");
         assert_eq!(source, "");
+    }
+
+    #[test]
+    fn parse_frontmatter_handles_multiline_negative_lists_and_dual_strict_vectors() {
+        let h = harness();
+        let front = "\
+es6id: 13.3.1.1
+description: >
+  multiline
+  description
+includes:
+  - propertyHelper.js
+  - compareArray.js
+flags:
+  - noStrict
+negative:
+  phase: parse
+  type: SyntaxError
+";
+        let meta = h.parse_frontmatter(front).expect("frontmatter parses");
+        assert_eq!(meta.get("es6id").map(String::as_str), Some("13.3.1.1"));
+        assert_eq!(
+            h.parse_list_field(&meta, "includes"),
+            vec![
+                "propertyHelper.js".to_string(),
+                "compareArray.js".to_string()
+            ]
+        );
+        assert_eq!(
+            h.parse_negative_field(&meta),
+            Some(Test262Negative {
+                phase: "parse".to_string(),
+                error_type: "SyntaxError".to_string(),
+            })
+        );
+
+        let pos_case = Test262TestCase {
+            file_path: "language/expressions/addition/basic.js".to_string(),
+            es_clause: "12.8.3".to_string(),
+            description: "basic".to_string(),
+            source: "assert.sameValue(1 + 2, 3);".to_string(),
+            expected_outcome: Test262ExpectedOutcome::Pass,
+            features: Vec::new(),
+            flags: Vec::new(),
+            includes: Vec::new(),
+            negative: None,
+        };
+        let vectors = h.generate_case_vectors(&[pos_case]);
+        assert_eq!(vectors.len(), 2);
+        assert_eq!(vectors[0].test_id, "language/expressions/addition/basic.js");
+        assert_eq!(vectors[0].expected_value, "TEST262_PASS");
+        assert!(!vectors[0].source.starts_with("\"use strict\";"));
+        assert!(vectors[0].source.contains("assert.sameValue"));
+        assert_eq!(
+            vectors[1].test_id,
+            "language/expressions/addition/basic.js#strict"
+        );
+        assert!(vectors[1].source.starts_with("\"use strict\";\n"));
     }
 }

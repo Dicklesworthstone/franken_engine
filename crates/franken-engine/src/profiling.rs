@@ -200,8 +200,7 @@ impl Profiler {
             return;
         }
 
-        *self.opcodes.times[opcode::index(instruction)]
-            .get_or_insert(Duration::ZERO) += duration;
+        *self.opcodes.times[opcode::index(instruction)].get_or_insert(Duration::ZERO) += duration;
     }
 
     /// Record object allocation.

@@ -87,7 +87,10 @@ done.catch(function (error) {
 #[test]
 fn cancellation_finishes_both_endpoints_without_waiting_for_a_source_chunk() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        assert_eq!(run(ABORT, lane), ["ABORT_PIPELINE ABORT_ERR abort,cancel false"]);
+        assert_eq!(
+            run(ABORT, lane),
+            ["ABORT_PIPELINE ABORT_ERR abort,cancel false"]
+        );
     }
 }
 
@@ -110,11 +113,21 @@ fn esm_named_imports_share_the_native_promise_pipeline() {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_frankenctl"))
         .args(["run", "--input"])
         .arg(&entry)
-        .args(["--goal", "module", "--extension-id", "web-pipeline-esm", "--out"])
+        .args([
+            "--goal",
+            "module",
+            "--extension-id",
+            "web-pipeline-esm",
+            "--out",
+        ])
         .arg(&report)
         .output()
         .expect("execute native engine");
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let payload: serde_json::Value =
         serde_json::from_slice(&std::fs::read(report).expect("read report")).expect("report JSON");
     let lines: Vec<_> = payload["console_output"]

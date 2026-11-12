@@ -252,8 +252,17 @@ import('fs/promises').then(function(again) { console.log(again === namespace); }
 #[test]
 fn native_source_modules_share_identity_across_commonjs_load_forms() {
     for specifier in [
-        "util", "util/types", "assert", "assert/strict", "events", "buffer",
-        "string_decoder", "stream", "stream/promises", "timers", "timers/promises",
+        "util",
+        "util/types",
+        "assert",
+        "assert/strict",
+        "events",
+        "buffer",
+        "string_decoder",
+        "stream",
+        "stream/promises",
+        "timers",
+        "timers/promises",
     ] {
         let entry = format!(
             "const literal = require('{specifier}'); const load = require; \
@@ -261,7 +270,10 @@ fn native_source_modules_share_identity_across_commonjs_load_forms() {
              console.log(literal === load('node:{specifier}'), literal === child);"
         );
         let child = format!("module.exports = require('node:{specifier}');");
-        assert_output(&[("app.cjs", &entry), ("child.cjs", &child)], &["true true"]);
+        assert_output(
+            &[("app.cjs", &entry), ("child.cjs", &child)],
+            &["true true"],
+        );
     }
 }
 

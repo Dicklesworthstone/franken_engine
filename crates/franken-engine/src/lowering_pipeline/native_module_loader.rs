@@ -8,19 +8,18 @@ use std::collections::BTreeSet;
 
 use super::super::with_statement::{Outcome, Walk, walk_expression};
 use super::{LoweringPipelineError, NativeModuleSource};
-use crate::ast::{
-    BindingPattern, Expression, SourceSpan, Statement, SyntaxTree,
-    VariableDeclarationKind,
-};
 #[cfg(test)]
 use crate::ast::ParseGoal;
+use crate::ast::{
+    BindingPattern, Expression, SourceSpan, Statement, SyntaxTree, VariableDeclarationKind,
+};
 #[cfg(test)]
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 
-#[path = "stream_web_bridge.rs"]
-mod stream_web_bridge;
 #[path = "readline_cursor.rs"]
 mod readline_cursor;
+#[path = "stream_web_bridge.rs"]
+mod stream_web_bridge;
 #[path = "util_mime.rs"]
 mod util_mime;
 
@@ -96,7 +95,10 @@ pub(super) fn defer_modules_with_runtime_sources(
         let Statement::VariableDeclaration(declaration) = &mut tree.body[index] else {
             return Err(invalid());
         };
-        let initializer = declaration.declarations[0].initializer.take().ok_or_else(invalid)?;
+        let initializer = declaration.declarations[0]
+            .initializer
+            .take()
+            .ok_or_else(invalid)?;
         declaration.declarations[0].initializer = Some(deferred(initializer)?);
     }
     Ok(())
@@ -165,7 +167,10 @@ mod tests {
             span: Some(SourceSpan::new(10, 20, 2, 1, 2, 11)),
         };
         let deferred = deferred(initializer.clone()).expect("template parses");
-        let Expression::Call { callee, arguments, .. } = &deferred else {
+        let Expression::Call {
+            callee, arguments, ..
+        } = &deferred
+        else {
             panic!("loader construction is a call");
         };
         // The initializer thunk is evaluated as the call's argument, not
@@ -183,10 +188,16 @@ mod tests {
                 walk_expression(self, expression)
             }
         }
-        let mut in_cache = Occurrences { expected: &initializer, count: 0 };
+        let mut in_cache = Occurrences {
+            expected: &initializer,
+            count: 0,
+        };
         in_cache.expression(&mut callee.as_ref().clone()).unwrap();
         assert_eq!(in_cache.count, 0);
-        let mut in_thunk = Occurrences { expected: &initializer, count: 0 };
+        let mut in_thunk = Occurrences {
+            expected: &initializer,
+            count: 0,
+        };
         in_thunk.expression(&mut arguments[0].clone()).unwrap();
         assert_eq!(in_thunk.count, 1);
     }
@@ -218,7 +229,10 @@ mod rewrite_tests {
     fn parse(source: &str) -> SyntaxTree {
         CanonicalEs2020Parser
             .parse_with_options(
-                ParserSource { label: "deferred-module-test.js".into(), text: source.into() },
+                ParserSource {
+                    label: "deferred-module-test.js".into(),
+                    text: source.into(),
+                },
                 ParseGoal::Script,
                 &ParserOptions::default(),
             )
@@ -229,11 +243,17 @@ mod rewrite_tests {
         let Statement::VariableDeclaration(declaration) = statement else {
             panic!("expected a module or guest declaration");
         };
-        declaration.declarations[0].initializer.as_ref().expect("initializer")
+        declaration.declarations[0]
+            .initializer
+            .as_ref()
+            .expect("initializer")
     }
 
     fn assert_loader_call(expression: &Expression, binding: &str) {
-        let Expression::Call { callee, arguments, .. } = expression else {
+        let Expression::Call {
+            callee, arguments, ..
+        } = expression
+        else {
             panic!("a require must invoke the loader at its execution site");
         };
         assert_eq!(callee.as_ref(), &Expression::Identifier(binding.into()));
@@ -247,41 +267,68 @@ mod rewrite_tests {
              const types = require('util/types');",
         );
         let rewritten = super::super::rewrite_util_requires(&original)
-            .expect("rewrite").expect("module requested");
+            .expect("rewrite")
+            .expect("module requested");
         assert_eq!(rewritten.body.len(), original.body.len() + 1);
         assert_loader_call(initializer(&rewritten.body[1]), "%util_module");
         assert_loader_call(initializer(&rewritten.body[2]), "%util_module");
-        let Expression::Member { object, property, computed, .. } =
-            initializer(&rewritten.body[3])
+        let Expression::Member {
+            object,
+            property,
+            computed,
+            ..
+        } = initializer(&rewritten.body[3])
         else {
             panic!("types is a member of the cached module");
         };
         assert_loader_call(object, "%util_module");
         assert_eq!(property.as_ref(), &Expression::Identifier("types".into()));
         assert!(!computed);
-        assert!(super::super::rewrite_util_requires(&rewritten).unwrap().is_none());
+        assert!(
+            super::super::rewrite_util_requires(&rewritten)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
     fn all_module_preludes_construct_loaders_instead_of_module_objects() {
         for specifier in [
-            "util", "events", "assert", "timers", "string_decoder", "vm",
-            "buffer", "querystring", "stream", "stream/consumers", "fs", "fs/promises",
+            "util",
+            "events",
+            "assert",
+            "timers",
+            "string_decoder",
+            "vm",
+            "buffer",
+            "querystring",
+            "stream",
+            "stream/consumers",
+            "fs",
+            "fs/promises",
         ] {
             let original = parse(&format!(
                 "function unused() {{ return require('{specifier}'); }}"
             ));
             let rewritten = super::super::rewrite_util_requires(&original)
-                .expect("rewrite").expect("deferred module");
+                .expect("rewrite")
+                .expect("deferred module");
             let mut declarations = 0;
             for statement in &rewritten.body {
-                let Statement::VariableDeclaration(declaration) = statement else { continue; };
+                let Statement::VariableDeclaration(declaration) = statement else {
+                    continue;
+                };
                 let BindingPattern::Identifier(name) = &declaration.declarations[0].pattern else {
                     continue;
                 };
-                if !name.starts_with('%') { continue; }
+                if !name.starts_with('%') {
+                    continue;
+                }
                 declarations += 1;
-                assert!(super::super::is_module_declaration(statement), "classify {name}");
+                assert!(
+                    super::super::is_module_declaration(statement),
+                    "classify {name}"
+                );
                 let Expression::Call { arguments, .. } = initializer(statement) else {
                     panic!("loader construction for {specifier}");
                 };
@@ -290,7 +337,11 @@ mod rewrite_tests {
                 assert_eq!(arguments.len(), 1, "defer {name}");
             }
             assert!(declarations > 0, "{specifier}");
-            assert!(super::super::rewrite_util_requires(&rewritten).unwrap().is_none());
+            assert!(
+                super::super::rewrite_util_requires(&rewritten)
+                    .unwrap()
+                    .is_none()
+            );
         }
     }
 
@@ -302,7 +353,9 @@ mod rewrite_tests {
             "const dynamic = name; require(dynamic);",
         ] {
             assert!(
-                super::super::rewrite_util_requires(&parse(source)).unwrap().is_none(),
+                super::super::rewrite_util_requires(&parse(source))
+                    .unwrap()
+                    .is_none(),
                 "{source}"
             );
         }
@@ -315,12 +368,17 @@ mod rewrite_tests {
             "const promises = require('fs/promises'); console.log(promises);",
         ] {
             let rewritten = super::super::rewrite_util_requires(&parse(source))
-                .expect("rewrite").expect("filesystem module");
-            let guest = rewritten.body.iter().find(|statement| {
-                matches!(statement, Statement::VariableDeclaration(declaration)
+                .expect("rewrite")
+                .expect("filesystem module");
+            let guest = rewritten
+                .body
+                .iter()
+                .find(|statement| {
+                    matches!(statement, Statement::VariableDeclaration(declaration)
                     if matches!(&declaration.declarations[0].pattern,
                         BindingPattern::Identifier(name) if name == "fs" || name == "promises"))
-            }).expect("guest declaration remains");
+                })
+                .expect("guest declaration remains");
             let value = initializer(guest);
             let value = match value {
                 Expression::Member { object, .. } => object.as_ref(),
@@ -338,16 +396,27 @@ mod rewrite_tests {
             span: None,
         };
         let bindings = BTreeSet::from(["%events_module".to_string()]);
-        ModuleReferences(&bindings).expression(&mut expression).unwrap();
-        let Expression::Call { callee, arguments, .. } = expression else { panic!("call"); };
+        ModuleReferences(&bindings)
+            .expression(&mut expression)
+            .unwrap();
+        let Expression::Call {
+            callee, arguments, ..
+        } = expression
+        else {
+            panic!("call");
+        };
         assert_loader_call(&callee, "%events_module");
-        assert_eq!(arguments, vec![Expression::StringLiteral("argument".into())]);
+        assert_eq!(
+            arguments,
+            vec![Expression::StringLiteral("argument".into())]
+        );
     }
 
     #[test]
     fn dependency_values_become_loads_without_rewriting_native_intrinsics() {
         let bindings = BTreeSet::from([
-            "%util_module".to_string(), "%events_module".to_string(),
+            "%util_module".to_string(),
+            "%events_module".to_string(),
             "%string_decoder_module".to_string(),
         ]);
         for binding in &bindings {

@@ -513,7 +513,8 @@ impl InterpreterCore {
                 ),
             });
         }
-        let created = self.array_buffer_copy_and_detach_storage(buffer, new_len, max_byte_length)?;
+        let created =
+            self.array_buffer_copy_and_detach_storage(buffer, new_len, max_byte_length)?;
         Ok(Value::Object(created))
     }
 

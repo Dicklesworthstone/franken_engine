@@ -188,7 +188,10 @@ fn console_value_calls_cannot_bypass_witness_containment_in_both_lanes_bd_9vouw_
             ));
             assert_ne!(decision.action, HookAction::Allow);
             assert_eq!(result.result.requested_hook_action, Some(decision.action));
-            assert!(result.result.console_output.is_empty(), "{lane:?}: {source}");
+            assert!(
+                result.result.console_output.is_empty(),
+                "{lane:?}: {source}"
+            );
         }
     }
 }
@@ -229,7 +232,9 @@ fn console_value_calls_require_live_console_authority_in_both_lanes_bd_9vouw_7()
 fn console_value_methods_keep_exact_operation_names_in_both_lanes_bd_9vouw_7() {
     for method in ["log", "error", "warn", "info", "debug", "count"] {
         let tag = format!("console:{method}");
-        let module = lower(&format!("const output = console.{method}; output('value');"));
+        let module = lower(&format!(
+            "const output = console.{method}; output('value');"
+        ));
         assert_value_path(&module, &tag);
         for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
             let allowed = execute(&module, lane, None, None);
@@ -342,7 +347,10 @@ fn timer_value_effects_are_guarded_through_forwarding_in_both_lanes_bd_9vouw_7()
             let decision = only_decision(&stopped.adapter, tag);
             assert_ne!(decision.action, HookAction::Allow);
             assert_eq!(result.result.requested_hook_action, Some(decision.action));
-            assert!(result.result.console_output.is_empty(), "{lane:?}: {source}");
+            assert!(
+                result.result.console_output.is_empty(),
+                "{lane:?}: {source}"
+            );
         }
     }
 }

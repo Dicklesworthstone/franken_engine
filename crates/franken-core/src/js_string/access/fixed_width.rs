@@ -127,7 +127,12 @@ mod tests {
     #[test]
     fn an_interior_non_three_byte_scalar_cannot_pass_the_proof() {
         for scalar in [
-            'a', '\u{7f}', '\u{80}', '\u{7ff}', '\u{10000}', '\u{10ffff}',
+            'a',
+            '\u{7f}',
+            '\u{80}',
+            '\u{7ff}',
+            '\u{10000}',
+            '\u{10ffff}',
         ] {
             let text = format!(
                 "a{}{scalar}{}!",
@@ -141,7 +146,9 @@ mod tests {
                 assert_eq!(string.code_unit_at(position), Some(units[position]));
                 for width in [1, 2, 7] {
                     assert_eq!(
-                        string.utf16_slice(position, position + width).code_units_vec(),
+                        string
+                            .utf16_slice(position, position + width)
+                            .code_units_vec(),
                         units[position..position + width]
                     );
                 }

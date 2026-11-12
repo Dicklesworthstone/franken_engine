@@ -165,7 +165,13 @@ console.log(clone.plainView.byteOffset, clone.plainView.length, Array.from(clone
 fn a_transfer_batch_can_mix_empty_fixed_and_resizable_view_shells() {
     check(
         MIXED_SHELLS,
-        &["0 0 0 0 0", "1048576 19", "true true true", "2 10 11 67", "1 2 4,6"],
+        &[
+            "0 0 0 0 0",
+            "1048576 19",
+            "true true true",
+            "2 10 11 67",
+            "1 2 4,6",
+        ],
         None,
     );
 }

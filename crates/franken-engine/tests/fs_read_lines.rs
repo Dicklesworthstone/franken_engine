@@ -37,9 +37,15 @@ fn run(source: &str, root: &Path, caps: &[&str], lane: LaneChoice) -> Result<Run
         version: "1.0.0".into(),
         metadata: BTreeMap::new(),
     };
-    let result = runtime.execute(&package).map_err(|error| format!("{error:?}"))?;
+    let result = runtime
+        .execute(&package)
+        .map_err(|error| format!("{error:?}"))?;
     Ok((
-        result.console_output.into_iter().map(|entry| entry.message).collect(),
+        result
+            .console_output
+            .into_iter()
+            .map(|entry| entry.message)
+            .collect(),
         transcript.entries(),
     ))
 }
@@ -48,7 +54,11 @@ fn run(source: &str, root: &Path, caps: &[&str], lane: LaneChoice) -> Result<Run
 fn implicit_readline_dependency_streams_lines_through_bounded_descriptor_effects() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
         let root = tempfile::tempdir().unwrap();
-        std::fs::write(root.path().join("input"), format!("{}\r\nβ\rfinal", "x".repeat(40007))).unwrap();
+        std::fs::write(
+            root.path().join("input"),
+            format!("{}\r\nβ\rfinal", "x".repeat(40007)),
+        )
+        .unwrap();
         let (lines, effects) = run(
             r#"const fs=require('node:fs/promises');const WeakMap='guest';
             (async function(){const h=await fs.open('input');const rl=h.readLines();
@@ -56,18 +66,29 @@ fn implicit_readline_dependency_streams_lines_through_bounded_descriptor_effects
               const lines=[];for await(const line of rl)lines.push(line);
               await closed;console.log('LINES',lines.length,lines[0].length,lines[1],lines[2],h.fd);
             })();"#,
-            root.path(), &["fs_read", "fs_write"], lane,
-        ).expect("native line completion");
+            root.path(),
+            &["fs_read", "fs_write"],
+            lane,
+        )
+        .expect("native line completion");
         assert_eq!(lines, ["LINES 3 40007 β final -1"]);
         let (mut reads, mut opens, mut closes) = (0, 0, 0);
         for (request, _) in effects {
-            let HostIoRequest::FsMeta { operation, arguments, .. } = request else {
+            let HostIoRequest::FsMeta {
+                operation,
+                arguments,
+                ..
+            } = request
+            else {
                 panic!("line streaming must not use a whole-file or external effect");
             };
             match operation {
                 FsOperation::ReadFd => {
                     reads += 1;
-                    let length = arguments.iter().find_map(|arg| arg.strip_prefix("length=")).unwrap();
+                    let length = arguments
+                        .iter()
+                        .find_map(|arg| arg.strip_prefix("length="))
+                        .unwrap();
                     assert!(length.parse::<usize>().unwrap() <= 16384);
                 }
                 FsOperation::Open => opens += 1,
@@ -96,7 +117,14 @@ fn explicit_modules_share_interface_identity_and_retained_cursor_ownership() {
             })();"#,
             root.path(), &["fs_read", "fs_write"], lane,
         ).expect("shared native module identity");
-        assert_eq!(lines, ["SHARED true true", "CURSOR first|last true false", "CLOSED -1"]);
+        assert_eq!(
+            lines,
+            [
+                "SHARED true true",
+                "CURSOR first|last true false",
+                "CLOSED -1"
+            ]
+        );
     }
 }
 
@@ -104,7 +132,11 @@ fn explicit_modules_share_interface_identity_and_retained_cursor_ownership() {
 fn early_return_preserves_borrowed_input_and_explicit_cleanup_prevents_further_reads() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
         let root = tempfile::tempdir().unwrap();
-        std::fs::write(root.path().join("input"), format!("first\n{}", "rest\n".repeat(1000))).unwrap();
+        std::fs::write(
+            root.path().join("input"),
+            format!("first\n{}", "rest\n".repeat(1000)),
+        )
+        .unwrap();
         let (lines, effects) = run(
             r#"(async function(){const h=await require('fs/promises').open('input');
               const rl=h.readLines({autoClose:false,highWaterMark:1});
@@ -113,12 +145,28 @@ fn early_return_preserves_borrowed_input_and_explicit_cleanup_prevents_further_r
               const closed=new Promise(resolve=>rl.input.once('close',resolve));
               rl.input.destroy();await closed;await h.close();console.log('RELEASED',h.fd);
             })();"#,
-            root.path(), &["fs_read", "fs_write"], lane,
-        ).expect("early-return ownership");
+            root.path(),
+            &["fs_read", "fs_write"],
+            lane,
+        )
+        .expect("early-return ownership");
         assert_eq!(lines, ["FIRST first", "BORROWED true false", "RELEASED -1"]);
-        let reads = effects.iter().filter(|(request, _)| matches!(request,
-            HostIoRequest::FsMeta { operation: FsOperation::ReadFd, .. })).count();
-        assert!(reads <= 8, "a paused line iterator must not consume the remaining file");
+        let reads = effects
+            .iter()
+            .filter(|(request, _)| {
+                matches!(
+                    request,
+                    HostIoRequest::FsMeta {
+                        operation: FsOperation::ReadFd,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert!(
+            reads <= 8,
+            "a paused line iterator must not consume the remaining file"
+        );
     }
 }
 
@@ -139,9 +187,14 @@ fn line_stream_errors_reject_and_creation_does_not_infer_read_authority() {
         assert_eq!(lines, ["FAILED EBADF", "RELEASED -1"]);
         let denied = run(
             "require('fs/promises').open('input').then(h=>h.readLines());",
-            root.path(), &[], lane,
+            root.path(),
+            &[],
+            lane,
         );
-        assert!(denied.is_err(), "opening a line stream requires ordinary file authority");
+        assert!(
+            denied.is_err(),
+            "opening a line stream requires ordinary file authority"
+        );
     }
 }
 
@@ -165,21 +218,36 @@ fn file_readers_and_writers_share_unsuppressible_constructor_cancellation() {
             }
             (async function(){await cancel('input',false);await cancel('output',true);
               console.log('CANCELLATION_COMPLETE');})();"#,
-            root.path(), &["fs_read", "fs_write"], lane,
-        ).expect("both adapters use the shared abort owner");
-        assert_eq!(lines, [
-            "CANCELLED false ABORT_ERR true null",
-            "CANCELLED true ABORT_ERR true null",
-            "CANCELLATION_COMPLETE",
-        ]);
-        assert_eq!(std::fs::read(root.path().join("input")).unwrap(), b"unchanged\n");
+            root.path(),
+            &["fs_read", "fs_write"],
+            lane,
+        )
+        .expect("both adapters use the shared abort owner");
+        assert_eq!(
+            lines,
+            [
+                "CANCELLED false ABORT_ERR true null",
+                "CANCELLED true ABORT_ERR true null",
+                "CANCELLATION_COMPLETE",
+            ]
+        );
+        assert_eq!(
+            std::fs::read(root.path().join("input")).unwrap(),
+            b"unchanged\n"
+        );
         assert_eq!(std::fs::read(root.path().join("output")).unwrap(), b"");
         let mut opens = 0;
         let mut closes = 0;
         for (request, _) in effects {
             match request {
-                HostIoRequest::FsMeta { operation: FsOperation::Open, .. } => opens += 1,
-                HostIoRequest::FsMeta { operation: FsOperation::CloseFd, .. } => closes += 1,
+                HostIoRequest::FsMeta {
+                    operation: FsOperation::Open,
+                    ..
+                } => opens += 1,
+                HostIoRequest::FsMeta {
+                    operation: FsOperation::CloseFd,
+                    ..
+                } => closes += 1,
                 other => panic!("cancelled idle streams must not read or write: {other:?}"),
             }
         }
@@ -205,7 +273,10 @@ fn finished_file_writer_releases_signal_without_stealing_retained_descriptor() {
             root.path(), &["fs_read", "fs_write"], lane,
         ).expect("late abort does not invalidate completed output");
         assert_eq!(lines, ["RETAINED true false true 0", "RELEASED -1"]);
-        assert_eq!(std::fs::read(root.path().join("output")).unwrap(), b"kept\n");
+        assert_eq!(
+            std::fs::read(root.path().join("output")).unwrap(),
+            b"kept\n"
+        );
     }
 }
 
@@ -221,10 +292,16 @@ fn pre_aborted_path_writer_finishes_cleanup_without_file_authority_or_truncation
               await new Promise(resolve=>stream.once('close',resolve));
               console.log('NO_ACQUISITION',failure.code,failure.cause===null,stream.fd);
             })();"#,
-            root.path(), &[], lane,
-        ).expect("cancelled construction needs no filesystem effect");
+            root.path(),
+            &[],
+            lane,
+        )
+        .expect("cancelled construction needs no filesystem effect");
         assert_eq!(lines, ["NO_ACQUISITION ABORT_ERR true null"]);
         assert!(effects.is_empty());
-        assert_eq!(std::fs::read(root.path().join("output")).unwrap(), b"retained\n");
+        assert_eq!(
+            std::fs::read(root.path().join("output")).unwrap(),
+            b"retained\n"
+        );
     }
 }

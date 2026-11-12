@@ -61,9 +61,16 @@ fn run(body: &str, expected: &str, shadowed: bool) {
                 let result = core.execute(&module).unwrap_or_else(|error| {
                     panic!("throughput={throughput}, stress={stress:?}: {error}")
                 });
-                let lines: Vec<_> = result.console_output.iter().map(|entry| entry.message.as_str()).collect();
+                let lines: Vec<_> = result
+                    .console_output
+                    .iter()
+                    .map(|entry| entry.message.as_str())
+                    .collect();
                 assert_eq!(lines, [expected], "completion must actually run");
-                assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes()
+                );
             }
         }
     }
@@ -71,15 +78,27 @@ fn run(body: &str, expected: &str, shadowed: bool) {
 
 #[test]
 fn callback_and_transactional_cursor_output_complete_in_both_module_modes() {
-    run(include_str!("fixtures/readline_cursor.js"), "READLINE_CURSOR_OK", false);
+    run(
+        include_str!("fixtures/readline_cursor.js"),
+        "READLINE_CURSOR_OK",
+        false,
+    );
 }
 
 #[test]
 fn cursor_implementation_uses_realm_helpers_not_guest_shadow_bindings() {
-    run(include_str!("fixtures/readline_cursor.js"), "READLINE_CURSOR_OK", true);
+    run(
+        include_str!("fixtures/readline_cursor.js"),
+        "READLINE_CURSOR_OK",
+        true,
+    );
 }
 
 #[test]
 fn reentrant_output_keeps_batches_and_completion_ownership_separate() {
-    run(include_str!("fixtures/readline_cursor_reentry.js"), "READLINE_CURSOR_REENTRY_OK", false);
+    run(
+        include_str!("fixtures/readline_cursor_reentry.js"),
+        "READLINE_CURSOR_REENTRY_OK",
+        false,
+    );
 }

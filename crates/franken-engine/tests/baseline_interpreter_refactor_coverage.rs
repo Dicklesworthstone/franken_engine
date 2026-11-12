@@ -155,7 +155,7 @@ fn load_float(dst: u32, value: f64) -> Ir3Instruction {
 }
 
 fn baseline_interpreter_source() -> &'static str {
-    include_str!("../src/baseline_interpreter.rs")
+    frankenengine_engine::baseline_interpreter::COMBINED_PRODUCTION_SOURCE
 }
 
 // ============================================================================
@@ -577,7 +577,9 @@ fn instruction_profiling_records_instructions_when_enabled() {
 fn instruction_profiling_records_timing_data() {
     let source = baseline_interpreter_source();
     assert!(source.contains("let profile_start = if self.profiling_data.is_some()"));
-    assert!(source.contains("let profiling_instruction = if self.profiling_data.is_some()"));
+    assert!(
+        source.contains("profiler.record_instruction_time(instr_ref, profile_start.elapsed())")
+    );
     assert!(
         source.contains("profiler.record_instruction_time(instruction, profile_start.elapsed())")
     );

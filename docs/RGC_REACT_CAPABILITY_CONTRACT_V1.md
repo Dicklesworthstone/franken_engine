@@ -62,11 +62,11 @@ support.
 
 | Capability | Current status | Owning bead | Parity gate | Product surface |
 |---|---|---|---|---|
-| `jsx-classic-runtime-compile` | `deferred` | `bd-1lsy.3.6.1` | `bd-1lsy.9.7.1` | `bd-1lsy.10.12.1` |
-| `tsx-classic-runtime-compile` | `deferred` | `bd-1lsy.3.6.1` | `bd-1lsy.9.7.1` | `bd-1lsy.10.12.1` |
-| `fragment-lowering-contract` | `deferred` | `bd-1lsy.3.6.1` | `bd-1lsy.9.7.1` | `bd-1lsy.10.12.1` |
-| `jsx-automatic-runtime-compile` | `deferred` | `bd-1lsy.3.6.2` | `bd-1lsy.9.7.1` | `bd-1lsy.10.12.1` |
-| `tsx-automatic-runtime-compile` | `deferred` | `bd-1lsy.3.6.2` | `bd-1lsy.9.7.1` | `bd-1lsy.10.12.1` |
+| `jsx-classic-runtime-compile` | `shipped` | `bd-1lsy.3.6.1` | `bd-1lsy.9.7.1` | `bd-1lsy.10.12.1` |
+| `tsx-classic-runtime-compile` | `shipped` | `bd-1lsy.3.6.1` | `bd-1lsy.9.7.1` | `bd-1lsy.10.12.1` |
+| `fragment-lowering-contract` | `shipped` | `bd-1lsy.3.6.1` | `bd-1lsy.9.7.1` | `bd-1lsy.10.12.1` |
+| `jsx-automatic-runtime-compile` | `shipped` | `bd-1lsy.3.6.2` | `bd-1lsy.9.7.1` | `bd-1lsy.10.12.1` |
+| `tsx-automatic-runtime-compile` | `shipped` | `bd-1lsy.3.6.2` | `bd-1lsy.9.7.1` | `bd-1lsy.10.12.1` |
 | `jsx-dev-runtime-diagnostics` | `unsupported` | `bd-1lsy.3.6.2` | `bd-1lsy.9.7.1` | `bd-1lsy.10.12.2` |
 | `tsx-dev-runtime-diagnostics` | `unsupported` | `bd-1lsy.3.6.2` | `bd-1lsy.9.7.1` | `bd-1lsy.10.12.2` |
 | `react-ssr-entrypoint` | `unsupported` | `bd-1lsy.5.7.2` | `bd-1lsy.9.7.2` | `bd-1lsy.10.12.3` |

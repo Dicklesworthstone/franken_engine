@@ -140,9 +140,10 @@ impl InterpreterCore {
         frame: FlattenFrame,
     ) -> Result<(), InterpreterError> {
         if stack.len() == stack.capacity() {
-            let minimum = stack.len().checked_add(1).ok_or_else(|| {
-                self.memory_budget_error(u64::MAX, self.heap_object_count_u32())
-            })?;
+            let minimum = stack
+                .len()
+                .checked_add(1)
+                .ok_or_else(|| self.memory_budget_error(u64::MAX, self.heap_object_count_u32()))?;
             let capacity = stack
                 .capacity()
                 .checked_mul(2)
@@ -150,14 +151,14 @@ impl InterpreterCore {
                 .max(minimum)
                 .max(4);
             let requested = frame_bytes(capacity).saturating_sub(*reserved);
-            let next = reserved.checked_add(requested).ok_or_else(|| {
-                self.memory_budget_error(u64::MAX, self.heap_object_count_u32())
-            })?;
+            let next = reserved
+                .checked_add(requested)
+                .ok_or_else(|| self.memory_budget_error(u64::MAX, self.heap_object_count_u32()))?;
             self.json_reserve_temporary(requested)?;
             *reserved = next;
-            stack.try_reserve_exact(capacity - stack.len()).map_err(|_| {
-                self.memory_budget_error(u64::MAX, self.heap_object_count_u32())
-            })?;
+            stack
+                .try_reserve_exact(capacity - stack.len())
+                .map_err(|_| self.memory_budget_error(u64::MAX, self.heap_object_count_u32()))?;
             let actual = frame_bytes(stack.capacity());
             if actual > *reserved {
                 self.json_reserve_temporary(actual - *reserved)?;

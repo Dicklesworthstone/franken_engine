@@ -341,16 +341,26 @@ fn instruction(writer: &mut CanonicalWriter, instruction: &Ir3Instruction) {
                 preserve_state
             )
         }
-        ImportModule { specifier, dst, import_attributes } => {
+        ImportModule {
+            specifier,
+            dst,
+            import_attributes,
+        } => {
             if import_attributes.is_empty() {
                 copied!("import_module", specifier, dst);
             } else {
-                fields(writer, [
-                    ("op", Field::Str("import_module")),
-                    ("specifier", Field::from(*specifier)),
-                    ("dst", Field::from(*dst)),
-                    ("import_attributes", Field::ImportAttributes(import_attributes)),
-                ]);
+                fields(
+                    writer,
+                    [
+                        ("op", Field::Str("import_module")),
+                        ("specifier", Field::from(*specifier)),
+                        ("dst", Field::from(*dst)),
+                        (
+                            "import_attributes",
+                            Field::ImportAttributes(import_attributes),
+                        ),
+                    ],
+                );
             }
         }
         ExportBinding {

@@ -54,9 +54,15 @@ bytes.fill(90);
 })();
 "#;
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        assert_eq!(run(source, ParseGoal::Script, lane), [
-            "resume.txt text/plain 3 7 true true true", "AB! false", "AB!", "[object File]",
-        ]);
+        assert_eq!(
+            run(source, ParseGoal::Script, lane),
+            [
+                "resume.txt text/plain 3 7 true true true",
+                "AB! false",
+                "AB!",
+                "[object File]",
+            ]
+        );
     }
 }
 
@@ -75,9 +81,10 @@ console.log(first.done,Array.from(first.value).join(','),last.done,Array.from(la
 const end=await reader.read(new Uint8Array(2));console.log(end.done,end.value.byteLength);
 "#;
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        assert_eq!(run(source, ParseGoal::Module, lane), [
-            "true true", "false 97,98 true 99,100,101", "true 0",
-        ]);
+        assert_eq!(
+            run(source, ParseGoal::Module, lane),
+            ["true true", "false 97,98 true 99,100,101", "true 0",]
+        );
     }
 }
 
@@ -99,7 +106,10 @@ f.slice=()=>{throw Error('public slice');};f.arrayBuffer=()=>{throw Error('publi
 })();
 "#;
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        assert_eq!(run(source, ParseGoal::Script, lane), ["65536 37", "true 37", "true 0"]);
+        assert_eq!(
+            run(source, ParseGoal::Script, lane),
+            ["65536 37", "true 37", "true 0"]
+        );
     }
 }
 
@@ -119,9 +129,13 @@ try{Object.getOwnPropertyDescriptor(File.prototype,'name').get.call({});}
 catch(error){console.log(error.name);}
 "#;
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        assert_eq!(run(source, ParseGoal::Script, lane), [
-            "iterator,type,endings,iterator,start,part,end,mime,time,name",
-            "x text/plain 4 2", "TypeError",
-        ]);
+        assert_eq!(
+            run(source, ParseGoal::Script, lane),
+            [
+                "iterator,type,endings,iterator,start,part,end,mime,time,name",
+                "x text/plain 4 2",
+                "TypeError",
+            ]
+        );
     }
 }

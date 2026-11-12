@@ -85,7 +85,10 @@ impl StringifyState {
         text: &super::JsString,
     ) -> Result<(), InterpreterError> {
         if text.is_ascii() {
-            let bytes = text.as_str().expect("ASCII has an exact str view").as_bytes();
+            let bytes = text
+                .as_str()
+                .expect("ASCII has an exact str view")
+                .as_bytes();
             if QUOTED {
                 self.quote_ascii(core, bytes)
             } else {
@@ -212,9 +215,9 @@ impl StringifyState {
                 .ok_or_else(|| core.memory_budget_error(u64::MAX, core.heap_object_count_u32()))?;
             self.reserve(core, growth)?;
             *scratch += growth;
-            pending.try_reserve_exact(additional).map_err(|_| {
-                core.memory_budget_error(u64::MAX, core.heap_object_count_u32())
-            })?;
+            pending
+                .try_reserve_exact(additional)
+                .map_err(|_| core.memory_budget_error(u64::MAX, core.heap_object_count_u32()))?;
             let retained = u64::try_from(pending.capacity() - previous)
                 .ok()
                 .and_then(|count| count.checked_mul(slot))
@@ -416,7 +419,12 @@ mod frontier_tests {
         }
         core.config.max_total_memory_bytes = core.estimated_memory_bytes();
         assert!(matches!(
-            state.push_string_part(&mut core, &mut pending, JsString::from("refused"), &mut scratch),
+            state.push_string_part(
+                &mut core,
+                &mut pending,
+                JsString::from("refused"),
+                &mut scratch
+            ),
             Err(InterpreterError::MemoryBudgetExceeded { .. })
         ));
         assert_eq!(scratch, 0);
@@ -467,13 +475,23 @@ mod frontier_tests {
         core.config.max_total_memory_bytes = core.estimated_memory_bytes();
         for _ in 0..INLINE_STRING_PARTS + capacity {
             state
-                .push_string_part(&mut core, &mut pending, JsString::from("refill"), &mut scratch)
+                .push_string_part(
+                    &mut core,
+                    &mut pending,
+                    JsString::from("refill"),
+                    &mut scratch,
+                )
                 .unwrap();
         }
         assert_eq!(pending.spill.as_ptr(), pointer);
         assert_eq!(pending.spill.capacity(), capacity);
         assert!(matches!(
-            state.push_string_part(&mut core, &mut pending, JsString::from("overflow"), &mut scratch),
+            state.push_string_part(
+                &mut core,
+                &mut pending,
+                JsString::from("overflow"),
+                &mut scratch
+            ),
             Err(InterpreterError::MemoryBudgetExceeded { .. })
         ));
         drop(pending);

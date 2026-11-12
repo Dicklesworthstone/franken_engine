@@ -25,8 +25,16 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            archive_ext: tar.xz
+            binary_name: frankenctl
           - os: macos-14
             target: aarch64-apple-darwin
+            archive_ext: tar.xz
+            binary_name: frankenctl
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive_ext: zip
+            binary_name: frankenctl.exe
 
     runs-on: ${{ matrix.os }}
     permissions:
@@ -35,28 +43,42 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: nightly-2026-09-21
           targets: ${{ matrix.target }}
 
-      - name: Build frankenctl (Standalone Mode)
+      - name: Build frankenctl (Standalone Mode + asupersync)
+        shell: bash
         env:
           RCH_CARGO_WRAPPER_BYPASS: "1"
-        # --no-default-features keeps the release surface standalone. All source
-        # dependencies resolve from this workspace or the registry; no /dp
-        # sibling checkout is available or required on the clean runner.
-        run: cargo build --release --no-default-features -p frankenengine-engine --bin frankenctl --target ${{ matrix.target }}
+        # --no-default-features --features asupersync-integration keeps the release
+        # surface standalone (no /dp sibling checkout required) while preserving
+        # deterministic asupersync kernel/decision/evidence integration.
+        run: cargo build --release --no-default-features --features asupersync-integration -p frankenengine-engine --bin frankenctl --target ${{ matrix.target }}
 
-      - name: Create tarball
+      - name: Create release archive
+        shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist
-          TARBALL="frankenctl-${{ matrix.target }}.tar.xz"
-          binary="target/${{ matrix.target }}/release/frankenctl"
+          ARCHIVE="frankenctl-${{ matrix.target }}.${{ matrix.archive_ext }}"
+          binary="target/${{ matrix.target }}/release/${{ matrix.binary_name }}"
           [ -f "$binary" ] || { echo "::error::expected binary not found at $binary"; exit 1; }
-          tar -cJf "dist/$TARBALL" -C "target/${{ matrix.target }}/release" frankenctl
-          (cd dist && shasum -a 256 "$TARBALL" > "$TARBALL.sha256")
+          if [ "${{ matrix.archive_ext }}" = "zip" ]; then
+            7z a -tzip "dist/$ARCHIVE" "./$binary"
+          else
+            tar -cJf "dist/$ARCHIVE" -C "target/${{ matrix.target }}/release" "${{ matrix.binary_name }}"
+          fi
+          (
+            cd dist
+            if command -v shasum >/dev/null 2>&1; then
+              shasum -a 256 "$ARCHIVE" > "$ARCHIVE.sha256"
+            else
+              sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
+            fi
+          )
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -91,7 +113,7 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
           cd dist
-          for f in frankenctl-*.tar.xz; do
+          for f in frankenctl-*.tar.xz frankenctl-*.zip; do
             cosign sign-blob --yes --bundle "${f}.sigstore.json" "$f"
           done
 

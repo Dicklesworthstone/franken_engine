@@ -8,9 +8,7 @@ use super::*;
 use std::sync::Mutex;
 
 use frankenengine_extension_host::host_effect_journal::HostEffectJournalEntry;
-use frankenengine_extension_host::process_spawn::{
-    ProcessSpawnCapability, ProcessSpawnOutcome,
-};
+use frankenengine_extension_host::process_spawn::{ProcessSpawnCapability, ProcessSpawnOutcome};
 
 #[derive(Debug, Default)]
 struct LifecycleProvider {
@@ -90,7 +88,10 @@ impl InterpreterHook for LifecycleHook {
     }
 
     fn pre_hostcall(&self, _ctx: &HookContext, capability: &str, allowed: bool) -> HookAction {
-        self.observations.lock().unwrap().push((capability.to_string(), allowed));
+        self.observations
+            .lock()
+            .unwrap()
+            .push((capability.to_string(), allowed));
         self.action.clone()
     }
 }
@@ -120,8 +121,10 @@ impl Fixture {
         let mut core = InterpreterCore::new(config, "process-lifecycle-membrane");
         let child = core.alloc_branded_object("ChildProcess", &[]).unwrap();
         let stdin = core.alloc_branded_object("ChildProcessStdin", &[]).unwrap();
-        core.child_process_handles.insert(child, "fixture-child".to_string());
-        core.child_process_streams.insert(stdin, (child, ChildProcessStreamKind::Stdin));
+        core.child_process_handles
+            .insert(child, "fixture-child".to_string());
+        core.child_process_streams
+            .insert(stdin, (child, ChildProcessStreamKind::Stdin));
         let provider = Arc::new(LifecycleProvider::default());
         let journal = Arc::new(InMemoryHostEffectJournal::recording());
         journal.begin_execution().unwrap();
@@ -133,7 +136,14 @@ impl Fixture {
         core.hook = Some(hook.clone());
         core.write_reg(0, Value::str("public-bytes")).unwrap();
         core.set_register_label(0, Label::Public).unwrap();
-        Self { core, child, stdin, provider, journal, hook }
+        Self {
+            core,
+            child,
+            stdin,
+            provider,
+            journal,
+            hook,
+        }
     }
 
     fn invoke(&mut self, kind: BuiltinFunctionKind) -> Result<Value, InterpreterError> {
@@ -176,15 +186,21 @@ fn public_lifecycle_effects_are_authorized_and_observed_once_in_both_profiles() 
     for throughput in [false, true] {
         let mut fixture = Fixture::new(throughput, HookAction::Allow);
         assert_eq!(
-            fixture.invoke(BuiltinFunctionKind::ChildProcessStdinWrite).unwrap(),
+            fixture
+                .invoke(BuiltinFunctionKind::ChildProcessStdinWrite)
+                .unwrap(),
             Value::Bool(true)
         );
         assert_eq!(
-            fixture.invoke(BuiltinFunctionKind::ChildProcessStdinEnd).unwrap(),
+            fixture
+                .invoke(BuiltinFunctionKind::ChildProcessStdinEnd)
+                .unwrap(),
             Value::Undefined
         );
         assert_eq!(
-            fixture.invoke(BuiltinFunctionKind::ChildProcessKill).unwrap(),
+            fixture
+                .invoke(BuiltinFunctionKind::ChildProcessKill)
+                .unwrap(),
             Value::Bool(true)
         );
         let requests = fixture.provider.requests.lock().unwrap();
@@ -194,13 +210,20 @@ fn public_lifecycle_effects_are_authorized_and_observed_once_in_both_profiles() 
             ProcessSpawnRequest::WriteStdin { handle, data }
                 if handle == "fixture-child" && data.as_slice() == b"public-bytes"
         ));
-        assert!(matches!(&requests[1], ProcessSpawnRequest::CloseStdin { .. }));
+        assert!(matches!(
+            &requests[1],
+            ProcessSpawnRequest::CloseStdin { .. }
+        ));
         assert!(matches!(&requests[2], ProcessSpawnRequest::Kill { .. }));
         assert_eq!(fixture.journal.entries().len(), 3);
         assert_eq!(fixture.core.hostcall_decisions.len(), 3);
-        assert!(fixture.core.hostcall_decisions.iter().all(|record| {
-            record.capability.0 == "process_spawn" && record.allowed
-        }));
+        assert!(
+            fixture
+                .core
+                .hostcall_decisions
+                .iter()
+                .all(|record| { record.capability.0 == "process_spawn" && record.allowed })
+        );
         assert_eq!(
             *fixture.hook.observations.lock().unwrap(),
             vec![("process_spawn".to_string(), true); 3]
@@ -213,12 +236,19 @@ fn a_retained_child_handle_does_not_replace_live_process_authority() {
     for throughput in [false, true] {
         for kind in lifecycle_kinds() {
             let mut fixture = Fixture::new(throughput, HookAction::Allow);
-            fixture.core.config.granted_capabilities.remove(&RuntimeCapability::ProcessSpawn);
-            assert!(matches!(
-                fixture.invoke(kind),
-                Err(InterpreterError::CapabilityDenied { capability })
-                    if capability == "process_spawn"
-            ), "{kind:?}");
+            fixture
+                .core
+                .config
+                .granted_capabilities
+                .remove(&RuntimeCapability::ProcessSpawn);
+            assert!(
+                matches!(
+                    fixture.invoke(kind),
+                    Err(InterpreterError::CapabilityDenied { capability })
+                        if capability == "process_spawn"
+                ),
+                "{kind:?}"
+            );
             assert!(fixture.provider.requests.lock().unwrap().is_empty());
             assert!(fixture.journal.entries().is_empty());
             assert_eq!(fixture.core.hostcall_decisions.len(), 1);
@@ -236,11 +266,14 @@ fn lifecycle_containment_precedes_the_effect_and_preserves_compensating_cleanup(
     for throughput in [false, true] {
         for kind in lifecycle_kinds() {
             let mut fixture = Fixture::new(throughput, HookAction::Suspend);
-            assert!(matches!(
-                fixture.invoke(kind),
-                Err(InterpreterError::ContainmentActionRequested { action, .. })
-                    if action == "suspend"
-            ), "containment must not be converted into kill() returning false: {kind:?}");
+            assert!(
+                matches!(
+                    fixture.invoke(kind),
+                    Err(InterpreterError::ContainmentActionRequested { action, .. })
+                        if action == "suspend"
+                ),
+                "containment must not be converted into kill() returning false: {kind:?}"
+            );
             assert!(fixture.provider.requests.lock().unwrap().is_empty());
             assert!(fixture.journal.entries().is_empty());
             assert_eq!(
@@ -248,8 +281,15 @@ fn lifecycle_containment_precedes_the_effect_and_preserves_compensating_cleanup(
                 vec![("process_spawn".to_string(), true)]
             );
 
-            fixture.core.config.granted_capabilities.remove(&RuntimeCapability::ProcessSpawn);
-            fixture.core.cleanup_process_handle("fixture-child").unwrap();
+            fixture
+                .core
+                .config
+                .granted_capabilities
+                .remove(&RuntimeCapability::ProcessSpawn);
+            fixture
+                .core
+                .cleanup_process_handle("fixture-child")
+                .unwrap();
             assert_eq!(*fixture.provider.cleanup_count.lock().unwrap(), 1);
             assert!(matches!(
                 fixture.journal.entries().as_slice(),
@@ -273,10 +313,19 @@ fn stdin_preserves_scalar_backing_storage_and_callback_confidentiality() {
                     fixture.core.set_register_label(0, Label::Secret).unwrap();
                 }
                 "buffer-alias" => {
-                    let buffer = fixture.core.alloc_buffer_from_bytes(b"secret-bytes").unwrap();
-                    fixture.core.join_binary_storage_label(buffer, &Label::Secret).unwrap();
+                    let buffer = fixture
+                        .core
+                        .alloc_buffer_from_bytes(b"secret-bytes")
+                        .unwrap();
+                    fixture
+                        .core
+                        .join_binary_storage_label(buffer, &Label::Secret)
+                        .unwrap();
                     let backing = fixture.core.array_buffer_id_for_object(buffer).unwrap();
-                    let alias = fixture.core.alloc_buffer_view_object(backing, 0, 12).unwrap();
+                    let alias = fixture
+                        .core
+                        .alloc_buffer_view_object(backing, 0, 12)
+                        .unwrap();
                     fixture.core.write_reg(0, Value::Object(alias)).unwrap();
                     fixture.core.set_register_label(0, Label::Public).unwrap();
                     assert_eq!(fixture.core.binary_storage_label(alias), Label::Secret);
@@ -286,19 +335,28 @@ fn stdin_preserves_scalar_backing_storage_and_callback_confidentiality() {
                 }
                 _ => unreachable!(),
             }
-            assert!(matches!(
-                fixture.invoke(BuiltinFunctionKind::ChildProcessStdinWrite),
-                Err(InterpreterError::HostProcess { code, message, .. })
-                    if code == "EACCES" && message.contains("FLOW_POLICY_BLOCKED")
-            ), "{source}");
-            assert!(fixture.provider.requests.lock().unwrap().is_empty(), "{source}");
-            assert!(matches!(
-                fixture.journal.entries().as_slice(),
-                [HostEffectJournalEntry::ProcessSpawn {
-                    request: ProcessSpawnRequest::WriteStdin { .. },
-                    outcome: Err(ProcessSpawnError::FlowPolicyBlocked),
-                }]
-            ), "{source}");
+            assert!(
+                matches!(
+                    fixture.invoke(BuiltinFunctionKind::ChildProcessStdinWrite),
+                    Err(InterpreterError::HostProcess { code, message, .. })
+                        if code == "EACCES" && message.contains("FLOW_POLICY_BLOCKED")
+                ),
+                "{source}"
+            );
+            assert!(
+                fixture.provider.requests.lock().unwrap().is_empty(),
+                "{source}"
+            );
+            assert!(
+                matches!(
+                    fixture.journal.entries().as_slice(),
+                    [HostEffectJournalEntry::ProcessSpawn {
+                        request: ProcessSpawnRequest::WriteStdin { .. },
+                        outcome: Err(ProcessSpawnError::FlowPolicyBlocked),
+                    }]
+                ),
+                "{source}"
+            );
             let recorded = fixture.journal.finish_execution().unwrap();
             let replay = Arc::new(InMemoryHostEffectJournal::replaying(recorded.clone()));
             replay.begin_execution().unwrap();

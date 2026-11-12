@@ -22,19 +22,16 @@ fn eval_value(source: &str) -> String {
 }
 
 #[test]
-#[ignore = "bd-wni4m: regex capability-denied in eval; un-ignore when usable"]
 fn regex_test_matches() {
     assert_eq!(eval_value(r#"/ab/.test("xabz")"#), "true");
 }
 
 #[test]
-#[ignore = "bd-wni4m: regex capability-denied in eval; un-ignore when usable"]
 fn regex_replace_global() {
     assert_eq!(eval_value(r#""a1b2".replace(/[0-9]/g, "X")"#), "aXbX");
 }
 
 #[test]
-#[ignore = "bd-wni4m: regex capability-denied in eval; un-ignore when usable"]
 fn string_match_returns_first() {
     assert_eq!(eval_value(r#"let m = "a1b2".match(/[0-9]/); m[0]"#), "1");
 }

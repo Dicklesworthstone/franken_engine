@@ -140,7 +140,10 @@ fn rope_cancellation_is_observed_before_frontier_allocation() {
     core.config.cancellation_token = Some(token);
     // Output index one is not an ordinary 256-unit checkpoint. The rope's
     // structural check must still honor cancellation before allocating.
-    assert_eq!(state.quote(&mut core, &text), Err(InterpreterError::Cancelled));
+    assert_eq!(
+        state.quote(&mut core, &text),
+        Err(InterpreterError::Cancelled)
+    );
     assert_eq!(state.output, [0x61, u16::from(b'"')]);
     assert_eq!(state.charged, charged);
     assert!(text.unjoined_concat_children().is_some());
@@ -465,7 +468,11 @@ fn live_raw_json_ropes_preserve_callbacks_validation_and_literal_spelling() {
     let tree = crate::parser_api_stability::parse_script(source).unwrap();
     let lowered = crate::lowering_pipeline::lower_ir0_to_ir3(
         &crate::ir_contract::Ir0Module::from_syntax_tree(tree, "raw-rope-json.js"),
-        &crate::lowering_pipeline::LoweringContext::new("raw-rope-json", "callbacks", "builtin-only"),
+        &crate::lowering_pipeline::LoweringContext::new(
+            "raw-rope-json",
+            "callbacks",
+            "builtin-only",
+        ),
     )
     .unwrap();
     let mut core = core();

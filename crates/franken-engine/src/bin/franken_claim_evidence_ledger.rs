@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! `franken_claim_evidence_ledger` — build, commit, and verify the Merkle-committed
 //! Claim-Evidence Ledger (CEI track H.1, bead `bd-sde5e.8.1`).
 //!

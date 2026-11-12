@@ -15,7 +15,6 @@ jobs:
       matrix:
         lane: [n, n_minus_1, n_plus_1]
     env:
-      RUSTUP_TOOLCHAIN: nightly
       VERSION_MATRIX_LANES: ${{ matrix.lane }}
       SHARED_BOUNDARY_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
       SHARED_BOUNDARY_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -26,9 +25,10 @@ jobs:
           fetch-depth: 0
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: nightly
+          toolchain: nightly-2026-09-21
+          components: rustfmt, clippy
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2

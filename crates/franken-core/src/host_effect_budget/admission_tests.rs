@@ -39,7 +39,11 @@ fn module(source: &str) -> Ir3Module {
         .expect("admission-lifetime source must parse");
     lower_ir0_to_ir3(
         &Ir0Module::from_syntax_tree(tree, "admission-lifetime.js"),
-        &LoweringContext::new("admission-lifetime", "admission-lifetime", "admission-lifetime"),
+        &LoweringContext::new(
+            "admission-lifetime",
+            "admission-lifetime",
+            "admission-lifetime",
+        ),
     )
     .expect("admission-lifetime source must lower")
     .ir3

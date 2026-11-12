@@ -32,13 +32,11 @@ fn eval_value(source: &str) -> String {
 }
 
 #[test]
-#[ignore = "bd-semhe: blocked on accessor feature (parser/ast/lowering/interpreter); un-ignore when landed"]
 fn object_literal_getter_returns_computed_value() {
     assert_eq!(eval_value("let o = { get v() { return 11; } }; o.v"), "11");
 }
 
 #[test]
-#[ignore = "bd-semhe: blocked on accessor feature; un-ignore when landed"]
 fn object_literal_getter_binds_this_to_receiver() {
     // The getter runs with the object as `this`, so it can read sibling props.
     assert_eq!(
@@ -48,7 +46,6 @@ fn object_literal_getter_binds_this_to_receiver() {
 }
 
 #[test]
-#[ignore = "bd-semhe: blocked on accessor feature; un-ignore when landed"]
 fn object_literal_setter_side_effect_is_observable() {
     // The setter runs with the object as `this` and its side effect persists.
     assert_eq!(
@@ -58,7 +55,6 @@ fn object_literal_setter_side_effect_is_observable() {
 }
 
 #[test]
-#[ignore = "bd-semhe: blocked on accessor feature; un-ignore when landed"]
 fn data_properties_coexist_with_accessors_unchanged() {
     // A plain data property alongside a getter must keep its normal value.
     assert_eq!(
@@ -68,7 +64,6 @@ fn data_properties_coexist_with_accessors_unchanged() {
 }
 
 #[test]
-#[ignore = "bd-semhe: blocked on accessor feature; un-ignore when landed"]
 fn absent_property_on_accessor_object_is_undefined() {
     // Accessing a key with no data prop and no accessor still yields undefined.
     assert_eq!(

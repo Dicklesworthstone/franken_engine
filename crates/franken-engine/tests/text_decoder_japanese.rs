@@ -11,25 +11,33 @@ use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserS
 
 #[test]
 fn japanese_decoders_execute_on_both_native_profiles_with_gc_stress() {
-    let fixtures: serde_json::Value = serde_json::from_str(include_str!(
-        "fixtures/text_decoder/japanese.json"
-    )).expect("Japanese decoder fixtures");
+    let fixtures: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/text_decoder/japanese.json"))
+            .expect("Japanese decoder fixtures");
     for fixture in fixtures.as_array().unwrap() {
         let name = fixture["name"].as_str().unwrap();
-        let tree = CanonicalEs2020Parser.parse_with_options(
-            ParserSource {
-                label: format!("japanese-{name}.js"),
-                text: fixture["source"].as_str().unwrap().to_owned(),
-            },
-            ParseGoal::Script,
-            &ParserOptions::default(),
-        ).expect("Japanese decoder program parses");
+        let tree = CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource {
+                    label: format!("japanese-{name}.js"),
+                    text: fixture["source"].as_str().unwrap().to_owned(),
+                },
+                ParseGoal::Script,
+                &ParserOptions::default(),
+            )
+            .expect("Japanese decoder program parses");
         let module = lower_ir0_to_ir3(
             &Ir0Module::from_syntax_tree(tree, "japanese-decoder.js"),
             &LoweringContext::new("japanese-decoder", "multibyte", "builtin-only"),
-        ).expect("Japanese decoder program lowers").ir3;
-        let expected: Vec<_> = fixture["expected"].as_array().unwrap()
-            .iter().map(|line| line.as_str().unwrap()).collect();
+        )
+        .expect("Japanese decoder program lowers")
+        .ir3;
+        let expected: Vec<_> = fixture["expected"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|line| line.as_str().unwrap())
+            .collect();
         for throughput in [false, true] {
             for stress in [None, Some(1), Some(7)] {
                 let mut config = if throughput {
@@ -42,16 +50,28 @@ fn japanese_decoders_execute_on_both_native_profiles_with_gc_stress() {
                     RuntimeCapability::HeapAllocate,
                     RuntimeCapability::Builtin,
                     RuntimeCapability::Console,
-                ].into_iter().collect();
+                ]
+                .into_iter()
+                .collect();
                 let mut core = InterpreterCore::new(config, "japanese-decoder");
                 core.set_gc_stress_interval(stress);
                 let result = core.execute(&module).unwrap_or_else(|error| {
                     panic!("{name}, throughput={throughput}, stress={stress:?}: {error}")
                 });
-                let actual: Vec<_> = result.console_output.iter()
-                    .map(|entry| entry.message.as_str()).collect();
-                assert_eq!(actual, expected, "{name}, throughput={throughput}, stress={stress:?}");
-                assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes(), "{name}");
+                let actual: Vec<_> = result
+                    .console_output
+                    .iter()
+                    .map(|entry| entry.message.as_str())
+                    .collect();
+                assert_eq!(
+                    actual, expected,
+                    "{name}, throughput={throughput}, stress={stress:?}"
+                );
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes(),
+                    "{name}"
+                );
             }
         }
     }

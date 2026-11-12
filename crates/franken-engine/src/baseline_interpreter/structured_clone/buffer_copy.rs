@@ -193,13 +193,20 @@ mod tests {
         };
         core.join_binary_storage_label(source, &label).unwrap();
         let target = clone_buffer(&mut core).unwrap();
-        assert_eq!(core.buffer_backing(target).unwrap().max_byte_length, Some(256));
+        assert_eq!(
+            core.buffer_backing(target).unwrap().max_byte_length,
+            Some(256)
+        );
         assert_eq!(core.binary_storage_label(target), label);
         assert_eq!(core.pending_hostcall_result_label, Some(label));
         core.resize_buffer_bytes(source, 128).unwrap();
         assert_eq!(core.buffer_backing(target).unwrap().bytes.len(), 64);
         core.resize_buffer_bytes(target, 96).unwrap();
-        assert!(core.buffer_backing(target).unwrap().bytes[64..].iter().all(|b| *b == 0));
+        assert!(
+            core.buffer_backing(target).unwrap().bytes[64..]
+                .iter()
+                .all(|b| *b == 0)
+        );
         assert_eq!(core.buffer_backing(source).unwrap().bytes.len(), 128);
         accounted(&core, 0);
     }

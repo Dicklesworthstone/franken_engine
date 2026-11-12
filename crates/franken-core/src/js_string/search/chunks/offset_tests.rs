@@ -24,8 +24,15 @@ fn variable_width_and_astral_offsets_cannot_use_an_average_width() {
         "\u{10ffff}\u{800}a\u{ffff}",
     ] {
         let units = text.encode_utf16().count();
-        for byte in text.char_indices().map(|(byte, _)| byte).chain([text.len()]) {
-            assert_eq!(units_before(text, byte, units), text[..byte].encode_utf16().count());
+        for byte in text
+            .char_indices()
+            .map(|(byte, _)| byte)
+            .chain([text.len()])
+        {
+            assert_eq!(
+                units_before(text, byte, units),
+                text[..byte].encode_utf16().count()
+            );
         }
     }
 }
@@ -50,7 +57,9 @@ fn successful_unicode_searches_keep_utf16_offsets_and_unjoined_backing() {
     assert_eq!(value.utf16_last_index_of(&needle, usize::MAX), Some(12_289));
     assert_eq!(value.utf16_last_index_of(&needle, 12_288), Some(8192));
     assert_eq!(value.utf16_last_index_of(&needle, 8191), None);
-    let Text::Concat(node) = &value.utf8 else { panic!("expected rope") };
+    let Text::Concat(node) = &value.utf8 else {
+        panic!("expected rope")
+    };
     assert!(node.joined.get().is_none());
 }
 

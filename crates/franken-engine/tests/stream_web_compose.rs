@@ -2,11 +2,11 @@
 //! The host bridge suite is separate and cannot establish these results.
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeMap;
 use frankenengine_engine::baseline_interpreter::LaneChoice;
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, LabFixtureExecutionOrchestratorExt, OrchestratorConfig,
 };
+use std::collections::BTreeMap;
 
 fn run(source: &str, lane: LaneChoice) -> Vec<String> {
     let mut engine = ExecutionOrchestrator::new(OrchestratorConfig {
@@ -19,12 +19,19 @@ fn run(source: &str, lane: LaneChoice) -> Vec<String> {
         source_file: None,
         module_root: None,
         capabilities: ["vm_dispatch", "heap_allocate", "builtin", "console"]
-            .into_iter().map(str::to_string).collect(),
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
         version: "1.0.0".into(),
         metadata: BTreeMap::new(),
     };
-    engine.execute(&package).expect("native composition completes")
-        .console_output.into_iter().map(|line| line.message).collect()
+    engine
+        .execute(&package)
+        .expect("native composition completes")
+        .console_output
+        .into_iter()
+        .map(|line| line.message)
+        .collect()
 }
 
 const REUSABLE_CHAIN: &str = r#"
@@ -44,7 +51,10 @@ promises.pipeline(R.from(['alpha', 'beta']), reusable,
 #[test]
 fn reusable_web_chain_uses_the_existing_pipeline_and_protected_globals() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        assert_eq!(run(REUSABLE_CHAIN, lane), ["COMPOSE_COMPLETE ALPHABETA! false false"]);
+        assert_eq!(
+            run(REUSABLE_CHAIN, lane),
+            ["COMPOSE_COMPLETE ALPHABETA! false false"]
+        );
     }
 }
 
@@ -105,14 +115,31 @@ promises.pipeline(Readable.from(['esm']), reusable,
     std::fs::write(&entry, source).expect("write source");
     let report = root.path().join("report.json");
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_frankenctl"))
-        .args(["run", "--input"]).arg(&entry)
-        .args(["--goal", "module", "--extension-id", "web-compose-esm", "--out"])
-        .arg(&report).output().expect("execute native frankenctl");
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    let data: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(report).expect("read native report"),
-    ).expect("report JSON");
-    let lines: Vec<_> = data["console_output"].as_array().expect("console array")
-        .iter().map(|line| line["message"].as_str().expect("console message")).collect();
+        .args(["run", "--input"])
+        .arg(&entry)
+        .args([
+            "--goal",
+            "module",
+            "--extension-id",
+            "web-compose-esm",
+            "--out",
+        ])
+        .arg(&report)
+        .output()
+        .expect("execute native frankenctl");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let data: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(report).expect("read native report"))
+            .expect("report JSON");
+    let lines: Vec<_> = data["console_output"]
+        .as_array()
+        .expect("console array")
+        .iter()
+        .map(|line| line["message"].as_str().expect("console message"))
+        .collect();
     assert_eq!(lines, ["ESM_COMPOSE_COMPLETE ESM"]);
 }

@@ -5,10 +5,14 @@
 use frankenengine_engine::HybridRouter;
 
 fn check(source: &str, expected: &[&str]) {
-    let outcome = HybridRouter::default().eval(source)
+    let outcome = HybridRouter::default()
+        .eval(source)
         .unwrap_or_else(|error| panic!("evaluation failed: {error}"));
-    let lines: Vec<_> = outcome.console_output.iter()
-        .map(|entry| entry.message.as_str()).collect();
+    let lines: Vec<_> = outcome
+        .console_output
+        .iter()
+        .map(|entry| entry.message.as_str())
+        .collect();
     assert_eq!(lines, expected);
 }
 
@@ -33,13 +37,16 @@ console.log(exact.indexOf('\ud800', 1) + ':' + exact.lastIndexOf('\ud800', 1) + 
 var middle = '😀' + '中'.repeat(1024) + 'é';
 console.log(middle.indexOf('中中', 513) + ':' + middle.lastIndexOf('中中', 513) + ':' + middle.lastIndexOf('é', Infinity));
 "#;
-    check(source, &[
-        "5126|5123:-1,5123:-1,5123:-1,5123:5123,-1:5123,-1:5123,-1:5123,-1:5123",
-        "1:-1,1:1,4:1,4:1,4:4,-1:4,-1:4,-1:4,-1:4",
-        "2:4:7:7",
-        "2:0:3:-1",
-        "513:513:1026",
-    ]);
+    check(
+        source,
+        &[
+            "5126|5123:-1,5123:-1,5123:-1,5123:5123,-1:5123,-1:5123,-1:5123,-1:5123",
+            "1:-1,1:1,4:1,4:1,4:4,-1:4,-1:4,-1:4,-1:4",
+            "2:4:7:7",
+            "2:0:3:-1",
+            "513:513:1026",
+        ],
+    );
 }
 
 #[test]
@@ -64,11 +71,7 @@ for (var i = 0; i < pairs.length; i++) {
 }
 console.log(results.join(','));
 "#;
-    check(source, &[
-        "4:1:TNPTNP",
-        "true:TN",
-        "0:6,0:3,0:4,0:3,0:0",
-    ]);
+    check(source, &["4:1:TNPTNP", "true:TN", "0:6,0:3,0:4,0:3,0:0"]);
 }
 
 #[test]
@@ -89,9 +92,12 @@ for (var i = 0; i < mixed.length; i++) {
 }
 console.log(out.join(','));
 "#;
-    check(source, &[
-        "3074|1024:-1,1024:-1,1024:1024,2049:1024,2049:1024,2049:2049,-1:2049,-1:2049",
-        "1024:2048:3072:3072",
-        "1:3,-1:-1,3:3,2:2",
-    ]);
+    check(
+        source,
+        &[
+            "3074|1024:-1,1024:-1,1024:1024,2049:1024,2049:1024,2049:2049,-1:2049,-1:2049",
+            "1024:2048:3072:3072",
+            "1:3,-1:-1,3:3,2:2",
+        ],
+    );
 }

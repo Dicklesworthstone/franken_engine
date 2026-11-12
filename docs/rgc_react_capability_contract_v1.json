@@ -124,7 +124,7 @@
       "source_form": "jsx_fragment",
       "runtime_mode": "fragment_lowering",
       "entry_surface": "compile_contract",
-      "support_status": "deferred",
+      "support_status": "shipped",
       "owning_implementation_bead": "bd-1lsy.3.6.1",
       "parity_gate_bead": "bd-1lsy.9.7.1",
       "product_surface_bead": "bd-1lsy.10.12.1",
@@ -139,7 +139,7 @@
       "user_visible_diagnostic": {
         "error_code": "FE-RGC-016A-CAP-0003",
         "diagnostic_surface": "frankenctl react compile/build",
-        "message_template": "React fragment lowering is not yet shipped as a supported compile path; reject the request and route the user to unsupported-surface guidance.",
+        "message_template": "React fragment lowering support is shipped through frankenctl react compile and emits native pipeline output.",
         "remediation_bead": "bd-1lsy.10.11.2"
       },
       "unsupported_surface_policy": {

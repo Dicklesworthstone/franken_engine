@@ -79,7 +79,11 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let label = self.json_parse_context_label()?;
         let (value, observed) = self.invoke_inline_method_call_with_argument_label(
-            Some(module), method, iterator, Vec::new(), Some(label),
+            Some(module),
+            method,
+            iterator,
+            Vec::new(),
+            Some(label),
         )?;
         self.json_observe_label(observed)?;
         self.observe_scoped_callback_result()?;
@@ -116,7 +120,11 @@ impl InterpreterCore {
             let observed = core.json_parse_context_label()?;
             match step {
                 Ok(value) => core.array_from_async_await(
-                    module, holder, value, FromAsyncAwait::SyncValue, &observed,
+                    module,
+                    holder,
+                    value,
+                    FromAsyncAwait::SyncValue,
+                    &observed,
                 ),
                 Err(error) => {
                     // Only language errors reject the wrapper. Budget and
@@ -138,7 +146,11 @@ impl InterpreterCore {
         let reason = self.promise_value(&reason)?;
         let promise = self.create_rejected_promise(reason, label.clone())?;
         self.array_from_async_await(
-            module, holder, Value::Promise(promise.0), FromAsyncAwait::SyncStep, &label,
+            module,
+            holder,
+            Value::Promise(promise.0),
+            FromAsyncAwait::SyncStep,
+            &label,
         )
     }
 
@@ -205,7 +217,11 @@ impl InterpreterCore {
             let observed = core.json_parse_context_label()?;
             match result {
                 Ok(Some(value)) => core.array_from_async_await(
-                    module, holder, value, FromAsyncAwait::SyncCloseValue, &observed,
+                    module,
+                    holder,
+                    value,
+                    FromAsyncAwait::SyncCloseValue,
+                    &observed,
                 ),
                 Ok(None) => core.array_from_async_sync_close_settled(module, holder, &observed),
                 Err(error) => {
@@ -231,7 +247,11 @@ impl InterpreterCore {
         let original = self.array_from_async_slot(holder, "__error")?;
         self.array_from_async_keep_close_reason(holder, original, &observed)?;
         self.array_from_async_await(
-            module, holder, Value::Undefined, FromAsyncAwait::Close, &observed,
+            module,
+            holder,
+            Value::Undefined,
+            FromAsyncAwait::Close,
+            &observed,
         )
     }
 }
@@ -246,13 +266,17 @@ mod tests {
         let module = lower_ir0_to_ir3(
             &Ir0Module::from_syntax_tree(tree, "sync-protocol-state.js"),
             &LoweringContext::new("sync-protocol", "state", "builtin-only"),
-        ).unwrap().ir3;
+        )
+        .unwrap()
+        .ir3;
         let mut config = InterpreterConfig::quickjs_defaults();
         config.granted_capabilities = [
             RuntimeCapability::VmDispatch,
             RuntimeCapability::HeapAllocate,
             RuntimeCapability::Builtin,
-        ].into_iter().collect();
+        ]
+        .into_iter()
+        .collect();
         let mut core = InterpreterCore::new(config, "sync-protocol-state");
         let Value::Object(state) = core.execute(&module).unwrap().value else {
             panic!("fixture must return its state");
@@ -263,41 +287,60 @@ mod tests {
     }
 
     fn prop(core: &InterpreterCore, state: ObjectId, name: &str) -> Value {
-        core.heap[state.0 as usize].properties.get(name).unwrap().clone()
+        core.heap[state.0 as usize]
+            .properties
+            .get(name)
+            .unwrap()
+            .clone()
     }
 
     fn holder(core: &mut InterpreterCore, iterator: Value) -> ObjectId {
         let promise = core.create_promise().unwrap();
-        let holder = core.alloc_object_with_properties(&[
-            ("__promise", Value::Promise(promise.0)),
-            ("__iterator", iterator),
-        ]).unwrap();
+        let holder = core
+            .alloc_object_with_properties(&[
+                ("__promise", Value::Promise(promise.0)),
+                ("__iterator", iterator),
+            ])
+            .unwrap();
         core.seed_register(1, Value::Object(holder)).unwrap();
         for (name, kind) in [
-            ("__onFulfilled", BuiltinFunctionKind::ArrayFromAsyncFulfilled),
+            (
+                "__onFulfilled",
+                BuiltinFunctionKind::ArrayFromAsyncFulfilled,
+            ),
             ("__onRejected", BuiltinFunctionKind::ArrayFromAsyncRejected),
         ] {
-            let handler = core.promise_reaction_handler_from_value(
-                Value::BuiltinFunction(BuiltinFunction::bound_to(kind, holder)),
-                "sync protocol test",
-            ).unwrap().unwrap();
-            core.array_from_async_set(holder, name, Value::Int(i64::from(handler.0))).unwrap();
+            let handler = core
+                .promise_reaction_handler_from_value(
+                    Value::BuiltinFunction(BuiltinFunction::bound_to(kind, holder)),
+                    "sync protocol test",
+                )
+                .unwrap()
+                .unwrap();
+            core.array_from_async_set(holder, name, Value::Int(i64::from(handler.0)))
+                .unwrap();
         }
-        core.array_from_async_set_source(holder, FromAsyncSource::SyncProtocol).unwrap();
+        core.array_from_async_set_source(holder, FromAsyncSource::SyncProtocol)
+            .unwrap();
         holder
     }
 
     #[test]
     fn capture_preserves_original_iterator_and_reads_next_once() {
-        let (mut core, module, state) = fixture(r#"
+        let (mut core, module, state) = fixture(
+            r#"
             const state = { reads: 0 };
             state.iterator = { get next() { state.reads++; return function () { return {done:true}; }; } };
             state;
-        "#);
+        "#,
+        );
         let original = prop(&core, state, "iterator");
-        let FromAsyncSyncIterator::Protocol { iterator, next } =
-            core.array_from_async_capture_sync(&module, original.clone()).unwrap()
-        else { panic!("explicit protocol record required"); };
+        let FromAsyncSyncIterator::Protocol { iterator, next } = core
+            .array_from_async_capture_sync(&module, original.clone())
+            .unwrap()
+        else {
+            panic!("explicit protocol record required");
+        };
         assert_eq!(iterator, original);
         assert!(next.is_callable());
         assert_eq!(prop(&core, state, "reads"), Value::Int(1));
@@ -305,27 +348,40 @@ mod tests {
 
     #[test]
     fn pending_close_value_keeps_original_reason_and_await_phase() {
-        let (mut core, module, state) = fixture(r#"
+        let (mut core, module, state) = fixture(
+            r#"
             const state = { closes: 0, reason: {} };
             state.pending = new Promise(function () {});
             state.iterator = { return() { state.closes++; return {done:true,value:state.pending}; } };
             state;
-        "#);
+        "#,
+        );
         let iterator = prop(&core, state, "iterator");
         let original = prop(&core, state, "reason");
         let holder = holder(&mut core, iterator);
-        core.array_from_async_keep_close_reason(holder, original.clone(), &Label::Secret).unwrap();
-        core.array_from_async_sync_protocol_close(&module, holder, &Label::Secret).unwrap();
+        core.array_from_async_keep_close_reason(holder, original.clone(), &Label::Secret)
+            .unwrap();
+        core.array_from_async_sync_protocol_close(&module, holder, &Label::Secret)
+            .unwrap();
         let phase = core.array_from_async_index(holder, "__await").unwrap() as usize;
         assert_eq!(FROM_ASYNC_AWAITS[phase], FromAsyncAwait::SyncCloseValue);
         assert_eq!(prop(&core, holder, "__error"), original);
         assert_eq!(prop(&core, state, "closes"), Value::Int(1));
         let promise = core.array_from_async_promise(holder).unwrap();
-        assert!(matches!(core.promise_store.get(promise).unwrap().state, PromiseState::Pending));
-        assert_eq!(core.runtime_property_label(holder, &InterpreterCore::from_async_sync_key("__error")), Label::Secret);
+        assert!(matches!(
+            core.promise_store.get(promise).unwrap().state,
+            PromiseState::Pending
+        ));
+        assert_eq!(
+            core.runtime_property_label(holder, &InterpreterCore::from_async_sync_key("__error")),
+            Label::Secret
+        );
         assert!(core.active_inline_callback_context_label.is_none());
         assert_eq!(core.json_parse_temporary_bytes, 0);
-        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]
@@ -333,28 +389,42 @@ mod tests {
         let (mut core, module, state) = fixture("({iterator:{},reason:undefined});");
         let iterator = prop(&core, state, "iterator");
         let holder = holder(&mut core, iterator);
-        core.array_from_async_keep_close_reason(holder, Value::Undefined, &Label::Secret).unwrap();
-        core.array_from_async_sync_close_settled(&module, holder, &Label::Public).unwrap();
+        core.array_from_async_keep_close_reason(holder, Value::Undefined, &Label::Secret)
+            .unwrap();
+        core.array_from_async_sync_close_settled(&module, holder, &Label::Public)
+            .unwrap();
         let phase = core.array_from_async_index(holder, "__await").unwrap() as usize;
         assert_eq!(FROM_ASYNC_AWAITS[phase], FromAsyncAwait::Close);
         assert_eq!(prop(&core, holder, "__error"), Value::Undefined);
-        assert_eq!(core.runtime_property_label(holder, &InterpreterCore::from_async_sync_key("__error")), Label::Secret);
-        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        assert_eq!(
+            core.runtime_property_label(holder, &InterpreterCore::from_async_sync_key("__error")),
+            Label::Secret
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]
     fn memory_refusal_precedes_cleanup_and_remains_a_host_error() {
-        let (mut core, module, state) = fixture(r#"
+        let (mut core, module, state) = fixture(
+            r#"
             const state={closes:0};
             state.iterator={return(){state.closes++;return {};}};
             state;
-        "#);
+        "#,
+        );
         let iterator = prop(&core, state, "iterator");
         let holder = holder(&mut core, iterator);
-        core.array_from_async_keep_close_reason(holder, Value::Bool(false), &Label::Public).unwrap();
+        core.array_from_async_keep_close_reason(holder, Value::Bool(false), &Label::Public)
+            .unwrap();
         let limit = core.estimated_memory_bytes();
         core.config.max_total_memory_bytes = limit;
-        let label = Label::Custom { name: "sync-close-label".repeat(128), level: 3 };
+        let label = Label::Custom {
+            name: "sync-close-label".repeat(128),
+            level: 3,
+        };
         assert!(matches!(
             core.array_from_async_sync_protocol_close(&module, holder, &label),
             Err(InterpreterError::MemoryBudgetExceeded { .. })

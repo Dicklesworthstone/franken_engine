@@ -30,7 +30,11 @@ fn run_case(index: usize, esm: bool) {
                 label: "stream-operator-protocol.js".to_string(),
                 text: source,
             },
-            if esm { ParseGoal::Module } else { ParseGoal::Script },
+            if esm {
+                ParseGoal::Module
+            } else {
+                ParseGoal::Script
+            },
             &ParserOptions::default(),
         )
         .expect("protocol fixture parses");

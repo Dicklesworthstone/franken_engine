@@ -40,7 +40,9 @@ impl InterpreterCore {
         let payload_work = if same_length {
             0
         } else {
-            (new_len as u64).saturating_add(copy_len as u64).div_ceil(64)
+            (new_len as u64)
+                .saturating_add(copy_len as u64)
+                .div_ceil(64)
         };
         let work = payload_work
             .saturating_add(self.heap_size() as u64)
@@ -138,7 +140,8 @@ mod tests {
                 let mut core = runtime();
                 let source = source(&mut core, length);
                 let address = core.buffer_backing(source).unwrap().bytes.as_ptr();
-                core.join_binary_storage_label(source, &Label::Secret).unwrap();
+                core.join_binary_storage_label(source, &Label::Secret)
+                    .unwrap();
                 let target = core
                     .array_buffer_copy_and_detach_storage(source, length, maximum)
                     .unwrap();
@@ -146,12 +149,21 @@ mod tests {
                 assert_eq!(backing.bytes.as_ptr(), address, "payload was copied");
                 assert_eq!(backing.bytes.len(), length);
                 assert_eq!(backing.max_byte_length, maximum);
-                assert!(backing.bytes.iter().enumerate().all(|(i, b)| *b == (i % 251) as u8));
+                assert!(
+                    backing
+                        .bytes
+                        .iter()
+                        .enumerate()
+                        .all(|(i, b)| *b == (i % 251) as u8)
+                );
                 assert!(core.buffer_backing(source).unwrap().detached);
                 assert!(core.buffer_backing(source).unwrap().bytes.is_empty());
                 assert_eq!(core.binary_storage_label(target), Label::Secret);
                 assert_eq!(core.json_parse_temporary_bytes, 0);
-                assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes()
+                );
             }
         }
     }
@@ -161,14 +173,19 @@ mod tests {
         for (old, new) in [(4, 0), (4, 2), (4, 8), (4096, 17)] {
             let mut core = runtime();
             let source = source(&mut core, old);
-            let target = core.array_buffer_copy_and_detach_storage(source, new, None).unwrap();
+            let target = core
+                .array_buffer_copy_and_detach_storage(source, new, None)
+                .unwrap();
             let expected: Vec<u8> = (0..new)
                 .map(|index| if index < old { (index % 251) as u8 } else { 0 })
                 .collect();
             assert_eq!(core.buffer_backing(target).unwrap().bytes, expected);
             assert!(core.buffer_backing(source).unwrap().detached);
             assert_eq!(core.json_parse_temporary_bytes, 0);
-            assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
         }
     }
 
@@ -179,9 +196,14 @@ mod tests {
         let address = core.buffer_backing(source).unwrap().bytes.as_ptr();
         // Enough for the new object's metadata, but not a second 64 KiB payload.
         core.config.max_total_memory_bytes = core.estimated_memory_bytes() + 32_768;
-        let target = core.array_buffer_copy_and_detach_storage(source, 65_536, None).unwrap();
+        let target = core
+            .array_buffer_copy_and_detach_storage(source, 65_536, None)
+            .unwrap();
         assert_eq!(core.buffer_backing(target).unwrap().bytes.as_ptr(), address);
-        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]
@@ -202,15 +224,27 @@ mod tests {
             if cancel {
                 assert_eq!(outcome, Err(InterpreterError::Cancelled));
             } else {
-                assert!(matches!(outcome, Err(InterpreterError::MemoryBudgetExceeded { .. })));
+                assert!(matches!(
+                    outcome,
+                    Err(InterpreterError::MemoryBudgetExceeded { .. })
+                ));
             }
             let backing = core.buffer_backing(source).unwrap();
             assert!(!backing.detached);
             assert_eq!(backing.bytes.as_ptr(), address);
             assert_eq!(backing.bytes.len(), 4096);
-            assert!(backing.bytes.iter().enumerate().all(|(i, b)| *b == (i % 251) as u8));
+            assert!(
+                backing
+                    .bytes
+                    .iter()
+                    .enumerate()
+                    .all(|(i, b)| *b == (i % 251) as u8)
+            );
             assert_eq!(core.json_parse_temporary_bytes, 0);
-            assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
         }
     }
 }

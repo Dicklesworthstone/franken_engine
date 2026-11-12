@@ -334,7 +334,23 @@ if (( build_status != 0 )); then
     exit "$build_status"
 fi
 
-log "lake build succeeded; extracting top-level theorem names"
+log "lake build succeeded; verifying Lean #eval finite truth vectors and extracting top-level theorem names"
+
+readonly TRUTH_FIXTURE_PATH="${PROJECT_DIR}/crates/franken-engine/tests/fixtures/lean_finite_truth_vectors_v1.json"
+eval_vectors_tmp="$(mktemp -t lean-truth-vectors.XXXXXXXX.json)"
+trap 'rm -f "$build_log" "$eval_vectors_tmp"' EXIT
+(
+    cd "$LEAN_PROOFS_DIR" && lake env lean --stdin <<'LEAN' > "$eval_vectors_tmp"
+import CapabilityAlgebraSpecification
+#eval IO.println CapabilityProfile.exportFiniteTruthVectorsJson
+LEAN
+) || refuse "Lean #eval exportFiniteTruthVectorsJson failed"
+if [[ -f "$TRUTH_FIXTURE_PATH" ]]; then
+    if ! cmp -s "$eval_vectors_tmp" "$TRUTH_FIXTURE_PATH"; then
+        refuse "Lean #eval finite truth vectors drifted from ${TRUTH_FIXTURE_PATH}"
+    fi
+    log "verified byte-for-byte parity with ${TRUTH_FIXTURE_PATH}"
+fi
 
 # Pull `theorem <name>` declarations from each .lean module in proofs/lean4/.
 # A `theorem` line that survived `lake build` was successfully checked; the

@@ -1274,6 +1274,7 @@ impl Default for ConsoleHandler {
 }
 
 /// Mock handler for file system effects (for testing).
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug)]
 pub struct MockFsHandler {
     /// Mock file system state.
@@ -1284,6 +1285,7 @@ pub struct MockFsHandler {
     pub allow_writes: bool,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl MockFsHandler {
     /// Create a new mock filesystem handler.
     pub fn new() -> Self {
@@ -1308,6 +1310,7 @@ impl MockFsHandler {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl Handler for MockFsHandler {
     fn can_handle(&self, effect_name: &str) -> bool {
         matches!(effect_name, "fs:read" | "fs:write")
@@ -1415,6 +1418,7 @@ impl Handler for MockFsHandler {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl Default for MockFsHandler {
     fn default() -> Self {
         Self::new()

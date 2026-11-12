@@ -27,9 +27,20 @@ var hit = sticky.exec(text);
 out.push([hit.index, hit[1], hit[2], sticky.lastIndex, sticky.exec(text), sticky.lastIndex]);
 console.log(JSON.stringify(out));
 "#;
-    let outcome = HybridRouter::default().eval(source).expect("native evaluation");
-    let lines: Vec<_> = outcome.console_output.iter().map(|entry| entry.message.as_str()).collect();
-    assert_eq!(lines, [r#"[[2,["ababababababababababababababababab","ab","ab"]],[0,["abababababababababababababababababab!","ab","ab"]],[34,["!","ab","ab"]],[0,["ab",null,null]],null,[[1,35,"ab","ab"],[37,71,"ab","ab"]],"x[ab:ab]!y[ab:ab]!",["x","ab","ab","!y","ab","ab","!"],[1,"ab","ab",35,null,0]]"#]);
+    let outcome = HybridRouter::default()
+        .eval(source)
+        .expect("native evaluation");
+    let lines: Vec<_> = outcome
+        .console_output
+        .iter()
+        .map(|entry| entry.message.as_str())
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            r#"[[2,["ababababababababababababababababab","ab","ab"]],[0,["abababababababababababababababababab!","ab","ab"]],[34,["!","ab","ab"]],[0,["ab",null,null]],null,[[1,35,"ab","ab"],[37,71,"ab","ab"]],"x[ab:ab]!y[ab:ab]!",["x","ab","ab","!y","ab","ab","!"],[1,"ab","ab",35,null,0]]"#
+        ]
+    );
 }
 
 #[test]
@@ -48,9 +59,20 @@ out.push(sample('((.)){17}(?=!)', 's', 'x'.repeat(8) + '\n' + 'x'.repeat(8) + '!
 out.push(sample('((.)){17}(?=!)', '', 'x'.repeat(8) + '\n' + 'x'.repeat(8) + '!'));
 console.log(JSON.stringify(out));
 "#;
-    let outcome = HybridRouter::default().eval(source).expect("native evaluation");
-    let lines: Vec<_> = outcome.console_output.iter().map(|entry| entry.message.as_str()).collect();
-    assert_eq!(lines, [r#"[[0,34,"Ks","Ks"],null,[0,51,"😀é","😀é"],[51,1,"😀é","😀é"],[1,17,"c","c"],[0,17,"x","x"],null]"#]);
+    let outcome = HybridRouter::default()
+        .eval(source)
+        .expect("native evaluation");
+    let lines: Vec<_> = outcome
+        .console_output
+        .iter()
+        .map(|entry| entry.message.as_str())
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            r#"[[0,34,"Ks","Ks"],null,[0,51,"😀é","😀é"],[51,1,"😀é","😀é"],[1,17,"c","c"],[0,17,"x","x"],null]"#
+        ]
+    );
 }
 
 #[test]
@@ -80,9 +102,20 @@ var hit = sticky.exec('xabab!');
 out.push([hit.index, hit[1], sticky.lastIndex, sticky.exec('xabab!'), sticky.lastIndex]);
 console.log(JSON.stringify(out));
 "#;
-    let outcome = HybridRouter::default().eval(source).expect("native evaluation");
-    let lines: Vec<_> = outcome.console_output.iter().map(|entry| entry.message.as_str()).collect();
-    assert_eq!(lines, [r#"[[0,["ababab","ab","ab"]],[0,["ababababababababababababababababababab!","ab","ab"]],[0,["abababababababababababababababababab","ab","ab"]],[4,["!","ab","ab"]],[0,["ab",null,null]],[0,["",null,null]],[0,["Ksks","ks","ks"]],[0,["😀é😀é😀é","😀é","😀é"]],[[0,5,"ab","ab"],[6,7,null,null],[8,11,"ab","ab"]],"[ab:ab]x[:]x[ab:ab]",["x","ab","ab","y","ab","ab","z"],[[0,"ab","ab"],[6,null,null],[8,"ab","ab"]],[1,"ab",6,null,0]]"#]);
+    let outcome = HybridRouter::default()
+        .eval(source)
+        .expect("native evaluation");
+    let lines: Vec<_> = outcome
+        .console_output
+        .iter()
+        .map(|entry| entry.message.as_str())
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            r#"[[0,["ababab","ab","ab"]],[0,["ababababababababababababababababababab!","ab","ab"]],[0,["abababababababababababababababababab","ab","ab"]],[4,["!","ab","ab"]],[0,["ab",null,null]],[0,["",null,null]],[0,["Ksks","ks","ks"]],[0,["😀é😀é😀é","😀é","😀é"]],[[0,5,"ab","ab"],[6,7,null,null],[8,11,"ab","ab"]],"[ab:ab]x[:]x[ab:ab]",["x","ab","ab","y","ab","ab","z"],[[0,"ab","ab"],[6,null,null],[8,"ab","ab"]],[1,"ab",6,null,0]]"#
+        ]
+    );
 }
 
 #[test]
@@ -115,7 +148,18 @@ var hit = sticky.exec('xabab!');
 out.push([hit.index, hit[1], sticky.lastIndex, sticky.exec('xabab!'), sticky.lastIndex]);
 console.log(JSON.stringify(out));
 "#;
-    let outcome = HybridRouter::default().eval(source).expect("native evaluation");
-    let lines: Vec<_> = outcome.console_output.iter().map(|entry| entry.message.as_str()).collect();
-    assert_eq!(lines, [r#"[[0,["",null,null]],[0,["ababab","ab","ab"]],[0,["ababababababababababababababababababab!","ab","ab"]],[0,["abababababababababababababababababab","ab","ab"]],[0,["ab",null,null]],[4,["!",null,null]],[36,["!","ab","ab"]],[0,["ab",null,null]],[0,["Ksks","ks","ks"]],[0,["😀é😀é😀é","😀é","😀é"]],[0,["a\nb","b","b"]],[[0,5,"ab","ab"],[6,7,null,null],[8,11,"ab","ab"]],"[ab:ab]x[:]x[ab:ab]",["x","ab","ab","y","ab","ab","z"],[[0,"ab","ab"],[6,null,null],[8,"ab","ab"]],[1,"ab",6,null,0]]"#]);
+    let outcome = HybridRouter::default()
+        .eval(source)
+        .expect("native evaluation");
+    let lines: Vec<_> = outcome
+        .console_output
+        .iter()
+        .map(|entry| entry.message.as_str())
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            r#"[[0,["",null,null]],[0,["ababab","ab","ab"]],[0,["ababababababababababababababababababab!","ab","ab"]],[0,["abababababababababababababababababab","ab","ab"]],[0,["ab",null,null]],[4,["!",null,null]],[36,["!","ab","ab"]],[0,["ab",null,null]],[0,["Ksks","ks","ks"]],[0,["😀é😀é😀é","😀é","😀é"]],[0,["a\nb","b","b"]],[[0,5,"ab","ab"],[6,7,null,null],[8,11,"ab","ab"]],"[ab:ab]x[:]x[ab:ab]",["x","ab","ab","y","ab","ab","z"],[[0,"ab","ab"],[6,null,null],[8,"ab","ab"]],[1,"ab",6,null,0]]"#
+        ]
+    );
 }

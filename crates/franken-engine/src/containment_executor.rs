@@ -365,6 +365,8 @@ pub struct ForensicSnapshot {
 pub struct ContainmentExecutor {
     extensions: Vec<ExtensionRecord>,
     next_receipt_id: u64,
+    #[serde(skip)]
+    network_revocations: BTreeMap<String, frankenengine_extension_host::host_io::NetworkRevocation>,
 }
 
 impl ContainmentExecutor {
@@ -385,6 +387,19 @@ impl ContainmentExecutor {
                 forensic_snapshot: None,
             });
         }
+    }
+
+    /// Bind a live host-I/O [`frankenengine_extension_host::host_io::NetworkRevocation`]
+    /// handle to `extension_id` so containment transitions (`Sandbox` with
+    /// `allow_network == false`, `Suspend`, `Terminate`, `Quarantine`) revoke
+    /// live sockets and DNS waits immediately (`[RC-C2]` / `g2vrp.9`).
+    pub fn register_network_revocation(
+        &mut self,
+        extension_id: impl Into<String>,
+        revocation: frankenengine_extension_host::host_io::NetworkRevocation,
+    ) {
+        self.network_revocations
+            .insert(extension_id.into(), revocation);
     }
 
     /// Get the current containment state of an extension.
@@ -469,9 +484,22 @@ impl ContainmentExecutor {
         // Apply action-specific effects.
         match action {
             ContainmentAction::Sandbox => {
+                if !context.sandbox_policy.allow_network
+                    && let Some(revocation) = self.network_revocations.get(extension_id)
+                {
+                    revocation.revoke();
+                }
                 ext.sandbox_policy = Some(context.sandbox_policy.clone());
             }
+            ContainmentAction::Suspend | ContainmentAction::Terminate => {
+                if let Some(revocation) = self.network_revocations.get(extension_id) {
+                    revocation.revoke();
+                }
+            }
             ContainmentAction::Quarantine => {
+                if let Some(revocation) = self.network_revocations.get(extension_id) {
+                    revocation.revoke();
+                }
                 // Build a content-addressed forensic snapshot from actual
                 // extension state rather than a synthetic placeholder.
                 let receipt_count = ext.receipts.len() as u64;
@@ -2625,5 +2653,37 @@ mod tests {
             .expect("operation should succeed for valid inputs");
         // The second receipt ID should be strictly different from the first.
         assert_ne!(r1.receipt_id, r2.receipt_id);
+    }
+
+    #[test]
+    fn containment_actions_revoke_bound_network_authority() {
+        let mut executor = setup_executor();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let provider =
+            frankenengine_extension_host::host_io::SandboxedHostIo::with_root(dir.path())
+                .expect("sandboxed host io");
+        let revocation = provider.network_revocation();
+        assert!(!revocation.is_revoked());
+        executor.register_network_revocation("ext-001", revocation.clone());
+
+        let mut allow_net_ctx = test_context();
+        allow_net_ctx.sandbox_policy.allow_network = true;
+        executor
+            .execute(ContainmentAction::Challenge, "ext-001", &allow_net_ctx)
+            .expect("challenge succeeds");
+        assert!(
+            !revocation.is_revoked(),
+            "Challenge must not prematurely kill network authority"
+        );
+
+        let deny_net_ctx = test_context();
+        assert!(!deny_net_ctx.sandbox_policy.allow_network);
+        executor
+            .execute(ContainmentAction::Sandbox, "ext-001", &deny_net_ctx)
+            .expect("sandbox with allow_network=false succeeds");
+        assert!(
+            revocation.is_revoked(),
+            "Sandbox with allow_network=false must revoke bound NetworkRevocation"
+        );
     }
 }

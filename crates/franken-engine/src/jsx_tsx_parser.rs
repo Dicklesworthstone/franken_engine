@@ -1430,6 +1430,7 @@ fn read_until_char(cursor: &mut Cursor<'_>, terminator: char) -> String {
 /// Replace JSX occurring in executable expression positions, preserving the
 /// original spelling of strings, comments, regular expressions and template text.
 /// The callback owns lowering/code generation; its output is parenthesized.
+#[cfg(test)]
 pub(crate) fn transform_jsx_expressions<E, F>(
     source: &str,
     config: &JsxParserConfig,

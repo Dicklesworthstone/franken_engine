@@ -26,9 +26,15 @@ fn compare_body(regexp: &BacktrackRegExp, text: &str, position: usize, budget: u
         precise.advance_captured_iteration_precise(&repeat, position),
         "text={text:?} position={position} budget={budget}"
     );
-    assert_eq!(actual.steps_left, precise.steps_left, "exact mismatch charge");
+    assert_eq!(
+        actual.steps_left, precise.steps_left,
+        "exact mismatch charge"
+    );
     assert_eq!(actual.slots, precise.slots, "including every partial Save");
-    assert_eq!(actual.registers, precise.registers, "including the paid Mark");
+    assert_eq!(
+        actual.registers, precise.registers,
+        "including the paid Mark"
+    );
     assert!(actual.stack.is_empty());
 }
 
@@ -41,7 +47,11 @@ fn affordable_and_short_bodies_agree_at_every_mismatch_and_refusal_boundary() {
                 .collect();
             for backward in [false, true] {
                 let core = format!("{}{}{}*", "(".repeat(groups), word, ")".repeat(groups));
-                let pattern = if backward { format!("(?<={core})!") } else { core };
+                let pattern = if backward {
+                    format!("(?<={core})!")
+                } else {
+                    core
+                };
                 let regexp = BacktrackRegExp::new(&pattern, "").unwrap();
                 let complete_cost = 2 + 4 * groups + width;
                 for length in [0, 1, width - 1, width] {
@@ -113,7 +123,10 @@ fn affordable_mismatches_charge_only_examined_literals_and_keep_original_slots()
     let mut run = Run::new(&regexp, &input, complete_cost as u64);
     assert_eq!(run.advance_captured_iteration(&repeat, 0), Ok(Some(4)));
     assert_eq!(run.steps_left, 0, "no loop-tail instruction is prepaid");
-    assert_eq!(&run.slots[repeat.from..repeat.to], &[Some(0), Some(4), Some(0), Some(4)]);
+    assert_eq!(
+        &run.slots[repeat.from..repeat.to],
+        &[Some(0), Some(4), Some(0), Some(4)]
+    );
 }
 
 #[test]
@@ -144,8 +157,10 @@ fn batching_never_skips_counted_tail_writes_or_original_vm_refusal_states() {
                 );
                 assert_eq!(actual.steps_left, reference.steps_left);
                 assert_eq!(actual.slots, reference.slots);
-                assert_eq!(actual.registers, reference.registers,
-                    "pattern={pattern} initial={initial_count} budget={budget}");
+                assert_eq!(
+                    actual.registers, reference.registers,
+                    "pattern={pattern} initial={initial_count} budget={budget}"
+                );
             }
         }
     }

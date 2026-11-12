@@ -276,7 +276,8 @@ impl Run<'_> {
                             self.repeat_dispatches += 1;
                         }
                         if literal.greedy {
-                            position = self.execute_literal_greedy(&literal, pc, position, stack)?;
+                            position =
+                                self.execute_literal_greedy(&literal, pc, position, stack)?;
                         } else {
                             self.push_literal_lazy(&literal, pc, position, stack);
                         }
@@ -292,9 +293,14 @@ impl Run<'_> {
                             self.repeat_dispatches += 1;
                         }
                         if captured.greedy {
-                            position = self.execute_captured_greedy(&captured, pc, position, stack)?;
+                            position =
+                                self.execute_captured_greedy(&captured, pc, position, stack)?;
                         } else {
-                            stack.push(Frame::CapturedLazy { pc, position, start: position });
+                            stack.push(Frame::CapturedLazy {
+                                pc,
+                                position,
+                                start: position,
+                            });
                         }
                         pc = captured.exit;
                         continue;
@@ -374,7 +380,9 @@ impl Run<'_> {
                     #[cfg(test)]
                     let captured = captured.filter(|_| !self.repetitions_disabled);
                     let completed = if let Some(captured) = &captured {
-                        if let Some(end) = self.execute_captured_counted_required(captured, position, stack)? {
+                        if let Some(end) =
+                            self.execute_captured_counted_required(captured, position, stack)?
+                        {
                             position = end;
                             true
                         } else {
@@ -401,17 +409,19 @@ impl Run<'_> {
                         } else if max.is_some_and(|max| count >= max) {
                             pc = *exit;
                         } else if *greedy && let Some(captured) = &captured {
-                            position = self.execute_captured_counted_greedy(
-                                captured, pc, position, stack,
-                            )?;
+                            position = self
+                                .execute_captured_counted_greedy(captured, pc, position, stack)?;
                             pc = *exit;
                         } else if captured.is_some() {
-                            stack.push(Frame::CapturedCountedLazy { pc, position, start: position });
+                            stack.push(Frame::CapturedCountedLazy {
+                                pc,
+                                position,
+                                start: position,
+                            });
                             pc = *exit;
                         } else if *greedy && let Some(repeat) = &repeat {
-                            position = self.execute_counted_greedy(
-                                repeat, pc, position, *max, stack,
-                            )?;
+                            position =
+                                self.execute_counted_greedy(repeat, pc, position, *max, stack)?;
                             pc = *exit;
                         } else if let Some(repeat) = &repeat {
                             self.push_counted_lazy(repeat, pc, position, stack);
@@ -502,7 +512,9 @@ impl Run<'_> {
                         Some(Frame::Register { register, old }) => {
                             self.registers[register] = old;
                         }
-                        Some(frame @ (Frame::RepeatForward { .. } | Frame::RepeatBackward { .. })) => {
+                        Some(
+                            frame @ (Frame::RepeatForward { .. } | Frame::RepeatBackward { .. }),
+                        ) => {
                             (pc, position) = self.resume_repeat(frame, stack);
                             break;
                         }
@@ -635,8 +647,7 @@ impl Run<'_> {
     /// zero/one-step allowance returns to execute, preserving the exact
     /// refusal point and partial capture state rather than fabricating EOF.
     fn skip_literal_misses(&mut self, at: usize, literal: char) -> usize {
-        let count = ((self.steps_left / 2).min(256) as usize)
-            .min(self.input.chars.len() - at);
+        let count = ((self.steps_left / 2).min(256) as usize).min(self.input.chars.len() - at);
         let missed = self.input.chars[at..at + count]
             .iter()
             .position(|&character| character == literal)
@@ -687,7 +698,11 @@ impl Run<'_> {
 }
 
 impl<'a> Run<'a> {
-    pub(super) fn new(regexp: &'a BacktrackRegExp, input: &'a PreparedInput, steps_left: u64) -> Self {
+    pub(super) fn new(
+        regexp: &'a BacktrackRegExp,
+        input: &'a PreparedInput,
+        steps_left: u64,
+    ) -> Self {
         Self {
             regexp,
             input,

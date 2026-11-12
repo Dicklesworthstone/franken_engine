@@ -4,8 +4,13 @@
 use frankenengine_engine::HybridRouter;
 
 fn run(source: &str) -> Vec<String> {
-    HybridRouter::default().eval(source).expect("native buffer validation")
-        .console_output.into_iter().map(|entry| entry.message).collect()
+    HybridRouter::default()
+        .eval(source)
+        .expect("native buffer validation")
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect()
 }
 
 #[test]
@@ -22,7 +27,15 @@ TextDecoder.prototype.decode=()=>{throw new Error('validation decoded');};
 console.log(isUtf8(text),isAscii(text),isUtf8(Buffer.from([255])));
 console.log('BYTE_VALIDATION_COMPLETE');
 "#);
-    assert_eq!(lines, ["1111111000000", "1100000000000", "true false false", "BYTE_VALIDATION_COMPLETE"]);
+    assert_eq!(
+        lines,
+        [
+            "1111111000000",
+            "1100000000000",
+            "true false false",
+            "BYTE_VALIDATION_COMPLETE"
+        ]
+    );
 }
 
 #[test]
@@ -44,7 +57,15 @@ try{buffer.isUtf8(new DataView(new ArrayBuffer(2)));console.log('UNEXPECTED');}
 catch(error){console.log(error.code);}
 console.log('BYTE_WINDOW_COMPLETE');
 "#);
-    assert_eq!(lines, ["false false", "true true 0", "ERR_INVALID_ARG_TYPE", "BYTE_WINDOW_COMPLETE"]);
+    assert_eq!(
+        lines,
+        [
+            "false false",
+            "true true 0",
+            "ERR_INVALID_ARG_TYPE",
+            "BYTE_WINDOW_COMPLETE"
+        ]
+    );
 }
 
 #[test]
@@ -58,7 +79,15 @@ const ascii=first.Buffer.alloc(4096,65);console.log(valid(ascii),first.isAscii(a
 ascii[4095]=255;console.log(valid(ascii),first.isAscii(ascii));
 console.log('BUFFER_ALIAS_COMPLETE');
 "#);
-    assert_eq!(lines, ["true true", "true true", "false false", "BUFFER_ALIAS_COMPLETE"]);
+    assert_eq!(
+        lines,
+        [
+            "true true",
+            "true true",
+            "false false",
+            "BUFFER_ALIAS_COMPLETE"
+        ]
+    );
 }
 
 #[test]
@@ -80,7 +109,16 @@ console.log(isUtf8(view),isAscii(view));
 console.log(isUtf8(new Uint8Array(view.buffer,view.byteOffset,67)));
 console.log('WORD_BOUNDARIES_COMPLETE');
 "#);
-    assert_eq!(lines, ["true true", "64", "true false", "false", "WORD_BOUNDARIES_COMPLETE"]);
+    assert_eq!(
+        lines,
+        [
+            "true true",
+            "64",
+            "true false",
+            "false",
+            "WORD_BOUNDARIES_COMPLETE"
+        ]
+    );
 }
 
 #[test]
@@ -97,5 +135,8 @@ console.log(buffer.isUtf8(bytes),buffer.isAscii(bytes));
 globalThis.DataView.prototype.getUint32=saved;
 console.log('WORD_INTRINSICS_COMPLETE');
 "#);
-    assert_eq!(lines, ["true true", "false false", "WORD_INTRINSICS_COMPLETE"]);
+    assert_eq!(
+        lines,
+        ["true true", "false false", "WORD_INTRINSICS_COMPLETE"]
+    );
 }

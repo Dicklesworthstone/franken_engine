@@ -117,7 +117,6 @@ impl InterpreterCore {
         self.json_release_temporary(charged);
         outcome
     }
-
 }
 
 fn core() -> InterpreterCore {
@@ -299,7 +298,10 @@ fn chain_charges_retained_stack_not_every_consumed_edge() {
         actual
             .observe_reachable_value(&Value::Object(a[0]), edges)
             .unwrap();
-        assert_eq!(actual.active_inline_callback_context_label, Some(Label::Secret));
+        assert_eq!(
+            actual.active_inline_callback_context_label,
+            Some(Label::Secret)
+        );
         assert!(matches!(
             expected.reference_observe(&Value::Object(b[0]), edges),
             Err(InterpreterError::MemoryBudgetExceeded { .. })
@@ -351,7 +353,10 @@ fn cancellation_and_repeated_walks_keep_the_original_lifecycle() {
         .unwrap();
     core.json_observe_reachable_value(&Value::Object(nodes[0]))
         .unwrap();
-    assert_eq!(core.active_inline_callback_context_label, Some(Label::Secret));
+    assert_eq!(
+        core.active_inline_callback_context_label,
+        Some(Label::Secret)
+    );
     assert_accounted(&core, 777);
     core.json_release_temporary(777);
     assert_accounted(&core, 0);
@@ -638,7 +643,10 @@ fn bitmap_walk_does_not_cache_labels_across_mutation_or_cancellation() {
     core.config.cancellation_token = None;
     core.json_observe_reachable_value(&Value::Object(nodes[0]))
         .unwrap();
-    assert_eq!(core.active_inline_callback_context_label, Some(Label::Secret));
+    assert_eq!(
+        core.active_inline_callback_context_label,
+        Some(Label::Secret)
+    );
     assert_accounted(&core, 777);
     core.json_release_temporary(777);
     assert_accounted(&core, 0);
@@ -847,7 +855,10 @@ fn compressed_frontier_admits_alias_fanout_without_skipping_work() {
         actual
             .observe_reachable_value(&Value::Object(a), edges)
             .unwrap();
-        assert_eq!(actual.active_inline_callback_context_label, Some(Label::Secret));
+        assert_eq!(
+            actual.active_inline_callback_context_label,
+            Some(Label::Secret)
+        );
         assert!(matches!(
             expected.reference_observe(&Value::Object(b), edges),
             Err(InterpreterError::MemoryBudgetExceeded { .. })

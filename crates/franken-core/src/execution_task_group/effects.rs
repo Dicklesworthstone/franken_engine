@@ -10,7 +10,8 @@ use super::{
     WorkBudgetError,
 };
 use crate::host_effect_budget::{
-    BudgetedHostIo, BudgetedProcessSpawn, HostEffectDrainError, HostEffectSnapshot, HostEffectWorkPool,
+    BudgetedHostIo, BudgetedProcessSpawn, HostEffectDrainError, HostEffectSnapshot,
+    HostEffectWorkPool,
 };
 
 use frankenengine_extension_host::host_io::HostIoProvider;
@@ -27,7 +28,8 @@ pub struct ExecutionHostBindings<'a> {
 
 impl fmt::Debug for ExecutionHostBindings<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ExecutionHostBindings").finish_non_exhaustive()
+        f.debug_struct("ExecutionHostBindings")
+            .finish_non_exhaustive()
     }
 }
 
@@ -41,14 +43,19 @@ impl ExecutionHostBindings<'_> {
     /// Preserve the configured provider's policy while sharing this group's
     /// operation credits, in-flight frontier and the job's cancellation lifetime.
     pub fn bind_host_io(&self, provider: Arc<dyn HostIoProvider>) -> BudgetedHostIo {
-        self.effects.bind_host_io_for_admission(provider, self.admission)
+        self.effects
+            .bind_host_io_for_admission(provider, self.admission)
     }
 
     /// Process dispatch shares the SAME credits and in-flight ceiling as I/O.
     /// Preserve spawned handles, native typed failures and trusted cleanup. Only
     /// admitted dispatch is drained; cleanup/reaping/journaling remain external.
-    pub fn bind_process_spawn(&self, provider: Arc<dyn ProcessSpawnProvider>) -> BudgetedProcessSpawn {
-        self.effects.bind_process_spawn_for_admission(provider, self.admission)
+    pub fn bind_process_spawn(
+        &self,
+        provider: Arc<dyn ProcessSpawnProvider>,
+    ) -> BudgetedProcessSpawn {
+        self.effects
+            .bind_process_spawn_for_admission(provider, self.admission)
     }
 }
 
@@ -143,11 +150,25 @@ impl ExecutionTaskGroup {
         if self.is_closed() {
             return Err(ExecutionGroupStartError::Closed);
         }
-        let effects = self.effects.clone()
+        let effects = self
+            .effects
+            .clone()
             .ok_or(ExecutionGroupStartError::HostEffectsUnconfigured)?;
-        self.spawn_prepared(module, current_config, trace_id, deadline, |admission, config| {
-            prepare(&ExecutionHostBindings { admission, effects: &effects }, config)
-        })
+        self.spawn_prepared(
+            module,
+            current_config,
+            trace_id,
+            deadline,
+            |admission, config| {
+                prepare(
+                    &ExecutionHostBindings {
+                        admission,
+                        effects: &effects,
+                    },
+                    config,
+                )
+            },
+        )
     }
 
     /// Own an existing host-designated effect scope along with a new private

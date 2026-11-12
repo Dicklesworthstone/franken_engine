@@ -1,24 +1,35 @@
 //! Native execution regressions. Host differential checks are not substitutes.
 #![forbid(unsafe_code)]
-use std::collections::BTreeMap;
 use frankenengine_engine::baseline_interpreter::LaneChoice;
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, LabFixtureExecutionOrchestratorExt, OrchestratorConfig,
 };
+use std::collections::BTreeMap;
 
 fn run(source: &str, lane: LaneChoice) -> Vec<String> {
     let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig {
-        force_lane: Some(lane), ..OrchestratorConfig::default()
+        force_lane: Some(lane),
+        ..OrchestratorConfig::default()
     });
     let package = ExtensionPackage {
-        extension_id: "readline-native".into(), source: source.into(),
-        source_file: None, module_root: None,
+        extension_id: "readline-native".into(),
+        source: source.into(),
+        source_file: None,
+        module_root: None,
         capabilities: ["vm_dispatch", "heap_allocate", "builtin", "console"]
-            .into_iter().map(str::to_string).collect(),
-        version: "1.0.0".into(), metadata: BTreeMap::new(),
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        version: "1.0.0".into(),
+        metadata: BTreeMap::new(),
     };
-    orchestrator.execute(&package).expect("native readline completion")
-        .console_output.into_iter().map(|line| line.message).collect()
+    orchestrator
+        .execute(&package)
+        .expect("native readline completion")
+        .console_output
+        .into_iter()
+        .map(|line| line.message)
+        .collect()
 }
 
 #[test]
@@ -49,9 +60,14 @@ const next=rl.question('value?');input.write('42\n');console.log('QUESTION_COMPL
 rl.close();console.log('QUESTION_CLEANUP',input.listenerCount('data'),input.destroyed);})();
 "#;
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        assert_eq!(run(source, lane), [
-            "QUESTION_ABORT ABORT_ERR true", "QUESTION_COMPLETE 42", "QUESTION_CLEANUP 0 false",
-        ]);
+        assert_eq!(
+            run(source, lane),
+            [
+                "QUESTION_ABORT ABORT_ERR true",
+                "QUESTION_COMPLETE 42",
+                "QUESTION_CLEANUP 0 false",
+            ]
+        );
     }
 }
 
@@ -81,7 +97,10 @@ console.log('ITERATOR_FIRST',(await first).value);await it.return();
 console.log('ITERATOR_CLEANUP',(await it.next()).done,rl.closed,input.destroyed,input.listenerCount('data'));})();
 "#;
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        assert_eq!(run(source, lane), ["ITERATOR_FIRST a", "ITERATOR_CLEANUP true true false 0"]);
+        assert_eq!(
+            run(source, lane),
+            ["ITERATOR_FIRST a", "ITERATOR_CLEANUP true true false 0"]
+        );
     }
 }
 
@@ -89,22 +108,42 @@ console.log('ITERATOR_CLEANUP',(await it.next()).done,rl.closed,input.destroyed,
 fn native_cli_esm_readline_imports_use_the_canonical_module_factory() {
     let root = tempfile::tempdir().expect("temporary project");
     let entry = root.path().join("main.mjs");
-    std::fs::write(&entry,
+    std::fs::write(
+        &entry,
         "import {createInterface} from 'node:readline/promises';\
          import {Readable} from 'node:stream';\
          const rl=createInterface({input:Readable.from(['a\\r','\\nb\\n']),crlfDelay:Infinity});\
          (async function(){const lines=[];for await(const line of rl)lines.push(line);\
-         console.log('ESM_READLINE_COMPLETE',lines.join('|'),rl.closed);})();"
-    ).expect("write native ESM program");
+         console.log('ESM_READLINE_COMPLETE',lines.join('|'),rl.closed);})();",
+    )
+    .expect("write native ESM program");
     let report = root.path().join("report.json");
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_frankenctl"))
-        .args(["run", "--input"]).arg(&entry)
-        .args(["--goal", "module", "--extension-id", "readline-esm", "--out"])
-        .arg(&report).output().expect("execute native frankenctl");
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    let payload: serde_json::Value = serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
-    let lines: Vec<_> = payload["console_output"].as_array().unwrap().iter()
-        .map(|line| line["message"].as_str().unwrap()).collect();
+        .args(["run", "--input"])
+        .arg(&entry)
+        .args([
+            "--goal",
+            "module",
+            "--extension-id",
+            "readline-esm",
+            "--out",
+        ])
+        .arg(&report)
+        .output()
+        .expect("execute native frankenctl");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
+    let lines: Vec<_> = payload["console_output"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|line| line["message"].as_str().unwrap())
+        .collect();
     assert_eq!(lines, ["ESM_READLINE_COMPLETE a|b true"]);
 }
 
@@ -129,12 +168,15 @@ const ask=promisify(rl.question).bind(rl);
 })();
 "#;
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        assert_eq!(run(source, lane), [
-            "PROMISIFIED_ANSWER 42",
-            "PROMISIFIED_ABORT ABORT_ERR true",
-            "PROMISIFIED_EMPTY true",
-            "PROMISIFIED_CLOSED ERR_USE_AFTER_CLOSE",
-            "PROMISIFIED_COMPLETE 0 false",
-        ]);
+        assert_eq!(
+            run(source, lane),
+            [
+                "PROMISIFIED_ANSWER 42",
+                "PROMISIFIED_ABORT ABORT_ERR true",
+                "PROMISIFIED_EMPTY true",
+                "PROMISIFIED_CLOSED ERR_USE_AFTER_CLOSE",
+                "PROMISIFIED_COMPLETE 0 false",
+            ]
+        );
     }
 }

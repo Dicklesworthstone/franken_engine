@@ -18,8 +18,19 @@ use super::super::{
 use crate::ast::{BindingPattern, Expression, Statement, SyntaxTree};
 
 const GLOBALS: [&str; 13] = [
-    "AbortController", "AbortSignal", "Array", "Blob", "Buffer", "Error", "EventTarget", "Object", "Promise",
-    "Reflect", "Symbol", "TypeError", "Uint8Array",
+    "AbortController",
+    "AbortSignal",
+    "Array",
+    "Blob",
+    "Buffer",
+    "Error",
+    "EventTarget",
+    "Object",
+    "Promise",
+    "Reflect",
+    "Symbol",
+    "TypeError",
+    "Uint8Array",
 ];
 // Both adapters and completion observation share the SAME lazy Web instance.
 pub(super) const SOURCE: &str = concat!(
@@ -61,7 +72,13 @@ pub(super) fn compose_with_runtime_sources(
     lexical_names(&tree.body, &mut names);
     for statement in &tree.body {
         if let Statement::Import(import) = statement {
-            names.extend(import.clause.binding_names().into_iter().map(str::to_string));
+            names.extend(
+                import
+                    .clause
+                    .binding_names()
+                    .into_iter()
+                    .map(str::to_string),
+            );
         }
     }
     // This reference is still a module VALUE. The enclosing loader pass will
@@ -81,14 +98,22 @@ pub(super) fn compose_with_runtime_sources(
     let mut installer = INSTALLER.expression()?;
     CompletionTick.expression(&mut installer)?;
     ModuleRenamer {
-        through_global_object: GLOBALS.iter()
+        through_global_object: GLOBALS
+            .iter()
             .filter(|name| names.contains(**name))
-            .map(|name| (*name).to_string()).collect(),
-    }.expression(&mut installer)?;
+            .map(|name| (*name).to_string())
+            .collect(),
+    }
+    .expression(&mut installer)?;
     for statement in &mut tree.body {
-        let Statement::VariableDeclaration(declaration) = statement else { continue; };
-        let [declarator] = declaration.declarations.as_mut_slice() else { continue; };
-        if !matches!(&declarator.pattern, BindingPattern::Identifier(name) if name == STREAM_MODULE_BINDING) {
+        let Statement::VariableDeclaration(declaration) = statement else {
+            continue;
+        };
+        let [declarator] = declaration.declarations.as_mut_slice() else {
+            continue;
+        };
+        if !matches!(&declarator.pattern, BindingPattern::Identifier(name) if name == STREAM_MODULE_BINDING)
+        {
             continue;
         }
         let original = declarator.initializer.take().ok_or_else(super::invalid)?;
@@ -104,35 +129,51 @@ pub(super) fn compose_with_runtime_sources(
 
 #[cfg(test)]
 mod tests {
+    use super::super::super::{
+        is_module_declaration, rewrite_module_objects, rewrite_util_requires,
+    };
     use super::*;
-    use super::super::super::{is_module_declaration, rewrite_util_requires, rewrite_module_objects};
     use crate::ast::ParseGoal;
     use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 
     fn parse(source: &str) -> SyntaxTree {
-        CanonicalEs2020Parser.parse_with_options(
-            ParserSource { label: "stream-web-bridge-test.js".into(), text: source.into() },
-            ParseGoal::Script, &ParserOptions::default(),
-        ).expect("program parses")
+        CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource {
+                    label: "stream-web-bridge-test.js".into(),
+                    text: source.into(),
+                },
+                ParseGoal::Script,
+                &ParserOptions::default(),
+            )
+            .expect("program parses")
     }
 
     #[test]
     fn installer_has_only_declared_realm_helpers_and_uses_pristine_cached_syntax() {
-        let mut source = INSTALLER.expression().expect("canonical parser accepts installer");
+        let mut source = INSTALLER
+            .expression()
+            .expect("canonical parser accepts installer");
         let expected: BTreeSet<String> = GLOBALS.iter().map(|s| (*s).into()).collect();
         let mut free = expected.clone();
         free.insert(TICK.into());
         assert_eq!(super::super::super::tests::free_names(&mut source), free);
         let pristine = source.clone();
         CompletionTick.expression(&mut source).unwrap();
-        ModuleRenamer { through_global_object: expected }.expression(&mut source).unwrap();
+        ModuleRenamer {
+            through_global_object: expected,
+        }
+        .expression(&mut source)
+        .unwrap();
         assert_eq!(
             super::super::super::tests::free_names(&mut source),
             BTreeSet::from(["globalThis".into(), "%StreamNextTick".into()]),
         );
         assert_eq!(INSTALLER.expression().unwrap(), pristine);
-        assert_eq!(super::super::super::intrinsic_capability("%StreamNextTick"),
-            Some("builtin:ProcessNextTick"));
+        assert_eq!(
+            super::super::super::intrinsic_capability("%StreamNextTick"),
+            Some("builtin:ProcessNextTick")
+        );
     }
 
     #[test]
@@ -145,10 +186,22 @@ mod tests {
             let tree = parse(source);
             let before = rewrite_module_objects(&tree).unwrap().unwrap();
             let after = rewrite_util_requires(&tree).unwrap().unwrap();
-            assert_eq!(after.body.len(), before.body.len(), "no extra top-level module or duplicated factory");
             assert_eq!(
-                after.body.iter().filter(|s| is_module_declaration(s)).count(),
-                before.body.iter().filter(|s| is_module_declaration(s)).count(),
+                after.body.len(),
+                before.body.len(),
+                "no extra top-level module or duplicated factory"
+            );
+            assert_eq!(
+                after
+                    .body
+                    .iter()
+                    .filter(|s| is_module_declaration(s))
+                    .count(),
+                before
+                    .body
+                    .iter()
+                    .filter(|s| is_module_declaration(s))
+                    .count(),
             );
             assert!(rewrite_util_requires(&after).unwrap().is_none());
         }
@@ -156,24 +209,40 @@ mod tests {
 
     #[test]
     fn explicit_web_dependency_is_a_reference_not_an_independent_factory() {
-        let tree = parse("const s=require('stream'); const w=require('node:stream/web'); s.Readable.toWeb(input);");
+        let tree = parse(
+            "const s=require('stream'); const w=require('node:stream/web'); s.Readable.toWeb(input);",
+        );
         let mut objects = rewrite_module_objects(&tree).unwrap().unwrap();
-        compose(&mut objects, &BTreeSet::from([STREAM_MODULE_BINDING.into(), WEB_STREAMS_BINDING.into()])).unwrap();
+        compose(
+            &mut objects,
+            &BTreeSet::from([STREAM_MODULE_BINDING.into(), WEB_STREAMS_BINDING.into()]),
+        )
+        .unwrap();
         struct Count(usize);
         impl Walk for Count {
             fn expression(&mut self, expression: &mut Expression) -> Outcome {
-                if matches!(expression, Expression::Identifier(name) if name == WEB_STREAMS_BINDING) {
+                if matches!(expression, Expression::Identifier(name) if name == WEB_STREAMS_BINDING)
+                {
                     self.0 += 1;
                 }
                 walk_expression(self, expression)
             }
         }
         let mut references = Count(0);
-        let statement = objects.body.iter_mut().find(|s| matches!(s,
+        let statement = objects
+            .body
+            .iter_mut()
+            .find(|s| {
+                matches!(s,
             Statement::VariableDeclaration(d) if matches!(&d.declarations[0].pattern,
-                BindingPattern::Identifier(name) if name == STREAM_MODULE_BINDING))).unwrap();
+                BindingPattern::Identifier(name) if name == STREAM_MODULE_BINDING))
+            })
+            .unwrap();
         references.statement(statement).unwrap();
-        assert_eq!(references.0, 1, "one lazy reference to the explicitly requested Web module");
+        assert_eq!(
+            references.0, 1,
+            "one lazy reference to the explicitly requested Web module"
+        );
     }
 
     #[test]

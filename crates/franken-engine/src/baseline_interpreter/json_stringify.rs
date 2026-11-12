@@ -1150,7 +1150,11 @@ mod tests {
                     }
                 }
                 Err(error) => {
-                    reference_text(state, core, &format!("\\u{:04x}", error.unpaired_surrogate()))?;
+                    reference_text(
+                        state,
+                        core,
+                        &format!("\\u{:04x}", error.unpaired_surrogate()),
+                    )?;
                 }
             }
         }

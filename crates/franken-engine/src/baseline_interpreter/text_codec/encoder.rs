@@ -84,8 +84,7 @@ mod tests {
     #[test]
     fn mixed_pairs_and_lone_halves_preserve_all_destination_boundaries() {
         let alphabet = [
-            0, 0x7f, 0x80, 0x7ff, 0x800, 0xd7ff, 0xd800, 0xdbff, 0xdc00, 0xdfff, 0xe000,
-            0xffff,
+            0, 0x7f, 0x80, 0x7ff, 0x800, 0xd7ff, 0xd800, 0xdbff, 0xdc00, 0xdfff, 0xe000, 0xffff,
         ];
         for left in alphabet {
             for right in alphabet {
@@ -208,8 +207,7 @@ mod tests {
     fn native_encode_still_refuses_an_unadmitted_destination_allocation() {
         let mut core = core();
         let encoder = core.construct_text_encoder().unwrap();
-        core.seed_register(0, Value::str("a".repeat(4096)))
-            .unwrap();
+        core.seed_register(0, Value::str("a".repeat(4096))).unwrap();
         core.config.max_total_memory_bytes = core.estimated_memory_bytes();
         assert!(matches!(
             core.text_codec_method("encode", encoder, RegRange { start: 0, count: 1 }),

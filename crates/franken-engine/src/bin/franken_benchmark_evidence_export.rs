@@ -79,39 +79,177 @@ fn load_evidence_bundle(path: &Path) -> Result<EvidenceBundle, Box<dyn std::erro
     Ok(bundle)
 }
 
-/// Load benchmark gate manifest and integrate with evidence bundle.
+fn parse_parity_target(raw: &str) -> Result<ParityTarget, String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "node" | "nodejs" | "node_js" => Ok(ParityTarget::NodeJs),
+        "bun" => Ok(ParityTarget::Bun),
+        "deno" => Ok(ParityTarget::Deno),
+        "v8" | "v8_isolate" | "v8isolate" => Ok(ParityTarget::V8Isolate),
+        other => Err(format!(
+            "unsupported parity target '{other}'; expected node, bun, deno, or v8_isolate"
+        )),
+    }
+}
+
+fn compute_transcript_evidence_hash(
+    workload_id: &str,
+    target: ParityTarget,
+    franken_output: &str,
+    reference_output: &str,
+) -> ContentHash {
+    let mut preimage = Vec::new();
+    for field in [
+        workload_id.as_bytes(),
+        target.as_str().as_bytes(),
+        franken_output.as_bytes(),
+        reference_output.as_bytes(),
+    ] {
+        preimage.extend_from_slice(&(field.len() as u64).to_le_bytes());
+        preimage.extend_from_slice(field);
+    }
+    ContentHash::compute(&preimage)
+}
+
+fn parse_content_hash_hex(raw: &str) -> Result<ContentHash, String> {
+    let trimmed = raw.trim().strip_prefix("content:").unwrap_or(raw.trim());
+    let decoded =
+        hex::decode(trimmed).map_err(|e| format!("invalid evidence_hash hex '{raw}': {e}"))?;
+    let bytes: [u8; 32] = decoded.try_into().map_err(|v: Vec<u8>| {
+        format!(
+            "evidence_hash must be 32 bytes (64 hex chars), got {} bytes",
+            v.len()
+        )
+    })?;
+    Ok(ContentHash::from_bytes(bytes))
+}
+
+/// Load benchmark gate manifest and integrate verified parity verdicts with evidence bundle.
+///
+/// Fails closed if any result entry lacks differential output transcripts or explicit
+/// verified parity verdict fields (`output_equivalent`, `behavioral_differences`, and
+/// `evidence_hash`) so timing-only manifests can never fabricate `output_equivalent: true`.
 fn integrate_with_gate_manifest(
     bundle: &mut EvidenceBundle,
     gate_path: &Path,
 ) -> Result<(), String> {
-    // Load the gate manifest (uses same format as cc_2's benchmark gate binary)
     let content = fs::read_to_string(gate_path).map_err(|e| e.to_string())?;
     let gate_manifest: serde_json::Value =
         serde_json::from_str(&content).map_err(|e| e.to_string())?;
 
-    // Extract baseline results and create parity verdicts
-    if let Some(results) = gate_manifest.get("results").and_then(|r| r.as_array()) {
-        for result in results {
-            if let (Some(test_name), Some(value)) = (
-                result.get("test_name").and_then(|n| n.as_str()),
-                result.get("value").and_then(|v| v.as_f64()),
-            ) {
-                // Create parity verdict for each gate result
-                let parity = ParityVerdict {
-                    workload_id: test_name.to_string(),
-                    target: ParityTarget::NodeJs,
-                    output_equivalent: true,
-                    performance_ratio_millionths: ((value * 1.0) * 1_000_000.0) as u64,
-                    behavioral_differences: 0,
-                    difference_details: Vec::new(),
-                    evidence_hash: ContentHash::compute(test_name.as_bytes()),
-                };
+    let default_target = gate_manifest
+        .get("engine")
+        .and_then(|e| e.as_str())
+        .map(parse_parity_target)
+        .transpose()?
+        .unwrap_or(ParityTarget::NodeJs);
 
-                bundle
-                    .add_parity_verdict(parity)
-                    .map_err(|e| format!("Failed to add parity verdict: {}", e))?;
-            }
-        }
+    let results = gate_manifest
+        .get("results")
+        .and_then(|r| r.as_array())
+        .ok_or_else(|| "gate manifest missing required 'results' array".to_string())?;
+    if results.is_empty() {
+        return Err("gate manifest 'results' array must not be empty".to_string());
+    }
+
+    for (idx, result) in results.iter().enumerate() {
+        let test_name = result
+            .get("test_name")
+            .and_then(|n| n.as_str())
+            .filter(|n| !n.trim().is_empty())
+            .ok_or_else(|| format!("gate manifest result[{idx}] missing non-empty 'test_name'"))?;
+        let value = result
+            .get("value")
+            .and_then(|v| v.as_f64())
+            .filter(|v| v.is_finite() && *v >= 0.0)
+            .ok_or_else(|| {
+                format!("gate manifest result '{test_name}' missing finite non-negative 'value'")
+            })?;
+        let target = result
+            .get("target")
+            .or_else(|| result.get("engine"))
+            .and_then(|t| t.as_str())
+            .map(parse_parity_target)
+            .transpose()?
+            .unwrap_or(default_target);
+
+        let metadata = result.get("metadata");
+        let franken_output = result
+            .get("franken_output")
+            .or_else(|| metadata.and_then(|m| m.get("franken_output")))
+            .and_then(|v| v.as_str());
+        let reference_output = result
+            .get("reference_output")
+            .or_else(|| metadata.and_then(|m| m.get("reference_output")))
+            .and_then(|v| v.as_str());
+
+        let (output_equivalent, behavioral_differences, difference_details, evidence_hash) =
+            if let (Some(franken_out), Some(ref_out)) = (franken_output, reference_output) {
+                let eq = franken_out == ref_out;
+                let details = if eq {
+                    Vec::new()
+                } else {
+                    vec![format!(
+                        "differential transcript mismatch for '{test_name}' vs {target}"
+                    )]
+                };
+                let hash =
+                    compute_transcript_evidence_hash(test_name, target, franken_out, ref_out);
+                (eq, usize::from(!eq), details, hash)
+            } else if let (Some(eq), Some(diff_u64), Some(hash_str)) = (
+                result.get("output_equivalent").and_then(|v| v.as_bool()),
+                result
+                    .get("behavioral_differences")
+                    .and_then(|v| v.as_u64()),
+                result
+                    .get("evidence_hash")
+                    .or_else(|| result.get("transcript_hash"))
+                    .and_then(|v| v.as_str()),
+            ) {
+                let diffs = usize::try_from(diff_u64).map_err(|_| {
+                    format!("gate manifest result '{test_name}' behavioral_differences overflow")
+                })?;
+                if eq && diffs != 0 {
+                    return Err(format!(
+                        "gate manifest result '{test_name}' claims output_equivalent=true with behavioral_differences={diffs}"
+                    ));
+                }
+                if !eq && diffs == 0 {
+                    return Err(format!(
+                        "gate manifest result '{test_name}' claims output_equivalent=false with behavioral_differences=0"
+                    ));
+                }
+                let details = result
+                    .get("difference_details")
+                    .and_then(|d| d.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|item| item.as_str().map(str::to_string))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let hash = parse_content_hash_hex(hash_str)?;
+                (eq, diffs, details, hash)
+            } else {
+                return Err(format!(
+                    "gate manifest result '{test_name}' lacks differential parity transcript \
+                     (franken_output + reference_output) or verified parity verdict fields \
+                     (output_equivalent + behavioral_differences + evidence_hash); refusing to fabricate parity"
+                ));
+            };
+
+        let parity = ParityVerdict {
+            workload_id: test_name.to_string(),
+            target,
+            output_equivalent,
+            performance_ratio_millionths: (value * 1_000_000.0).round() as u64,
+            behavioral_differences,
+            difference_details,
+            evidence_hash,
+        };
+
+        bundle
+            .add_parity_verdict(parity)
+            .map_err(|e| format!("Failed to add parity verdict: {e}"))?;
     }
 
     Ok(())
@@ -159,7 +297,8 @@ fn main() {
         }
 
         if let Err(e) = integrate_with_gate_manifest(&mut bundle, gate_path) {
-            eprintln!("Warning: gate integration failed: {}", e);
+            eprintln!("Error integrating gate manifest: {}", e);
+            process::exit(1);
         }
     }
 

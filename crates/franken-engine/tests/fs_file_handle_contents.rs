@@ -101,8 +101,15 @@ fn cancelled_and_closed_whole_file_operations_leave_the_file_unchanged() {
         &["fs_read", "fs_write"],
     )
     .expect("cancellation and closed-handle rejections");
-    assert_eq!(output, ["AbortError ABORT_ERR stop", "EBADF", "EBADF", "EBADF"]);
-    assert!(std::fs::read(root.path().join("empty.txt")).unwrap().is_empty());
+    assert_eq!(
+        output,
+        ["AbortError ABORT_ERR stop", "EBADF", "EBADF", "EBADF"]
+    );
+    assert!(
+        std::fs::read(root.path().join("empty.txt"))
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -119,7 +126,10 @@ fn close_from_a_whole_file_option_getter_waits_for_the_write() {
     )
     .expect("a pending operation retains ownership across getters");
     assert_eq!(output, ["-1"]);
-    assert_eq!(std::fs::read(root.path().join("data.txt")).unwrap(), b"safe");
+    assert_eq!(
+        std::fs::read(root.path().join("data.txt")).unwrap(),
+        b"safe"
+    );
 }
 
 #[test]
@@ -176,7 +186,11 @@ fn file_handle_vectors_validate_all_entries_before_io() {
     )
     .expect("invalid vector inputs reject without partial I/O");
     assert_eq!(output, ["ERR_INVALID_ARG_TYPE", "ERR_INVALID_ARG_TYPE"]);
-    assert!(std::fs::read(root.path().join("empty.txt")).unwrap().is_empty());
+    assert!(
+        std::fs::read(root.path().join("empty.txt"))
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -195,7 +209,10 @@ fn a_vector_entry_getter_cannot_close_the_active_descriptor() {
     )
     .expect("vector admission pins its descriptor across getters");
     assert_eq!(output, ["4", "-1"]);
-    assert_eq!(std::fs::read(root.path().join("data.txt")).unwrap(), b"abcd");
+    assert_eq!(
+        std::fs::read(root.path().join("data.txt")).unwrap(),
+        b"abcd"
+    );
 }
 
 #[test]

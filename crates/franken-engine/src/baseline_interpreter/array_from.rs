@@ -493,10 +493,11 @@ impl InterpreterCore {
             // The iterator and destination live only in native locals here.
             // Pin them while the mapper executes so a long mapper may collect
             // without reclaiming either side of the ongoing Array.from.
-            if let Err(error) = self.with_gc_nested_request(
-                vec![iterator.clone(), Value::Object(target.id)],
-                |core| core.array_from_append(module, mapper, this_arg, target, index, element),
-            ) {
+            if let Err(error) = self
+                .with_gc_nested_request(vec![iterator.clone(), Value::Object(target.id)], |core| {
+                    core.array_from_append(module, mapper, this_arg, target, index, element)
+                })
+            {
                 return self.array_from_close_after_error(module, iterator, error);
             }
             index += 1;
@@ -627,10 +628,9 @@ impl InterpreterCore {
             // A single code point has a bounded constructor/Arc footprint.
             self.json_reserve_temporary(256)?;
             let element = Value::Str(JsString::from_code_units(&pair[..length]));
-            let outcome = self.with_gc_nested_request(
-                vec![Value::Object(target.id)],
-                |core| core.array_from_append(module, mapper, this_arg, target, index, element),
-            );
+            let outcome = self.with_gc_nested_request(vec![Value::Object(target.id)], |core| {
+                core.array_from_append(module, mapper, this_arg, target, index, element)
+            });
             self.json_release_temporary(256);
             outcome?;
             index += 1;
@@ -807,7 +807,12 @@ impl InterpreterCore {
         if let Err(error) = self.array_from_async_start(
             module,
             promise,
-            FromAsyncCall { items, mapper, this_arg, constructor },
+            FromAsyncCall {
+                items,
+                mapper,
+                this_arg,
+                constructor,
+            },
             &label,
         ) {
             let (reason, reason_label) = self.thrown_completion_value(error, &label)?;
@@ -990,10 +995,14 @@ impl InterpreterCore {
                 Vec::new(),
                 Some(label.clone()),
             )?;
-            return self.array_from_async_capture_sync(module, iterator).map(Some);
+            return self
+                .array_from_async_capture_sync(module, iterator)
+                .map(Some);
         }
         if matches!(items, Value::Iterator(_) | Value::Generator(_)) {
-            return self.array_from_async_capture_sync(module, items.clone()).map(Some);
+            return self
+                .array_from_async_capture_sync(module, items.clone())
+                .map(Some);
         }
         if let Some(object) = backing
             && self.array_from_has_explicit_iterator(object)?
@@ -1164,9 +1173,8 @@ impl InterpreterCore {
                 if !self.array_from_async_slot(holder, "__done")?.is_truthy() {
                     let iterator = self.array_from_async_slot(holder, "__iterator")?;
                     if self.array_from_async_source(holder)? == FromAsyncSource::SyncProtocol {
-                        return self.array_from_async_sync_value_rejected(
-                            module, holder, reason, label,
-                        );
+                        return self
+                            .array_from_async_sync_value_rejected(module, holder, reason, label);
                     }
                     let closed = self.close_iterator(module, iterator, IteratorCloseReason::Throw);
                     self.array_from_async_discard_close_error(closed)?;
@@ -1381,12 +1389,7 @@ impl InterpreterCore {
             .array_from_async_slot(holder, "__constructed")?
             .is_truthy()
         {
-            self.generic_set(
-                Some(module),
-                target_id,
-                &Self::generic_length_key(),
-                k,
-            )?;
+            self.generic_set(Some(module), target_id, &Self::generic_length_key(), k)?;
         } else {
             self.set_object_property(target_id, "length".to_string(), k)?;
         }

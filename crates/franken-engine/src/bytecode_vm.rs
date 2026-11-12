@@ -1018,7 +1018,9 @@ mod tests {
         assert_eq!(report.cache_stats.hits, 1);
 
         let mut vm = BytecodeVm::new("negative-cache-shape", 8, 64);
-        let report = vm.execute(&program).expect("shape transition should invalidate");
+        let report = vm
+            .execute(&program)
+            .expect("shape transition should invalidate");
         assert_eq!(report.result, Value::Int(7));
         assert_eq!(report.cache_stats.misses, 3);
     }

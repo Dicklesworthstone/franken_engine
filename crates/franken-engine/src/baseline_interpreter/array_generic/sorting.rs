@@ -93,7 +93,11 @@ impl InterpreterCore {
         // In particular, do not reject a huge sparse/proxy length before its
         // first HasProperty/Get can throw. toSorted materializes every index
         // and keeps its existing ArrayCreate/resource preflight.
-        let mut items = if in_place { Vec::new() } else { self.generic_buffer(len)? };
+        let mut items = if in_place {
+            Vec::new()
+        } else {
+            self.generic_buffer(len)?
+        };
         let mut retained = buffer_bytes::<Value>(items.capacity());
         self.json_reserve_temporary(retained)?;
         let outcome = (|| {
@@ -104,7 +108,9 @@ impl InterpreterCore {
             };
             let reads = indices.as_ref().map_or(len, |indices| indices.len() as u64);
             for step in 0..reads {
-                let index = indices.as_ref().map_or(step, |indices| u64::from(indices[step as usize]));
+                let index = indices
+                    .as_ref()
+                    .map_or(step, |indices| u64::from(indices[step as usize]));
                 self.charge_native_hole_read()?;
                 let key = Self::generic_index_key(index);
                 let present = !in_place || self.generic_has(m, object, &key)?;
@@ -146,9 +152,13 @@ impl InterpreterCore {
                 // Enumerate AFTER every write, never from the capture snapshot.
                 let from = items.len() as u64;
                 let indices = self.sparse_sort_indices(object, from, len, false, &mut retained)?;
-                let deletes = indices.as_ref().map_or(len.saturating_sub(from), |indices| indices.len() as u64);
+                let deletes = indices
+                    .as_ref()
+                    .map_or(len.saturating_sub(from), |indices| indices.len() as u64);
                 for step in 0..deletes {
-                    let index = indices.as_ref().map_or(from + step, |indices| u64::from(indices[step as usize]));
+                    let index = indices
+                        .as_ref()
+                        .map_or(from + step, |indices| u64::from(indices[step as usize]));
                     self.charge_native_hole_read()?;
                     self.reflect_admit_mutation_label(object)?;
                     self.generic_delete(m, object, &Self::generic_index_key(index))?;
@@ -179,28 +189,34 @@ impl InterpreterCore {
         if buffer.len() < buffer.capacity() {
             return Ok(());
         }
-        let minimum = buffer.len().checked_add(1).ok_or_else(|| {
-            self.memory_budget_error(u64::MAX, self.heap_object_count_u32())
-        })?;
-        let capacity = buffer.capacity().checked_mul(2).unwrap_or(minimum).max(minimum).max(8);
+        let minimum = buffer
+            .len()
+            .checked_add(1)
+            .ok_or_else(|| self.memory_budget_error(u64::MAX, self.heap_object_count_u32()))?;
+        let capacity = buffer
+            .capacity()
+            .checked_mul(2)
+            .unwrap_or(minimum)
+            .max(minimum)
+            .max(8);
         let old_bytes = buffer_bytes::<T>(buffer.capacity());
         let requested = buffer_bytes::<T>(capacity).saturating_sub(old_bytes);
-        let next = retained.checked_add(requested).ok_or_else(|| {
-            self.memory_budget_error(u64::MAX, self.heap_object_count_u32())
-        })?;
+        let next = retained
+            .checked_add(requested)
+            .ok_or_else(|| self.memory_budget_error(u64::MAX, self.heap_object_count_u32()))?;
         self.json_reserve_temporary(requested)?;
         *retained = next;
-        buffer.try_reserve_exact(capacity - buffer.len()).map_err(|_| {
-            self.memory_budget_error(u64::MAX, self.heap_object_count_u32())
-        })?;
+        buffer
+            .try_reserve_exact(capacity - buffer.len())
+            .map_err(|_| self.memory_budget_error(u64::MAX, self.heap_object_count_u32()))?;
         // The allocator may grant more capacity than requested. Admit that
         // surplus before a later getter or comparator can reenter the engine.
         let surplus = buffer_bytes::<T>(buffer.capacity())
             .saturating_sub(old_bytes.saturating_add(requested));
         if surplus != 0 {
-            let next = retained.checked_add(surplus).ok_or_else(|| {
-                self.memory_budget_error(u64::MAX, self.heap_object_count_u32())
-            })?;
+            let next = retained
+                .checked_add(surplus)
+                .ok_or_else(|| self.memory_budget_error(u64::MAX, self.heap_object_count_u32()))?;
             self.json_reserve_temporary(surplus)?;
             *retained = next;
         }
@@ -220,20 +236,21 @@ impl InterpreterCore {
         // and the adaptive path saves the smaller adjacent run. The
         // destination permutation needs no inverse buffer.
         let scratch_len = items.len() / 2;
-        let mut reserved = buffer_bytes::<usize>(items.len())
-            .saturating_add(buffer_bytes::<usize>(scratch_len));
+        let mut reserved =
+            buffer_bytes::<usize>(items.len()).saturating_add(buffer_bytes::<usize>(scratch_len));
         self.json_reserve_temporary(reserved)?;
         let mut order = Vec::new();
         let mut scratch = Vec::new();
         let outcome = (|| {
-            order.try_reserve_exact(items.len()).map_err(|_| {
-                self.memory_budget_error(u64::MAX, self.heap_object_count_u32())
-            })?;
-            scratch.try_reserve_exact(scratch_len).map_err(|_| {
-                self.memory_budget_error(u64::MAX, self.heap_object_count_u32())
-            })?;
-            let actual = buffer_bytes::<usize>(order.capacity())
-                .saturating_add(buffer_bytes::<usize>(scratch.capacity()));
+            order
+                .try_reserve_exact(items.len())
+                .map_err(|_| self.memory_budget_error(u64::MAX, self.heap_object_count_u32()))?;
+            scratch
+                .try_reserve_exact(scratch_len)
+                .map_err(|_| self.memory_budget_error(u64::MAX, self.heap_object_count_u32()))?;
+            let actual =
+                buffer_bytes::<usize>(order.capacity())
+                    .saturating_add(buffer_bytes::<usize>(scratch.capacity()));
             if actual > reserved {
                 self.json_reserve_temporary(actual - reserved)?;
                 reserved = actual;
@@ -253,7 +270,10 @@ impl InterpreterCore {
             {
                 let mut compare = |left: usize, right: usize| {
                     let ordering = self.generic_sort_compare(
-                        module, items[left].clone(), items[right].clone(), comparator,
+                        module,
+                        items[left].clone(),
+                        items[right].clone(),
+                        comparator,
                     )?;
                     self.observe_scoped_callback_result()?;
                     Ok::<_, InterpreterError>(ordering)
@@ -281,8 +301,12 @@ impl InterpreterCore {
 fn immutable_sort_primitive(value: &Value) -> bool {
     match value {
         Value::Str(text) => text.concat_parts().nodes == 0,
-        Value::Undefined | Value::Null | Value::Bool(_) | Value::Int(_)
-        | Value::Float(_) | Value::BigInt(_) => true,
+        Value::Undefined
+        | Value::Null
+        | Value::Bool(_)
+        | Value::Int(_)
+        | Value::Float(_)
+        | Value::BigInt(_) => true,
         _ => false,
     }
 }
@@ -399,9 +423,9 @@ fn stable_order<E>(
 #[cfg(test)]
 mod tests {
     use super::{
-        InterpreterConfig, InterpreterCore, InterpreterError, JsString, Label,
-        ObjectId, RuntimeCapability, Value, apply_order, immutable_sort_primitive,
-        monotone_order, stable_order,
+        InterpreterConfig, InterpreterCore, InterpreterError, JsString, Label, ObjectId,
+        RuntimeCapability, Value, apply_order, immutable_sort_primitive, monotone_order,
+        stable_order,
     };
     use std::cmp::Ordering;
 
@@ -436,22 +460,26 @@ mod tests {
         let mut seed = 0x5eeda11_u64;
         for length in 0..129 {
             for _ in 0..8 {
-                let values: Vec<_> = (0..length).map(|_| {
-                    seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
-                    (seed >> 32) % 17
-                }).collect();
+                let values: Vec<_> = (0..length)
+                    .map(|_| {
+                        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+                        (seed >> 32) % 17
+                    })
+                    .collect();
                 let mut old_trace = Vec::new();
                 let expected = allocating_reference((0..length).collect(), &mut |a, b| {
                     old_trace.push((a, b));
                     Ok::<_, ()>(values[a].cmp(&values[b]))
-                }).unwrap();
+                })
+                .unwrap();
                 let mut actual: Vec<_> = (0..length).collect();
                 let mut scratch = vec![0; length / 2];
                 let mut trace = Vec::new();
                 stable_order(&mut actual, &mut scratch, &mut |a, b| {
                     trace.push((a, b));
                     Ok::<_, ()>(values[a].cmp(&values[b]))
-                }).unwrap();
+                })
+                .unwrap();
                 assert_eq!(actual, expected, "length {length}");
                 assert_eq!(trace, old_trace, "comparison schedule at length {length}");
                 for pair in actual.windows(2) {
@@ -470,19 +498,27 @@ mod tests {
             let mut old_trace = Vec::new();
             let expected = allocating_reference((0..values.len()).collect(), &mut |a, b| {
                 old_trace.push((a, b));
-                if old_trace.len() == fail_at { Err(fail_at) }
-                else { Ok(values[a].cmp(&values[b])) }
+                if old_trace.len() == fail_at {
+                    Err(fail_at)
+                } else {
+                    Ok(values[a].cmp(&values[b]))
+                }
             });
             let mut order: Vec<_> = (0..values.len()).collect();
             let mut scratch = vec![0; values.len() / 2];
             let mut trace = Vec::new();
             let result = stable_order(&mut order, &mut scratch, &mut |a, b| {
                 trace.push((a, b));
-                if trace.len() == fail_at { Err(fail_at) }
-                else { Ok(values[a].cmp(&values[b])) }
+                if trace.len() == fail_at {
+                    Err(fail_at)
+                } else {
+                    Ok(values[a].cmp(&values[b]))
+                }
             });
             assert_eq!(result.as_ref().err(), expected.as_ref().err());
-            if let Ok(expected) = expected { assert_eq!(order, expected); }
+            if let Ok(expected) = expected {
+                assert_eq!(order, expected);
+            }
             assert_eq!(trace, old_trace);
         }
     }
@@ -497,7 +533,8 @@ mod tests {
                     old_calls += 1;
                     old_trace.push((a, b));
                     Ok::<_, ()>(((a + old_calls) % modulus).cmp(&(b % modulus)))
-                }).unwrap();
+                })
+                .unwrap();
                 let mut order: Vec<_> = (0..length).collect();
                 let mut scratch = vec![0; length / 2];
                 let mut calls = 0;
@@ -506,7 +543,8 @@ mod tests {
                     calls += 1;
                     trace.push((a, b));
                     Ok::<_, ()>(((a + calls) % modulus).cmp(&(b % modulus)))
-                }).unwrap();
+                })
+                .unwrap();
                 assert_eq!(order, expected);
                 assert_eq!(calls, old_calls);
                 assert_eq!(trace, old_trace);
@@ -550,13 +588,19 @@ mod tests {
             apply_order(&mut items, &mut remaining, &mut || {
                 steps += 1;
                 Ok::<_, ()>(())
-            }).unwrap();
-            assert_eq!(items.iter().map(|item| item.0).collect::<Vec<_>>(), order.to_vec());
+            })
+            .unwrap();
+            assert_eq!(
+                items.iter().map(|item| item.0).collect::<Vec<_>>(),
+                order.to_vec()
+            );
             assert_eq!(remaining, (0..order.len()).collect::<Vec<_>>());
             assert_eq!(steps, reference_permutation_steps(order));
             assert!(steps <= items.len() + items.len().saturating_sub(1));
         }
-        for length in 0..8 { check(&mut (0..length).collect::<Vec<_>>(), 0); }
+        for length in 0..8 {
+            check(&mut (0..length).collect::<Vec<_>>(), 0);
+        }
     }
 
     #[test]
@@ -568,10 +612,17 @@ mod tests {
             let mut steps = 0;
             let result = apply_order(&mut values, &mut remaining, &mut || {
                 steps += 1;
-                if steps == fail_at { Err(fail_at) } else { Ok(()) }
+                if steps == fail_at {
+                    Err(fail_at)
+                } else {
+                    Ok(())
+                }
             });
-            if result.is_ok() { assert_eq!(values, order); }
-            else { assert_eq!(steps, fail_at); }
+            if result.is_ok() {
+                assert_eq!(values, order);
+            } else {
+                assert_eq!(steps, fail_at);
+            }
             values.sort_unstable();
             assert_eq!(values, [0, 1, 2, 3, 4]);
         }
@@ -581,19 +632,22 @@ mod tests {
     fn merges_touch_only_the_left_half_scratch_at_power_of_two_boundaries() {
         for length in [2, 3, 4, 5, 15, 16, 17, 63, 64, 65, 255, 256, 257, 1023] {
             for pattern in 0..4 {
-                let values: Vec<_> = (0..length).map(|index| match pattern {
-                    0 => index,
-                    1 => length - index,
-                    2 => index % 3,
-                    _ => (index * 17) % 31,
-                }).collect();
+                let values: Vec<_> = (0..length)
+                    .map(|index| match pattern {
+                        0 => index,
+                        1 => length - index,
+                        2 => index % 3,
+                        _ => (index * 17) % 31,
+                    })
+                    .collect();
                 let mut order: Vec<_> = (0..length).collect();
                 let mut storage = vec![usize::MAX; length / 2 + 2];
                 let (canary, rest) = storage.split_at_mut(1);
                 let (scratch, tail) = rest.split_at_mut(length / 2);
                 stable_order(&mut order, scratch, &mut |a, b| {
                     Ok::<_, ()>(values[a].cmp(&values[b]))
-                }).unwrap();
+                })
+                .unwrap();
                 assert_eq!(canary, &[usize::MAX]);
                 assert_eq!(tail, &[usize::MAX]);
                 let mut expected: Vec<_> = (0..length).collect();
@@ -618,8 +672,11 @@ mod tests {
         let total = reference_permutation_steps(&original);
         for fail_at in 1..=total + 1 {
             let drops: Vec<_> = (0..original.len()).map(|_| Rc::new(Cell::new(0))).collect();
-            let mut items: Vec<_> = drops.iter().enumerate()
-                .map(|(index, count)| Payload(index, Rc::clone(count))).collect();
+            let mut items: Vec<_> = drops
+                .iter()
+                .enumerate()
+                .map(|(index, count)| Payload(index, Rc::clone(count)))
+                .collect();
             let mut order = original;
             let mut steps = 0;
             let result = apply_order(&mut items, &mut order, &mut || {
@@ -629,7 +686,10 @@ mod tests {
             assert_eq!(result.is_ok(), fail_at > total);
             assert!(drops.iter().all(|count| count.get() == 0));
             if result.is_ok() {
-                assert_eq!(items.iter().map(|item| item.0).collect::<Vec<_>>(), original);
+                assert_eq!(
+                    items.iter().map(|item| item.0).collect::<Vec<_>>(),
+                    original
+                );
             }
             let mut identities: Vec<_> = items.iter().map(|item| item.0).collect();
             identities.sort_unstable();
@@ -643,17 +703,22 @@ mod tests {
     fn monotone_runs_need_one_comparison_per_adjacent_pair() {
         for length in [0, 1, 2, 3, 16, 17, 255, 256, 257, 1024] {
             for pattern in 0..3 {
-                let values: Vec<_> = (0..length).map(|index| match pattern {
-                    0 => index,
-                    1 => length - index,
-                    _ => index / 3,
-                }).collect();
+                let values: Vec<_> = (0..length)
+                    .map(|index| match pattern {
+                        0 => index,
+                        1 => length - index,
+                        _ => index / 3,
+                    })
+                    .collect();
                 let mut order: Vec<_> = (0..length).collect();
                 let mut calls = 0;
-                assert!(monotone_order(&mut order, &mut |a, b| {
-                    calls += 1;
-                    Ok::<_, ()>(values[a].cmp(&values[b]))
-                }).unwrap());
+                assert!(
+                    monotone_order(&mut order, &mut |a, b| {
+                        calls += 1;
+                        Ok::<_, ()>(values[a].cmp(&values[b]))
+                    })
+                    .unwrap()
+                );
                 let mut expected: Vec<_> = (0..length).collect();
                 expected.sort_by_key(|index| values[*index]);
                 assert_eq!(order, expected);
@@ -665,18 +730,26 @@ mod tests {
     #[test]
     fn descending_ties_and_disordered_runs_keep_the_stable_fallback() {
         for values in [
-            vec![3, 2, 2, 1], vec![4, 3, 2, 2], vec![1, 1, 0],
-            vec![0, 1, 0], vec![3, 1, 2], vec![0, 1, 2, 3, 2],
+            vec![3, 2, 2, 1],
+            vec![4, 3, 2, 2],
+            vec![1, 1, 0],
+            vec![0, 1, 0],
+            vec![3, 1, 2],
+            vec![0, 1, 2, 3, 2],
         ] {
             let original: Vec<_> = (0..values.len()).collect();
             let mut order = original.clone();
-            assert!(!monotone_order(&mut order, &mut |a, b| {
-                Ok::<_, ()>(values[a].cmp(&values[b]))
-            }).unwrap());
+            assert!(
+                !monotone_order(&mut order, &mut |a, b| {
+                    Ok::<_, ()>(values[a].cmp(&values[b]))
+                })
+                .unwrap()
+            );
             assert_eq!(order, original, "failed proof must not permute indices");
             stable_order(&mut order, &mut vec![0; values.len() / 2], &mut |a, b| {
                 Ok::<_, ()>(values[a].cmp(&values[b]))
-            }).unwrap();
+            })
+            .unwrap();
             let mut expected = original;
             expected.sort_by_key(|index| values[*index]);
             assert_eq!(order, expected);
@@ -693,7 +766,9 @@ mod tests {
                     let mut calls = 0;
                     let result = monotone_order(&mut order, &mut |a, b| {
                         calls += 1;
-                        if calls == fail_at { return Err(fail_at); }
+                        if calls == fail_at {
+                            return Err(fail_at);
+                        }
                         Ok(if descending { b.cmp(&a) } else { a.cmp(&b) })
                     });
                     assert_eq!(result, Err(fail_at));
@@ -709,18 +784,29 @@ mod tests {
         use std::sync::Arc;
 
         for value in [
-            Value::Object(ObjectId(0)), Value::Function(0), Value::Closure(0),
-            Value::Iterator(0), Value::Generator(0), Value::Promise(0),
-            Value::Accessor { get: None, set: None },
-            Value::Str(JsString::from("a".repeat(2048))
-                .concat(&JsString::from("b".repeat(2048)))),
+            Value::Object(ObjectId(0)),
+            Value::Function(0),
+            Value::Closure(0),
+            Value::Iterator(0),
+            Value::Generator(0),
+            Value::Promise(0),
+            Value::Accessor {
+                get: None,
+                set: None,
+            },
+            Value::Str(JsString::from("a".repeat(2048)).concat(&JsString::from("b".repeat(2048)))),
         ] {
             assert!(!immutable_sort_primitive(&value));
         }
         for value in [
-            Value::Undefined, Value::Null, Value::Bool(true), Value::Bool(false),
-            Value::Int(i64::MIN), Value::Float(f64::NAN.into()),
-            Value::Float((-0.0).into()), Value::Float(f64::INFINITY.into()),
+            Value::Undefined,
+            Value::Null,
+            Value::Bool(true),
+            Value::Bool(false),
+            Value::Int(i64::MIN),
+            Value::Float(f64::NAN.into()),
+            Value::Float((-0.0).into()),
+            Value::Float(f64::INFINITY.into()),
             Value::BigInt(Arc::from("123456789012345678901234567890")),
             Value::Str(JsString::from("\u{1f600}\u{e000}")),
             Value::Str(JsString::from_code_units(&[0xd800])),
@@ -731,15 +817,21 @@ mod tests {
 
     fn sort_config(mut config: InterpreterConfig) -> InterpreterConfig {
         config.granted_capabilities = [
-            RuntimeCapability::VmDispatch, RuntimeCapability::HeapAllocate,
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
             RuntimeCapability::Builtin,
-        ].into_iter().collect();
+        ]
+        .into_iter()
+        .collect();
         config
     }
 
     #[test]
     fn native_default_monotone_sort_has_linear_work_and_releases_scratch() {
-        for config in [InterpreterConfig::quickjs_defaults(), InterpreterConfig::v8_defaults()] {
+        for config in [
+            InterpreterConfig::quickjs_defaults(),
+            InterpreterConfig::v8_defaults(),
+        ] {
             for descending in [false, true] {
                 let mut core = InterpreterCore::new(sort_config(config.clone()), "monotone-sort");
                 core.json_observe_label(Label::Public).unwrap();
@@ -747,9 +839,12 @@ mod tests {
                 // ordering here; this is NOT a numeric-comparator fast path.
                 let expected: Vec<_> = (1000..1257).map(Value::Int).collect();
                 let mut items = expected.clone();
-                if descending { items.reverse(); }
+                if descending {
+                    items.reverse();
+                }
                 let before = core.native_hole_reads.get();
-                core.sort_captured_values(None, &mut items, &Value::Undefined).unwrap();
+                core.sort_captured_values(None, &mut items, &Value::Undefined)
+                    .unwrap();
                 assert_eq!(items, expected);
                 let count = items.len() as u64;
                 let swaps = if descending { count / 2 } else { 0 };
@@ -757,48 +852,76 @@ mod tests {
                 // destinations and swaps all use the real shared work meter.
                 assert_eq!(core.native_hole_reads.get() - before, 3 * count - 1 + swaps);
                 assert_eq!(core.json_parse_temporary_bytes, 0);
-                assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes()
+                );
             }
         }
     }
 
     #[test]
     fn native_default_sort_preserves_equal_cross_type_keys_and_undefined_tail() {
-        for config in [InterpreterConfig::quickjs_defaults(), InterpreterConfig::v8_defaults()] {
+        for config in [
+            InterpreterConfig::quickjs_defaults(),
+            InterpreterConfig::v8_defaults(),
+        ] {
             let mut core = InterpreterCore::new(sort_config(config), "monotone-sort-ties");
             core.json_observe_label(Label::Public).unwrap();
             let mut items = vec![
-                Value::Undefined, Value::Int(3), Value::Int(2),
-                Value::Str(JsString::from("2")), Value::Int(1), Value::Int(10),
+                Value::Undefined,
+                Value::Int(3),
+                Value::Int(2),
+                Value::Str(JsString::from("2")),
+                Value::Int(1),
+                Value::Int(10),
             ];
-            core.sort_captured_values(None, &mut items, &Value::Undefined).unwrap();
-            assert_eq!(items, vec![
-                Value::Int(1), Value::Int(10), Value::Int(2),
-                Value::Str(JsString::from("2")), Value::Int(3), Value::Undefined,
-            ]);
+            core.sort_captured_values(None, &mut items, &Value::Undefined)
+                .unwrap();
+            assert_eq!(
+                items,
+                vec![
+                    Value::Int(1),
+                    Value::Int(10),
+                    Value::Int(2),
+                    Value::Str(JsString::from("2")),
+                    Value::Int(3),
+                    Value::Undefined,
+                ]
+            );
             assert_eq!(core.json_parse_temporary_bytes, 0);
-            assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
         }
     }
 
     #[test]
     fn native_probe_budget_refusal_does_not_publish_partial_sorting() {
-        for config in [InterpreterConfig::quickjs_defaults(), InterpreterConfig::v8_defaults()] {
+        for config in [
+            InterpreterConfig::quickjs_defaults(),
+            InterpreterConfig::v8_defaults(),
+        ] {
             for compared in [0, 1, 63, 255] {
-                let mut core = InterpreterCore::new(sort_config(config.clone()), "monotone-sort-budget");
+                let mut core =
+                    InterpreterCore::new(sort_config(config.clone()), "monotone-sort-budget");
                 core.json_observe_label(Label::Public).unwrap();
                 let original: Vec<_> = (1000..1257).rev().map(Value::Int).collect();
                 let mut items = original.clone();
                 let before = core.native_hole_reads.get();
-                core.config.instruction_budget = core.instructions_executed + before
-                    + items.len() as u64 + compared;
+                core.config.instruction_budget =
+                    core.instructions_executed + before + items.len() as u64 + compared;
                 assert!(matches!(
                     core.sort_captured_values(None, &mut items, &Value::Undefined),
                     Err(InterpreterError::BudgetExhausted { .. })
                 ));
                 assert_eq!(items, original);
                 assert_eq!(core.json_parse_temporary_bytes, 0);
-                assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes()
+                );
             }
         }
     }
@@ -806,16 +929,24 @@ mod tests {
     #[test]
     fn native_monotone_probe_keeps_pending_callback_provenance() {
         let mut core = InterpreterCore::new(
-            sort_config(InterpreterConfig::quickjs_defaults()), "monotone-sort-provenance",
+            sort_config(InterpreterConfig::quickjs_defaults()),
+            "monotone-sort-provenance",
         );
         core.json_observe_label(Label::Public).unwrap();
-        core.replace_pending_hostcall_result_label(Some(Label::Secret)).unwrap();
+        core.replace_pending_hostcall_result_label(Some(Label::Secret))
+            .unwrap();
         let mut items = vec![Value::Int(1), Value::Int(2), Value::Int(3)];
-        core.sort_captured_values(None, &mut items, &Value::Undefined).unwrap();
+        core.sort_captured_values(None, &mut items, &Value::Undefined)
+            .unwrap();
         assert_eq!(items, vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
-        assert_eq!(core.active_inline_callback_context_label, Some(Label::Secret));
+        assert_eq!(
+            core.active_inline_callback_context_label,
+            Some(Label::Secret)
+        );
         assert_eq!(core.json_parse_temporary_bytes, 0);
-        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
-
 }

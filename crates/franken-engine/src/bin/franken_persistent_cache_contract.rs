@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 pub use frankenengine_engine::hash_tiers;
 pub use frankenengine_engine::module_cache;
 

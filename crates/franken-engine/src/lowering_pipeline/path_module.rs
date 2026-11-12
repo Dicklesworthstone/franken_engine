@@ -85,9 +85,21 @@ const INTRINSICS: [(&str, &str, &str); 12] = [
     ),
     ("__franken_path_parse", "%PathParse", "builtin:PathParse"),
     ("__franken_path_format", "%PathFormat", "builtin:PathFormat"),
-    ("__franken_path_win32_join", "%PathWin32Join", "builtin:PathWin32Join"),
-    ("__franken_path_win32_basename", "%PathWin32Basename", "builtin:PathWin32Basename"),
-    ("__franken_path_win32_is_absolute", "%PathWin32IsAbsolute", "builtin:PathWin32IsAbsolute"),
+    (
+        "__franken_path_win32_join",
+        "%PathWin32Join",
+        "builtin:PathWin32Join",
+    ),
+    (
+        "__franken_path_win32_basename",
+        "%PathWin32Basename",
+        "builtin:PathWin32Basename",
+    ),
+    (
+        "__franken_path_win32_is_absolute",
+        "%PathWin32IsAbsolute",
+        "builtin:PathWin32IsAbsolute",
+    ),
 ];
 
 pub(super) fn intrinsic_capability(name: &str) -> Option<&'static str> {
@@ -152,7 +164,14 @@ fn is_require_call_of(expression: &Expression, specifiers: &[&str]) -> bool {
 fn is_path_require_call(expression: &Expression) -> bool {
     is_require_call_of(
         expression,
-        &["path", "node:path", "path/posix", "node:path/posix", "path/win32", "node:path/win32"],
+        &[
+            "path",
+            "node:path",
+            "path/posix",
+            "node:path/posix",
+            "path/win32",
+            "node:path/win32",
+        ],
     )
 }
 
@@ -168,7 +187,10 @@ fn is_facade_inline_use(expression: &Expression) -> bool {
 }
 
 fn is_facade_alias_use(expression: &Expression, aliases: &BTreeSet<String>) -> bool {
-    is_facade_use(expression, &|value| matches!(value, Expression::Identifier(name) if aliases.contains(name)))
+    is_facade_use(
+        expression,
+        &|value| matches!(value, Expression::Identifier(name) if aliases.contains(name)),
+    )
 }
 
 fn is_facade_use(expression: &Expression, receiver: &impl Fn(&Expression) -> bool) -> bool {
@@ -236,7 +258,13 @@ pub(super) fn rewrite_path_requires(
     lexical_names(&tree.body, &mut root);
     for statement in &tree.body {
         if let Statement::Import(import) = statement {
-            root.extend(import.clause.binding_names().into_iter().map(str::to_string));
+            root.extend(
+                import
+                    .clause
+                    .binding_names()
+                    .into_iter()
+                    .map(str::to_string),
+            );
         }
     }
     let mut rewritten = tree.clone();
@@ -285,7 +313,9 @@ fn parse_module_source() -> Result<Expression, LoweringPipelineError> {
 
 /// Rename only engine intrinsics and protect the factory's Array binding.
 fn module_source(program_names: &BTreeSet<String>) -> Result<Expression, LoweringPipelineError> {
-    struct Renamer { protect_array: bool }
+    struct Renamer {
+        protect_array: bool,
+    }
 
     impl Walk for Renamer {
         fn expression(&mut self, expression: &mut Expression) -> Outcome {
@@ -310,7 +340,10 @@ fn module_source(program_names: &BTreeSet<String>) -> Result<Expression, Lowerin
     }
 
     let mut expression = parse_module_source()?;
-    Renamer { protect_array: program_names.contains("Array") }.expression(&mut expression)?;
+    Renamer {
+        protect_array: program_names.contains("Array"),
+    }
+    .expression(&mut expression)?;
     Ok(expression)
 }
 
@@ -342,7 +375,9 @@ fn aliases_read_in_functions(
         fn expression(&mut self, expression: &mut Expression) -> Outcome {
             if self.depth == 0 && is_facade_alias_use(expression, self.aliases) {
                 if let Expression::Call { arguments, .. } = expression {
-                    for argument in arguments { self.expression(argument)?; }
+                    for argument in arguments {
+                        self.expression(argument)?;
+                    }
                 }
                 return Ok(());
             }
@@ -445,12 +480,26 @@ impl Walk for PathRewriter {
                 }
             }
             Statement::ForIn(loop_statement) if loop_statement.binding_kind.is_some() => {
-                names.extend(loop_statement.binding.binding_names().into_iter().map(str::to_string));
+                names.extend(
+                    loop_statement
+                        .binding
+                        .binding_names()
+                        .into_iter()
+                        .map(str::to_string),
+                );
             }
             Statement::ForOf(loop_statement) if loop_statement.binding_kind.is_some() => {
-                names.extend(loop_statement.binding.binding_names().into_iter().map(str::to_string));
+                names.extend(
+                    loop_statement
+                        .binding
+                        .binding_names()
+                        .into_iter()
+                        .map(str::to_string),
+                );
             }
-            Statement::With(_) => { names.insert("require".into()); }
+            Statement::With(_) => {
+                names.insert("require".into());
+            }
             _ => {}
         }
         self.scoped(names, |walker| walk_statement(walker, statement))
@@ -484,7 +533,9 @@ impl Walk for PathRewriter {
                     computed: false,
                     span: None,
                 }
-            } else { module };
+            } else {
+                module
+            };
             self.replaced += 1;
             return Ok(());
         }
@@ -531,10 +582,16 @@ mod win32_tests {
     use super::*;
 
     fn parse(source: &str, goal: ParseGoal) -> SyntaxTree {
-        CanonicalEs2020Parser.parse_with_options(
-            ParserSource { label: "path-namespace-values.js".into(), text: source.into() },
-            goal, &ParserOptions::default(),
-        ).expect("fixture parses")
+        CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource {
+                    label: "path-namespace-values.js".into(),
+                    text: source.into(),
+                },
+                goal,
+                &ParserOptions::default(),
+            )
+            .expect("fixture parses")
     }
 
     #[test]
@@ -547,10 +604,25 @@ mod win32_tests {
             "const p=require('path/posix'); const q=require('path'); p===q;",
         ] {
             let tree = parse(source, ParseGoal::Script);
-            let rewritten = rewrite_path_requires(&tree).unwrap().expect("namespace materialized");
+            let rewritten = rewrite_path_requires(&tree)
+                .unwrap()
+                .expect("namespace materialized");
             assert_eq!(rewritten.body.len(), tree.body.len() + 1, "{source}");
-            assert_eq!(rewritten.body.iter().filter(|s| is_module_declaration(s)).count(), 1);
-            assert!(!rewritten.body.iter().any(|s| PATH_REQUIRE_SEARCH.in_statement(s)), "no direct call bypass: {source}");
+            assert_eq!(
+                rewritten
+                    .body
+                    .iter()
+                    .filter(|s| is_module_declaration(s))
+                    .count(),
+                1
+            );
+            assert!(
+                !rewritten
+                    .body
+                    .iter()
+                    .any(|s| PATH_REQUIRE_SEARCH.in_statement(s)),
+                "no direct call bypass: {source}"
+            );
             assert!(rewrite_path_requires(&rewritten).unwrap().is_none());
             assert_eq!(tree, parse(source, ParseGoal::Script), "input is immutable");
         }
@@ -563,7 +635,12 @@ mod win32_tests {
             "require('path').basename('/a/b');",
             "const p=require('path'); p.win32.join('C:/', 'a');",
         ] {
-            assert!(rewrite_path_requires(&parse(source, ParseGoal::Script)).unwrap().is_none(), "{source}");
+            assert!(
+                rewrite_path_requires(&parse(source, ParseGoal::Script))
+                    .unwrap()
+                    .is_none(),
+                "{source}"
+            );
         }
     }
 
@@ -580,9 +657,17 @@ mod win32_tests {
             "const name='path/win32'; require(name);",
             "require('./path/win32');",
         ] {
-            assert!(rewrite_path_requires(&parse(source, ParseGoal::Script)).unwrap().is_none(), "{source}");
+            assert!(
+                rewrite_path_requires(&parse(source, ParseGoal::Script))
+                    .unwrap()
+                    .is_none(),
+                "{source}"
+            );
         }
-        let imported = parse("import require from './loader.mjs'; require('path/win32');", ParseGoal::Module);
+        let imported = parse(
+            "import require from './loader.mjs'; require('path/win32');",
+            ParseGoal::Module,
+        );
         assert!(rewrite_path_requires(&imported).unwrap().is_none());
     }
 
@@ -598,12 +683,29 @@ mod win32_tests {
             let tree = parse(source, ParseGoal::Module);
             let expanded = super::super::esm_core_imports::rewrite_core_module_imports(&tree)
                 .expect("Windows core imports are recognized");
-            let lowered = rewrite_path_requires(&expanded).unwrap()
+            let lowered = rewrite_path_requires(&expanded)
+                .unwrap()
                 .expect("imported values use the canonical namespace pair");
-            assert_eq!(lowered.body.iter().filter(|s| is_module_declaration(s)).count(), 1);
-            assert!(!lowered.body.iter().any(|s| PATH_REQUIRE_SEARCH.in_statement(s)));
+            assert_eq!(
+                lowered
+                    .body
+                    .iter()
+                    .filter(|s| is_module_declaration(s))
+                    .count(),
+                1
+            );
+            assert!(
+                !lowered
+                    .body
+                    .iter()
+                    .any(|s| PATH_REQUIRE_SEARCH.in_statement(s))
+            );
             assert!(rewrite_path_requires(&lowered).unwrap().is_none());
-            assert_eq!(tree, parse(source, ParseGoal::Module), "source AST is unchanged");
+            assert_eq!(
+                tree,
+                parse(source, ParseGoal::Module),
+                "source AST is unchanged"
+            );
         }
         let shadowed = parse(
             "import require from './loader.mjs'; import w from 'path/win32'; w.join('a');",
@@ -618,7 +720,10 @@ mod win32_tests {
         let protected = module_source(&BTreeSet::from(["Array".into()])).unwrap();
         assert_ne!(unprotected, protected);
         assert!(format!("{protected:?}").contains("globalThis"));
-        assert_eq!(intrinsic_capability("%PathWin32Join"), Some("builtin:PathWin32Join"));
+        assert_eq!(
+            intrinsic_capability("%PathWin32Join"),
+            Some("builtin:PathWin32Join")
+        );
         assert_eq!(intrinsic_capability("__franken_path_win32_join"), None);
     }
 }

@@ -1,0 +1,11 @@
+{
+  "git_sha": "72638eb589e11e7a0ae8c0c412e05f33e48e66b9",
+  "git_branch": "main",
+  "git_dirty": true,
+  "rust_version": "rustc 1.100.0-nightly (bba531001 2026-09-20)",
+  "target_triple": "x86_64-unknown-linux-gnu",
+  "features": [],
+  "timestamp": "2026-11-11T15:32:02Z",
+  "hostname": "hetzner2",
+  "cargo_profile": "release"
+}

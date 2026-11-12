@@ -109,7 +109,10 @@ fn dependency_graph_is_rejected_before_ambient_fallback() {
     let error = orchestrator
         .execute_resolved_entry(&package(), &resolved)
         .expect_err("dependency graph must fail closed");
-    assert!(matches!(error, OrchestratorError::ResolvedEntryRejected { .. }));
+    assert!(matches!(
+        error,
+        OrchestratorError::ResolvedEntryRejected { .. }
+    ));
     assert!(error.to_string().contains("runtime resolver injection"));
 }
 

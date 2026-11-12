@@ -373,9 +373,13 @@ fn search_releases_an_oversized_stack_instead_of_retaining_an_adversarial_peak()
     let text = "a".repeat(MAX_RETAINED_FRAMES * 2);
     let input = PreparedInput::new(&text);
     let mut run = Run::new(&regexp, &input, 1_000_000);
-    assert_eq!(run.search(0, true).unwrap(), Some(vec![
-        Some((0, text.len())), Some((text.len() - 1, text.len())),
-    ]));
+    assert_eq!(
+        run.search(0, true).unwrap(),
+        Some(vec![
+            Some((0, text.len())),
+            Some((text.len() - 1, text.len())),
+        ])
+    );
     assert_eq!(run.stack.capacity(), 0);
     assert_eq!(
         run.search(input.char_len(), true).unwrap(),
@@ -455,7 +459,10 @@ fn assertion_journal_keeps_first_old_values_and_discards_internal_choices() {
     let mut run = Run::new(&regexp, &input, 1_000_000);
     run.slots[0] = Some(17);
     let before = run.slots.clone();
-    let mut stack = vec![Frame::Alternative { pc: 7, position: 11 }];
+    let mut stack = vec![Frame::Alternative {
+        pc: 7,
+        position: 11,
+    }];
     assert_eq!(
         run.execute_inner(first_assertion_body(&regexp), 0, &mut stack, 1),
         Ok(Some(text.len()))
@@ -479,7 +486,10 @@ fn assertion_journal_keeps_first_old_values_and_discards_internal_choices() {
     assert_eq!(stack.len(), 1);
     assert!(matches!(
         stack[0],
-        Frame::Alternative { pc: 7, position: 11 }
+        Frame::Alternative {
+            pc: 7,
+            position: 11
+        }
     ));
 }
 
@@ -499,7 +509,10 @@ fn negative_assertion_rolls_back_repeated_and_nested_capture_writes() {
     assert_eq!(run.slots, before);
     assert!(run.capture_seen.iter().all(|seen| !seen));
     assert_eq!(stack.len(), 1);
-    assert!(matches!(stack[0], Frame::Alternative { pc: 3, position: 7 }));
+    assert!(matches!(
+        stack[0],
+        Frame::Alternative { pc: 3, position: 7 }
+    ));
 }
 
 #[test]

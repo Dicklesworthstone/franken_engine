@@ -2823,4 +2823,96 @@ mod tests {
         );
         assert_eq!(canonicalize_capability_tag(""), None);
     }
+
+    #[test]
+    fn lean_isomorphism_truth_table_parity() {
+        // 1. Verify exact 22-variant bijection with CapabilityAlgebraSpecification.lean (`Fin 22`).
+        let expected_order = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::GcInvoke,
+            RuntimeCapability::IrLowering,
+            RuntimeCapability::PolicyRead,
+            RuntimeCapability::PolicyWrite,
+            RuntimeCapability::EvidenceEmit,
+            RuntimeCapability::DecisionInvoke,
+            RuntimeCapability::NetworkEgress,
+            RuntimeCapability::LeaseManagement,
+            RuntimeCapability::IdempotencyDerive,
+            RuntimeCapability::ExtensionLifecycle,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::EnvRead,
+            RuntimeCapability::ProcessSpawn,
+            RuntimeCapability::FsRead,
+            RuntimeCapability::FsWrite,
+            RuntimeCapability::ModuleLoad,
+            RuntimeCapability::Console,
+            RuntimeCapability::Timer,
+            RuntimeCapability::Builtin,
+            RuntimeCapability::Declassify,
+            RuntimeCapability::RandomRead,
+        ];
+        assert_eq!(RuntimeCapability::ALL, expected_order);
+
+        let to_bitmask = |profile: &CapabilityProfile| -> u32 {
+            let mut mask = 0u32;
+            for (idx, cap) in RuntimeCapability::ALL.iter().enumerate() {
+                if profile.has(*cap) {
+                    mask |= 1u32 << idx;
+                }
+            }
+            mask
+        };
+        let full = CapabilityProfile::full();
+        let ec = CapabilityProfile::engine_core();
+        let pol = CapabilityProfile::policy();
+        let rem = CapabilityProfile::remote();
+        let co = CapabilityProfile::compute_only();
+
+        assert_eq!(to_bitmask(&full), (1u32 << 22) - 1);
+        assert_eq!(
+            to_bitmask(&ec),
+            (1 << 0) | (1 << 1) | (1 << 2) | (1 << 11) | (1 << 17) | (1 << 18) | (1 << 19)
+        );
+        assert_eq!(to_bitmask(&pol), (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6));
+        assert_eq!(to_bitmask(&rem), (1 << 7) | (1 << 8) | (1 << 9));
+        assert_eq!(to_bitmask(&co), 0);
+
+        let standard = [&full, &ec, &pol, &rem, &co];
+        for a in &standard {
+            assert_eq!(a.intersect(a), **a, "ValidProfile idempotence must hold");
+            for b in &standard {
+                let inter = a.intersect(b);
+                assert_eq!(to_bitmask(&inter), to_bitmask(a) & to_bitmask(b));
+                assert_eq!(
+                    a.subsumes(b),
+                    (to_bitmask(b) & to_bitmask(a)) == to_bitmask(b)
+                );
+            }
+        }
+
+        // Verify the explicit raw invalid struct counterexample from Lean (`<Full, empty>`).
+        let raw_invalid = CapabilityProfile {
+            kind: ProfileKind::Full,
+            capabilities: BTreeSet::new(),
+        };
+        assert_ne!(raw_invalid.intersect(&raw_invalid), raw_invalid);
+        assert_eq!(raw_invalid.intersect(&raw_invalid), co);
+
+        // 2. Verify exact 5-level IFC Label lattice & flow truth-table parity with IFCLatticeIsomorphism.lean.
+        let labels = [
+            Label::Public,
+            Label::Internal,
+            Label::Confidential,
+            Label::Secret,
+            Label::TopSecret,
+        ];
+        for (i, li) in labels.iter().enumerate() {
+            assert_eq!(li.level() as usize, i);
+            for (j, lj) in labels.iter().enumerate() {
+                assert_eq!(li.can_flow_to(lj), i <= j);
+                assert_eq!(li.join(lj), labels[i.max(j)]);
+                assert_eq!(li.meet(lj), labels[i.min(j)]);
+            }
+        }
+    }
 }

@@ -26,10 +26,19 @@ pub(super) const MODULE_BINDING: &str = "%fs_module";
 // Compose callbacks, directory iteration and copying on one filesystem object.
 // All adapters retain the same private host calls and admission boundary.
 const SOURCE: &str = concat!(
-    "(", include_str!("fs_callbacks.js"), ")(",
-    "(", include_str!("fs_recursive_readdir.js"), ")(",
-    "(", include_str!("fs_directory.js"), ")((",
-    include_str!("fs_copy.js"), ")(", include_str!("fs_module.js"), "))))",
+    "(",
+    include_str!("fs_callbacks.js"),
+    ")(",
+    "(",
+    include_str!("fs_recursive_readdir.js"),
+    ")(",
+    "(",
+    include_str!("fs_directory.js"),
+    ")((",
+    include_str!("fs_copy.js"),
+    ")(",
+    include_str!("fs_module.js"),
+    "))))",
 );
 pub(super) const SOURCE_BYTES: usize = SOURCE.len();
 // One immutable parser template shared by fs and fs/promises. Every program
@@ -150,7 +159,13 @@ pub(super) fn rewrite_fs_requires_with_runtime_sources(
     // helpers from imports named Buffer, Promise, WeakMap, and so on.
     for statement in &tree.body {
         if let Statement::Import(import) = statement {
-            names.extend(import.clause.binding_names().into_iter().map(str::to_string));
+            names.extend(
+                import
+                    .clause
+                    .binding_names()
+                    .into_iter()
+                    .map(str::to_string),
+            );
         }
     }
     let mut rewritten = tree.clone();
@@ -172,7 +187,10 @@ pub(super) fn rewrite_fs_requires_with_runtime_sources(
             kind: VariableDeclarationKind::Const,
             declarations: vec![VariableDeclarator {
                 pattern: BindingPattern::Identifier(MODULE_BINDING.to_string()),
-                initializer: Some(module_source_with_runtime_sources(&names, retain_runtime_sources)?),
+                initializer: Some(module_source_with_runtime_sources(
+                    &names,
+                    retain_runtime_sources,
+                )?),
                 span,
             }],
             span,
@@ -358,8 +376,9 @@ fn expand_call_only_aliases(tree: &mut SyntaxTree) -> Result<bool, LoweringPipel
     for (statement_index, statement) in tree.body.iter_mut().enumerate() {
         if let Statement::VariableDeclaration(declaration) = statement {
             let mut replacements = Vec::new();
-            for (index, mut declarator) in
-                std::mem::take(&mut declaration.declarations).into_iter().enumerate()
+            for (index, mut declarator) in std::mem::take(&mut declaration.declarations)
+                .into_iter()
+                .enumerate()
             {
                 if let Some(bindings) = declarations.get(&(statement_index, index)) {
                     for (name, _) in bindings {
@@ -398,11 +417,17 @@ struct CallOnlyAliases {
 impl Walk for CallOnlyAliases {
     fn statement(&mut self, statement: &mut Statement) -> Outcome {
         // Export clauses name bindings without visiting Identifier expressions.
-        if matches!(statement, Statement::Export(_) | Statement::Import(_) | Statement::With(_)) {
+        if matches!(
+            statement,
+            Statement::Export(_) | Statement::Import(_) | Statement::With(_)
+        ) {
             self.compatible = false;
         }
         if let Statement::FunctionDeclaration(function) = statement
-            && function.name.as_ref().is_some_and(|name| self.aliases.contains_key(name))
+            && function
+                .name
+                .as_ref()
+                .is_some_and(|name| self.aliases.contains_key(name))
         {
             self.compatible = false;
         }
@@ -410,12 +435,18 @@ impl Walk for CallOnlyAliases {
     }
 
     fn pattern(&mut self, pattern: &mut BindingPattern) -> Outcome {
-        if pattern.binding_names().iter().any(|name| self.aliases.contains_key(*name)) {
+        if pattern
+            .binding_names()
+            .iter()
+            .any(|name| self.aliases.contains_key(*name))
+        {
             self.compatible = false;
         }
         if let BindingPattern::ObjectPattern(properties) = pattern
-            && properties.iter().any(|property| property.computed
-                || super::super::well_formed_static_name(&property.key) == Some("constructor"))
+            && properties.iter().any(|property| {
+                property.computed
+                    || super::super::well_formed_static_name(&property.key) == Some("constructor")
+            })
         {
             self.compatible = false;
         }
@@ -423,7 +454,10 @@ impl Walk for CallOnlyAliases {
     }
 
     fn function(&mut self, function: FunctionParts<'_>) -> Outcome {
-        if function.own_name.is_some_and(|name| self.aliases.contains_key(name)) {
+        if function
+            .own_name
+            .is_some_and(|name| self.aliases.contains_key(name))
+        {
             self.compatible = false;
         }
         // A hoisted/escaping closure can run before the const initializer.
@@ -435,7 +469,11 @@ impl Walk for CallOnlyAliases {
     }
 
     fn catch_clause(&mut self, clause: &mut CatchClause) -> Outcome {
-        if clause.parameter.as_ref().is_some_and(|name| self.aliases.contains_key(name)) {
+        if clause
+            .parameter
+            .as_ref()
+            .is_some_and(|name| self.aliases.contains_key(name))
+        {
             self.compatible = false;
         }
         self.block(&mut clause.body.body)
@@ -457,7 +495,12 @@ impl Walk for CallOnlyAliases {
         // Named environment reads still traverse the lowering's IFC source
         // rules. Other process/global/module surfaces can obtain another loader
         // or a dynamic-code entry point and must retain observable module values.
-        if let Expression::Member { object, property, computed: false, .. } = expression
+        if let Expression::Member {
+            object,
+            property,
+            computed: false,
+            ..
+        } = expression
             && matches!(object.as_ref(), Expression::Identifier(name) if name == "process")
             && !self.aliases.contains_key("process")
             && super::super::well_formed_static_name(property) == Some("env")
@@ -491,7 +534,10 @@ impl Walk for CallOnlyAliases {
             **object = inline_fs_require(DirectFsModule::Sync);
             return Ok(());
         }
-        if let Expression::Call { callee, arguments, .. } = expression {
+        if let Expression::Call {
+            callee, arguments, ..
+        } = expression
+        {
             let selected = match callee.as_ref() {
                 Expression::Identifier(local) => self.aliases.get(local).and_then(|alias| {
                     alias
@@ -555,7 +601,10 @@ impl Walk for CallOnlyAliases {
             if self.aliases.contains_key(name)
                 || matches!(name.as_str(), "eval" | "Function" | "globalThis" | "global"
                     | "self" | "window" | "Reflect" | "Object" | "process" | "module" | "exports"))
-            || matches!(expression, Expression::This | Expression::SloppyThis | Expression::Raw(_))
+            || matches!(
+                expression,
+                Expression::This | Expression::SloppyThis | Expression::Raw(_)
+            )
         {
             // Argument/value escape, mutation, typeof and dynamic evaluation
             // can all make the elided module/function value observable.
@@ -564,8 +613,12 @@ impl Walk for CallOnlyAliases {
         // Reflection may recover code generation without spelling Function.
         // Numeric literal keys cannot name constructor or invoke guest key
         // coercion; still walk their receivers and any getter bodies below.
-        if let Expression::Member { property, computed, .. }
-            | Expression::OptionalMember { property, computed, .. } = expression
+        if let Expression::Member {
+            property, computed, ..
+        }
+        | Expression::OptionalMember {
+            property, computed, ..
+        } = expression
             && ((*computed && !matches!(property.as_ref(), Expression::NumericLiteral(_)))
                 || super::super::well_formed_static_name(property) == Some("constructor"))
         {
@@ -859,10 +912,8 @@ fn module_source_with_runtime_sources(
     } else {
         FILESYSTEM_SOURCE.expression()
     };
-    let mut expression = parsed.map_err(|_| {
-        LoweringPipelineError::InvariantViolation {
-            detail: "the engine's filesystem module source failed to parse",
-        }
+    let mut expression = parsed.map_err(|_| LoweringPipelineError::InvariantViolation {
+        detail: "the engine's filesystem module source failed to parse",
     })?;
     ModuleRenamer { names }.expression(&mut expression)?;
     Ok(expression)
@@ -990,8 +1041,17 @@ mod tests {
         ] {
             let tree = parse(source);
             assert!(direct_fs_calls(&tree).unwrap().is_none());
-            let rewritten = rewrite_fs_requires(&tree).unwrap().expect("directory module");
-            assert_eq!(rewritten.body.iter().filter(|s| is_module_declaration(s)).count(), 1);
+            let rewritten = rewrite_fs_requires(&tree)
+                .unwrap()
+                .expect("directory module");
+            assert_eq!(
+                rewritten
+                    .body
+                    .iter()
+                    .filter(|s| is_module_declaration(s))
+                    .count(),
+                1
+            );
             assert!(rewrite_fs_requires(&rewritten).unwrap().is_none());
         }
         for source in [
@@ -1004,7 +1064,12 @@ mod tests {
         let mut expression = module_source(&names).expect("all directory helpers protected");
         assert_eq!(
             super::super::tests::free_names(&mut expression),
-            BTreeSet::from(["globalThis".into(), "%FsRead".into(), "%FsWrite".into(), "require".into()])
+            BTreeSet::from([
+                "globalThis".into(),
+                "%FsRead".into(),
+                "%FsWrite".into(),
+                "require".into()
+            ])
         );
     }
 
@@ -1017,15 +1082,29 @@ mod tests {
         ] {
             let tree = parse(source);
             assert!(direct_fs_calls(&tree).unwrap().is_none());
-            let rewritten = rewrite_fs_requires(&tree).unwrap().expect("filesystem module");
-            assert_eq!(rewritten.body.iter().filter(|s| is_module_declaration(s)).count(), 1);
+            let rewritten = rewrite_fs_requires(&tree)
+                .unwrap()
+                .expect("filesystem module");
+            assert_eq!(
+                rewritten
+                    .body
+                    .iter()
+                    .filter(|s| is_module_declaration(s))
+                    .count(),
+                1
+            );
             assert!(rewrite_fs_requires(&rewritten).unwrap().is_none());
         }
         let names = GLOBALS.iter().map(|name| (*name).to_string()).collect();
         let mut expression = module_source(&names).expect("protected composite source");
         assert_eq!(
             super::super::tests::free_names(&mut expression),
-            BTreeSet::from(["globalThis".into(), "%FsRead".into(), "%FsWrite".into(), "require".into()])
+            BTreeSet::from([
+                "globalThis".into(),
+                "%FsRead".into(),
+                "%FsWrite".into(),
+                "require".into()
+            ])
         );
     }
 
@@ -1044,8 +1123,17 @@ mod tests {
         ] {
             let tree = parse(source);
             assert!(direct_fs_calls(&tree).unwrap().is_none(), "{source}");
-            let rewritten = rewrite_fs_requires(&tree).unwrap().expect("callback module");
-            assert_eq!(rewritten.body.iter().filter(|s| is_module_declaration(s)).count(), 1);
+            let rewritten = rewrite_fs_requires(&tree)
+                .unwrap()
+                .expect("callback module");
+            assert_eq!(
+                rewritten
+                    .body
+                    .iter()
+                    .filter(|s| is_module_declaration(s))
+                    .count(),
+                1
+            );
             assert!(rewrite_fs_requires(&rewritten).unwrap().is_none());
         }
         let tree = parse("function f(require) { return require('fs').open('x', callback); }");
@@ -1067,9 +1155,17 @@ mod tests {
         let [Statement::Expression(statement)] = fresh.body.as_slice() else {
             panic!("one filesystem module expression");
         };
-        let cached = FILESYSTEM_SOURCE.expression().expect("cached filesystem source");
-        assert_eq!(cached, statement.expression, "exact syntax and source spans");
-        assert_eq!(cached.canonical_value(), statement.expression.canonical_value());
+        let cached = FILESYSTEM_SOURCE
+            .expression()
+            .expect("cached filesystem source");
+        assert_eq!(
+            cached, statement.expression,
+            "exact syntax and source spans"
+        );
+        assert_eq!(
+            cached.canonical_value(),
+            statement.expression.canonical_value()
+        );
     }
 
     #[test]
@@ -1146,7 +1242,9 @@ mod tests {
         let expected = super::super::rewrite_util_requires(&first)
             .expect("first full rewrite")
             .expect("module loader");
-        let pristine = FILESYSTEM_SOURCE.expression().expect("cache before mixed rewrite");
+        let pristine = FILESYSTEM_SOURCE
+            .expression()
+            .expect("cache before mixed rewrite");
         let mixed = parse(
             "const Buffer = replacement; const Promise = other; \
              const fs = require('node:fs/promises'); const stream = require('stream'); \
@@ -1160,7 +1258,11 @@ mod tests {
             .expect("same module loader");
         assert_eq!(repeated, expected);
         assert_eq!(FILESYSTEM_SOURCE.expression().unwrap(), pristine);
-        assert!(super::super::rewrite_util_requires(&repeated).unwrap().is_none());
+        assert!(
+            super::super::rewrite_util_requires(&repeated)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -1276,7 +1378,12 @@ mod tests {
         struct QualifiedGlobals(BTreeSet<String>);
         impl Walk for QualifiedGlobals {
             fn expression(&mut self, expression: &mut Expression) -> Outcome {
-                if let Expression::Member { object, property, computed: false, .. } = expression
+                if let Expression::Member {
+                    object,
+                    property,
+                    computed: false,
+                    ..
+                } = expression
                     && matches!(object.as_ref(), Expression::Identifier(name) if name == "globalThis")
                     && let Expression::Identifier(name) = property.as_ref()
                 {
@@ -1293,8 +1400,13 @@ mod tests {
             .expect("rewrite")
             .expect("free filesystem require");
         let mut reads = QualifiedGlobals(BTreeSet::new());
-        reads.statement(&mut rewritten.body[0]).expect("walk module prelude");
-        assert_eq!(reads.0, GLOBALS.iter().map(|name| (*name).to_string()).collect());
+        reads
+            .statement(&mut rewritten.body[0])
+            .expect("walk module prelude");
+        assert_eq!(
+            reads.0,
+            GLOBALS.iter().map(|name| (*name).to_string()).collect()
+        );
     }
 
     #[test]
@@ -1306,7 +1418,12 @@ mod tests {
             "for (const { require } of loaders) { require('node:fs/promises'); }",
             "for (let require of require('fs')) {}",
         ] {
-            assert!(rewrite_fs_requires(&parse(source)).expect("loop scope").is_none(), "{source}");
+            assert!(
+                rewrite_fs_requires(&parse(source))
+                    .expect("loop scope")
+                    .is_none(),
+                "{source}"
+            );
         }
     }
 
@@ -1317,7 +1434,12 @@ mod tests {
             "const C = class require extends require('fs') {};",
             "const C = class require { [require('fs')]() {} };",
         ] {
-            assert!(rewrite_fs_requires(&parse(source)).expect("class scope").is_none(), "{source}");
+            assert!(
+                rewrite_fs_requires(&parse(source))
+                    .expect("class scope")
+                    .is_none(),
+                "{source}"
+            );
         }
     }
 
@@ -1328,7 +1450,12 @@ mod tests {
             "with (loader) { function f() { return require('node:fs'); } }",
             "with (outer) { with (inner) { require('fs/promises'); } }",
         ] {
-            assert!(rewrite_fs_requires(&parse(source)).expect("object scope").is_none(), "{source}");
+            assert!(
+                rewrite_fs_requires(&parse(source))
+                    .expect("object scope")
+                    .is_none(),
+                "{source}"
+            );
         }
     }
 
@@ -1355,23 +1482,43 @@ mod tests {
         ] {
             let tree = parse(source);
             assert_eq!(require_count(&tree), 2);
-            let rewritten = rewrite_fs_requires(&tree).expect("rewrite").expect("free sibling");
+            let rewritten = rewrite_fs_requires(&tree)
+                .expect("rewrite")
+                .expect("free sibling");
             assert_eq!(rewritten.body.len(), tree.body.len() + 1);
             assert!(is_module_declaration(&rewritten.body[0]));
-            assert_eq!(require_count(&rewritten), 1, "retain exactly the shadowed call: {source}");
+            assert_eq!(
+                require_count(&rewritten),
+                1,
+                "retain exactly the shadowed call: {source}"
+            );
             assert_eq!(require_count(&tree), 2, "the input AST is immutable");
-            assert!(rewrite_fs_requires(&rewritten).expect("idempotent").is_none());
+            assert!(
+                rewrite_fs_requires(&rewritten)
+                    .expect("idempotent")
+                    .is_none()
+            );
         }
     }
 
     #[test]
     fn with_object_expression_is_evaluated_before_the_new_scope() {
         let tree = parse("with (require('fs')) { require('node:fs'); }");
-        let rewritten = rewrite_fs_requires(&tree).expect("rewrite").expect("object operand");
+        let rewritten = rewrite_fs_requires(&tree)
+            .expect("rewrite")
+            .expect("object operand");
         assert_eq!(require_count(&rewritten), 1);
-        let Statement::With(statement) = &rewritten.body[1] else { panic!("with statement"); };
-        assert!(matches!(&statement.object, Expression::Identifier(name) if name == MODULE_BINDING));
-        assert!(rewrite_fs_requires(&rewritten).expect("idempotent").is_none());
+        let Statement::With(statement) = &rewritten.body[1] else {
+            panic!("with statement");
+        };
+        assert!(
+            matches!(&statement.object, Expression::Identifier(name) if name == MODULE_BINDING)
+        );
+        assert!(
+            rewrite_fs_requires(&rewritten)
+                .expect("idempotent")
+                .is_none()
+        );
     }
 
     #[test]
@@ -1379,10 +1526,28 @@ mod tests {
         for (method, arguments, discriminator, intrinsic, arity) in [
             ("readFileSync", "'input'", "read", "%FsRead", 3),
             ("writeFileSync", "'output', 'bytes'", "write", "%FsWrite", 4),
-            ("appendFileSync", "'output', 'bytes'", "append", "%FsWrite", 4),
+            (
+                "appendFileSync",
+                "'output', 'bytes'",
+                "append",
+                "%FsWrite",
+                4,
+            ),
             ("statSync", "'input'", "stat", "%FsRead", 3),
-            ("readSync", "fd, buffer, 0, 4, null", "read_fd", "%FsRead", 6),
-            ("writeSync", "fd, buffer, 0, 4, null", "write_fd", "%FsWrite", 6),
+            (
+                "readSync",
+                "fd, buffer, 0, 4, null",
+                "read_fd",
+                "%FsRead",
+                6,
+            ),
+            (
+                "writeSync",
+                "fd, buffer, 0, 4, null",
+                "write_fd",
+                "%FsWrite",
+                6,
+            ),
             ("closeSync", "fd", "close_fd", "%FsWrite", 2),
         ] {
             for specifier in ["fs", "node:fs"] {
@@ -1391,13 +1556,35 @@ mod tests {
                 let original = serde_json::to_value(&tree).unwrap();
                 let rewritten = rewrite_fs_requires(&tree).unwrap().expect("direct call");
                 assert_eq!(rewritten.body.len(), 1);
-                let Statement::Expression(statement) = &rewritten.body[0] else { panic!("call"); };
-                let Expression::Call { callee, arguments, span } = &statement.expression else { panic!("call"); };
-                assert!(matches!(callee.as_ref(), Expression::Identifier(name) if name == intrinsic));
+                let Statement::Expression(statement) = &rewritten.body[0] else {
+                    panic!("call");
+                };
+                let Expression::Call {
+                    callee,
+                    arguments,
+                    span,
+                } = &statement.expression
+                else {
+                    panic!("call");
+                };
+                assert!(
+                    matches!(callee.as_ref(), Expression::Identifier(name) if name == intrinsic)
+                );
                 assert_eq!(arguments.len(), arity);
-                assert_eq!(arguments[0], Expression::StringLiteral(format!("\0fsop:{discriminator}").into()));
-                let Statement::Expression(original_statement) = &tree.body[0] else { panic!("call"); };
-                let Expression::Call { span: original_span, .. } = &original_statement.expression else { panic!("call"); };
+                assert_eq!(
+                    arguments[0],
+                    Expression::StringLiteral(format!("\0fsop:{discriminator}").into())
+                );
+                let Statement::Expression(original_statement) = &tree.body[0] else {
+                    panic!("call");
+                };
+                let Expression::Call {
+                    span: original_span,
+                    ..
+                } = &original_statement.expression
+                else {
+                    panic!("call");
+                };
                 assert_eq!(span, original_span);
                 assert_eq!(serde_json::to_value(&tree).unwrap(), original);
                 assert!(rewrite_fs_requires(&rewritten).unwrap().is_none());
@@ -1602,17 +1789,45 @@ mod tests {
     fn direct_calls_preserve_arguments_and_discriminator_like_guest_paths() {
         let tree = parse("require('fs').readFileSync(path(), 'utf8');");
         let rewritten = direct_fs_calls(&tree).unwrap().unwrap();
-        let Statement::Expression(original) = &tree.body[0] else { panic!("call"); };
-        let Statement::Expression(lowered) = &rewritten.body[0] else { panic!("call"); };
-        let Expression::Call { arguments: before, .. } = &original.expression else { panic!("args"); };
-        let Expression::Call { arguments: after, .. } = &lowered.expression else { panic!("args"); };
-        assert_eq!(&after[1..], before.as_slice(), "each operand appears exactly once in order");
+        let Statement::Expression(original) = &tree.body[0] else {
+            panic!("call");
+        };
+        let Statement::Expression(lowered) = &rewritten.body[0] else {
+            panic!("call");
+        };
+        let Expression::Call {
+            arguments: before, ..
+        } = &original.expression
+        else {
+            panic!("args");
+        };
+        let Expression::Call {
+            arguments: after, ..
+        } = &lowered.expression
+        else {
+            panic!("args");
+        };
+        assert_eq!(
+            &after[1..],
+            before.as_slice(),
+            "each operand appears exactly once in order"
+        );
         let tree = parse("require('fs').readFileSync('\\0fsop:unlink');");
         let rewritten = direct_fs_calls(&tree).unwrap().unwrap();
-        let Statement::Expression(statement) = &rewritten.body[0] else { panic!("call"); };
-        let Expression::Call { arguments, .. } = &statement.expression else { panic!("args"); };
-        assert_eq!(arguments[0], Expression::StringLiteral("\0fsop:read".into()));
-        assert_eq!(arguments[1], Expression::StringLiteral("\0fsop:unlink".into()));
+        let Statement::Expression(statement) = &rewritten.body[0] else {
+            panic!("call");
+        };
+        let Expression::Call { arguments, .. } = &statement.expression else {
+            panic!("args");
+        };
+        assert_eq!(
+            arguments[0],
+            Expression::StringLiteral("\0fsop:read".into())
+        );
+        assert_eq!(
+            arguments[1],
+            Expression::StringLiteral("\0fsop:unlink".into())
+        );
     }
 
     #[test]
@@ -1629,7 +1844,10 @@ mod tests {
             let tree = parse(source);
             let original = tree.clone();
             assert!(direct_fs_calls(&tree).unwrap().is_none(), "{source}");
-            assert_eq!(tree, original, "a failed direct proof must not mutate source");
+            assert_eq!(
+                tree, original,
+                "a failed direct proof must not mutate source"
+            );
             let rewritten = rewrite_fs_requires(&tree).unwrap().expect("native facade");
             let Statement::Expression(before) = tree.body.last().unwrap() else {
                 panic!("original call");
@@ -1637,19 +1855,31 @@ mod tests {
             let Statement::Expression(after) = rewritten.body.last().unwrap() else {
                 panic!("facade call");
             };
-            let Expression::Call { arguments: before, .. } = &before.expression else {
+            let Expression::Call {
+                arguments: before, ..
+            } = &before.expression
+            else {
                 panic!("original operands");
             };
-            let Expression::Call { arguments: after, .. } = &after.expression else {
+            let Expression::Call {
+                arguments: after, ..
+            } = &after.expression
+            else {
                 panic!("facade operands");
             };
-            assert_eq!(after, before, "preserve every operand exactly once and in order: {source}");
+            assert_eq!(
+                after, before,
+                "preserve every operand exactly once and in order: {source}"
+            );
         }
         // Source `undefined` is a shadowable identifier. Only omitted options
         // create an UndefinedLiteral without resolving a guest binding.
         for options in ["", ", 'utf8'", ", null"] {
             let source = format!("require('fs').readFileSync(path(){options});");
-            assert!(direct_fs_calls(&parse(&source)).unwrap().is_some(), "{source}");
+            assert!(
+                direct_fs_calls(&parse(&source)).unwrap().is_some(),
+                "{source}"
+            );
         }
     }
 
@@ -1665,7 +1895,11 @@ mod tests {
                 .unwrap()
                 .expect("independent core facade");
             assert_eq!(rewritten.body.len(), tree.body.len());
-            assert_eq!(require_count(&rewritten), 0, "all filesystem loads are mediated");
+            assert_eq!(
+                require_count(&rewritten),
+                0,
+                "all filesystem loads are mediated"
+            );
             assert_eq!(rewritten.body[1], tree.body[1]);
             assert!(!rewritten.body.iter().any(is_module_declaration));
             let Statement::VariableDeclaration(declaration) = &rewritten.body[2] else {
@@ -1706,11 +1940,20 @@ mod tests {
                  const fs = require('fs'); fs.writeFileSync(path, 'public-data');"
             ));
             let original = tree.clone();
-            let rewritten = direct_fs_calls(&tree).unwrap().expect("native crypto facade");
+            let rewritten = direct_fs_calls(&tree)
+                .unwrap()
+                .expect("native crypto facade");
             assert_eq!(rewritten.body.len(), tree.body.len());
-            assert_eq!(rewritten.body[0], tree.body[0], "preserve the crypto loader");
+            assert_eq!(
+                rewritten.body[0], tree.body[0],
+                "preserve the crypto loader"
+            );
             assert_eq!(rewritten.body[1], tree.body[1], "preserve the entropy call");
-            assert_eq!(require_count(&rewritten), 0, "filesystem loads are mediated");
+            assert_eq!(
+                require_count(&rewritten),
+                0,
+                "filesystem loads are mediated"
+            );
             assert!(!rewritten.body.iter().any(is_module_declaration));
             let Statement::Expression(before) = &tree.body[3] else {
                 panic!("original write");
@@ -1718,15 +1961,28 @@ mod tests {
             let Statement::Expression(after) = &rewritten.body[3] else {
                 panic!("protected write");
             };
-            let Expression::Call { arguments: before, .. } = &before.expression else {
+            let Expression::Call {
+                arguments: before, ..
+            } = &before.expression
+            else {
                 panic!("original operands");
             };
-            let Expression::Call { callee, arguments, .. } = &after.expression else {
+            let Expression::Call {
+                callee, arguments, ..
+            } = &after.expression
+            else {
                 panic!("protected operands");
             };
             assert_eq!(callee.as_ref(), &Expression::Identifier("%FsWrite".into()));
-            assert_eq!(arguments[0], Expression::StringLiteral("\0fsop:write".into()));
-            assert_eq!(&arguments[1..3], before.as_slice(), "retain the nonfinal secret path operand");
+            assert_eq!(
+                arguments[0],
+                Expression::StringLiteral("\0fsop:write".into())
+            );
+            assert_eq!(
+                &arguments[1..3],
+                before.as_slice(),
+                "retain the nonfinal secret path operand"
+            );
             assert_eq!(tree, original, "the proof must not mutate its input");
             assert!(rewrite_fs_requires(&rewritten).unwrap().is_none());
         }
@@ -1786,7 +2042,10 @@ mod tests {
             "const C = class require { method() { require('fs').readFileSync('x'); } };",
             "with (object) { require('fs').readFileSync('x'); }",
         ] {
-            assert!(direct_fs_calls(&parse(source)).unwrap().is_none(), "{source}");
+            assert!(
+                direct_fs_calls(&parse(source)).unwrap().is_none(),
+                "{source}"
+            );
         }
     }
 
@@ -1991,26 +2250,65 @@ mod tests {
         ] {
             for specifier in ["fs", "node:fs"] {
                 for (declaration, callee) in [
-                    (format!("const io = require('{specifier}');"), format!("io.{method}")),
-                    (format!("const {{ {method} }} = require('{specifier}');"), method.to_string()),
-                    (format!("const {{ {method}: operation }} = require('{specifier}');"), "operation".to_string()),
+                    (
+                        format!("const io = require('{specifier}');"),
+                        format!("io.{method}"),
+                    ),
+                    (
+                        format!("const {{ {method} }} = require('{specifier}');"),
+                        method.to_string(),
+                    ),
+                    (
+                        format!("const {{ {method}: operation }} = require('{specifier}');"),
+                        "operation".to_string(),
+                    ),
                 ] {
                     let tree = parse(&format!("{declaration}\n{callee}({args});"));
                     let before = serde_json::to_value(&tree).unwrap();
                     let rewritten = direct_fs_calls(&tree).unwrap().expect("call-only alias");
                     assert_eq!(rewritten.body.len(), 2);
                     assert!(!is_module_declaration(&rewritten.body[0]));
-                    let Statement::Expression(statement) = &rewritten.body[1] else { panic!("call"); };
-                    let Expression::Call { callee, arguments, span } = &statement.expression else { panic!("call"); };
+                    let Statement::Expression(statement) = &rewritten.body[1] else {
+                        panic!("call");
+                    };
+                    let Expression::Call {
+                        callee,
+                        arguments,
+                        span,
+                    } = &statement.expression
+                    else {
+                        panic!("call");
+                    };
                     assert_eq!(callee.as_ref(), &Expression::Identifier(intrinsic.into()));
-                    assert_eq!(arguments[0], Expression::StringLiteral(format!("\0fsop:{discriminator}").into()));
-                    let inline = direct_fs_calls(&parse(&format!("require('fs').{method}({args});")))
-                        .unwrap().unwrap();
-                    let Statement::Expression(inline) = &inline.body[0] else { panic!("inline call"); };
-                    let Expression::Call { arguments: inline_args, .. } = &inline.expression else { panic!("inline args"); };
+                    assert_eq!(
+                        arguments[0],
+                        Expression::StringLiteral(format!("\0fsop:{discriminator}").into())
+                    );
+                    let inline =
+                        direct_fs_calls(&parse(&format!("require('fs').{method}({args});")))
+                            .unwrap()
+                            .unwrap();
+                    let Statement::Expression(inline) = &inline.body[0] else {
+                        panic!("inline call");
+                    };
+                    let Expression::Call {
+                        arguments: inline_args,
+                        ..
+                    } = &inline.expression
+                    else {
+                        panic!("inline args");
+                    };
                     assert_eq!(arguments, inline_args, "one shared emitter");
-                    let Statement::Expression(original) = &tree.body[1] else { panic!("original call"); };
-                    let Expression::Call { span: original_span, .. } = &original.expression else { panic!("original span"); };
+                    let Statement::Expression(original) = &tree.body[1] else {
+                        panic!("original call");
+                    };
+                    let Expression::Call {
+                        span: original_span,
+                        ..
+                    } = &original.expression
+                    else {
+                        panic!("original span");
+                    };
                     assert_eq!(span, original_span);
                     assert_eq!(serde_json::to_value(&tree).unwrap(), before);
                     assert!(rewrite_fs_requires(&rewritten).unwrap().is_none());
@@ -2021,16 +2319,30 @@ mod tests {
 
     #[test]
     fn alias_expansion_keeps_declarator_order_and_non_alias_effects() {
-        let tree = parse("const a = first(), { readFileSync: read, statSync: stat } = require('fs'), z = last(); read('x'); stat('x');");
-        let rewritten = direct_fs_calls(&tree).unwrap().expect("multi-declarator aliases");
-        let Statement::VariableDeclaration(before) = &tree.body[0] else { panic!("declaration"); };
-        let Statement::VariableDeclaration(after) = &rewritten.body[0] else { panic!("declaration"); };
+        let tree = parse(
+            "const a = first(), { readFileSync: read, statSync: stat } = require('fs'), z = last(); read('x'); stat('x');",
+        );
+        let rewritten = direct_fs_calls(&tree)
+            .unwrap()
+            .expect("multi-declarator aliases");
+        let Statement::VariableDeclaration(before) = &tree.body[0] else {
+            panic!("declaration");
+        };
+        let Statement::VariableDeclaration(after) = &rewritten.body[0] else {
+            panic!("declaration");
+        };
         assert_eq!(after.kind, VariableDeclarationKind::Const);
         assert_eq!(after.span, before.span);
         assert_eq!(after.declarations[0], before.declarations[0]);
         assert_eq!(after.declarations[3], before.declarations[2]);
-        assert_eq!(after.declarations[1].pattern, BindingPattern::Identifier("read".into()));
-        assert_eq!(after.declarations[2].pattern, BindingPattern::Identifier("stat".into()));
+        assert_eq!(
+            after.declarations[1].pattern,
+            BindingPattern::Identifier("read".into())
+        );
+        assert_eq!(
+            after.declarations[2].pattern,
+            BindingPattern::Identifier("stat".into())
+        );
         for declarator in &after.declarations[1..3] {
             assert_eq!(declarator.initializer, Some(Expression::UndefinedLiteral));
             assert_eq!(declarator.span, before.declarations[1].span);
@@ -2044,8 +2356,12 @@ mod tests {
             "for (let i = 0; i < 3; i += 1) { fs.readFileSync('x'); }",
             "try { fs.readFileSync('x'); } catch (error) { report(error); }",
         ] {
-            assert!(direct_fs_calls(&parse(&format!("const fs = require('fs'); {tail}")))
-                .unwrap().is_some(), "{tail}");
+            assert!(
+                direct_fs_calls(&parse(&format!("const fs = require('fs'); {tail}")))
+                    .unwrap()
+                    .is_some(),
+                "{tail}"
+            );
         }
         for source in [
             "fs.readFileSync('x'); const fs = require('fs');",
@@ -2054,7 +2370,10 @@ mod tests {
             "const fs = require('fs'); const run = () => fs.readFileSync('x'); run();",
             "const fs = require('fs'); function f(x = fs.readFileSync('x')) {} f();",
         ] {
-            assert!(direct_fs_calls(&parse(source)).unwrap().is_none(), "{source}");
+            assert!(
+                direct_fs_calls(&parse(source)).unwrap().is_none(),
+                "{source}"
+            );
         }
     }
 
@@ -2075,14 +2394,19 @@ mod tests {
             "fs.readFile('x', callback);",
             "fs.promises.readFile(handle);",
             "const other = require('node:fs'); consume(other);",
-            "eval('fs');", "globalThis.inspect();", "Reflect.get(fs, 'readFileSync');",
+            "eval('fs');",
+            "globalThis.inspect();",
+            "Reflect.get(fs, 'readFileSync');",
             "const C = (() => {}).constructor; C('return fs')();",
             "const {constructor: C} = function () {}; C('return fs')();",
             "const C = Object.getOwnPropertyDescriptor(() => {}, 'constructor');",
-            "global.eval('fs');", "module.require('fs').readFileSync = replacement;",
+            "global.eval('fs');",
+            "module.require('fs').readFileSync = replacement;",
             "process.getBuiltinModule('fs').readFileSync = replacement;",
         ] {
-            let tree = parse(&format!("const fs = require('fs'); fs.readFileSync('x'); {tail}"));
+            let tree = parse(&format!(
+                "const fs = require('fs'); fs.readFileSync('x'); {tail}"
+            ));
             let before = serde_json::to_value(&tree).unwrap();
             assert!(direct_fs_calls(&tree).unwrap().is_none(), "{tail}");
             assert_eq!(serde_json::to_value(&tree).unwrap(), before);
@@ -2100,9 +2424,15 @@ mod tests {
             "with (scope) { fs.readFileSync('x'); }",
         ] {
             let source = format!("const fs = require('fs'); fs.readFileSync('x'); {tail}");
-            assert!(direct_fs_calls(&parse(&source)).unwrap().is_none(), "{tail}");
+            assert!(
+                direct_fs_calls(&parse(&source)).unwrap().is_none(),
+                "{tail}"
+            );
         }
-        let tree = parse_goal("const fs = require('fs'); fs.readFileSync('x'); export { fs };", ParseGoal::Module);
+        let tree = parse_goal(
+            "const fs = require('fs'); fs.readFileSync('x'); export { fs };",
+            ParseGoal::Module,
+        );
         assert!(direct_fs_calls(&tree).unwrap().is_none());
     }
 
@@ -2114,7 +2444,10 @@ mod tests {
         ] {
             // This is an alias property read, not the ambient environment
             // source. Eliding the declaration would change it into a throw.
-            assert!(direct_fs_calls(&parse(source)).unwrap().is_none(), "{source}");
+            assert!(
+                direct_fs_calls(&parse(source)).unwrap().is_none(),
+                "{source}"
+            );
         }
     }
 
@@ -2132,7 +2465,10 @@ mod tests {
             "let fs = require('fs'); fs.readFileSync('x');",
             "const fs = require('fs'); fs.readFileSync('x'); const require = custom;",
         ] {
-            assert!(direct_fs_calls(&parse(source)).unwrap().is_none(), "{source}");
+            assert!(
+                direct_fs_calls(&parse(source)).unwrap().is_none(),
+                "{source}"
+            );
         }
     }
     #[test]
@@ -2145,8 +2481,17 @@ mod tests {
         ] {
             let tree = parse(source);
             assert!(direct_fs_calls(&tree).unwrap().is_none(), "{source}");
-            let rewritten = rewrite_fs_requires(&tree).unwrap().expect("directory collector");
-            assert_eq!(rewritten.body.iter().filter(|s| is_module_declaration(s)).count(), 1);
+            let rewritten = rewrite_fs_requires(&tree)
+                .unwrap()
+                .expect("directory collector");
+            assert_eq!(
+                rewritten
+                    .body
+                    .iter()
+                    .filter(|s| is_module_declaration(s))
+                    .count(),
+                1
+            );
             assert!(rewrite_fs_requires(&rewritten).unwrap().is_none());
             assert_eq!(tree, parse(source));
         }
@@ -2155,10 +2500,17 @@ mod tests {
             "require('fs').readdirSync('tree', 'utf8');",
             "const {readdirSync: scan} = require('fs'); scan('tree', null);",
         ] {
-            let rewritten = direct_fs_calls(&parse(source)).unwrap().expect("proven shallow");
-            assert!(!rewritten.body.iter().any(is_module_declaration), "{source}");
+            let rewritten = direct_fs_calls(&parse(source))
+                .unwrap()
+                .expect("proven shallow");
+            assert!(
+                !rewritten.body.iter().any(is_module_declaration),
+                "{source}"
+            );
         }
-        let tree = parse("function f(require) { return require('fs').readdirSync('tree', {recursive:true}); }");
+        let tree = parse(
+            "function f(require) { return require('fs').readdirSync('tree', {recursive:true}); }",
+        );
         assert!(rewrite_fs_requires(&tree).unwrap().is_none());
     }
 }

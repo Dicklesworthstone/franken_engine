@@ -11,12 +11,16 @@ fn reference(haystack: &[u16], needle: &[u16], from: usize, last: bool) -> Optio
     if needle.len() > haystack.len() {
         return None;
     }
-    let mut hits = haystack.windows(needle.len()).enumerate()
+    let mut hits = haystack
+        .windows(needle.len())
+        .enumerate()
         .filter(|(_, candidate)| *candidate == needle);
     if last {
-        hits.rfind(|(index, _)| *index <= from).map(|(index, _)| index)
+        hits.rfind(|(index, _)| *index <= from)
+            .map(|(index, _)| index)
     } else {
-        hits.find(|(index, _)| *index >= from).map(|(index, _)| index)
+        hits.find(|(index, _)| *index >= from)
+            .map(|(index, _)| index)
     }
 }
 
@@ -24,26 +28,48 @@ fn check(text: &JsString, needle: &JsString, positions: impl IntoIterator<Item =
     let units = text.code_units_vec();
     let pattern = needle.code_units_vec();
     for from in positions {
-        assert_eq!(text.utf16_index_of(needle, from), reference(&units, &pattern, from, false),
-            "forward from={from}, lengths={}/{}", units.len(), pattern.len());
-        assert_eq!(text.utf16_last_index_of(needle, from), reference(&units, &pattern, from, true),
-            "reverse from={from}, lengths={}/{}", units.len(), pattern.len());
+        assert_eq!(
+            text.utf16_index_of(needle, from),
+            reference(&units, &pattern, from, false),
+            "forward from={from}, lengths={}/{}",
+            units.len(),
+            pattern.len()
+        );
+        assert_eq!(
+            text.utf16_last_index_of(needle, from),
+            reference(&units, &pattern, from, true),
+            "reverse from={from}, lengths={}/{}",
+            units.len(),
+            pattern.len()
+        );
     }
 }
 
 #[test]
 fn every_offset_preserves_pairs_overlaps_empty_patterns_and_oversized_bounds() {
-    for input in ["", "ascii\0ascii", "aé中😀\u{10ffff}é😀", "😀😀a😀", "éaéaé"] {
+    for input in [
+        "",
+        "ascii\0ascii",
+        "aé中😀\u{10ffff}é😀",
+        "😀😀a😀",
+        "éaéaé",
+    ] {
         let text = JsString::from(input);
         let units = text.code_units_vec();
         for start in 0..=units.len() {
             for end in start..=units.len() {
-                check(&text, &JsString::from_code_units(&units[start..end]),
-                    (0..=units.len() + 1).chain([usize::MAX]));
+                check(
+                    &text,
+                    &JsString::from_code_units(&units[start..end]),
+                    (0..=units.len() + 1).chain([usize::MAX]),
+                );
             }
         }
-        check(&text, &JsString::from("absent-and-longer-than-the-input"),
-            [0, units.len(), usize::MAX]);
+        check(
+            &text,
+            &JsString::from("absent-and-longer-than-the-input"),
+            [0, units.len(), usize::MAX],
+        );
     }
 }
 
@@ -62,9 +88,25 @@ fn long_flat_unicode_searches_keep_tail_and_fringe_coordinates_exact() {
         assert!(text.unjoined_concat_children().is_none());
         let length = text.utf16_len();
         for needle in ["", "END", "é😀", "😀", "中中中", "ascii", "absent"] {
-            check(&text, &JsString::from(needle), [0, 1, 255, 256, length / 2,
-                length / 2 - 1, length - 257, length - 256, length - 7, length - 2, length - 1,
-                length, usize::MAX]);
+            check(
+                &text,
+                &JsString::from(needle),
+                [
+                    0,
+                    1,
+                    255,
+                    256,
+                    length / 2,
+                    length / 2 - 1,
+                    length - 257,
+                    length - 256,
+                    length - 7,
+                    length - 2,
+                    length - 1,
+                    length,
+                    usize::MAX,
+                ],
+            );
         }
     }
 }
@@ -72,14 +114,28 @@ fn long_flat_unicode_searches_keep_tail_and_fringe_coordinates_exact() {
 #[test]
 fn fixed_width_flat_searches_use_exact_middle_and_end_coordinates() {
     for padding in [0, 1, 256, 4096] {
-        let input = format!("{}語{}語{}", "中".repeat(padding),
-            "日".repeat(padding), "文".repeat(padding));
+        let input = format!(
+            "{}語{}語{}",
+            "中".repeat(padding),
+            "日".repeat(padding),
+            "文".repeat(padding)
+        );
         let text = JsString::from(input);
         assert!(text.unjoined_concat_children().is_none());
         assert_eq!(text.len(), 3 * text.utf16_len());
         for needle in ["語", "日", "語日", "日語", "中中", "文文", "", "ない"] {
-            check(&text, &JsString::from(needle), [0, padding, padding + 1,
-                2 * padding + 1, text.utf16_len(), usize::MAX]);
+            check(
+                &text,
+                &JsString::from(needle),
+                [
+                    0,
+                    padding,
+                    padding + 1,
+                    2 * padding + 1,
+                    text.utf16_len(),
+                    usize::MAX,
+                ],
+            );
         }
     }
 }
@@ -90,11 +146,23 @@ fn unjoined_and_published_rope_searches_agree_without_eager_joining() {
     let right = JsString::from(format!("😀{}end", "x".repeat(2048)));
     let text = left.concat(&right);
     assert!(text.unjoined_concat_children().is_some());
-    let positions = [0, 2047, 2048, 2049, 2050, 2051, text.utf16_len() - 4, usize::MAX];
+    let positions = [
+        0,
+        2047,
+        2048,
+        2049,
+        2050,
+        2051,
+        text.utf16_len() - 4,
+        usize::MAX,
+    ];
     for needle in ["é😀", "😀", "xend", "end", "中é"] {
         check(&text, &JsString::from(needle), positions);
     }
-    assert!(text.unjoined_concat_children().is_some(), "search must not join the input");
+    assert!(
+        text.unjoined_concat_children().is_some(),
+        "search must not join the input"
+    );
     let _ = text.as_utf8_projection();
     assert!(text.unjoined_concat_children().is_none());
     for needle in ["é😀", "😀", "xend", "end", "中é"] {
@@ -112,8 +180,11 @@ fn exact_only_haystacks_and_needles_still_distinguish_lone_surrogates() {
         let text = JsString::from_code_units(&units);
         for start in 0..=units.len() {
             for end in start..=units.len() {
-                check(&text, &JsString::from_code_units(&units[start..end]),
-                    (0..=units.len() + 1).chain([usize::MAX]));
+                check(
+                    &text,
+                    &JsString::from_code_units(&units[start..end]),
+                    (0..=units.len() + 1).chain([usize::MAX]),
+                );
             }
         }
     }

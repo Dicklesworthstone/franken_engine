@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! `franken_coverage_frontier` (`bd-fqlfw.7.1` E7.T1 + `bd-fqlfw.7.2` E7.T2 +
 //! `bd-fqlfw.7.5` E7.T5) — operator binary that clusters Test262 and
 //! differential-oracle FAILURES by spec construct into a deterministic,

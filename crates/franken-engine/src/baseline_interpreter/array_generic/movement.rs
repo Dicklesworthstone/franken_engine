@@ -6,8 +6,8 @@
 //! candidate across a getter, setter or proxy operation. Actual moves remain
 //! HasProperty/Get/Set/Delete through the existing native property machinery.
 
-use super::*;
 use super::iteration::{MIN_SPARSE_INTERVAL, NextIndex};
+use super::*;
 
 struct MoveCursor {
     source: u64,
@@ -59,7 +59,11 @@ impl MoveCursor {
         if self.mirrored {
             (self.target - self.back, self.target - self.front, true)
         } else {
-            (self.target + self.front, self.target + self.back, self.backwards)
+            (
+                self.target + self.front,
+                self.target + self.back,
+                self.backwards,
+            )
         }
     }
 
@@ -78,17 +82,27 @@ impl MoveCursor {
         if self.front == self.back {
             return Ok(None);
         }
-        let edge = if self.backwards { self.back - 1 } else { self.front };
+        let edge = if self.backwards {
+            self.back - 1
+        } else {
+            self.front
+        };
         let mut offset = edge;
         // Unlike a read-only cursor, this may omit absent Delete operations.
         // Retain ordinary writes whenever current control/callback provenance
         // is non-public, even if the receiver's own metadata is still public.
-        if self.sparse && self.probes_left == 0
-            && core.active_execution_context_label()
-            .is_none_or(|label| label == &Label::Public)
-            && core.active_inline_callback_context_label.as_ref()
+        if self.sparse
+            && self.probes_left == 0
+            && core
+                .active_execution_context_label()
                 .is_none_or(|label| label == &Label::Public)
-            && core.pending_hostcall_result_label.as_ref()
+            && core
+                .active_inline_callback_context_label
+                .as_ref()
+                .is_none_or(|label| label == &Label::Public)
+            && core
+                .pending_hostcall_result_label
+                .as_ref()
                 .is_none_or(|label| label == &Label::Public)
         {
             let (source, source_work) = core.live_array_like_index(
@@ -104,7 +118,10 @@ impl MoveCursor {
             if source != Some(edge) {
                 let (target_front, target_back, target_backwards) = self.target_range();
                 let (target, target_work) = core.live_array_like_index(
-                    object, target_front, target_back, target_backwards,
+                    object,
+                    target_front,
+                    target_back,
+                    target_backwards,
                 )?;
                 self.probes_left = source_work.saturating_add(target_work).max(1);
                 let target = self.target_offset(target, edge);

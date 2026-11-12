@@ -706,7 +706,6 @@ fn add_negative_integers() {
 }
 
 #[test]
-#[ignore = "behavior drift: asserts legacy Int(3) for 7/2, but JS-spec Number division returns Float(3.5). Whole-result coverage already lives in baseline_interpreter_integration.rs::div_integers (20/4 -> Int(5)). Body is stale; rewrite to assert Float(3.5) before re-enabling (bd-c13nb)"]
 fn div_integer_truncation() {
     let m = test_module(vec![
         Ir3Instruction::LoadInt { dst: 1, value: 7 },
@@ -719,7 +718,7 @@ fn div_integer_truncation() {
         Ir3Instruction::Halt,
     ]);
     let result = quickjs_execute(&m).unwrap();
-    assert_eq!(result.value, Value::Int(3)); // truncated
+    assert_eq!(result.value, Value::Float(Float64::new(3.5)));
 }
 
 #[test]

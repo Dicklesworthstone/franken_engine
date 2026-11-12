@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::{
     BindingPattern, ExportDeclaration, ExportKind, Expression, ExpressionStatement, ImportClause,
-    ImportDeclaration, ImportSpecifier, NamedExportClause, ParseGoal, SourceSpan, Statement, SyntaxTree,
-    VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
+    ImportDeclaration, ImportSpecifier, NamedExportClause, ParseGoal, SourceSpan, Statement,
+    SyntaxTree, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
 };
 use crate::import_attributes::ImportAttributes;
 use crate::js_string::JsString;
@@ -993,8 +993,10 @@ fn node_audit_descriptor(node: &ArenaNode) -> String {
             );
             if !import_attributes.is_empty() {
                 descriptor.push_str(" import_attributes=");
-                descriptor.push_str(&serde_json::to_string(import_attributes)
-                    .expect("import attribute audit serialization should be infallible"));
+                descriptor.push_str(
+                    &serde_json::to_string(import_attributes)
+                        .expect("import attribute audit serialization should be infallible"),
+                );
             }
             descriptor
         }

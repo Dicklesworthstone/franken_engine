@@ -61,7 +61,15 @@ fn assert_searches(haystack: &JsString, needle: &JsString, positions: &[usize]) 
 
 #[test]
 fn searches_match_exact_units_at_every_small_boundary() {
-    let pieces = ["", "a", "aba", "\u{e9}", "\u{65e5}", "\u{1f600}", "a\u{1f600}a"];
+    let pieces = [
+        "",
+        "a",
+        "aba",
+        "\u{e9}",
+        "\u{65e5}",
+        "\u{1f600}",
+        "a\u{1f600}a",
+    ];
     let needles = [
         vec![],
         vec![0x61],
@@ -170,7 +178,10 @@ fn suffix_match_does_not_visit_or_flatten_the_accumulated_prefix() {
     let value = rope(prefix.clone(), JsString::from("\u{1f600}needle"));
     let mut reverse = ReverseUnits::new(&value);
     let suffix: Vec<_> = reverse.by_ref().take(6).collect();
-    assert_eq!(suffix, "needle".bytes().rev().map(u16::from).collect::<Vec<_>>());
+    assert_eq!(
+        suffix,
+        "needle".bytes().rev().map(u16::from).collect::<Vec<_>>()
+    );
     assert_eq!(reverse.visited_nodes, 1);
     assert_eq!(reverse.decoded_scalars, 6);
     assert_eq!(
@@ -231,7 +242,11 @@ fn publication_between_reverse_reads_keeps_owned_children_valid() {
     let _ = right.as_utf8_projection();
     assert_eq!(
         actual.collect::<Vec<_>>(),
-        expected[..expected.len() - 1].iter().rev().copied().collect::<Vec<_>>()
+        expected[..expected.len() - 1]
+            .iter()
+            .rev()
+            .copied()
+            .collect::<Vec<_>>()
     );
     assert_eq!(
         ReverseUnits::new(&value).collect::<Vec<_>>(),
@@ -294,7 +309,11 @@ fn deterministic_mixed_unicode_searches_match_reference() {
             let from = next() as usize % (units.len() + 2);
             assert_searches(&value, &needle, &[0, from, start, end, usize::MAX]);
         }
-        assert_searches(&value, &JsString::from_code_units(&[0xd800]), &[0, usize::MAX]);
+        assert_searches(
+            &value,
+            &JsString::from_code_units(&[0xd800]),
+            &[0, usize::MAX],
+        );
     }
 }
 

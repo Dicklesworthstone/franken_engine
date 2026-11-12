@@ -108,7 +108,10 @@ impl RawScanner {
                 _ => Rejected,
             },
             Literal(tail, offset) => {
-                if tail.get(offset).is_some_and(|&byte| u16::from(byte) == unit) {
+                if tail
+                    .get(offset)
+                    .is_some_and(|&byte| u16::from(byte) == unit)
+                {
                     if offset + 1 == tail.len() {
                         Done
                     } else {
@@ -170,9 +173,9 @@ fn push_pending(
             .ok_or_else(error)?;
         core.json_reserve_temporary(growth)?;
         *charged += growth;
-        pending.try_reserve_exact(additional).map_err(|_| {
-            core.memory_budget_error(u64::MAX, core.heap_object_count_u32())
-        })?;
+        pending
+            .try_reserve_exact(additional)
+            .map_err(|_| core.memory_budget_error(u64::MAX, core.heap_object_count_u32()))?;
         let retained = u64::try_from(pending.capacity() - previous)
             .ok()
             .and_then(|count| count.checked_mul(slot))

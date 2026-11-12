@@ -139,7 +139,10 @@ fn iterator_exhaustion_and_adapter_state_match_a_slice() {
 #[test]
 fn metadata_does_not_change_wire_debug_or_canonical_values() {
     let ascii = JsString::from("abc");
-    assert_eq!(format!("{ascii:?}"), "JsString { utf8: \"abc\", units: None }");
+    assert_eq!(
+        format!("{ascii:?}"),
+        "JsString { utf8: \"abc\", units: None }"
+    );
     assert_eq!(serde_json::to_string(&ascii).unwrap(), "\"abc\"");
     for units in [
         vec![],

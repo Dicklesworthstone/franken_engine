@@ -115,7 +115,8 @@ mod tests {
                     calls += 1;
                     assert!(index < count.min(MAX_SPAN));
                     Ok::<_, ()>(index < prefix)
-                }).unwrap();
+                })
+                .unwrap();
                 assert_eq!(actual, prefix.min(MAX_SPAN));
                 assert!(calls <= 16, "{calls} comparisons for {count}/{prefix}");
                 if prefix == 0 && count != 0 {
@@ -133,12 +134,17 @@ mod tests {
                 winning_span(count, |index| {
                     calls += 1;
                     Ok::<_, usize>(index < prefix)
-                }).unwrap();
+                })
+                .unwrap();
                 for fail_at in 1..=calls {
                     let mut seen = 0;
                     let result = winning_span(count, |index| {
                         seen += 1;
-                        if seen == fail_at { Err(seen) } else { Ok(index < prefix) }
+                        if seen == fail_at {
+                            Err(seen)
+                        } else {
+                            Ok(index < prefix)
+                        }
                     });
                     assert_eq!(result, Err(fail_at));
                     assert_eq!(seen, fail_at);

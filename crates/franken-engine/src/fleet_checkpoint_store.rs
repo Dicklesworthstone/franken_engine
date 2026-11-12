@@ -171,6 +171,10 @@ mod backend {
     const STATE_ID: i64 = 1;
     const SCHEMA_VERSION: &str = "fleet_checkpoint_state_v1";
 
+    fn checkpoint_create_table_sql() -> String {
+        create_table::<CheckpointRow>().build()
+    }
+
     #[derive(Debug, Clone, Model)]
     #[sqlmodel(table = "fleet_checkpoint_state")]
     struct CheckpointRow {
@@ -462,7 +466,7 @@ mod backend {
                 .map_err(database_error)?;
             if count == 0 && initialize {
                 transaction
-                    .execute_raw(&create_table::<CheckpointRow>())
+                    .execute_raw(&checkpoint_create_table_sql())
                     .map_err(database_error)?;
             } else if count != 1 {
                 return Err(invalid(format!(
@@ -519,7 +523,7 @@ mod backend {
                     &schema
                         .get_named::<String>("create_sql")
                         .map_err(database_error)?,
-                ) != table_tokens(&create_table::<CheckpointRow>())
+                ) != table_tokens(&checkpoint_create_table_sql())
             {
                 return Err(invalid(
                     "checkpoint database has a noncanonical table definition",
@@ -1095,7 +1099,7 @@ mod backend {
         #[test]
         fn noncanonical_schema_and_wrong_basename_are_rejected() {
             let connection = FrankenConnection::open_memory().unwrap();
-            let malformed = create_table::<CheckpointRow>().replace(
+            let malformed = checkpoint_create_table_sql().replace(
                 "\"revision_decimal\" TEXT",
                 "\"revision_decimal\" TEXT COLLATE NOCASE",
             );
@@ -1116,7 +1120,7 @@ mod backend {
 
         #[test]
         fn schema_normalization_preserves_quoted_types_and_constraints() {
-            let generated = create_table::<CheckpointRow>();
+            let generated = checkpoint_create_table_sql();
             let canonical = table_tokens(&generated);
             assert_eq!(
                 canonical,
@@ -1147,6 +1151,17 @@ mod backend {
                 rejected,
                 "quoted type words must never pass schema admission"
             );
+        }
+
+        #[test]
+        fn checkpoint_create_table_sql_initializes_memory_store_cleanly() {
+            let ddl = checkpoint_create_table_sql();
+            assert!(ddl.starts_with("CREATE TABLE"));
+            let connection = FrankenConnection::open_memory().unwrap();
+            connection.execute_raw(&ddl).unwrap();
+            let mut store =
+                FrankensqliteFleetCheckpointStore::initialize(connection, fleet(), node()).unwrap();
+            assert!(store.load().unwrap().is_none());
         }
     }
 }

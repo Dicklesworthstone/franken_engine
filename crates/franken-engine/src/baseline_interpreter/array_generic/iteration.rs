@@ -32,7 +32,9 @@ impl LiveArrayCursor {
     pub(super) fn new(front: u64, back: u64, backwards: bool, visits_holes: bool) -> Self {
         let front = front.min(back);
         Self {
-            front, back, backwards,
+            front,
+            back,
+            backwards,
             sparse: !visits_holes && back - front >= MIN_SPARSE_INTERVAL,
             probes_left: 0,
         }
@@ -48,11 +50,14 @@ impl LiveArrayCursor {
         if self.front == self.back {
             return Ok(None);
         }
-        let edge = if self.backwards { self.back - 1 } else { self.front };
+        let edge = if self.backwards {
+            self.back - 1
+        } else {
+            self.front
+        };
         let index = if self.sparse && self.probes_left == 0 {
-            let (next, inspected) = core.live_array_like_index(
-                receiver, self.front, self.back, self.backwards,
-            )?;
+            let (next, inspected) =
+                core.live_array_like_index(receiver, self.front, self.back, self.backwards)?;
             // Sequential probes cannot skip new properties. Rechecking a
             // failed proof later is safe too, even if guest code changes the
             // receiver's shape while this debt is being consumed.
@@ -95,10 +100,17 @@ impl InterpreterCore {
         use BuiltinFunctionKind as K;
         if !matches!(
             kind,
-            K::ArrayForEach | K::ArrayMap | K::ArrayFilter | K::ArraySome
-                | K::ArrayEvery | K::ArrayReduce | K::ArrayReduceRight
-                | K::ArrayIndexOf | K::ArrayLastIndexOf
-                | K::ArraySliceMethod | K::ArrayConcat
+            K::ArrayForEach
+                | K::ArrayMap
+                | K::ArrayFilter
+                | K::ArraySome
+                | K::ArrayEvery
+                | K::ArrayReduce
+                | K::ArrayReduceRight
+                | K::ArrayIndexOf
+                | K::ArrayLastIndexOf
+                | K::ArraySliceMethod
+                | K::ArrayConcat
         ) {
             // In particular, find-family methods and includes(undefined)
             // observe holes; they must not inherit a skip-holes selection.
@@ -124,8 +136,7 @@ impl InterpreterCore {
             return false;
         };
         let count = u64::try_from(count).unwrap_or(u64::MAX);
-        u64::from(length) >= MIN_SPARSE_INTERVAL
-            && u64::from(length) > count.saturating_mul(8)
+        u64::from(length) >= MIN_SPARSE_INTERVAL && u64::from(length) > count.saturating_mul(8)
     }
 
     /// Find the nearest currently present property without executing guest
@@ -145,7 +156,9 @@ impl InterpreterCore {
         // do not rescan a large ordinary dense prefix. This selects a PROBE;
         // the caller's real Has/Get still observes proxies and provenance.
         if edge < u64::from(u32::MAX)
-            && self.heap.get(receiver.0 as usize)
+            && self
+                .heap
+                .get(receiver.0 as usize)
                 .is_some_and(|object| object.properties.get_index(edge as u32).is_some())
         {
             return Ok((NextIndex::Probe, 0));
@@ -155,14 +168,19 @@ impl InterpreterCore {
         let mut inspected = 0_u64;
         for _ in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
             let Some(id) = current else {
-                return Ok((selected.map_or(NextIndex::Exhausted, NextIndex::Present), inspected));
+                return Ok((
+                    selected.map_or(NextIndex::Exhausted, NextIndex::Present),
+                    inspected,
+                ));
             };
             self.charge_native_hole_read()?;
             inspected = inspected.saturating_add(1);
             // A proxy's HasProperty, an exotic indexed object, or provenance
             // on a skipped absence requires the ordinary, metered operations.
             if self.proxy_record(id)?.is_some()
-                || self.object_mutation_labels.get(&id)
+                || self
+                    .object_mutation_labels
+                    .get(&id)
                     .is_some_and(|label| label != &Label::Public)
             {
                 return Ok((NextIndex::Probe, inspected));
@@ -174,7 +192,8 @@ impl InterpreterCore {
             // indexed HasProperty/Get. Its own inventory and CURRENT prototype
             // chain can therefore prove holes just like an ordinary object's.
             // Typed arrays and primitive wrappers still require exotic reads.
-            if object.typed_array.is_some() || object.primitive_value.is_some()
+            if object.typed_array.is_some()
+                || object.primitive_value.is_some()
                 || !object.property_labels.exact_is_empty()
             {
                 return Ok((NextIndex::Probe, inspected));
@@ -184,7 +203,8 @@ impl InterpreterCore {
                 // walk or parse the entire property dictionary to find its next
                 // entry. The bounded holey search may return an absent boundary;
                 // Has/Get below remains authoritative for that candidate.
-                let (candidate, work) = object.properties
+                let (candidate, work) = object
+                    .properties
                     .probe_index_key(front as u32..back as u32, backwards);
                 for _ in 0..work {
                     self.charge_native_hole_read()?;
@@ -192,12 +212,18 @@ impl InterpreterCore {
                 inspected = inspected.saturating_add(work as u64);
                 if let Some(index) = candidate.map(u64::from)
                     && selected.is_none_or(|previous| {
-                        if backwards { index > previous } else { index < previous }
+                        if backwards {
+                            index > previous
+                        } else {
+                            index < previous
+                        }
                     })
                 {
                     selected = Some(index);
                 }
-                let object = self.heap.get(id.0 as usize)
+                let object = self
+                    .heap
+                    .get(id.0 as usize)
                     .expect("no guest call changed the receiver");
                 current = self.observable_prototype_link(object, id);
                 continue;
@@ -210,12 +236,20 @@ impl InterpreterCore {
                 self.charge_native_hole_read()?;
             }
             inspected = inspected.saturating_add(count as u64);
-            let object = self.heap.get(id.0 as usize).expect("no guest call changed the receiver");
+            let object = self
+                .heap
+                .get(id.0 as usize)
+                .expect("no guest call changed the receiver");
             for (key, _) in object.properties.well_formed_data_entries() {
                 if let Some(index) = array_like_index(key)
-                    && front <= index && index < back
+                    && front <= index
+                    && index < back
                     && selected.is_none_or(|previous| {
-                        if backwards { index > previous } else { index < previous }
+                        if backwards {
+                            index > previous
+                        } else {
+                            index < previous
+                        }
                     })
                 {
                     selected = Some(index);
@@ -224,11 +258,14 @@ impl InterpreterCore {
             current = self.observable_prototype_link(object, id);
         }
         // A bounded proof that cannot reach the end is NOT proof of absence.
-        Ok((if current.is_none() {
-            selected.map_or(NextIndex::Exhausted, NextIndex::Present)
-        } else {
-            NextIndex::Probe
-        }, inspected))
+        Ok((
+            if current.is_none() {
+                selected.map_or(NextIndex::Exhausted, NextIndex::Present)
+            } else {
+                NextIndex::Probe
+            },
+            inspected,
+        ))
     }
 }
 
@@ -242,7 +279,9 @@ fn array_like_index(key: &str) -> Option<u64> {
     }
     let mut index = u64::from(first - b'0');
     for &byte in rest {
-        if !byte.is_ascii_digit() { return None; }
+        if !byte.is_ascii_digit() {
+            return None;
+        }
         index = index.checked_mul(10)?.checked_add(u64::from(byte - b'0'))?;
     }
     (index < MAX_SAFE_LENGTH).then_some(index)

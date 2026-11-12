@@ -300,7 +300,57 @@ pub fn produce_lean_proof_artifact(
         ContentHash::compute(build.stderr.as_bytes()),
     );
 
-    let theorem_ids = collect_theorem_ids(&config.proof_dir)?;
+    let combined_build_log = format!("{}\n{}", build.stdout, build.stderr);
+    if combined_build_log.contains("declaration uses 'sorry'")
+        || combined_build_log.contains("sorryAx")
+    {
+        let artifact = proof_artifact(
+            config,
+            input_hashes,
+            output_hashes,
+            tool_version,
+            ProofCheckerResult::Failed {
+                reason: "lake build reported unproven sorry/sorryAx axiom usage".to_string(),
+            },
+        );
+        return Ok(LeanProofProducerReport {
+            artifact,
+            theorem_ids: Vec::new(),
+        });
+    }
+
+    let registered_libs = match collect_registered_lean_libs(&config.proof_dir)? {
+        Ok(libs) => libs,
+        Err(reason) => {
+            let artifact = proof_artifact(
+                config,
+                input_hashes,
+                output_hashes,
+                tool_version,
+                ProofCheckerResult::Unavailable { reason },
+            );
+            return Ok(LeanProofProducerReport {
+                artifact,
+                theorem_ids: Vec::new(),
+            });
+        }
+    };
+
+    if let Err(reason) = verify_no_unproven_escapes(&config.proof_dir, &registered_libs)? {
+        let artifact = proof_artifact(
+            config,
+            input_hashes,
+            output_hashes,
+            tool_version,
+            ProofCheckerResult::Failed { reason },
+        );
+        return Ok(LeanProofProducerReport {
+            artifact,
+            theorem_ids: Vec::new(),
+        });
+    }
+
+    let theorem_ids = collect_theorem_ids(&config.proof_dir, &registered_libs)?;
     if theorem_ids.is_empty() {
         let artifact = proof_artifact(
             config,
@@ -469,21 +519,212 @@ fn collect_lean_files_inner(
             if !hidden {
                 collect_lean_files_inner(&path, files)?;
             }
-        } else if !hidden && path.extension().is_some_and(|ext| ext == "lean") {
+        } else if !hidden
+            && path.file_name().and_then(|n| n.to_str()) != Some("lakefile.lean")
+            && path.extension().is_some_and(|ext| ext == "lean")
+        {
             files.push(path);
         }
     }
     Ok(())
 }
 
-fn collect_theorem_ids(proof_dir: &Path) -> Result<Vec<String>, LeanProofProducerError> {
-    let mut theorem_ids = Vec::new();
+fn collect_registered_lean_libs(
+    proof_dir: &Path,
+) -> Result<Result<Vec<String>, String>, LeanProofProducerError> {
+    let lakefile_path = proof_dir.join("lakefile.lean");
+    let lakefile_src =
+        fs::read_to_string(&lakefile_path).map_err(|source| LeanProofProducerError::Io {
+            path: lakefile_path,
+            source,
+        })?;
+    let libs = parse_lakefile_lean_libs(&strip_lean_comments(&lakefile_src));
+    if libs.is_empty() {
+        return Ok(Err(
+            "lakefile.lean declares no lean_lib targets; refusing to credit unbuilt files"
+                .to_string(),
+        ));
+    }
+
+    let mut unregistered = Vec::new();
     for path in collect_lean_files(proof_dir)? {
+        let rel = relative_proof_path(proof_dir, &path);
+        let stem = rel.strip_suffix(".lean").unwrap_or(&rel);
+        let module_root = stem.split('/').next().unwrap_or(stem);
+        if !libs.iter().any(|lib| lib == stem || lib == module_root) {
+            unregistered.push(rel);
+        }
+    }
+    if !unregistered.is_empty() {
+        return Ok(Err(format!(
+            "unregistered Lean proof module(s) not declared in lakefile.lean: {}",
+            unregistered.join(", ")
+        )));
+    }
+    Ok(Ok(libs))
+}
+
+fn parse_lakefile_lean_libs(sanitized_lakefile: &str) -> Vec<String> {
+    let mut libs = Vec::new();
+    for line in sanitized_lakefile.lines() {
+        let trimmed = line.trim_start();
+        let Some(rest) = trimmed.strip_prefix("lean_lib") else {
+            continue;
+        };
+        if !rest.starts_with(char::is_whitespace) {
+            continue;
+        }
+        let rest = rest.trim_start();
+        let name = if let Some(after_open) = rest.strip_prefix('«') {
+            after_open.split('»').next().unwrap_or_default().trim()
+        } else {
+            rest.split(|ch: char| ch.is_whitespace() || ch == '{')
+                .next()
+                .unwrap_or_default()
+                .trim()
+        };
+        if !name.is_empty() && !libs.iter().any(|existing| existing == name) {
+            libs.push(name.to_string());
+        }
+    }
+    libs
+}
+
+fn verify_no_unproven_escapes(
+    proof_dir: &Path,
+    registered_libs: &[String],
+) -> Result<Result<(), String>, LeanProofProducerError> {
+    for path in collect_lean_files(proof_dir)? {
+        let rel = relative_proof_path(proof_dir, &path);
+        let stem = rel.strip_suffix(".lean").unwrap_or(&rel);
+        let module_root = stem.split('/').next().unwrap_or(stem);
+        if !registered_libs
+            .iter()
+            .any(|lib| lib == stem || lib == module_root)
+        {
+            continue;
+        }
         let source = fs::read_to_string(&path).map_err(|source| LeanProofProducerError::Io {
             path: path.clone(),
             source,
         })?;
-        for line in source.lines() {
+        let sanitized = strip_lean_comments_and_strings(&source);
+        for token in sanitized
+            .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '\''))
+            .filter(|tok| !tok.is_empty())
+        {
+            if matches!(token, "sorry" | "sorryAx" | "admit" | "axiom") {
+                return Ok(Err(format!(
+                    "Lean proof module `{rel}` contains forbidden unproven escape `{token}`"
+                )));
+            }
+        }
+    }
+    Ok(Ok(()))
+}
+
+fn strip_lean_comments(source: &str) -> String {
+    strip_lean_comments_inner(source, false)
+}
+
+fn strip_lean_comments_and_strings(source: &str) -> String {
+    strip_lean_comments_inner(source, true)
+}
+
+fn strip_lean_comments_inner(source: &str, strip_strings: bool) -> String {
+    let chars: Vec<char> = source.chars().collect();
+    let mut out = String::with_capacity(source.len());
+    let mut i = 0usize;
+    let mut block_depth = 0usize;
+    let mut in_line_comment = false;
+    let mut in_string = false;
+
+    while i < chars.len() {
+        let c = chars[i];
+        if in_line_comment {
+            if c == '\n' {
+                in_line_comment = false;
+                out.push('\n');
+            } else {
+                out.push(' ');
+            }
+            i += 1;
+            continue;
+        }
+        if block_depth > 0 {
+            if i + 1 < chars.len() && chars[i] == '/' && chars[i + 1] == '-' {
+                block_depth += 1;
+                out.push_str("  ");
+                i += 2;
+            } else if i + 1 < chars.len() && chars[i] == '-' && chars[i + 1] == '/' {
+                block_depth -= 1;
+                out.push_str("  ");
+                i += 2;
+            } else {
+                out.push(if c == '\n' { '\n' } else { ' ' });
+                i += 1;
+            }
+            continue;
+        }
+        if in_string {
+            if c == '\\' && i + 1 < chars.len() {
+                out.push(' ');
+                out.push(if chars[i + 1] == '\n' { '\n' } else { ' ' });
+                i += 2;
+            } else if c == '"' {
+                in_string = false;
+                out.push(' ');
+                i += 1;
+            } else {
+                out.push(if c == '\n' { '\n' } else { ' ' });
+                i += 1;
+            }
+            continue;
+        }
+        if i + 1 < chars.len() && chars[i] == '-' && chars[i + 1] == '-' {
+            in_line_comment = true;
+            out.push_str("  ");
+            i += 2;
+            continue;
+        }
+        if i + 1 < chars.len() && chars[i] == '/' && chars[i + 1] == '-' {
+            block_depth = 1;
+            out.push_str("  ");
+            i += 2;
+            continue;
+        }
+        if strip_strings && c == '"' {
+            in_string = true;
+            out.push(' ');
+            i += 1;
+            continue;
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
+}
+
+fn collect_theorem_ids(
+    proof_dir: &Path,
+    registered_libs: &[String],
+) -> Result<Vec<String>, LeanProofProducerError> {
+    let mut theorem_ids = Vec::new();
+    for path in collect_lean_files(proof_dir)? {
+        let rel = relative_proof_path(proof_dir, &path);
+        let stem = rel.strip_suffix(".lean").unwrap_or(&rel);
+        let module_root = stem.split('/').next().unwrap_or(stem);
+        if !registered_libs
+            .iter()
+            .any(|lib| lib == stem || lib == module_root)
+        {
+            continue;
+        }
+        let source = fs::read_to_string(&path).map_err(|source| LeanProofProducerError::Io {
+            path: path.clone(),
+            source,
+        })?;
+        for line in strip_lean_comments(&source).lines() {
             if let Some(theorem_id) = parse_theorem_id(line) {
                 theorem_ids.push(theorem_id.to_string());
             }
@@ -657,8 +898,11 @@ mod tests {
     use super::*;
 
     fn write_fixture_proofs(dir: &Path, theorem_source: &str) {
-        fs::write(dir.join("lakefile.lean"), "import Lake\nopen Lake DSL\n")
-            .expect("write lakefile");
+        fs::write(
+            dir.join("lakefile.lean"),
+            "import Lake\nopen Lake DSL\n\npackage test\n\n@[default_target]\nlean_lib «IFCLatticeSpecification» where\n",
+        )
+        .expect("write lakefile");
         fs::write(dir.join("lean-toolchain"), "leanprover/lean4:4.7.0\n")
             .expect("write lean-toolchain");
         fs::write(dir.join("IFCLatticeSpecification.lean"), theorem_source)
@@ -834,5 +1078,233 @@ mod tests {
 
         assert_eq!(written, report.artifact);
         assert!(validate_proof_producer_artifact(&written).is_ok());
+    }
+
+    #[test]
+    fn produce_lean_proof_artifact_rejects_unregistered_lean_module_on_disk() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_fixture_proofs(temp.path(), "theorem built_ok : True := by trivial\n");
+        fs::write(
+            temp.path().join("UnbuiltShadow.lean"),
+            "theorem smuggled_theorem : False := by trivial\n",
+        )
+        .expect("write unregistered module");
+
+        let report = produce_lean_proof_artifact(&success_config(temp.path()))
+            .expect("unregistered module yields fail-closed report");
+        assert!(report.theorem_ids.is_empty());
+        assert!(matches!(
+            report.artifact.checker_result,
+            ProofCheckerResult::Unavailable { ref reason }
+                if reason.contains("UnbuiltShadow.lean")
+        ));
+        assert!(validate_proof_producer_artifact(&report.artifact).is_err());
+    }
+
+    #[test]
+    fn produce_lean_proof_artifact_rejects_sorry_and_axiom_escapes_but_ignores_comments() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_fixture_proofs(
+            temp.path(),
+            "/- comment mentioning sorry and axiom -/\ntheorem clean : True := by trivial\n",
+        );
+        let clean = produce_lean_proof_artifact(&success_config(temp.path())).expect("clean");
+        assert_eq!(clean.artifact.checker_result, ProofCheckerResult::Passed);
+
+        write_fixture_proofs(temp.path(), "theorem cheated : False := by sorry\n");
+        let cheated = produce_lean_proof_artifact(&success_config(temp.path())).expect("sorry");
+        assert!(cheated.theorem_ids.is_empty());
+        assert!(matches!(
+            cheated.artifact.checker_result,
+            ProofCheckerResult::Failed { ref reason } if reason.contains("sorry")
+        ));
+        assert!(validate_proof_producer_artifact(&cheated.artifact).is_err());
+
+        write_fixture_proofs(
+            temp.path(),
+            "axiom bogus : False\ntheorem derived : False := bogus\n",
+        );
+        let axiomatized = produce_lean_proof_artifact(&success_config(temp.path())).expect("axiom");
+        assert!(axiomatized.theorem_ids.is_empty());
+        assert!(matches!(
+            axiomatized.artifact.checker_result,
+            ProofCheckerResult::Failed { ref reason } if reason.contains("axiom")
+        ));
+        assert!(validate_proof_producer_artifact(&axiomatized.artifact).is_err());
+    }
+
+    #[test]
+    fn lean_eval_finite_truth_vectors_match_rust_ifc_and_capability_algebra() {
+        use crate::capability::{CapabilityProfile, ProfileKind, RuntimeCapability};
+        use crate::ifc_artifacts::{ClearanceClass, Label};
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+
+        let fixture_json = include_str!("../tests/fixtures/lean_finite_truth_vectors_v1.json");
+        let repo_proofs_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../proofs/lean4");
+        if repo_proofs_dir
+            .join("CapabilityAlgebraSpecification.lean")
+            .is_file()
+        {
+            let lake_candidates = [
+                PathBuf::from("lake"),
+                std::env::var_os("HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_default()
+                    .join(".elan/bin/lake"),
+            ];
+            if let Some(lake_bin) = lake_candidates.iter().find(|candidate| {
+                Command::new(candidate)
+                    .arg("--version")
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .is_ok_and(|status| status.success())
+            }) {
+                let mut path_env = std::env::var_os("PATH").unwrap_or_default();
+                if let Some(parent) = lake_bin.parent().filter(|p| !p.as_os_str().is_empty()) {
+                    let mut paths: Vec<PathBuf> = std::env::split_paths(&path_env).collect();
+                    paths.insert(0, parent.to_path_buf());
+                    if let Ok(joined) = std::env::join_paths(paths) {
+                        path_env = joined;
+                    }
+                }
+                let mut child = Command::new(lake_bin)
+                    .args(["env", "lean", "--stdin"])
+                    .current_dir(&repo_proofs_dir)
+                    .env("PATH", path_env)
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .expect("spawn lake env lean --stdin");
+                child
+                    .stdin
+                    .as_mut()
+                    .expect("lean stdin")
+                    .write_all(
+                        b"import CapabilityAlgebraSpecification\n#eval IO.println CapabilityProfile.exportFiniteTruthVectorsJson\n",
+                    )
+                    .expect("write lean eval snippet");
+                let out = child.wait_with_output().expect("wait lean eval");
+                assert!(
+                    out.status.success(),
+                    "live Lean #eval failed: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+                let live_json = String::from_utf8(out.stdout).expect("utf8 lean eval output");
+                assert_eq!(
+                    live_json.trim(),
+                    fixture_json.trim(),
+                    "live Lean #eval truth vectors drifted from committed fixture"
+                );
+            }
+        }
+
+        let vectors: serde_json::Value =
+            serde_json::from_str(fixture_json).expect("parse lean finite truth vectors");
+        assert_eq!(
+            vectors["schema_version"].as_str(),
+            Some("franken-engine.lean-finite-truth-vectors.v1")
+        );
+
+        let label_rows = vectors["ifc_label_lattice"]
+            .as_array()
+            .expect("ifc_label_lattice array");
+        assert_eq!(label_rows.len(), 25);
+        for row in label_rows {
+            let lhs: Label = serde_json::from_value(row["lhs"].clone()).expect("lhs label");
+            let rhs: Label = serde_json::from_value(row["rhs"].clone()).expect("rhs label");
+            let expected_join: Label =
+                serde_json::from_value(row["join"].clone()).expect("join label");
+            let expected_meet: Label =
+                serde_json::from_value(row["meet"].clone()).expect("meet label");
+            let expected_le = row["le"].as_bool().expect("le bool");
+            assert_eq!(lhs.join(&rhs), expected_join, "join mismatch for {row}");
+            assert_eq!(lhs.meet(&rhs), expected_meet, "meet mismatch for {row}");
+            assert_eq!(lhs <= rhs, expected_le, "le mismatch for {row}");
+            assert_eq!(
+                lhs.can_flow_to(&rhs),
+                expected_le,
+                "label can_flow_to mismatch for {row}"
+            );
+        }
+
+        let flow_rows = vectors["ifc_clearance_flows"]
+            .as_array()
+            .expect("ifc_clearance_flows array");
+        assert_eq!(flow_rows.len(), 25);
+        for row in flow_rows {
+            let label: Label = serde_json::from_value(row["label"].clone()).expect("flow label");
+            let clearance: ClearanceClass =
+                serde_json::from_value(row["clearance"].clone()).expect("clearance");
+            let expected_flow = row["can_flow"].as_bool().expect("can_flow bool");
+            assert_eq!(
+                clearance.can_receive(&label),
+                expected_flow,
+                "ClearanceClass::can_receive mismatch for {row}"
+            );
+        }
+
+        let profile_for_kind = |kind: ProfileKind| -> CapabilityProfile {
+            match kind {
+                ProfileKind::Full => CapabilityProfile::full(),
+                ProfileKind::EngineCore => CapabilityProfile::engine_core(),
+                ProfileKind::Policy => CapabilityProfile::policy(),
+                ProfileKind::Remote => CapabilityProfile::remote(),
+                ProfileKind::ComputeOnly => CapabilityProfile::compute_only(),
+            }
+        };
+
+        let cap_rows = vectors["capability_membership"]
+            .as_array()
+            .expect("capability_membership array");
+        assert_eq!(cap_rows.len(), 110);
+        for row in cap_rows {
+            let kind: ProfileKind =
+                serde_json::from_value(row["profile"].clone()).expect("profile kind");
+            let cap: RuntimeCapability =
+                serde_json::from_value(row["capability"].clone()).expect("capability");
+            let expected_granted = row["granted"].as_bool().expect("granted bool");
+            let profile = profile_for_kind(kind);
+            assert_eq!(
+                profile.has(cap),
+                expected_granted,
+                "CapabilityProfile::has mismatch for {row}"
+            );
+        }
+
+        let inter_rows = vectors["capability_intersections"]
+            .as_array()
+            .expect("capability_intersections array");
+        assert_eq!(inter_rows.len(), 25);
+        for row in inter_rows {
+            let lhs_kind: ProfileKind =
+                serde_json::from_value(row["lhs"].clone()).expect("lhs kind");
+            let rhs_kind: ProfileKind =
+                serde_json::from_value(row["rhs"].clone()).expect("rhs kind");
+            let expected_kind: ProfileKind =
+                serde_json::from_value(row["intersect_kind"].clone()).expect("intersect_kind");
+            let expected_len = row["intersect_len"].as_u64().expect("intersect_len") as usize;
+            let expected_subsumes = row["subsumes"].as_bool().expect("subsumes bool");
+            let lhs = profile_for_kind(lhs_kind);
+            let rhs = profile_for_kind(rhs_kind);
+            let inter = lhs.intersect(&rhs);
+            assert_eq!(
+                inter.kind(),
+                expected_kind,
+                "intersect kind mismatch for {row}"
+            );
+            assert_eq!(
+                inter.len(),
+                expected_len,
+                "intersect len mismatch for {row}"
+            );
+            assert_eq!(
+                lhs.subsumes(&rhs),
+                expected_subsumes,
+                "subsumes mismatch for {row}"
+            );
+        }
     }
 }

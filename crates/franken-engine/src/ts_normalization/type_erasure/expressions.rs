@@ -101,6 +101,8 @@ impl Eraser<'_> {
         let mut cursor = 0;
         let mut previous = None;
         let mut asserted = false;
+        let mut conditionals = vec![0usize];
+        let mut in_unmatched_return_type = false;
         while cursor < self.tokens.len() {
             if self.removed[cursor] {
                 cursor += 1;
@@ -111,8 +113,49 @@ impl Eraser<'_> {
             if let Some(end) = self.module_clause_end(cursor) {
                 previous = end.checked_sub(1);
                 asserted = false;
+                in_unmatched_return_type = false;
                 cursor = end;
                 continue;
+            }
+            match self.text(cursor) {
+                "(" | "[" | "{" => {
+                    if self.text(cursor) == "{" {
+                        in_unmatched_return_type = false;
+                    }
+                    conditionals.push(0);
+                }
+                ")" | "]" | "}" => {
+                    if conditionals.len() > 1 {
+                        conditionals.pop();
+                    }
+                }
+                "?" => {
+                    *conditionals.last_mut().expect("root conditional scope") += 1;
+                }
+                ":" => {
+                    let pending = conditionals.last_mut().expect("root conditional scope");
+                    if *pending > 0 {
+                        *pending -= 1;
+                    } else if previous.is_some_and(|rparen| {
+                        self.text(rparen) == ")"
+                            && self
+                                .pairs
+                                .get(rparen)
+                                .copied()
+                                .flatten()
+                                .is_none_or(|lparen| lparen == 0 || self.text(lparen - 1) != "case")
+                    }) {
+                        // An un-erased `):` outside a conditional branch is an
+                        // incomplete or effectful signature's return type, not
+                        // an instantiation expression operand.
+                        in_unmatched_return_type = true;
+                    }
+                }
+                ";" | "=" => {
+                    *conditionals.last_mut().expect("root conditional scope") = 0;
+                    in_unmatched_return_type = false;
+                }
+                _ => {}
             }
             // Type arguments do not evaluate and must not turn a method
             // reference into a detached function. Keep the entire callee,
@@ -122,6 +165,7 @@ impl Eraser<'_> {
             let optional = self.text(cursor) == "?.";
             let arguments = cursor + usize::from(optional);
             if !asserted
+                && !in_unmatched_return_type
                 && self.text(arguments) == "<"
                 && previous.is_some_and(|index| self.suffix_operand(index))
                 && !previous.is_some_and(|index| {

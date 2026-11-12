@@ -59,7 +59,7 @@ impl NetworkRevocation {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{DeadlineTcpStream, NetworkDeadline};
+    use super::super::{DeadlineTcpStream, NetworkDeadline, NetworkEgressPolicy};
     use super::*;
     use crate::host_io::{
         HostIoCapability, HostIoError, HostIoProvider, HostIoRequest, HostIoResponse,
@@ -75,6 +75,7 @@ mod tests {
             end: Instant::now() + Duration::from_secs(10),
             revocation: Some(signal.clone()),
             control: None,
+            egress_policy: NetworkEgressPolicy::Unrestricted,
         }
     }
 

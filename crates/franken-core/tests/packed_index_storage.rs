@@ -140,7 +140,10 @@ fn invalid_dense_moves_are_transactional_even_with_sparse_keys() {
     let before = map.clone();
     assert_eq!(map.shift_dense_index_values(2), None);
     assert_eq!(map.unshift_dense_index_values(2, vec![4]), Err(vec![4]));
-    assert_eq!(map.splice_dense_index_values(2, 0, 1, vec![4]), Err(vec![4]));
+    assert_eq!(
+        map.splice_dense_index_values(2, 0, 1, vec![4]),
+        Err(vec![4])
+    );
     assert_eq!(map, before);
     let mut map = dense(&[10, 20, 30]);
     let before = map.clone();
@@ -148,6 +151,9 @@ fn invalid_dense_moves_are_transactional_even_with_sparse_keys() {
         map.splice_dense_index_values(3, u32::MAX, 1, vec![4]),
         Err(vec![4])
     );
-    assert_eq!(map.splice_dense_index_values(3, 2, 2, vec![4]), Err(vec![4]));
+    assert_eq!(
+        map.splice_dense_index_values(3, 2, 2, vec![4]),
+        Err(vec![4])
+    );
     assert_eq!(map, before);
 }

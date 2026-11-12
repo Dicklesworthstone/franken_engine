@@ -365,7 +365,7 @@ impl InterpreterCore {
         outcome
     }
 
-    fn conversion_observe_hooks(&mut self) -> Result<(), InterpreterError> {
+    pub(super) fn conversion_observe_hooks(&mut self) -> Result<(), InterpreterError> {
         let label = self.json_parse_context_label()?;
         self.json_observe_label(label)
     }

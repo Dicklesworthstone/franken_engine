@@ -350,8 +350,9 @@ impl InterpreterCore {
             // rejected text. Valid primitives never allocate an input-sized
             // UTF-16 buffer or a decoded value merely to discard it.
             let units = text.code_units_vec();
-            let padded =
-                |unit: Option<&u16>| unit.is_none_or(|unit| matches!(unit, 0x09 | 0x0A | 0x0D | 0x20));
+            let padded = |unit: Option<&u16>| {
+                unit.is_none_or(|unit| matches!(unit, 0x09 | 0x0A | 0x0D | 0x20))
+            };
             if padded(units.first())
                 || padded(units.last())
                 || matches!(units.first(), Some(0x7B | 0x5B))
@@ -1039,16 +1040,12 @@ mod tests {
         };
         for name in ["empty", "items"] {
             assert_eq!(core.own_property_label(root, name), Label::Secret);
-            let Some(Value::Object(child)) = core.heap[root.0 as usize].properties.get(name)
-            else {
+            let Some(Value::Object(child)) = core.heap[root.0 as usize].properties.get(name) else {
                 panic!("nested container expected");
             };
             assert_eq!(core.object_mutation_labels.get(child), Some(&Label::Secret));
         }
-        assert_eq!(
-            core.object_mutation_labels.get(&root),
-            Some(&Label::Secret)
-        );
+        assert_eq!(core.object_mutation_labels.get(&root), Some(&Label::Secret));
         assert!(matches!(
             core.json_parse_module_source(r#"{"items":[1]} invalid"#),
             Err(InterpreterError::UncaughtException { .. })
@@ -1059,7 +1056,10 @@ mod tests {
                 .keys()
                 .all(|id| (id.0 as usize) < core.heap.len())
         );
-        assert_eq!(core.active_inline_callback_context_label, Some(Label::Secret));
+        assert_eq!(
+            core.active_inline_callback_context_label,
+            Some(Label::Secret)
+        );
         assert_eq!(core.json_parse_temporary_bytes, 0);
         assert_eq!(
             core.estimated_memory_bytes(),
@@ -1165,7 +1165,13 @@ mod tests {
                 Some(JsString::from(index.to_string()))
             );
         }
-        assert!(record.root.entries.iter().all(|entry| entry.record.is_none()));
+        assert!(
+            record
+                .root
+                .entries
+                .iter()
+                .all(|entry| entry.record.is_none())
+        );
         drop(record);
         core.json_release_temporary(charged);
         assert_eq!(core.json_parse_temporary_bytes, 0);
@@ -1240,7 +1246,10 @@ mod tests {
         assert_eq!(pos, 6);
         assert_eq!(record.root.source, Some(0..6));
         assert_eq!(
-            record.root.source_units(&units).map(JsString::from_code_units),
+            record
+                .root
+                .source_units(&units)
+                .map(JsString::from_code_units),
             Some(text)
         );
         drop(record);

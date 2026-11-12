@@ -1314,7 +1314,6 @@ fn writable_state_reflection_is_authoritative_bd_fw7zd_2() {
 }
 
 #[test]
-#[ignore = "bd-8nrud: process.nextTick prerequisite not implemented yet"]
 fn writable_cork_next_tick_prerequisite() {
     assert_cases(&[EvalCase {
         ids: &["tc::stream::0013"],

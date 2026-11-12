@@ -12,28 +12,41 @@ use frankenengine_engine::runtime_config::RuntimeConfig;
 
 fn run(source: &str, lane: LaneChoice) -> Result<Vec<String>, String> {
     let mut orchestrator = ExecutionOrchestrator::try_new_lab_with_runtime_config(
-        OrchestratorConfig { force_lane: Some(lane), ..OrchestratorConfig::default() },
+        OrchestratorConfig {
+            force_lane: Some(lane),
+            ..OrchestratorConfig::default()
+        },
         RuntimeConfig::default(),
-    ).expect("ordinary runtime budgets");
+    )
+    .expect("ordinary runtime budgets");
     let package = ExtensionPackage {
         extension_id: "sparse-array-sort".into(),
         source: source.into(),
         source_file: None,
         module_root: None,
         capabilities: ["vm_dispatch", "heap_allocate", "builtin", "console"]
-            .into_iter().map(str::to_string).collect(),
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
         version: "1.0.0".into(),
         metadata: BTreeMap::new(),
     };
-    let result = orchestrator.execute(&package).map_err(|error| format!("{error:?}"))?;
-    Ok(result.console_output.into_iter().map(|entry| entry.message).collect())
+    let result = orchestrator
+        .execute(&package)
+        .map_err(|error| format!("{error:?}"))?;
+    Ok(result
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect())
 }
 
 #[test]
 fn sort_allocates_for_captured_values_after_observable_reads() {
     let source = include_str!("fixtures/array_mutation/sparse_sort.js");
     let expected: Vec<_> = include_str!("fixtures/array_mutation/sparse_sort.expected")
-        .lines().collect();
+        .lines()
+        .collect();
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
         assert_eq!(run(source, lane).expect("demand-driven capture"), expected);
     }
@@ -79,8 +92,9 @@ a.sort((x, y) => x - y);
 console.log(a[0], a[1], a[2], a.length, 7 in a, 50000 in a, 4294967294 in a);
 "#;
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        assert_eq!(run(source, lane).expect("bounded sparse work"), [
-            "true 4294967295 0", "1 2 3 4294967295 false false false",
-        ]);
+        assert_eq!(
+            run(source, lane).expect("bounded sparse work"),
+            ["true 4294967295 0", "1 2 3 4294967295 false false false",]
+        );
     }
 }

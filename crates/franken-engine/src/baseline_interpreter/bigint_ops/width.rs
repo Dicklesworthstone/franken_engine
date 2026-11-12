@@ -51,7 +51,9 @@ fn decimal_residue(bits: usize, digits: &[u8]) -> Option<u128> {
         if !byte.is_ascii_digit() {
             return None;
         }
-        residue = residue.wrapping_mul(10).wrapping_add(u128::from(byte - b'0'));
+        residue = residue
+            .wrapping_mul(10)
+            .wrapping_add(u128::from(byte - b'0'));
     }
     Some(residue)
 }
@@ -94,7 +96,11 @@ mod tests {
                             } else {
                                 as_uint_n(bits, &text)
                             };
-                            assert_eq!(actual, Ok(expected), "bits={bits}, signed={signed}, {text}");
+                            assert_eq!(
+                                actual,
+                                Ok(expected),
+                                "bits={bits}, signed={signed}, {text}"
+                            );
                         }
                     }
                 }

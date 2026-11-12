@@ -23,7 +23,8 @@ impl LazyRepeat {
             atom,
             Inst::CheckProgress(progress),
             Inst::Jump(head),
-        ] = regexp.program.get(pc..exit)? else {
+        ] = regexp.program.get(pc..exit)?
+        else {
             return None;
         };
         if *first != exit

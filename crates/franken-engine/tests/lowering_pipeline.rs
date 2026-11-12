@@ -2561,3 +2561,116 @@ fn enrichment_unary_plus_lowering() {
         .any(|i| matches!(i, Ir3Instruction::UnaryPlus { .. }));
     assert!(has_uplus, "unary + should produce UnaryPlus");
 }
+
+// --- 111. RC-C1: Ambient-authority globalThis alias/destructuring/computed folding ---
+
+#[test]
+fn rc_c1_ambient_authority_rejects_globalthis_aliases_destructuring_and_folded_keys() {
+    let parser = CanonicalEs2020Parser;
+    let denied_snippets = [
+        "const g = globalThis; g.process;",
+        "const { process } = globalThis;",
+        "let process; ({ process } = globalThis);",
+        "const { ...rest } = globalThis;",
+        r#"globalThis["process"];"#,
+        r#"globalThis["ev" + "al"]("1");"#,
+        r#"globalThis.fetch("https://example.com");"#,
+    ];
+    for snippet in denied_snippets {
+        let tree = parser.parse(snippet, ParseGoal::Script).expect("parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "rc_c1_ambient.js");
+        let err = lower_ir0_to_ir3(&ir0, &default_ctx()).expect_err(&format!(
+            "snippet must be rejected as ambient authority: {snippet}"
+        ));
+        assert!(
+            matches!(err, LoweringPipelineError::AmbientAuthorityViolation { .. }),
+            "expected AmbientAuthorityViolation for `{snippet}`, got: {err:?}"
+        );
+    }
+
+    // Lexical parameter shadow of an outer globalThis alias must NOT false-positive.
+    let shadowed = "const g = globalThis; (function(g) { return g.process; })({ process: 1 });";
+    let tree = parser.parse(shadowed, ParseGoal::Script).expect("parse");
+    let ir0 = Ir0Module::from_syntax_tree(tree, "rc_c1_shadowed.js");
+    lower_ir0_to_ir3(&ir0, &default_ctx())
+        .expect("shadowed parameter g must lower without ambient authority false positive");
+}
+
+// --- 112. RC-C1: Static forbid_dynamic_codegen policy gate ---
+
+#[test]
+fn rc_c1_forbid_dynamic_codegen_rejects_function_constructor_unless_shadowed() {
+    let parser = CanonicalEs2020Parser;
+    let strict_ctx = default_ctx().with_forbid_dynamic_codegen(true);
+
+    for snippet in [r#"Function("return 1");"#, r#"new Function("return 1");"#] {
+        let tree = parser.parse(snippet, ParseGoal::Script).expect("parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "rc_c1_forbid_codegen.js");
+        let err = lower_ir0_to_ir3(&ir0, &strict_ctx).expect_err(
+            "unshadowed Function constructor must be rejected when dynamic codegen is forbidden",
+        );
+        assert!(
+            matches!(err, LoweringPipelineError::AmbientAuthorityViolation { .. }),
+            "expected AmbientAuthorityViolation for `{snippet}`, got: {err:?}"
+        );
+    }
+
+    let shadowed = r#"(function(Function) { return Function("x"); })(function(x) { return x; });"#;
+    let tree = parser.parse(shadowed, ParseGoal::Script).expect("parse");
+    let ir0 = Ir0Module::from_syntax_tree(tree, "rc_c1_shadowed_fn_ctor.js");
+    lower_ir0_to_ir3(&ir0, &strict_ctx)
+        .expect("lexically shadowed Function binding must still lower cleanly");
+}
+
+// --- 113. RC-C1: Typed TS hostcall<"cap"> exact capability preservation across hoisting & loops ---
+
+#[test]
+fn rc_c1_ts_typed_hostcall_preserves_exact_capabilities_across_hoisted_fns_and_for_updates() {
+    use frankenengine_engine::parser::ParserOptions;
+    use frankenengine_engine::ts_normalization::{
+        TsIngestionProvenance, ingest_typescript_to_pipeline_artifacts,
+    };
+
+    let ts_source = r#"
+        const top = hostcall<"net.send">("payload");
+        for (let i = 0; i < 1; hostcall<"timer.set">(i), i++) {
+            helper();
+        }
+        function helper() {
+            return hostcall<"fs.read">("config.json");
+        }
+    "#;
+    let artifacts = ingest_typescript_to_pipeline_artifacts(
+        ts_source,
+        &TsNormalizationConfig::default(),
+        "rc_c1_typed_hostcall.ts",
+        ParseGoal::Script,
+        &ParserOptions::default(),
+        TsIngestionProvenance::new("trace-ts-caps", "decision-ts-caps", "policy-ts-caps"),
+    )
+    .expect("TS ingestion and lowering should succeed");
+
+    let ir3_caps: Vec<&str> = artifacts
+        .lowering_output
+        .ir3
+        .required_capabilities
+        .iter()
+        .map(|c| c.0.as_str())
+        .collect();
+    assert!(
+        ir3_caps.contains(&"net.send"),
+        "missing net.send in {ir3_caps:?}"
+    );
+    assert!(
+        ir3_caps.contains(&"timer.set"),
+        "missing timer.set in {ir3_caps:?}"
+    );
+    assert!(
+        ir3_caps.contains(&"fs.read"),
+        "missing fs.read in {ir3_caps:?}"
+    );
+    assert!(
+        !ir3_caps.contains(&"hostcall.invoke"),
+        "typed hostcalls must not fall back to hostcall.invoke: {ir3_caps:?}"
+    );
+}

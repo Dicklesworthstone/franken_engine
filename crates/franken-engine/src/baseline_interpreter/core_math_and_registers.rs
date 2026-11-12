@@ -1777,6 +1777,12 @@ impl InterpreterCore {
             });
         }
         let actual_reg = self.register_base + reg as usize;
+        if !self.all_register_labels_public
+            && (self.seeded_register_labels.is_empty()
+                || !self.seeded_register_labels.contains(&actual_reg))
+        {
+            return self.write_reg_with_label(reg, value, Label::Public);
+        }
         let fast_path_eligible = if self.all_register_labels_public {
             self.static_register_write_eligible(actual_reg, &value, &Label::Public)
         } else {
@@ -3999,6 +4005,12 @@ impl InterpreterCore {
                     total.saturating_add(Self::estimate_binding_cell_payload_bytes(&binding.state));
             }
         }
+        for entry in &self.module_state.live_exports {
+            if seen_cells.insert(ColdBindingCells::key(&entry.cell)) {
+                total =
+                    total.saturating_add(Self::estimate_binding_cell_payload_bytes(&entry.cell));
+            }
+        }
         total
     }
 
@@ -5683,6 +5695,8 @@ impl InterpreterCore {
 
     pub(super) fn rollback_call_setup_state(&mut self) {
         if let Some(frame) = self.call_stack.pop(&mut self.closures.cold_cells) {
+            let depth = self.call_stack.len();
+            self.pc_label_stack.retain(|pc| pc.call_depth <= depth);
             self.pending_exception = frame.saved_pending_exception;
             self.pending_exception_label = frame.saved_pending_exception_label;
             self.pending_return = frame.saved_pending_return;

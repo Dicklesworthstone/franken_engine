@@ -1082,9 +1082,13 @@ impl InterpreterCore {
             decision_receipts: EvidenceLog::new(),
             nondeterminism_trace,
             register_labels: vec![Label::Public; max_regs],
+            seeded_register_labels: BTreeSet::new(),
             all_register_labels_public: true,
             object_mutation_labels: BTreeMap::new(),
             active_inline_callback_context_label: None,
+            pc_label_stack: Vec::new(),
+            ipdom_cache: BTreeMap::new(),
+            ifc_runtime_flow_audit: Vec::new(),
             inline_callback_start_probes: Vec::new(),
             proxy_trap_lookup_depth: 0,
             weakmap_storage: BTreeMap::new(),
@@ -3029,8 +3033,13 @@ impl InterpreterCore {
         capability: &str,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        if matches!(capability, "env:read" | "env:has") {
-            return self.dispatch_environment_hostcall(capability, args);
+        if matches!(capability, "env:read" | "env:has" | "env.read" | "env.has") {
+            let canonical = if matches!(capability, "env:has" | "env.has") {
+                "env:has"
+            } else {
+                "env:read"
+            };
+            return self.dispatch_environment_hostcall(canonical, args);
         }
         // bd-3894s slice (2b): the `net:request` egress is handled by a single
         // shared seam — [`Self::perform_net_request_effect`] — used by BOTH the
@@ -3042,7 +3051,8 @@ impl InterpreterCore {
         // to the real method/headers/body. (`net:client_request`, the
         // ClientRequest-CREATION tag, is intercepted earlier in the IR3 HostCall
         // dispatch and never reaches this function.)
-        if capability.starts_with("net:") {
+        if capability.starts_with("net:") || capability.starts_with("net.") {
+            self.check_host_io_confidentiality(capability, args)?;
             let args_label = self.join_arg_range_label(args)?;
             let response_label =
                 hostcall_result_contract(capability).result_label(&args_label, None);
@@ -3131,8 +3141,8 @@ impl InterpreterCore {
         // it in the typed effect/request makes transcripts and receipts commit to
         // the concrete action without adding capability aliases.
         let declared_operation = match capability {
-            "fs:read" => FsOperation::Read,
-            "fs:write" => FsOperation::Write,
+            "fs:read" | "fs.read" => FsOperation::Read,
+            "fs:write" | "fs.write" => FsOperation::Write,
             _ => {
                 return Err(InterpreterError::CapabilityDenied {
                     capability: recordable_capability_tag(capability).into_owned(),

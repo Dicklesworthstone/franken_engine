@@ -493,11 +493,17 @@ pub fn analyze_authority_footprint(
         source_label,
         &prepared.prepared_source,
     );
+    let typed_hostcall_capabilities = prepared
+        .normalization_output
+        .as_ref()
+        .map(|output| output.ordered_hostcall_capabilities.clone())
+        .unwrap_or_default();
     let context = LoweringContext::new(
         CHECK_TRACE_ID.to_string(),
         CHECK_DECISION_ID.to_string(),
         CHECK_POLICY_ID.to_string(),
-    );
+    )
+    .with_typed_hostcall_capabilities(typed_hostcall_capabilities);
 
     match lower_ir0_to_ir3(&ir0, &context) {
         Ok(output) => report_from_clean_lowering(
@@ -649,7 +655,11 @@ fn report_from_clean_lowering(
     // signed-receipt requirement. Intents are pre-sorted and deduplicated by the
     // normalization layer, so iteration order is deterministic.
     for intent in capability_intents {
-        if is_declassification_capability(&intent.capability) {
+        let already_recorded = flow_proof
+            .required_declassifications
+            .iter()
+            .any(|ob| ob.capability.as_deref() == Some(intent.capability.as_str()));
+        if is_declassification_capability(&intent.capability) && !already_recorded {
             report.findings.push(CheckFinding {
                 error_code: CheckFindingKind::DeclassificationRequired
                     .error_code()
@@ -1091,5 +1101,55 @@ mod tests {
             AnalysisCompleteness::Unanalyzable
         );
         assert!(!broken.analyzable);
+    }
+
+    #[test]
+    fn typed_hostcall_capabilities_and_evasion_vectors_are_reflected_in_footprint_bd_7fhp3() {
+        let typed = analyze_authority_footprint(
+            "const a = hostcall<\"fs.read\">(\"/etc/hosts\");\nconst b = hostcall<\"net.send\">(\"https://example.com\");\n",
+            "typed.ts",
+            ParseGoal::Script,
+        );
+        assert_eq!(typed.analysis_completeness, AnalysisCompleteness::Complete);
+        let tags: Vec<&str> = typed
+            .required_capabilities
+            .iter()
+            .map(|req| req.capability_tag.as_str())
+            .collect();
+        assert!(tags.contains(&"fs.read"), "missing fs.read in {tags:?}");
+        assert!(tags.contains(&"net.send"), "missing net.send in {tags:?}");
+
+        let unauthorized = analyze_authority_footprint(
+            "const a = hostcall<\"fs.read\">(\"/etc/hosts\");\nconst b = hostcall<\"net.send\">(a);\n",
+            "typed_flow_denied.ts",
+            ParseGoal::Script,
+        );
+        assert_eq!(
+            unauthorized.analysis_completeness,
+            AnalysisCompleteness::Unanalyzable,
+            "Internal -> Public typed hostcall flow must fail closed during lowering"
+        );
+        assert!(!unauthorized.analyzable);
+
+        for evasion in [
+            "const g = globalThis;\nconst { process: p } = g;\nconst x = p.env.PATH;\n",
+            "const x = globalThis['pro' + 'cess'].env.PATH;\n",
+            "const ws = globalThis.WebSocket;\n",
+            "const d = Deno;\n",
+        ] {
+            let report = analyze_authority_footprint(evasion, "evasion.js", ParseGoal::Script);
+            assert_eq!(
+                report.analysis_completeness,
+                AnalysisCompleteness::BoundedAtFirstViolation,
+                "evasion must fail closed at first ambient violation: {evasion}"
+            );
+            assert!(
+                report
+                    .findings
+                    .iter()
+                    .any(|f| f.kind == CheckFindingKind::AmbientAuthorityViolation),
+                "expected ambient authority finding for {evasion}"
+            );
+        }
     }
 }

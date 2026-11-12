@@ -83,6 +83,8 @@ pub struct TsNormalizationWitness {
 pub struct TsNormalizationOutput {
     pub normalized_source: String,
     pub capability_intents: Vec<CapabilityIntent>,
+    #[serde(default)]
+    pub ordered_hostcall_capabilities: Vec<String>,
     pub source_map: Vec<SourceMapEntry>,
     pub witness: TsNormalizationWitness,
     pub events: Vec<NormalizationEvent>,
@@ -706,6 +708,7 @@ pub fn normalize_typescript_to_es2020(
     }
 
     let capability_intents = extract_capability_intents(&normalized_source);
+    let ordered_hostcall_capabilities = extract_ordered_hostcall_capabilities(&normalized_source);
     decisions.push(build_decision(
         "capability_intent_extraction",
         !capability_intents.is_empty(),
@@ -750,6 +753,7 @@ pub fn normalize_typescript_to_es2020(
     Ok(TsNormalizationOutput {
         normalized_source,
         capability_intents,
+        ordered_hostcall_capabilities,
         source_map,
         witness,
         events,
@@ -842,7 +846,10 @@ pub fn ingest_typescript_to_pipeline_artifacts(
         source_label,
         &normalization_output.normalized_source,
     );
-    let lowering_context = LoweringContext::new(trace_id, decision_id, policy_id);
+    let lowering_context = LoweringContext::new(trace_id, decision_id, policy_id)
+        .with_typed_hostcall_capabilities(
+            normalization_output.ordered_hostcall_capabilities.clone(),
+        );
     let lowering_output = match lower_ir0_to_ir3(&ir0, &lowering_context) {
         Ok(output) => {
             ingestion_events.push(success_ingestion_event(
@@ -1283,6 +1290,20 @@ fn validate_capability_contracts(
         }
 
         hostcall_contract_capabilities.insert(capability.0.clone());
+    }
+    for cap in &lowering_output.ir2.required_capabilities {
+        if cap.0 == "hostcall.invoke" {
+            has_hostcall_invoke_fallback = true;
+            continue;
+        }
+        hostcall_contract_capabilities.insert(cap.0.clone());
+    }
+    for cap in &lowering_output.ir3.required_capabilities {
+        if cap.0 == "hostcall.invoke" {
+            has_hostcall_invoke_fallback = true;
+            continue;
+        }
+        hostcall_contract_capabilities.insert(cap.0.clone());
     }
 
     // When TS normalization strips type annotations from `hostcall<"cap">()`,
@@ -3278,6 +3299,16 @@ fn strip_hostcall_type_params(source: &str) -> String {
     }
     output.push_str(&source[copied..]);
     output
+}
+
+fn extract_ordered_hostcall_capabilities(source: &str) -> Vec<String> {
+    let Some(code) = typed_hostcall_code_view(source) else {
+        return Vec::new();
+    };
+    typed_hostcall_sites(source, &code)
+        .into_iter()
+        .map(|site| site.capability)
+        .collect()
 }
 
 fn extract_capability_intents(source: &str) -> Vec<CapabilityIntent> {

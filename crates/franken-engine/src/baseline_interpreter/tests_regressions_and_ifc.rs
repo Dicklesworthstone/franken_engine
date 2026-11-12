@@ -3492,4 +3492,439 @@ mod ifc_taint_closures_rc_c1 {
             Label::Secret
         );
     }
+
+    #[test]
+    fn console_sink_clearance_is_internal_and_network_is_public() {
+        assert_eq!(
+            crate::lowering_pipeline::sink_clearance_from_capability("console:log"),
+            Label::Internal
+        );
+        assert_eq!(
+            crate::lowering_pipeline::sink_clearance_from_capability("console"),
+            Label::Internal
+        );
+        assert_eq!(
+            crate::lowering_pipeline::sink_clearance_from_capability("net:request"),
+            Label::Public
+        );
+    }
+
+    #[test]
+    fn disallow_dynamic_codegen_refuses_function_constructor_at_runtime() {
+        let mut config = ifc_test_config();
+        config.disallow_dynamic_codegen = true;
+        for snippet in [
+            r#"Function("return 1")();"#,
+            r#"new Function("return 1")();"#,
+        ] {
+            let mut core = InterpreterCore::new(config.clone(), "rc-c1-no-codegen");
+            let err = core
+                .execute(&module_for(snippet))
+                .expect_err("disallow_dynamic_codegen must refuse Function constructor");
+            assert!(
+                matches!(
+                    &err,
+                    InterpreterError::CapabilityDenied { capability } if capability == "eval"
+                ),
+                "expected CapabilityDenied(eval) for `{snippet}`, got: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn tainted_callee_and_constructor_propagate_secret_label_to_results() {
+        let mut core = core_with_secret_box("top-secret-token");
+        let err = core
+            .execute(&module_for(
+                "const f = () => 'alpha';\n\
+                 const g = () => 'beta';\n\
+                 const pick = __secretPayload ? f : g;\n\
+                 const leaked = pick();\n\
+                 console.log(leaked);",
+            ))
+            .expect_err("calling a Secret-selected callee must taint the return value");
+        assert!(
+            matches!(
+                &err,
+                InterpreterError::CapabilityDenied { capability }
+                    if capability == "console:log:confidentiality"
+            ),
+            "unexpected error for tainted callee: {err:?}"
+        );
+
+        let mut ctor_core = core_with_secret_box("top-secret-token");
+        let ctor_err = ctor_core
+            .execute(&module_for(
+                "function A() { this.tag = 'a'; }\n\
+                 function B() { this.tag = 'b'; }\n\
+                 const Ctor = __secretPayload ? A : B;\n\
+                 const inst = new Ctor();\n\
+                 console.log(inst.tag);",
+            ))
+            .expect_err(
+                "constructing via a Secret-selected constructor must taint instance properties",
+            );
+        assert!(
+            matches!(
+                &ctor_err,
+                InterpreterError::CapabilityDenied { capability }
+                    if capability == "console:log:confidentiality"
+            ),
+            "unexpected error for tainted constructor: {ctor_err:?}"
+        );
+    }
+
+    #[test]
+    fn implicit_flow_branch_pc_taint_blocks_leaks_and_reconverges_at_ipdom() {
+        // 1. Direct conditional mutation under Secret branch condition -> blocked at sink.
+        let mut core = core_with_secret_box("top-secret-token");
+        let err = core
+            .execute(&module_for(
+                "let out = 'no';\n\
+                 if (__secretPayload === 'top-secret-token') { out = 'yes'; }\n\
+                 console.log(out);",
+            ))
+            .expect_err("implicit flow through Secret branch must taint mutated binding");
+        assert!(
+            matches!(
+                &err,
+                InterpreterError::CapabilityDenied { capability }
+                    if capability == "console:log:confidentiality"
+            ),
+            "unexpected error for implicit branch flow: {err:?}"
+        );
+
+        // 2. Early-return implicit flow inside helper function -> return value carries Secret!
+        let mut early_core = core_with_secret_box("top-secret-token");
+        let early_err = early_core
+            .execute(&module_for(
+                "function probe(s) {\n\
+                   if (s === 'top-secret-token') { return 1; }\n\
+                   return 0;\n\
+                 }\n\
+                 const bit = probe(__secretPayload);\n\
+                 console.log(bit);",
+            ))
+            .expect_err("early return conditioned on Secret must taint return value");
+        assert!(
+            matches!(
+                &early_err,
+                InterpreterError::CapabilityDenied { capability }
+                    if capability == "console:log:confidentiality"
+            ),
+            "unexpected error for early-return implicit flow: {early_err:?}"
+        );
+
+        // 3. Post-dominator reconvergence: code AFTER the Secret branch merges stays Public!
+        let post_module = module_for(
+            "let secretBit = 0;\n\
+             if (__secretPayload === 'top-secret-token') { secretBit = 1; }\n\
+             let publicAfter = 42;\n\
+             console.log(publicAfter);\n\
+             publicAfter;",
+        );
+        let compact_plan =
+            CompactTier1Program::compile(&post_module).expect("compile compact tier1");
+        for compact in [false, true] {
+            let mut post_core = core_with_secret_box("top-secret-token");
+            let result = if compact {
+                post_core.execute_ephemeral_with_compact_tier1(&post_module, &compact_plan)
+            } else {
+                post_core.execute(&post_module)
+            }
+            .expect("post-dominator reconvergence must not overtaint subsequent Public code");
+            assert_eq!(result.value, Value::Int(42));
+            assert_eq!(result.completion_label, Label::Public);
+            assert_eq!(result.console_output.len(), 1);
+        }
+    }
+
+    #[test]
+    fn runtime_flow_policy_enforces_signed_declassification_receipt_and_records_audit() {
+        use crate::ifc_artifacts::{
+            ContentBinding, DeclassificationDecision, DeclassificationReceipt,
+            DeclassificationRoute, FlowPolicy, FlowPolicyEnforcement, IfcSchemaVersion,
+        };
+        use crate::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
+
+        let signing_key = SigningKey::from_bytes([7u8; 32]).expect("deterministic signing key");
+        let policy = FlowPolicy {
+            policy_id: "policy-rc-c1".to_string(),
+            extension_id: "ext-rc-c1".to_string(),
+            label_classes: [Label::Public, Label::Internal, Label::Secret]
+                .into_iter()
+                .collect(),
+            clearance_classes: [Label::Public, Label::Internal].into_iter().collect(),
+            allowed_flows: vec![],
+            prohibited_flows: vec![],
+            declassification_routes: vec![DeclassificationRoute {
+                route_id: "route-secret-console".to_string(),
+                source_label: Label::Secret,
+                target_clearance: Label::Internal,
+                conditions: vec!["audit_logged".to_string()],
+            }],
+            enforcement_mode: FlowPolicyEnforcement::LatticeOpen,
+            epoch_id: 1,
+            schema_version: IfcSchemaVersion::CURRENT,
+            signature: Signature::from_bytes(SIGNATURE_SENTINEL),
+        };
+
+        // Case A: Policy requires declassification route, but no receipt is supplied -> DENIED + audited.
+        let mut denied_core = core_with_secret_box("top-secret-token");
+        denied_core.config.ifc_flow_policy = Some(policy.clone());
+        let err = denied_core
+            .execute(&module_for("console.log(__secretPayload);"))
+            .expect_err("missing declassification receipt must deny Secret -> console:log");
+        assert!(matches!(
+            &err,
+            InterpreterError::CapabilityDenied { capability }
+                if capability == "console:log:confidentiality"
+        ));
+        let denied_audit = denied_core.ifc_runtime_flow_audit();
+        assert_eq!(denied_audit.len(), 1);
+        assert_eq!(denied_audit[0].decision, IfcRuntimeFlowDecision::Denied);
+        assert_eq!(
+            denied_audit[0].route_id.as_deref(),
+            Some("route-secret-console")
+        );
+        assert_eq!(denied_audit[0].receipt_id, None);
+
+        // Build a valid signed DeclassificationReceipt.
+        let binding =
+            ContentBinding::new(b"top-secret-token", Label::Secret, &signing_key).expect("binding");
+        let mut valid_receipt = DeclassificationReceipt {
+            receipt_id: "rcpt-secret-console-1".to_string(),
+            source_label: Label::Secret,
+            sink_clearance: Label::Internal,
+            content_binding: Some(binding),
+            declassification_route_ref: "route-secret-console".to_string(),
+            decision_contract_id: "contract-rc-c1".to_string(),
+            policy_evaluation_summary: "approved console diagnostic redaction".to_string(),
+            loss_assessment_milli: 100,
+            decision: DeclassificationDecision::Allow,
+            authorized_by: signing_key.verification_key(),
+            replay_linkage: "trace-rc-c1".to_string(),
+            timestamp_ms: 1_700_000_000_000,
+            not_before_ms: 1_699_000_000_000,
+            not_after_ms: 1_701_000_000_000,
+            schema_version: IfcSchemaVersion::CURRENT,
+            signature: Signature::from_bytes(SIGNATURE_SENTINEL),
+        };
+        valid_receipt.sign(&signing_key).expect("sign receipt");
+
+        // Case B: Tampered signature receipt -> DENIED.
+        let mut forged_receipt = valid_receipt.clone();
+        forged_receipt.signature = Signature::from_bytes([0xAA; 64]);
+        let mut forged_core = core_with_secret_box("top-secret-token");
+        forged_core.config.ifc_flow_policy = Some(policy.clone());
+        forged_core.config.declassification_receipts = vec![forged_receipt];
+        assert!(
+            forged_core
+                .execute(&module_for("console.log(__secretPayload);"))
+                .is_err(),
+            "forged signature on DeclassificationReceipt must fail closed"
+        );
+        assert_eq!(
+            forged_core.ifc_runtime_flow_audit()[0].decision,
+            IfcRuntimeFlowDecision::Denied
+        );
+
+        // Case C: Valid cryptographically signed receipt -> ALLOWED + audited as Declassified!
+        let mut allowed_core = core_with_secret_box("top-secret-token");
+        allowed_core.config.ifc_flow_policy = Some(policy);
+        allowed_core.config.declassification_receipts = vec![valid_receipt];
+        let allowed_res = allowed_core
+            .execute(&module_for("console.log(__secretPayload);"))
+            .expect("valid signed DeclassificationReceipt must authorize route-secret-console");
+        assert_eq!(allowed_res.console_output.len(), 1);
+        let allowed_audit = allowed_core.ifc_runtime_flow_audit();
+        assert_eq!(allowed_audit.len(), 1);
+        assert_eq!(
+            allowed_audit[0].decision,
+            IfcRuntimeFlowDecision::Declassified
+        );
+        assert_eq!(
+            allowed_audit[0].receipt_id.as_deref(),
+            Some("rcpt-secret-console-1")
+        );
+    }
+
+    #[test]
+    fn typescript_typed_hostcall_executes_with_exact_capability_and_ifc_sink_enforcement() {
+        use crate::ast::ParseGoal;
+        use crate::parser::ParserOptions;
+        use crate::ts_normalization::{
+            TsIngestionProvenance, TsNormalizationConfig, ingest_typescript_to_pipeline_artifacts,
+        };
+
+        let read_artifacts = ingest_typescript_to_pipeline_artifacts(
+            r#"hostcall<"env.has">("HOME");"#,
+            &TsNormalizationConfig::default(),
+            "ts-env-test.ts",
+            ParseGoal::Script,
+            &ParserOptions::default(),
+            TsIngestionProvenance::new("trace-ts-exec", "decision-ts-exec", "policy-ts-exec"),
+        )
+        .expect("ingest env.has TS");
+
+        // Without EnvRead -> CapabilityDenied.
+        let mut ungranted = InterpreterCore::new(ifc_test_config(), "ts-env-denied");
+        let denied_err = ungranted
+            .execute(&read_artifacts.lowering_output.ir3)
+            .expect_err("env.has without RuntimeCapability::EnvRead must fail closed");
+        assert!(matches!(
+            denied_err,
+            InterpreterError::CapabilityDenied { .. }
+        ));
+
+        // With EnvRead -> executes cleanly through HostcallDispatchBinding::HostIo!
+        #[derive(Debug)]
+        struct TestEnvHostIo;
+        impl frankenengine_extension_host::host_io::HostIoProvider for TestEnvHostIo {
+            fn name(&self) -> &str {
+                "test-env-host-io"
+            }
+            fn perform(
+                &self,
+                request: &frankenengine_extension_host::host_io::HostIoRequest,
+                granted: &[frankenengine_extension_host::host_io::HostIoCapability],
+            ) -> frankenengine_extension_host::host_io::HostIoOutcome {
+                use frankenengine_extension_host::host_io::{
+                    HostIoCapability, HostIoError, HostIoRequest, HostIoResponse,
+                };
+                if !granted.contains(&HostIoCapability::EnvRead) {
+                    return Err(HostIoError::Denied {
+                        reason: "missing env_read".to_string(),
+                    });
+                }
+                match request {
+                    HostIoRequest::EnvRead { name } => Ok(HostIoResponse::EnvRead {
+                        value: (name == "HOME").then(|| "/sandbox".to_string()),
+                    }),
+                    other => Err(HostIoError::NotImplemented {
+                        what: format!("{other:?}"),
+                    }),
+                }
+            }
+        }
+        let mut granted_cfg = ifc_test_config();
+        granted_cfg
+            .granted_capabilities
+            .insert(RuntimeCapability::EnvRead);
+        let mut granted = InterpreterCore::new(granted_cfg, "ts-env-allowed");
+        granted.set_host_io(std::sync::Arc::new(TestEnvHostIo), None);
+        let res = granted
+            .execute(&read_artifacts.lowering_output.ir3)
+            .expect("env.has with EnvRead granted should execute cleanly");
+        assert_eq!(res.value, Value::Bool(true));
+
+        // Non-public binding flowing into typed `hostcall<"net.send">` (Public sink)
+        // must fail closed statically during lowering (`Internal -> Public`).
+        let net_err = ingest_typescript_to_pipeline_artifacts(
+            r#"hostcall<"net.send">(__secretPayload);"#,
+            &TsNormalizationConfig::default(),
+            "ts-net-test.ts",
+            ParseGoal::Script,
+            &ParserOptions::default(),
+            TsIngestionProvenance::new("trace-ts-net", "decision-ts-net", "policy-ts-net"),
+        )
+        .expect_err(
+            "non-public argument to typed hostcall<\"net.send\"> must be blocked statically",
+        );
+        assert!(
+            net_err.to_string().contains("unauthorized flow"),
+            "unexpected lowering error for __secretPayload -> net.send: {net_err}"
+        );
+
+        // Runtime Secret property flowing into typed `hostcall<"fs.write">` (Internal sink)
+        // passes static `Internal -> Internal` lowering and is blocked at runtime by IFC!
+        let fs_artifacts = ingest_typescript_to_pipeline_artifacts(
+            r#"hostcall<"fs.write">("/tmp/out", __secretBox.payload);"#,
+            &TsNormalizationConfig::default(),
+            "ts-fs-test.ts",
+            ParseGoal::Script,
+            &ParserOptions::default(),
+            TsIngestionProvenance::new("trace-ts-fs", "decision-ts-fs", "policy-ts-fs"),
+        )
+        .expect("ingest fs.write TS");
+        let mut secret_fs_core = core_with_secret_box("top-secret-token");
+        secret_fs_core
+            .config
+            .granted_capabilities
+            .insert(RuntimeCapability::FsWrite);
+        let fs_err = secret_fs_core
+            .execute(&fs_artifacts.lowering_output.ir3)
+            .expect_err("Secret argument to typed hostcall<\"fs.write\"> must be blocked by IFC");
+        assert!(
+            matches!(
+                &fs_err,
+                InterpreterError::CapabilityDenied { capability }
+                    if capability == "fs.write:confidentiality"
+            ),
+            "unexpected error for Secret -> fs.write: {fs_err:?}"
+        );
+    }
+
+    #[test]
+    fn compact_tier1_aara_block_hoisting_preserves_exact_budget_and_loop_semantics_rc_e1() {
+        let mut module = Ir3Module::new(ContentHash::compute(b"rc-e1-aara"), "rc-e1.js");
+        // Tight loop: r0 = 0; r1 = 0; r2 = 10; loop: r0 = r0 + r1; r1 = r1 + 1; r3 = r1 < r2; JumpIf r3 -> 3; Return r0
+        module.instructions = vec![
+            Ir3Instruction::LoadInt { dst: 0, value: 0 },
+            Ir3Instruction::LoadInt { dst: 1, value: 0 },
+            Ir3Instruction::LoadInt { dst: 2, value: 10 },
+            Ir3Instruction::Add {
+                dst: 0,
+                lhs: 0,
+                rhs: 1,
+            },
+            Ir3Instruction::Inc { dst: 1, src: 1 },
+            Ir3Instruction::Lt {
+                dst: 3,
+                lhs: 1,
+                rhs: 2,
+            },
+            Ir3Instruction::JumpIf { cond: 3, target: 3 },
+            Ir3Instruction::Return { value: 0 },
+        ];
+        let program = CompactTier1Program::compile(&module).expect("compact program compiles");
+        assert_eq!(program.instructions[0].aara_block_run, 7);
+        assert_eq!(program.instructions[3].aara_block_run, 4);
+        assert_eq!(program.instructions[6].aara_block_run, 1);
+
+        let mut full_cfg = ifc_test_config();
+        full_cfg.instruction_budget = 1_000;
+        let compact = QuickJsLane::with_config(full_cfg.clone())
+            .execute_with_compact_tier1(&module, "rc-e1-compact", &program)
+            .expect("compact loop completes");
+        let baseline = QuickJsLane::with_config(full_cfg)
+            .execute(&module, "rc-e1-baseline")
+            .expect("baseline loop completes");
+        assert_eq!(compact.value, Value::Int(45));
+        assert_eq!(baseline.value, Value::Int(45));
+        assert_eq!(
+            compact.instructions_executed,
+            baseline.instructions_executed
+        );
+        // 3 init + 10 * 4 loop ops = 43 compact Tier-I ops; Return + Writable drain stay Tier-R.
+        assert_eq!(compact.tier_i_instructions_executed, 43);
+
+        // Mid-block budget expiry must fail at exact budget count (budget = 9, inside IP 3..7).
+        let mut tight_cfg = ifc_test_config();
+        tight_cfg.instruction_budget = 9;
+        let compact_err = QuickJsLane::with_config(tight_cfg.clone())
+            .execute_with_compact_tier1(&module, "rc-e1-tight-compact", &program)
+            .expect_err("compact mid-block budget must exhaust at exact boundary");
+        let baseline_err = QuickJsLane::with_config(tight_cfg)
+            .execute(&module, "rc-e1-tight-baseline")
+            .expect_err("baseline mid-block budget must exhaust at exact boundary");
+        assert_eq!(
+            compact_err,
+            InterpreterError::BudgetExhausted {
+                executed: 9,
+                budget: 9,
+            }
+        );
+        assert_eq!(compact_err, baseline_err);
+    }
 }

@@ -7534,9 +7534,13 @@ impl InterpreterCore {
                         self.dispatch_host_io_hostcall(cap, delegated_args)
                     }
                 }),
-            Some(
-                HostcallDispatchBinding::Internal | HostcallDispatchBinding::DeterministicNoop,
-            ) => Ok(Value::Undefined),
+            Some(HostcallDispatchBinding::Internal) => Ok(Value::Undefined),
+            Some(HostcallDispatchBinding::DeterministicNoop) => {
+                if !cap.starts_with("declassify.") && !cap.starts_with("declassify:") {
+                    self.check_host_io_confidentiality(cap, delegated_args)?;
+                }
+                Ok(Value::Undefined)
+            }
             None => Err(InterpreterError::CapabilityDenied {
                 capability: recordable_capability_tag(cap).into_owned(),
             }),

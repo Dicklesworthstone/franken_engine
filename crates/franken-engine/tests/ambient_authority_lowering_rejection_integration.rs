@@ -128,10 +128,26 @@ fn specific_ambient_authority_patterns_rejected() {
         ("process.env", Some(EffectKind::EnvRead)),
         // Direct require access
         ("require('fs')", Some(EffectKind::FsRead)),
+        // Cross-runtime Web/Deno/Bun ambient surfaces (bd-7fhp3)
+        ("globalThis.WebSocket", Some(EffectKind::NetConnect)),
+        ("XMLHttpRequest", Some(EffectKind::NetConnect)),
+        ("EventSource", Some(EffectKind::NetConnect)),
+        ("Deno", Some(EffectKind::Global)),
+        ("Bun", Some(EffectKind::Global)),
+        ("SharedWorker", Some(EffectKind::Eval)),
+        ("localStorage", Some(EffectKind::FsRead)),
+        // Constant-folded computed string concatenation on globalThis (bd-7fhp3)
+        ("globalThis['pro' + 'cess']", Some(EffectKind::EnvRead)),
+        ("globalThis['req' + 'uire']", Some(EffectKind::FsRead)),
         // Safe patterns that should NOT be rejected
         ("console.log('hello')", None),
         ("Math.PI", None),
         ("JSON.stringify({})", None),
+        ("globalThis.Array", None),
+        (
+            "((process) => process.platform)({ platform: 'linux' })",
+            None,
+        ),
     ];
 
     for (source, expected_effect) in test_cases {

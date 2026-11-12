@@ -212,6 +212,7 @@ impl InterpreterCore {
                 self.compact_tier1_jump(instruction.payload as u32);
             }
             Op::JumpIf => {
+                self.push_branch_pc_label_if_tainted(module, lhs)?;
                 let branch_taken = self
                     .compact_borrowed_reg(lhs)?
                     .is_some_and(Value::is_truthy);
@@ -223,6 +224,7 @@ impl InterpreterCore {
                 }
             }
             Op::JumpIfNullish => {
+                self.push_branch_pc_label_if_tainted(module, lhs)?;
                 let branch_taken = self
                     .compact_borrowed_reg(lhs)?
                     .is_none_or(Value::is_nullish);
@@ -1128,7 +1130,12 @@ impl InterpreterCore {
                 self.function_own_property_object(module, target)?
             }
             Value::BuiltinFunction(builtin)
-                if builtin.kind == BuiltinFunctionKind::GeneratedFunction =>
+                if matches!(
+                    builtin.kind,
+                    BuiltinFunctionKind::GeneratedFunction
+                        | BuiltinFunctionKind::NativeHttpFunction
+                        | BuiltinFunctionKind::NativeChildProcessFunction
+                ) =>
             {
                 self.function_own_property_object(module, target)?
             }
@@ -1172,9 +1179,16 @@ impl InterpreterCore {
         // an object (an arrow's undefined) is a TypeError.
         let prototype = if Self::is_callable_proxy(&constructor)
             || !self.is_constructible_value(&constructor)
-            || matches!(&constructor, Value::BuiltinFunction(builtin)
-                if builtin.kind == BuiltinFunctionKind::GeneratedFunction)
-        {
+            || matches!(
+                &constructor,
+                Value::BuiltinFunction(builtin)
+                    if matches!(
+                        builtin.kind,
+                        BuiltinFunctionKind::GeneratedFunction
+                            | BuiltinFunctionKind::NativeHttpFunction
+                            | BuiltinFunctionKind::NativeChildProcessFunction
+                    )
+            ) {
             let key = RuntimePropertyKey::String(JsString::from("prototype"));
             match self.get_v(module, &constructor, &key)? {
                 Value::Object(prototype) => prototype,
@@ -5948,6 +5962,45 @@ impl InterpreterCore {
             {
                 self.capture_property_resolution_found(key, id, depth);
                 return self.call_prototype_getter(module, &getter, receiver);
+            }
+            let skip_inherited_buffer_fallback = self.builtin_prototypes.get("Buffer") == Some(&id)
+                && key.as_str().is_some_and(|k| {
+                    k != "constructor" && Self::buffer_prototype_method(k).is_none()
+                });
+            if !skip_inherited_buffer_fallback
+                && let Some(val) = self.canonical_prototype_virtual_property(id, key)
+            {
+                self.capture_property_resolution_found(key, id, depth);
+                return Ok(val);
+            }
+            if id == object_id
+                && !self.builtin_prototypes.contains_key("Array")
+                && self.heap.get(id.0 as usize).is_some_and(|obj| {
+                    obj.is_array && !obj.is_null_prototype && obj.prototype.is_none()
+                })
+                && !self.canonical_virtual_property_deleted("Array", key)
+            {
+                let implicit_array_val = match key {
+                    RuntimePropertyKey::String(name) => match name.as_str() {
+                        Some("constructor") => Some(Value::BuiltinFunction(
+                            BuiltinFunction::standard_constructor("Array"),
+                        )),
+                        Some(method) => {
+                            Self::array_prototype_method(method).map(Value::BuiltinFunction)
+                        }
+                        None => None,
+                    },
+                    RuntimePropertyKey::Symbol(symbol)
+                        if *symbol == WellKnownSymbol::Iterator.id() =>
+                    {
+                        Some(Value::BuiltinFunction(BuiltinFunction::array_values()))
+                    }
+                    RuntimePropertyKey::Symbol(_) => None,
+                };
+                if let Some(val) = implicit_array_val {
+                    self.capture_property_resolution_found(key, id, depth + 1);
+                    return Ok(val);
+                }
             }
             current = next_prototype;
             depth += 1;

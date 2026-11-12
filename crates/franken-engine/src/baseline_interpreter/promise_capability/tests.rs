@@ -932,9 +932,11 @@ fn native_primitive_carriers_are_reused_without_payload_copies() {
         let carrier = core.promise_value(&value).expect("exact carrier");
         drop(value);
         let before = core.estimated_memory_bytes();
+        let expected =
+            before.saturating_add(std::mem::size_of::<crate::promise_model::WitnessEvent>() as u64);
         let carriers_before = core.promise_value_carriers.len();
         let next_before = core.next_promise_value_carrier;
-        core.config.max_total_memory_bytes = before;
+        core.config.max_total_memory_bytes = expected;
         core.resolve_native_combinator_result(None, result, carrier.clone(), Label::Public, false)
             .expect("primitive winner needs no extra payload ownership");
         assert_eq!(
@@ -944,7 +946,7 @@ fn native_primitive_carriers_are_reused_without_payload_copies() {
         assert_eq!(core.promise_value_carriers.len(), carriers_before);
         assert_eq!(core.next_promise_value_carrier, next_before);
         assert_eq!(core.json_parse_temporary_bytes, 0);
-        assert_eq!(core.estimated_memory_bytes(), before);
+        assert_eq!(core.estimated_memory_bytes(), expected);
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()

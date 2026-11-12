@@ -131,6 +131,19 @@ pub(super) fn has_ambient_fs_require(tree: &SyntaxTree) -> Result<bool, Lowering
     Ok(rewrite_fs_requires(tree)?.is_some())
 }
 
+pub(super) fn rewrite_direct_fs_calls(
+    tree: &SyntaxTree,
+) -> Result<Option<SyntaxTree>, LoweringPipelineError> {
+    if !tree
+        .body
+        .iter()
+        .any(|statement| SEARCH.in_statement(statement))
+    {
+        return Ok(None);
+    }
+    direct_fs_calls(tree)
+}
+
 pub(super) fn rewrite_fs_requires(
     tree: &SyntaxTree,
 ) -> Result<Option<SyntaxTree>, LoweringPipelineError> {

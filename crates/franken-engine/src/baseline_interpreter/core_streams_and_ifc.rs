@@ -5112,12 +5112,28 @@ impl InterpreterCore {
         };
         let is_public = matches!(&next_label, Label::Public);
         self.register_labels[actual_reg] = next_label;
-        if !is_public {
+        if is_public {
+            self.seeded_register_labels.remove(&actual_reg);
+        } else {
+            self.seeded_register_labels.insert(actual_reg);
             self.all_register_labels_public = false;
         }
         self.adjust_register_labels_bytes(previous_label_bytes, next_label_bytes);
         self.estimated_memory_bytes = requested_bytes;
         Ok(())
+    }
+
+    #[inline]
+    pub(super) fn seeded_register_label(&self, reg: u32) -> Option<&Label> {
+        if self.seeded_register_labels.is_empty() {
+            return None;
+        }
+        let actual_reg = self.register_base.checked_add(reg as usize)?;
+        if self.seeded_register_labels.contains(&actual_reg) {
+            self.register_labels.get(actual_reg)
+        } else {
+            None
+        }
     }
 
     pub(super) fn array_buffer_id_for_object(&self, object_id: ObjectId) -> Option<ObjectId> {
@@ -5835,7 +5851,235 @@ impl InterpreterCore {
                 "call-stack super-label prefix drifted from the scan (bd-9vouw.72)"
             );
         }
+        if let Some(pc_frame) = self.pc_label_stack.last()
+            && winner.is_none_or(|current| &pc_frame.label > current)
+        {
+            winner = Some(&pc_frame.label);
+        }
         winner
+    }
+
+    /// Read-only view of runtime IFC sink flow audit entries recorded by this core.
+    pub fn ifc_runtime_flow_audit(&self) -> &[IfcRuntimeFlowAuditEntry] {
+        &self.ifc_runtime_flow_audit
+    }
+
+    /// Drain runtime IFC sink flow audit entries recorded by this core.
+    pub fn take_ifc_runtime_flow_audit(&mut self) -> Vec<IfcRuntimeFlowAuditEntry> {
+        std::mem::take(&mut self.ifc_runtime_flow_audit)
+    }
+
+    pub(super) fn compute_ipdom_table(module: &Ir3Module) -> Arc<[usize]> {
+        let n = module.instructions.len();
+        let exit = n;
+        let mut succs: Vec<Vec<usize>> = vec![Vec::new(); n + 1];
+        let mut rev_succs: Vec<Vec<usize>> = vec![Vec::new(); n + 1];
+        let mut try_handlers: Vec<usize> = Vec::new();
+
+        let add_edge =
+            |u: usize, v: usize, succs: &mut [Vec<usize>], rev_succs: &mut [Vec<usize>]| {
+                let target = v.min(exit);
+                if !succs[u].contains(&target) {
+                    succs[u].push(target);
+                    rev_succs[target].push(u);
+                }
+            };
+
+        for (i, instr) in module.instructions.iter().enumerate() {
+            match instr {
+                Ir3Instruction::BeginTry {
+                    catch_target,
+                    finally_target,
+                } => {
+                    let handler = finally_target.unwrap_or(*catch_target) as usize;
+                    try_handlers.push(handler.min(exit));
+                    add_edge(i, i + 1, &mut succs, &mut rev_succs);
+                }
+                Ir3Instruction::EndTry => {
+                    try_handlers.pop();
+                    add_edge(i, i + 1, &mut succs, &mut rev_succs);
+                }
+                Ir3Instruction::Halt
+                | Ir3Instruction::Return { .. }
+                | Ir3Instruction::AsyncReturn { .. }
+                | Ir3Instruction::AsyncThrow { .. }
+                | Ir3Instruction::EndFinally => {
+                    add_edge(i, exit, &mut succs, &mut rev_succs);
+                }
+                Ir3Instruction::Throw { .. } => {
+                    let target = try_handlers.last().copied().unwrap_or(exit);
+                    add_edge(i, target, &mut succs, &mut rev_succs);
+                }
+                Ir3Instruction::Jump { target } => {
+                    add_edge(i, *target as usize, &mut succs, &mut rev_succs);
+                }
+                Ir3Instruction::JumpIf { target, .. }
+                | Ir3Instruction::JumpIfNullish { target, .. }
+                | Ir3Instruction::ForInNext {
+                    done_target: target,
+                    ..
+                }
+                | Ir3Instruction::ForOfNext {
+                    done_target: target,
+                    ..
+                } => {
+                    add_edge(i, i + 1, &mut succs, &mut rev_succs);
+                    add_edge(i, *target as usize, &mut succs, &mut rev_succs);
+                }
+                _ => {
+                    add_edge(i, i + 1, &mut succs, &mut rev_succs);
+                }
+            }
+        }
+
+        // Reverse-CFG postorder DFS rooted at `exit` so RPO index 0 is `exit`.
+        let mut visited = vec![false; n + 1];
+        let mut postorder = Vec::with_capacity(n + 1);
+        let mut stack: Vec<(usize, usize)> = vec![(exit, 0)];
+        visited[exit] = true;
+        while let Some((node, next_idx)) = stack.last_mut() {
+            let current = *node;
+            if *next_idx < rev_succs[current].len() {
+                let child = rev_succs[current][*next_idx];
+                *next_idx += 1;
+                if !visited[child] {
+                    visited[child] = true;
+                    stack.push((child, 0));
+                }
+            } else {
+                postorder.push(current);
+                stack.pop();
+            }
+        }
+
+        let rpo_len = postorder.len();
+        let mut rpo_nodes = Vec::with_capacity(rpo_len);
+        let mut rpo_num = vec![usize::MAX; n + 1];
+        for (idx, &node) in postorder.iter().rev().enumerate() {
+            rpo_nodes.push(node);
+            rpo_num[node] = idx;
+        }
+
+        // Cooper-Harvey-Kennedy iterative dominators on reverse CFG.
+        let mut doms = vec![usize::MAX; rpo_len];
+        if !doms.is_empty() {
+            doms[0] = 0;
+        }
+        let intersect = |mut b1: usize, mut b2: usize, doms: &[usize]| -> usize {
+            while b1 != b2 {
+                while b1 > b2 {
+                    b1 = doms[b1];
+                }
+                while b2 > b1 {
+                    b2 = doms[b2];
+                }
+            }
+            b1
+        };
+
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for idx in 1..rpo_len {
+                let u = rpo_nodes[idx];
+                let mut new_idom = usize::MAX;
+                for &succ in &succs[u] {
+                    let pred_rpo = rpo_num[succ];
+                    if pred_rpo != usize::MAX && doms[pred_rpo] != usize::MAX {
+                        new_idom = if new_idom == usize::MAX {
+                            pred_rpo
+                        } else {
+                            intersect(pred_rpo, new_idom, &doms)
+                        };
+                    }
+                }
+                if new_idom != usize::MAX && doms[idx] != new_idom {
+                    doms[idx] = new_idom;
+                    changed = true;
+                }
+            }
+        }
+
+        let mut ipdom = vec![exit; n];
+        for (u, slot) in ipdom.iter_mut().enumerate() {
+            let idx = rpo_num[u];
+            if idx != usize::MAX && doms[idx] != usize::MAX {
+                *slot = rpo_nodes[doms[idx]];
+            }
+        }
+        Arc::from(ipdom)
+    }
+
+    pub(super) fn ipdom_for(&mut self, module: &Ir3Module, branch_ip: usize) -> usize {
+        let key = (
+            module.instructions.as_ptr() as usize,
+            module.instructions.len(),
+        );
+        let table = if let Some(cached) = self.ipdom_cache.get(&key) {
+            Arc::clone(cached)
+        } else {
+            if self.ipdom_cache.len() >= 16 {
+                self.ipdom_cache.clear();
+            }
+            let computed = Self::compute_ipdom_table(module);
+            self.ipdom_cache.insert(key, Arc::clone(&computed));
+            computed
+        };
+        table
+            .get(branch_ip)
+            .copied()
+            .unwrap_or(module.instructions.len())
+    }
+
+    #[inline]
+    pub(super) fn push_branch_pc_label_if_tainted(
+        &mut self,
+        module: &Ir3Module,
+        cond_reg: u32,
+    ) -> Result<(), InterpreterError> {
+        if self.all_register_labels_public {
+            return Ok(());
+        }
+        let cond_label = self.get_register_label(cond_reg)?;
+        if *cond_label == Label::Public {
+            return Ok(());
+        }
+        let joined = match self.active_execution_context_label() {
+            Some(active) => active.join(cond_label),
+            None => cond_label.clone(),
+        };
+        let reconvergence_ip = self.ipdom_for(module, self.ip);
+        let call_depth = self.call_stack.len();
+        if self.pc_label_stack.last().is_some_and(|top| {
+            top.reconvergence_ip == reconvergence_ip
+                && top.call_depth == call_depth
+                && top.label == joined
+        }) {
+            return Ok(());
+        }
+        self.pc_label_stack.push(PcLabelFrame {
+            reconvergence_ip,
+            call_depth,
+            label: joined,
+        });
+        Ok(())
+    }
+
+    #[inline]
+    pub(super) fn push_callee_pc_label(&mut self, callee_label: Label) {
+        if callee_label == Label::Public {
+            return;
+        }
+        let joined = match self.active_execution_context_label() {
+            Some(active) => active.join(&callee_label),
+            None => callee_label,
+        };
+        let call_depth = self.call_stack.len();
+        self.pc_label_stack.push(PcLabelFrame {
+            reconvergence_ip: usize::MAX,
+            call_depth,
+            label: joined,
+        });
     }
 
     pub(super) fn clone_active_execution_context_label(&self) -> Result<Label, InterpreterError> {
@@ -7166,7 +7410,9 @@ impl InterpreterCore {
         self.gc_remembered_set.clear();
         self.module_state.modules.clear();
         self.module_state.retained_program_bytes = 0;
-        self.module_state.live_exports.clear();
+        for entry in self.module_state.live_exports.drain(..) {
+            self.closures.cold_cells.release_cell(&entry.cell);
+        }
         self.pending_async_module_import = None;
         self.active_cjs_context = None;
 
@@ -7652,6 +7898,7 @@ impl InterpreterCore {
             register_labels,
             register_label_bytes,
         );
+        self.pc_label_stack.clear();
         // The fresh files are clear throughout (bd-9vouw.499).
         self.register_dirty_end = 0;
         Ok(snapshot)
@@ -7688,6 +7935,7 @@ impl InterpreterCore {
             register_label_bytes,
             register_dirty_end: self.register_dirty_end,
             active_inline_callback_context_label: self.active_inline_callback_context_label.clone(),
+            pc_label_stack: self.pc_label_stack.clone(),
             call_stack: self.call_stack.to_vec(),
             ip: self.ip,
             register_base: self.register_base,
@@ -7727,6 +7975,7 @@ impl InterpreterCore {
         // No one writes the files while they are parked (bd-9vouw.499).
         self.register_dirty_end = snapshot.register_dirty_end;
         self.active_inline_callback_context_label = snapshot.active_inline_callback_context_label;
+        self.pc_label_stack = snapshot.pc_label_stack;
         self.call_stack
             .replace(snapshot.call_stack, &mut self.closures.cold_cells);
         self.ip = snapshot.ip;
@@ -10143,7 +10392,7 @@ impl InterpreterCore {
         // Delivered sources were already prepared by their capture host.
         // Normalize filesystem TypeScript before any syntax detection so the
         // detection and execution parser consume the same JavaScript bytes.
-        let source = if !source_is_delivered
+        let (source, typed_hostcall_capabilities) = if !source_is_delivered
             && crate::ts_normalization::source_label_has_typescript_extension(resolved)
         {
             match crate::ts_normalization::prepare_source_entry_for_public_entrypoints(
@@ -10153,8 +10402,17 @@ impl InterpreterCore {
                 "module-import",
                 "baseline_interpreter",
             ) {
-                Ok(prepared) => prepared.prepared_source,
-                Err(crate::ts_normalization::TsNormalizationError::EmptySource) => String::new(),
+                Ok(prepared) => {
+                    let typed_caps = prepared
+                        .normalization_output
+                        .as_ref()
+                        .map(|out| out.ordered_hostcall_capabilities.clone())
+                        .unwrap_or_default();
+                    (prepared.prepared_source, typed_caps)
+                }
+                Err(crate::ts_normalization::TsNormalizationError::EmptySource) => {
+                    (String::new(), Vec::new())
+                }
                 Err(error) => {
                     self.fail_module_record(resolved, &error.to_string());
                     return Err(InterpreterError::ModuleParseFailed {
@@ -10164,7 +10422,7 @@ impl InterpreterCore {
                 }
             }
         } else {
-            source
+            (source, Vec::new())
         };
         let source_has_use_strict =
             crate::parser::source_has_use_strict_directive(&source, ParseGoal::Script);
@@ -10307,7 +10565,8 @@ impl InterpreterCore {
         let lowering_ctx =
             LoweringContext::new(&self.trace_id, "module-import", "baseline_interpreter")
                 .with_ambient_authority_grant(ambient_grant)
-                .with_host_io_exception_provenance(self.filesystem_exception_provenance());
+                .with_host_io_exception_provenance(self.filesystem_exception_provenance())
+                .with_typed_hostcall_capabilities(typed_hostcall_capabilities);
         let lowering_ctx = if is_cjs {
             lowering_ctx.with_authenticated_commonjs_runtime_bindings()
         } else {
@@ -13120,6 +13379,11 @@ impl InterpreterCore {
         args: RegRange,
         kind: DynamicFunctionKind,
     ) -> Result<Value, InterpreterError> {
+        if self.config.disallow_dynamic_codegen {
+            return Err(InterpreterError::CapabilityDenied {
+                capability: "eval".to_string(),
+            });
+        }
         // bd-9vouw.60: code generation is the call the behavior firewall
         // exists to see, but a builtin callee never reaches the per-call hook
         // (only IR3 functions and closures do). Every Function-constructor

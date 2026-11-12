@@ -303,6 +303,141 @@ impl InterpreterCore {
         outcome
     }
 
+    fn record_ifc_runtime_flow_audit(
+        &mut self,
+        capability: &str,
+        source_label: &Label,
+        sink_clearance: &Label,
+        decision: IfcRuntimeFlowDecision,
+        route_id: Option<String>,
+        receipt_id: Option<String>,
+    ) {
+        if self.ifc_runtime_flow_audit.len() >= MAX_IFC_RUNTIME_FLOW_AUDIT_ENTRIES {
+            return;
+        }
+        self.ifc_runtime_flow_audit.push(IfcRuntimeFlowAuditEntry {
+            trace_id: self.trace_id.clone(),
+            instruction_ip: self.ip as u32,
+            capability: capability.to_string(),
+            source_label: source_label.clone(),
+            sink_clearance: sink_clearance.clone(),
+            decision,
+            route_id,
+            receipt_id,
+        });
+    }
+
+    fn evaluate_sink_flow_decision(
+        &mut self,
+        capability: &str,
+        label: &Label,
+        clearance: &Label,
+    ) -> Result<(), InterpreterError> {
+        use crate::ifc_artifacts::{DeclassificationDecision, FlowCheckResult};
+
+        if let Some(policy) = self.config.ifc_flow_policy.clone() {
+            match policy.is_flow_allowed(label, clearance) {
+                FlowCheckResult::Allowed => {
+                    self.record_ifc_runtime_flow_audit(
+                        capability,
+                        label,
+                        clearance,
+                        IfcRuntimeFlowDecision::AllowedPolicy,
+                        None,
+                        None,
+                    );
+                    return Ok(());
+                }
+                FlowCheckResult::LatticeAllowed => {
+                    self.record_ifc_runtime_flow_audit(
+                        capability,
+                        label,
+                        clearance,
+                        IfcRuntimeFlowDecision::AllowedLattice,
+                        None,
+                        None,
+                    );
+                    return Ok(());
+                }
+                FlowCheckResult::DeclassificationRequired { route_id } => {
+                    let matching_receipt = self
+                        .config
+                        .declassification_receipts
+                        .iter()
+                        .find(|receipt| {
+                            receipt.decision == DeclassificationDecision::Allow
+                                && receipt.source_label == *label
+                                && receipt.sink_clearance == *clearance
+                                && receipt.declassification_route_ref == route_id
+                                && receipt.validate().is_ok()
+                                && receipt.verify(&receipt.authorized_by).is_ok()
+                        })
+                        .map(|receipt| receipt.receipt_id.clone());
+                    if let Some(receipt_id) = matching_receipt {
+                        self.record_ifc_runtime_flow_audit(
+                            capability,
+                            label,
+                            clearance,
+                            IfcRuntimeFlowDecision::Declassified,
+                            Some(route_id),
+                            Some(receipt_id),
+                        );
+                        return Ok(());
+                    }
+                    self.record_ifc_runtime_flow_audit(
+                        capability,
+                        label,
+                        clearance,
+                        IfcRuntimeFlowDecision::Denied,
+                        Some(route_id),
+                        None,
+                    );
+                    return Err(InterpreterError::CapabilityDenied {
+                        capability: format!("{capability}:confidentiality"),
+                    });
+                }
+                FlowCheckResult::Prohibited | FlowCheckResult::Denied => {
+                    self.record_ifc_runtime_flow_audit(
+                        capability,
+                        label,
+                        clearance,
+                        IfcRuntimeFlowDecision::Denied,
+                        None,
+                        None,
+                    );
+                    return Err(InterpreterError::CapabilityDenied {
+                        capability: format!("{capability}:confidentiality"),
+                    });
+                }
+            }
+        }
+
+        if !label.can_flow_to(clearance) {
+            self.record_ifc_runtime_flow_audit(
+                capability,
+                label,
+                clearance,
+                IfcRuntimeFlowDecision::Denied,
+                None,
+                None,
+            );
+            return Err(InterpreterError::CapabilityDenied {
+                capability: format!("{capability}:confidentiality"),
+            });
+        }
+        if *label > Label::Public {
+            self.record_ifc_runtime_flow_audit(
+                capability,
+                label,
+                clearance,
+                IfcRuntimeFlowDecision::AllowedLattice,
+                None,
+                None,
+            );
+        }
+        Ok(())
+    }
+
     /// Console is an Internal-clearance sink even when reached through a
     /// first-class builtin. Check live argument/PC and reachable storage labels
     /// before formatting or capturing output, not only the compiler's estimate.
@@ -345,12 +480,7 @@ impl InterpreterCore {
                 self.console_observe_reachable_value(&value)?;
             }
             let label = self.json_parse_context_label()?;
-            if !label.can_flow_to(clearance) {
-                return Err(InterpreterError::CapabilityDenied {
-                    capability: format!("{capability}:confidentiality"),
-                });
-            }
-            Ok(())
+            self.evaluate_sink_flow_decision(capability, &label, clearance)
         })();
         let context = self
             .active_inline_callback_context_label

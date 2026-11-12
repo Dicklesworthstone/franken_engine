@@ -13618,6 +13618,9 @@ fn module_and_commonjs_bindings_shadow_immutable_global_names() {
             true,
             false,
             false,
+            false,
+            false,
+            &[],
         )
         .expect("lower authenticated CommonJS");
         assert!(

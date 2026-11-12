@@ -13665,10 +13665,11 @@ impl InterpreterCore {
         receiver: Value,
         arguments: Vec<Value>,
     ) -> Result<Value, InterpreterError> {
-        self.invoke_inline_method_call_with_argument_label(
+        let (value, label) = self.invoke_inline_method_call_with_argument_label(
             module, callee, receiver, arguments, None,
-        )
-        .map(|(value, _label)| value)
+        )?;
+        self.join_pending_array_result_label(&label)?;
+        Ok(value)
     }
 
     pub(super) fn mark_inline_callback_started(&mut self) {

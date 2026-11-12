@@ -7049,12 +7049,11 @@ fn parse_expression(
         return result;
     }
 
-    // `yield` / `await` bind looser than every binary operator: their operand is
-    // a full AssignmentExpression, so `yield 1 + 1` is `yield (1 + 1)`, never
-    // `(yield 1) + 1`. Handle them before binary scanning, which would otherwise
-    // split `yield 1+1` at the `+` and leave the generator yielding the first
-    // operand (bd-hoplz bug #2). The prefix tests mirror the yield/await arms in
-    // `parse_primary_expression`, which performs the actual parse.
+    // `yield` binds looser than every binary operator: its operand is a full
+    // AssignmentExpression, so `yield 1 + 1` is `yield (1 + 1)`, never
+    // `(yield 1) + 1`. (`await` is a UnaryExpression per ES2020 §12.5, so
+    // `await p !== 91` is `(await p) !== 91`, handled via `try_parse_binary`
+    // and unary prefix / primary fallback.)
     let yields_assignment_expr = !yield_names_identifier_operand(expression, context)
         && expression.strip_prefix("yield").is_some_and(|rest| {
             rest.is_empty()
@@ -7065,11 +7064,7 @@ fn parse_expression(
                 || rest.starts_with('}')
                 || yield_operand_follows_directly(rest, context)
         });
-    let awaits_unary_expr = !await_names_identifier_operand(expression, context)
-        && expression
-            .strip_prefix("await")
-            .is_some_and(|rest| rest.starts_with(' ') || rest.starts_with('('));
-    if yields_assignment_expr || awaits_unary_expr {
+    if yields_assignment_expr {
         return parse_primary_expression(expression, span, context, recursion_depth);
     }
 
@@ -9254,10 +9249,11 @@ fn try_parse_binary(
             let rhs = expr[i + len..].trim();
             let sign = matches!(op, BinaryOperator::Add | BinaryOperator::Subtract)
                 && !ends_with_postfix_update(lhs)
-                && lhs
+                && (lhs
                     .as_bytes()
                     .last()
-                    .is_none_or(|&c| is_operator_context_byte(c));
+                    .is_none_or(|&c| is_operator_context_byte(c))
+                    || ends_with_unary_operand_keyword(lhs, context));
             if !lhs.is_empty() && !rhs.is_empty() && !sign {
                 split_points.push((i, len, op));
             }
@@ -14650,9 +14646,11 @@ fn parse_if_statement(
     let condition = parse_expression_allowing_sequence(condition_src.trim(), &span, context, 1)?;
 
     let rest = rest.trim();
-    // Split consequent from optional else.
-    let (consequent_src, alternate_src) = if rest.starts_with('{') {
-        if let Some((block_inner, after_block)) = extract_balanced(rest, '{', '}') {
+    // Split consequent from optional else, preserving zero-copy `&str` slices
+    // into `rest` so `FunctionSourceMap` retains exact function source offsets.
+    let (consequent_src, alternate_src): (&str, Option<&str>) = if rest.starts_with('{') {
+        if let Some((_block_inner, after_block)) = extract_balanced(rest, '{', '}') {
+            let block_src = &rest[..rest.len() - after_block.len()];
             let after = after_block.trim();
             // `if (a) {} ; else b`: the `;` is an empty statement after the
             // if, so this `else` has no if.
@@ -14668,21 +14666,15 @@ fn parse_if_statement(
                 ));
             }
             (
-                format!("{{{block_inner}}}"),
+                block_src,
                 if after.starts_with("else") {
-                    Some(
-                        after
-                            .strip_prefix("else")
-                            .unwrap_or(after)
-                            .trim()
-                            .to_string(),
-                    )
+                    Some(after.strip_prefix("else").unwrap_or(after).trim())
                 } else {
                     None
                 },
             )
         } else {
-            (rest.to_string(), None)
+            (rest, None)
         }
     } else {
         // Single-statement consequent: find "else" boundary.
@@ -14702,17 +14694,16 @@ fn parse_if_statement(
                     body.trim_end()
                 }
                 _ => cons,
-            }
-            .to_string();
-            let alt = rest[else_idx + 4..].trim().to_string();
+            };
+            let alt = rest[else_idx + 4..].trim();
             (cons, Some(alt))
         } else {
-            (rest.to_string(), None)
+            (rest, None)
         }
     };
 
     reject_declaration_in_statement_position(
-        &consequent_src,
+        consequent_src,
         StatementPosition::If,
         &span,
         context,
@@ -14727,7 +14718,7 @@ fn parse_if_statement(
     let alternate = if let Some(alt_src) = alternate_src {
         if !alt_src.is_empty() {
             reject_declaration_in_statement_position(
-                &alt_src,
+                alt_src,
                 StatementPosition::If,
                 &span,
                 context,

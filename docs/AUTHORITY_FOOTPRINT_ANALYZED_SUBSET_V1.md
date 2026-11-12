@@ -43,17 +43,22 @@ Every report carries an explicit `analysis_completeness`:
 
 The `bounded_at_first_violation` state exists because lowering applies a
 deny-by-default (empty) ambient-authority profile and returns at the first raw
-ambient access (`eval`, `process[.env]`, `require`, `fetch`, `crypto`, …). v1 of
-the file-level analyzer therefore surfaces one ambient violation per pass; the
-report and the least-authority suggestion both say so, so the count is never
-read as "only one exists".
+ambient access (`eval`, `process[.env]`, `require`, `fetch`, `crypto`,
+`WebSocket`, `XMLHttpRequest`, `EventSource`, `Deno`, `Bun`, `SharedWorker`,
+`importScripts`, `localStorage`, `sessionStorage`, `indexedDB`, including
+lexical `globalThis`/`global` aliases, object-pattern destructuring
+projections, and constant-folded computed string keys such as
+`globalThis['pro' + 'cess']`). v1 of the file-level analyzer therefore surfaces
+one ambient violation per pass; the report and the least-authority suggestion
+both say so, so the count is never read as "only one exists".
 
 ## What is analyzed
 
 For a file that lowers cleanly (`complete`):
 
 - **Minimal capability footprint** — the capability tags the supported hostcall
-  edges require (`Ir2Op.required_capability`), each with the exact source
+  edges require (`Ir2Op.required_capability`, including per-site TS/JS typed
+  `hostcall<"cap">(...)` capability bindings), each with the exact source
   locations (spans) that demand them, plus a best-effort typed
   `RuntimeCapability`.
 - **IFC findings** — denied flows (`error[FE-CAP-0002]`) and

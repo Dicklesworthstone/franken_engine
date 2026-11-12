@@ -84,13 +84,19 @@ impl InterpreterCore {
                 let mut element = self.generic_get(module, from, &key)?;
                 self.observe_scoped_callback_result()?;
                 if mapped && let Some((mapper, this_arg)) = mapper {
+                    let element_label = self.runtime_property_label(from, &key).join(
+                        self.object_mutation_labels
+                            .get(&from)
+                            .unwrap_or(&Label::Public),
+                    );
+                    let argument_label = (element_label != Label::Public).then_some(element_label);
                     // Child frames are never mapped. These are the only
                     // traversal-owned objects outside interpreter state;
                     // the call itself pins mapper, thisArg and arguments.
-                    element = self.with_gc_nested_request(
+                    let (mapped_element, mapped_label) = self.with_gc_nested_request(
                         vec![Value::Object(target), Value::Object(source)],
                         |core| {
-                            core.invoke_inline_method_call(
+                            core.invoke_inline_method_call_with_argument_label(
                                 module,
                                 mapper.clone(),
                                 this_arg.clone(),
@@ -99,9 +105,12 @@ impl InterpreterCore {
                                     Self::generic_length_value(index),
                                     core.generic_object_value(from),
                                 ],
+                                argument_label,
                             )
                         },
                     )?;
+                    element = mapped_element;
+                    self.join_pending_array_result_label(&mapped_label)?;
                     self.observe_scoped_callback_result()?;
                 }
                 if depth_left > 0.0

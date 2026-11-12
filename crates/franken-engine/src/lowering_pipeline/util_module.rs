@@ -476,10 +476,11 @@ const DIAGNOSTICS_CHANNEL_GLOBALS: [&str; 7] = [
 
 const VM_GLOBALS: [&str; 2] = ["EvalError", "TypeError"];
 
-const BUFFER_GLOBALS: [&str; 17] = [
+const BUFFER_GLOBALS: [&str; 18] = [
     "ArrayBuffer",
     "Blob",
     "Buffer",
+    "DataView",
     "Date",
     "Error",
     "File",
@@ -614,6 +615,22 @@ pub(super) fn rewrite_util_requires(
     tree: &SyntaxTree,
 ) -> Result<Option<SyntaxTree>, LoweringPipelineError> {
     let Some(mut rewritten) = rewrite_module_objects(tree)? else {
+        return Ok(None);
+    };
+    native_module_loader::defer_modules(&mut rewritten)?;
+    Ok(Some(rewritten))
+}
+
+/// Standalone IR0->IR1 lowering (`lower_ir0_to_ir1` / `lower_ir0_to_ir1_with_ambient_grant`)
+/// runs without IR2/IR3 capability verification or `authority_footprint`'s
+/// `has_ambient_fs_require` pre-check. Keep direct call-only fs HostCall
+/// rewrites, while leaving bare/first-class `require('fs')` / `require('fs/promises')`
+/// module loads untouched so the IR1 ambient-authority gate rejects them.
+pub(super) fn rewrite_util_requires_without_fs_module_object(
+    tree: &SyntaxTree,
+) -> Result<Option<SyntaxTree>, LoweringPipelineError> {
+    let Some(mut rewritten) = rewrite_module_objects_with_options(tree, false, false, false)?
+    else {
         return Ok(None);
     };
     native_module_loader::defer_modules(&mut rewritten)?;
@@ -905,8 +922,24 @@ fn rewrite_module_objects_with_runtime_sources(
     retain_runtime_sources: bool,
     preserve_runtime_requires: bool,
 ) -> Result<Option<SyntaxTree>, LoweringPipelineError> {
+    rewrite_module_objects_with_options(
+        tree,
+        retain_runtime_sources,
+        preserve_runtime_requires,
+        true,
+    )
+}
+
+fn rewrite_module_objects_with_options(
+    tree: &SyntaxTree,
+    retain_runtime_sources: bool,
+    preserve_runtime_requires: bool,
+    allow_fs_module_object: bool,
+) -> Result<Option<SyntaxTree>, LoweringPipelineError> {
     let fs_rewritten = if preserve_runtime_requires {
         None
+    } else if !allow_fs_module_object {
+        fs_module::rewrite_direct_fs_calls(tree)?
     } else if retain_runtime_sources {
         fs_module::rewrite_fs_requires_with_runtime_sources(tree, true)?
     } else {
@@ -2389,6 +2422,7 @@ mod tests {
             BTreeSet::from([
                 "globalThis".to_string(),
                 "arguments".to_string(),
+                "%NativeBufferPlatform".to_string(),
                 WEB_STREAMS_BINDING.to_string(),
             ])
         );

@@ -1221,7 +1221,13 @@ impl InterpreterCore {
             if let Some(result) = filter_result {
                 self.generic_filter_admit_prefix(o, result)?;
             }
-            let outcome = self.invoke_inline_method_call(
+            let element_label = self.runtime_property_label(o, &key).join(
+                self.object_mutation_labels
+                    .get(&o)
+                    .unwrap_or(&Label::Public),
+            );
+            let argument_label = (element_label != Label::Public).then_some(element_label);
+            let (outcome, outcome_label) = self.invoke_inline_method_call_with_argument_label(
                 m,
                 callback.clone(),
                 this_arg.clone(),
@@ -1230,7 +1236,9 @@ impl InterpreterCore {
                     Self::generic_length_value(k),
                     self.generic_object_value(o),
                 ],
+                argument_label,
             )?;
+            self.join_pending_array_result_label(&outcome_label)?;
             self.observe_scoped_callback_result()?;
             if let Some(result) = filter_result {
                 self.generic_filter_admit_prefix(o, result)?;

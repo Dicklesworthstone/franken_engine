@@ -1,0 +1,36 @@
+{
+  "schema_version": "franken-engine.red-team-scenario.v1",
+  "name": "cross_runtime_web_ambient_evasion",
+  "title": "Unmediated cross-runtime Web network authority probe via globalThis.WebSocket",
+  "baseline_version": "node-bun-frankenengine-red-team-v1",
+  "attack_vector": "cross_runtime_web_ambient_evasion",
+  "cwe": ["CWE-284", "CWE-749"],
+  "payload": {
+    "program": "cross_runtime_web_ambient_evasion.js",
+    "entrypoint": "node cross_runtime_web_ambient_evasion.js",
+    "input": "globalThis.WebSocket || fetch",
+    "success_criteria": "Unmediated network constructor or fetch function is resolved off globalThis"
+  },
+  "expected_outcome": {
+    "node": {
+      "outcome": "succeeds",
+      "observable": "Node exposes ambient WebSocket/fetch network constructors on globalThis without capability mediation"
+    },
+    "bun": {
+      "outcome": "succeeds",
+      "observable": "Bun exposes ambient WebSocket/fetch network constructors on globalThis without capability mediation"
+    },
+    "frankenengine": {
+      "outcome": "fail_closed",
+      "observable": "capability-typed lowering classifies cross-runtime Web/Deno/Bun ambient surfaces (WebSocket, XMLHttpRequest, EventSource, Deno, Bun, localStorage, SharedWorker) as capability-gated effects and rejects unmediated access at compile time",
+      "denial_reason": "cross_runtime_web_ambient_authority_rejected"
+    }
+  },
+  "measurement": {
+    "success_signal": "attack_succeeded == true",
+    "failure_signal": "lowering refuses globalThis.WebSocket with EffectKind::NetConnect at compile time"
+  },
+  "reproduction": [
+    "node crates/franken-engine/tests/red_team_scenarios/cross_runtime_web_ambient_evasion.js"
+  ]
+}

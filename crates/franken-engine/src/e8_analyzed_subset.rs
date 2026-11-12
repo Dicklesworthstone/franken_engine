@@ -477,11 +477,17 @@ pub fn scan_source(
         source_label,
         &prepared.prepared_source,
     );
+    let typed_hostcall_capabilities = prepared
+        .normalization_output
+        .as_ref()
+        .map(|output| output.ordered_hostcall_capabilities.clone())
+        .unwrap_or_default();
     let context = LoweringContext::new(
         SCAN_TRACE_ID.to_string(),
         SCAN_DECISION_ID.to_string(),
         SCAN_POLICY_ID.to_string(),
-    );
+    )
+    .with_typed_hostcall_capabilities(typed_hostcall_capabilities);
     let output = match lower_ir0_to_ir3(&ir0, &context) {
         Ok(output) => output,
         Err(LoweringPipelineError::AmbientAuthorityViolation { accessor, span, .. }) => {

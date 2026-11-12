@@ -5398,7 +5398,7 @@ impl InterpreterCore {
                 .module_state
                 .live_exports
                 .get_mut(existing.get() as usize - 1)
-            && entry.cell.as_ptr() == Rc::as_ptr(cell)
+            && Rc::ptr_eq(&entry.cell, cell)
         {
             if !entry.exports.contains(&target) {
                 entry.exports.push(target);
@@ -5411,8 +5411,9 @@ impl InterpreterCore {
             .ok_or_else(|| InterpreterError::InternalError {
                 details: "too many exported module bindings".to_string(),
             })?;
+        self.closures.cold_cells.register_cell(cell);
         self.module_state.live_exports.push(LiveExport {
-            cell: Rc::downgrade(cell),
+            cell: Rc::clone(cell),
             exports: vec![target],
         });
         cell.try_borrow_mut()
@@ -5480,7 +5481,7 @@ impl InterpreterCore {
         else {
             return Ok(());
         };
-        if entry.cell.as_ptr() != Rc::as_ptr(cell) {
+        if !Rc::ptr_eq(&entry.cell, cell) {
             return Ok(());
         }
         let exports = entry.exports.clone();
@@ -5615,12 +5616,8 @@ impl InterpreterCore {
         return_val: Value,
         return_label: Label,
     ) -> Result<Option<LabeledReturn>, InterpreterError> {
-        let return_label = if let Some(frame) = self
-            .call_stack
-            .last()
-            .filter(|frame| frame.super_home_object.is_some())
-        {
-            self.join_owned_label_with_temporary_budget(return_label, &frame.super_label)?
+        let return_label = if let Some(context) = self.active_execution_context_label().cloned() {
+            self.join_owned_label_with_temporary_budget(return_label, &context)?
         } else {
             return_label
         };
@@ -5646,6 +5643,14 @@ impl InterpreterCore {
             (!scope_inert_activation).then(|| self.closures_memory_bytes());
         let previous_call_stack_bytes = self.call_stack_memory_bytes();
         if let Some(mut frame) = self.call_stack.pop(&mut self.closures.cold_cells) {
+            let new_depth = self.call_stack.len();
+            while self
+                .pc_label_stack
+                .last()
+                .is_some_and(|pc| pc.call_depth > new_depth)
+            {
+                self.pc_label_stack.pop();
+            }
             let completion = if frame.derived_constructor {
                 if return_val.is_object_like() {
                     Ok((return_val, return_label))
@@ -6960,6 +6965,8 @@ impl InterpreterCore {
         if let Some(depth) = restored_suspended_abrupt_depth {
             self.suspended_abrupt_completions.truncate(depth);
         }
+        self.pc_label_stack
+            .retain(|frame| frame.call_depth <= target_depth);
         self.apply_scope_closure_call_stack_memory_delta(
             previous_scope_bytes,
             previous_closure_bytes,
@@ -8746,6 +8753,7 @@ impl InterpreterCore {
             register_labels_bytes: None,
             delegation: None,
             active_inline_callback_context_label: invocation.inline_context_label,
+            pc_label_stack: Vec::new(),
             call_stack: vec![CallFrame {
                 return_ip: module.instructions.len(),
                 return_reg: 0,
@@ -8843,6 +8851,7 @@ impl InterpreterCore {
             register_labels,
             delegation: self.generator_delegation.take(),
             active_inline_callback_context_label: self.active_inline_callback_context_label.take(),
+            pc_label_stack: std::mem::take(&mut self.pc_label_stack),
             call_stack: self.call_stack.take(&mut self.closures.cold_cells),
             ip: std::mem::take(&mut self.ip),
             register_base: std::mem::take(&mut self.register_base),
@@ -9330,6 +9339,7 @@ impl InterpreterCore {
         self.register_dirty_end = execution.register_dirty_end;
         self.generator_delegation = execution.delegation;
         self.active_inline_callback_context_label = execution.active_inline_callback_context_label;
+        self.pc_label_stack = execution.pc_label_stack;
         self.call_stack
             .replace(execution.call_stack, &mut self.closures.cold_cells);
         self.ip = execution.ip;
@@ -10294,7 +10304,8 @@ impl InterpreterCore {
                         // thrown value.
                         let escaped = self
                             .join_arg_range_label(args)?
-                            .join(self.get_register_label(receiver)?);
+                            .join(self.get_register_label(receiver)?)
+                            .join(self.get_register_label(callee)?);
                         self.join_pending_exception_label(&escaped)?;
                         return Ok(());
                     }
@@ -10330,6 +10341,7 @@ impl InterpreterCore {
             let result_label = self
                 .join_arg_range_label(args)?
                 .join(self.get_register_label(receiver)?)
+                .join(self.get_register_label(callee)?)
                 .join(&binary_storage_label)
                 .join(&stream_state_label)
                 .join(&url_state_label)
@@ -10369,7 +10381,9 @@ impl InterpreterCore {
                     // original thrown value (not a Public
                     // engine error), so a Secret arg cannot
                     // launder to a Public catch binding.
-                    let escaped = self.join_arg_range_label(args)?;
+                    let escaped = self
+                        .join_arg_range_label(args)?
+                        .join(self.get_register_label(callee)?);
                     self.join_pending_exception_label(&escaped)?;
                     return Ok(());
                 }
@@ -10385,7 +10399,9 @@ impl InterpreterCore {
         // dst label is the join of the arg labels — mirrors the
         // HostCall propagation (bd-ooaka.1, fourth member of
         // the bd-n2mjy/bd-0zybl under-tainting family).
-        let args_label = self.join_arg_range_label(args)?;
+        let args_label = self
+            .join_arg_range_label(args)?
+            .join(self.get_register_label(callee)?);
         self.write_reg_with_label(dst, result, args_label.join(&callback_result_label))?;
         self.ip += 1;
         Ok(())
@@ -10816,7 +10832,14 @@ impl InterpreterCore {
                         }
                         Value::Undefined
                     }
-                    HostcallDispatchBinding::DeterministicNoop => Value::Undefined,
+                    HostcallDispatchBinding::DeterministicNoop => {
+                        if !capability.0.starts_with("declassify.")
+                            && !capability.0.starts_with("declassify:")
+                        {
+                            self.check_host_io_confidentiality(&capability.0, args)?;
+                        }
+                        Value::Undefined
+                    }
                 };
                 let runtime_result_label = self.take_pending_hostcall_result_label();
                 let result_label = hostcall_result_contract(&capability.0)
@@ -11225,6 +11248,17 @@ impl InterpreterCore {
             // (bd-fqlfw.3.5.5). O(1) branch when disarmed.
             self.check_state_capture_boundary();
 
+            if !self.pc_label_stack.is_empty() {
+                let depth = self.call_stack.len();
+                let ip = self.ip;
+                while self.pc_label_stack.last().is_some_and(|frame| {
+                    depth < frame.call_depth
+                        || (depth == frame.call_depth && ip == frame.reconvergence_ip)
+                }) {
+                    self.pc_label_stack.pop();
+                }
+            }
+
             if self.ip >= module.instructions.len() + trampoline.len() {
                 // Fell off the end of the instruction stream.
                 if !self.call_stack.is_empty() {
@@ -11246,6 +11280,39 @@ impl InterpreterCore {
                     executed: self.instructions_executed,
                     budget: self.config.instruction_budget,
                 });
+            }
+
+            // [RC-E1] Hoist budget, safepoint, PC-label, and trampoline checks
+            // to basic-block entry for straight-line Compact Tier-I runs.
+            if self.profiling_data.is_none()
+                && checkpoint_guard.is_none()
+                && self.state_capture_tick.is_none()
+                && self.pc_label_stack.is_empty()
+                && !self.gc_safe_point_due()
+                && let Some(block) = compact_tier1.and_then(|p| p.block_slice_at(self.ip))
+                && self
+                    .instructions_executed
+                    .saturating_add(block.len() as u64)
+                    <= self.config.instruction_budget
+            {
+                let mut ran_any = false;
+                for &cell in block {
+                    if self.compact_operator_needs_to_primitive(&cell) {
+                        break;
+                    }
+                    let ip_before = self.ip;
+                    ran_any = true;
+                    self.instructions_executed += 1;
+                    self.tier_i_instructions_executed =
+                        self.tier_i_instructions_executed.saturating_add(1);
+                    self.execute_compact_tier1_instruction(module, cell)?;
+                    if self.ip != ip_before + 1 || !self.pc_label_stack.is_empty() {
+                        break;
+                    }
+                }
+                if ran_any {
+                    continue;
+                }
             }
 
             let instr_ref = Self::instruction_with_trampoline(module, trampoline, self.ip)?;
@@ -11454,6 +11521,7 @@ impl InterpreterCore {
                     self.ip = target_ip;
                 }
                 Ir3Instruction::JumpIf { cond, target } => {
+                    self.push_branch_pc_label_if_tainted(module, cond)?;
                     let val = self.read_reg(cond)?;
                     if val.is_truthy() {
                         let target_ip = target as usize;
@@ -11472,6 +11540,7 @@ impl InterpreterCore {
                     }
                 }
                 Ir3Instruction::JumpIfNullish { cond, target } => {
+                    self.push_branch_pc_label_if_tainted(module, cond)?;
                     let val = self.read_reg(cond)?;
                     if val.is_nullish() {
                         let target_ip = target as usize;
@@ -11520,6 +11589,12 @@ impl InterpreterCore {
                     {
                         let call_labels =
                             self.clone_isolated_call_labels_from_registers(None, args)?;
+                        let callee_reg_label = self.get_register_label(callee)?.clone();
+                        let isolated_context_label = match self.active_execution_context_label() {
+                            Some(active) => Some(active.join(&callee_reg_label)),
+                            None if callee_reg_label > Label::Public => Some(callee_reg_label),
+                            None => None,
+                        };
                         let arguments = self.call_arguments(args)?;
                         // An async call from the armed loop may collect inside
                         // the callee: this handler holds nothing the snapshot
@@ -11530,7 +11605,7 @@ impl InterpreterCore {
                                 callee_val.clone(),
                                 Value::Undefined,
                                 arguments,
-                                None,
+                                isolated_context_label,
                                 call_labels,
                             )
                         };
@@ -11593,6 +11668,14 @@ impl InterpreterCore {
                     if let Value::GeneratorFunction(cid) = &callee_val {
                         let (arguments, argument_labels) =
                             self.capture_generator_arguments(args)?;
+                        let callee_reg_label = self.get_register_label(callee)?.clone();
+                        let gen_context_label = match self.active_execution_context_label() {
+                            Some(active) => Some(active.join(&callee_reg_label)),
+                            None if callee_reg_label > Label::Public => {
+                                Some(callee_reg_label.clone())
+                            }
+                            None => None,
+                        };
                         let owner_module = self.continuation_owner_module(*cid, module)?;
                         let (module_specifier, generated_function_artifact) =
                             self.closure_execution_provenance(&callee_val, module)?;
@@ -11606,9 +11689,7 @@ impl InterpreterCore {
                                 argument_labels,
                                 this_value: Value::Undefined,
                                 this_label: Label::Public,
-                                inline_context_label: self
-                                    .active_inline_callback_context_label
-                                    .clone(),
+                                inline_context_label: gen_context_label.clone(),
                                 module_specifier: Some(module_specifier),
                                 generated_function_artifact,
                             }),
@@ -11617,7 +11698,10 @@ impl InterpreterCore {
                             phase: GeneratorPhase::SuspendedStart,
                             prototype,
                         })?;
-                        if let Err(error) = self.write_reg(dst, Value::Generator(gen_id)) {
+                        let gen_dst_label = gen_context_label.unwrap_or(callee_reg_label);
+                        if let Err(error) =
+                            self.write_reg_with_label(dst, Value::Generator(gen_id), gen_dst_label)
+                        {
                             self.pop_generator_object_and_release();
                             return Err(error);
                         }
@@ -11708,12 +11792,13 @@ impl InterpreterCore {
                                     result_promise,
                                 })?;
                             async_object_created = true;
+                            let callee_reg_label = self.get_register_label(callee)?.clone();
                             let (super_value, super_label, super_home_object) = self
                                 .closure_super_binding(&callee_val, callee, captured_env_bytes)?;
                             self.write_reg_with_label(
                                 dst,
                                 Value::Promise(result_promise),
-                                super_label,
+                                super_label.join(&callee_reg_label),
                             )?;
                             let super_label = self
                                 .clone_register_label_with_additional_temporary_budget(
@@ -11806,6 +11891,7 @@ impl InterpreterCore {
                             // unchanged until snapshot width is independently
                             // verified and measured.
                             self.enter_stacked_register_frame(None)?;
+                            self.push_callee_pc_label(callee_reg_label);
                             for (i, (val, label)) in
                                 arg_vals.into_iter().zip(arg_labels).enumerate()
                             {
@@ -11836,6 +11922,14 @@ impl InterpreterCore {
                     if let Value::AsyncGeneratorFunction(cid) = &callee_val {
                         let (arguments, argument_labels) =
                             self.capture_generator_arguments(args)?;
+                        let callee_reg_label = self.get_register_label(callee)?.clone();
+                        let async_gen_context_label = match self.active_execution_context_label() {
+                            Some(active) => Some(active.join(&callee_reg_label)),
+                            None if callee_reg_label > Label::Public => {
+                                Some(callee_reg_label.clone())
+                            }
+                            None => None,
+                        };
                         let owner_module = self.continuation_owner_module(*cid, module)?;
                         let (module_specifier, generated_function_artifact) =
                             self.closure_execution_provenance(&callee_val, module)?;
@@ -11849,17 +11943,19 @@ impl InterpreterCore {
                                 argument_labels,
                                 this_value: Value::Undefined,
                                 this_label: Label::Public,
-                                inline_context_label: self
-                                    .active_inline_callback_context_label
-                                    .clone(),
+                                inline_context_label: async_gen_context_label.clone(),
                                 module_specifier: Some(module_specifier),
                                 generated_function_artifact,
                             },
                             prototype,
                         )?;
-                        if let Err(error) =
-                            self.write_reg(dst, Value::AsyncGeneratorObject(async_gen_id))
-                        {
+                        let async_gen_dst_label =
+                            async_gen_context_label.unwrap_or(callee_reg_label);
+                        if let Err(error) = self.write_reg_with_label(
+                            dst,
+                            Value::AsyncGeneratorObject(async_gen_id),
+                            async_gen_dst_label,
+                        ) {
                             self.pop_async_generator_object_and_release();
                             self.pop_generator_object_and_release();
                             return Err(error);
@@ -11909,7 +12005,8 @@ impl InterpreterCore {
                                     let result_label = self
                                         .take_pending_hostcall_result_label()
                                         .unwrap_or(Label::Public)
-                                        .join(&self.join_arg_range_label(args)?);
+                                        .join(&self.join_arg_range_label(args)?)
+                                        .join(self.get_register_label(callee)?);
                                     self.write_reg_with_label(dst, result, result_label)?;
                                     self.ip += 1;
                                     continue;
@@ -11962,6 +12059,7 @@ impl InterpreterCore {
                                 .as_ref()
                                 .map(|env| Self::estimate_scope_chain_bytes(env))
                                 .unwrap_or(0);
+                            let callee_reg_label = self.get_register_label(callee)?.clone();
                             let (super_value, super_label, super_home_object) = self
                                 .closure_super_binding(&callee_val, callee, captured_env_bytes)?;
                             let binding_temporary_bytes = captured_env_bytes
@@ -12109,6 +12207,7 @@ impl InterpreterCore {
                                 compact_tier1,
                                 func_idx,
                             )?;
+                            self.push_callee_pc_label(callee_reg_label);
 
                             // Copy arguments into registers for the callee.
                             for (i, (val, label)) in
@@ -12231,6 +12330,12 @@ impl InterpreterCore {
                     {
                         let call_labels =
                             self.clone_isolated_call_labels_from_registers(Some(receiver), args)?;
+                        let callee_reg_label = self.get_register_label(callee)?.clone();
+                        let isolated_context_label = match self.active_execution_context_label() {
+                            Some(active) => Some(active.join(&callee_reg_label)),
+                            None if callee_reg_label > Label::Public => Some(callee_reg_label),
+                            None => None,
+                        };
                         let arguments = self.call_arguments(args)?;
                         // An async call from the armed loop may collect inside
                         // the callee: this handler holds nothing the snapshot
@@ -12241,7 +12346,7 @@ impl InterpreterCore {
                                 callee_val.clone(),
                                 receiver_val,
                                 arguments,
-                                None,
+                                isolated_context_label,
                                 call_labels,
                             )
                         };
@@ -12294,6 +12399,14 @@ impl InterpreterCore {
                             self.capture_generator_arguments(args)?;
                         let receiver_label =
                             self.clone_register_label_with_temporary_budget(receiver)?;
+                        let callee_reg_label = self.get_register_label(callee)?.clone();
+                        let gen_context_label = match self.active_execution_context_label() {
+                            Some(active) => Some(active.join(&callee_reg_label)),
+                            None if callee_reg_label > Label::Public => {
+                                Some(callee_reg_label.clone())
+                            }
+                            None => None,
+                        };
                         let owner_module = self.continuation_owner_module(*cid, module)?;
                         let (module_specifier, generated_function_artifact) =
                             self.closure_execution_provenance(&callee_val, module)?;
@@ -12307,9 +12420,7 @@ impl InterpreterCore {
                                 argument_labels,
                                 this_value: receiver_val.clone(),
                                 this_label: receiver_label,
-                                inline_context_label: self
-                                    .active_inline_callback_context_label
-                                    .clone(),
+                                inline_context_label: gen_context_label.clone(),
                                 module_specifier: Some(module_specifier),
                                 generated_function_artifact,
                             }),
@@ -12318,7 +12429,10 @@ impl InterpreterCore {
                             phase: GeneratorPhase::SuspendedStart,
                             prototype,
                         })?;
-                        if let Err(error) = self.write_reg(dst, Value::Generator(gen_id)) {
+                        let gen_dst_label = gen_context_label.unwrap_or(callee_reg_label);
+                        if let Err(error) =
+                            self.write_reg_with_label(dst, Value::Generator(gen_id), gen_dst_label)
+                        {
                             self.pop_generator_object_and_release();
                             return Err(error);
                         }
@@ -12394,6 +12508,7 @@ impl InterpreterCore {
                                     result_promise,
                                 })?;
                             async_object_created = true;
+                            let callee_reg_label = self.get_register_label(callee)?.clone();
                             let (super_value, super_label, super_home_object) = self
                                 .closure_super_binding(&callee_val, callee, captured_env_bytes)?;
                             let binding_temporary_bytes = captured_env_bytes
@@ -12416,7 +12531,7 @@ impl InterpreterCore {
                             self.write_reg_with_label(
                                 dst,
                                 Value::Promise(result_promise),
-                                super_label,
+                                super_label.join(&callee_reg_label),
                             )?;
                             let super_label = self
                                 .clone_register_label_with_additional_temporary_budget(
@@ -12493,6 +12608,7 @@ impl InterpreterCore {
                             // unchanged until snapshot width is independently
                             // verified and measured.
                             self.enter_stacked_register_frame(None)?;
+                            self.push_callee_pc_label(callee_reg_label);
                             for (i, (val, label)) in
                                 arg_vals.into_iter().zip(arg_labels).enumerate()
                             {
@@ -12525,6 +12641,14 @@ impl InterpreterCore {
                             self.capture_generator_arguments(args)?;
                         let receiver_label =
                             self.clone_register_label_with_temporary_budget(receiver)?;
+                        let callee_reg_label = self.get_register_label(callee)?.clone();
+                        let async_gen_context_label = match self.active_execution_context_label() {
+                            Some(active) => Some(active.join(&callee_reg_label)),
+                            None if callee_reg_label > Label::Public => {
+                                Some(callee_reg_label.clone())
+                            }
+                            None => None,
+                        };
                         let owner_module = self.continuation_owner_module(*cid, module)?;
                         let (module_specifier, generated_function_artifact) =
                             self.closure_execution_provenance(&callee_val, module)?;
@@ -12538,17 +12662,19 @@ impl InterpreterCore {
                                 argument_labels,
                                 this_value: receiver_val.clone(),
                                 this_label: receiver_label,
-                                inline_context_label: self
-                                    .active_inline_callback_context_label
-                                    .clone(),
+                                inline_context_label: async_gen_context_label.clone(),
                                 module_specifier: Some(module_specifier),
                                 generated_function_artifact,
                             },
                             prototype,
                         )?;
-                        if let Err(error) =
-                            self.write_reg(dst, Value::AsyncGeneratorObject(async_gen_id))
-                        {
+                        let async_gen_dst_label =
+                            async_gen_context_label.unwrap_or(callee_reg_label);
+                        if let Err(error) = self.write_reg_with_label(
+                            dst,
+                            Value::AsyncGeneratorObject(async_gen_id),
+                            async_gen_dst_label,
+                        ) {
                             self.pop_async_generator_object_and_release();
                             self.pop_generator_object_and_release();
                             return Err(error);
@@ -12628,6 +12754,7 @@ impl InterpreterCore {
                         .as_ref()
                         .map(|env| Self::estimate_scope_chain_bytes(env))
                         .unwrap_or(0);
+                    let callee_reg_label = self.get_register_label(callee)?.clone();
                     let (super_value, super_label, super_home_object) =
                         self.closure_super_binding(&callee_val, callee, captured_env_bytes)?;
                     let binding_temporary_bytes =
@@ -12743,6 +12870,7 @@ impl InterpreterCore {
                         compact_tier1,
                         func_idx,
                     )?;
+                    self.push_callee_pc_label(callee_reg_label);
 
                     for (i, (val, label)) in
                         arg_vals.drain(..).zip(arg_labels.drain(..)).enumerate()
@@ -12758,7 +12886,12 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::Return { value } => {
                     let return_val = self.read_reg(value)?;
-                    let return_label = self.clone_register_label_with_temporary_budget(value)?;
+                    let mut return_label =
+                        self.clone_register_label_with_temporary_budget(value)?;
+                    if let Some(context) = self.active_execution_context_label().cloned() {
+                        return_label =
+                            self.join_owned_label_with_temporary_budget(return_label, &context)?;
+                    }
                     // A return from inside a finally overrides any in-flight
                     // exception, and a return from inside try/catch must still
                     // unwind through enclosing finally blocks before it can
@@ -12950,9 +13083,9 @@ impl InterpreterCore {
                                 &method.definition_label,
                             )?;
                         }
-                        let prior_dst_label = self.get_register_label(dst)?;
-                        label =
-                            self.join_owned_label_with_temporary_budget(label, prior_dst_label)?;
+                        if let Some(seeded) = self.seeded_register_label(dst).cloned() {
+                            label = self.join_owned_label_with_temporary_budget(label, &seeded)?;
+                        }
                         self.write_reg_with_label(dst, value, label)?;
                         self.ip += 1;
                         continue;
@@ -13684,9 +13817,10 @@ impl InterpreterCore {
                         result_label = self
                             .join_owned_label_with_temporary_budget(result_label, &legacy_label)?;
                     }
-                    let prior_dst_label = self.get_register_label(dst)?;
-                    result_label =
-                        self.join_owned_label_with_temporary_budget(result_label, prior_dst_label)?;
+                    if let Some(seeded) = self.seeded_register_label(dst).cloned() {
+                        result_label =
+                            self.join_owned_label_with_temporary_budget(result_label, &seeded)?;
+                    }
                     if let Some(observed_label) = self.take_pending_hostcall_result_label() {
                         result_label = self.join_owned_label_with_temporary_budget(
                             result_label,
@@ -13838,10 +13972,13 @@ impl InterpreterCore {
                                     oid,
                                     &property_key,
                                 )?;
-                                let mutation_label = self
+                                let mut mutation_label = self
                                     .get_register_label(obj)?
                                     .join(self.get_register_label(key)?)
                                     .join(self.get_register_label(val)?);
+                                if let Some(ctx) = self.active_execution_context_label() {
+                                    mutation_label = mutation_label.join(ctx);
+                                }
                                 self.join_object_mutation_label(oid, &mutation_label)?;
                                 let handled_url = match property_key.as_str() {
                                     Some(key) => self.set_url_object_property(
@@ -13895,7 +14032,10 @@ impl InterpreterCore {
                                     // combined retained size; failure restores the
                                     // old sparse label instead of committing an
                                     // unlabeled value under memory pressure.
-                                    let value_label = self.get_register_label(val)?.clone();
+                                    let mut value_label = self.get_register_label(val)?.clone();
+                                    if let Some(ctx) = self.active_execution_context_label() {
+                                        value_label = value_label.join(ctx);
+                                    }
                                     let label_owner = self
                                         .proxy_set_receiver_object(&Value::Object(oid))?
                                         .unwrap_or(oid);
@@ -13981,10 +14121,13 @@ impl InterpreterCore {
                                     .function_prototype_descriptor_fields(Some(module), &function)?
                                     .is_some_and(|fields| fields.writable == Some(true));
                                 if writable {
-                                    let label = self
+                                    let mut label = self
                                         .get_register_label(obj)?
                                         .join(self.get_register_label(key)?)
                                         .join(self.get_register_label(val)?);
+                                    if let Some(ctx) = self.active_execution_context_label() {
+                                        label = label.join(ctx);
+                                    }
                                     self.set_constructor_prototype_override(
                                         module, &function, set_val, label,
                                     )?;
@@ -14035,10 +14178,13 @@ impl InterpreterCore {
                                                 got: builtin.display_name().to_string(),
                                             })?,
                                     };
-                                let mutation_label = self
+                                let mut mutation_label = self
                                     .get_register_label(obj)?
                                     .join(self.get_register_label(key)?)
                                     .join(self.get_register_label(val)?);
+                                if let Some(ctx) = self.active_execution_context_label() {
+                                    mutation_label = mutation_label.join(ctx);
+                                }
                                 self.join_object_mutation_label(property_object, &mutation_label)?;
                                 self.set_backing_object_property(
                                     module,
@@ -14130,10 +14276,13 @@ impl InterpreterCore {
                                     .expect(
                                         "user function values always have a backing-object key",
                                     );
-                                let mutation_label = self
+                                let mut mutation_label = self
                                     .get_register_label(obj)?
                                     .join(self.get_register_label(key)?)
                                     .join(self.get_register_label(val)?);
+                                if let Some(ctx) = self.active_execution_context_label() {
+                                    mutation_label = mutation_label.join(ctx);
+                                }
                                 self.join_object_mutation_label(property_object, &mutation_label)?;
                                 self.set_backing_object_property(
                                     module,
@@ -14153,10 +14302,13 @@ impl InterpreterCore {
                                     .expect(
                                         "promise and generator values have a backing-object key",
                                     );
-                                let mutation_label = self
+                                let mut mutation_label = self
                                     .get_register_label(obj)?
                                     .join(self.get_register_label(key)?)
                                     .join(self.get_register_label(val)?);
+                                if let Some(ctx) = self.active_execution_context_label() {
+                                    mutation_label = mutation_label.join(ctx);
+                                }
                                 self.join_object_mutation_label(property_object, &mutation_label)?;
                                 self.set_backing_object_property(
                                     module,
@@ -14190,10 +14342,13 @@ impl InterpreterCore {
                             }
                         }
                         if let Some(object_id) = binary_object_id {
-                            let mutation_label = self
+                            let mut mutation_label = self
                                 .get_register_label(obj)?
                                 .join(self.get_register_label(key)?)
                                 .join(self.get_register_label(val)?);
+                            if let Some(ctx) = self.active_execution_context_label() {
+                                mutation_label = mutation_label.join(ctx);
+                            }
                             self.join_binary_storage_label(object_id, &mutation_label)?;
                         }
                         Ok(())
@@ -14432,6 +14587,26 @@ impl InterpreterCore {
                                     expected: "object with configurable properties".to_string(),
                                     got: function.type_name().to_string(),
                                 });
+                            };
+                            self.write_reg(dst, Value::Bool(deleted))?;
+                        }
+                        ref exotic if Self::has_exotic_backing_object(exotic) => {
+                            let deleted = if let Some(backing) =
+                                self.function_own_property_object(module, exotic)?
+                            {
+                                self.run_pre_runtime_property_access_hook(
+                                    module,
+                                    backing,
+                                    &property_key,
+                                )?;
+                                self.proxy_aware_delete_runtime_property(
+                                    Some(module),
+                                    backing,
+                                    &property_key,
+                                    0,
+                                )?
+                            } else {
+                                true
                             };
                             self.write_reg(dst, Value::Bool(deleted))?;
                         }
@@ -15229,7 +15404,7 @@ impl InterpreterCore {
                         } else {
                             args_label
                         };
-                        self.write_reg_with_label(dst, result, result_label)?;
+                        self.write_reg_with_label(dst, result, result_label.join(&callee_label))?;
                         self.ip += 1;
                         continue;
                     }
@@ -15413,6 +15588,13 @@ impl InterpreterCore {
                             let previous_scope_bytes = self.scope_chain_memory_bytes();
                             let previous_closure_bytes = self.closures_memory_bytes();
                             let previous_call_stack_bytes = self.call_stack_memory_bytes();
+                            let construct_this_label = match self.active_execution_context_label() {
+                                Some(active) => active.join(&callee_label),
+                                None => callee_label.clone(),
+                            };
+                            if construct_this_label > Label::Public {
+                                self.join_object_mutation_label(this_id, &construct_this_label)?;
+                            }
                             let pushed_frame = CallFrame {
                                 return_ip: self.ip + 1,
                                 return_reg: dst,
@@ -15420,7 +15602,7 @@ impl InterpreterCore {
                                 register_width: self.register_width,
                                 function_index: Some(func_idx),
                                 this_value: this_val.clone(),
-                                this_label: Label::Public,
+                                this_label: construct_this_label.clone(),
                                 new_target_value: callee_val.clone(),
                                 new_target_label: callee_label,
                                 super_value: Value::Undefined,
@@ -15472,6 +15654,7 @@ impl InterpreterCore {
                                 compact_tier1,
                                 func_idx,
                             )?;
+                            self.push_callee_pc_label(construct_this_label);
 
                             // Arguments occupy r0..rN-1, matching the IR3
                             // lowering's parameter-register allocation
@@ -16105,8 +16288,8 @@ impl InterpreterCore {
                     let yielded = self.read_reg(value)?;
                     let yielded_label = self.clone_register_label_with_temporary_budget(value)?;
                     let mut yielded_label =
-                        if let Some(context) = &self.active_inline_callback_context_label {
-                            self.join_owned_label_with_temporary_budget(yielded_label, context)?
+                        if let Some(context) = self.active_execution_context_label().cloned() {
+                            self.join_owned_label_with_temporary_budget(yielded_label, &context)?
                         } else {
                             yielded_label
                         };
@@ -16255,9 +16438,9 @@ impl InterpreterCore {
                 Ir3Instruction::AsyncReturn { value_reg } => {
                     let return_value = self.read_reg(value_reg)?;
                     let mut return_label = self.get_register_label(value_reg)?.clone();
-                    if let Some(context) = &self.active_inline_callback_context_label {
+                    if let Some(context) = self.active_execution_context_label().cloned() {
                         return_label =
-                            self.join_owned_label_with_temporary_budget(return_label, context)?;
+                            self.join_owned_label_with_temporary_budget(return_label, &context)?;
                     }
                     if let Some(artifact_label) = self.active_generated_artifact_source_label() {
                         return_label = self.join_owned_label_with_temporary_budget(
@@ -16277,9 +16460,9 @@ impl InterpreterCore {
                 Ir3Instruction::AsyncThrow { error_reg } => {
                     let error_value = self.read_reg(error_reg)?;
                     let mut error_label = self.get_register_label(error_reg)?.clone();
-                    if let Some(context) = &self.active_inline_callback_context_label {
+                    if let Some(context) = self.active_execution_context_label().cloned() {
                         error_label =
-                            self.join_owned_label_with_temporary_budget(error_label, context)?;
+                            self.join_owned_label_with_temporary_budget(error_label, &context)?;
                     }
                     if let Some(artifact_label) = self.active_generated_artifact_source_label() {
                         error_label = self
@@ -16491,12 +16674,14 @@ impl InterpreterCore {
                                     } else {
                                         label
                                     };
-                                    // Never lower what dst already holds.
-                                    let prior_dst_label = self.get_register_label(dst)?;
-                                    let label = self.join_owned_label_with_temporary_budget(
-                                        label,
-                                        prior_dst_label,
-                                    )?;
+                                    // Never lower a caller-seeded label on dst.
+                                    let label = if let Some(seeded) =
+                                        self.seeded_register_label(dst).cloned()
+                                    {
+                                        self.join_owned_label_with_temporary_budget(label, &seeded)?
+                                    } else {
+                                        label
+                                    };
                                     self.write_reg_with_label(dst, val, label)?;
                                 }
                                 None => {
@@ -16504,25 +16689,28 @@ impl InterpreterCore {
                                     let label = self
                                         .take_pending_hostcall_result_label()
                                         .unwrap_or(Label::Public);
-                                    let prior_dst_label = self.get_register_label(dst)?;
-                                    let label = self.join_owned_label_with_temporary_budget(
-                                        label,
-                                        prior_dst_label,
-                                    )?;
+                                    let label = if let Some(seeded) =
+                                        self.seeded_register_label(dst).cloned()
+                                    {
+                                        self.join_owned_label_with_temporary_budget(label, &seeded)?
+                                    } else {
+                                        label
+                                    };
                                     self.write_reg_with_label(dst, Value::Undefined, label)?;
                                 }
                             }
                         }
                         loaded => {
                             // A scope cell keeps its value's label (LoadScoped
-                            // writes it); the read carries it, joined with
-                            // dst's like the global-object read above
-                            // (bd-9vouw.487: the value used to keep dst's
-                            // label only).
+                            // writes it); the read carries it, joined with any
+                            // caller-seeded label on dst (bd-9vouw.487).
                             let (val, label) = loaded?;
-                            let prior_dst_label = self.get_register_label(dst)?;
-                            let label = self
-                                .join_owned_label_with_temporary_budget(label, prior_dst_label)?;
+                            let label =
+                                if let Some(seeded) = self.seeded_register_label(dst).cloned() {
+                                    self.join_owned_label_with_temporary_budget(label, &seeded)?
+                                } else {
+                                    label
+                                };
                             self.write_reg_with_label(dst, val, label)?;
                         }
                     }
@@ -16552,7 +16740,10 @@ impl InterpreterCore {
                 } => {
                     let name = Self::scoped_constant_name(module, name_pool_index);
                     let val = self.read_reg(src)?;
-                    let label = self.get_register_label(src)?.clone();
+                    let mut label = self.get_register_label(src)?.clone();
+                    if let Some(ctx) = self.active_execution_context_label() {
+                        label = label.join(ctx);
+                    }
                     #[cfg(debug_assertions)]
                     let walked_before = self.scope_closure_call_stack_memory_bytes();
                     let mut previous = None;
@@ -16610,7 +16801,10 @@ impl InterpreterCore {
                 } => {
                     let name = Self::scoped_constant_name(module, name_pool_index);
                     let val = self.read_reg(src)?;
-                    let label = self.get_register_label(src)?.clone();
+                    let mut label = self.get_register_label(src)?.clone();
+                    if let Some(ctx) = self.active_execution_context_label() {
+                        label = label.join(ctx);
+                    }
                     self.put_runtime_name_labeled(
                         Some(module),
                         name.as_ref(),
@@ -16630,7 +16824,10 @@ impl InterpreterCore {
                     let val = self.read_reg(src)?;
                     let reference_token =
                         Self::runtime_name_reference_token(self.read_reg(status)?)?;
-                    let label = self.get_register_label(src)?.clone();
+                    let mut label = self.get_register_label(src)?.clone();
+                    if let Some(ctx) = self.active_execution_context_label() {
+                        label = label.join(ctx);
+                    }
                     self.put_runtime_name_with_status_labeled(
                         Some(module),
                         name.as_ref(),
@@ -16647,7 +16844,10 @@ impl InterpreterCore {
                 } => {
                     let name = Self::scoped_constant_name(module, name_pool_index);
                     let val = self.read_reg(src)?;
-                    let label = self.get_register_label(src)?.clone();
+                    let mut label = self.get_register_label(src)?.clone();
+                    if let Some(ctx) = self.active_execution_context_label() {
+                        label = label.join(ctx);
+                    }
                     #[cfg(debug_assertions)]
                     let walked_before = self.scope_closure_call_stack_memory_bytes();
                     let mut previous = None;

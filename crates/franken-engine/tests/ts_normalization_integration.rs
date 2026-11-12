@@ -664,8 +664,8 @@ fn ts_ingestion_propagates_declared_capability_into_ir_contracts() {
             .any(|ci| ci.capability == "fs.read"),
         "capability intent fs.read should be extracted from original source"
     );
-    // After stripping <"fs.read">, the parser sees hostcall("path") as a
-    // plain call — the lowering pipeline tags it with hostcall.invoke.
+    // After stripping <"fs.read">, the ordered typed hostcall capability is
+    // threaded into LoweringContext so IR2/IR3 carry the real "fs.read" tag.
     assert!(
         artifacts
             .lowering_output
@@ -676,8 +676,8 @@ fn ts_ingestion_propagates_declared_capability_into_ir_contracts() {
                 .required_capability
                 .as_ref()
                 .map(|capability| capability.0.as_str()))
-            .any(|capability| capability == "hostcall.invoke"),
-        "hostcall call should produce hostcall.invoke in IR"
+            .any(|capability| capability == "fs.read"),
+        "typed hostcall call should preserve fs.read in IR2"
     );
 }
 

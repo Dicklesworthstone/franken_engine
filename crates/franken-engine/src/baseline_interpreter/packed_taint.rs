@@ -535,4 +535,168 @@ mod tests {
         }
         assert_eq!(packed.to_label_vec(), reference);
     }
+
+    mod proptest_state_machine {
+        use super::*;
+        use proptest::prelude::*;
+
+        #[derive(Debug, Clone)]
+        enum FrameAction {
+            Write {
+                dst: u8,
+                seed: u64,
+            },
+            Join {
+                dst: u8,
+                lhs: u8,
+                rhs: u8,
+            },
+            PushFrame,
+            PopReturn {
+                dst: u8,
+                ret_seed: u64,
+                pc_seed: u64,
+            },
+            ThrowUnwind {
+                dst: u8,
+                thrown_seed: u64,
+                unwound_seeds: [u64; 2],
+                pc_seed: u64,
+            },
+            EnvCellRoundtrip {
+                cell: u8,
+                src: u8,
+                dst: u8,
+                pc_seed: u64,
+            },
+            ClearPrefix {
+                width: u8,
+            },
+        }
+
+        fn action_strategy() -> impl Strategy<Value = FrameAction> {
+            prop_oneof![
+                (0u8..48, any::<u64>()).prop_map(|(dst, seed)| FrameAction::Write { dst, seed }),
+                (0u8..48, 0u8..48, 0u8..48).prop_map(|(dst, lhs, rhs)| FrameAction::Join {
+                    dst,
+                    lhs,
+                    rhs
+                }),
+                Just(FrameAction::PushFrame),
+                (0u8..48, any::<u64>(), any::<u64>()).prop_map(|(dst, ret_seed, pc_seed)| {
+                    FrameAction::PopReturn {
+                        dst,
+                        ret_seed,
+                        pc_seed,
+                    }
+                }),
+                (0u8..48, any::<u64>(), any::<[u64; 2]>(), any::<u64>(),).prop_map(
+                    |(dst, thrown_seed, unwound_seeds, pc_seed)| {
+                        FrameAction::ThrowUnwind {
+                            dst,
+                            thrown_seed,
+                            unwound_seeds,
+                            pc_seed,
+                        }
+                    }
+                ),
+                (0u8..6, 0u8..48, 0u8..48, any::<u64>()).prop_map(|(cell, src, dst, pc_seed)| {
+                    FrameAction::EnvCellRoundtrip {
+                        cell,
+                        src,
+                        dst,
+                        pc_seed,
+                    }
+                }),
+                (0u8..=48).prop_map(|width| FrameAction::ClearPrefix { width }),
+            ]
+        }
+
+        proptest! {
+            #[test]
+            fn packed_taint_multi_frame_state_machine_matches_reference_rc_e1(
+                actions in proptest::collection::vec(action_strategy(), 1..160)
+            ) {
+                const REGS: usize = 48;
+                const CELLS: usize = 6;
+                let mut packed_stack = vec![PackedFrameTaint::new(REGS)];
+                let mut ref_stack = vec![vec![Label::Public; REGS]];
+                let mut packed_cells = vec![PackedEnvCell::public(); CELLS];
+                let mut ref_cells = vec![Label::Public; CELLS];
+
+                for action in actions {
+                    match action {
+                        FrameAction::Write { dst, seed } => {
+                            let lbl = sample_label(seed);
+                            packed_stack.last_mut().unwrap().set(u32::from(dst), lbl.clone());
+                            ref_stack.last_mut().unwrap()[usize::from(dst)] = lbl;
+                        }
+                        FrameAction::Join { dst, lhs, rhs } => {
+                            let p = packed_stack.last().unwrap().join_regs(u32::from(lhs), u32::from(rhs));
+                            let r_frame = ref_stack.last().unwrap();
+                            let r = r_frame[usize::from(lhs)].join(&r_frame[usize::from(rhs)]);
+                            prop_assert_eq!(&p, &r);
+                            packed_stack.last_mut().unwrap().set(u32::from(dst), p);
+                            ref_stack.last_mut().unwrap()[usize::from(dst)] = r;
+                        }
+                        FrameAction::PushFrame => {
+                            if packed_stack.len() < 6 {
+                                packed_stack.push(PackedFrameTaint::new(REGS));
+                                ref_stack.push(vec![Label::Public; REGS]);
+                            }
+                        }
+                        FrameAction::PopReturn { dst, ret_seed, pc_seed } => {
+                            if packed_stack.len() > 1 {
+                                packed_stack.pop();
+                                ref_stack.pop();
+                            }
+                            let ret = sample_label(ret_seed);
+                            let pc = if pc_seed.is_multiple_of(3) { sample_label(pc_seed) } else { Label::Public };
+                            packed_stack.last_mut().unwrap().apply_callee_return(u32::from(dst), ret.clone(), &pc);
+                            ref_stack.last_mut().unwrap()[usize::from(dst)] = ret.join(&pc);
+                        }
+                        FrameAction::ThrowUnwind { dst, thrown_seed, unwound_seeds, pc_seed } => {
+                            if packed_stack.len() > 1 {
+                                packed_stack.pop();
+                                ref_stack.pop();
+                            }
+                            let thrown = sample_label(thrown_seed);
+                            let unwound = [sample_label(unwound_seeds[0]), sample_label(unwound_seeds[1])];
+                            let pc = if pc_seed.is_multiple_of(3) { sample_label(pc_seed) } else { Label::Public };
+                            let p_caught = packed_stack
+                                .last_mut()
+                                .unwrap()
+                                .apply_exception_unwind(u32::from(dst), thrown.clone(), &unwound, &pc);
+                            let r_caught = thrown.join(&pc).join(&unwound[0]).join(&unwound[1]);
+                            prop_assert_eq!(p_caught, r_caught.clone());
+                            ref_stack.last_mut().unwrap()[usize::from(dst)] = r_caught;
+                        }
+                        FrameAction::EnvCellRoundtrip { cell, src, dst, pc_seed } => {
+                            let pc = if pc_seed.is_multiple_of(4) { sample_label(pc_seed) } else { Label::Public };
+                            let c_idx = usize::from(cell);
+                            packed_cells[c_idx] = packed_stack.last().unwrap().store_to_env_cell(u32::from(src), &pc);
+                            ref_cells[c_idx] = ref_stack.last().unwrap()[usize::from(src)].join(&pc);
+                            packed_stack.last_mut().unwrap().load_from_env_cell(u32::from(dst), &packed_cells[c_idx], &pc);
+                            ref_stack.last_mut().unwrap()[usize::from(dst)] = ref_cells[c_idx].join(&pc);
+                        }
+                        FrameAction::ClearPrefix { width } => {
+                            let w = usize::from(width);
+                            packed_stack.last_mut().unwrap().clear_prefix(w);
+                            for slot in ref_stack.last_mut().unwrap().iter_mut().take(w) {
+                                *slot = Label::Public;
+                            }
+                        }
+                    }
+
+                    let top_p = packed_stack.last().unwrap();
+                    let top_r = ref_stack.last().unwrap();
+                    prop_assert_eq!(top_p.to_label_vec(), top_r.clone());
+                    prop_assert_eq!(
+                        top_p.is_all_public(),
+                        top_r.iter().all(|l| matches!(l, Label::Public))
+                    );
+                }
+            }
+        }
+    }
 }

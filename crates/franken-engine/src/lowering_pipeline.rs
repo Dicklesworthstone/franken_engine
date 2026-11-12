@@ -176,6 +176,426 @@ fn commonjs_wrapper_sentinel(name: &str) -> String {
     format!("{LEXICAL_BINDING_SENTINEL_PREFIX}\0commonjs-wrapper\0{name}")
 }
 
+const FORBID_DYNAMIC_CODEGEN_SENTINEL: &str = "\0lexical\0\0forbid-dynamic-codegen";
+
+fn global_object_alias_sentinel(name: &str) -> String {
+    format!("{LEXICAL_BINDING_SENTINEL_PREFIX}\0global-object-alias\0{name}")
+}
+
+#[derive(Default)]
+struct ActiveTypedHostcallState {
+    by_callee_ptr: BTreeMap<usize, String>,
+    fallback_queue: std::collections::VecDeque<String>,
+}
+
+thread_local! {
+    static ACTIVE_TYPED_HOSTCALL_CAPABILITIES: std::cell::RefCell<Vec<ActiveTypedHostcallState>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+struct ActiveTypedHostcallGuard {
+    installed: bool,
+}
+
+impl ActiveTypedHostcallGuard {
+    fn install(statements: &[Statement], capabilities: &[String]) -> Self {
+        if capabilities.is_empty() {
+            return Self { installed: false };
+        }
+        let state = collect_lexical_typed_hostcalls(statements, capabilities);
+        ACTIVE_TYPED_HOSTCALL_CAPABILITIES.with(|stack| {
+            stack.borrow_mut().push(state);
+        });
+        Self { installed: true }
+    }
+}
+
+impl Drop for ActiveTypedHostcallGuard {
+    fn drop(&mut self) {
+        if self.installed {
+            ACTIVE_TYPED_HOSTCALL_CAPABILITIES.with(|stack| {
+                let _ = stack.borrow_mut().pop();
+            });
+        }
+    }
+}
+
+fn take_active_typed_hostcall_capability(callee: &Expression) -> Option<String> {
+    let ptr = std::ptr::from_ref(callee) as usize;
+    ACTIVE_TYPED_HOSTCALL_CAPABILITIES.with(|stack| {
+        let mut stack = stack.borrow_mut();
+        let state = stack.last_mut()?;
+        state
+            .by_callee_ptr
+            .remove(&ptr)
+            .or_else(|| state.fallback_queue.pop_front())
+    })
+}
+
+fn collect_lexical_typed_hostcalls(
+    statements: &[Statement],
+    capabilities: &[String],
+) -> ActiveTypedHostcallState {
+    struct LexicalHostcallCollector<'a> {
+        capabilities: &'a [String],
+        cursor: usize,
+        shadow_depth: usize,
+        by_callee_ptr: BTreeMap<usize, String>,
+    }
+
+    impl<'a> LexicalHostcallCollector<'a> {
+        fn scope_declares_hostcall_statements(stmts: &[Statement]) -> bool {
+            stmts.iter().any(|stmt| match stmt {
+                Statement::Import(import) => import.clause.binding_names().contains(&"hostcall"),
+                Statement::VariableDeclaration(vd) => vd
+                    .declarations
+                    .iter()
+                    .any(|d| d.pattern.binding_names().contains(&"hostcall")),
+                Statement::FunctionDeclaration(f) => f.name.as_deref() == Some("hostcall"),
+                Statement::ClassDeclaration(c) => c.name.as_deref() == Some("hostcall"),
+                _ => false,
+            })
+        }
+
+        fn visit_statements(&mut self, stmts: &[Statement]) {
+            let declares = Self::scope_declares_hostcall_statements(stmts);
+            if declares {
+                self.shadow_depth += 1;
+            }
+            for stmt in stmts {
+                self.visit_statement(stmt);
+            }
+            if declares {
+                self.shadow_depth -= 1;
+            }
+        }
+
+        fn visit_statement(&mut self, stmt: &Statement) {
+            match stmt {
+                Statement::Import(_) | Statement::Break(_) | Statement::Continue(_) => {}
+                Statement::Export(export) => {
+                    if let ExportKind::Default(expr) = &export.kind {
+                        self.visit_expression(expr);
+                    }
+                }
+                Statement::VariableDeclaration(vd) => {
+                    for d in &vd.declarations {
+                        self.visit_pattern(&d.pattern);
+                        if let Some(init) = &d.initializer {
+                            self.visit_expression(init);
+                        }
+                    }
+                }
+                Statement::Expression(s) => self.visit_expression(&s.expression),
+                Statement::Block(b) => self.visit_statements(&b.body),
+                Statement::If(s) => {
+                    self.visit_expression(&s.condition);
+                    self.visit_statement(&s.consequent);
+                    if let Some(alt) = &s.alternate {
+                        self.visit_statement(alt);
+                    }
+                }
+                Statement::For(s) => {
+                    let init_declares = s.init.as_deref().is_some_and(|init| {
+                        matches!(init, Statement::VariableDeclaration(vd)
+                            if vd.declarations.iter().any(|d| d.pattern.binding_names().contains(&"hostcall")))
+                    });
+                    if init_declares {
+                        self.shadow_depth += 1;
+                    }
+                    if let Some(init) = &s.init {
+                        self.visit_statement(init);
+                    }
+                    if let Some(cond) = &s.condition {
+                        self.visit_expression(cond);
+                    }
+                    if let Some(upd) = &s.update {
+                        self.visit_expression(upd);
+                    }
+                    self.visit_statement(&s.body);
+                    if init_declares {
+                        self.shadow_depth -= 1;
+                    }
+                }
+                Statement::While(s) => {
+                    self.visit_expression(&s.condition);
+                    self.visit_statement(&s.body);
+                }
+                Statement::With(s) => {
+                    self.visit_expression(&s.object);
+                    self.visit_statement(&s.body);
+                }
+                Statement::DoWhile(s) => {
+                    self.visit_statement(&s.body);
+                    self.visit_expression(&s.condition);
+                }
+                Statement::Return(s) => {
+                    if let Some(arg) = &s.argument {
+                        self.visit_expression(arg);
+                    }
+                }
+                Statement::Throw(s) => self.visit_expression(&s.argument),
+                Statement::TryCatch(s) => {
+                    self.visit_statements(&s.block.body);
+                    if let Some(handler) = &s.handler {
+                        let catches_hostcall = handler.parameter.as_deref() == Some("hostcall");
+                        if catches_hostcall {
+                            self.shadow_depth += 1;
+                        }
+                        self.visit_statements(&handler.body.body);
+                        if catches_hostcall {
+                            self.shadow_depth -= 1;
+                        }
+                    }
+                    if let Some(fin) = &s.finalizer {
+                        self.visit_statements(&fin.body);
+                    }
+                }
+                Statement::Switch(s) => {
+                    self.visit_expression(&s.discriminant);
+                    for case in &s.cases {
+                        if let Some(test) = &case.test {
+                            self.visit_expression(test);
+                        }
+                        self.visit_statements(&case.consequent);
+                    }
+                }
+                Statement::FunctionDeclaration(f) => {
+                    self.visit_function(f.name.as_deref(), &f.params, &f.body.body);
+                }
+                Statement::ClassDeclaration(c) => {
+                    self.visit_class(c.name.as_deref(), c.super_class.as_deref(), &c.body);
+                }
+                Statement::ForIn(s) => {
+                    let binds = s.binding.binding_names().contains(&"hostcall");
+                    if binds {
+                        self.shadow_depth += 1;
+                    }
+                    self.visit_pattern(&s.binding);
+                    self.visit_expression(&s.object);
+                    self.visit_statement(&s.body);
+                    if binds {
+                        self.shadow_depth -= 1;
+                    }
+                }
+                Statement::ForOf(s) => {
+                    let binds = s.binding.binding_names().contains(&"hostcall");
+                    if binds {
+                        self.shadow_depth += 1;
+                    }
+                    self.visit_pattern(&s.binding);
+                    self.visit_expression(&s.iterable);
+                    self.visit_statement(&s.body);
+                    if binds {
+                        self.shadow_depth -= 1;
+                    }
+                }
+                Statement::Labeled(s) => self.visit_statement(&s.body),
+            }
+        }
+
+        fn visit_expression(&mut self, expr: &Expression) {
+            match expr {
+                Expression::Call {
+                    callee, arguments, ..
+                } => {
+                    if self.shadow_depth == 0
+                        && matches!(callee.as_ref(), Expression::Identifier(name) if name == "hostcall")
+                        && let Some(cap) = self.capabilities.get(self.cursor)
+                    {
+                        self.cursor += 1;
+                        self.by_callee_ptr
+                            .insert(std::ptr::from_ref(callee.as_ref()) as usize, cap.clone());
+                    }
+                    self.visit_expression(callee);
+                    for arg in arguments {
+                        self.visit_expression(arg);
+                    }
+                }
+                Expression::OptionalCall {
+                    callee, arguments, ..
+                }
+                | Expression::New { callee, arguments } => {
+                    self.visit_expression(callee);
+                    for arg in arguments {
+                        self.visit_expression(arg);
+                    }
+                }
+                Expression::Await(inner)
+                | Expression::SpreadElement(inner)
+                | Expression::Unary {
+                    argument: inner, ..
+                } => self.visit_expression(inner),
+                Expression::Yield { argument, .. } => {
+                    if let Some(arg) = argument {
+                        self.visit_expression(arg);
+                    }
+                }
+                Expression::Binary { left, right, .. }
+                | Expression::Assignment { left, right, .. } => {
+                    self.visit_expression(left);
+                    self.visit_expression(right);
+                }
+                Expression::Conditional {
+                    test,
+                    consequent,
+                    alternate,
+                } => {
+                    self.visit_expression(test);
+                    self.visit_expression(consequent);
+                    self.visit_expression(alternate);
+                }
+                Expression::Member {
+                    object, property, ..
+                }
+                | Expression::OptionalMember {
+                    object, property, ..
+                } => {
+                    self.visit_expression(object);
+                    self.visit_expression(property);
+                }
+                Expression::ArrayLiteral(elems) => {
+                    for elem in elems.iter().flatten() {
+                        self.visit_expression(elem);
+                    }
+                }
+                Expression::ObjectLiteral(props) => {
+                    for prop in props {
+                        self.visit_expression(&prop.key);
+                        self.visit_expression(&prop.value);
+                    }
+                }
+                Expression::ArrowFunction { params, body, .. } => {
+                    let shadows = params
+                        .iter()
+                        .any(|p| p.pattern.binding_names().contains(&"hostcall"));
+                    if shadows {
+                        self.shadow_depth += 1;
+                    }
+                    for param in params {
+                        self.visit_pattern(&param.pattern);
+                    }
+                    match body {
+                        ArrowBody::Expression(e) => self.visit_expression(e),
+                        ArrowBody::Block(b) => self.visit_statements(&b.body),
+                    }
+                    if shadows {
+                        self.shadow_depth -= 1;
+                    }
+                }
+                Expression::TemplateLiteral { expressions, .. } => {
+                    for e in expressions {
+                        self.visit_expression(e);
+                    }
+                }
+                Expression::Function {
+                    name, params, body, ..
+                } => self.visit_function(name.as_deref(), params, &body.body),
+                Expression::ClassExpression {
+                    name,
+                    super_class,
+                    body,
+                    ..
+                } => self.visit_class(name.as_deref(), super_class.as_deref(), body),
+                Expression::Identifier(_)
+                | Expression::StringLiteral(_)
+                | Expression::NumericLiteral(_)
+                | Expression::BigIntLiteral(_)
+                | Expression::FloatLiteral(_)
+                | Expression::BooleanLiteral(_)
+                | Expression::NullLiteral
+                | Expression::UndefinedLiteral
+                | Expression::This
+                | Expression::SloppyThis
+                | Expression::NewTarget
+                | Expression::ImportMeta
+                | Expression::Raw(_)
+                | Expression::RegExpLiteral { .. }
+                | Expression::Super => {}
+            }
+        }
+
+        fn visit_pattern(&mut self, pattern: &BindingPattern) {
+            match pattern {
+                BindingPattern::Identifier(_) => {}
+                BindingPattern::ObjectPattern(props) => {
+                    for prop in props {
+                        self.visit_expression(&prop.key);
+                        self.visit_pattern(&prop.value);
+                    }
+                }
+                BindingPattern::ArrayPattern(elems) => {
+                    for elem in elems.iter().flatten() {
+                        self.visit_pattern(elem);
+                    }
+                }
+                BindingPattern::Rest(inner) => self.visit_pattern(inner),
+                BindingPattern::AssignmentPattern { left, right } => {
+                    self.visit_pattern(left);
+                    self.visit_expression(right);
+                }
+            }
+        }
+
+        fn visit_function(
+            &mut self,
+            name: Option<&str>,
+            params: &[FunctionParam],
+            body: &[Statement],
+        ) {
+            let shadows = name == Some("hostcall")
+                || params
+                    .iter()
+                    .any(|p| p.pattern.binding_names().contains(&"hostcall"));
+            if shadows {
+                self.shadow_depth += 1;
+            }
+            for param in params {
+                self.visit_pattern(&param.pattern);
+            }
+            self.visit_statements(body);
+            if shadows {
+                self.shadow_depth -= 1;
+            }
+        }
+
+        fn visit_class(
+            &mut self,
+            name: Option<&str>,
+            super_class: Option<&Expression>,
+            body: &[MethodDefinition],
+        ) {
+            let shadows = name == Some("hostcall");
+            if shadows {
+                self.shadow_depth += 1;
+            }
+            if let Some(sc) = super_class {
+                self.visit_expression(sc);
+            }
+            for m in body {
+                self.visit_expression(&m.key);
+                self.visit_function(None, &m.params, &m.body.body);
+            }
+            if shadows {
+                self.shadow_depth -= 1;
+            }
+        }
+    }
+
+    let mut collector = LexicalHostcallCollector {
+        capabilities,
+        cursor: 0,
+        shadow_depth: 0,
+        by_callee_ptr: BTreeMap::new(),
+    };
+    collector.visit_statements(statements);
+    let fallback_queue = capabilities[collector.cursor..].iter().cloned().collect();
+    ActiveTypedHostcallState {
+        by_callee_ptr: collector.by_callee_ptr,
+        fallback_queue,
+    }
+}
+
 /// Whether `name`, as seen from a function body whose enclosing lookup is
 /// `outer_lookup`, is the CommonJS wrapper binding itself rather than a
 /// source binding of the same name (bd-rff5g). The loader writes the wrapper
@@ -479,6 +899,15 @@ pub struct LoweringContext {
     /// CommonJS bindings, module authority, or any builtin capability.
     #[serde(default)]
     pub preserve_runtime_module_loads: bool,
+    /// When enabled, unshadowed `Function(...)` / `new Function(...)` calls
+    /// require `EffectKind::Eval` at lowering time (rejecting dynamic codegen
+    /// under `AmbientAuthorityGrant::DenyAll`).
+    #[serde(default)]
+    pub forbid_dynamic_codegen: bool,
+    /// Lexical source-order capability tags extracted from TypeScript
+    /// `hostcall<"cap">(args)` calls before generic type erasure.
+    #[serde(default)]
+    pub typed_hostcall_capabilities: Vec<String>,
 }
 
 impl LoweringContext {
@@ -495,6 +924,8 @@ impl LoweringContext {
             host_io_exception_provenance: HostIoExceptionProvenance::Unknown,
             authenticated_commonjs_runtime_bindings: false,
             preserve_runtime_module_loads: false,
+            forbid_dynamic_codegen: false,
+            typed_hostcall_capabilities: Vec::new(),
         }
     }
 
@@ -528,6 +959,20 @@ impl LoweringContext {
     /// cannot replace these requests with lowering-time facade authority.
     pub fn with_preserved_runtime_module_loads(mut self) -> Self {
         self.preserve_runtime_module_loads = true;
+        self
+    }
+
+    /// Reject unshadowed `Function(...)` / `new Function(...)` dynamic codegen
+    /// unless `EffectKind::Eval` is granted in the lowering profile.
+    pub fn with_forbid_dynamic_codegen(mut self, forbid: bool) -> Self {
+        self.forbid_dynamic_codegen = forbid;
+        self
+    }
+
+    /// Bind lowering to lexical source-order capability tags extracted from
+    /// TypeScript `hostcall<"cap">(args)` sites before type erasure.
+    pub fn with_typed_hostcall_capabilities(mut self, capabilities: Vec<String>) -> Self {
+        self.typed_hostcall_capabilities = capabilities;
         self
     }
 }
@@ -876,6 +1321,9 @@ fn lower_ir0_to_ir3_unit(
         context.authenticated_commonjs_runtime_bindings,
         bounded_imports,
         context.preserve_runtime_module_loads,
+        true,
+        context.forbid_dynamic_codegen,
+        &context.typed_hostcall_capabilities,
     ) {
         Ok(result) => {
             events.push(success_event(context, "ir0_to_ir1_lowered"));
@@ -1195,7 +1643,16 @@ fn lower_ir0_to_ir1_with_ambient_grant(
     ir0: &Ir0Module,
     ambient_grant: AmbientAuthorityGrant,
 ) -> Result<LoweringPassResult<Ir1Module>, LoweringPipelineError> {
-    lower_ir0_to_ir1_with_authenticated_runtime_bindings(ir0, ambient_grant, false, false, false)
+    lower_ir0_to_ir1_with_authenticated_runtime_bindings(
+        ir0,
+        ambient_grant,
+        false,
+        false,
+        false,
+        false,
+        false,
+        &[],
+    )
 }
 
 /// Native stack for IR0 -> IR1 lowering, which recurses over the syntax tree
@@ -1209,12 +1666,16 @@ const LOWERING_STACK_BASE_BYTES: usize = 4 * 1024 * 1024;
 const LOWERING_STACK_BYTES_PER_NESTING_LEVEL: usize = 320 * 1024;
 const LOWERING_STACK_NESTING_LEVELS: usize = 256;
 
+#[allow(clippy::too_many_arguments)]
 fn lower_ir0_to_ir1_with_authenticated_runtime_bindings(
     ir0: &Ir0Module,
     ambient_grant: AmbientAuthorityGrant,
     authenticated_commonjs_runtime_bindings: bool,
     bounded_imports: bool,
     preserve_runtime_module_loads: bool,
+    allow_fs_module_object: bool,
+    forbid_dynamic_codegen: bool,
+    typed_hostcall_capabilities: &[String],
 ) -> Result<LoweringPassResult<Ir1Module>, LoweringPipelineError> {
     crate::parser::run_with_provisioned_stack(
         "franken-engine-lower",
@@ -1228,17 +1689,24 @@ fn lower_ir0_to_ir1_with_authenticated_runtime_bindings(
                 authenticated_commonjs_runtime_bindings,
                 bounded_imports,
                 preserve_runtime_module_loads,
+                allow_fs_module_object,
+                forbid_dynamic_codegen,
+                typed_hostcall_capabilities,
             )
         },
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lower_ir0_to_ir1_on_current_stack(
     ir0: &Ir0Module,
     ambient_grant: AmbientAuthorityGrant,
     authenticated_commonjs_runtime_bindings: bool,
     bounded_imports: bool,
     preserve_runtime_module_loads: bool,
+    allow_fs_module_object: bool,
+    forbid_dynamic_codegen: bool,
+    typed_hostcall_capabilities: &[String],
 ) -> Result<LoweringPassResult<Ir1Module>, LoweringPipelineError> {
     verify_schema_version(&ir0.header).map_err(lowering_error_from_ir_error)?;
     verify_ir0_script_global_schema(ir0).map_err(lowering_error_from_ir_error)?;
@@ -1307,8 +1775,10 @@ fn lower_ir0_to_ir1_on_current_stack(
         None
     } else if authenticated_commonjs_runtime_bindings {
         util_module::rewrite_commonjs_util_requires(&ir0.tree)?
-    } else {
+    } else if allow_fs_module_object {
         util_module::rewrite_util_requires(&ir0.tree)?
+    } else {
+        util_module::rewrite_util_requires_without_fs_module_object(&ir0.tree)?
     } {
         Some(tree) => {
             util_rewritten = Ir0Module {
@@ -1356,10 +1826,15 @@ fn lower_ir0_to_ir1_on_current_stack(
             limit: MAX_PREALLOC_BINDINGS,
         });
     }
+    let _typed_hostcall_guard =
+        ActiveTypedHostcallGuard::install(&ir0.tree.body, typed_hostcall_capabilities);
     let mut bindings = Vec::<ResolvedBinding>::with_capacity(estimated_bindings);
     let mut binding_lookup = BTreeMap::<String, BindingId>::new();
     if preserve_runtime_module_loads {
         binding_lookup.insert(PRESERVE_RUNTIME_MODULE_LOADS_SENTINEL.to_string(), 0);
+    }
+    if forbid_dynamic_codegen {
+        binding_lookup.insert(FORBID_DYNAMIC_CODEGEN_SENTINEL.to_string(), 0);
     }
     // ESM alias recognizers have no require callee on which to check the
     // sentinel. Keep their source declarations as runtime imports too.
@@ -1446,6 +1921,18 @@ fn lower_ir0_to_ir1_on_current_stack(
             && global_value_literal(name).is_some()
         {
             binding_lookup.insert(script_global_value_sentinel(name), binding_id);
+        }
+    }
+    for statement in &ir0.tree.body {
+        if let Statement::VariableDeclaration(vd) = statement {
+            for d in &vd.declarations {
+                if let BindingPattern::Identifier(alias) = &d.pattern
+                    && let Some(init) = &d.initializer
+                    && expr_is_global_object_ref(init, &binding_lookup)
+                {
+                    binding_lookup.insert(global_object_alias_sentinel(alias), 0);
+                }
+            }
         }
     }
     // bd-1xl17.a: record fs-module binding aliases (`const fs = require('fs')`
@@ -3508,6 +3995,12 @@ fn prepare_function_body_bindings(
                 body_lookup.insert(key.clone(), binding_id);
             }
         }
+    }
+    for name in &local_names {
+        body_lookup.remove(&global_object_alias_sentinel(name));
+    }
+    if let Some(name) = self_name {
+        body_lookup.remove(&global_object_alias_sentinel(name));
     }
 
     if is_arrow
@@ -5818,6 +6311,24 @@ fn lower_statement_to_ir1_with_flow(
 
                 // Lower the initializer expression (pushes value onto stack).
                 if let Some(init) = &d.initializer {
+                    if expr_is_global_object_ref(init, binding_lookup) {
+                        if let BindingPattern::Identifier(alias) = &d.pattern {
+                            binding_lookup.insert(global_object_alias_sentinel(alias), 0);
+                        } else {
+                            check_global_object_destructuring_pattern(
+                                &d.pattern,
+                                scope_id,
+                                Some(d.span),
+                                binding_lookup,
+                            )?;
+                        }
+                    } else if matches!(
+                        vd.kind,
+                        VariableDeclarationKind::Let | VariableDeclarationKind::Const
+                    ) && let BindingPattern::Identifier(alias) = &d.pattern
+                    {
+                        binding_lookup.remove(&global_object_alias_sentinel(alias));
+                    }
                     // bd-1xl17.a: when `<id> = require('fs')` aliases the fs module
                     // AND the alias was confirmed at pre-scan (used as an fs host
                     // method; the NUL-sentinel is present), bind `id` to `undefined`
@@ -15804,15 +16315,25 @@ fn required_effect_for_ambient_authority(
     member_property: Option<&str>,
 ) -> Option<EffectKind> {
     match identifier {
-        "eval" => Some(EffectKind::Eval),
-        // bd-9vouw.17: the global object the runtime binds to `globalThis`
-        // (and Node's `global`) holds only the standard intrinsics, never a
-        // host-authority member, so reading it needs no authority. A static
-        // read of a host member stays gated like the bare identifier.
+        "eval" | "SharedWorker" | "importScripts" => Some(EffectKind::Eval),
+        "Deno" | "Bun" => Some(EffectKind::Global),
+        "WebSocket" | "XMLHttpRequest" | "EventSource" => Some(EffectKind::NetConnect),
+        "localStorage" | "sessionStorage" | "indexedDB" => Some(EffectKind::FsRead),
+        // bd-9vouw.17 + bd-7fhp3: the global object the runtime binds to
+        // `globalThis` (and Node's `global`) holds only the standard intrinsics,
+        // never a host-authority member, so reading it needs no authority. A
+        // static or folded read of any Node/Web/Deno/Bun host-authority member
+        // stays gated identically to the bare identifier.
         "globalThis" | "global" => match member_property {
+            Some("eval" | "SharedWorker" | "importScripts") => Some(EffectKind::Eval),
+            Some("Deno" | "Bun") => Some(EffectKind::Global),
             Some("process") => Some(EffectKind::EnvRead), // process.env access
-            Some("require") => Some(EffectKind::FsRead),  // require can access filesystem
-            Some("fetch") => Some(EffectKind::NetConnect), // fetch is network access
+            Some("require" | "localStorage" | "sessionStorage" | "indexedDB") => {
+                Some(EffectKind::FsRead)
+            }
+            Some("fetch" | "WebSocket" | "XMLHttpRequest" | "EventSource") => {
+                Some(EffectKind::NetConnect)
+            }
             Some("crypto") => Some(EffectKind::RandomRead), // crypto uses CSPRNG
             _ => None,
         },
@@ -15941,18 +16462,27 @@ fn lower_typeof_operand_suppressing_ambient(
         Expression::Member {
             object,
             property,
-            computed: false,
+            computed,
             ..
         } => {
             let Expression::Identifier(obj_name) = object.as_ref() else {
                 return Ok(false);
             };
-            let Some(prop_name) = well_formed_static_name(property) else {
+            let is_shadowed = has_source_lexical_binding(binding_lookup, obj_name);
+            let ambient_base = if expr_is_global_object_ref(object, binding_lookup) {
+                "globalThis"
+            } else {
+                obj_name.as_str()
+            };
+            let Some(prop_name) = (if !*computed || ambient_base == "globalThis" {
+                static_member_property_name(property, *computed)
+            } else {
+                None
+            }) else {
                 return Ok(false);
             };
-            let is_shadowed = has_source_lexical_binding(binding_lookup, obj_name);
-            if is_shadowed
-                || required_effect_for_ambient_authority(obj_name, Some(prop_name)).is_none()
+            if (is_shadowed && ambient_base != "globalThis")
+                || required_effect_for_ambient_authority(ambient_base, Some(&prop_name)).is_none()
             {
                 return Ok(false);
             }
@@ -15984,7 +16514,7 @@ fn lower_typeof_operand_suppressing_ambient(
             }
             let key = lower_member_property_key_to_ir1(
                 property,
-                false,
+                *computed,
                 ops,
                 bindings,
                 binding_lookup,
@@ -16107,6 +16637,337 @@ fn lower_spread_apply_hostcall_to_ir1(
 /// Resolve a method reference before evaluating its arguments. Standard
 /// builtin properties are mutable, so they share this ordinary member-call
 /// path with user objects instead of selecting a native callee at compile time.
+fn try_fold_static_string_expr(expr: &Expression) -> Option<String> {
+    match expr {
+        Expression::StringLiteral(s) => s.as_str().map(str::to_string),
+        Expression::TemplateLiteral {
+            quasis,
+            expressions,
+        } => {
+            let mut out = String::new();
+            for (idx, quasi) in quasis.iter().enumerate() {
+                let cooked = crate::parser::cook_template_quasi(quasi)?;
+                out.push_str(cooked.as_str()?);
+                if let Some(sub) = expressions.get(idx) {
+                    out.push_str(&try_fold_static_string_expr(sub)?);
+                }
+            }
+            Some(out)
+        }
+        Expression::Binary {
+            operator: BinaryOperator::Add,
+            left,
+            right,
+        } => {
+            let mut lhs = try_fold_static_string_expr(left)?;
+            let rhs = try_fold_static_string_expr(right)?;
+            lhs.push_str(&rhs);
+            Some(lhs)
+        }
+        _ => None,
+    }
+}
+
+fn static_member_property_name(property: &Expression, computed: bool) -> Option<String> {
+    if !computed {
+        match property {
+            Expression::Identifier(name) => Some(name.clone()),
+            _ => None,
+        }
+    } else {
+        try_fold_static_string_expr(property)
+    }
+}
+
+fn expr_is_global_object_ref(
+    expr: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    match expr {
+        Expression::Identifier(name) => {
+            if matches!(name.as_str(), "globalThis" | "global")
+                && !has_source_lexical_binding(binding_lookup, name)
+            {
+                return true;
+            }
+            binding_lookup.contains_key(&global_object_alias_sentinel(name))
+        }
+        Expression::Member {
+            object,
+            property,
+            computed,
+            ..
+        }
+        | Expression::OptionalMember {
+            object,
+            property,
+            computed,
+            ..
+        } => {
+            expr_is_global_object_ref(object, binding_lookup)
+                && static_member_property_name(property, *computed)
+                    .is_some_and(|prop| matches!(prop.as_str(), "globalThis" | "global"))
+        }
+        _ => false,
+    }
+}
+
+fn is_unshadowed_dynamic_function_callee(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    match callee {
+        Expression::Identifier(name) => {
+            name == "Function" && !has_source_lexical_binding(binding_lookup, name)
+        }
+        Expression::Member {
+            object,
+            property,
+            computed,
+            ..
+        }
+        | Expression::OptionalMember {
+            object,
+            property,
+            computed,
+            ..
+        } => {
+            expr_is_global_object_ref(object, binding_lookup)
+                && static_member_property_name(property, *computed)
+                    .is_some_and(|prop| prop == "Function")
+        }
+        _ => false,
+    }
+}
+
+fn check_member_ambient_authority_violation(
+    object: &Expression,
+    property: &Expression,
+    computed: bool,
+    exempt_process_next_tick: bool,
+    span: Option<crate::ast::SourceSpan>,
+    root_scope_id: ScopeId,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Result<(), LoweringPipelineError> {
+    if crypto_constants_member_read(object, property, computed, binding_lookup) {
+        return Ok(());
+    }
+    let (ambient_base, display_base): (&str, &str) =
+        if expr_is_global_object_ref(object, binding_lookup) {
+            let display = match object {
+                Expression::Identifier(name) => name.as_str(),
+                _ => "globalThis",
+            };
+            ("globalThis", display)
+        } else if let Expression::Identifier(obj_name) = object
+            && !has_source_lexical_binding(binding_lookup, obj_name)
+        {
+            (obj_name.as_str(), obj_name.as_str())
+        } else {
+            return Ok(());
+        };
+
+    let resolved_prop = if !computed || ambient_base == "globalThis" {
+        static_member_property_name(property, computed)
+    } else {
+        None
+    };
+    if exempt_process_next_tick
+        && ambient_base == "process"
+        && !computed
+        && resolved_prop.as_deref() == Some("nextTick")
+    {
+        return Ok(());
+    }
+    let prop_for_check = match resolved_prop.as_deref() {
+        Some(prop) => prop,
+        None if ambient_base == "process" && computed => "<computed>",
+        None => return Ok(()),
+    };
+    let required_effect = if ambient_base == "globalThis"
+        && prop_for_check == "Function"
+        && binding_lookup.contains_key(FORBID_DYNAMIC_CODEGEN_SENTINEL)
+    {
+        Some(EffectKind::Eval)
+    } else {
+        required_effect_for_ambient_authority(ambient_base, Some(prop_for_check))
+    };
+    if let Some(required_effect) = required_effect
+        && let Err(caller_profile) =
+            check_ambient_authority_allowed(required_effect, root_scope_id, binding_lookup)
+    {
+        let accessor = if computed {
+            format!("{display_base}[{prop_for_check}]")
+        } else {
+            format!("{display_base}.{prop_for_check}")
+        };
+        return Err(LoweringPipelineError::AmbientAuthorityViolation {
+            required_effect,
+            caller_profile,
+            accessor,
+            span,
+        });
+    }
+    Ok(())
+}
+
+fn check_global_object_destructuring_pattern(
+    pattern: &BindingPattern,
+    scope_id: ScopeId,
+    span: Option<crate::ast::SourceSpan>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+) -> Result<(), LoweringPipelineError> {
+    match pattern {
+        BindingPattern::ObjectPattern(props) => {
+            for prop in props {
+                if matches!(prop.value, BindingPattern::Rest(_)) {
+                    if let Err(caller_profile) = check_ambient_authority_allowed(
+                        EffectKind::Global,
+                        scope_id,
+                        binding_lookup,
+                    ) {
+                        return Err(LoweringPipelineError::AmbientAuthorityViolation {
+                            required_effect: EffectKind::Global,
+                            caller_profile,
+                            accessor: "globalThis.{...rest}".to_string(),
+                            span,
+                        });
+                    }
+                    continue;
+                }
+                let Some(key_name) =
+                    static_member_property_name(&prop.key, prop.computed).or_else(|| {
+                        (!prop.computed)
+                            .then(|| well_formed_static_name(&prop.key).map(str::to_string))
+                            .flatten()
+                    })
+                else {
+                    if let Err(caller_profile) = check_ambient_authority_allowed(
+                        EffectKind::Global,
+                        scope_id,
+                        binding_lookup,
+                    ) {
+                        return Err(LoweringPipelineError::AmbientAuthorityViolation {
+                            required_effect: EffectKind::Global,
+                            caller_profile,
+                            accessor: "globalThis[<computed>]".to_string(),
+                            span,
+                        });
+                    }
+                    continue;
+                };
+                let required_effect = if key_name == "Function"
+                    && binding_lookup.contains_key(FORBID_DYNAMIC_CODEGEN_SENTINEL)
+                {
+                    Some(EffectKind::Eval)
+                } else {
+                    required_effect_for_ambient_authority("globalThis", Some(&key_name))
+                };
+                if let Some(required_effect) = required_effect
+                    && let Err(caller_profile) =
+                        check_ambient_authority_allowed(required_effect, scope_id, binding_lookup)
+                {
+                    return Err(LoweringPipelineError::AmbientAuthorityViolation {
+                        required_effect,
+                        caller_profile,
+                        accessor: format!("globalThis.{key_name}"),
+                        span,
+                    });
+                }
+                if matches!(key_name.as_str(), "globalThis" | "global") {
+                    match &prop.value {
+                        BindingPattern::Identifier(alias) => {
+                            binding_lookup.insert(global_object_alias_sentinel(alias), 0);
+                        }
+                        other => {
+                            check_global_object_destructuring_pattern(
+                                other,
+                                scope_id,
+                                span,
+                                binding_lookup,
+                            )?;
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
+        BindingPattern::AssignmentPattern { left, .. } => {
+            check_global_object_destructuring_pattern(left, scope_id, span, binding_lookup)
+        }
+        _ => Ok(()),
+    }
+}
+
+fn check_global_object_assignment_pattern(
+    properties: &[crate::ast::ObjectProperty],
+    scope_id: ScopeId,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+) -> Result<(), LoweringPipelineError> {
+    for prop in properties {
+        if matches!(prop.value, Expression::SpreadElement(_)) {
+            if let Err(caller_profile) =
+                check_ambient_authority_allowed(EffectKind::Global, scope_id, binding_lookup)
+            {
+                return Err(LoweringPipelineError::AmbientAuthorityViolation {
+                    required_effect: EffectKind::Global,
+                    caller_profile,
+                    accessor: "globalThis.{...rest}".to_string(),
+                    span: None,
+                });
+            }
+            continue;
+        }
+        let Some(key_name) = static_member_property_name(&prop.key, prop.computed).or_else(|| {
+            (!prop.computed)
+                .then(|| well_formed_static_name(&prop.key).map(str::to_string))
+                .flatten()
+        }) else {
+            if let Err(caller_profile) =
+                check_ambient_authority_allowed(EffectKind::Global, scope_id, binding_lookup)
+            {
+                return Err(LoweringPipelineError::AmbientAuthorityViolation {
+                    required_effect: EffectKind::Global,
+                    caller_profile,
+                    accessor: "globalThis[<computed>]".to_string(),
+                    span: None,
+                });
+            }
+            continue;
+        };
+        let required_effect = if key_name == "Function"
+            && binding_lookup.contains_key(FORBID_DYNAMIC_CODEGEN_SENTINEL)
+        {
+            Some(EffectKind::Eval)
+        } else {
+            required_effect_for_ambient_authority("globalThis", Some(&key_name))
+        };
+        if let Some(required_effect) = required_effect
+            && let Err(caller_profile) =
+                check_ambient_authority_allowed(required_effect, scope_id, binding_lookup)
+        {
+            return Err(LoweringPipelineError::AmbientAuthorityViolation {
+                required_effect,
+                caller_profile,
+                accessor: format!("globalThis.{key_name}"),
+                span: None,
+            });
+        }
+        if matches!(key_name.as_str(), "globalThis" | "global") {
+            match &prop.value {
+                Expression::Identifier(alias) => {
+                    binding_lookup.insert(global_object_alias_sentinel(alias), 0);
+                }
+                Expression::ObjectLiteral(nested) => {
+                    check_global_object_assignment_pattern(nested, scope_id, binding_lookup)?;
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn lower_member_call_to_ir1(
     object: &Expression,
@@ -16121,6 +16982,15 @@ fn lower_member_call_to_ir1(
     label_counter: &mut u32,
     span_table: &mut Vec<Ir1OpSpanEntry>,
 ) -> Result<(), LoweringPipelineError> {
+    check_member_ambient_authority_violation(
+        object,
+        property,
+        computed,
+        true,
+        None,
+        root_scope_id,
+        binding_lookup,
+    )?;
     if stages_argument_array(arguments) {
         return lower_member_spread_call_to_reflect_apply(
             object,
@@ -16566,26 +17436,15 @@ fn try_lower_optional_chain_to_ir1(
             } => {
                 // The same ambient-authority check as a plain member read
                 // (`process.env?.()` still needs env.read).
-                if let Expression::Identifier(object_name) = object
-                    && !has_source_lexical_binding(binding_lookup, object_name)
-                    && !crypto_constants_member_read(object, property, computed, binding_lookup)
-                    && !computed
-                    && let Expression::Identifier(prop_name) = property
-                    && let Some(required_effect) =
-                        required_effect_for_ambient_authority(object_name, Some(prop_name))
-                    && let Err(caller_profile) = check_ambient_authority_allowed(
-                        required_effect,
-                        root_scope_id,
-                        binding_lookup,
-                    )
-                {
-                    return Err(LoweringPipelineError::AmbientAuthorityViolation {
-                        required_effect,
-                        caller_profile,
-                        accessor: format!("{object_name}.{prop_name}"),
-                        span: None,
-                    });
-                }
+                check_member_ambient_authority_violation(
+                    object,
+                    property,
+                    computed,
+                    false,
+                    None,
+                    root_scope_id,
+                    binding_lookup,
+                )?;
                 if matches!(chain.get(index + 1), Some(OptionalChainLink::Call { .. })) {
                     let receiver_binding = alloc_internal_binding(
                         bindings,
@@ -17936,6 +18795,9 @@ fn lower_expression_to_ir1_inner(
                 return Ok(());
             }
             if let Expression::Identifier(name) = left.as_ref() {
+                if expr_is_global_object_ref(right, binding_lookup) {
+                    binding_lookup.insert(global_object_alias_sentinel(name), 0);
+                }
                 let resolved_binding_id = if has_source_lexical_binding(binding_lookup, name) {
                     Some(materialize_source_binding_id(
                         bindings,
@@ -18650,6 +19512,13 @@ fn lower_expression_to_ir1_inner(
                         None,
                     ));
                 }
+                if expr_is_global_object_ref(right, binding_lookup) {
+                    check_global_object_assignment_pattern(
+                        properties,
+                        root_scope_id,
+                        binding_lookup,
+                    )?;
+                }
                 let source_bid = alloc_internal_binding(
                     bindings,
                     binding_lookup,
@@ -18858,6 +19727,18 @@ fn lower_expression_to_ir1_inner(
                     required_effect: EffectKind::Eval,
                     caller_profile,
                     accessor: "eval".to_string(),
+                    span: *span,
+                });
+            }
+            if binding_lookup.contains_key(FORBID_DYNAMIC_CODEGEN_SENTINEL)
+                && is_unshadowed_dynamic_function_callee(callee, binding_lookup)
+                && let Err(caller_profile) =
+                    check_ambient_authority_allowed(EffectKind::Eval, root_scope_id, binding_lookup)
+            {
+                return Err(LoweringPipelineError::AmbientAuthorityViolation {
+                    required_effect: EffectKind::Eval,
+                    caller_profile,
+                    accessor: "Function".to_string(),
                     span: *span,
                 });
             }
@@ -20202,6 +21083,8 @@ fn lower_expression_to_ir1_inner(
                 && name == "hostcall"
                 && !is_lexically_shadowed(binding_lookup, name)
             {
+                let resolved_capability = take_active_typed_hostcall_capability(callee.as_ref())
+                    .unwrap_or_else(|| "hostcall.invoke".to_string());
                 for arg in arguments {
                     lower_expression_to_ir1(
                         arg,
@@ -20222,7 +21105,7 @@ fn lower_expression_to_ir1_inner(
                     });
                 }
                 ops.push(Ir1Op::HostCall {
-                    capability: "hostcall.invoke".to_string(),
+                    capability: resolved_capability,
                     arg_count: arg_count as u32,
                 });
                 return Ok(());
@@ -20307,9 +21190,18 @@ fn lower_expression_to_ir1_inner(
                 object,
                 property,
                 computed,
-                ..
+                span: member_span,
             } = callee.as_ref()
             {
+                check_member_ambient_authority_violation(
+                    object,
+                    property,
+                    *computed,
+                    true,
+                    *member_span,
+                    root_scope_id,
+                    binding_lookup,
+                )?;
                 let temp_obj = alloc_internal_binding(
                     bindings,
                     binding_lookup,
@@ -20487,26 +21379,15 @@ fn lower_expression_to_ir1_inner(
             // whose value is deterministic and engine-owned; exempt it before
             // the generic `crypto.* => random.read` ambient classifier so the
             // dedicated lowering below can allocate that immutable bundle.
-            if let Expression::Identifier(object_name) = object.as_ref()
-                && !has_source_lexical_binding(binding_lookup, object_name)
-                && !crypto_constants_member_read(object, property, *computed, binding_lookup)
-                && !is_process_next_tick_read(expression, binding_lookup)
-                && !*computed
-                && let Expression::Identifier(prop_name) = property.as_ref()
-                && let Some(required_effect) =
-                    required_effect_for_ambient_authority(object_name, Some(prop_name))
-                && let Err(caller_profile) =
-                    check_ambient_authority_allowed(required_effect, root_scope_id, binding_lookup)
-            {
-                return Err(LoweringPipelineError::AmbientAuthorityViolation {
-                    required_effect,
-                    caller_profile,
-                    accessor: format!("{object_name}.{prop_name}"),
-                    // Member nodes carry parse-time spans since
-                    // bd-fqlfw.1.1; the denial points at source.
-                    span: *span,
-                });
-            }
+            check_member_ambient_authority_violation(
+                object,
+                property,
+                *computed,
+                is_process_next_tick_read(expression, binding_lookup),
+                *span,
+                root_scope_id,
+                binding_lookup,
+            )?;
 
             // `super.x` looks the key up from [[HomeObject]].[[Prototype]] but
             // runs a getter with the activation's `this` as its receiver
@@ -21784,6 +22665,18 @@ fn lower_expression_to_ir1_inner(
             });
         }
         Expression::New { callee, arguments } => {
+            if binding_lookup.contains_key(FORBID_DYNAMIC_CODEGEN_SENTINEL)
+                && is_unshadowed_dynamic_function_callee(callee, binding_lookup)
+                && let Err(caller_profile) =
+                    check_ambient_authority_allowed(EffectKind::Eval, root_scope_id, binding_lookup)
+            {
+                return Err(LoweringPipelineError::AmbientAuthorityViolation {
+                    required_effect: EffectKind::Eval,
+                    caller_profile,
+                    accessor: "Function".to_string(),
+                    span: None,
+                });
+            }
             // bd-fw7zd: proven Readable/Writable named exports are lowering-only
             // constructor bindings. Route construction directly to the finite
             // stream kernel without materializing a stream module or callable

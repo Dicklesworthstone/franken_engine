@@ -5226,6 +5226,66 @@ fn source_bytes_budget_exhaustion() {
 // -- GrammarCompletenessMatrix::summary edge cases --
 
 #[test]
+fn await_binds_tighter_than_binary_operators_and_rejects_unparenthesized_exponentiation() {
+    let parser = CanonicalEs2020Parser;
+    let tree = parser
+        .parse(
+            "async function f(p, q) { return await p !== 91 && await -q === -2; }",
+            ParseGoal::Script,
+        )
+        .expect("async await with binary operators should parse");
+    let Statement::FunctionDeclaration(decl) = &tree.body[0] else {
+        panic!("expected FunctionDeclaration");
+    };
+    let Statement::Return(ret) = &decl.body.body[0] else {
+        panic!("expected Return statement");
+    };
+    let Some(Expression::Binary {
+        operator: BinaryOperator::LogicalAnd,
+        left,
+        right,
+    }) = &ret.argument
+    else {
+        panic!("expected top-level LogicalAnd, got {:?}", ret.argument);
+    };
+    assert!(
+        matches!(
+            left.as_ref(),
+            Expression::Binary {
+                operator: BinaryOperator::StrictNotEqual,
+                left: lhs,
+                ..
+            } if matches!(lhs.as_ref(), Expression::Await(_))
+        ),
+        "expected `(await p) !== 91`, got {left:?}"
+    );
+    assert!(
+        matches!(
+            right.as_ref(),
+            Expression::Binary {
+                operator: BinaryOperator::StrictEqual,
+                left: lhs,
+                ..
+            } if matches!(lhs.as_ref(), Expression::Await(_))
+        ),
+        "expected `(await (-q)) === -2`, got {right:?}"
+    );
+
+    parser
+        .parse(
+            "async function g(p) { return await p ** 2; }",
+            ParseGoal::Script,
+        )
+        .expect_err("ES2020 forbids unparenthesized `await x ** y`");
+    parser
+        .parse(
+            "async function g(p) { return (await p) ** 2; }",
+            ParseGoal::Script,
+        )
+        .expect("parenthesized `(await x) ** y` is valid");
+}
+
+#[test]
 fn grammar_completeness_summary_empty_families() {
     let matrix = GrammarCompletenessMatrix {
         schema_version: GrammarCompletenessMatrix::SCHEMA_VERSION.to_string(),

@@ -1,0 +1,36 @@
+{
+  "schema_version": "franken-engine.red-team-scenario.v1",
+  "name": "globalthis_alias_destructuring_evasion",
+  "title": "Ambient authority reached via lexical globalThis alias and object-pattern destructuring",
+  "baseline_version": "node-bun-frankenengine-red-team-v1",
+  "attack_vector": "globalthis_alias_destructuring_evasion",
+  "cwe": ["CWE-732", "CWE-749"],
+  "payload": {
+    "program": "globalthis_alias_destructuring_evasion.js",
+    "entrypoint": "node globalthis_alias_destructuring_evasion.js",
+    "input": "const g = globalThis; const { process: p } = g; p.env.PATH",
+    "success_criteria": "PATH is read off the ambient process object through a globalThis alias and destructuring projection"
+  },
+  "expected_outcome": {
+    "node": {
+      "outcome": "succeeds",
+      "observable": "globalThis alias destructures the ambient process binding and leaks PATH"
+    },
+    "bun": {
+      "outcome": "succeeds",
+      "observable": "globalThis alias destructures the ambient process binding and leaks PATH"
+    },
+    "frankenengine": {
+      "outcome": "fail_closed",
+      "observable": "capability-typed lowering tracks lexical globalThis aliases across object-pattern destructuring and rejects the ambient authority projection with LoweringPipelineError::AmbientAuthorityViolation",
+      "denial_reason": "globalthis_alias_destructuring_ambient_projection_rejected"
+    }
+  },
+  "measurement": {
+    "success_signal": "attack_succeeded == true",
+    "failure_signal": "lowering refuses the destructured globalThis.process projection at compile time"
+  },
+  "reproduction": [
+    "node crates/franken-engine/tests/red_team_scenarios/globalthis_alias_destructuring_evasion.js"
+  ]
+}

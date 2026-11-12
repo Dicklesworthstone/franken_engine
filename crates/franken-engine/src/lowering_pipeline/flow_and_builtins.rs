@@ -1069,7 +1069,17 @@ pub(super) fn confirmed_querystring_module_aliases(
         if let Statement::VariableDeclaration(vd) = stmt {
             for d in &vd.declarations {
                 if let (BindingPattern::Identifier(name), Some(init)) = (&d.pattern, &d.initializer)
-                    && is_require_querystring_module_initializer(init, binding_lookup)
+                    && (is_require_querystring_module_initializer(init, binding_lookup)
+                        || matches!(
+                            init,
+                            Expression::Call { callee, arguments, .. }
+                                if arguments.is_empty()
+                                    && matches!(
+                                        callee.as_ref(),
+                                        Expression::Identifier(fn_name)
+                                            if fn_name == "__franken_querystring_module"
+                                    )
+                        ))
                 {
                     candidates.insert(name.clone());
                 }
@@ -4532,6 +4542,18 @@ pub(super) fn module_alias_expression_is_predeclaration_call_hazard(
         && !is_require_child_process_module_initializer(expression, binding_lookup)
         && !is_require_url_module_initializer(expression, binding_lookup)
         && !is_require_events_module_initializer(expression, binding_lookup)
+        && !matches!(
+            expression,
+            Expression::Call {
+                callee,
+                arguments,
+                ..
+            } if arguments.is_empty()
+                && matches!(
+                    callee.as_ref(),
+                    Expression::Identifier(name) if util_module::is_module_binding(name)
+                )
+        )
 }
 
 pub(super) fn module_alias_expression_has_predeclaration_call_hazard(
@@ -7601,10 +7623,10 @@ pub(super) fn unshadowed_process_member<'a>(
     {
         return None;
     }
-    match *computed {
-        false => well_formed_static_name(property),
-        true => well_formed_string_literal(property),
+    if *computed {
+        return None;
     }
+    well_formed_static_name(property)
 }
 
 /// Capability for a statically recognized `process` method call: the exact
@@ -11525,10 +11547,25 @@ pub(super) fn simulate_ir2_flow_labels<O: FlowOp>(
                 // incorrectly guard the source operation before it produced a
                 // value. Keep the operation annotation operand-derived and push
                 // the shared result-contract label onto the value stack.
-                let mut result_label =
-                    hostcall_result_contract(capability).result_label(&operation_data_label, None);
+                let is_deferred_entropy_callback = matches!(
+                    capability.as_str(),
+                    "builtin:CryptoRandomBytes" | "builtin:CryptoRandomInt"
+                ) && inputs.len() >= 2
+                    && inputs[0].shape == FlowValueShape::Callable;
+                let mut result_label = if is_deferred_entropy_callback {
+                    // Deferred entropy callbacks return `undefined` synchronously;
+                    // `schedule_io_callback_with_label` labels the macrotask payload
+                    // at runtime (Secret on success, invocation label on redacted failure).
+                    operation_data_label.clone()
+                } else {
+                    hostcall_result_contract(capability).result_label(&operation_data_label, None)
+                };
                 let mut result_origin = None;
-                let mut result_shape = FlowValueShape::Unknown;
+                let mut result_shape = if is_deferred_entropy_callback {
+                    FlowValueShape::Primitive
+                } else {
+                    FlowValueShape::Unknown
+                };
 
                 let constructor_kind = match capability.as_str() {
                     "builtin:CryptoCreateHash" => Some(CryptoFlowObjectKind::Hash),
@@ -12032,27 +12069,47 @@ pub(super) fn simulate_ir2_flow_labels<O: FlowOp>(
 /// Clamping every annotation to this bound therefore cannot admit a flow of
 /// information that the program is able to hold. Programs that do touch a
 /// sensitive source keep today's per-operation precision below the bound.
+pub(super) fn ir2_ops_contain_try_begin(ops: &[Ir2Op]) -> bool {
+    fn ir1_op_contains_try_begin(op: &Ir1Op) -> bool {
+        match op {
+            Ir1Op::BeginTry { .. } => true,
+            Ir1Op::DeclareFunction { body_ops, .. } | Ir1Op::CreateFunction { body_ops, .. } => {
+                body_ops.iter().any(ir1_op_contains_try_begin)
+            }
+            _ => false,
+        }
+    }
+    ops.iter().any(|op| ir1_op_contains_try_begin(&op.inner))
+}
+
 pub(super) fn ir2_flow_label_ceiling(
     ops: &[Ir2Op],
     host_io_exception_provenance: HostIoExceptionProvenance,
 ) -> Label {
     let bounded_imports = ops_assume_bounded_imports(ops);
+    let has_try_begin = ir2_ops_contain_try_begin(ops);
     let mut ceiling = Label::Internal;
+    let mut prev_op: Option<&Ir1Op> = None;
     for op in ops {
         accumulate_ir1_flow_label_ceiling(
             &op.inner,
+            prev_op,
             host_io_exception_provenance,
             bounded_imports,
+            has_try_begin,
             &mut ceiling,
         );
+        prev_op = Some(&op.inner);
     }
     ceiling
 }
 
 pub(super) fn accumulate_ir1_flow_label_ceiling(
     op: &Ir1Op,
+    prev_op: Option<&Ir1Op>,
     host_io_exception_provenance: HostIoExceptionProvenance,
     bounded_imports: bool,
+    has_try_begin: bool,
     ceiling: &mut Label,
 ) {
     if *ceiling == Label::TopSecret {
@@ -12060,13 +12117,17 @@ pub(super) fn accumulate_ir1_flow_label_ceiling(
     }
     let contribution = match op {
         Ir1Op::DeclareFunction { body_ops, .. } | Ir1Op::CreateFunction { body_ops, .. } => {
+            let mut inner_prev: Option<&Ir1Op> = None;
             for inner in body_ops {
                 accumulate_ir1_flow_label_ceiling(
                     inner,
+                    inner_prev,
                     host_io_exception_provenance,
                     bounded_imports,
+                    has_try_begin,
                     ceiling,
                 );
+                inner_prev = Some(inner);
             }
             return;
         }
@@ -12089,9 +12150,24 @@ pub(super) fn accumulate_ir1_flow_label_ceiling(
         {
             IFC_BOUNDED_IMPORT_LABEL
         }
-        Ir1Op::HostCall { capability, .. } => {
-            hostcall_flow_label_ceiling(capability, host_io_exception_provenance)
+        Ir1Op::HostCall {
+            capability,
+            arg_count,
+        } if !has_try_begin
+            && matches!(
+                capability.as_str(),
+                "builtin:CryptoRandomBytes" | "builtin:CryptoRandomInt"
+            )
+            && *arg_count >= 2
+            && matches!(prev_op, Some(Ir1Op::CreateFunction { .. })) =>
+        {
+            Label::Public
         }
+        Ir1Op::HostCall { capability, .. } => hostcall_flow_label_ceiling_with_catch(
+            capability,
+            host_io_exception_provenance,
+            has_try_begin,
+        ),
         _ => return,
     };
     *ceiling = ceiling.join(&contribution);
@@ -12100,9 +12176,10 @@ pub(super) fn accumulate_ir1_flow_label_ceiling(
 /// Highest label one HostCall can introduce: its result contract applied to
 /// public operands, joined with whatever its exceptional completion can carry
 /// from outside the program.
-pub(super) fn hostcall_flow_label_ceiling(
+pub(super) fn hostcall_flow_label_ceiling_with_catch(
     capability: &str,
     host_io_exception_provenance: HostIoExceptionProvenance,
+    has_try_begin: bool,
 ) -> Label {
     use crate::capability::{RuntimeCapability, hostcall_registry_row};
 
@@ -12121,6 +12198,9 @@ pub(super) fn hostcall_flow_label_ceiling(
         return Label::TopSecret;
     };
     let result_label = row.result_contract.result_label(&Label::Public, None);
+    if !has_try_begin {
+        return result_label;
+    }
     // Native crypto failures are rethrown with a fail-high label at runtime.
     if capability.starts_with("builtin:Crypto") {
         return Label::TopSecret;
@@ -12477,6 +12557,9 @@ pub(crate) fn sink_clearance_from_capability(capability: &str) -> Label {
         || normalized.contains("module.import")
         || normalized.contains("import")
     {
+        return Label::Internal;
+    }
+    if normalized.starts_with("console:") || normalized == "console" {
         return Label::Internal;
     }
     if normalized.contains("declassify") {

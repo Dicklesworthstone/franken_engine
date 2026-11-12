@@ -10254,7 +10254,7 @@ impl ModuleState {
 /// `(module specifier, export name)` pairs (bd-1lsy.4.10.1).
 #[derive(Debug, Clone)]
 struct LiveExport {
-    cell: Weak<RefCell<ScopeBindingState>>,
+    cell: Rc<RefCell<ScopeBindingState>>,
     exports: Vec<(String, JsString)>,
 }
 
@@ -10497,6 +10497,7 @@ struct GeneratorExecutionSnapshot {
     register_labels_bytes: Option<u64>,
     delegation: Option<GeneratorDelegation>,
     active_inline_callback_context_label: Option<Label>,
+    pc_label_stack: Vec<PcLabelFrame>,
     call_stack: Vec<CallFrame>,
     ip: usize,
     register_base: usize,
@@ -13106,6 +13107,18 @@ pub struct InterpreterConfig {
     /// Builtin grant alone must not authorize access to invocation inputs.
     #[serde(default)]
     pub process_shape_read_allowed: bool,
+    /// When true, `Function` / `AsyncFunction` / `GeneratorFunction` /
+    /// `AsyncGeneratorFunction` constructors are refused at runtime with
+    /// `CapabilityDenied { capability: "eval" }`.
+    #[serde(default)]
+    pub disallow_dynamic_codegen: bool,
+    /// Optional explicit IFC flow policy enforced at runtime sink checks.
+    #[serde(default)]
+    pub ifc_flow_policy: Option<crate::ifc_artifacts::FlowPolicy>,
+    /// Signed declassification receipts consulted when `ifc_flow_policy`
+    /// requires an authorized declassification route.
+    #[serde(default)]
+    pub declassification_receipts: Vec<crate::ifc_artifacts::DeclassificationReceipt>,
 }
 
 impl PartialEq for InterpreterConfig {
@@ -13127,6 +13140,9 @@ impl PartialEq for InterpreterConfig {
             && self.module_conditions == other.module_conditions
             && self.process_argv == other.process_argv
             && self.process_shape_read_allowed == other.process_shape_read_allowed
+            && self.disallow_dynamic_codegen == other.disallow_dynamic_codegen
+            && self.ifc_flow_policy == other.ifc_flow_policy
+            && self.declassification_receipts == other.declassification_receipts
         // Note: cancellation_token is intentionally excluded from comparison
     }
 }
@@ -13153,6 +13169,9 @@ impl InterpreterConfig {
             module_conditions: Vec::new(),
             process_argv: Vec::new(),
             process_shape_read_allowed: false,
+            disallow_dynamic_codegen: false,
+            ifc_flow_policy: None,
+            declassification_receipts: Vec::new(),
             granted_capabilities: BTreeSet::new(),
             extension_id: None,
             cancellation_token: None,
@@ -13179,6 +13198,9 @@ impl InterpreterConfig {
             module_conditions: Vec::new(),
             process_argv: Vec::new(),
             process_shape_read_allowed: false,
+            disallow_dynamic_codegen: false,
+            ifc_flow_policy: None,
+            declassification_receipts: Vec::new(),
             granted_capabilities: BTreeSet::new(),
             extension_id: None,
             cancellation_token: None,
@@ -13211,6 +13233,9 @@ impl InterpreterConfig {
             module_conditions: Vec::new(),
             process_argv: Vec::new(),
             process_shape_read_allowed: false,
+            disallow_dynamic_codegen: false,
+            ifc_flow_policy: None,
+            declassification_receipts: Vec::new(),
             granted_capabilities: BTreeSet::new(),
             extension_id: None,
             cancellation_token: None,
@@ -13243,6 +13268,9 @@ impl InterpreterConfig {
             module_conditions: Vec::new(),
             process_argv: Vec::new(),
             process_shape_read_allowed: false,
+            disallow_dynamic_codegen: false,
+            ifc_flow_policy: None,
+            declassification_receipts: Vec::new(),
             granted_capabilities: BTreeSet::new(),
             extension_id: None,
             cancellation_token: None,
@@ -13377,6 +13405,49 @@ pub struct ConsoleEntry {
 /// a failed run returns only the error, so without this sink everything the
 /// program printed before throwing would be lost.
 pub type FailedConsoleSink = Arc<std::sync::Mutex<Vec<ConsoleEntry>>>;
+
+const MAX_IFC_RUNTIME_FLOW_AUDIT_ENTRIES: usize = 1024;
+
+/// Implicit-flow program-counter taint frame pushed at a conditional branch
+/// (`JumpIf` / `JumpIfNullish`) whose condition carries non-Public taint or at
+/// a call site whose `callee` register carries non-Public taint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PcLabelFrame {
+    /// Immediate post-dominator IP at `call_depth` where the branch's control
+    /// dependence reconverges (`usize::MAX` for callee-taint frames that
+    /// remain active until `call_stack.len() < call_depth`).
+    pub(crate) reconvergence_ip: usize,
+    /// `call_stack.len()` at which this frame was pushed.
+    pub(crate) call_depth: usize,
+    /// Monotonically non-decreasing joined PC taint (`top.label >= below.label`).
+    pub(crate) label: Label,
+}
+
+/// Runtime sink-flow enforcement outcome recorded by [`InterpreterCore`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IfcRuntimeFlowDecision {
+    /// Allowed by explicit `FlowPolicy` rule.
+    AllowedPolicy,
+    /// Allowed by lattice ordering (`source_label <= sink_clearance`).
+    AllowedLattice,
+    /// Cross-label flow authorized by a verified `DeclassificationReceipt`.
+    Declassified,
+    /// Refused at the sink boundary before any side effect ran.
+    Denied,
+}
+
+/// Auditable runtime IFC sink check record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IfcRuntimeFlowAuditEntry {
+    pub trace_id: String,
+    pub instruction_ip: u32,
+    pub capability: String,
+    pub source_label: Label,
+    pub sink_clearance: Label,
+    pub decision: IfcRuntimeFlowDecision,
+    pub route_id: Option<String>,
+    pub receipt_id: Option<String>,
+}
 
 // ---------------------------------------------------------------------------
 // ExecutionResult
@@ -13526,7 +13597,10 @@ enum CompactTier1Opcode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CompactTier1Instruction {
     opcode: CompactTier1Opcode,
-    _reserved: u8,
+    /// Straight-line instruction budget run starting at this IP (`[RC-E1]`
+    /// AARA basic-block hoisting). `0` for `Baseline`; `1` for block-ending
+    /// branches/`Halt`; `2..=255` for straight-line compact instruction runs.
+    aara_block_run: u8,
     dst: u16,
     lhs: u16,
     rhs: u16,
@@ -13536,7 +13610,7 @@ struct CompactTier1Instruction {
 impl CompactTier1Instruction {
     const BASELINE: Self = Self {
         opcode: CompactTier1Opcode::Baseline,
-        _reserved: 0,
+        aara_block_run: 0,
         dst: 0,
         lhs: 0,
         rhs: 0,
@@ -13546,7 +13620,7 @@ impl CompactTier1Instruction {
     fn new(opcode: CompactTier1Opcode, dst: u16, lhs: u16, rhs: u16, payload: u64) -> Self {
         Self {
             opcode,
-            _reserved: 0,
+            aara_block_run: 0,
             dst,
             lhs,
             rhs,
@@ -13622,7 +13696,7 @@ impl CompactTier1Program {
             .into();
         let mut compact_instruction_count = 0usize;
         let mut compact_work_instruction_count = 0usize;
-        let instructions = module
+        let mut cells = module
             .instructions
             .iter()
             .map(|instruction| {
@@ -13637,10 +13711,25 @@ impl CompactTier1Program {
                 }
                 compact
             })
-            .collect::<Arc<[_]>>();
+            .collect::<Vec<_>>();
         if compact_work_instruction_count == 0 {
             return None;
         }
+        for idx in (0..cells.len()).rev() {
+            let run = match cells[idx].opcode {
+                CompactTier1Opcode::Baseline => 0,
+                CompactTier1Opcode::Jump
+                | CompactTier1Opcode::JumpIf
+                | CompactTier1Opcode::JumpIfNullish
+                | CompactTier1Opcode::Halt => 1,
+                _ => cells
+                    .get(idx + 1)
+                    .map_or(0, |next| next.aara_block_run)
+                    .saturating_add(1),
+            };
+            cells[idx].aara_block_run = run;
+        }
+        let instructions: Arc<[CompactTier1Instruction]> = cells.into();
         let source_module_hash = source_hash.unwrap_or_else(|| module.content_hash());
         debug_assert_eq!(source_module_hash, module.content_hash());
         Some(Self {
@@ -14187,6 +14276,16 @@ impl CompactTier1Program {
             .filter(|instruction| instruction.opcode != CompactTier1Opcode::Baseline)
     }
 
+    #[inline(always)]
+    fn block_slice_at(&self, ip: usize) -> Option<&[CompactTier1Instruction]> {
+        let first = self.instructions.get(ip)?;
+        let run = usize::from(first.aara_block_run);
+        if run < 2 {
+            return None;
+        }
+        self.instructions.get(ip..ip.checked_add(run)?)
+    }
+
     pub(crate) fn compact_instruction_count(&self) -> usize {
         self.compact_instruction_count
     }
@@ -14226,6 +14325,9 @@ struct ModuleExecutionSnapshot {
     /// PC-style provenance for an isolated stream/event callback. Keeping one
     /// snapshotted label avoids cloning a Custom label into every register.
     active_inline_callback_context_label: Option<Label>,
+    /// Post-dominator implicit-flow PC-label frames owned by the suspended
+    /// activation.
+    pc_label_stack: Vec<PcLabelFrame>,
     call_stack: Vec<CallFrame>,
     ip: usize,
     register_base: usize,
@@ -16497,10 +16599,19 @@ pub struct InterpreterCore {
     /// reference. Process-effect request extraction joins these labels
     /// recursively before crossing the provider boundary.
     object_mutation_labels: BTreeMap<ObjectId, Label>,
+    /// Physical register indices explicitly pinned via `set_register_label`.
+    seeded_register_labels: BTreeSet<usize>,
     /// Aggregate provenance active while an isolated callback runs. Register
     /// writes join this label after per-call frame clearing, so zero-argument
     /// callbacks cannot lose lifecycle/emission context.
     active_inline_callback_context_label: Option<Label>,
+    /// Post-dominator implicit-flow PC-label stack (`g2vrp.8`).
+    pc_label_stack: Vec<PcLabelFrame>,
+    /// Bounded cache of immediate post-dominator tables keyed by
+    /// `(instructions_ptr, instructions_len)`.
+    ipdom_cache: BTreeMap<(usize, usize), Arc<[usize]>>,
+    /// Bounded structured audit trail of runtime IFC sink flow checks.
+    ifc_runtime_flow_audit: Vec<IfcRuntimeFlowAuditEntry>,
     /// Transaction probes for isolated callbacks whose caller publishes an
     /// in-flight state before invocation. The innermost probe flips after
     /// CallMethod validates the callee but before any persistent callee setup

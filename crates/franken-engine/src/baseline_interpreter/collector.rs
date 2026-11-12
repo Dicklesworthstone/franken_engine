@@ -564,6 +564,7 @@ impl GcMarker {
             register_labels_bytes: _,
             delegation,
             active_inline_callback_context_label: _,
+            pc_label_stack: _,
             call_stack,
             ip: _,
             register_base: _,
@@ -610,6 +611,7 @@ impl GcMarker {
             register_label_bytes: _,
             register_dirty_end: _,
             active_inline_callback_context_label: _,
+            pc_label_stack: _,
             call_stack,
             ip: _,
             register_base: _,
@@ -1967,7 +1969,11 @@ impl InterpreterCore {
             // and ids are never reused. `collect_garbage` purges the
             // mutation labels of reclaimed objects.
             object_mutation_labels: _,
+            seeded_register_labels: _,
             active_inline_callback_context_label: _,
+            pc_label_stack: _,
+            ipdom_cache: _,
+            ifc_runtime_flow_audit: _,
             inline_callback_start_probes: _,
             proxy_trap_lookup_depth: _,
             weakmap_storage: _,
@@ -2300,6 +2306,9 @@ impl InterpreterCore {
             if let Some(handle) = record.evaluation_promise {
                 m.promise(handle.0);
             }
+        }
+        for entry in &module_state.live_exports {
+            m.cell(&entry.cell);
         }
         if let Some(context) = active_cjs_context {
             m.object(context.module_object);

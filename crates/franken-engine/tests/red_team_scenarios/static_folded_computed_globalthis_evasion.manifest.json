@@ -1,0 +1,36 @@
+{
+  "schema_version": "franken-engine.red-team-scenario.v1",
+  "name": "static_folded_computed_globalthis_evasion",
+  "title": "Ambient authority reached via string-concatenated computed member on globalThis",
+  "baseline_version": "node-bun-frankenengine-red-team-v1",
+  "attack_vector": "static_folded_computed_globalthis_evasion",
+  "cwe": ["CWE-732", "CWE-749"],
+  "payload": {
+    "program": "static_folded_computed_globalthis_evasion.js",
+    "entrypoint": "node static_folded_computed_globalthis_evasion.js",
+    "input": "globalThis['pro' + 'cess'].env.PATH",
+    "success_criteria": "PATH is read off globalThis via constant-folded string concatenation"
+  },
+  "expected_outcome": {
+    "node": {
+      "outcome": "succeeds",
+      "observable": "computed string concatenation resolves to globalThis.process and leaks PATH"
+    },
+    "bun": {
+      "outcome": "succeeds",
+      "observable": "computed string concatenation resolves to globalThis.process and leaks PATH"
+    },
+    "frankenengine": {
+      "outcome": "fail_closed",
+      "observable": "capability-typed lowering folds constant string-concatenation computed property keys on globalThis and rejects ambient authority access with LoweringPipelineError::AmbientAuthorityViolation",
+      "denial_reason": "static_folded_computed_globalthis_ambient_access_rejected"
+    }
+  },
+  "measurement": {
+    "success_signal": "attack_succeeded == true",
+    "failure_signal": "lowering refuses the folded globalThis['pro' + 'cess'] access at compile time"
+  },
+  "reproduction": [
+    "node crates/franken-engine/tests/red_team_scenarios/static_folded_computed_globalthis_evasion.js"
+  ]
+}

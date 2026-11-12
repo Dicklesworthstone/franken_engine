@@ -33,6 +33,10 @@ const SCENARIOS: &[Scenario] = &[
         source: include_str!("red_team_scenarios/computed_member_capability_evasion.js"),
     },
     Scenario {
+        id: "cross_runtime_web_ambient_evasion",
+        source: include_str!("red_team_scenarios/cross_runtime_web_ambient_evasion.js"),
+    },
+    Scenario {
         id: "declassification_without_receipt",
         source: include_str!("red_team_scenarios/declassification_without_receipt.js"),
     },
@@ -51,6 +55,10 @@ const SCENARIOS: &[Scenario] = &[
     Scenario {
         id: "function_constructor_evasion",
         source: include_str!("red_team_scenarios/function_constructor_evasion.js"),
+    },
+    Scenario {
+        id: "globalthis_alias_destructuring_evasion",
+        source: include_str!("red_team_scenarios/globalthis_alias_destructuring_evasion.js"),
     },
     Scenario {
         id: "process_privilege_surface_probe",
@@ -75,6 +83,10 @@ const SCENARIOS: &[Scenario] = &[
     Scenario {
         id: "smuggle_flow_via_unanalyzed_construct",
         source: include_str!("red_team_scenarios/smuggle_flow_via_unanalyzed_construct.js"),
+    },
+    Scenario {
+        id: "static_folded_computed_globalthis_evasion",
+        source: include_str!("red_team_scenarios/static_folded_computed_globalthis_evasion.js"),
     },
     Scenario {
         id: "supply_chain_backdoor_execution",

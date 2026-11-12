@@ -9831,7 +9831,7 @@ pub(super) fn summarize_function_body_uncached(
     // recomputed exactly them (debug builds still check that).
     let mut fixed_point = None;
     for _ in 0..MAX_FUNCTION_SUMMARY_PASSES {
-        let Ok((labels, changed, _)) = simulate_ir2_flow_labels(
+        let Ok((labels, changed, _, _)) = simulate_ir2_flow_labels(
             body_ops,
             &mut body_binding_labels,
             &catch_region_events,
@@ -9858,7 +9858,7 @@ pub(super) fn summarize_function_body_uncached(
             summary_depth,
         );
         debug_assert!(
-            matches!(&again, Ok((again_labels, false, _)) if *again_labels == labels),
+            matches!(&again, Ok((again_labels, false, _, _)) if *again_labels == labels),
             "a function's flow summary changed after its fixed point"
         );
     }
@@ -10419,13 +10419,15 @@ pub(super) fn ir1_exception_flow_label(
     }
 }
 
+type SimulatedIr2FlowLabels = (Vec<Label>, bool, BTreeSet<usize>, BTreeSet<usize>);
+
 pub(super) fn simulate_ir2_flow_labels<O: FlowOp>(
     ops: &[O],
     binding_labels: &mut BTreeMap<BindingId, Label>,
     catch_region_events: &CatchRegionEvents,
     host_io_exception_provenance: HostIoExceptionProvenance,
     summary_depth: usize,
-) -> Result<(Vec<Label>, bool, BTreeSet<usize>), LoweringPipelineError> {
+) -> Result<SimulatedIr2FlowLabels, LoweringPipelineError> {
     let mut value_stack = Vec::<FlowValue>::new();
     let mut next_identity = 0usize;
     let (catch_region_starts, catch_region_ends, initial_catch_entry_labels) = catch_region_events;
@@ -10437,6 +10439,7 @@ pub(super) fn simulate_ir2_flow_labels<O: FlowOp>(
     // ordinary binding stores stay unannotated.
     let mut catch_entry_identities = BTreeSet::<usize>::new();
     let mut catch_entry_store_indexes = BTreeSet::<usize>::new();
+    let mut hmac_update_indexes = BTreeSet::<usize>::new();
     let mut active_catch_regions = Vec::<u32>::new();
     let mut iterator_cleanup_labels = BTreeMap::<u32, usize>::new();
     let mut binding_crypto_origins = BTreeMap::<BindingId, Option<usize>>::new();
@@ -11528,7 +11531,7 @@ pub(super) fn simulate_ir2_flow_labels<O: FlowOp>(
                 // joining the callback value's fail-high function summary
                 // into the effect data misclassified every deferred-entropy
                 // form as TopSecret -> Internal egress.
-                let operation_data_label = if capability == "process_spawn" {
+                let mut operation_data_label = if capability == "process_spawn" {
                     process_spawn_request_label(&inputs)
                 } else if matches!(
                     capability.as_str(),
@@ -11615,6 +11618,22 @@ pub(super) fn simulate_ir2_flow_labels<O: FlowOp>(
                         result_label = prior.lifecycle_label.join(&operation_data_label);
                         match capability.as_str() {
                             "builtin:CryptoObjectUpdate" => {
+                                if prior.kind == CryptoFlowObjectKind::Hmac {
+                                    // bd-vw7s1: `createHmac` already cleared key
+                                    // ingress at `Internal` and elevated the
+                                    // handle to `Secret`. Measure `hmac.update`
+                                    // ingress over the message/encoding operands
+                                    // so `Internal` messages remain legal while
+                                    // `Secret` messages fail `Internal` clearance;
+                                    // keep `Secret` on the returned handle and
+                                    // on any thrown lifecycle error.
+                                    let message_data_label =
+                                        join_flow_values(&inputs[..inputs.len().saturating_sub(1)]);
+                                    result_label = prior.lifecycle_label.join(&message_data_label);
+                                    operation_exception_label_override = Some(result_label.clone());
+                                    operation_data_label = message_data_label;
+                                    hmac_update_indexes.insert(op_index);
+                                }
                                 crypto_flow_states.insert(
                                     origin,
                                     CryptoFlowObjectState {
@@ -12042,7 +12061,12 @@ pub(super) fn simulate_ir2_flow_labels<O: FlowOp>(
         inferred_labels.push(inferred);
     }
 
-    Ok((inferred_labels, bindings_changed, catch_entry_store_indexes))
+    Ok((
+        inferred_labels,
+        bindings_changed,
+        catch_entry_store_indexes,
+        hmac_update_indexes,
+    ))
 }
 
 /// Sound upper bound on every IFC label a value, thrown exception, binding,
@@ -12268,19 +12292,21 @@ pub(super) fn infer_ir2_flow_annotations_bounded(
     // them (debug builds still check that).
     let mut fixed_point = None;
     for _ in 0..MAX_FLOW_INFERENCE_PASSES {
-        let (labels, changed, catch_entry_store_indexes) = simulate_ir2_flow_labels(
-            &ir2.ops,
-            &mut binding_labels,
-            &catch_region_events,
-            host_io_exception_provenance,
-            0,
-        )?;
+        let (labels, changed, catch_entry_store_indexes, hmac_update_indexes) =
+            simulate_ir2_flow_labels(
+                &ir2.ops,
+                &mut binding_labels,
+                &catch_region_events,
+                host_io_exception_provenance,
+                0,
+            )?;
         if !changed {
-            fixed_point = Some((labels, catch_entry_store_indexes));
+            fixed_point = Some((labels, catch_entry_store_indexes, hmac_update_indexes));
             break;
         }
     }
-    let Some((inferred_labels, catch_entry_store_indexes)) = fixed_point else {
+    let Some((inferred_labels, catch_entry_store_indexes, hmac_update_indexes)) = fixed_point
+    else {
         return Err(LoweringPipelineError::InvariantViolation {
             detail: "IR2 flow-label inference exceeded its pass budget",
         });
@@ -12295,7 +12321,10 @@ pub(super) fn infer_ir2_flow_annotations_bounded(
             0,
         )?;
         debug_assert!(
-            !again.1 && again.0 == inferred_labels && again.2 == catch_entry_store_indexes,
+            !again.1
+                && again.0 == inferred_labels
+                && again.2 == catch_entry_store_indexes
+                && again.3 == hmac_update_indexes,
             "IR2 flow-label binding fixed point changed after convergence"
         );
     }
@@ -12339,6 +12368,11 @@ pub(super) fn infer_ir2_flow_annotations_bounded(
             // without a local catch (including finally-only regions) retain
             // the normal boundary clearance and fail closed when necessary.
             inferred_data_label.clone()
+        } else if hmac_update_indexes.contains(&op_index) {
+            // bd-vw7s1: authenticated HMAC message ingress shares `createHmac`'s
+            // finite `Internal` clearance so un-declassified `Secret` payloads
+            // cannot be converted into keyed tags via `hmac.update(...)`.
+            Label::Internal
         } else {
             infer_sink_clearance(
                 &op.effect,

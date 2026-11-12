@@ -247,11 +247,11 @@ The orchestrated extension path composes capability, security-epoch, evidence, a
 
 | Surface | Count / size (tracked HEAD, verified 2026-09-22) |
 |---|---|
-| Source modules in `crates/franken-engine/src/` | 636 top-level `.rs` files / 625 `pub mod` declarations in `lib.rs` (`baseline_interpreter.rs` alone is ~0.6 MB / 16,715 LoC). The generated companion [`docs/ARCHITECTURE_INVENTORY.md`](./docs/ARCHITECTURE_INVENTORY.md) counts module files recursively (excluding `lib.rs` itself). |
+| Source modules in `crates/franken-engine/src/` | 636 top-level `.rs` files / 625 `pub mod` declarations in `lib.rs` (`baseline_interpreter.rs` alone is ~0.6 MB / 16,728 LoC). The generated companion [`docs/ARCHITECTURE_INVENTORY.md`](./docs/ARCHITECTURE_INVENTORY.md) counts module files recursively (excluding `lib.rs` itself). |
 | Internal operator binaries in `crates/franken-engine/src/bin/` | 73 `.rs` files in total (6 of them are the release binaries listed above; 67 are internal operator tools) |
 | Integration tests in `crates/franken-engine/tests/` | 2,247 top-level `.rs` files (41 are RGC gate tests) |
-| Operator gate scripts in `scripts/run_*.sh` | 295 (RGC, parser, and FRX families plus claim/evidence/build plumbing) |
-| Replay wrappers in `scripts/e2e/*_replay.sh` | 186 (some are exact `<gate>_replay.sh` partners to a `run_<gate>.sh`; the rest cover composite or sub-gate replay shapes) |
+| Operator gate scripts in `scripts/run_*.sh` | 296 (RGC, parser, and FRX families plus claim/evidence/build plumbing) |
+| Replay wrappers in `scripts/e2e/*_replay.sh` | 187 (some are exact `<gate>_replay.sh` partners to a `run_<gate>.sh`; the rest cover composite or sub-gate replay shapes) |
 | Architecture / contract docs in `docs/` | 737 top-level files (`*.md` + `*.json` contracts) plus `docs/architecture/`, `docs/adr/`, `docs/plans/`, `docs/planning/` (janitor-relocated root reports: `HASHER_AUDIT_FIXED_LAYOUT_MIGRATION.md`, `REVIEW_SUMMARY.md`), `docs/templates/`, `docs/operator-gates/` |
 | Impossible-by-default demos under `examples/` | 13 impossible-by-default *capabilities* across 24 numbered directories (`01_…` through `26_…`, with gaps at `08_…` and `10_…`). The 13 capabilities are the originally-scoped set; the remaining dirs cover live-runtime variants and integration smokes that sit alongside but are not themselves separate capability claims. |
 | Tracked beads in `.beads/issues.jsonl` | ≈5,122 records (open + closed); closed-bead history with reasons is the durable journal (historical session journals are not checked in) |
@@ -280,7 +280,7 @@ franken_engine/
 │   └── franken-engine-{deterministic-derive,deterministic-trait,fixed-layout-derive}/ # Derive/trait support crates
 ├── docs/                            # Charters, contracts, audits, gate specs (737 top-level files + subdirs including docs/planning/)
 ├── examples/                        # 13 impossible-by-default capabilities across 24 numbered demo dirs (01..26, gaps at 08/10) + live runtime examples
-├── scripts/                         # 295 run_*.sh gate runners + e2e/*_replay.sh wrappers
+├── scripts/                         # 296 run_*.sh gate runners + e2e/*_replay.sh wrappers
 ├── runbooks/                        # Incident-evidence collector + emergency rollback
 ├── fuzz/                            # cargo-fuzz harnesses (parser, ts_module_resolution, shadow_panel)
 ├── benchmarks/                      # Benchmark inputs and goldens
@@ -1687,6 +1687,72 @@ end-to-end capability-typed TS-to-IR *contract* remains bounded. Operator runboo
 [`runbooks/dw_authority_check.md`](./runbooks/dw_authority_check.md). Editor/LSP
 setup: [`docs/dueling_wizards/FRANKEN_LSP_EDITOR_SETUP.md`](./docs/dueling_wizards/FRANKEN_LSP_EDITOR_SETUP.md).
 
+### Non-Use / Non-Exfiltration Certificates (`--data-contract` / `agent-sandbox`)
+
+`frankenctl run --data-contract` and `frankenctl agent-sandbox` execute untrusted
+extension or model-generated JavaScript/TypeScript under a machine-readable
+data-owner contract (`franken-engine.data-contract.v1`) and emit a signed six-file
+bundle (`non_use_certificate.json`, `use_certificate.json`,
+`declassification_receipts.jsonl`, `capability_trace.jsonl`, `repro.lock`, and
+`audit.md`) recording what the run **did not do** with labeled inputs—or refusing
+certification fail-closed with span provenance when source exits the analyzed
+subset.
+
+**When to use it.** Running AI-agent tool code or third-party extensions over
+labeled inputs (`Confidential` / `Secret`) when downstream auditors or buyers
+require an externally verifiable record of negative claims (`no_flow`,
+`output_independent_of`, `capability_not_used`) pinned to an Ed25519 trust anchor.
+
+```bash
+# 1) Initialize an explicit E8 certifier key + public trust snapshot
+TRUST_DIGEST=$(frankenctl evidence init --producer-id franken-engine.e8-certifier \
+  --key-out ./artifacts/e8.seed \
+  --trust-out ./artifacts/e8.trust.json \
+  --epoch 1 | jq -r .evidence_trust_snapshot_digest)
+
+# 2) Execute source under a data contract and emit a deterministic six-file E8 bundle
+frankenctl run \
+  --input ./agent_step.js \
+  --extension-id agent-support-summarizer \
+  --data-contract ./contract.json \
+  --evidence-key-file ./artifacts/e8.seed \
+  --evidence-producer-id franken-engine.e8-certifier \
+  --trust-snapshot ./artifacts/e8.trust.json \
+  --expected-trust-digest "$TRUST_DIGEST" \
+  --emit-trace ./artifacts/nondeterminism_trace.json \
+  --explain --explain-out ./artifacts/explain.json \
+  --certificate-out ./artifacts/certificate_bundle \
+  --out ./artifacts/run_report.json
+
+# 3) Or run model-generated code under manifest-declared tool grants
+frankenctl agent-sandbox \
+  --manifest ./sandbox_manifest.json \
+  --input ./agent_step.js \
+  --data-contract ./contract.json \
+  --certificate-out ./artifacts/sandbox_bundle \
+  --out ./artifacts/sandbox_report.json
+```
+
+Run the four-act live walkthrough via `./examples/26_non_exfiltration_certificate/demo.sh`.
+The full soundness capstone gate emits a content-addressed bundle via
+`./scripts/run_dw_non_use_certificate.sh ci` (set `DW_RUN_LOCAL=1` when `rch` is
+unavailable) and replays preserved bundles via
+`./scripts/e2e/dw_non_use_certificate_replay.sh bundle <run_dir>`.
+
+**Status & threat-model boundary:** certificates cover **explicit data flows only**
+(`explicit_flow_ifc_v1`) within the v1 analyzed subset—never covert, timing,
+control-flow-implicit, or hardware side channels, and never a noninterference
+proof for arbitrary JS/TS. Unproven constructs (`await`, `yield`, `for..in` /
+`for..of`, module edges, dynamic `require`, native addons) emit
+`unproven_ifc_propagation` with span provenance and downgrade the bundle to
+`uncertified`. Underlying IFC declassification receipts (`FE-CLAIM-015`),
+compile-time hostcall/import capability rejection (`FE-CLAIM-006`), deterministic
+replay (`FE-CLAIM-013`), and signed decision receipts (`FE-CLAIM-004`) are
+OBSERVED; live hardware TEE quote binding (`FE-CLAIM-004-TEE`) and end-to-end
+theorem-backed security decision proofs (`FE-CLAIM-016`) remain HYPOTHESIS.
+Boundary spec: [`docs/E8_NON_USE_CERTIFICATE_THREAT_MODEL_V1.md`](./docs/E8_NON_USE_CERTIFICATE_THREAT_MODEL_V1.md).
+Integrator runbook: [`runbooks/dw_non_use_certificate.md`](./runbooks/dw_non_use_certificate.md).
+
 ---
 
 ## Impossible-By-Default Capabilities
@@ -2626,6 +2692,29 @@ Failure sources combine: `--report <conformance.json>` (a `franken_test262_runne
 **Truth gate.** `--cross-reference` joins clusters to the `parser_gap_inventory.rs` / `lowering_gap_inventory.rs` inventories and exits **3** if any cluster is an *undocumented* gap (a failure with no inventory entry), so a regression cannot quietly grow the frontier without being recorded. Exit codes for the binary: `0` report/plan emitted (truth gate passed under `--cross-reference`); `2` usage error / no source selected / a `--execute` filing failed; `3` truth-gate failure (undocumented gaps).
 
 The capstone gate is `./scripts/run_dw_conformance_frontier.sh ci` (replay: `./scripts/e2e/dw_conformance_frontier_replay.sh bundle`); a runnable demo is [`examples/24_conformance_frontier/demo.sh`](./examples/24_conformance_frontier/demo.sh), and the operator runbook (modes, bundle anatomy, exit-code triage, and the "pick the next highest-value language gap" walkthrough) is [`runbooks/dw_conformance_frontier.md`](./runbooks/dw_conformance_frontier.md).
+
+---
+
+## External Trust Artifact UX (Auditor Proof-Readers)
+
+Auditors, security reviewers, and downstream `/dp/franken_node` staging workflows can inspect claim rows, offline proof bundles, and E8 non-use certificate scenarios without mutating repository state or auto-running heavy replay jobs:
+
+```bash
+# Explain a claim-to-proof matrix row against preserved evidence and Beads state
+./target/release/frankenctl claims explain FE-CLAIM-006 --matrix docs/claim_to_proof_matrix_v1.json --beads-jsonl .beads/issues.jsonl --format json
+
+# Doctor an offline proof or certificate bundle
+python3 scripts/external_trust_artifact_bundle_doctor.py --bundle scripts/testdata/e8_non_use_certificate_scenario_report/certified_bundle --pretty
+
+# Render an E8 non-use certificate security-review report (text or json)
+python3 scripts/e8_non_use_certificate_scenario_report.py --contract scripts/testdata/e8_non_use_certificate_scenario_report/contract_honest.json --bundle scripts/testdata/e8_non_use_certificate_scenario_report/certified_bundle --format text
+
+# Replay the 12-stage no-mock auditor drill and paired truth gate
+python3 scripts/external_trust_no_mock_auditor_drill.py --mode fixture --out-dir /tmp/external_trust_drill
+python3 scripts/check_external_trust_auditor_drill_truth_gate.py --drill-dir /tmp/external_trust_drill
+```
+
+These commands are advisory proof-readers: they do not establish runtime or certificate soundness, do not execute replay runs, and do not promote claims from transport-only evidence. Normative receipt schemas and reason codes live in [`docs/EXTERNAL_TRUST_ARTIFACT_UX_CONTRACT_V1.md`](./docs/EXTERNAL_TRUST_ARTIFACT_UX_CONTRACT_V1.md), operator triage steps (including validation transport blocker states) live in [`runbooks/external_trust_artifact_ux.md`](./runbooks/external_trust_artifact_ux.md), and documentation wording is checked by `python3 scripts/check_external_trust_docs_truth_gate.py`.
 
 ---
 

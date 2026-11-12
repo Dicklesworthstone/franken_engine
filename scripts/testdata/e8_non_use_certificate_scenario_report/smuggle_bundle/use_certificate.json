@@ -1,0 +1,198 @@
+{
+  "schema_version": "franken-engine.use-certificate.v2",
+  "certificate_id": "e8-uc-68a50718b7afa87ecf69049536b4c5b777ef69379f5a7f5c35bf4e472a75329c",
+  "producer_id": "franken-engine.e8-certifier:frankenctl-run:0:5e78268bc045bdde1ab8c5e2d20f0b5f198423fce61d0921df1f4a8634f4222a",
+  "scope": {
+    "engine_version": "0.3.0",
+    "policy_id": "default-policy",
+    "policy_epoch": 1,
+    "parse_goal": "script",
+    "contract_id": "contract-smuggle",
+    "contract_hash_hex": "35d81555453be4ab6646a445da2c1f6808d5a93723b7c803198e5e1dd8b18b49",
+    "extension_id": "agent-support-summarizer",
+    "run_input_binding_id": "support-ticket-batch",
+    "run_input_object_ref": "object://support-ticket-batch",
+    "run_input_path": "/data/projects/franken_engine/examples/26_non_exfiltration_certificate/out/agent_smuggle.js",
+    "run_input_content_hash_hex": "9d98dc427ce87003f633a33d2756fd2ab1b9a0f61fd8bdef020ecfb0909440d8",
+    "purpose": "runtime_execution",
+    "trace_id": "frankenctl-run:0",
+    "decision_id": "frankenctl-run:decision:0",
+    "containment_action": "allow",
+    "replay_trace_content_hash_hex": "cadc328d5c74614f41f0f46a359af0726fb91807264906392621b28886713a25",
+    "declared_sinks": [
+      {
+        "sink_id": "audited-summary-report",
+        "clearance": "AuditedSink",
+        "location": "report://weekly-summary",
+        "allowed_labels": [
+          "Public",
+          "Internal",
+          "Confidential"
+        ]
+      }
+    ],
+    "contract_capabilities": [
+      "VmDispatch",
+      "HeapAllocate",
+      "Console",
+      "Builtin"
+    ],
+    "runtime_granted_capabilities": [
+      "VmDispatch",
+      "GcInvoke",
+      "IrLowering",
+      "HeapAllocate",
+      "Console",
+      "Timer",
+      "Builtin"
+    ],
+    "declassification_route_ids": [],
+    "threat_model_scope": "explicit_flow_ifc_v1",
+    "analysis_posture": "conservative_ingress_over_approximation_v1"
+  },
+  "inputs_bound": [
+    {
+      "binding_id": "support-ticket-batch",
+      "object_ref": "object://support-ticket-batch",
+      "label": "Confidential",
+      "role": "RunInput",
+      "ingressed": true
+    }
+  ],
+  "contract_capability_envelope_respected": false,
+  "capabilities_granted_beyond_contract": [
+    "GcInvoke",
+    "IrLowering",
+    "Timer"
+  ],
+  "capability_use_evidence": [
+    {
+      "capability": "VmDispatch",
+      "evidence": "295 instructions executed"
+    }
+  ],
+  "sinks_potentially_reached": [
+    "audited-summary-report"
+  ],
+  "declassification_route_ids_exercised": [],
+  "output_dependency_posture": "conservative over-approximation: the output may depend on every ingressed input binding and every capability with recorded use; independence claims are evaluated fail-closed in non_use_certificate.json",
+  "console_entry_count": 0,
+  "instructions_executed": 295,
+  "execution_value_content_hash_hex": "6f4b6612125fb3a0daecd2799dfd6c9c299424fd920f9b308110a2c1fbd8f443",
+  "signature_envelope": {
+    "producer_id": "franken-engine.e8-certifier:frankenctl-run:0:5e78268bc045bdde1ab8c5e2d20f0b5f198423fce61d0921df1f4a8634f4222a",
+    "key_provenance": {
+      "authority_class": "runtime",
+      "key_id": "ed25519:33efc660e6bd355686d3074b57fa91ab0d6a60e186c7e558d8ad3cec742971f7",
+      "activation_epoch": 1,
+      "rotation_sequence": 1
+    },
+    "signed_epoch": 1,
+    "verification_key": {
+      "inner": [
+        129,
+        45,
+        230,
+        65,
+        69,
+        38,
+        232,
+        169,
+        251,
+        217,
+        214,
+        66,
+        95,
+        55,
+        98,
+        78,
+        46,
+        61,
+        29,
+        81,
+        15,
+        156,
+        15,
+        157,
+        241,
+        117,
+        239,
+        152,
+        139,
+        254,
+        103,
+        136
+      ]
+    },
+    "signature": {
+      "lower": [
+        5,
+        231,
+        215,
+        242,
+        146,
+        6,
+        54,
+        58,
+        24,
+        193,
+        160,
+        161,
+        52,
+        26,
+        133,
+        126,
+        241,
+        50,
+        184,
+        214,
+        245,
+        160,
+        217,
+        244,
+        127,
+        200,
+        60,
+        22,
+        227,
+        31,
+        40,
+        54
+      ],
+      "upper": [
+        170,
+        124,
+        188,
+        212,
+        254,
+        218,
+        176,
+        195,
+        160,
+        120,
+        68,
+        133,
+        163,
+        203,
+        18,
+        225,
+        133,
+        250,
+        142,
+        84,
+        13,
+        93,
+        48,
+        177,
+        76,
+        224,
+        130,
+        204,
+        20,
+        180,
+        95,
+        8
+      ]
+    }
+  }
+}

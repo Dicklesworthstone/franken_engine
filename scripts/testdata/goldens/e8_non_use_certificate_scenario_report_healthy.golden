@@ -1,0 +1,294 @@
+{
+  "artifact_refs": [
+    {
+      "artifact_id": "e8-data-contract",
+      "content_hash": "be9e81e554b6e2d06f38007d2518df93c17136b50c20e23a8d764512d95746a7",
+      "path": "scripts/testdata/e8_non_use_certificate_scenario_report/contract_honest.json",
+      "present": true,
+      "replay_command": null,
+      "required": true,
+      "schema_version": "franken-engine.data-contract.v1"
+    },
+    {
+      "artifact_id": "e8-bundle:non_use_certificate.json",
+      "content_hash": "e697b3db12403ae978e1f114314186a979c5e08b31a39128304cbc5c71c83ee6",
+      "path": "scripts/testdata/e8_non_use_certificate_scenario_report/certified_bundle/non_use_certificate.json",
+      "present": true,
+      "replay_command": null,
+      "required": true,
+      "schema_version": null
+    },
+    {
+      "artifact_id": "e8-bundle:use_certificate.json",
+      "content_hash": "38c80ca162b774c0d6adb7e136e935dd7d9a0f9ad98109981af8fd0e336c9b00",
+      "path": "scripts/testdata/e8_non_use_certificate_scenario_report/certified_bundle/use_certificate.json",
+      "present": true,
+      "replay_command": null,
+      "required": true,
+      "schema_version": null
+    },
+    {
+      "artifact_id": "e8-bundle:repro.lock",
+      "content_hash": "6aa653d3c1eb8a750c603a0c25d541d0ba146fe5c990f6cc56bb79a345fd5854",
+      "path": "scripts/testdata/e8_non_use_certificate_scenario_report/certified_bundle/repro.lock",
+      "present": true,
+      "replay_command": null,
+      "required": true,
+      "schema_version": null
+    },
+    {
+      "artifact_id": "e8-bundle:declassification_receipts.jsonl",
+      "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "path": "scripts/testdata/e8_non_use_certificate_scenario_report/certified_bundle/declassification_receipts.jsonl",
+      "present": true,
+      "replay_command": null,
+      "required": true,
+      "schema_version": null
+    },
+    {
+      "artifact_id": "e8-bundle:capability_trace.jsonl",
+      "content_hash": "bd92ff254e7a6674f0112751b67aa8277988cf4bea2a80658507a5cebc970b96",
+      "path": "scripts/testdata/e8_non_use_certificate_scenario_report/certified_bundle/capability_trace.jsonl",
+      "present": true,
+      "replay_command": null,
+      "required": true,
+      "schema_version": null
+    },
+    {
+      "artifact_id": "e8-bundle:audit.md",
+      "content_hash": "e591e870d142a18644ad003b3bfecd00ddf35ee3b9e9314a471112461b9068f4",
+      "path": "scripts/testdata/e8_non_use_certificate_scenario_report/certified_bundle/audit.md",
+      "present": true,
+      "replay_command": null,
+      "required": true,
+      "schema_version": null
+    }
+  ],
+  "bead_refs": [
+    {
+      "assignee": "ubuntu",
+      "bead_id": "bd-fqlfw.8",
+      "blockers": [],
+      "freshness_status": "fresh",
+      "status": "closed",
+      "tracker_source": "scripts/testdata/e8_non_use_certificate_scenario_report/issues.jsonl"
+    },
+    {
+      "assignee": "ubuntu",
+      "bead_id": "bd-fqlfw.8.7",
+      "blockers": [],
+      "freshness_status": "fresh",
+      "status": "closed",
+      "tracker_source": "scripts/testdata/e8_non_use_certificate_scenario_report/issues.jsonl"
+    }
+  ],
+  "claim_refs": [
+    {
+      "actual_wording_state": "observed",
+      "allowed_state": "observed",
+      "claim_id": "no-secret-open-sink",
+      "downgrade_text": null,
+      "owning_bead": "bd-fqlfw.8",
+      "source_path": "scripts/testdata/e8_non_use_certificate_scenario_report/certified_bundle/non_use_certificate.json",
+      "source_span": null
+    },
+    {
+      "actual_wording_state": "observed",
+      "allowed_state": "observed",
+      "claim_id": "no-process-spawn",
+      "downgrade_text": null,
+      "owning_bead": "bd-fqlfw.8",
+      "source_path": "scripts/testdata/e8_non_use_certificate_scenario_report/certified_bundle/non_use_certificate.json",
+      "source_span": null
+    },
+    {
+      "actual_wording_state": "observed",
+      "allowed_state": "observed",
+      "claim_id": "no-network-egress",
+      "downgrade_text": null,
+      "owning_bead": "bd-fqlfw.8",
+      "source_path": "scripts/testdata/e8_non_use_certificate_scenario_report/certified_bundle/non_use_certificate.json",
+      "source_span": null
+    }
+  ],
+  "decision": "supported",
+  "e8_scenario": {
+    "analysis_posture": "conservative_ingress_over_approximation_v1",
+    "authorized_purpose": "runtime_execution",
+    "capabilities": {
+      "contract_allowed": [
+        "VmDispatch",
+        "HeapAllocate",
+        "Console",
+        "Builtin"
+      ],
+      "granted_beyond_contract": [
+        "GcInvoke",
+        "IrLowering",
+        "Timer"
+      ],
+      "recorded_use": [
+        {
+          "capability": "VmDispatch",
+          "evidence": "76 instructions executed"
+        }
+      ],
+      "runtime_granted": [
+        "VmDispatch",
+        "GcInvoke",
+        "IrLowering",
+        "HeapAllocate",
+        "Console",
+        "Timer",
+        "Builtin"
+      ]
+    },
+    "certificate_status": "certified_within_analyzed_scope",
+    "certified_claims": [
+      {
+        "claim_id": "no-secret-open-sink",
+        "claim_type": "no_flow",
+        "detail": "no declared sink of clearance OpenSink exists in the host boundary; undeclared sinks are fail-closed by the membrane",
+        "evaluation": "holds_within_analyzed_scope",
+        "evidence_refs": [
+          "host_boundary:no_matching_sink"
+        ]
+      },
+      {
+        "claim_id": "no-process-spawn",
+        "claim_type": "capability_not_used",
+        "detail": "capability ProcessSpawn was granted by neither the contract envelope nor the runtime profile; the hostcall membrane denies ungranted capabilities fail-closed",
+        "evaluation": "holds_within_analyzed_scope",
+        "evidence_refs": [
+          "enforcement:ungranted:ProcessSpawn"
+        ]
+      },
+      {
+        "claim_id": "no-network-egress",
+        "claim_type": "capability_not_used",
+        "detail": "capability NetworkEgress was granted by neither the contract envelope nor the runtime profile; the hostcall membrane denies ungranted capabilities fail-closed",
+        "evaluation": "holds_within_analyzed_scope",
+        "evidence_refs": [
+          "enforcement:ungranted:NetworkEgress"
+        ]
+      }
+    ],
+    "computed_contract_hash_hex": "3ad5a125e25886750a4133e0dcc76658d74a2f79b8cf526e221afd3fcad902d6",
+    "contract_allowed_purposes": [
+      "runtime_execution"
+    ],
+    "contract_hash_hex": "3ad5a125e25886750a4133e0dcc76658d74a2f79b8cf526e221afd3fcad902d6",
+    "contract_id": "contract-support-summary",
+    "data_ingress": [
+      {
+        "allowed_purposes": [
+          "runtime_execution"
+        ],
+        "binding_id": "support-ticket-batch",
+        "ingressed": true,
+        "label": "Confidential",
+        "object_ref": "object://support-ticket-batch",
+        "owner": "data-owner",
+        "role": "run_input"
+      }
+    ],
+    "declassification_receipt_count": 0,
+    "declassification_routes": [],
+    "extension_id": "agent-support-summarizer",
+    "refusal_ledger_id": "e8-preflight-7be2431488de1d3ad7676a580f706b1d10c54148e4d7df2fc870523c40ae1449",
+    "refusal_ledger_result_class": "certifiable_subset",
+    "replay_trace_content_hash_hex": "eb01cd03aa0e5e00f34691bd4ee1b1f4087c598c7b641275b4dad0815525ceca",
+    "run_input_content_hash_hex": "d8ff2668924fab8bd0a71cbdd439088b4c652180403fcb9ca711cd17d3019e31",
+    "signer": {
+      "authority_class": "runtime",
+      "key_id": "ed25519:b3c65dbcb6c95661102a866e72f7200e7d3c6a25b6cab2fbe0aab2608a3edfd7",
+      "producer_id": "franken-engine.e8-certifier:frankenctl-run:0:bf6a05ace937fe393f99df01f51d65e70e4d2abe21774782e751e771f064a041",
+      "signed_epoch": 1
+    },
+    "sinks": [
+      {
+        "allowed_labels": [
+          "Public",
+          "Internal",
+          "Confidential"
+        ],
+        "clearance": "AuditedSink",
+        "location": "report://weekly-summary",
+        "potentially_reached": true,
+        "sink_id": "audited-summary-report"
+      }
+    ],
+    "threat_model_holes": [
+      "Explicit-flow IFC only (explicit_flow_ifc_v1): covert channels and microarchitectural/timing side channels are out of scope.",
+      "Control-flow implicit channels outside tracked PC-label/analyzed-subset obligations are out of scope; unanalyzed constructs refuse certification.",
+      "Embedded signature_envelope.verification_key is self-carried metadata, not an external trust anchor; reviewers MUST verify against an independently pinned runtime VerificationKey via frankenctl verify non-use-certificate.",
+      "Use-certificate output dependency posture is a conservative over-approximation unless an explicit OutputIndependentOf claim holds within analyzed scope."
+    ],
+    "threat_model_scope": "explicit_flow_ifc_v1",
+    "verification_commands": [
+      "frankenctl verify non-use-certificate --bundle scripts/testdata/e8_non_use_certificate_scenario_report/certified_bundle --data-contract scripts/testdata/e8_non_use_certificate_scenario_report/contract_honest.json --key-file <trusted-runtime-verification-key.json>",
+      "frankenctl run --input examples/26_non_exfiltration_certificate/out/agent_honest.js --extension-id agent-support-summarizer --goal script --data-contract <contract.json> --purpose runtime_execution --certificate-out <bundle-dir>",
+      "frankenctl replay run --trace <nondeterminism-trace.json> --mode strict"
+    ],
+    "warnings": []
+  },
+  "evidence_freshness": {
+    "freshness_days": 0,
+    "status": "fresh",
+    "unavailable_reason": null
+  },
+  "generated_at_utc": "2030-01-01T00:00:00Z",
+  "local_fallback_findings": [],
+  "local_fallback_status": "absent",
+  "mock_findings": [],
+  "mock_status": "absent",
+  "mutation_policy": {
+    "mutates_agent_mail": false,
+    "mutates_br": false,
+    "mutates_cargo_targets": false,
+    "mutates_claim_matrix": false,
+    "mutates_evidence_bundles": false,
+    "mutates_file_reservations": false,
+    "mutates_git": false,
+    "mutates_remote_workers": false,
+    "mutates_runtime_policy": false
+  },
+  "reason_codes": [],
+  "receipt_id": "e8-explain-9314ef012dba2237",
+  "remediation": [],
+  "renderer_boundary": {
+    "future_rich_renderer_provider": "/dp/frankentui",
+    "local_rich_renderer_shipped": false
+  },
+  "replay_commands": [
+    "frankenctl run --input examples/26_non_exfiltration_certificate/out/agent_honest.js --extension-id agent-support-summarizer --goal script --data-contract <contract.json> --purpose runtime_execution --certificate-out <bundle-dir>",
+    "frankenctl replay run --trace <nondeterminism-trace.json> --mode strict"
+  ],
+  "schema_version": "franken-engine.external-trust-artifact-explanation.v1",
+  "source_inputs": [
+    {
+      "availability": "present",
+      "content_hash": "be9e81e554b6e2d06f38007d2518df93c17136b50c20e23a8d764512d95746a7",
+      "freshness": "present",
+      "input_kind": "e8_certificate_bundle",
+      "schema_version": "franken-engine.data-contract.v1",
+      "source_path": "scripts/testdata/e8_non_use_certificate_scenario_report/contract_honest.json"
+    },
+    {
+      "availability": "present",
+      "content_hash": "e697b3db12403ae978e1f114314186a979c5e08b31a39128304cbc5c71c83ee6",
+      "freshness": "present",
+      "input_kind": "e8_certificate_bundle",
+      "schema_version": "franken-engine.non-use-certificate.v2",
+      "source_path": "scripts/testdata/e8_non_use_certificate_scenario_report/certified_bundle/non_use_certificate.json"
+    }
+  ],
+  "source_line_refs": [
+    {
+      "end_line": 120,
+      "path": "crates/franken-engine/src/non_use_certificate.rs",
+      "start_line": 1,
+      "status": "available"
+    }
+  ]
+}

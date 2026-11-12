@@ -13,10 +13,21 @@ use crate::benchmark_denominator::{
     PublicationContext, PublicationGateInput, evaluate_publication_gate,
 };
 use crate::causal_replay::CounterfactualConfig;
+use crate::data_contract::{E8_REFUSAL_THREAT_MODEL_SCOPE, E8RefusalLedgerReceipt};
+use crate::deterministic_replay::NondeterminismTrace;
 use crate::engine_object_id::EngineObjectId;
-use crate::evidence_ledger::EvidenceTrustSnapshot;
+use crate::evidence_ledger::{EvidenceTrustSnapshot, EvidenceVerificationIdentity};
 use crate::hash_tiers::ContentHash;
+use crate::ifc_artifacts::DeclassificationReceipt;
+use crate::ifc_provenance_index::FlowDecision;
 use crate::incident_replay_bundle::{BundleVerifier, CheckOutcome, IncidentReplayBundle};
+use crate::non_use_certificate::{
+    AUDIT_FILE, CAPABILITY_TRACE_FILE, CapabilityTraceRecord, CertificateReproLock,
+    CertificateStatus, ClaimEvaluation, DECLASSIFICATION_RECEIPTS_FILE,
+    E8_CERTIFICATE_BUNDLE_SCHEMA_VERSION, E8_CERTIFICATE_REPRO_LOCK_SCHEMA_VERSION,
+    NON_USE_CERTIFICATE_FILE, NonUseCertificate, REPRO_LOCK_FILE, USE_CERTIFICATE_FILE,
+    UseCertificate,
+};
 use crate::quarantine_mesh_gate::GateValidationResult;
 use crate::security_epoch::SecurityEpoch;
 use crate::signature_preimage::{
@@ -49,6 +60,13 @@ const CODE_ATTESTATION_ENVELOPE: &str = "FE-TPV-ATTEST-0001";
 const CODE_ATTESTATION_DIGEST: &str = "FE-TPV-ATTEST-0002";
 const CODE_ATTESTATION_PARSE: &str = "FE-TPV-ATTEST-0003";
 const CODE_ATTESTATION_SIGNATURE: &str = "FE-TPV-ATTEST-0004";
+const CODE_NUC_PARSE: &str = "FE-TPV-NUC-0001";
+const CODE_NUC_SIGNATURE: &str = "FE-TPV-NUC-0002";
+const CODE_NUC_LOCK: &str = "FE-TPV-NUC-0003";
+const CODE_NUC_TRACE: &str = "FE-TPV-NUC-0004";
+const CODE_NUC_REFUSAL: &str = "FE-TPV-NUC-0005";
+const CODE_NUC_RECEIPTS: &str = "FE-TPV-NUC-0006";
+const CODE_NUC_SCOPE: &str = "FE-TPV-NUC-0007";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -168,6 +186,24 @@ pub struct ContainmentClaimBundle {
     pub result: GateValidationResult,
     #[serde(default = "default_containment_latency_sla_ns")]
     pub detection_latency_sla_ns: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NonUseCertificateClaimBundle {
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    /// Trust anchor resolved out-of-band by the verifier; never read from the
+    /// claimant's certificate envelope.
+    pub trusted_identity: EvidenceVerificationIdentity,
+    /// Exact serialized contents of the 6 E8 bundle files keyed by file name.
+    pub bundle_files: BTreeMap<String, Vec<u8>>,
+    /// Uncertified-preflight / refusal-ledger receipt governing certificate status.
+    pub refusal_receipt: E8RefusalLedgerReceipt,
+    /// Recorded nondeterminism trace JSON bytes (`--emit-trace` or canonical
+    /// `NondeterminismTrace` encoding) anchored by `replay_trace_content_hash_hex`.
+    #[serde(default)]
+    pub recorded_trace_bytes: Option<Vec<u8>>,
 }
 
 fn default_containment_latency_sla_ns() -> u64 {
@@ -1066,6 +1102,490 @@ pub fn verify_attestation(attestation: &VerificationAttestation) -> ThirdPartyVe
     build_report(attestation, "attestation", verdict, checks, events)
 }
 
+pub fn verify_non_use_certificate_claim(
+    bundle: &NonUseCertificateClaimBundle,
+) -> ThirdPartyVerificationReport {
+    const EXPECTED_SIBLINGS: [&str; 5] = [
+        NON_USE_CERTIFICATE_FILE,
+        USE_CERTIFICATE_FILE,
+        DECLASSIFICATION_RECEIPTS_FILE,
+        CAPABILITY_TRACE_FILE,
+        AUDIT_FILE,
+    ];
+
+    let mut checks = Vec::new();
+    let mut events = vec![event(
+        bundle,
+        "non_use_certificate_verification_started",
+        "pass",
+        None,
+    )];
+
+    let non_use: Option<NonUseCertificate> = match bundle.bundle_files.get(NON_USE_CERTIFICATE_FILE)
+    {
+        Some(bytes) => match serde_json::from_slice(bytes) {
+            Ok(parsed) => {
+                pass_check(
+                    &mut checks,
+                    "non_use_certificate_parsed",
+                    format!("parsed {NON_USE_CERTIFICATE_FILE} ({} bytes)", bytes.len()),
+                );
+                Some(parsed)
+            }
+            Err(error) => {
+                fail_check(
+                    &mut checks,
+                    "non_use_certificate_parsed",
+                    CODE_NUC_PARSE,
+                    format!("failed to parse {NON_USE_CERTIFICATE_FILE}: {error}"),
+                );
+                None
+            }
+        },
+        None => {
+            fail_check(
+                &mut checks,
+                "non_use_certificate_parsed",
+                CODE_NUC_PARSE,
+                format!("missing required bundle file {NON_USE_CERTIFICATE_FILE}"),
+            );
+            None
+        }
+    };
+
+    let use_cert: Option<UseCertificate> = match bundle.bundle_files.get(USE_CERTIFICATE_FILE) {
+        Some(bytes) => match serde_json::from_slice(bytes) {
+            Ok(parsed) => {
+                pass_check(
+                    &mut checks,
+                    "use_certificate_parsed",
+                    format!("parsed {USE_CERTIFICATE_FILE} ({} bytes)", bytes.len()),
+                );
+                Some(parsed)
+            }
+            Err(error) => {
+                fail_check(
+                    &mut checks,
+                    "use_certificate_parsed",
+                    CODE_NUC_PARSE,
+                    format!("failed to parse {USE_CERTIFICATE_FILE}: {error}"),
+                );
+                None
+            }
+        },
+        None => {
+            fail_check(
+                &mut checks,
+                "use_certificate_parsed",
+                CODE_NUC_PARSE,
+                format!("missing required bundle file {USE_CERTIFICATE_FILE}"),
+            );
+            None
+        }
+    };
+
+    let repro_lock: Option<CertificateReproLock> = match bundle.bundle_files.get(REPRO_LOCK_FILE) {
+        Some(bytes) => match serde_json::from_slice(bytes) {
+            Ok(parsed) => {
+                pass_check(
+                    &mut checks,
+                    "repro_lock_parsed",
+                    format!("parsed {REPRO_LOCK_FILE} ({} bytes)", bytes.len()),
+                );
+                Some(parsed)
+            }
+            Err(error) => {
+                fail_check(
+                    &mut checks,
+                    "repro_lock_parsed",
+                    CODE_NUC_PARSE,
+                    format!("failed to parse {REPRO_LOCK_FILE}: {error}"),
+                );
+                None
+            }
+        },
+        None => {
+            fail_check(
+                &mut checks,
+                "repro_lock_parsed",
+                CODE_NUC_PARSE,
+                format!("missing required bundle file {REPRO_LOCK_FILE}"),
+            );
+            None
+        }
+    };
+
+    if let Some(non_use) = &non_use {
+        match non_use.verify_with_trusted_identity(&bundle.trusted_identity) {
+            Ok(()) => pass_check(
+                &mut checks,
+                "non_use_certificate_signature_valid",
+                format!(
+                    "verified against external trust anchor producer={}",
+                    bundle.trusted_identity.producer_id
+                ),
+            ),
+            Err(error) => fail_check(
+                &mut checks,
+                "non_use_certificate_signature_valid",
+                CODE_NUC_SIGNATURE,
+                error.to_string(),
+            ),
+        }
+    }
+
+    if let Some(use_cert) = &use_cert {
+        match use_cert.verify_with_trusted_identity(&bundle.trusted_identity) {
+            Ok(()) => pass_check(
+                &mut checks,
+                "use_certificate_signature_valid",
+                format!(
+                    "verified against external trust anchor producer={}",
+                    bundle.trusted_identity.producer_id
+                ),
+            ),
+            Err(error) => fail_check(
+                &mut checks,
+                "use_certificate_signature_valid",
+                CODE_NUC_SIGNATURE,
+                error.to_string(),
+            ),
+        }
+    }
+
+    if let Some(lock) = &repro_lock {
+        if lock.schema_version == E8_CERTIFICATE_REPRO_LOCK_SCHEMA_VERSION
+            && lock.bundle_schema_version == E8_CERTIFICATE_BUNDLE_SCHEMA_VERSION
+            && !lock.determinism.allow_network
+            && !lock.determinism.allow_wall_clock
+            && !lock.determinism.allow_randomness
+        {
+            pass_check(
+                &mut checks,
+                "repro_lock_determinism_contract",
+                format!(
+                    "schema={} bundle_schema={} determinism=strict",
+                    lock.schema_version, lock.bundle_schema_version
+                ),
+            );
+        } else {
+            fail_check(
+                &mut checks,
+                "repro_lock_determinism_contract",
+                CODE_NUC_LOCK,
+                format!(
+                    "invalid repro.lock header or determinism flags: schema={} bundle_schema={} determinism={:?}",
+                    lock.schema_version, lock.bundle_schema_version, lock.determinism
+                ),
+            );
+        }
+
+        let lock_map: BTreeMap<&str, _> = lock
+            .files
+            .iter()
+            .map(|entry| (entry.name.as_str(), entry))
+            .collect();
+        let expected_set: BTreeSet<&str> = EXPECTED_SIBLINGS.into_iter().collect();
+        let actual_set: BTreeSet<&str> = lock_map.keys().copied().collect();
+        let mut digest_mismatches = Vec::new();
+        if actual_set != expected_set || lock.files.len() != EXPECTED_SIBLINGS.len() {
+            digest_mismatches.push(format!(
+                "repro.lock file inventory {:?} differs from expected {:?}",
+                lock.files
+                    .iter()
+                    .map(|f| f.name.as_str())
+                    .collect::<Vec<_>>(),
+                EXPECTED_SIBLINGS
+            ));
+        }
+        for name in EXPECTED_SIBLINGS {
+            match (bundle.bundle_files.get(name), lock_map.get(name)) {
+                (Some(bytes), Some(entry)) => {
+                    let sha256_hex = ContentHash::compute(bytes).to_hex();
+                    let byte_len = bytes.len() as u64;
+                    if entry.sha256_hex != sha256_hex || entry.bytes != byte_len {
+                        digest_mismatches.push(format!(
+                            "{name}: expected sha256={} ({}B), actual sha256={sha256_hex} ({byte_len}B)",
+                            entry.sha256_hex, entry.bytes
+                        ));
+                    }
+                }
+                (None, _) => digest_mismatches.push(format!("{name}: missing from bundle_files")),
+                (_, None) => digest_mismatches.push(format!("{name}: missing from repro.lock")),
+            }
+        }
+        if bundle
+            .bundle_files
+            .keys()
+            .any(|name| name != REPRO_LOCK_FILE && !expected_set.contains(name.as_str()))
+        {
+            digest_mismatches.push("bundle_files contains unrecorded extra file".to_string());
+        }
+        if digest_mismatches.is_empty() {
+            pass_check(
+                &mut checks,
+                "repro_lock_file_digests_match",
+                format!(
+                    "all {} sibling files match repro.lock SHA-256 and byte counts",
+                    EXPECTED_SIBLINGS.len()
+                ),
+            );
+        } else {
+            fail_check(
+                &mut checks,
+                "repro_lock_file_digests_match",
+                CODE_NUC_LOCK,
+                digest_mismatches.join("; "),
+            );
+        }
+    }
+
+    if let (Some(non_use), Some(use_cert), Some(lock)) = (&non_use, &use_cert, &repro_lock) {
+        let context_matches = non_use.scope == use_cert.scope
+            && non_use.scope.trace_id == bundle.trace_id
+            && non_use.scope.decision_id == bundle.decision_id
+            && non_use.scope.policy_id == bundle.policy_id
+            && lock.replay.trace_id == bundle.trace_id
+            && lock.replay.decision_id == bundle.decision_id
+            && lock.replay.policy_id == bundle.policy_id
+            && lock.replay.replay_pointer == non_use.scope.replay_trace_content_hash_hex
+            && non_use.scope.threat_model_scope == E8_REFUSAL_THREAT_MODEL_SCOPE;
+        let audit_ok = bundle
+            .bundle_files
+            .get(AUDIT_FILE)
+            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+            .is_some_and(|audit| {
+                audit.contains("EXPLICIT-FLOW ONLY")
+                    && audit.contains(&non_use.scope.replay_trace_content_hash_hex)
+            });
+        if context_matches && audit_ok {
+            pass_check(
+                &mut checks,
+                "scope_and_explicit_flow_disclosure_valid",
+                format!(
+                    "trace_id={} threat_model_scope={}",
+                    bundle.trace_id, non_use.scope.threat_model_scope
+                ),
+            );
+        } else {
+            fail_check(
+                &mut checks,
+                "scope_and_explicit_flow_disclosure_valid",
+                CODE_NUC_SCOPE,
+                "scope mismatch across certificates/repro.lock/claim context or missing explicit-flow audit disclosure".to_string(),
+            );
+        }
+
+        match bundle.recorded_trace_bytes.as_deref() {
+            Some(trace_bytes) => match serde_json::from_slice::<NondeterminismTrace>(trace_bytes) {
+                Ok(parsed_trace) => match (
+                    parsed_trace.validate_for_replay(),
+                    serde_json::to_vec(&parsed_trace),
+                ) {
+                    (Ok(()), Ok(canonical_trace_bytes)) => {
+                        let actual_hash = ContentHash::compute(&canonical_trace_bytes).to_hex();
+                        if parsed_trace.session_id == bundle.trace_id
+                            && actual_hash == non_use.scope.replay_trace_content_hash_hex
+                            && actual_hash == lock.replay.replay_pointer
+                        {
+                            pass_check(
+                                &mut checks,
+                                "replay_trace_hash_matches",
+                                format!("replay_trace_content_hash_hex={actual_hash}"),
+                            );
+                        } else {
+                            fail_check(
+                                &mut checks,
+                                "replay_trace_hash_matches",
+                                CODE_NUC_TRACE,
+                                format!(
+                                    "trace session/hash mismatch: trace_session={} computed={actual_hash} certificate={} repro_lock={}",
+                                    parsed_trace.session_id,
+                                    non_use.scope.replay_trace_content_hash_hex,
+                                    lock.replay.replay_pointer
+                                ),
+                            );
+                        }
+                    }
+                    (Err(error), _) => fail_check(
+                        &mut checks,
+                        "replay_trace_hash_matches",
+                        CODE_NUC_TRACE,
+                        format!("recorded_trace_bytes failed replay validation: {error}"),
+                    ),
+                    (_, Err(error)) => fail_check(
+                        &mut checks,
+                        "replay_trace_hash_matches",
+                        CODE_NUC_TRACE,
+                        format!("failed to canonicalize NondeterminismTrace: {error}"),
+                    ),
+                },
+                Err(error) => fail_check(
+                    &mut checks,
+                    "replay_trace_hash_matches",
+                    CODE_NUC_TRACE,
+                    format!("recorded_trace_bytes is not a valid NondeterminismTrace: {error}"),
+                ),
+            },
+            None => fail_check(
+                &mut checks,
+                "replay_trace_hash_matches",
+                CODE_NUC_TRACE,
+                "recorded_trace_bytes is required to verify non-use certificate replay binding"
+                    .to_string(),
+            ),
+        }
+
+        match serde_json::to_vec(&bundle.refusal_receipt) {
+            Ok(receipt_bytes) => {
+                let receipt_hash = ContentHash::compute(&receipt_bytes).to_hex();
+                let ledger_allows = !bundle.refusal_receipt.must_block_certificate
+                    && bundle.refusal_receipt.certifier_input_allowed
+                    && bundle.refusal_receipt.result_class == "certifiable_subset"
+                    && bundle.refusal_receipt.refusal_codes.is_empty()
+                    && bundle.refusal_receipt.unanalyzed_surface_count == 0;
+                let every_claim_holds = non_use
+                    .claims
+                    .iter()
+                    .all(|claim| claim.evaluation == ClaimEvaluation::HoldsWithinAnalyzedScope);
+                let expected_status = if ledger_allows && every_claim_holds {
+                    CertificateStatus::CertifiedWithinAnalyzedScope
+                } else {
+                    CertificateStatus::Uncertified
+                };
+                if bundle.refusal_receipt.run_id == bundle.trace_id
+                    && bundle.refusal_receipt.contract_id == non_use.scope.contract_id
+                    && non_use.refusal_ledger_id == bundle.refusal_receipt.ledger_id
+                    && non_use.refusal_ledger_result_class == bundle.refusal_receipt.result_class
+                    && non_use.refusal_ledger_content_hash_hex == receipt_hash
+                    && non_use.certificate_status == expected_status
+                {
+                    pass_check(
+                        &mut checks,
+                        "refusal_ledger_and_status_soundness",
+                        format!(
+                            "status={} result_class={} ledger_hash={receipt_hash}",
+                            non_use.certificate_status, bundle.refusal_receipt.result_class
+                        ),
+                    );
+                } else {
+                    fail_check(
+                        &mut checks,
+                        "refusal_ledger_and_status_soundness",
+                        CODE_NUC_REFUSAL,
+                        format!(
+                            "refusal-ledger linkage or derived status mismatch: claimed_status={} expected_status={expected_status} cert_hash={} computed_hash={receipt_hash}",
+                            non_use.certificate_status, non_use.refusal_ledger_content_hash_hex
+                        ),
+                    );
+                }
+            }
+            Err(error) => fail_check(
+                &mut checks,
+                "refusal_ledger_and_status_soundness",
+                CODE_NUC_REFUSAL,
+                format!("failed to encode refusal receipt: {error}"),
+            ),
+        }
+
+        let mut receipt_errors = Vec::new();
+        let mut verified_receipt_ids = BTreeSet::new();
+        match bundle
+            .bundle_files
+            .get(DECLASSIFICATION_RECEIPTS_FILE)
+            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+        {
+            Some(jsonl) => {
+                let mut count = 0u64;
+                for (line_idx, line) in jsonl.lines().filter(|l| !l.trim().is_empty()).enumerate() {
+                    count += 1;
+                    match serde_json::from_str::<DeclassificationReceipt>(line) {
+                        Ok(receipt) => match receipt.verify(&receipt.authorized_by) {
+                            Ok(()) => {
+                                verified_receipt_ids.insert(receipt.receipt_id);
+                            }
+                            Err(error) => receipt_errors.push(format!(
+                                "line {}: receipt `{}` failed verification: {error}",
+                                line_idx + 1,
+                                receipt.receipt_id
+                            )),
+                        },
+                        Err(error) => receipt_errors.push(format!(
+                            "line {}: invalid DeclassificationReceipt JSON: {error}",
+                            line_idx + 1
+                        )),
+                    }
+                }
+                if count != non_use.declassification_receipt_count {
+                    receipt_errors.push(format!(
+                        "receipt count {count} differs from certificate count {}",
+                        non_use.declassification_receipt_count
+                    ));
+                }
+            }
+            None => receipt_errors.push(format!(
+                "{DECLASSIFICATION_RECEIPTS_FILE} missing or invalid UTF-8"
+            )),
+        }
+        for event in &non_use.flow_events {
+            if event.decision == FlowDecision::Declassified
+                && !event
+                    .receipt_ref
+                    .as_deref()
+                    .is_some_and(|id| verified_receipt_ids.contains(id))
+            {
+                receipt_errors.push(format!(
+                    "declassified flow event `{}` lacks a verified receipt in {DECLASSIFICATION_RECEIPTS_FILE}",
+                    event.event_id
+                ));
+            }
+        }
+        match bundle
+            .bundle_files
+            .get(CAPABILITY_TRACE_FILE)
+            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+        {
+            Some(jsonl) => {
+                for (line_idx, line) in jsonl.lines().filter(|l| !l.trim().is_empty()).enumerate() {
+                    if let Err(error) = serde_json::from_str::<CapabilityTraceRecord>(line) {
+                        receipt_errors.push(format!(
+                            "{CAPABILITY_TRACE_FILE} line {} invalid: {error}",
+                            line_idx + 1
+                        ));
+                    }
+                }
+            }
+            None => {
+                receipt_errors.push(format!("{CAPABILITY_TRACE_FILE} missing or invalid UTF-8"))
+            }
+        }
+        if receipt_errors.is_empty() {
+            pass_check(
+                &mut checks,
+                "declassification_receipts_and_capability_trace_valid",
+                format!("verified_receipts={}", verified_receipt_ids.len()),
+            );
+        } else {
+            fail_check(
+                &mut checks,
+                "declassification_receipts_and_capability_trace_valid",
+                CODE_NUC_RECEIPTS,
+                receipt_errors.join("; "),
+            );
+        }
+    }
+
+    let verdict = verdict_from_checks(&checks, false);
+    events.push(event_with_verdict(
+        bundle,
+        "non_use_certificate_verification_completed",
+        verdict,
+    ));
+    append_failure_events(bundle, &checks, &mut events);
+
+    build_report(bundle, "non_use_certificate", verdict, checks, events)
+}
+
 pub fn render_attestation_summary(attestation: &VerificationAttestation) -> String {
     format!(
         "claim_type={} verdict={} signed={} verifier={} issued_at={}",
@@ -1495,6 +2015,20 @@ impl ClaimContext for ReplayClaimBundle {
 }
 
 impl ClaimContext for ContainmentClaimBundle {
+    fn trace_id(&self) -> &str {
+        &self.trace_id
+    }
+
+    fn decision_id(&self) -> &str {
+        &self.decision_id
+    }
+
+    fn policy_id(&self) -> &str {
+        &self.policy_id
+    }
+}
+
+impl ClaimContext for NonUseCertificateClaimBundle {
     fn trace_id(&self) -> &str {
         &self.trace_id
     }
@@ -2933,5 +3467,240 @@ mod tests {
         assert!(names.contains(&"latency_sla:s1"));
         assert!(names.contains(&"isolation_verified:s1"));
         assert!(names.contains(&"recovery_verified:s1"));
+    }
+
+    mod non_use_certificate {
+        use super::*;
+        use crate::capability::RuntimeCapability;
+        use crate::data_contract::{
+            DATA_CONTRACT_SCHEMA_VERSION, DEFAULT_DATA_CONTRACT_PURPOSE, DataBinding,
+            DataBindingRole, DataContract, RequestedOutputClaim, RequiredDeclassificationRoute,
+            SinkBinding,
+        };
+        use crate::e8_analyzed_subset::scan_source;
+        use crate::evidence_ledger::LabEvidenceAuthority;
+        use crate::ifc_artifacts::{
+            ClearanceClass, DeclassificationDecision, DeclassificationReceipt,
+            DeclassificationRoute, IfcSchemaVersion, Label,
+        };
+        use crate::ifc_provenance_index::FlowEventRecord;
+        use crate::non_use_certificate::{
+            CertifierInputs, E8_CERTIFIER_PRODUCER_ID, emit_certificate_bundle_lab,
+        };
+
+        fn sample_claim_bundle(with_declassified_receipt: bool) -> NonUseCertificateClaimBundle {
+            let source = "const answer = 40 + 2;";
+            let input_path = "fixtures/tpv_nuc.js";
+            let contract = DataContract {
+                schema_version: DATA_CONTRACT_SCHEMA_VERSION.to_string(),
+                contract_id: "contract-tpv-nuc".to_string(),
+                extension_id: "ext-tpv-nuc".to_string(),
+                input_bindings: vec![DataBinding {
+                    binding_id: "run-source".to_string(),
+                    object_ref: "object://run-source".to_string(),
+                    path: Some(input_path.to_string()),
+                    label: Label::Public,
+                    owner: "runtime-team".to_string(),
+                    role: DataBindingRole::RunInput,
+                    allowed_purposes: BTreeSet::from([DEFAULT_DATA_CONTRACT_PURPOSE.to_string()]),
+                    content_hash_hex: Some(ContentHash::compute(source.as_bytes()).to_hex()),
+                }],
+                allowed_purposes: BTreeSet::from([DEFAULT_DATA_CONTRACT_PURPOSE.to_string()]),
+                allowed_capabilities: BTreeSet::from([
+                    RuntimeCapability::VmDispatch,
+                    RuntimeCapability::Builtin,
+                ]),
+                allowed_sinks: vec![SinkBinding {
+                    sink_id: "audit-sink".to_string(),
+                    clearance: ClearanceClass::AuditedSink,
+                    location: "ledger://audit".to_string(),
+                    allowed_labels: BTreeSet::from([Label::Public, Label::Internal]),
+                }],
+                required_declassification_routes: if with_declassified_receipt {
+                    vec![RequiredDeclassificationRoute {
+                        route: DeclassificationRoute {
+                            route_id: "route-audit-release".to_string(),
+                            source_label: Label::Secret,
+                            target_clearance: Label::Internal,
+                            conditions: vec!["approved_audit_summary".to_string()],
+                        },
+                        required_for_claims: BTreeSet::from(["no-process-spawn".to_string()]),
+                    }]
+                } else {
+                    Vec::new()
+                },
+                requested_output_claims: vec![RequestedOutputClaim::CapabilityNotUsed {
+                    claim_id: "no-process-spawn".to_string(),
+                    capability: RuntimeCapability::ProcessSpawn,
+                }],
+                metadata: BTreeMap::new(),
+            };
+            let binding = contract
+                .bind_to_run(
+                    "ext-tpv-nuc",
+                    input_path,
+                    DEFAULT_DATA_CONTRACT_PURPOSE,
+                    Some(&ContentHash::compute(source.as_bytes())),
+                )
+                .expect("bind contract");
+            let scan = scan_source(source, input_path, crate::ast::ParseGoal::Script);
+            let trace_id = "trace-tpv-nuc-1";
+            let decision_id = "decision-tpv-nuc-1";
+            let policy_id = "policy-tpv-nuc";
+            let refusal_receipt =
+                binding.preflight_receipt(trace_id, Some("tpv.explain.json"), Some(&scan), &[]);
+
+            let mut trace = NondeterminismTrace::new(trace_id);
+            trace.finalise(0);
+            let trace_bytes = serde_json::to_vec_pretty(&trace).expect("pretty trace json");
+            let canonical_trace = serde_json::to_vec(&trace).expect("canonical trace json");
+            let replay_hash = ContentHash::compute(&canonical_trace).to_hex();
+
+            let mut receipts = Vec::new();
+            let mut flow_events = Vec::new();
+            if with_declassified_receipt {
+                let authorizer = SigningKey::from_bytes([0x41; 32]).expect("signing key");
+                let mut receipt = DeclassificationReceipt {
+                    receipt_id: "rcpt-tpv-nuc-1".to_string(),
+                    source_label: Label::Secret,
+                    sink_clearance: Label::Internal,
+                    content_binding: None,
+                    declassification_route_ref: "route-audit-release".to_string(),
+                    decision_contract_id: "contract-tpv-nuc".to_string(),
+                    policy_evaluation_summary: "approved audit summary release".to_string(),
+                    loss_assessment_milli: 100,
+                    decision: DeclassificationDecision::Allow,
+                    authorized_by: authorizer.verification_key(),
+                    replay_linkage: trace_id.to_string(),
+                    timestamp_ms: 1_700_000_000_000,
+                    not_before_ms: 1_699_999_000_000,
+                    not_after_ms: 1_700_001_000_000,
+                    schema_version: IfcSchemaVersion::CURRENT,
+                    signature: Signature::from_bytes(crate::signature_preimage::SIGNATURE_SENTINEL),
+                };
+                receipt.sign(&authorizer).expect("sign receipt");
+                receipts.push(receipt);
+                flow_events.push(FlowEventRecord {
+                    event_id: "flow-tpv-declass-1".to_string(),
+                    extension_id: "ext-tpv-nuc".to_string(),
+                    source_label: Label::Secret,
+                    sink_clearance: Label::Internal,
+                    flow_location: "data_contract:contract-tpv-nuc:sink:audit-sink".to_string(),
+                    decision: FlowDecision::Declassified,
+                    receipt_ref: Some("rcpt-tpv-nuc-1".to_string()),
+                    timestamp_ms: 0,
+                });
+            }
+
+            let granted =
+                BTreeSet::from([RuntimeCapability::VmDispatch, RuntimeCapability::Builtin]);
+            let epoch = SecurityEpoch::from_raw(3);
+            let authority = LabEvidenceAuthority::deterministic_fixture(
+                E8_CERTIFIER_PRODUCER_ID,
+                "tpv-nuc-authority",
+                epoch,
+            )
+            .expect("lab authority");
+            let inputs = CertifierInputs {
+                contract: &contract,
+                binding: &binding,
+                flow_events: &flow_events,
+                host_effects: &[],
+                declassification_receipts: &receipts,
+                refusal_receipt: &refusal_receipt,
+                runtime_granted_capabilities: &granted,
+                policy_id,
+                policy_epoch: epoch.as_u64(),
+                parse_goal: "script",
+                trace_id,
+                decision_id,
+                engine_version: env!("CARGO_PKG_VERSION"),
+                containment_action: "allow",
+                instructions_executed: 12,
+                console_entry_count: 0,
+                execution_value: "undefined",
+                replay_trace_content_hash_hex: &replay_hash,
+            };
+            let cert_bundle =
+                emit_certificate_bundle_lab(&inputs, &authority).expect("emit bundle");
+            let bundle_files = cert_bundle
+                .files
+                .iter()
+                .map(|file| (file.name.clone(), file.bytes.clone()))
+                .collect();
+
+            NonUseCertificateClaimBundle {
+                trace_id: trace_id.to_string(),
+                decision_id: decision_id.to_string(),
+                policy_id: policy_id.to_string(),
+                trusted_identity: authority.verification_identity(),
+                bundle_files,
+                refusal_receipt,
+                recorded_trace_bytes: Some(trace_bytes),
+            }
+        }
+
+        #[test]
+        fn verifies_honest_bundle_and_signed_declassification_receipt() {
+            for with_receipt in [false, true] {
+                let claim = sample_claim_bundle(with_receipt);
+                let report = verify_non_use_certificate_claim(&claim);
+                assert_eq!(
+                    report.verdict,
+                    VerificationVerdict::Verified,
+                    "expected Verified report (with_receipt={with_receipt}): {report:?}"
+                );
+                assert_eq!(report.exit_code(), EXIT_CODE_VERIFIED);
+            }
+        }
+
+        #[test]
+        fn rejects_wrong_external_trust_anchor_and_claimant_key_substitution() {
+            let mut claim = sample_claim_bundle(false);
+            let attacker = LabEvidenceAuthority::deterministic_fixture(
+                E8_CERTIFIER_PRODUCER_ID,
+                "tpv-nuc-attacker",
+                SecurityEpoch::from_raw(3),
+            )
+            .expect("attacker authority");
+            claim.trusted_identity = attacker.verification_identity();
+            let report = verify_non_use_certificate_claim(&claim);
+            assert_eq!(report.verdict, VerificationVerdict::Failed);
+            assert!(
+                report
+                    .checks
+                    .iter()
+                    .any(|c| c.name == "non_use_certificate_signature_valid" && !c.passed)
+            );
+        }
+
+        #[test]
+        fn rejects_missing_or_tampered_replay_trace_and_sibling_digest_drift() {
+            let mut missing_trace = sample_claim_bundle(false);
+            missing_trace.recorded_trace_bytes = None;
+            let report = verify_non_use_certificate_claim(&missing_trace);
+            assert_eq!(report.verdict, VerificationVerdict::Failed);
+            assert!(
+                report
+                    .checks
+                    .iter()
+                    .any(|c| c.name == "replay_trace_hash_matches" && !c.passed)
+            );
+
+            let mut tampered_audit = sample_claim_bundle(false);
+            tampered_audit
+                .bundle_files
+                .get_mut(AUDIT_FILE)
+                .expect("audit file")
+                .extend_from_slice(b"\ntampered\n");
+            let report = verify_non_use_certificate_claim(&tampered_audit);
+            assert_eq!(report.verdict, VerificationVerdict::Failed);
+            assert!(
+                report
+                    .checks
+                    .iter()
+                    .any(|c| c.name == "repro_lock_file_digests_match" && !c.passed)
+            );
+        }
     }
 }

@@ -1,0 +1,48 @@
+# E8 Non-Use / Non-Exfiltration Security Scenario Report
+Receipt ID: e8-explain-9314ef012dba2237
+Decision: SUPPORTED (explicit-flow scope verified)
+Extension: agent-support-summarizer | Contract: contract-support-summary
+Contract SHA-256: 3ad5a125e25886750a4133e0dcc76658d74a2f79b8cf526e221afd3fcad902d6
+Run-Input SHA-256: d8ff2668924fab8bd0a71cbdd439088b4c652180403fcb9ca711cd17d3019e31
+Authorized Purpose: runtime_execution (contract allows: runtime_execution)
+Certificate Status: certified_within_analyzed_scope | Refusal Ledger: e8-preflight-7be2431488de1d3ad7676a580f706b1d10c54148e4d7df2fc870523c40ae1449 (certifiable_subset)
+Signer Metadata: authority=runtime key_id=ed25519:b3c65dbcb6c95661102a866e72f7200e7d3c6a25b6cab2fbe0aab2608a3edfd7
+
+## Data Ingress & Labels
+| binding_id | role | label | owner | ingressed | object_ref |
+|---|---|---|---|---|---|
+| support-ticket-batch | run_input | Confidential | data-owner | True | object://support-ticket-batch |
+
+## Capabilities Envelope
+- Contract allowed: VmDispatch, HeapAllocate, Console, Builtin
+- Runtime granted: VmDispatch, GcInvoke, IrLowering, HeapAllocate, Console, Timer, Builtin
+- Granted beyond contract (ambient runtime profile): GcInvoke, IrLowering, Timer
+- Recorded capability uses: VmDispatch (76 instructions executed)
+
+## Allowed & Reached Sinks
+| sink_id | clearance | location | allowed_labels | potentially_reached |
+|---|---|---|---|---|
+| audited-summary-report | AuditedSink | report://weekly-summary | Public, Internal, Confidential | True |
+
+## Required Declassification Routes
+| route_id | flow | required_for_claims | exercised | conditions |
+|---|---|---|---|---|
+| (none required) | - | - | - | - |
+
+## Certifier Claim Verdicts
+| claim_id | type | evaluation | detail |
+|---|---|---|---|
+| no-secret-open-sink | no_flow | holds_within_analyzed_scope | no declared sink of clearance OpenSink exists in the host boundary; undeclared sinks are fail-closed by the membrane |
+| no-process-spawn | capability_not_used | holds_within_analyzed_scope | capability ProcessSpawn was granted by neither the contract envelope nor the runtime profile; the hostcall membrane denies ungranted capabilities fail-closed |
+| no-network-egress | capability_not_used | holds_within_analyzed_scope | capability NetworkEgress was granted by neither the contract envelope nor the runtime profile; the hostcall membrane denies ungranted capabilities fail-closed |
+
+## Threat-Model Holes & Reviewer Boundaries
+- Explicit-flow IFC only (explicit_flow_ifc_v1): covert channels and microarchitectural/timing side channels are out of scope.
+- Control-flow implicit channels outside tracked PC-label/analyzed-subset obligations are out of scope; unanalyzed constructs refuse certification.
+- Embedded signature_envelope.verification_key is self-carried metadata, not an external trust anchor; reviewers MUST verify against an independently pinned runtime VerificationKey via frankenctl verify non-use-certificate.
+- Use-certificate output dependency posture is a conservative over-approximation unless an explicit OutputIndependentOf claim holds within analyzed scope.
+
+## Verification & Replay Commands
+- `frankenctl verify non-use-certificate --bundle scripts/testdata/e8_non_use_certificate_scenario_report/certified_bundle --data-contract scripts/testdata/e8_non_use_certificate_scenario_report/contract_honest.json --key-file <trusted-runtime-verification-key.json>`
+- `frankenctl run --input examples/26_non_exfiltration_certificate/out/agent_honest.js --extension-id agent-support-summarizer --goal script --data-contract <contract.json> --purpose runtime_execution --certificate-out <bundle-dir>`
+- `frankenctl replay run --trace <nondeterminism-trace.json> --mode strict`

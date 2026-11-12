@@ -193,6 +193,7 @@ impl InterpreterCore {
                         || self.converts_object_argument(kind, args)?
                         || length_locked
                         || self.array_mutation_requires_generic(object_id, kind, args)?
+                        || self.array_ifc_requires_generic(object_id, kind, args)?
                         || (kind == K::ArraySort
                             && !self.array_sorts_on_element_storage(object_id, args)?)
                         || (kind == K::ArrayCopyWithin
@@ -263,6 +264,78 @@ impl InterpreterCore {
                     .is_some_and(|value| value.is_object_like())
             {
                 return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Whether an ordinary `Array` receiver must run on the generic property
+    /// path to preserve per-element IFC labels (`property_labels`) or labeled
+    /// mutation/index arguments (`bd-ojvo1`). Pure-`Public` arrays with
+    /// `Public` arguments return `false` in `O(1)` without scanning elements.
+    fn array_ifc_requires_generic(
+        &self,
+        array_id: ObjectId,
+        kind: BuiltinFunctionKind,
+        args: RegRange,
+    ) -> Result<bool, InterpreterError> {
+        use BuiltinFunctionKind as K;
+        let moves_or_copies_elements = matches!(
+            kind,
+            K::ArrayShift
+                | K::ArrayUnshift
+                | K::ArrayReverse
+                | K::ArrayFill
+                | K::ArrayCopyWithin
+                | K::ArraySort
+                | K::ArrayConcat
+                | K::ArraySliceMethod
+                | K::ArrayToReversed
+                | K::ArrayToSorted
+                | K::ArrayWith
+                | K::ArrayToSpliced
+        );
+        if !moves_or_copies_elements {
+            return Ok(false);
+        }
+        let mut current = Some(array_id);
+        for _ in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
+            let Some(id) = current else {
+                break;
+            };
+            let Some(object) = self.heap.get(id.0 as usize) else {
+                return Ok(true);
+            };
+            if object.property_labels.has_index_keys() {
+                return Ok(true);
+            }
+            current = self.observable_prototype_link(object, id);
+        }
+        if current.is_some() {
+            return Ok(true);
+        }
+        if !self.all_register_labels_public
+            && matches!(
+                kind,
+                K::ArrayUnshift
+                    | K::ArrayFill
+                    | K::ArrayCopyWithin
+                    | K::ArrayConcat
+                    | K::ArraySliceMethod
+                    | K::ArrayWith
+                    | K::ArrayToSpliced
+            )
+        {
+            for offset in 0..args.count {
+                let register = args.start.checked_add(offset).ok_or(
+                    InterpreterError::RegisterOutOfBounds {
+                        register: args.start,
+                        max: self.config.max_registers,
+                    },
+                )?;
+                if self.get_register_label(register)? != &Label::Public {
+                    return Ok(true);
+                }
             }
         }
         Ok(false)
@@ -379,7 +452,8 @@ impl InterpreterCore {
             let Some(object) = self.heap.get(id.0 as usize) else {
                 return Ok(true);
             };
-            if object.contains_own_runtime_property(&key) {
+            if object.property_labels.has_index_keys() || object.contains_own_runtime_property(&key)
+            {
                 return Ok(true);
             }
             current = self.observable_prototype_link(object, id);
@@ -408,8 +482,15 @@ impl InterpreterCore {
                 | K::ArrayReverse
                 | K::ArrayFill
                 | K::ArrayCopyWithin
+                | K::ArrayAt
+                | K::ArrayIncludes
+                | K::ArrayJoin
+                | K::ArrayToString
                 | K::ArraySort
                 | K::ArrayToSorted
+                | K::ArrayToReversed
+                | K::ArrayWith
+                | K::ArrayToSpliced
                 | K::ArrayMap
                 | K::ArrayFilter
                 | K::ArrayForEach
@@ -463,14 +544,13 @@ impl InterpreterCore {
                     return Err(Self::generic_length_error());
                 }
                 for index in 0..args.count {
+                    self.preflight_generic_array_argument(args, index)?;
+                }
+                for index in 0..args.count {
                     self.charge_native_hole_read()?;
-                    // Unlike an element read, taking an argument does not
-                    // install its stored register label in the scoped floor.
-                    // Preserve it before a destination setter can run.
-                    self.observe_generic_array_argument(args, index)?;
                     let item = arg(self, index)?;
                     let key = Self::generic_index_key(len);
-                    self.generic_species_output_write(o, &key, |core| {
+                    self.generic_species_output_write_with_arg(o, &key, args, index, |core| {
                         core.generic_set(m, o, &key, item)
                     })?;
                     len += 1;
@@ -523,15 +603,17 @@ impl InterpreterCore {
                     if len + count > MAX_SAFE_LENGTH {
                         return Err(Self::generic_length_error());
                     }
+                    for index in 0..args.count {
+                        self.preflight_generic_array_argument(args, index)?;
+                    }
                     // Move backwards with the original captured length.
                     // No key inventory survives a getter or destination setter.
                     self.generic_move_range(m, o, 0, count, len, true)?;
                     for index in 0..args.count {
                         self.charge_native_hole_read()?;
-                        self.observe_generic_array_argument(args, index)?;
                         let item = arg(self, index)?;
                         let key = Self::generic_index_key(u64::from(index));
-                        self.generic_species_output_write(o, &key, |core| {
+                        self.generic_species_output_write_with_arg(o, &key, args, index, |core| {
                             core.generic_set(m, o, &key, item)
                         })?;
                         self.observe_scoped_callback_result()?;
@@ -545,18 +627,32 @@ impl InterpreterCore {
             K::ArraySliceMethod => {
                 let len = self.generic_length(m, o)?;
                 let start = self.generic_relative_index(m, arg(self, 0)?, len, 0)?;
+                self.observe_scoped_callback_result()?;
                 let end = self.generic_relative_index(m, arg(self, 1)?, len, len)?;
+                self.observe_scoped_callback_result()?;
                 let count = end.saturating_sub(start);
+                if count > 0 {
+                    for index in [0, 1] {
+                        self.preflight_generic_array_argument(args, index)?;
+                    }
+                    for index in [0, 1] {
+                        self.observe_generic_array_argument(args, index)?;
+                    }
+                }
                 let result = self.array_species_result(module, o, count)?;
                 self.generic_slice_result(module, o, start, end, result)?
             }
             K::ArrayConcat => {
-                let mut items = vec![self.generic_object_value(o)];
                 for index in 0..args.count {
-                    items.push(arg(self, index)?);
+                    self.preflight_generic_array_argument(args, index)?;
+                }
+                let mut items = vec![(self.generic_object_value(o), Label::Public)];
+                for index in 0..args.count {
+                    let item_label = self.generic_argument_label(args, index)?;
+                    items.push((arg(self, index)?, item_label));
                 }
                 let result = self.array_species_result(module, o, 0)?;
-                self.generic_concat_result(module, items, result)?
+                self.generic_concat_labeled_result(module, items, result)?
             }
             K::ArrayIndexOf | K::ArrayLastIndexOf => {
                 let len = self.generic_length(m, o)?;
@@ -668,21 +764,41 @@ impl InterpreterCore {
             // source (bd-9vouw.276).
             K::ArrayCopyWithin => {
                 let len = self.generic_length(m, o)?;
+                self.observe_scoped_callback_result()?;
                 let to = self.generic_relative_index(m, arg(self, 0)?, len, 0)?;
+                self.observe_scoped_callback_result()?;
                 let from = self.generic_relative_index(m, arg(self, 1)?, len, 0)?;
+                self.observe_scoped_callback_result()?;
                 let end = self.generic_relative_index(m, arg(self, 2)?, len, len)?;
+                self.observe_scoped_callback_result()?;
                 let count = end.saturating_sub(from).min(len - to);
+                if count > 0 {
+                    for index in [0, 1, 2] {
+                        self.preflight_generic_array_argument(args, index)?;
+                    }
+                    for index in [0, 1, 2] {
+                        self.observe_generic_array_argument(args, index)?;
+                    }
+                }
                 let backwards = from < to && to < from + count;
                 self.generic_move_range(m, o, from, to, count, backwards)?;
                 self.generic_object_value(o)
             }
             K::ArrayFill => {
                 let len = self.generic_length(m, o)?;
+                self.observe_scoped_callback_result()?;
                 let value = arg(self, 0)?;
                 let start = self.generic_relative_index(m, arg(self, 1)?, len, 0)?;
+                self.observe_scoped_callback_result()?;
                 let end = self.generic_relative_index(m, arg(self, 2)?, len, len)?;
+                self.observe_scoped_callback_result()?;
                 if start < end {
-                    self.observe_generic_array_argument(args, 0)?;
+                    for index in [0, 1, 2] {
+                        self.preflight_generic_array_argument(args, index)?;
+                    }
+                    for index in [0, 1, 2] {
+                        self.observe_generic_array_argument(args, index)?;
+                    }
                 }
                 for k in start..end.max(start) {
                     self.charge_native_hole_read()?;
@@ -695,7 +811,9 @@ impl InterpreterCore {
             }
             K::ArrayAt => {
                 let len = self.generic_length(m, o)?;
+                self.observe_scoped_callback_result()?;
                 let relative = self.generic_to_integer(m, arg(self, 0)?)?;
+                self.observe_scoped_callback_result()?;
                 let k = if relative >= 0.0 {
                     relative
                 } else {
@@ -704,6 +822,8 @@ impl InterpreterCore {
                 if k < 0.0 || k >= len as f64 {
                     Value::Undefined
                 } else {
+                    self.preflight_generic_array_argument(args, 0)?;
+                    self.observe_generic_array_argument(args, 0)?;
                     self.generic_get(m, o, &Self::generic_index_key(k as u64))?
                 }
             }
@@ -796,16 +916,27 @@ impl InterpreterCore {
             }
             K::ArrayToReversed => {
                 let len = self.generic_length(m, o)?;
+                self.observe_scoped_callback_result()?;
                 Self::generic_array_create_length(len)?;
                 let mut items = self.generic_buffer(len)?;
-                for k in (0..len).rev() {
-                    items.push(self.generic_get(m, o, &Self::generic_index_key(k))?);
+                let mut labels: Vec<(u64, Label)> = Vec::new();
+                for (out_idx, k) in (0..len).rev().enumerate() {
+                    let key = Self::generic_index_key(k);
+                    let (elem, label) = self.generic_read_with_label(m, o, &key)?;
+                    if label != Label::Public {
+                        labels.push((out_idx as u64, label));
+                    }
+                    items.push(elem);
                 }
-                Value::Object(self.alloc_array_from_values(&items)?)
+                let array = self.alloc_array_from_values(&items)?;
+                self.install_copied_element_labels(array, labels)?;
+                Value::Object(array)
             }
             K::ArrayWith => {
                 let len = self.generic_length(m, o)?;
+                self.observe_scoped_callback_result()?;
                 let relative = self.generic_to_integer(m, arg(self, 0)?)?;
+                self.observe_scoped_callback_result()?;
                 let actual = if relative >= 0.0 {
                     relative
                 } else {
@@ -817,28 +948,50 @@ impl InterpreterCore {
                     });
                 }
                 Self::generic_array_create_length(len)?;
+                self.preflight_generic_array_argument(args, 0)?;
+                self.preflight_generic_array_argument(args, 1)?;
+                let index_label = self.generic_argument_label(args, 0)?;
+                if index_label != Label::Public {
+                    self.json_observe_label(index_label.clone())?;
+                }
+                let replacement_label = self.generic_argument_label(args, 1)?.join(&index_label);
                 let replacement = arg(self, 1)?;
                 let mut items = self.generic_buffer(len)?;
+                let mut labels: Vec<(u64, Label)> = Vec::new();
                 for k in 0..len {
-                    items.push(if k == actual as u64 {
-                        replacement.clone()
+                    if k == actual as u64 {
+                        if replacement_label != Label::Public {
+                            labels.push((k, replacement_label.clone()));
+                        }
+                        items.push(replacement.clone());
                     } else {
-                        self.generic_get(m, o, &Self::generic_index_key(k))?
-                    });
+                        let key = Self::generic_index_key(k);
+                        let (elem, elem_label) = self.generic_read_with_label(m, o, &key)?;
+                        let combined = elem_label.join(&index_label);
+                        if combined != Label::Public {
+                            labels.push((k, combined));
+                        }
+                        items.push(elem);
+                    }
                 }
-                Value::Object(self.alloc_array_from_values(&items)?)
+                let array = self.alloc_array_from_values(&items)?;
+                self.install_copied_element_labels(array, labels)?;
+                Value::Object(array)
             }
             // ES2023 23.1.3.35: the elements before `start`, the items,
             // then the elements after the skipped ones, into an ArrayCreate
             // of the new length (bd-9vouw.354).
             K::ArrayToSpliced => {
                 let len = self.generic_length(m, o)?;
+                self.observe_scoped_callback_result()?;
                 let start = self.generic_relative_index(m, arg(self, 0)?, len, 0)?;
+                self.observe_scoped_callback_result()?;
                 let skip = match args.count {
                     0 => 0,
                     1 => len - start,
                     _ => {
                         let requested = self.generic_to_integer(m, arg(self, 1)?)?;
+                        self.observe_scoped_callback_result()?;
                         requested.clamp(0.0, (len - start) as f64) as u64
                     }
                 };
@@ -847,17 +1000,58 @@ impl InterpreterCore {
                     return Err(Self::generic_length_error());
                 }
                 Self::generic_array_create_length(new_len)?;
+                let control_label = if skip > 0 || args.count > 2 {
+                    self.preflight_generic_array_argument(args, 0)?;
+                    self.preflight_generic_array_argument(args, 1)?;
+                    let joined = self
+                        .generic_argument_label(args, 0)?
+                        .join(&self.generic_argument_label(args, 1)?);
+                    if joined != Label::Public {
+                        self.json_observe_label(joined.clone())?;
+                    }
+                    joined
+                } else {
+                    Label::Public
+                };
+                for index in 2..args.count {
+                    self.preflight_generic_array_argument(args, index)?;
+                }
                 let mut items = self.generic_buffer(new_len)?;
+                let mut labels: Vec<(u64, Label)> = Vec::new();
+                let mut out_idx = 0u64;
                 for k in 0..start {
-                    items.push(self.generic_get(m, o, &Self::generic_index_key(k))?);
+                    let key = Self::generic_index_key(k);
+                    let (elem, elem_label) = self.generic_read_with_label(m, o, &key)?;
+                    let combined = elem_label.join(&control_label);
+                    if combined != Label::Public {
+                        labels.push((out_idx, combined));
+                    }
+                    items.push(elem);
+                    out_idx += 1;
                 }
                 for index in 2..args.count {
+                    let item_label = self
+                        .generic_argument_label(args, index)?
+                        .join(&control_label);
+                    if item_label != Label::Public {
+                        labels.push((out_idx, item_label));
+                    }
                     items.push(arg(self, index)?);
+                    out_idx += 1;
                 }
                 for k in start + skip..len {
-                    items.push(self.generic_get(m, o, &Self::generic_index_key(k))?);
+                    let key = Self::generic_index_key(k);
+                    let (elem, elem_label) = self.generic_read_with_label(m, o, &key)?;
+                    let combined = elem_label.join(&control_label);
+                    if combined != Label::Public {
+                        labels.push((out_idx, combined));
+                    }
+                    items.push(elem);
+                    out_idx += 1;
                 }
-                Value::Object(self.alloc_array_from_values(&items)?)
+                let array = self.alloc_array_from_values(&items)?;
+                self.install_copied_element_labels(array, labels)?;
+                Value::Object(array)
             }
             // ES2019 22.1.3.10-11: FlattenIntoArray into ArraySpeciesCreate(O,
             // 0); flatMap maps the top-level elements and flattens one level
@@ -904,15 +1098,24 @@ impl InterpreterCore {
         Ok(Some(value))
     }
 
-    /// Retain the label of an actually consumed argument without treating a
-    /// missing argument's default `undefined` as an out-of-bounds register.
-    fn observe_generic_array_argument(
-        &mut self,
+    /// Preflight temporary-memory headroom for an actually consumed argument
+    /// register before any observable mutation or move begins (`bd-ojvo1`).
+    fn preflight_generic_array_argument(
+        &self,
         args: RegRange,
         index: u32,
     ) -> Result<(), InterpreterError> {
+        let _ = self.generic_argument_label(args, index)?;
+        Ok(())
+    }
+
+    fn generic_argument_label(
+        &self,
+        args: RegRange,
+        index: u32,
+    ) -> Result<Label, InterpreterError> {
         if index >= args.count {
-            return Ok(());
+            return Ok(Label::Public);
         }
         let register =
             args.start
@@ -921,7 +1124,67 @@ impl InterpreterCore {
                     register: args.start,
                     max: self.config.max_registers,
                 })?;
-        let label = self.clone_register_label_with_temporary_budget(register)?;
+        self.clone_register_label_with_temporary_budget(register)
+    }
+
+    fn generic_read_with_label(
+        &mut self,
+        m: Option<&Ir3Module>,
+        o: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> Result<(Value, Label), InterpreterError> {
+        let stored = self.runtime_property_label(o, key);
+        let prior_pending = self.take_pending_hostcall_result_label();
+        let value =
+            self.proxy_aware_get_runtime_property(m, o, key, self.generic_object_value(o), 0);
+        let getter_observed = self
+            .pending_hostcall_result_label
+            .as_ref()
+            .cloned()
+            .unwrap_or(Label::Public);
+        if getter_observed != Label::Public {
+            self.json_observe_label(getter_observed.clone())?;
+        }
+        let context = self.json_parse_context_label()?;
+        let elem_label = stored.join(&getter_observed).join(&context);
+        let merged_pending = match prior_pending {
+            Some(prev) => prev.join(&elem_label),
+            None => elem_label.clone(),
+        };
+        if merged_pending != Label::Public {
+            self.replace_pending_hostcall_result_label(Some(merged_pending))?;
+        }
+        Ok((value?, elem_label))
+    }
+
+    fn install_copied_element_labels(
+        &mut self,
+        array: ObjectId,
+        labels: Vec<(u64, Label)>,
+    ) -> Result<(), InterpreterError> {
+        for (index, label) in labels {
+            let joined = self
+                .pending_hostcall_result_label
+                .as_ref()
+                .unwrap_or(&Label::Public)
+                .join(&label);
+            self.replace_pending_hostcall_result_label(Some(joined))?;
+            self.set_own_runtime_property_label(array, &Self::generic_index_key(index), &label)?;
+        }
+        Ok(())
+    }
+
+    /// Retain the label of an actually consumed argument without treating a
+    /// missing argument's default `undefined` as an out-of-bounds register.
+    fn observe_generic_array_argument(
+        &mut self,
+        args: RegRange,
+        index: u32,
+    ) -> Result<(), InterpreterError> {
+        let label = self.generic_argument_label(args, index)?;
+        if label == Label::Public {
+            return Ok(());
+        }
         self.json_observe_label(label)
     }
 
@@ -957,6 +1220,20 @@ impl InterpreterCore {
         if new_len > MAX_SAFE_LENGTH {
             return Err(Self::generic_length_error());
         }
+        let mutates_elements = delete_count > 0 || item_count > 0;
+        if mutates_elements {
+            for index in [0, 1] {
+                self.preflight_generic_array_argument(args, index)?;
+            }
+        }
+        for index in 2..args.count {
+            self.preflight_generic_array_argument(args, index)?;
+        }
+        if mutates_elements {
+            for index in [0, 1] {
+                self.observe_generic_array_argument(args, index)?;
+            }
+        }
         let removed = self.array_species_result(module, o, delete_count)?;
         self.observe_scoped_callback_result()?;
         // A species definition can mutate the source, including when it
@@ -987,9 +1264,10 @@ impl InterpreterCore {
         }
         for (index, item) in (2..args.count).zip(items) {
             self.charge_native_hole_read()?;
-            self.observe_generic_array_argument(args, index)?;
             let key = Self::generic_index_key(start + u64::from(index - 2));
-            self.generic_species_output_write(o, &key, |core| core.generic_set(m, o, &key, item))?;
+            self.generic_species_output_write_with_arg(o, &key, args, index, |core| {
+                core.generic_set(m, o, &key, item)
+            })?;
             self.observe_scoped_callback_result()?;
         }
         self.generic_set(
@@ -1045,10 +1323,15 @@ impl InterpreterCore {
             let present = self.generic_has(m, source, &key)?;
             self.observe_scoped_callback_result()?;
             if present {
-                let element = self.generic_get(m, source, &key)?;
-                self.observe_scoped_callback_result()?;
+                let (element, elem_label) = self.generic_read_with_label(m, source, &key)?;
                 // Holes retain their positions, including trailing ones.
-                self.generic_create_data_property(m, result, k - start, element)?;
+                self.generic_create_labeled_data_property(
+                    m,
+                    result,
+                    k - start,
+                    element,
+                    &elem_label,
+                )?;
             }
         }
         self.generic_species_set_length(m, result, end.saturating_sub(start))?;
@@ -1062,6 +1345,15 @@ impl InterpreterCore {
         result: ObjectId,
     ) -> Result<Value, InterpreterError> {
         self.generic_concat_tail(module, items, result, 0, None)
+    }
+
+    fn generic_concat_labeled_result(
+        &mut self,
+        module: &Ir3Module,
+        items: Vec<(Value, Label)>,
+        result: ObjectId,
+    ) -> Result<Value, InterpreterError> {
+        self.generic_concat_labeled_tail(module, items, result, 0, None)
     }
 
     pub(super) fn concat_result_end(
@@ -1082,14 +1374,37 @@ impl InterpreterCore {
         module: &Ir3Module,
         items: Vec<Value>,
         result: ObjectId,
+        n: u64,
+        pending_source: Option<(ObjectId, u64, u64)>,
+    ) -> Result<Value, InterpreterError> {
+        let labeled = items
+            .into_iter()
+            .map(|item| (item, Label::Public))
+            .collect();
+        self.generic_concat_labeled_tail(module, labeled, result, n, pending_source)
+    }
+
+    fn generic_concat_labeled_tail(
+        &mut self,
+        module: &Ir3Module,
+        items: Vec<(Value, Label)>,
+        result: ObjectId,
         mut n: u64,
         pending_source: Option<(ObjectId, u64, u64)>,
     ) -> Result<Value, InterpreterError> {
         let m = Some(module);
         if let Some((source, start, len)) = pending_source {
-            n = self.generic_concat_spread_tail(module, source, result, n, start, len)?;
+            n = self.generic_concat_spread_tail(
+                module,
+                source,
+                result,
+                n,
+                start,
+                len,
+                &Label::Public,
+            )?;
         }
-        for item in items {
+        for (item, item_label) in items {
             let spreadable = match &item {
                 Value::Object(id) => self.generic_is_concat_spreadable(m, *id)?,
                 _ => false,
@@ -1097,24 +1412,31 @@ impl InterpreterCore {
             self.observe_scoped_callback_result()?;
             let Value::Object(source) = item else {
                 let end = Self::concat_result_end(n, 1)?;
-                self.generic_create_data_property(m, result, n, item)?;
+                self.generic_create_labeled_data_property(m, result, n, item, &item_label)?;
                 n = end;
                 continue;
             };
             if !spreadable {
                 let end = Self::concat_result_end(n, 1)?;
-                self.generic_create_data_property(m, result, n, item)?;
+                self.generic_create_labeled_data_property(
+                    m,
+                    result,
+                    n,
+                    Value::Object(source),
+                    &item_label,
+                )?;
                 n = end;
                 continue;
             }
             let len = self.generic_length(m, source)?;
             self.observe_scoped_callback_result()?;
-            n = self.generic_concat_spread_tail(module, source, result, n, 0, len)?;
+            n = self.generic_concat_spread_tail(module, source, result, n, 0, len, &item_label)?;
         }
         self.generic_species_set_length(m, result, n)?;
         Ok(Value::Object(result))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn generic_concat_spread_tail(
         &mut self,
         module: &Ir3Module,
@@ -1123,8 +1445,17 @@ impl InterpreterCore {
         n: u64,
         start: u64,
         len: u64,
+        item_label: &Label,
     ) -> Result<u64, InterpreterError> {
         let m = Some(module);
+        if item_label != &Label::Public {
+            let joined = self
+                .pending_hostcall_result_label
+                .as_ref()
+                .unwrap_or(&Label::Public)
+                .join(item_label);
+            self.replace_pending_hostcall_result_label(Some(joined))?;
+        }
         let end = Self::concat_result_end(n, len.saturating_sub(start))?;
         let mut indices = LiveArrayCursor::new(start, len, false, false);
         while let Some(k) = indices.next(self, source)? {
@@ -1132,9 +1463,15 @@ impl InterpreterCore {
             let present = self.generic_has(m, source, &key)?;
             self.observe_scoped_callback_result()?;
             if present {
-                let element = self.generic_get(m, source, &key)?;
-                self.observe_scoped_callback_result()?;
-                self.generic_create_data_property(m, result, n + (k - start), element)?;
+                let (element, elem_label) = self.generic_read_with_label(m, source, &key)?;
+                let combined = elem_label.join(item_label);
+                self.generic_create_labeled_data_property(
+                    m,
+                    result,
+                    n + (k - start),
+                    element,
+                    &combined,
+                )?;
             }
         }
         Ok(end)
@@ -1426,6 +1763,25 @@ impl InterpreterCore {
         index: u64,
         value: Value,
     ) -> Result<(), InterpreterError> {
+        self.generic_create_labeled_data_property(module, object, index, value, &Label::Public)
+    }
+
+    fn generic_create_labeled_data_property(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object: ObjectId,
+        index: u64,
+        value: Value,
+        extra_label: &Label,
+    ) -> Result<(), InterpreterError> {
+        if extra_label != &Label::Public {
+            let joined = self
+                .pending_hostcall_result_label
+                .as_ref()
+                .unwrap_or(&Label::Public)
+                .join(extra_label);
+            self.replace_pending_hostcall_result_label(Some(joined))?;
+        }
         let fields = PropertyDescriptorFields {
             value: Some(value),
             writable: Some(true),
@@ -1435,7 +1791,7 @@ impl InterpreterCore {
             configurable: Some(true),
         };
         let key = Self::generic_index_key(index);
-        self.generic_species_output_write(object, &key, |core| {
+        self.generic_species_output_write_with_label(object, &key, extra_label, |core| {
             if core.proxy_aware_define_own_property(module, object, key.clone(), fields, 0)? {
                 Ok(())
             } else {
@@ -1470,14 +1826,36 @@ impl InterpreterCore {
         key: &RuntimePropertyKey,
         write: impl FnOnce(&mut Self) -> Result<(), InterpreterError>,
     ) -> Result<(), InterpreterError> {
+        self.generic_species_output_write_with_label(object, key, &Label::Public, write)
+    }
+
+    fn generic_species_output_write_with_label(
+        &mut self,
+        object: ObjectId,
+        key: &RuntimePropertyKey,
+        extra_label: &Label,
+        write: impl FnOnce(&mut Self) -> Result<(), InterpreterError>,
+    ) -> Result<(), InterpreterError> {
         self.generic_species_scope(|core| {
-            core.generic_species_admit_output_label(object, key)?;
+            core.generic_species_admit_output_label_with_extra(object, key, extra_label)?;
             let outcome = write(core);
             core.observe_scoped_callback_result()?;
             // A trap may mutate its target before returning false or throwing.
-            core.generic_species_admit_output_label(object, key)?;
+            core.generic_species_admit_output_label_with_extra(object, key, extra_label)?;
             outcome
         })
+    }
+
+    fn generic_species_output_write_with_arg(
+        &mut self,
+        object: ObjectId,
+        key: &RuntimePropertyKey,
+        args: RegRange,
+        arg_index: u32,
+        write: impl FnOnce(&mut Self) -> Result<(), InterpreterError>,
+    ) -> Result<(), InterpreterError> {
+        let arg_label = self.generic_argument_label(args, arg_index)?;
+        self.generic_species_output_write_with_label(object, key, &arg_label, write)
     }
 
     fn generic_species_admit_output_label(
@@ -1485,8 +1863,18 @@ impl InterpreterCore {
         object: ObjectId,
         key: &RuntimePropertyKey,
     ) -> Result<(), InterpreterError> {
+        self.generic_species_admit_output_label_with_extra(object, key, &Label::Public)
+    }
+
+    fn generic_species_admit_output_label_with_extra(
+        &mut self,
+        object: ObjectId,
+        key: &RuntimePropertyKey,
+        extra_label: &Label,
+    ) -> Result<(), InterpreterError> {
         self.reflect_admit_mutation_label(object)?;
-        let label = self.json_parse_context_label()?;
+        let context = self.json_parse_context_label()?;
+        let label = self.join_owned_label_with_temporary_budget(context, extra_label)?;
         let bytes = Self::estimate_label_bytes(&label);
         self.json_reserve_temporary(bytes)?;
         let outcome = (|| {
@@ -1607,10 +1995,12 @@ impl InterpreterCore {
         let present = self.generic_has(m, o, &from_key)?;
         self.observe_scoped_callback_result()?;
         if present {
-            let value = self.generic_get(m, o, &from_key)?;
-            self.observe_scoped_callback_result()?;
-            self.generic_species_output_write(o, &to_key, |core| {
-                core.generic_set(m, o, &to_key, value)
+            self.generic_species_scope(|core| {
+                let value = core.generic_get(m, o, &from_key)?;
+                core.observe_scoped_callback_result()?;
+                core.generic_species_output_write(o, &to_key, |core| {
+                    core.generic_set(m, o, &to_key, value)
+                })
             })?;
         } else {
             self.generic_species_output_write(o, &to_key, |core| {

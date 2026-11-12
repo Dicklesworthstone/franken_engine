@@ -700,3 +700,458 @@ fn unanalyzed_secret_to_sink_run_never_yields_a_non_use_pass() {
         .expect("audit is utf8");
     assert!(audit.contains("**Certificate status: uncertified**"));
 }
+
+#[test]
+fn declassified_flow_receipt_and_host_effect_trace_verify_via_third_party_verifier_bd_fqlfw_8_7() {
+    use frankenengine_engine::data_contract::RequiredDeclassificationRoute;
+    use frankenengine_engine::ifc_artifacts::{
+        DeclassificationDecision, DeclassificationReceipt, DeclassificationRoute, IfcSchemaVersion,
+    };
+    use frankenengine_engine::ifc_provenance_index::{FlowDecision, FlowEventRecord};
+    use frankenengine_engine::non_use_certificate::CapabilityTraceRecord;
+    use frankenengine_engine::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
+    use frankenengine_engine::third_party_verifier::{
+        NonUseCertificateClaimBundle, VerificationVerdict, verify_non_use_certificate_claim,
+    };
+    use frankenengine_extension_host::host_io::{HostIoRequest, HostIoResponse};
+
+    let mut contract = certifiable_contract();
+    contract.required_declassification_routes = vec![RequiredDeclassificationRoute {
+        route: DeclassificationRoute {
+            route_id: "route-audited-summary".to_string(),
+            source_label: Label::Secret,
+            target_clearance: Label::Internal,
+            conditions: vec!["audited_summary_release".to_string()],
+        },
+        required_for_claims: BTreeSet::from(["no-secret-open-sink".to_string()]),
+    }];
+    let run = scan_backed_run(contract, SOURCE, INPUT_PATH, Some("agent.explain.json"));
+
+    let authorizer = SigningKey::from_bytes([0x61; 32]).expect("signing key");
+    let mut receipt = DeclassificationReceipt {
+        receipt_id: "rcpt-e8-capstone-1".to_string(),
+        source_label: Label::Secret,
+        sink_clearance: Label::Internal,
+        content_binding: None,
+        declassification_route_ref: "route-audited-summary".to_string(),
+        decision_contract_id: run.contract.contract_id.clone(),
+        policy_evaluation_summary: "audited summary release".to_string(),
+        loss_assessment_milli: 250,
+        decision: DeclassificationDecision::Allow,
+        authorized_by: authorizer.verification_key(),
+        replay_linkage: run.result.trace_id.clone(),
+        timestamp_ms: 1_700_000_000_000,
+        not_before_ms: 1_699_999_000_000,
+        not_after_ms: 1_700_001_000_000,
+        schema_version: IfcSchemaVersion::CURRENT,
+        signature: Signature::from_bytes(SIGNATURE_SENTINEL),
+    };
+    receipt.sign(&authorizer).expect("sign receipt");
+
+    let mut flow_events = run.orchestrator.data_contract_flow_events().to_vec();
+    flow_events.push(FlowEventRecord {
+        event_id: "flow-declass-capstone-1".to_string(),
+        extension_id: EXTENSION_ID.to_string(),
+        source_label: Label::Secret,
+        sink_clearance: Label::Internal,
+        flow_location: format!("data_contract:{}:sink:audit-log", run.contract.contract_id),
+        decision: FlowDecision::Declassified,
+        receipt_ref: Some(receipt.receipt_id.clone()),
+        timestamp_ms: 0,
+    });
+
+    let host_effects = vec![(
+        HostIoRequest::RandomRead { byte_len: 16 },
+        Ok(HostIoResponse::RandomRead {
+            bytes: vec![0xaa; 16],
+        }),
+    )];
+    let replay_bytes =
+        serde_json::to_vec_pretty(&run.result.nondeterminism_trace).expect("pretty trace");
+    let replay_hash = ContentHash::compute(
+        &serde_json::to_vec(&run.result.nondeterminism_trace).expect("canonical trace"),
+    )
+    .to_hex();
+    let containment_action = run.result.containment_action.to_string();
+    let authority = LabEvidenceAuthority::deterministic_fixture(
+        E8_CERTIFIER_PRODUCER_ID,
+        "e8-capstone-certifier",
+        run.result.epoch,
+    )
+    .expect("certifier lab authority");
+    let inputs = CertifierInputs {
+        contract: &run.contract,
+        binding: &run.binding,
+        flow_events: &flow_events,
+        host_effects: &host_effects,
+        declassification_receipts: std::slice::from_ref(&receipt),
+        refusal_receipt: &run.refusal_receipt,
+        runtime_granted_capabilities: &run.granted,
+        policy_id: "policy-default",
+        policy_epoch: run.result.epoch.as_u64(),
+        parse_goal: "script",
+        trace_id: &run.result.trace_id,
+        decision_id: &run.result.decision_id,
+        engine_version: env!("CARGO_PKG_VERSION"),
+        containment_action: &containment_action,
+        instructions_executed: run.result.instructions_executed,
+        console_entry_count: run.result.console_output.len() as u64,
+        execution_value: &run.result.execution_value,
+        replay_trace_content_hash_hex: &replay_hash,
+    };
+    let cert_bundle = emit_certificate_bundle_lab(&inputs, &authority).expect("emit bundle");
+    assert_eq!(
+        cert_bundle.non_use_certificate.certificate_status,
+        CertificateStatus::CertifiedWithinAnalyzedScope
+    );
+    assert_eq!(
+        cert_bundle
+            .non_use_certificate
+            .declassification_receipt_count,
+        1
+    );
+
+    // Ensure capability_trace.jsonl recorded the HostEffect payload hash/len without raw bytes.
+    let cap_jsonl = String::from_utf8(
+        cert_bundle
+            .file(CAPABILITY_TRACE_FILE)
+            .expect("capability trace")
+            .bytes
+            .clone(),
+    )
+    .expect("utf8 capability trace");
+    assert!(
+        cap_jsonl
+            .lines()
+            .filter_map(|line| serde_json::from_str::<CapabilityTraceRecord>(line).ok())
+            .any(|rec| matches!(
+                rec,
+                CapabilityTraceRecord::HostEffect {
+                    payload_bytes: 16,
+                    ..
+                }
+            )),
+        "capability_trace.jsonl must record the HostIoRequest::RandomRead effect"
+    );
+
+    let claim = NonUseCertificateClaimBundle {
+        trace_id: run.result.trace_id.clone(),
+        decision_id: run.result.decision_id.clone(),
+        policy_id: "policy-default".to_string(),
+        trusted_identity: authority.verification_identity(),
+        bundle_files: cert_bundle
+            .files
+            .iter()
+            .map(|f| (f.name.clone(), f.bytes.clone()))
+            .collect(),
+        refusal_receipt: run.refusal_receipt.clone(),
+        recorded_trace_bytes: Some(replay_bytes),
+    };
+    let report = verify_non_use_certificate_claim(&claim);
+    assert_eq!(report.verdict, VerificationVerdict::Verified, "{report:?}");
+}
+
+#[test]
+fn unanalyzed_construct_matrix_refuses_with_spans_while_analyzed_lanes_certify_bd_fqlfw_8_7() {
+    // Analyzed property + callback + arithmetic lanes (bd-0zybl / bd-ooaka.1) certify cleanly.
+    let analyzed_src =
+        "const obj = { k: 21 }; const out = [obj.k, 21].map((n) => n).reduce((a, b) => a + b, 0);";
+    let mut analyzed_contract = certifiable_contract();
+    analyzed_contract.input_bindings[0].content_hash_hex =
+        Some(ContentHash::compute(analyzed_src.as_bytes()).to_hex());
+    let analyzed_run = scan_backed_run(
+        analyzed_contract,
+        analyzed_src,
+        INPUT_PATH,
+        Some("agent.explain.json"),
+    );
+    let analyzed_bundle = emit(&analyzed_run);
+    assert_eq!(
+        analyzed_bundle.non_use_certificate.certificate_status,
+        CertificateStatus::CertifiedWithinAnalyzedScope
+    );
+
+    // Unanalyzed constructs must all fail closed to `Uncertified` with span provenance.
+    for (case_name, goal, unanalyzed_src) in [
+        (
+            "async_await",
+            ParseGoal::Script,
+            "async function f(x) { return await x; }",
+        ),
+        (
+            "generator_yield",
+            ParseGoal::Script,
+            "function* g(x) { yield x; }",
+        ),
+        (
+            "for_of_iterator",
+            ParseGoal::Script,
+            "let s = ''; for (const ch of 'secret') { s = s + ch; }",
+        ),
+        (
+            "for_in_iterator",
+            ParseGoal::Script,
+            "let s = ''; for (const k in { a: 1 }) { s = s + k; }",
+        ),
+        (
+            "module_graph_import_export",
+            ParseGoal::Module,
+            "import { secret } from './dep.mjs'; export const out = secret;",
+        ),
+    ] {
+        let path = format!("fixtures/{case_name}.js");
+        let scan = scan_source(unanalyzed_src, &path, goal);
+        assert!(
+            !scan.is_fully_analyzed(),
+            "{case_name} must remain outside the v1 analyzed subset"
+        );
+        let mut contract = certifiable_contract();
+        contract.input_bindings[0].path = Some(path.clone());
+        contract.input_bindings[0].content_hash_hex =
+            Some(ContentHash::compute(unanalyzed_src.as_bytes()).to_hex());
+        let binding = contract
+            .bind_to_run(
+                EXTENSION_ID,
+                &path,
+                DEFAULT_DATA_CONTRACT_PURPOSE,
+                Some(&ContentHash::compute(unanalyzed_src.as_bytes())),
+            )
+            .expect("bind unanalyzed case");
+        let refusal_receipt =
+            binding.preflight_receipt("trace-matrix", Some("agent.explain.json"), Some(&scan), &[]);
+        assert!(refusal_receipt.must_block_certificate, "{case_name}");
+        assert_eq!(refusal_receipt.result_class, "uncertified", "{case_name}");
+        assert!(
+            refusal_receipt.refusal_codes.iter().any(|c| {
+                c.code == "unproven_ifc_propagation"
+                    && c.remediation
+                        .starts_with("uncertified - unanalyzed flow at span ")
+            }),
+            "{case_name} must emit unproven_ifc_propagation with span refusal wording: {:?}",
+            refusal_receipt.refusal_codes
+        );
+        assert!(
+            refusal_receipt.source_refs.iter().any(|r| {
+                r.id.starts_with("unproven-")
+                    && (r
+                        .span
+                        .as_deref()
+                        .is_some_and(|span| span.starts_with(&path))
+                        || refusal_receipt
+                            .refusal_codes
+                            .iter()
+                            .any(|c| c.code == "missing_source_span"))
+            }),
+            "{case_name} must carry unproven source_ref span or explicit missing_source_span degradation: {:?}",
+            refusal_receipt.source_refs
+        );
+    }
+}
+
+#[test]
+fn frankenctl_cli_two_pass_bundle_is_byte_identical_replayable_and_third_party_verified_bd_fqlfw_8_7()
+ {
+    use std::process::Command;
+
+    use frankenengine_engine::evidence_ledger::EvidenceTrustSnapshot;
+    use frankenengine_engine::third_party_verifier::{
+        NonUseCertificateClaimBundle, VerificationVerdict, verify_non_use_certificate_claim,
+    };
+
+    let bin = env!("CARGO_BIN_EXE_frankenctl");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let input_js = temp.path().join("honest_agent.js");
+    std::fs::write(&input_js, SOURCE).expect("write js");
+
+    let mut contract = certifiable_contract();
+    contract.input_bindings[0].path = Some(input_js.display().to_string());
+    contract.input_bindings[0].content_hash_hex =
+        Some(ContentHash::compute(SOURCE.as_bytes()).to_hex());
+    let contract_path = temp.path().join("contract.json");
+    std::fs::write(
+        &contract_path,
+        serde_json::to_vec_pretty(&contract).expect("contract json"),
+    )
+    .expect("write contract");
+
+    let key_path = temp.path().join("e8.seed");
+    let trust_path = temp.path().join("e8.trust.json");
+    let init_out = Command::new(bin)
+        .args([
+            "evidence",
+            "init",
+            "--producer-id",
+            E8_CERTIFIER_PRODUCER_ID,
+            "--key-out",
+            &key_path.display().to_string(),
+            "--trust-out",
+            &trust_path.display().to_string(),
+            "--epoch",
+            "1",
+        ])
+        .output()
+        .expect("run frankenctl evidence init");
+    assert!(
+        init_out.status.success(),
+        "evidence init failed: {}",
+        String::from_utf8_lossy(&init_out.stderr)
+    );
+    let init_json: serde_json::Value =
+        serde_json::from_slice(&init_out.stdout).expect("evidence init json");
+    let trust_digest = init_json["evidence_trust_snapshot_digest"]
+        .as_str()
+        .expect("trust digest string")
+        .to_string();
+
+    let run_once = |tag: &str| {
+        let dir = temp.path().join(tag);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let trace_path = dir.join("nondeterminism_trace.json");
+        let report_path = dir.join("run_report.json");
+        let cert_dir = dir.join("certificate_bundle");
+        let out = Command::new(bin)
+            .current_dir(&dir)
+            .args([
+                "run",
+                "--input",
+                &input_js.display().to_string(),
+                "--extension-id",
+                EXTENSION_ID,
+                "--data-contract",
+                &contract_path.display().to_string(),
+                "--evidence-key-file",
+                &key_path.display().to_string(),
+                "--evidence-producer-id",
+                E8_CERTIFIER_PRODUCER_ID,
+                "--trust-snapshot",
+                &trust_path.display().to_string(),
+                "--expected-trust-digest",
+                &trust_digest,
+                "--emit-trace",
+                "nondeterminism_trace.json",
+                "--explain",
+                "--explain-out",
+                "explain.json",
+                "--certificate-out",
+                "certificate_bundle",
+                "--out",
+                "run_report.json",
+            ])
+            .output()
+            .expect("run frankenctl run");
+        assert!(
+            out.status.success(),
+            "frankenctl run ({tag}) failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        (dir, trace_path, report_path, cert_dir)
+    };
+
+    let (_, trace_a, report_a, cert_a) = run_once("pass_a");
+    let (_, _, _report_b, cert_b) = run_once("pass_b");
+
+    // 1. Two independent CLI invocations with the same pinned E8 certifier seed
+    //    must produce byte-identical 6-file certificate bundles.
+    for file_name in [
+        NON_USE_CERTIFICATE_FILE,
+        USE_CERTIFICATE_FILE,
+        DECLASSIFICATION_RECEIPTS_FILE,
+        CAPABILITY_TRACE_FILE,
+        REPRO_LOCK_FILE,
+        AUDIT_FILE,
+    ] {
+        let bytes_a = std::fs::read(cert_a.join(file_name)).expect("read pass_a file");
+        let bytes_b = std::fs::read(cert_b.join(file_name)).expect("read pass_b file");
+        assert_eq!(
+            bytes_a, bytes_b,
+            "CLI two-pass determinism violated on `{file_name}`"
+        );
+    }
+
+    // 2. Non-self-fed strict replay via `frankenctl replay run` against the
+    //    pinned trust snapshot must succeed with zero divergences.
+    let replay_report = temp.path().join("replay_report.json");
+    let replay_out = Command::new(bin)
+        .args([
+            "replay",
+            "run",
+            "--trace",
+            &report_a.display().to_string(),
+            "--mode",
+            "strict",
+            "--trust-snapshot",
+            &trust_path.display().to_string(),
+            "--expected-trust-digest",
+            &trust_digest,
+            "--out",
+            &replay_report.display().to_string(),
+        ])
+        .output()
+        .expect("run frankenctl replay run");
+    assert!(
+        replay_out.status.success(),
+        "frankenctl replay run failed: {}",
+        String::from_utf8_lossy(&replay_out.stderr)
+    );
+
+    // 3. External third-party verification over the CLI bundle + trust snapshot
+    //    passes, and fails closed when trace bytes or trust anchor are tampered.
+    let run_json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&report_a).expect("read report")).expect("json");
+    let snapshot: EvidenceTrustSnapshot =
+        serde_json::from_slice(&std::fs::read(&trust_path).expect("read trust")).expect("snapshot");
+    let trusted_identity = snapshot
+        .identities
+        .iter()
+        .find(|id| id.producer_id == E8_CERTIFIER_PRODUCER_ID)
+        .expect("pinned E8 certifier identity")
+        .clone();
+    let refusal_receipt: E8RefusalLedgerReceipt =
+        serde_json::from_value(run_json["e8_preflight_receipt"].clone())
+            .expect("preflight receipt");
+    let bundle_files: BTreeMap<String, Vec<u8>> = [
+        NON_USE_CERTIFICATE_FILE,
+        USE_CERTIFICATE_FILE,
+        DECLASSIFICATION_RECEIPTS_FILE,
+        CAPABILITY_TRACE_FILE,
+        REPRO_LOCK_FILE,
+        AUDIT_FILE,
+    ]
+    .into_iter()
+    .map(|name| {
+        (
+            name.to_string(),
+            std::fs::read(cert_a.join(name)).expect("read bundle file"),
+        )
+    })
+    .collect();
+
+    let claim = NonUseCertificateClaimBundle {
+        trace_id: run_json["trace_id"].as_str().expect("trace_id").to_string(),
+        decision_id: run_json["decision_id"]
+            .as_str()
+            .expect("decision_id")
+            .to_string(),
+        policy_id: run_json["policy_id"]
+            .as_str()
+            .expect("policy_id")
+            .to_string(),
+        trusted_identity,
+        bundle_files,
+        refusal_receipt,
+        recorded_trace_bytes: Some(std::fs::read(&trace_a).expect("read emitted trace")),
+    };
+    let verified = verify_non_use_certificate_claim(&claim);
+    assert_eq!(
+        verified.verdict,
+        VerificationVerdict::Verified,
+        "{verified:?}"
+    );
+
+    let mut tampered_trace = claim.clone();
+    tampered_trace.recorded_trace_bytes = Some(b"{\"corrupted\":true}".to_vec());
+    assert_eq!(
+        verify_non_use_certificate_claim(&tampered_trace).verdict,
+        VerificationVerdict::Failed
+    );
+}

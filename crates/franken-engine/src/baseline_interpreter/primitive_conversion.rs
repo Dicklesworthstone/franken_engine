@@ -303,7 +303,7 @@ impl InterpreterCore {
         outcome
     }
 
-    fn record_ifc_runtime_flow_audit(
+    pub(super) fn record_ifc_runtime_flow_audit(
         &mut self,
         capability: &str,
         source_label: &Label,

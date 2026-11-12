@@ -21,7 +21,7 @@ set -euo pipefail
 # Usage: scripts/perf/run_perf_h1_smoke.sh [--quick|--self-check]
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "$REPO_ROOT"
+cd "$REPO_ROOT" || exit 1
 
 ISSUE_ID="bd-o4cbn.1.6"
 BEAD_LABEL="PERF-H1.6"
@@ -35,7 +35,7 @@ TARGET_MAX_MEAN_NS="110000"
 RUN_TS="${H1_SMOKE_RUN_TS:-$(date -u +%Y%m%dT%H%M%SZ)}"
 RUN_DIR="tests/artifacts/perf/h1_smoke/${RUN_TS}"
 CRITERION_HOME_DIR="${REPO_ROOT}/${RUN_DIR}/criterion"
-CARGO_TARGET_DIR_DEFAULT="/tmp/rch_target_franken_engine_h1_smoke_${USER:-agent}_${RUN_TS}"
+CARGO_TARGET_DIR_DEFAULT="${RCH_TARGET_BASE:-${TMPDIR:-/tmp}}/rch_target_franken_engine_h1_smoke_${USER:-agent}_${RUN_TS}"
 EFFECTIVE_CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$CARGO_TARGET_DIR_DEFAULT}"
 RCH_EXEC_TIMEOUT_SECONDS="${RCH_EXEC_TIMEOUT_SECONDS:-5400}"
 CURRENT_RUSTFLAGS="-C force-frame-pointers=yes -C linker=cc -Clinker-features=-lld"
@@ -125,6 +125,9 @@ run_rch_dry_run() {
     local label="$1"
     local out_path="$2"
     shift 2
+    if [[ -n "${RCH_WORKER:-}" ]]; then
+        rch workers probe "$RCH_WORKER" >/dev/null 2>&1 || true
+    fi
     log "dry-run remote admission for ${label}"
     if ! env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS \
         RCH_REQUIRE_REMOTE=1 RCH_BUILD_TIMEOUT_SEC="$RCH_EXEC_TIMEOUT_SECONDS" \
@@ -155,6 +158,7 @@ run_rch_capture() {
     shift 2
     local -a worker_args=()
     if [[ -n "${RCH_WORKER:-}" ]]; then
+        rch workers probe "$RCH_WORKER" >/dev/null 2>&1 || true
         worker_args=(--worker "$RCH_WORKER")
     fi
     log "running ${label} through rch"
@@ -255,12 +259,13 @@ PY
 }
 
 extract_bench_stats() {
-    python3 - "$CRITERION_HOME_DIR" "$GROUP" "$TARGET" "$PASS1_ESTIMATES" "$TARGET_MAX_MEAN_NS" "$BENCH_STATS_FILE" <<'PY'
+    python3 - "$CRITERION_HOME_DIR" "$GROUP" "$TARGET" "$PASS1_ESTIMATES" "$TARGET_MAX_MEAN_NS" "$BENCH_STATS_FILE" "${RUN_DIR}/bench_output.txt" <<'PY'
 import json
 import os
+import re
 import sys
 
-criterion_home, group, target, pass1_path, cap_ns, out_path = sys.argv[1:7]
+criterion_home, group, target, pass1_path, cap_ns, out_path, bench_log_path = sys.argv[1:8]
 target_root = os.path.join(criterion_home, group, target)
 candidate_baselines = ["new", "h1_smoke", "post_h1"]
 estimate_path = ""
@@ -269,35 +274,75 @@ for baseline in candidate_baselines:
     if os.path.exists(path):
         estimate_path = path
         break
-if not estimate_path:
-    raise SystemExit(f"missing Criterion estimates under {target_root}")
 
-with open(estimate_path, "r", encoding="utf-8") as fh:
-    estimates = json.load(fh)
 with open(pass1_path, "r", encoding="utf-8") as fh:
     pass1 = json.load(fh)
-
-mean = float(estimates["mean"]["point_estimate"])
-std = float(estimates["std_dev"]["point_estimate"])
 pass1_mean = float(pass1["mean"]["point_estimate"])
-ci = estimates["mean"]["confidence_interval"]
-delta_pct = ((mean - pass1_mean) / pass1_mean) * 100.0
-cv_pct = (std / mean) * 100.0 if mean else None
 
-sample_path = os.path.join(os.path.dirname(estimate_path), "sample.json")
-sample_count = None
-if os.path.exists(sample_path):
-    with open(sample_path, "r", encoding="utf-8") as fh:
-        sample = json.load(fh)
-    sample_count = len(sample.get("times", []))
+def unit_to_ns(value, unit):
+    scale = {
+        "ps": 1e-3,
+        "ns": 1.0,
+        "us": 1e3,
+        "µs": 1e3,
+        "μs": 1e3,
+        "ms": 1e6,
+        "s": 1e9,
+    }.get(unit)
+    if scale is None:
+        raise SystemExit(f"unsupported Criterion unit: {unit}")
+    return float(value) * scale
+
+if estimate_path:
+    with open(estimate_path, "r", encoding="utf-8") as fh:
+        estimates = json.load(fh)
+    mean = float(estimates["mean"]["point_estimate"])
+    std = float(estimates["std_dev"]["point_estimate"])
+    ci = estimates["mean"]["confidence_interval"]
+    ci_lower = float(ci["lower_bound"])
+    ci_upper = float(ci["upper_bound"])
+    sample_path = os.path.join(os.path.dirname(estimate_path), "sample.json")
+    sample_count = None
+    if os.path.exists(sample_path):
+        with open(sample_path, "r", encoding="utf-8") as fh:
+            sample = json.load(fh)
+        sample_count = len(sample.get("times", []))
+    estimate_source = "criterion_estimates_json"
+else:
+    if not os.path.exists(bench_log_path):
+        raise SystemExit(f"missing Criterion estimates under {target_root} and missing {bench_log_path}")
+    with open(bench_log_path, "r", encoding="utf-8", errors="replace") as fh:
+        clean_log = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", fh.read())
+    full_id = re.escape(f"{group}/{target}")
+    match = re.search(
+        rf"(?:^|\n){full_id}\s*\n\s*time:\s*\[\s*([0-9.]+)\s*(ps|ns|us|µs|μs|ms|s)\s+([0-9.]+)\s*(ps|ns|us|µs|μs|ms|s)\s+([0-9.]+)\s*(ps|ns|us|µs|μs|ms|s)\s*\]",
+        clean_log,
+    )
+    if not match:
+        raise SystemExit(f"missing Criterion estimates under {target_root} and no time bracket in {bench_log_path}")
+    ci_lower = unit_to_ns(match.group(1), match.group(2))
+    mean = unit_to_ns(match.group(3), match.group(4))
+    ci_upper = unit_to_ns(match.group(5), match.group(6))
+    sample_match = re.search(
+        rf"Benchmarking\s+{full_id}:\s+Collecting\s+([0-9]+)\s+samples",
+        clean_log,
+    )
+    sample_count = int(sample_match.group(1)) if sample_match else None
+    std = ((ci_upper - ci_lower) / 3.92) * (sample_count ** 0.5) if sample_count else None
+    estimate_path = f"{bench_log_path}#criterion_stdout"
+    estimate_source = "criterion_stdout"
+
+delta_pct = ((mean - pass1_mean) / pass1_mean) * 100.0
+cv_pct = (std / mean) * 100.0 if (mean and std is not None) else None
 
 payload = {
     "estimate_path": estimate_path,
+    "estimate_source": estimate_source,
     "mean_ns": mean,
     "std_dev_ns": std,
     "cv_pct": cv_pct,
-    "ci95_lower_ns": float(ci["lower_bound"]),
-    "ci95_upper_ns": float(ci["upper_bound"]),
+    "ci95_lower_ns": ci_lower,
+    "ci95_upper_ns": ci_upper,
     "pass1_mean_ns": pass1_mean,
     "delta_pct": delta_pct,
     "target_max_mean_ns": int(cap_ns),
@@ -513,7 +558,9 @@ COMMON_ENV=(
     CARGO_BUILD_JOBS="${H1_SMOKE_JOBS:-2}"
     CARGO_ENCODED_RUSTFLAGS="$CURRENT_ENCODED_RUSTFLAGS"
     CARGO_INCREMENTAL=0
+    CARGO_PROFILE_TEST_INCREMENTAL=false
     CARGO_PROFILE_DEV_DEBUG=0
+    CARGO_PROFILE_TEST_DEBUG=0
     CARGO_TARGET_DIR="$EFFECTIVE_CARGO_TARGET_DIR"
 )
 TEST_CMD=(

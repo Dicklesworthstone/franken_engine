@@ -1,0 +1,48 @@
+{
+  "schema_version": "franken-engine.repro-lock.v2",
+  "schema_hash": "sha256:f12f819f8120560ebfcde490a5c7a9ae94b233701aeb546908f9c1a4aef61cb2",
+  "lock_id": "e8-cert-lock-a12d29a1008b5ded18988edd2478f99d7224397cadfbf788645232eb87359f08",
+  "bundle_schema_version": "franken-engine.e8-certificate-bundle.v2",
+  "determinism": {
+    "allow_network": false,
+    "allow_wall_clock": false,
+    "allow_randomness": false
+  },
+  "replay": {
+    "trace_id": "frankenctl-run:0",
+    "decision_id": "frankenctl-run:decision:0",
+    "policy_id": "default-policy",
+    "replay_pointer": "cadc328d5c74614f41f0f46a359af0726fb91807264906392621b28886713a25"
+  },
+  "files": [
+    {
+      "name": "non_use_certificate.json",
+      "sha256_hex": "46e98310f34f108a1b5b9f2a81248c042d433dc83b758fa55fd7a827b62abee4",
+      "bytes": 5959
+    },
+    {
+      "name": "use_certificate.json",
+      "sha256_hex": "551c2662dac11fc50c6e25e164730df3ec71c30521d9189fb37af36866c75698",
+      "bytes": 4659
+    },
+    {
+      "name": "declassification_receipts.jsonl",
+      "sha256_hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "name": "capability_trace.jsonl",
+      "sha256_hex": "bd92ff254e7a6674f0112751b67aa8277988cf4bea2a80658507a5cebc970b96",
+      "bytes": 831
+    },
+    {
+      "name": "audit.md",
+      "sha256_hex": "8fbc032f714d2f39564944e7bb8b96916db035a25328cf123bdacc1a12ec317e",
+      "bytes": 3661
+    }
+  ],
+  "commands": [
+    "frankenctl run --input examples/26_non_exfiltration_certificate/out/agent_smuggle.js --extension-id agent-support-summarizer --goal script --data-contract <contract.json> --purpose runtime_execution --certificate-out <bundle-dir>",
+    "frankenctl replay run --trace <nondeterminism-trace.json> --mode strict"
+  ]
+}

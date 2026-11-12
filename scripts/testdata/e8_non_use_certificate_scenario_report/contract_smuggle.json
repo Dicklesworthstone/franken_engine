@@ -1,0 +1,45 @@
+{
+  "schema_version": "franken-engine.data-contract.v1",
+  "contract_id": "contract-smuggle",
+  "extension_id": "agent-support-summarizer",
+  "input_bindings": [
+    {
+      "binding_id": "support-ticket-batch",
+      "object_ref": "object://support-ticket-batch",
+      "path": "/data/projects/franken_engine/examples/26_non_exfiltration_certificate/out/agent_smuggle.js",
+      "label": "Confidential",
+      "owner": "data-owner",
+      "role": "run_input",
+      "allowed_purposes": ["runtime_execution"]
+    }
+  ],
+  "allowed_purposes": ["runtime_execution"],
+  "allowed_capabilities": ["VmDispatch", "HeapAllocate", "Builtin", "Console"],
+  "allowed_sinks": [
+    {
+      "sink_id": "audited-summary-report",
+      "clearance": "AuditedSink",
+      "location": "report://weekly-summary",
+      "allowed_labels": ["Public", "Internal", "Confidential"]
+    }
+  ],
+  "required_declassification_routes": [],
+  "requested_output_claims": [
+    {
+      "claim_type": "no_flow",
+      "claim_id": "no-secret-open-sink",
+      "source_label": "Secret",
+      "sink_clearance": "OpenSink"
+    },
+    {
+      "claim_type": "capability_not_used",
+      "claim_id": "no-process-spawn",
+      "capability": "ProcessSpawn"
+    },
+    {
+      "claim_type": "capability_not_used",
+      "claim_id": "no-network-egress",
+      "capability": "NetworkEgress"
+    }
+  ]
+}

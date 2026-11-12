@@ -1,0 +1,228 @@
+{
+  "schema_version": "franken-engine.non-use-certificate.v2",
+  "certificate_id": "e8-nuc-68a50718b7afa87ecf69049536b4c5b777ef69379f5a7f5c35bf4e472a75329c",
+  "producer_id": "franken-engine.e8-certifier:frankenctl-run:0:5e78268bc045bdde1ab8c5e2d20f0b5f198423fce61d0921df1f4a8634f4222a",
+  "scope": {
+    "engine_version": "0.3.0",
+    "policy_id": "default-policy",
+    "policy_epoch": 1,
+    "parse_goal": "script",
+    "contract_id": "contract-smuggle",
+    "contract_hash_hex": "35d81555453be4ab6646a445da2c1f6808d5a93723b7c803198e5e1dd8b18b49",
+    "extension_id": "agent-support-summarizer",
+    "run_input_binding_id": "support-ticket-batch",
+    "run_input_object_ref": "object://support-ticket-batch",
+    "run_input_path": "/data/projects/franken_engine/examples/26_non_exfiltration_certificate/out/agent_smuggle.js",
+    "run_input_content_hash_hex": "9d98dc427ce87003f633a33d2756fd2ab1b9a0f61fd8bdef020ecfb0909440d8",
+    "purpose": "runtime_execution",
+    "trace_id": "frankenctl-run:0",
+    "decision_id": "frankenctl-run:decision:0",
+    "containment_action": "allow",
+    "replay_trace_content_hash_hex": "cadc328d5c74614f41f0f46a359af0726fb91807264906392621b28886713a25",
+    "declared_sinks": [
+      {
+        "sink_id": "audited-summary-report",
+        "clearance": "AuditedSink",
+        "location": "report://weekly-summary",
+        "allowed_labels": [
+          "Public",
+          "Internal",
+          "Confidential"
+        ]
+      }
+    ],
+    "contract_capabilities": [
+      "VmDispatch",
+      "HeapAllocate",
+      "Console",
+      "Builtin"
+    ],
+    "runtime_granted_capabilities": [
+      "VmDispatch",
+      "GcInvoke",
+      "IrLowering",
+      "HeapAllocate",
+      "Console",
+      "Timer",
+      "Builtin"
+    ],
+    "declassification_route_ids": [],
+    "threat_model_scope": "explicit_flow_ifc_v1",
+    "analysis_posture": "conservative_ingress_over_approximation_v1"
+  },
+  "certificate_status": "uncertified",
+  "refusal_ledger_id": "e8-preflight-de928b0d9e7bd060477d81b5e23bcf3823245d8c8b263b55fb5a5fbc1833ee48",
+  "refusal_ledger_result_class": "uncertified",
+  "refusal_ledger_content_hash_hex": "2bfeae8ebe9d287a3f3987ead446bf173e5f9c5e36cf4126fea3476cb9e01053",
+  "claims": [
+    {
+      "claim_id": "no-secret-open-sink",
+      "claim": {
+        "claim_type": "no_flow",
+        "claim_id": "no-secret-open-sink",
+        "source_label": "Secret",
+        "sink_clearance": "OpenSink"
+      },
+      "evaluation": "holds_within_analyzed_scope",
+      "evidence_refs": [
+        "host_boundary:no_matching_sink"
+      ],
+      "detail": "no declared sink of clearance OpenSink exists in the host boundary; undeclared sinks are fail-closed by the membrane"
+    },
+    {
+      "claim_id": "no-process-spawn",
+      "claim": {
+        "claim_type": "capability_not_used",
+        "claim_id": "no-process-spawn",
+        "capability": "ProcessSpawn"
+      },
+      "evaluation": "holds_within_analyzed_scope",
+      "evidence_refs": [
+        "enforcement:ungranted:ProcessSpawn"
+      ],
+      "detail": "capability ProcessSpawn was granted by neither the contract envelope nor the runtime profile; the hostcall membrane denies ungranted capabilities fail-closed"
+    },
+    {
+      "claim_id": "no-network-egress",
+      "claim": {
+        "claim_type": "capability_not_used",
+        "claim_id": "no-network-egress",
+        "capability": "NetworkEgress"
+      },
+      "evaluation": "holds_within_analyzed_scope",
+      "evidence_refs": [
+        "enforcement:ungranted:NetworkEgress"
+      ],
+      "detail": "capability NetworkEgress was granted by neither the contract envelope nor the runtime profile; the hostcall membrane denies ungranted capabilities fail-closed"
+    }
+  ],
+  "flow_events": [
+    {
+      "event_id": "dc-ingress-contract-smuggle-support-ticket-batch-audited-summary-report",
+      "extension_id": "agent-support-summarizer",
+      "source_label": "Confidential",
+      "sink_clearance": "Confidential",
+      "flow_location": "data_contract:contract-smuggle:sink:audited-summary-report:purpose:runtime_execution",
+      "decision": "Allowed",
+      "receipt_ref": null,
+      "timestamp_ms": 1
+    }
+  ],
+  "declassification_receipt_count": 0,
+  "signature_envelope": {
+    "producer_id": "franken-engine.e8-certifier:frankenctl-run:0:5e78268bc045bdde1ab8c5e2d20f0b5f198423fce61d0921df1f4a8634f4222a",
+    "key_provenance": {
+      "authority_class": "runtime",
+      "key_id": "ed25519:33efc660e6bd355686d3074b57fa91ab0d6a60e186c7e558d8ad3cec742971f7",
+      "activation_epoch": 1,
+      "rotation_sequence": 1
+    },
+    "signed_epoch": 1,
+    "verification_key": {
+      "inner": [
+        129,
+        45,
+        230,
+        65,
+        69,
+        38,
+        232,
+        169,
+        251,
+        217,
+        214,
+        66,
+        95,
+        55,
+        98,
+        78,
+        46,
+        61,
+        29,
+        81,
+        15,
+        156,
+        15,
+        157,
+        241,
+        117,
+        239,
+        152,
+        139,
+        254,
+        103,
+        136
+      ]
+    },
+    "signature": {
+      "lower": [
+        117,
+        130,
+        113,
+        211,
+        247,
+        101,
+        73,
+        160,
+        71,
+        105,
+        84,
+        34,
+        192,
+        65,
+        2,
+        75,
+        196,
+        142,
+        146,
+        72,
+        31,
+        31,
+        1,
+        94,
+        107,
+        87,
+        32,
+        215,
+        145,
+        214,
+        50,
+        190
+      ],
+      "upper": [
+        233,
+        109,
+        133,
+        202,
+        68,
+        220,
+        71,
+        182,
+        70,
+        242,
+        253,
+        213,
+        51,
+        33,
+        87,
+        74,
+        138,
+        114,
+        34,
+        7,
+        26,
+        123,
+        218,
+        125,
+        149,
+        219,
+        82,
+        51,
+        116,
+        137,
+        160,
+        11
+      ]
+    }
+  }
+}

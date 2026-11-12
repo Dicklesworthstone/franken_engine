@@ -370,6 +370,16 @@ impl BundleStatus {
             Self::Superseded => "superseded",
         }
     }
+
+    const fn as_json_bytes(self) -> &'static [u8] {
+        match self {
+            Self::Assembling => b"\"assembling\"",
+            Self::Sealed => b"\"sealed\"",
+            Self::Published => b"\"published\"",
+            Self::Rejected => b"\"rejected\"",
+            Self::Superseded => b"\"superseded\"",
+        }
+    }
 }
 
 impl fmt::Display for BundleStatus {
@@ -594,15 +604,19 @@ impl EvidenceBundle {
         hasher.update(self.bundle_id.as_bytes());
         hasher.update(self.schema_version.as_bytes());
         hasher.update(self.created_epoch.as_u64().to_le_bytes());
-        let mut prov_hashes: Vec<ContentHash> =
-            self.provenances.iter().map(|p| p.content_hash).collect();
-        prov_hashes.sort();
-        for h in &prov_hashes {
-            hasher.update(h.as_bytes());
+        match self.provenances.as_slice() {
+            [] => {}
+            [single] => hasher.update(single.content_hash.as_bytes()),
+            many => {
+                let mut prov_hashes: Vec<ContentHash> =
+                    many.iter().map(|p| p.content_hash).collect();
+                prov_hashes.sort();
+                for h in &prov_hashes {
+                    hasher.update(h.as_bytes());
+                }
+            }
         }
-        let mut sorted_runs: Vec<&BenchmarkRun> = self.runs.iter().collect();
-        sorted_runs.sort_by(|a, b| a.run_id.cmp(&b.run_id));
-        for run in &sorted_runs {
+        let hash_run = |hasher: &mut Sha256, run: &BenchmarkRun| {
             hasher.update(run.run_id.as_bytes());
             hasher.update(run.workload_id.as_bytes());
             hasher.update(run.duration_us.to_le_bytes());
@@ -610,23 +624,31 @@ impl EvidenceBundle {
             hasher.update(run.gc_pause_us.to_le_bytes());
             hasher.update([u8::from(run.is_warmup)]);
             hasher.update(run.iteration.to_le_bytes());
+        };
+        match self.runs.as_slice() {
+            [] => {}
+            [single] => hash_run(&mut hasher, single),
+            many => {
+                let mut sorted_runs: Vec<&BenchmarkRun> = many.iter().collect();
+                sorted_runs.sort_by(|a, b| a.run_id.cmp(&b.run_id));
+                for run in &sorted_runs {
+                    hash_run(&mut hasher, run);
+                }
+            }
         }
-        let mut verdict_hashes: Vec<ContentHash> = self
-            .parity_verdicts
-            .iter()
-            .map(|v| v.evidence_hash)
-            .collect();
-        verdict_hashes.sort();
-        for h in &verdict_hashes {
-            hasher.update(h.as_bytes());
+        match self.parity_verdicts.as_slice() {
+            [] => {}
+            [single] => hasher.update(single.evidence_hash.as_bytes()),
+            many => {
+                let mut verdict_hashes: Vec<ContentHash> =
+                    many.iter().map(|v| v.evidence_hash).collect();
+                verdict_hashes.sort();
+                for h in &verdict_hashes {
+                    hasher.update(h.as_bytes());
+                }
+            }
         }
-        // SAFETY: BundleStatus derives Serialize and has no non-serializable fields.
-        // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        hasher.update(
-            serde_json::to_string(&self.status)
-                .expect("serialization should succeed")
-                .as_bytes(),
-        );
+        hasher.update(self.status.as_json_bytes());
         if let Some(ref env) = self.reference_environment {
             hasher.update(env.snapshot_hash.as_bytes());
         }
@@ -1090,7 +1112,9 @@ pub fn generate_report(bundle: &EvidenceBundle, config: &BundleConfig) -> Bundle
 
 /// Export an evidence bundle to JSON format.
 pub fn export_bundle_json(bundle: &EvidenceBundle) -> Result<String, serde_json::Error> {
-    serde_json::to_string_pretty(bundle)
+    let mut buf = Vec::with_capacity(2048);
+    serde_json::to_writer_pretty(&mut buf, bundle)?;
+    Ok(String::from_utf8(buf).expect("serde_json emits valid UTF-8"))
 }
 
 /// Export a bundle report to JSON format.

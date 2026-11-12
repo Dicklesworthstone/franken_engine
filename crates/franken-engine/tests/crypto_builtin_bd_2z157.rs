@@ -1596,3 +1596,148 @@ fn legacy_regexp_statics_carry_the_matched_string_label_bd_9vouw_113() {
     );
     assert_eq!(orchestrated_console(&result), "abc abc-");
 }
+
+#[test]
+fn hmac_authenticator_ingress_denies_secret_key_message_backing_and_generic_receipts_bd_vw7s1() {
+    use frankenengine_engine::ast::ParseGoal;
+    use frankenengine_engine::baseline_interpreter::{
+        IfcRuntimeFlowDecision, InterpreterConfig, InterpreterCore,
+    };
+    use frankenengine_engine::capability::CapabilityProfile;
+    use frankenengine_engine::ifc_artifacts::{DeclassificationDecision, DeclassificationReceipt};
+    use frankenengine_engine::ir_contract::Ir0Module;
+    use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+    use frankenengine_engine::parser::{CanonicalEs2020Parser, Es2020Parser};
+
+    // 1. Static lowering denies Secret message ingress into hmac.update even
+    //    without any downstream console/network sink.
+    let secret_msg_error = eval_crypto_error(
+        "const crypto = require('crypto'); \
+         const secret = crypto.randomUUID(); \
+         crypto.createHmac('sha256', 'public-key').update(secret).digest('hex');",
+    );
+    assert!(
+        secret_msg_error.contains("unauthorized flow")
+            && secret_msg_error.contains("Secret -> Internal"),
+        "hmac.update(secret) must fail static Internal ingress clearance: {secret_msg_error}"
+    );
+
+    // 2. Runtime-mutated Secret Buffer backing storage (randomFillSync) is
+    //    refused at runtime on BOTH createHmac(alg, buf) and hmac.update(buf),
+    //    even if a signed generic Secret -> Internal DeclassificationReceipt
+    //    and permissive FlowPolicy are installed on InterpreterConfig.
+    let authorizer = SigningKey::from_bytes([0x5a; 32]).expect("signing key");
+    let route_id = "generic-secret-to-internal".to_string();
+    let policy = FlowPolicy {
+        policy_id: "policy-generic-declass-bd-vw7s1".to_string(),
+        extension_id: "ext-bd-vw7s1".to_string(),
+        label_classes: [Label::Public, Label::Internal, Label::Secret]
+            .into_iter()
+            .collect(),
+        clearance_classes: [Label::Public, Label::Internal, Label::Secret]
+            .into_iter()
+            .collect(),
+        allowed_flows: Vec::new(),
+        declassification_routes: vec![DeclassificationRoute {
+            route_id: route_id.clone(),
+            source_label: Label::Secret,
+            target_clearance: Label::Internal,
+            conditions: vec!["generic_console_audit".to_string()],
+        }],
+        prohibited_flows: Vec::new(),
+        enforcement_mode: FlowPolicyEnforcement::LatticeOpen,
+        epoch_id: 1,
+        schema_version: IfcSchemaVersion::CURRENT,
+        signature: Signature::from_bytes(SIGNATURE_SENTINEL),
+    };
+    let mut generic_receipt = DeclassificationReceipt {
+        receipt_id: "rcpt-generic-bd-vw7s1".to_string(),
+        source_label: Label::Secret,
+        sink_clearance: Label::Internal,
+        content_binding: None,
+        declassification_route_ref: route_id,
+        decision_contract_id: "contract-generic-bd-vw7s1".to_string(),
+        policy_evaluation_summary: "generic Secret -> Internal receipt".to_string(),
+        loss_assessment_milli: 1_000,
+        decision: DeclassificationDecision::Allow,
+        authorized_by: authorizer.verification_key(),
+        replay_linkage: "trace-generic-bd-vw7s1".to_string(),
+        timestamp_ms: 1_700_000_000_000,
+        not_before_ms: 1_699_999_000_000,
+        not_after_ms: 1_700_001_000_000,
+        schema_version: IfcSchemaVersion::CURRENT,
+        signature: Signature::from_bytes(SIGNATURE_SENTINEL),
+    };
+    generic_receipt
+        .sign(&authorizer)
+        .expect("sign generic receipt");
+
+    for (case_name, source, expected_cap) in [
+        (
+            "secret_buffer_key",
+            "const crypto = require('crypto'); \
+             const key = Buffer.alloc(16); \
+             crypto.randomFillSync(key); \
+             crypto.createHmac('sha256', key);",
+            "builtin:CryptoCreateHmac:confidentiality",
+        ),
+        (
+            "secret_buffer_update",
+            "const crypto = require('crypto'); \
+             const msg = Buffer.alloc(16); \
+             crypto.randomFillSync(msg); \
+             const hmac = crypto.createHmac('sha256', 'public-key'); \
+             hmac.update(msg);",
+            "builtin:CryptoObjectUpdate:confidentiality",
+        ),
+        (
+            "secret_branch_pc_context_update",
+            "const crypto = require('crypto'); \
+             const hmac = crypto.createHmac('sha256', 'public-key'); \
+             const coin = Buffer.alloc(16); \
+             crypto.randomFillSync(coin); \
+             if (coin[0] === 99) { hmac.update('unreachable'); } else { hmac.update('public-msg'); }",
+            "builtin:CryptoObjectUpdate:confidentiality",
+        ),
+    ] {
+        let parser = CanonicalEs2020Parser;
+        let tree = parser.parse(source, ParseGoal::Script).expect("parse case");
+        let ir0 = Ir0Module::from_syntax_tree(tree, format!("{case_name}.js"));
+        let lowered = lower_ir0_to_ir3(
+            &ir0,
+            &LoweringContext::new("trace-vw7s1", "decision-vw7s1", "policy-vw7s1"),
+        )
+        .expect("runtime-mutated buffer / PC case lowers to IR3");
+
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = CapabilityProfile::full().capabilities().clone();
+        config.ifc_flow_policy = Some(policy.clone());
+        config.declassification_receipts = vec![generic_receipt.clone()];
+
+        let provider = Arc::new(ScriptedRandomHostIo::bytes([vec![0x33; 16]]));
+        let mut core = InterpreterCore::new(config, "trace-vw7s1");
+        core.set_host_io(provider, None);
+        let err = core
+            .execute(&lowered.ir3)
+            .expect_err("HMAC runtime ingress must reject Secret input even with generic receipt");
+        assert_eq!(
+            err,
+            InterpreterError::CapabilityDenied {
+                capability: expected_cap.to_string(),
+            },
+            "unexpected error for {case_name}"
+        );
+        let expected_base = expected_cap.trim_end_matches(":confidentiality");
+        assert!(
+            core.ifc_runtime_flow_audit().iter().any(|entry| {
+                entry.capability == expected_base
+                    && entry.source_label == Label::Secret
+                    && entry.sink_clearance == Label::Internal
+                    && entry.decision == IfcRuntimeFlowDecision::Denied
+                    && entry.receipt_id.is_none()
+            }),
+            "audit trail for {case_name} must record non-bypassed Denied decision: {:?}",
+            core.ifc_runtime_flow_audit()
+        );
+    }
+}

@@ -1,6 +1,6 @@
 # FrankenEngine Performance Baseline
 
-**Last Updated:** 2026-06-18
+**Last Updated:** 2026-11-12
 **Baseline Version:** FrankenEngine baseline interpreter (not JIT-optimized)  
 **Artifact Location:** `artifacts/performance_baselines/2026-04-16_12-41-04/`
 
@@ -74,23 +74,30 @@ FrankenEngine is NOT appropriate when you need:
 - **Low-latency applications** with tight timing requirements
 - **Existing Node.js performance expectations** without security needs
 
-## Cached defaults: invariants for static cryptographic material
+## Cached signing identities: invariants for prepared cryptographic material
 
-FrankenEngine caches frequently-accessed cryptographic keys using `LazyLock` to avoid repeated curve operations while maintaining security guarantees:
+FrankenEngine precomputes and caches prepared Ed25519 signing keys inside each explicit `EvidenceSigningIdentity` (`RuntimeEvidenceAuthority` and `LabEvidenceAuthority`) to avoid repeated scalar/curve expansion on every emitted evidence entry while preserving key-rotation provenance and authority separation:
 
 ```rust
-// Module-scope cache in evidence_ledger.rs
-static DEFAULT_EVIDENCE_SIGNING_KEY: std::sync::LazyLock<SigningKey> =
-    std::sync::LazyLock::new(|| {
-        SigningKey::from_bytes(DEFAULT_EVIDENCE_SIGNING_KEY_BYTES)
-            .expect("default evidence signing key bytes are non-zero (const)")
-    });
+// Explicit authority-bound cache in crates/franken-engine/src/evidence_ledger.rs
+struct EvidenceSigningIdentityInner {
+    producer_id: String,
+    key_provenance: EvidenceKeyProvenance,
+    signing_key: SigningKey,
+    prepared_signing_key: Arc<PreparedSigningKey>,
+}
 
-static DEFAULT_EVIDENCE_VERIFICATION_KEY: std::sync::LazyLock<VerificationKey> =
-    std::sync::LazyLock::new(|| DEFAULT_EVIDENCE_SIGNING_KEY.verification_key());
+#[derive(Clone)]
+struct EvidenceSigningIdentity(Arc<EvidenceSigningIdentityInner>);
+
+// Constructed once per authority via PreparedSigningKey::prepare(&signing_key)
+// and serialized via zero-clone EvidenceEntryBorrow views.
+fn sign_preimage(&self, preimage: &[u8]) -> Signature {
+    self.prepared_signing_key.sign(preimage)
+}
 ```
 
-**Invariant:** The cached signing key is guaranteed to be byte-identical to a freshly-constructed key from the same constant bytes. This invariant is preserved automatically by ed25519-dalek's deterministic key construction API, which produces identical `SigningKey` instances from identical 32-byte seeds. The cache avoids expensive elliptic curve computation while maintaining cryptographic correctness and deterministic behavior required for evidence replay.
+**Invariant:** `PreparedSigningKey::sign` produces signatures byte-identical to `SigningKey::sign` constructed from the same 32-byte key material (pinned by `evidence_ledger::tests::signature_byte_equal_with_cached_runtime_key` and `cached_runtime_key_matches_explicit_expansion`). Precomputing `Arc<PreparedSigningKey>` once per authority eliminates per-entry curve expansion while preserving deterministic signatures, explicit runtime-vs-lab authority separation, and auditable key-rotation lineage.
 
 For evidence supporting this optimization, see `tests/artifacts/perf/20260520T214829Z-prof-pass1/06_HYPOTHESIS_LEDGER.md#h1`.
 
@@ -109,7 +116,7 @@ under the accepted cap.
 |---|---|---|
 | PERF-H1.4 (`bd-o4cbn.1.4`) | `tests/artifacts/perf/h1_bench/20260618T1410Z/summary.md` | `evidence_ledger_bundle` mean `225145.0 ns` -> `71346.4 ns` (`-68.31 %`), CI95 `[70296.4, 72432.0] ns`, CV `7.7 %`; gate verdict PASS |
 | PERF-H1.5 (`bd-o4cbn.1.5`) | `tests/artifacts/perf/h1_replay/20260618T144245Z/` | replay coverage `3/3`, fail-closed fixture rejects as expected, metamorphic suite `12` relations / `12000` pairs / `0` violations |
-| PERF-H1.6 (`bd-o4cbn.1.6`) | `scripts/perf/run_perf_h1_smoke.sh` | remote-only E2E smoke emits `tests/artifacts/perf/h1_smoke/<run-id>/events.jsonl` with `perf.profile.run_start`, `perf.profile.sample_collected`, and `perf.profile.run_complete`; `evidence_ledger_bundle` cap is `<= 110000 ns` |
+| PERF-H1.6 (`bd-o4cbn.1.6`) | `scripts/perf/run_perf_h1_smoke.sh` (`20261112T152800Z` on `hz4`) | `119/119` `evidence_ledger` lib tests + `signature_golden` PASS; `evidence_ledger_bundle` mean `109540.0 ns` (`-51.35 %` vs `pass1` `225145.0 ns`), CI95 `[109440.0, 109640.0] ns`, CV `0.21 %` (`<= 110000 ns` cap); verdict PASS |
 
 ## Reusable canonical-encoding buffers
 

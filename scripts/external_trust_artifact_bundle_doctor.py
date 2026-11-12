@@ -23,7 +23,13 @@ SUPPORTED_SCHEMAS = {
     "franken-engine.e2-differential-bundle.v1",
     "franken-engine.e3-recorder-bundle.v1",
     "franken-engine.e8-certificate-bundle.v1",
+    "franken-engine.e8-certificate-bundle.v2",
     E8_REFUSAL_LEDGER_SCHEMA,
+}
+
+E8_REPRO_LOCK_SCHEMAS = {
+    "franken-engine.repro-lock.v1",
+    "franken-engine.repro-lock.v2",
 }
 
 DEFAULT_REQUIRED_MEMBERS = ("events.jsonl", "commands.txt")
@@ -188,12 +194,18 @@ def find_manifest(bundle_path: Path) -> tuple[Path | None, dict[str, Any] | None
         "run_manifest.toml",
         "manifest.json",
         "manifest.toml",
+        "repro.lock",
     ):
         candidate = bundle_path / name
         if candidate.is_file():
             try:
-                return candidate, load_manifest(candidate), None
+                loaded = load_manifest(candidate)
+                if name == "repro.lock" and loaded.get("schema_version") not in E8_REPRO_LOCK_SCHEMAS:
+                    continue
+                return candidate, loaded, None
             except (OSError, ValueError, json.JSONDecodeError, tomllib.TOMLDecodeError) as err:
+                if name == "repro.lock":
+                    continue
                 return candidate, None, str(err)
     return None, None, None
 
@@ -203,6 +215,30 @@ def required_members(manifest: dict[str, Any] | None) -> tuple[list[dict[str, An
         return [{"path": member, "required": True} for member in DEFAULT_REQUIRED_MEMBERS], False
     if is_e8_refusal_ledger(manifest) and "required_members" not in manifest:
         return [], False
+    if (
+        manifest.get("schema_version") in E8_REPRO_LOCK_SCHEMAS
+        and "required_members" not in manifest
+        and isinstance(manifest.get("files"), list)
+    ):
+        e8_members: list[dict[str, Any]] = []
+        malformed_e8_files = not manifest["files"]
+        for entry in manifest["files"]:
+            if (
+                isinstance(entry, dict)
+                and non_empty_string(entry.get("name"))
+                and isinstance(entry.get("sha256_hex"), str)
+                and is_sha256_hex(entry["sha256_hex"].strip().lower())
+            ):
+                e8_members.append(
+                    {
+                        "path": entry["name"],
+                        "required": True,
+                        "sha256": entry["sha256_hex"].strip().lower(),
+                    }
+                )
+            else:
+                malformed_e8_files = True
+        return e8_members, malformed_e8_files
 
     def declared_member_hash(raw_member: dict[str, Any]) -> tuple[str | None, bool]:
         declared_hashes: list[str] = []
@@ -290,6 +326,8 @@ def manifest_replay_commands(manifest: dict[str, Any]) -> tuple[list[str], bool]
         for field in ("replay_commands", "replay_command")
         if field in manifest
     ]
+    if not replay_fields and manifest.get("schema_version") in E8_REPRO_LOCK_SCHEMAS and "commands" in manifest:
+        replay_fields = [manifest["commands"]]
     if not replay_fields:
         return [], False
 
@@ -547,12 +585,16 @@ def build_receipt(bundle_path: Path, now_utc: str) -> dict[str, Any]:
     e8_refusal_ledger: dict[str, Any] | None = None
 
     manifest_path, manifest, manifest_load_error = find_manifest(bundle_path)
-    schema_version = str(manifest.get("schema_version", "")) if manifest else ""
+    raw_schema_version = str(manifest.get("schema_version", "")) if manifest else ""
+    if manifest and raw_schema_version in E8_REPRO_LOCK_SCHEMAS:
+        schema_version = str(manifest.get("bundle_schema_version", ""))
+    else:
+        schema_version = raw_schema_version
     bundle_type = str(
         (manifest or {}).get("bundle_type")
         or (manifest or {}).get("bundle_family")
         or (manifest or {}).get("kind")
-        or "unknown"
+        or ("e8_certificate_bundle" if raw_schema_version in E8_REPRO_LOCK_SCHEMAS else "unknown")
     )
 
     if manifest_load_error:
@@ -598,6 +640,28 @@ def build_receipt(bundle_path: Path, now_utc: str) -> dict[str, Any]:
     present_member_paths: list[Path] = []
 
     base_dir = bundle_path if bundle_path.is_dir() else bundle_path.parent
+    if schema_version in {
+        "franken-engine.e8-certificate-bundle.v1",
+        "franken-engine.e8-certificate-bundle.v2",
+    }:
+        non_use_cert_path = base_dir / "non_use_certificate.json"
+        if non_use_cert_path.is_file():
+            try:
+                non_use_cert = load_manifest(non_use_cert_path)
+            except (OSError, ValueError, json.JSONDecodeError, tomllib.TOMLDecodeError):
+                reason_codes.append(MALFORMED_MANIFEST_REASON)
+                remediation.append("Fix malformed non_use_certificate.json in E8 bundle.")
+            else:
+                cert_status = non_use_cert.get("certificate_status")
+                if (
+                    cert_status is not None
+                    and cert_status != "certified_within_analyzed_scope"
+                ):
+                    reason_codes.append(EXPLICIT_E8_REFUSAL_REASON)
+                    remediation.append(
+                        f"E8 non-use certificate status is `{cert_status}` "
+                        f"(ledger `{non_use_cert.get('refusal_ledger_id')}`); block positive non-use claims."
+                    )
     for member in members:
         member_path, path_safe = resolve_bundle_member_path(base_dir, str(member["path"]))
         present = path_safe and member_path.is_file()

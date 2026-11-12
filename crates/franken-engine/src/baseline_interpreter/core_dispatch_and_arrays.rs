@@ -1218,6 +1218,7 @@ impl InterpreterCore {
                 let element = self
                     .array_index_get(Some(module), arr_id, last)?
                     .unwrap_or(Value::Undefined);
+                self.join_element_stored_label(arr_id, last as u64)?;
                 // Sample trust immediately before the destructive mutation.
                 let was_dense = self.array_cache_is_dense(arr_id);
                 let trusted_dense_length = self.array_cache_matches_visible_length(arr_id, len);
@@ -1500,9 +1501,11 @@ impl InterpreterCore {
                 if idx < 0 || idx >= len {
                     return Ok(Value::Undefined);
                 }
-                Ok(self
+                let element = self
                     .array_index_get(Some(module), arr_id, idx as usize)?
-                    .unwrap_or(Value::Undefined))
+                    .unwrap_or(Value::Undefined);
+                self.join_element_stored_label(arr_id, idx as u64)?;
+                Ok(element)
             }
             BuiltinFunctionKind::ArrayFlat => {
                 // ES2019 23.1.3.10: `flat(depth)` returns a new array with

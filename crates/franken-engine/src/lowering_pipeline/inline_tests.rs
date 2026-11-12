@@ -1298,8 +1298,14 @@ fn product_catch_contracts_recover_only_finite_native_paths_bd_bscab() {
             true,
         ),
         (
-            "buffer_instance_method_stays_fail_high",
+            "buffer_authenticated_instance_tostring",
             "try { Buffer.from('abc').toString('bogus'); console.log('no-throw'); } catch (error) { console.log(error); }",
+            Label::Internal,
+            false,
+        ),
+        (
+            "buffer_instance_method_stays_fail_high",
+            "const buf = Buffer.from('abc'); buf.changed = true; try { buf.toString('bogus'); console.log('no-throw'); } catch (error) { console.log(error); }",
             Label::TopSecret,
             true,
         ),
@@ -2575,13 +2581,8 @@ fn function_values_retain_unknown_runtime_floor_bd_bscab() {
     );
     ir1.ops.push(Ir1Op::CreateFunction {
         name: None,
-        param_names: Vec::new(),
-        body_ops: vec![
-            Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("secret_return".into()),
-            },
-            Ir1Op::Return,
-        ],
+        param_names: vec!["runtime_input".to_string()],
+        body_ops: vec![Ir1Op::LoadBinding { binding_id: 0 }, Ir1Op::Return],
         free_vars: Vec::new(),
         free_var_ids: Vec::new(),
         runtime_global_loads: Vec::new(),
@@ -2621,15 +2622,10 @@ fn declared_function_values_retain_unknown_runtime_floor_bd_bscab() {
         "declared_function_output_floor.js",
     );
     ir1.ops.push(Ir1Op::DeclareFunction {
-        name: "secretReturningFunction".to_string(),
+        name: "runtimeInputReturningFunction".to_string(),
         binding_id: 23,
-        param_names: Vec::new(),
-        body_ops: vec![
-            Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("secret_return".into()),
-            },
-            Ir1Op::Return,
-        ],
+        param_names: vec!["runtime_input".to_string()],
+        body_ops: vec![Ir1Op::LoadBinding { binding_id: 0 }, Ir1Op::Return],
         free_vars: Vec::new(),
         free_var_ids: Vec::new(),
         runtime_global_loads: Vec::new(),
@@ -2703,6 +2699,7 @@ fn unrecognized_capture_identity_fails_high_bd_bscab() {
         ContentHash::compute(b"unknown-capture-flow"),
         "unknown_capture_flow.js",
     );
+    push_opaque_ceiling_source(&mut ir1.ops);
     ir1.ops.push(Ir1Op::CreateFunction {
         name: Some("recursive".to_string()),
         param_names: Vec::new(),
@@ -16528,5 +16525,70 @@ fn sloppy_self_captured_named_fn_expr_and_nested_deferred_body_lower_cleanly() {
     assert!(
         out.ir3.function_table.len() >= 3,
         "expected outer, f, and inner in function_table"
+    );
+}
+
+#[test]
+fn hmac_update_ingress_clearance_is_internal_while_hash_and_cipher_remain_top_secret_bd_vw7s1() {
+    use crate::parser::Es2020Parser;
+
+    let parser = crate::parser::CanonicalEs2020Parser;
+
+    let secret_hmac_msg = "const crypto = require('crypto'); \
+        const secret = crypto.randomUUID(); \
+        const hmac = crypto.createHmac('sha256', 'public-key'); \
+        hmac.update(secret);";
+    let tree = parser
+        .parse(secret_hmac_msg, crate::ast::ParseGoal::Script)
+        .expect("parse secret hmac update");
+    let ir0 = Ir0Module::from_syntax_tree(tree, "hmac_secret_update_bd_vw7s1.js");
+    let ctx = LoweringContext::new("trace-vw7s1-1", "decision-vw7s1-1", "policy-vw7s1");
+    let err = lower_ir0_to_ir3(&ir0, &ctx)
+        .expect_err("Secret message ingress into hmac.update must be rejected statically");
+    assert!(
+        matches!(
+            err,
+            LoweringPipelineError::UnauthorizedFlow {
+                source_label: Label::Secret,
+                sink_clearance: Label::Internal,
+                ..
+            }
+        ),
+        "expected UnauthorizedFlow Secret -> Internal on hmac.update, got {err:?}"
+    );
+
+    // Public/Internal HMAC message ingress remains legal and preserves thrown
+    // lifecycle error provenance, while Hash and Cipher updates continue to
+    // accept Secret payloads into engine-private state.
+    let allowed_hash_and_public_hmac = "const crypto = require('crypto'); \
+        const secret = crypto.randomBytes(16); \
+        const hash = crypto.createHash('sha256'); \
+        hash.update(secret); \
+        const cipher = crypto.createCipheriv('aes-128-ctr', Buffer.alloc(16, 1), Buffer.alloc(16, 2)); \
+        cipher.update(secret); \
+        const hmac = crypto.createHmac('sha256', 'public-key'); \
+        hmac.update('public-message');";
+    let tree = parser
+        .parse(allowed_hash_and_public_hmac, crate::ast::ParseGoal::Script)
+        .expect("parse allowed hash/cipher/public-hmac");
+    let ir0 = Ir0Module::from_syntax_tree(tree, "hmac_hash_cipher_bd_vw7s1.js");
+    let out = lower_ir0_to_ir3(&ir0, &ctx)
+        .expect("Hash/Cipher Secret updates and Public HMAC updates must lower cleanly");
+
+    let update_clearances: Vec<Label> = out
+        .ir2
+        .ops
+        .iter()
+        .filter_map(|op| match &op.inner {
+            Ir1Op::HostCall { capability, .. } if capability == "builtin:CryptoObjectUpdate" => {
+                op.flow.as_ref().map(|f| f.sink_clearance.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        update_clearances,
+        vec![Label::TopSecret, Label::TopSecret, Label::Internal],
+        "Hash and Cipher updates stay TopSecret while HMAC update enforces Internal clearance"
     );
 }

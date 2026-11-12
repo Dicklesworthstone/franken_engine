@@ -1,0 +1,73 @@
+{
+  "schema_version": "franken-engine.external-trust-claim-explainer.v1",
+  "receipt_id": "claim-explain-<SCRUBBED>",
+  "claim_id": "FE-CLAIM-OBSERVED-PASS",
+  "decision": "supported",
+  "reason_codes": [],
+  "matrix_path": "<WORKDIR>/matrix.json",
+  "matrix_schema_version": "franken-engine.claim-to-proof-matrix.v1",
+  "claim": {
+    "claim_scope": "evidence",
+    "claim_text": "Golden smoke source claim.",
+    "allowed_state": "observed",
+    "actual_wording_state": "observed",
+    "decision": "allow observed fixture",
+    "reason": "Observed fixture verified.",
+    "downgrade_text": "Downgrade observed fixture.",
+    "freshness_days": 0,
+    "owning_bead": "bd-closed-owner",
+    "verification_command": "rch exec -- env CARGO_TARGET_DIR=/data/tmp/rch_smoke cargo test -p frankenengine-engine smoke",
+    "artifact_path": "<WORKDIR>/artifact.json"
+  },
+  "artifact": {
+    "path": "<WORKDIR>/artifact.json",
+    "present": true,
+    "kind": "file",
+    "content_hash": "ec933667f12f1edd159e563ae3710a23b16aa2d5d29fc7027d7baecd12d2ce1d",
+    "expected_hash": null,
+    "hash_status": "unasserted",
+    "required_for_supported": true,
+    "actual_freshness_days": 0,
+    "freshness_status": "fresh",
+    "stale_threshold_days": 30,
+    "max_observed_freshness_days": 30
+  },
+  "bead": {
+    "bead_id": "bd-closed-owner",
+    "status": "closed",
+    "assignee": "ubuntu",
+    "source": "<WORKDIR>/issues.jsonl",
+    "found": true
+  },
+  "mock_status": "absent",
+  "local_fallback_status": "absent",
+  "replay_commands": [
+    "rch exec -- env CARGO_TARGET_DIR=/data/tmp/rch_smoke cargo test -p frankenengine-engine smoke"
+  ],
+  "remediation": [],
+  "source_line_refs": [
+    {
+      "source_path": "<WORKDIR>/source.md",
+      "start_line": 1,
+      "end_line": 1,
+      "must_contain": "Golden smoke",
+      "status": "matched"
+    }
+  ],
+  "mutation_policy": {
+    "mutates_br": false,
+    "mutates_agent_mail": false,
+    "mutates_file_reservations": false,
+    "mutates_remote_workers": false,
+    "mutates_evidence_bundles": false,
+    "mutates_claim_matrix": false,
+    "mutates_git": false,
+    "runs_cargo": false,
+    "runs_rch": false
+  },
+  "renderer_boundary": {
+    "future_rich_renderer_provider": "/dp/frankentui",
+    "local_rich_renderer_shipped": false
+  },
+  "generated_at_utc": "<GENERATED_AT_UTC>"
+}

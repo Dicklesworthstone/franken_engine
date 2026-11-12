@@ -72,6 +72,16 @@ pub const EVIDENCE_CHAIN_RECEIPT_SCHEMA_VERSION: &str = "franken-engine.evidence
 const TEST_EVIDENCE_PRODUCER_ID: &str = "franken-engine.evidence-ledger.builder";
 const TEST_EVIDENCE_FIXTURE_ID: &str = "default-evidence-entry-fixture-v2";
 
+static DEFAULT_EVIDENCE_SIGNING_KEY: std::sync::LazyLock<LabEvidenceAuthority> =
+    std::sync::LazyLock::new(|| {
+        LabEvidenceAuthority::deterministic_fixture(
+            TEST_EVIDENCE_PRODUCER_ID,
+            TEST_EVIDENCE_FIXTURE_ID,
+            SecurityEpoch::GENESIS,
+        )
+        .expect("built-in lab evidence identity must be valid")
+    });
+
 // ---------------------------------------------------------------------------
 // DecisionType — categorizes the decision
 // ---------------------------------------------------------------------------
@@ -200,12 +210,43 @@ const EVIDENCE_TRUST_SNAPSHOT_DIGEST_DOMAIN: &[u8] = b"franken-engine.evidence-t
 /// Current external trust-snapshot schema.
 pub const EVIDENCE_TRUST_SNAPSHOT_FORMAT_VERSION: u32 = 1;
 
+fn evidence_key_id_digest(verification_key: &VerificationKey) -> ContentHash {
+    let mut preimage = [0u8; EVIDENCE_KEY_ID_DOMAIN.len() + 32];
+    preimage[..EVIDENCE_KEY_ID_DOMAIN.len()].copy_from_slice(EVIDENCE_KEY_ID_DOMAIN);
+    preimage[EVIDENCE_KEY_ID_DOMAIN.len()..].copy_from_slice(verification_key.as_bytes());
+    ContentHash::compute(&preimage)
+}
+
 fn evidence_key_id(verification_key: &VerificationKey) -> String {
-    let mut preimage =
-        Vec::with_capacity(EVIDENCE_KEY_ID_DOMAIN.len() + verification_key.as_bytes().len());
-    preimage.extend_from_slice(EVIDENCE_KEY_ID_DOMAIN);
-    preimage.extend_from_slice(verification_key.as_bytes());
-    format!("ed25519:{}", ContentHash::compute(&preimage).to_hex())
+    const HEX_LOWER: &[u8; 16] = b"0123456789abcdef";
+    let digest = evidence_key_id_digest(verification_key);
+    let mut out = String::with_capacity(8 + 64);
+    out.push_str("ed25519:");
+    for &byte in digest.as_bytes() {
+        out.push(HEX_LOWER[(byte >> 4) as usize] as char);
+        out.push(HEX_LOWER[(byte & 0x0f) as usize] as char);
+    }
+    out
+}
+
+fn matches_evidence_key_id(key_id: &str, verification_key: &VerificationKey) -> bool {
+    const HEX_LOWER: &[u8; 16] = b"0123456789abcdef";
+    let Some(hex_part) = key_id.strip_prefix("ed25519:") else {
+        return false;
+    };
+    let hex_bytes = hex_part.as_bytes();
+    if hex_bytes.len() != 64 {
+        return false;
+    }
+    let digest = evidence_key_id_digest(verification_key);
+    for (idx, &byte) in digest.as_bytes().iter().enumerate() {
+        if hex_bytes[idx * 2] != HEX_LOWER[(byte >> 4) as usize]
+            || hex_bytes[idx * 2 + 1] != HEX_LOWER[(byte & 0x0f) as usize]
+        {
+            return false;
+        }
+    }
+    true
 }
 
 /// Public, signature-bound lifecycle coordinates for an evidence signing key.
@@ -237,8 +278,8 @@ pub struct EvidenceKeyProvenance {
 
 impl EvidenceKeyProvenance {
     fn validate(&self, verification_key: &VerificationKey) -> Result<(), LedgerError> {
-        let expected_key_id = evidence_key_id(verification_key);
-        if self.key_id != expected_key_id {
+        if !matches_evidence_key_id(&self.key_id, verification_key) {
+            let expected_key_id = evidence_key_id(verification_key);
             return Err(LedgerError::SchemaValidationFailed {
                 reason: format!(
                     "evidence key id mismatch: expected {expected_key_id}, actual {}",
@@ -277,18 +318,31 @@ impl EvidenceKeyProvenance {
 
 /// Private signing identity plus its public rotation provenance.
 ///
-/// Debug output remains safe because [`SigningKey`] redacts its bytes.
-#[derive(Debug, Clone)]
-struct EvidenceSigningIdentity {
+/// Debug output remains safe because [`PreparedSigningKey`] redacts its bytes.
+#[derive(Debug)]
+struct EvidenceSigningIdentityInner {
     producer_id: String,
     key_provenance: EvidenceKeyProvenance,
     signing_key: SigningKey,
     prepared_signing_key: Arc<PreparedSigningKey>,
+    prepared_verification_key: Arc<PreparedVerificationKey>,
+}
+
+#[derive(Debug, Clone)]
+struct EvidenceSigningIdentity(Arc<EvidenceSigningIdentityInner>);
+
+impl std::ops::Deref for EvidenceSigningIdentity {
+    type Target = EvidenceSigningIdentityInner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 impl PartialEq for EvidenceSigningIdentity {
     fn eq(&self, other: &Self) -> bool {
-        self.verification_identity() == other.verification_identity()
+        Arc::ptr_eq(&self.0, &other.0)
+            || self.verification_identity() == other.verification_identity()
     }
 }
 
@@ -321,7 +375,11 @@ impl EvidenceSigningIdentity {
         authority_class: EvidenceAuthorityClass,
     ) -> Result<Self, LedgerError> {
         let producer_id = producer_id.into();
-        let verification_key = signing_key.verification_key();
+        if producer_id.trim().is_empty() {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: "evidence producer id must not be empty".to_string(),
+            });
+        }
         let prepared_signing_key = PreparedSigningKey::prepare(&signing_key).map_err(|error| {
             LedgerError::SchemaValidationFailed {
                 reason: format!(
@@ -329,20 +387,24 @@ impl EvidenceSigningIdentity {
                 ),
             }
         })?;
-        let identity = Self {
+        let verification_key = prepared_signing_key.verification_key();
+        let key_provenance = EvidenceKeyProvenance {
+            authority_class,
+            key_id: evidence_key_id(&verification_key),
+            activation_epoch,
+            rotation_sequence,
+            previous_key_id,
+        };
+        key_provenance.validate(&verification_key)?;
+        let prepared_verification_key =
+            Arc::new(PreparedVerificationKey::prepare(verification_key));
+        Ok(Self(Arc::new(EvidenceSigningIdentityInner {
             producer_id,
-            key_provenance: EvidenceKeyProvenance {
-                authority_class,
-                key_id: evidence_key_id(&verification_key),
-                activation_epoch,
-                rotation_sequence,
-                previous_key_id,
-            },
+            key_provenance,
             signing_key,
             prepared_signing_key: Arc::new(prepared_signing_key),
-        };
-        identity.validate()?;
-        Ok(identity)
+            prepared_verification_key,
+        })))
     }
 
     /// Construct a deterministic, source-reproducible identity for a named
@@ -413,13 +475,12 @@ impl EvidenceSigningIdentity {
     }
 
     fn validate(&self) -> Result<(), LedgerError> {
-        if self.producer_id.trim().is_empty() {
-            return Err(LedgerError::SchemaValidationFailed {
-                reason: "evidence producer id must not be empty".to_string(),
-            });
-        }
-        self.key_provenance
-            .validate(&self.signing_key.verification_key())
+        let _ = &self.signing_key;
+        // Invariants (non-empty producer_id, valid key_provenance against
+        // verification_key) are checked at construction in
+        // `from_signing_key_with_authority_class` and `EvidenceSigningIdentityInner`
+        // is immutable.
+        Ok(())
     }
 
     fn validate_for_entry_epoch(&self, entry_epoch: SecurityEpoch) -> Result<(), LedgerError> {
@@ -1127,30 +1188,97 @@ pub struct EvidenceEntry {
     pub metadata: BTreeMap<String, String>,
 }
 
+#[derive(Serialize)]
+struct EvidenceSignatureEnvelopeBorrow<'a> {
+    producer_id: &'a str,
+    key_provenance: &'a EvidenceKeyProvenance,
+    signed_epoch: SecurityEpoch,
+    verification_key: &'a VerificationKey,
+    signature: &'a Signature,
+}
+
+#[derive(Serialize)]
+struct EvidenceEntryBorrow<'a> {
+    schema_version: SchemaVersion,
+    entry_id: &'a str,
+    trace_id: &'a str,
+    decision_id: &'a str,
+    policy_id: &'a str,
+    epoch_id: SecurityEpoch,
+    timestamp_ns: u64,
+    decision_type: DecisionType,
+    candidates: &'a [CandidateAction],
+    constraints: &'a [Constraint],
+    chosen_action: &'a ChosenAction,
+    witnesses: &'a [Witness],
+    evidence_hash: &'a str,
+    signed_envelope: EvidenceSignatureEnvelopeBorrow<'a>,
+    metadata: &'a BTreeMap<String, String>,
+}
+
+const SENTINEL_SIGNATURE: Signature = Signature {
+    lower: [0u8; 32],
+    upper: [0u8; 32],
+};
+
 impl EvidenceEntry {
+    #[cfg(test)]
     fn unsigned_signature_view(&self) -> Self {
         let mut unsigned = self.clone();
         unsigned.signed_envelope.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
         unsigned
     }
 
-    fn unsigned_signature_preimage(&self) -> Result<Vec<u8>, LedgerError> {
-        serde_json::to_vec(&self.unsigned_signature_view()).map_err(|e| {
+    fn write_unsigned_borrow_json(
+        &self,
+        entry_id: &str,
+        evidence_hash: &str,
+        err_context: &'static str,
+    ) -> Result<Vec<u8>, LedgerError> {
+        let view = EvidenceEntryBorrow {
+            schema_version: self.schema_version,
+            entry_id,
+            trace_id: &self.trace_id,
+            decision_id: &self.decision_id,
+            policy_id: &self.policy_id,
+            epoch_id: self.epoch_id,
+            timestamp_ns: self.timestamp_ns,
+            decision_type: self.decision_type,
+            candidates: &self.candidates,
+            constraints: &self.constraints,
+            chosen_action: &self.chosen_action,
+            witnesses: &self.witnesses,
+            evidence_hash,
+            signed_envelope: EvidenceSignatureEnvelopeBorrow {
+                producer_id: &self.signed_envelope.producer_id,
+                key_provenance: &self.signed_envelope.key_provenance,
+                signed_epoch: self.signed_envelope.signed_epoch,
+                verification_key: &self.signed_envelope.verification_key,
+                signature: &SENTINEL_SIGNATURE,
+            },
+            metadata: &self.metadata,
+        };
+        let mut buf = Vec::with_capacity(1280);
+        serde_json::to_writer(&mut buf, &view).map_err(|e| {
             LedgerError::SchemaValidationFailed {
-                reason: format!("evidence entry signature preimage serialization failed: {e}"),
+                reason: format!("{err_context}: {e}"),
             }
-        })
+        })?;
+        Ok(buf)
+    }
+
+    fn unsigned_signature_preimage(&self) -> Result<Vec<u8>, LedgerError> {
+        self.write_unsigned_borrow_json(
+            &self.entry_id,
+            &self.evidence_hash,
+            "evidence entry signature preimage serialization failed",
+        )
     }
 
     fn recomputed_content_ids(&self) -> Result<(String, String), LedgerError> {
-        let mut unsigned = self.unsigned_signature_view();
-        unsigned.entry_id.clear();
-        unsigned.evidence_hash.clear();
         let hash_input =
-            serde_json::to_string(&unsigned).map_err(|e| LedgerError::SchemaValidationFailed {
-                reason: format!("evidence entry serialization failed: {e}"),
-            })?;
-        let evidence_hash = deterministic_hash(&hash_input);
+            self.write_unsigned_borrow_json("", "", "evidence entry serialization failed")?;
+        let evidence_hash = deterministic_hash_bytes(&hash_input);
         let entry_id = format!("ev-{}", evidence_hash.get(..32).unwrap_or(&evidence_hash));
         Ok((entry_id, evidence_hash))
     }
@@ -1786,19 +1914,13 @@ impl EvidenceEntryBuilder {
         epoch_id: SecurityEpoch,
         decision_type: DecisionType,
     ) -> Self {
-        let authority = LabEvidenceAuthority::deterministic_fixture(
-            TEST_EVIDENCE_PRODUCER_ID,
-            TEST_EVIDENCE_FIXTURE_ID,
-            SecurityEpoch::GENESIS,
-        )
-        .expect("built-in lab evidence identity must be valid");
         Self::new_with_lab_authority(
             trace_id,
             decision_id,
             policy_id,
             epoch_id,
             decision_type,
-            &authority,
+            &DEFAULT_EVIDENCE_SIGNING_KEY,
         )
     }
 
@@ -1959,7 +2081,11 @@ impl LabFixtureEvidenceEntryBuilderExt for EvidenceEntryBuilder {
 ///
 /// Uses SHA-256 for collision resistance and tamper detection.
 fn deterministic_hash(input: &str) -> String {
-    ContentHash::compute(input.as_bytes()).to_hex()
+    deterministic_hash_bytes(input.as_bytes())
+}
+
+fn deterministic_hash_bytes(input: &[u8]) -> String {
+    ContentHash::compute(input).to_hex()
 }
 
 // ---------------------------------------------------------------------------
@@ -2101,16 +2227,10 @@ impl InMemoryLedger {
     /// Explicitly lab-scoped ledger trusting the built-in deterministic
     /// fixture identity.
     pub fn new_lab() -> Self {
-        let authority = LabEvidenceAuthority::deterministic_fixture(
-            TEST_EVIDENCE_PRODUCER_ID,
-            TEST_EVIDENCE_FIXTURE_ID,
-            SecurityEpoch::GENESIS,
-        )
-        .expect("built-in lab evidence identity must be valid");
-        let mut ledger = Self::empty_for_epoch(None, true);
-        ledger
-            .authorize_verification_identity(&authority.verification_identity())
-            .expect("built-in lab evidence identity must remain valid");
+        let mut ledger =
+            Self::for_lab_authority(SecurityEpoch::GENESIS, &DEFAULT_EVIDENCE_SIGNING_KEY)
+                .expect("built-in lab evidence identity must remain valid");
+        ledger.current_epoch = None;
         ledger
     }
 
@@ -2179,7 +2299,29 @@ impl InMemoryLedger {
         epoch: SecurityEpoch,
         authority: &RuntimeEvidenceAuthority,
     ) -> Result<Self, LedgerError> {
-        Self::for_verification_identity(epoch, &authority.verification_identity())
+        let identity = authority.signing_identity();
+        identity.validate_runtime_authority()?;
+        if identity.key_provenance.activation_epoch.as_u64() > epoch.as_u64() {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "evidence trust root activates at epoch {}, after ledger epoch {}",
+                    identity.key_provenance.activation_epoch.as_u64(),
+                    epoch.as_u64()
+                ),
+            });
+        }
+        let mut ledger = Self::empty_for_epoch(Some(epoch), false);
+        ledger.authorized_producers.insert(
+            (
+                identity.producer_id.clone(),
+                identity.key_provenance.key_id.clone(),
+            ),
+            AuthorizedEvidenceProducer {
+                key_provenance: identity.key_provenance.clone(),
+                verification_key: (*identity.prepared_verification_key).clone(),
+            },
+        );
+        Ok(ledger)
     }
 
     /// Construct a lab ledger from a lab authority's public identity.
@@ -2187,7 +2329,34 @@ impl InMemoryLedger {
         epoch: SecurityEpoch,
         authority: &LabEvidenceAuthority,
     ) -> Result<Self, LedgerError> {
-        Self::for_lab_verification_identity(epoch, &authority.verification_identity())
+        let identity = authority.signing_identity();
+        identity.validate()?;
+        if identity.key_provenance.authority_class != EvidenceAuthorityClass::LabFixture {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: "runtime evidence identity cannot authorize a lab-only ledger".to_string(),
+            });
+        }
+        if identity.key_provenance.activation_epoch.as_u64() > epoch.as_u64() {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "lab evidence trust root activates at epoch {}, after ledger epoch {}",
+                    identity.key_provenance.activation_epoch.as_u64(),
+                    epoch.as_u64()
+                ),
+            });
+        }
+        let mut ledger = Self::empty_for_epoch(Some(epoch), true);
+        ledger.authorized_producers.insert(
+            (
+                identity.producer_id.clone(),
+                identity.key_provenance.key_id.clone(),
+            ),
+            AuthorizedEvidenceProducer {
+                key_provenance: identity.key_provenance.clone(),
+                verification_key: (*identity.prepared_verification_key).clone(),
+            },
+        );
+        Ok(ledger)
     }
 
     #[cfg(test)]
@@ -2448,12 +2617,21 @@ impl InMemoryLedger {
         envelope: &EvidenceSignatureEnvelope,
     ) -> Result<&AuthorizedEvidenceProducer, LedgerError> {
         envelope.validate_public_provenance()?;
+        self.authorized_producer_for_validated_envelope(envelope)
+    }
+
+    fn authorized_producer_for_validated_envelope(
+        &self,
+        envelope: &EvidenceSignatureEnvelope,
+    ) -> Result<&AuthorizedEvidenceProducer, LedgerError> {
         let registered = self
             .authorized_producers
-            .get(&(
-                envelope.producer_id.clone(),
-                envelope.key_provenance.key_id.clone(),
-            ))
+            .iter()
+            .find_map(|((registered_producer, registered_key_id), producer)| {
+                (registered_producer == &envelope.producer_id
+                    && registered_key_id == &envelope.key_provenance.key_id)
+                    .then_some(producer)
+            })
             .ok_or_else(|| LedgerError::SchemaValidationFailed {
                 reason: format!(
                     "unauthorized evidence producer/key: {}/{}",
@@ -2694,7 +2872,7 @@ impl InMemoryLedger {
                 ),
             });
         }
-        let registered = self.authorized_producer_for_envelope(envelope)?;
+        let registered = self.authorized_producer_for_validated_envelope(envelope)?;
         registered
             .verification_key
             .verify(&entry.unsigned_signature_preimage()?, &envelope.signature)
@@ -2829,7 +3007,20 @@ impl EvidenceTrustRegistry {
 
 impl EvidenceEmitter for InMemoryLedger {
     fn emit(&mut self, entry: EvidenceEntry) -> Result<(), LedgerError> {
-        self.emit_batch(vec![entry])
+        if self.evidence_chain_ledger_id.is_some() {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: "bound evidence ledger requires an authenticated chain receipt".to_string(),
+            });
+        }
+        if self.entry_ids.contains(&entry.entry_id) {
+            return Err(LedgerError::DuplicateEntryId {
+                entry_id: entry.entry_id,
+            });
+        }
+        self.validate_entry(&entry)?;
+        self.entry_ids.insert(entry.entry_id.clone());
+        self.entries.push(entry);
+        Ok(())
     }
 
     fn emit_batch(&mut self, entries: Vec<EvidenceEntry>) -> Result<(), LedgerError> {
@@ -7300,5 +7491,58 @@ mod tests {
             ledger.evidence_chain_head(),
             Some(second_receipt.head_chain_hash.as_str())
         );
+    }
+
+    #[test]
+    fn evidence_entry_borrow_serialization_matches_owned_view_byte_for_byte() {
+        let entry = EvidenceEntryBuilder::new(
+            "trace-borrow-parity",
+            "decision-borrow-parity",
+            "policy-borrow-parity",
+            SecurityEpoch::from_raw(9),
+            DecisionType::ContractEvaluation,
+        )
+        .timestamp_ns(1_700_000_000_000_000_001)
+        .candidate(CandidateAction::new("allow", 10_000))
+        .candidate(CandidateAction::filtered(
+            "deny",
+            900_000,
+            "filtered-reason",
+        ))
+        .constraint(Constraint {
+            constraint_id: "c1".to_string(),
+            description: "desc".to_string(),
+            active: true,
+        })
+        .chosen(ChosenAction {
+            action_name: "allow".to_string(),
+            expected_loss_millionths: 10_000,
+            rationale: "rationale".to_string(),
+        })
+        .witness(Witness {
+            witness_id: "w1".to_string(),
+            witness_type: "sensor".to_string(),
+            value: "42".to_string(),
+        })
+        .meta("alpha", "1")
+        .meta("beta", "2")
+        .build()
+        .expect("entry should build");
+
+        let owned_preimage =
+            serde_json::to_vec(&entry.unsigned_signature_view()).expect("owned preimage");
+        let borrow_preimage = entry
+            .unsigned_signature_preimage()
+            .expect("borrow preimage");
+        assert_eq!(borrow_preimage, owned_preimage);
+
+        let mut owned_content = entry.unsigned_signature_view();
+        owned_content.entry_id.clear();
+        owned_content.evidence_hash.clear();
+        let owned_content_bytes = serde_json::to_vec(&owned_content).expect("owned content json");
+        let borrow_content_bytes = entry
+            .write_unsigned_borrow_json("", "", "test")
+            .expect("borrow content json");
+        assert_eq!(borrow_content_bytes, owned_content_bytes);
     }
 }

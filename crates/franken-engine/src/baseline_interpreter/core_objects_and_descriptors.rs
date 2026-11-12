@@ -3674,7 +3674,7 @@ impl InterpreterCore {
         &self,
         args: RegRange,
     ) -> Result<Label, InterpreterError> {
-        let mut winner: Option<&Label> = self.active_inline_callback_context_label.as_ref();
+        let mut winner: Option<&Label> = self.active_execution_context_label();
         for index in 0..args.count {
             let register =
                 args.start
@@ -3699,6 +3699,39 @@ impl InterpreterCore {
         };
         self.check_temporary_memory_budget(Self::estimate_label_bytes(winner))?;
         Ok(winner.clone())
+    }
+
+    pub(super) fn enforce_crypto_hmac_ingress_clearance(
+        &mut self,
+        capability: &str,
+        label: &Label,
+    ) -> Result<(), InterpreterError> {
+        let clearance = Label::Internal;
+        if label.can_flow_to(&clearance) {
+            self.record_ifc_runtime_flow_audit(
+                capability,
+                label,
+                &clearance,
+                IfcRuntimeFlowDecision::AllowedLattice,
+                None,
+                None,
+            );
+            return Ok(());
+        }
+        // bd-vw7s1: generic declassification receipts and ambient flow policies
+        // cannot authorize keyed authenticator derivation over un-declassified
+        // secrets; any future release must carry an explicit authenticator route.
+        self.record_ifc_runtime_flow_audit(
+            capability,
+            label,
+            &clearance,
+            IfcRuntimeFlowDecision::Denied,
+            None,
+            None,
+        );
+        Err(InterpreterError::CapabilityDenied {
+            capability: format!("{capability}:confidentiality"),
+        })
     }
 
     pub(super) fn crypto_input_bytes_with_mode(
@@ -4316,6 +4349,7 @@ impl InterpreterCore {
 
     pub(super) fn crypto_create_hmac(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
         let invocation_label = self.crypto_invocation_label(args)?;
+        self.enforce_crypto_hmac_ingress_clearance("builtin:CryptoCreateHmac", &invocation_label)?;
         let algorithm_name = self.crypto_required_string_arg(args, 0, "crypto HMAC algorithm")?;
         let Some(algorithm) = CryptoHashAlgorithm::parse(&algorithm_name) else {
             return Err(self.crypto_throw_node_error(
@@ -4355,6 +4389,17 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let object_id = self.crypto_receiver_id(receiver, builtin, "update")?;
         let invocation_label = self.crypto_invocation_label(args)?;
+        if self.crypto_objects.get(&object_id).is_some_and(|state| {
+            matches!(
+                state,
+                CryptoObjectState::HmacActive { .. } | CryptoObjectState::HmacFinalized { .. }
+            )
+        }) {
+            self.enforce_crypto_hmac_ingress_clearance(
+                "builtin:CryptoObjectUpdate",
+                &invocation_label,
+            )?;
+        }
         let value = self.crypto_required_arg(args, 0, "crypto update input")?;
         let encoding = self.builtin_arg(args, 1)?;
         let retained_state_bytes = self

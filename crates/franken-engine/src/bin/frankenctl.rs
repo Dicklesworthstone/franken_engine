@@ -5633,6 +5633,16 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
             let receipt = e8_preflight_receipt
                 .as_ref()
                 .expect("data-contract runs always build a preflight receipt");
+            let explicit_cert_authority = configured_evidence
+                .as_ref()
+                .map(|configured| &configured.authority)
+                .filter(|authority| {
+                    let producer_id = authority.producer_id();
+                    producer_id == E8_CERTIFIER_PRODUCER_ID
+                        || producer_id
+                            .strip_prefix(E8_CERTIFIER_PRODUCER_ID)
+                            .is_some_and(|suffix| suffix.starts_with(':') && suffix.len() > 1)
+                });
             Some(write_certificate_bundle(
                 dir,
                 contract,
@@ -5643,6 +5653,7 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
                 &policy_id,
                 args.parse_goal,
                 run_cli_capability_set(args.parse_goal, args.commonjs_entry),
+                explicit_cert_authority,
             )?)
         }
         (Some(_), None) => {
@@ -5772,6 +5783,7 @@ fn write_certificate_bundle(
     policy_id: &str,
     parse_goal: ParseGoal,
     granted: BTreeSet<RuntimeCapability>,
+    explicit_certificate_authority: Option<&RuntimeEvidenceAuthority>,
 ) -> Result<CertificateBundleSummary, String> {
     let replay_trace_hash =
         content_hash_for_json(&result.nondeterminism_trace, "nondeterminism trace")?.to_hex();
@@ -5798,13 +5810,16 @@ fn write_certificate_bundle(
         execution_value: &result.execution_value,
         replay_trace_content_hash_hex: &replay_trace_hash,
     };
-    let certificate_authority = RuntimeEvidenceAuthority::generate_runtime_owned(
-        fresh_runtime_evidence_producer_id(E8_CERTIFIER_PRODUCER_ID, &result.trace_id)?,
-        result.epoch,
-        1,
-        None,
-    )
-    .map_err(|error| format!("failed to initialize E8 certificate authority: {error}"))?;
+    let certificate_authority = match explicit_certificate_authority {
+        Some(authority) => authority.clone(),
+        None => RuntimeEvidenceAuthority::generate_runtime_owned(
+            fresh_runtime_evidence_producer_id(E8_CERTIFIER_PRODUCER_ID, &result.trace_id)?,
+            result.epoch,
+            1,
+            None,
+        )
+        .map_err(|error| format!("failed to initialize E8 certificate authority: {error}"))?,
+    };
     let certificate_verification_identity = certificate_authority.verification_identity();
     let bundle = emit_certificate_bundle_with_runtime_authority(&inputs, &certificate_authority)
         .map_err(|error| format!("failed to emit E8 certificate bundle: {error}"))?;
@@ -6010,6 +6025,7 @@ fn execute_agent_sandbox(args: AgentSandboxArgs) -> Result<i32, String> {
                 &policy_id,
                 args.parse_goal,
                 granted,
+                None,
             )?)
         }
         _ => None,
@@ -16374,6 +16390,73 @@ mod tests {
         let actual = compute_artifact_content_hash(&dir).expect("directory hash");
         assert_eq!(actual, ContentHash::compute(&expected_preimage).to_hex());
         assert_ne!(actual, ContentHash::compute(&legacy_preimage).to_hex());
+    }
+
+    #[test]
+    fn claim_explainer_owning_bead_open_status_mismatch_fails_closed() {
+        let dir = frankenctl_test_temp_dir("claim-owning-bead-mismatch");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let artifact_path = dir.join("artifact.json");
+        fs::write(&artifact_path, b"{\"ok\":true}\n").expect("write artifact");
+        write_repro_lock_next_to_file(&artifact_path);
+        let matrix_path = dir.join("matrix.json");
+        write_claim_matrix_fixture(
+            &matrix_path,
+            serde_json::json!([claim_row_fixture(
+                "FE-CLAIM-BEAD-OPEN",
+                "observed",
+                "observed",
+                artifact_path.display().to_string(),
+                "bd-still-open"
+            )]),
+        );
+        let beads_path = dir.join("issues.jsonl");
+        fs::write(
+            &beads_path,
+            serde_json::json!({"id":"bd-still-open","status":"open","assignee":"ubuntu"})
+                .to_string(),
+        )
+        .expect("write beads fixture");
+
+        let output = build_claim_explanation("FE-CLAIM-BEAD-OPEN", &matrix_path, Some(&beads_path))
+            .expect("open owning bead should render fail-closed receipt");
+        assert_eq!(output.decision, "fail_closed");
+        assert_eq!(output.exit_code(), 2);
+        assert!(
+            output
+                .reason_codes
+                .contains(&"contradictory_bead_status".to_string()),
+            "expected contradictory_bead_status in {:?}",
+            output.reason_codes
+        );
+        assert_eq!(output.bead.as_ref().expect("bead").status, "open");
+    }
+
+    #[test]
+    fn claim_explainer_hypothesis_claim_stays_not_promotable() {
+        let dir = frankenctl_test_temp_dir("claim-hypothesis");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let matrix_path = dir.join("matrix.json");
+        write_claim_matrix_fixture(
+            &matrix_path,
+            serde_json::json!([claim_row_fixture(
+                "FE-CLAIM-HYPOTHESIS",
+                "hypothesis",
+                "hypothesis",
+                "missing-hypothesis-artifact.json",
+                "bd-hypothesis"
+            )]),
+        );
+
+        let output = build_claim_explanation("FE-CLAIM-HYPOTHESIS", &matrix_path, None)
+            .expect("hypothesis claim should explain");
+        assert_eq!(output.decision, "not_promotable");
+        assert_eq!(output.exit_code(), 1);
+        assert!(
+            output
+                .reason_codes
+                .contains(&"claim_not_observed".to_string())
+        );
     }
 
     #[test]

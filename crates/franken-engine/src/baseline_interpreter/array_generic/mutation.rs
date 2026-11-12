@@ -499,6 +499,693 @@ mod tests {
         }
     }
 
+    fn bd_ojvo1_test_core() -> (Ir3Module, InterpreterCore) {
+        let tree = crate::parser_api_stability::parse_script("0").unwrap();
+        let module = crate::lowering_pipeline::lower_ir0_to_ir3(
+            &crate::ir_contract::Ir0Module::from_syntax_tree(tree, "bd-ojvo1.js"),
+            &crate::lowering_pipeline::LoweringContext::new("ojvo1", "labels", "builtin-only"),
+        )
+        .unwrap()
+        .ir3;
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]
+        .into_iter()
+        .collect();
+        (module, InterpreterCore::new(config, "bd-ojvo1"))
+    }
+
+    fn bd_ojvo1_generic_triple(core: &mut InterpreterCore) -> ObjectId {
+        let object = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(object, "length".into(), Value::Int(3))
+            .unwrap();
+        for (idx, val) in [("0", 10), ("1", 20), ("2", 30)] {
+            core.set_object_property(object, idx.into(), Value::Int(val))
+                .unwrap();
+        }
+        object
+    }
+
+    #[test]
+    fn generic_relative_index_labels_and_noop_omitted_precision_bd_ojvo1() {
+        use BuiltinFunctionKind as K;
+
+        // 1. Fill: Secret relative start taints written slot; empty range + unconsumed reg stay Public.
+        {
+            let (module, mut core) = bd_ojvo1_test_core();
+            let object = bd_ojvo1_generic_triple(&mut core);
+            core.write_reg_with_label(0, Value::Int(7), Label::Public)
+                .unwrap();
+            core.write_reg_with_label(1, Value::Int(-2), Label::Secret)
+                .unwrap();
+            core.write_reg_with_label(2, Value::Int(2), Label::Public)
+                .unwrap();
+            core.dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::new_kind(K::ArrayFill),
+                RegRange { start: 0, count: 3 },
+                Some(Value::Object(object)),
+                None,
+            )
+            .unwrap();
+            assert_eq!(core.own_property_label(object, "0"), Label::Public);
+            assert_eq!(core.own_property_label(object, "1"), Label::Secret);
+            assert_eq!(core.own_property_label(object, "2"), Label::Public);
+
+            let noop = bd_ojvo1_generic_triple(&mut core);
+            core.replace_pending_hostcall_result_label(None).unwrap();
+            core.write_reg_with_label(0, Value::Int(99), Label::Secret)
+                .unwrap();
+            core.write_reg_with_label(1, Value::Int(2), Label::Secret)
+                .unwrap();
+            core.write_reg_with_label(2, Value::Int(2), Label::Secret)
+                .unwrap();
+            core.write_reg_with_label(5, Value::Int(42), Label::TopSecret)
+                .unwrap();
+            core.dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::new_kind(K::ArrayFill),
+                RegRange { start: 0, count: 3 },
+                Some(Value::Object(noop)),
+                None,
+            )
+            .unwrap();
+            for key in ["0", "1", "2"] {
+                assert_eq!(core.own_property_label(noop, key), Label::Public);
+            }
+            assert_eq!(
+                core.take_pending_hostcall_result_label()
+                    .unwrap_or(Label::Public),
+                Label::Public
+            );
+            assert_eq!(core.json_parse_temporary_bytes, 0);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+
+        // 2. CopyWithin: Secret target taints destination; zero-count range stays Public.
+        {
+            let (module, mut core) = bd_ojvo1_test_core();
+            let object = bd_ojvo1_generic_triple(&mut core);
+            core.write_reg_with_label(0, Value::Int(-1), Label::Secret)
+                .unwrap();
+            core.write_reg_with_label(1, Value::Int(0), Label::Public)
+                .unwrap();
+            core.write_reg_with_label(2, Value::Int(1), Label::Public)
+                .unwrap();
+            core.dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::new_kind(K::ArrayCopyWithin),
+                RegRange { start: 0, count: 3 },
+                Some(Value::Object(object)),
+                None,
+            )
+            .unwrap();
+            assert_eq!(
+                core.heap[object.0 as usize].properties.get_index(2),
+                Some(&Value::Int(10))
+            );
+            assert_eq!(core.own_property_label(object, "2"), Label::Secret);
+            assert_eq!(core.own_property_label(object, "0"), Label::Public);
+
+            let noop = bd_ojvo1_generic_triple(&mut core);
+            core.replace_pending_hostcall_result_label(None).unwrap();
+            core.write_reg_with_label(0, Value::Int(1), Label::Secret)
+                .unwrap();
+            core.write_reg_with_label(1, Value::Int(2), Label::Secret)
+                .unwrap();
+            core.write_reg_with_label(2, Value::Int(2), Label::Secret)
+                .unwrap();
+            core.dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::new_kind(K::ArrayCopyWithin),
+                RegRange { start: 0, count: 3 },
+                Some(Value::Object(noop)),
+                None,
+            )
+            .unwrap();
+            for key in ["0", "1", "2"] {
+                assert_eq!(core.own_property_label(noop, key), Label::Public);
+            }
+            assert_eq!(
+                core.take_pending_hostcall_result_label()
+                    .unwrap_or(Label::Public),
+                Label::Public
+            );
+        }
+
+        // 3. Splice & Slice & At & With & ToSpliced: relative index labels vs no-op/omitted precision.
+        {
+            let (module, mut core) = bd_ojvo1_test_core();
+            let object = bd_ojvo1_generic_triple(&mut core);
+            core.write_reg_with_label(0, Value::Int(-2), Label::Secret)
+                .unwrap();
+            core.write_reg_with_label(1, Value::Int(1), Label::Public)
+                .unwrap();
+            let Value::Object(removed) = core
+                .dispatch_builtin_function(
+                    &module,
+                    &BuiltinFunction::new_kind(K::ArraySplice),
+                    RegRange { start: 0, count: 2 },
+                    Some(Value::Object(object)),
+                    None,
+                )
+                .unwrap()
+            else {
+                panic!("splice returns removed array");
+            };
+            assert_eq!(core.own_property_label(removed, "0"), Label::Secret);
+            assert_eq!(core.own_property_label(object, "1"), Label::Secret);
+
+            let noop_splice = bd_ojvo1_generic_triple(&mut core);
+            core.replace_pending_hostcall_result_label(None).unwrap();
+            core.write_reg_with_label(0, Value::Int(1), Label::Secret)
+                .unwrap();
+            core.write_reg_with_label(1, Value::Int(0), Label::Secret)
+                .unwrap();
+            core.dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::new_kind(K::ArraySplice),
+                RegRange { start: 0, count: 2 },
+                Some(Value::Object(noop_splice)),
+                None,
+            )
+            .unwrap();
+            for key in ["0", "1", "2"] {
+                assert_eq!(core.own_property_label(noop_splice, key), Label::Public);
+            }
+            assert_eq!(
+                core.take_pending_hostcall_result_label()
+                    .unwrap_or(Label::Public),
+                Label::Public
+            );
+
+            let slice_src = bd_ojvo1_generic_triple(&mut core);
+            core.write_reg_with_label(0, Value::Int(-2), Label::Secret)
+                .unwrap();
+            core.write_reg_with_label(1, Value::Int(2), Label::Public)
+                .unwrap();
+            let Value::Object(sliced) = core
+                .dispatch_builtin_function(
+                    &module,
+                    &BuiltinFunction::new_kind(K::ArraySliceMethod),
+                    RegRange { start: 0, count: 2 },
+                    Some(Value::Object(slice_src)),
+                    None,
+                )
+                .unwrap()
+            else {
+                panic!("slice returns array");
+            };
+            assert_eq!(core.own_property_label(sliced, "0"), Label::Secret);
+            assert_eq!(
+                core.take_pending_hostcall_result_label(),
+                Some(Label::Secret)
+            );
+
+            core.replace_pending_hostcall_result_label(None).unwrap();
+            core.write_reg_with_label(0, Value::Int(2), Label::Secret)
+                .unwrap();
+            core.write_reg_with_label(1, Value::Int(2), Label::Secret)
+                .unwrap();
+            core.dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::new_kind(K::ArraySliceMethod),
+                RegRange { start: 0, count: 2 },
+                Some(Value::Object(slice_src)),
+                None,
+            )
+            .unwrap();
+            assert_eq!(
+                core.take_pending_hostcall_result_label()
+                    .unwrap_or(Label::Public),
+                Label::Public
+            );
+
+            core.replace_pending_hostcall_result_label(None).unwrap();
+            core.write_reg_with_label(0, Value::Int(-1), Label::Secret)
+                .unwrap();
+            let at_val = core
+                .dispatch_builtin_function(
+                    &module,
+                    &BuiltinFunction::new_kind(K::ArrayAt),
+                    RegRange { start: 0, count: 1 },
+                    Some(Value::Object(slice_src)),
+                    None,
+                )
+                .unwrap();
+            assert_eq!(at_val, Value::Int(30));
+            assert_eq!(
+                core.take_pending_hostcall_result_label(),
+                Some(Label::Secret)
+            );
+
+            core.replace_pending_hostcall_result_label(None).unwrap();
+            core.write_reg_with_label(0, Value::Int(-2), Label::Secret)
+                .unwrap();
+            core.write_reg_with_label(1, Value::Int(99), Label::Public)
+                .unwrap();
+            let Value::Object(with_arr) = core
+                .dispatch_builtin_function(
+                    &module,
+                    &BuiltinFunction::new_kind(K::ArrayWith),
+                    RegRange { start: 0, count: 2 },
+                    Some(Value::Object(slice_src)),
+                    None,
+                )
+                .unwrap()
+            else {
+                panic!("with returns array");
+            };
+            for key in ["0", "1", "2"] {
+                assert_eq!(core.own_property_label(with_arr, key), Label::Secret);
+            }
+            assert_eq!(
+                core.take_pending_hostcall_result_label(),
+                Some(Label::Secret)
+            );
+
+            core.replace_pending_hostcall_result_label(None).unwrap();
+            core.write_reg_with_label(0, Value::Int(1), Label::Secret)
+                .unwrap();
+            core.write_reg_with_label(1, Value::Int(0), Label::Secret)
+                .unwrap();
+            let Value::Object(noop_to_spliced) = core
+                .dispatch_builtin_function(
+                    &module,
+                    &BuiltinFunction::new_kind(K::ArrayToSpliced),
+                    RegRange { start: 0, count: 2 },
+                    Some(Value::Object(slice_src)),
+                    None,
+                )
+                .unwrap()
+            else {
+                panic!("toSpliced returns array");
+            };
+            for key in ["0", "1", "2"] {
+                assert_eq!(core.own_property_label(noop_to_spliced, key), Label::Public);
+            }
+            assert_eq!(
+                core.take_pending_hostcall_result_label()
+                    .unwrap_or(Label::Public),
+                Label::Public
+            );
+            assert_eq!(core.json_parse_temporary_bytes, 0);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn generic_mutators_preflight_custom_labels_before_side_effects_bd_ojvo1() {
+        use BuiltinFunctionKind as K;
+
+        let custom = Label::Custom {
+            name: "mutator-preflight".repeat(512),
+            level: 6,
+        };
+        for kind in [
+            K::ArrayUnshift,
+            K::ArrayFill,
+            K::ArrayCopyWithin,
+            K::ArraySplice,
+        ] {
+            let (module, mut core) = bd_ojvo1_test_core();
+            let object = core.alloc_object_with_prototype(None).unwrap();
+            core.set_object_property(object, "length".into(), Value::Int(2))
+                .unwrap();
+            core.set_object_property(object, "0".into(), Value::Int(10))
+                .unwrap();
+            core.set_object_property(object, "1".into(), Value::Int(20))
+                .unwrap();
+            let args = match kind {
+                K::ArrayUnshift | K::ArrayFill => {
+                    core.write_reg_with_label(0, Value::Int(7), custom.clone())
+                        .unwrap();
+                    RegRange { start: 0, count: 1 }
+                }
+                K::ArrayCopyWithin => {
+                    core.write_reg_with_label(0, Value::Int(1), custom.clone())
+                        .unwrap();
+                    core.write_reg_with_label(1, Value::Int(0), Label::Public)
+                        .unwrap();
+                    core.write_reg_with_label(2, Value::Int(1), Label::Public)
+                        .unwrap();
+                    RegRange { start: 0, count: 3 }
+                }
+                K::ArraySplice => {
+                    core.write_reg_with_label(0, Value::Int(0), Label::Public)
+                        .unwrap();
+                    core.write_reg_with_label(1, Value::Int(1), Label::Public)
+                        .unwrap();
+                    core.write_reg_with_label(2, Value::Int(7), custom.clone())
+                        .unwrap();
+                    RegRange { start: 0, count: 3 }
+                }
+                _ => unreachable!(),
+            };
+            let before = core.estimated_memory_bytes();
+            core.config.max_total_memory_bytes =
+                before + InterpreterCore::estimate_label_bytes(&custom) - 1;
+            let result = core.dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::new_kind(kind),
+                args,
+                Some(Value::Object(object)),
+                None,
+            );
+            assert!(
+                matches!(result, Err(InterpreterError::MemoryBudgetExceeded { .. })),
+                "{kind:?} must fail temporary-budget preflight before mutating"
+            );
+            assert_eq!(
+                core.heap[object.0 as usize].properties.get("length"),
+                Some(&Value::Int(2)),
+                "{kind:?} must not mutate length before preflight"
+            );
+            assert_eq!(
+                core.heap[object.0 as usize].properties.get_index(0),
+                Some(&Value::Int(10)),
+                "{kind:?} must not mutate index 0 before preflight"
+            );
+            assert_eq!(
+                core.heap[object.0 as usize].properties.get_index(1),
+                Some(&Value::Int(20)),
+                "{kind:?} must not mutate index 1 before preflight"
+            );
+            assert_eq!(core.own_property_label(object, "0"), Label::Public);
+            assert_eq!(core.own_property_label(object, "1"), Label::Public);
+            assert_eq!(core.json_parse_temporary_bytes, 0);
+            assert_eq!(core.estimated_memory_bytes(), before);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_array_methods_preserve_stored_and_argument_labels_bd_ojvo1() {
+        use BuiltinFunctionKind as K;
+
+        let (module, mut core) = bd_ojvo1_test_core();
+
+        // push(Secret) -> pop() preserves Secret result label on ordinary Array.
+        let arr = core.alloc_array_from_values(&[]).unwrap();
+        core.write_reg_with_label(0, Value::Int(7), Label::Secret)
+            .unwrap();
+        core.dispatch_builtin_function(
+            &module,
+            &BuiltinFunction::new_kind(K::ArrayPush),
+            RegRange { start: 0, count: 1 },
+            Some(Value::Object(arr)),
+            None,
+        )
+        .unwrap();
+        assert_eq!(core.own_property_label(arr, "0"), Label::Secret);
+        core.replace_pending_hostcall_result_label(None).unwrap();
+        let popped = core
+            .dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::new_kind(K::ArrayPop),
+                RegRange { start: 0, count: 0 },
+                Some(Value::Object(arr)),
+                None,
+            )
+            .unwrap();
+        assert_eq!(popped, Value::Int(7));
+        assert_eq!(
+            core.take_pending_hostcall_result_label(),
+            Some(Label::Secret)
+        );
+
+        // at(-1) and at(0) on [Public(1), Secret(7)] preserve element-specific labels.
+        let at_arr = core
+            .alloc_array_from_values(&[Value::Int(1), Value::Int(7)])
+            .unwrap();
+        core.set_own_property_label(at_arr, "1", &Label::Secret)
+            .unwrap();
+        core.replace_pending_hostcall_result_label(None).unwrap();
+        core.write_reg_with_label(0, Value::Int(0), Label::Public)
+            .unwrap();
+        assert_eq!(
+            core.dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::new_kind(K::ArrayAt),
+                RegRange { start: 0, count: 1 },
+                Some(Value::Object(at_arr)),
+                None,
+            )
+            .unwrap(),
+            Value::Int(1)
+        );
+        assert_eq!(
+            core.take_pending_hostcall_result_label()
+                .unwrap_or(Label::Public),
+            Label::Public
+        );
+        core.write_reg_with_label(0, Value::Int(-1), Label::Public)
+            .unwrap();
+        assert_eq!(
+            core.dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::new_kind(K::ArrayAt),
+                RegRange { start: 0, count: 1 },
+                Some(Value::Object(at_arr)),
+                None,
+            )
+            .unwrap(),
+            Value::Int(7)
+        );
+        assert_eq!(
+            core.take_pending_hostcall_result_label(),
+            Some(Label::Secret)
+        );
+
+        // unshift(Public(6)) + unshift(Secret(5), Public(6)) + shift() + fill() on ordinary Array.
+        core.replace_pending_hostcall_result_label(None).unwrap();
+        let unshift_pub = core.alloc_array_from_values(&[Value::Int(9)]).unwrap();
+        core.write_reg_with_label(0, Value::Int(6), Label::Public)
+            .unwrap();
+        core.dispatch_builtin_function(
+            &module,
+            &BuiltinFunction::new_kind(K::ArrayUnshift),
+            RegRange { start: 0, count: 1 },
+            Some(Value::Object(unshift_pub)),
+            None,
+        )
+        .unwrap();
+        assert_eq!(core.own_property_label(unshift_pub, "0"), Label::Public);
+        assert_eq!(core.own_property_label(unshift_pub, "1"), Label::Public);
+
+        core.replace_pending_hostcall_result_label(None).unwrap();
+        let unshift_arr = core.alloc_array_from_values(&[Value::Int(9)]).unwrap();
+        core.write_reg_with_label(0, Value::Int(5), Label::Secret)
+            .unwrap();
+        core.write_reg_with_label(1, Value::Int(6), Label::Public)
+            .unwrap();
+        core.dispatch_builtin_function(
+            &module,
+            &BuiltinFunction::new_kind(K::ArrayUnshift),
+            RegRange { start: 0, count: 2 },
+            Some(Value::Object(unshift_arr)),
+            None,
+        )
+        .unwrap();
+        // Existing Public element at "0" moves to "2" before argument writes;
+        // writing Secret(5) at "0" establishes the monotone species-scope floor
+        // for subsequent writes in the same unshift call ("1").
+        assert_eq!(core.own_property_label(unshift_arr, "0"), Label::Secret);
+        assert_eq!(core.own_property_label(unshift_arr, "1"), Label::Secret);
+        assert_eq!(core.own_property_label(unshift_arr, "2"), Label::Public);
+
+        core.replace_pending_hostcall_result_label(None).unwrap();
+        let shift_arr = core
+            .alloc_array_from_values(&[Value::Int(1), Value::Int(7)])
+            .unwrap();
+        core.set_own_property_label(shift_arr, "1", &Label::Secret)
+            .unwrap();
+        core.dispatch_builtin_function(
+            &module,
+            &BuiltinFunction::new_kind(K::ArrayShift),
+            RegRange { start: 0, count: 0 },
+            Some(Value::Object(shift_arr)),
+            None,
+        )
+        .unwrap();
+        assert_eq!(core.own_property_label(shift_arr, "0"), Label::Secret);
+
+        core.replace_pending_hostcall_result_label(None).unwrap();
+        let fill_arr = core
+            .alloc_array_from_values(&[Value::Int(1), Value::Int(2), Value::Int(3)])
+            .unwrap();
+        core.write_reg_with_label(0, Value::Int(8), Label::Secret)
+            .unwrap();
+        core.write_reg_with_label(1, Value::Int(1), Label::Public)
+            .unwrap();
+        core.write_reg_with_label(2, Value::Int(2), Label::Public)
+            .unwrap();
+        core.dispatch_builtin_function(
+            &module,
+            &BuiltinFunction::new_kind(K::ArrayFill),
+            RegRange { start: 0, count: 3 },
+            Some(Value::Object(fill_arr)),
+            None,
+        )
+        .unwrap();
+        assert_eq!(core.own_property_label(fill_arr, "0"), Label::Public);
+        assert_eq!(core.own_property_label(fill_arr, "1"), Label::Secret);
+        assert_eq!(core.own_property_label(fill_arr, "2"), Label::Public);
+
+        // slice, concat (both spreadable array with Secret element and Confidential primitive arg),
+        // toReversed, with, and toSpliced on ordinary Array [Public(2), Secret(7)].
+        let src = core
+            .alloc_array_from_values(&[Value::Int(2), Value::Int(7)])
+            .unwrap();
+        core.set_own_property_label(src, "1", &Label::Secret)
+            .unwrap();
+
+        core.replace_pending_hostcall_result_label(None).unwrap();
+        let Value::Object(sliced) = core
+            .dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::new_kind(K::ArraySliceMethod),
+                RegRange { start: 0, count: 0 },
+                Some(Value::Object(src)),
+                None,
+            )
+            .unwrap()
+        else {
+            panic!("slice returns array");
+        };
+        assert_eq!(core.own_property_label(sliced, "0"), Label::Public);
+        assert_eq!(core.own_property_label(sliced, "1"), Label::Secret);
+        assert_eq!(
+            core.take_pending_hostcall_result_label(),
+            Some(Label::Secret)
+        );
+
+        let public_head = core.alloc_array_from_values(&[Value::Int(1)]).unwrap();
+        core.replace_pending_hostcall_result_label(None).unwrap();
+        core.write_reg_with_label(0, Value::Int(9), Label::Confidential)
+            .unwrap();
+        core.write_reg_with_label(1, Value::Object(src), Label::Public)
+            .unwrap();
+        let Value::Object(concat_out) = core
+            .dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::new_kind(K::ArrayConcat),
+                RegRange { start: 0, count: 2 },
+                Some(Value::Object(public_head)),
+                None,
+            )
+            .unwrap()
+        else {
+            panic!("concat returns array");
+        };
+        assert_eq!(core.own_property_label(concat_out, "0"), Label::Public);
+        assert_eq!(
+            core.own_property_label(concat_out, "1"),
+            Label::Confidential
+        );
+        assert_eq!(
+            core.own_property_label(concat_out, "2"),
+            Label::Confidential
+        );
+        assert_eq!(core.own_property_label(concat_out, "3"), Label::Secret);
+        assert_eq!(
+            core.take_pending_hostcall_result_label(),
+            Some(Label::Secret)
+        );
+
+        let rev_src = core
+            .alloc_array_from_values(&[Value::Int(7), Value::Int(2)])
+            .unwrap();
+        core.set_own_property_label(rev_src, "0", &Label::Secret)
+            .unwrap();
+        core.replace_pending_hostcall_result_label(None).unwrap();
+        let Value::Object(rev) = core
+            .dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::new_kind(K::ArrayToReversed),
+                RegRange { start: 0, count: 0 },
+                Some(Value::Object(rev_src)),
+                None,
+            )
+            .unwrap()
+        else {
+            panic!("toReversed returns array");
+        };
+        assert_eq!(core.own_property_label(rev, "0"), Label::Public);
+        assert_eq!(core.own_property_label(rev, "1"), Label::Secret);
+        assert_eq!(
+            core.take_pending_hostcall_result_label(),
+            Some(Label::Secret)
+        );
+
+        core.replace_pending_hostcall_result_label(None).unwrap();
+        core.write_reg_with_label(0, Value::Int(1), Label::Public)
+            .unwrap();
+        core.write_reg_with_label(1, Value::Int(42), Label::Public)
+            .unwrap();
+        let Value::Object(replaced) = core
+            .dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::new_kind(K::ArrayWith),
+                RegRange { start: 0, count: 2 },
+                Some(Value::Object(src)),
+                None,
+            )
+            .unwrap()
+        else {
+            panic!("with returns array");
+        };
+        assert_eq!(core.own_property_label(replaced, "0"), Label::Public);
+        assert_eq!(core.own_property_label(replaced, "1"), Label::Public);
+
+        core.replace_pending_hostcall_result_label(None).unwrap();
+        core.write_reg_with_label(0, Value::Int(1), Label::Public)
+            .unwrap();
+        core.write_reg_with_label(1, Value::Int(0), Label::Public)
+            .unwrap();
+        core.write_reg_with_label(2, Value::Int(99), Label::Confidential)
+            .unwrap();
+        let Value::Object(spliced_copy) = core
+            .dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::new_kind(K::ArrayToSpliced),
+                RegRange { start: 0, count: 3 },
+                Some(Value::Object(src)),
+                None,
+            )
+            .unwrap()
+        else {
+            panic!("toSpliced returns array");
+        };
+        assert_eq!(core.own_property_label(spliced_copy, "0"), Label::Public);
+        assert_eq!(
+            core.own_property_label(spliced_copy, "1"),
+            Label::Confidential
+        );
+        assert_eq!(core.own_property_label(spliced_copy, "2"), Label::Secret);
+        assert_eq!(
+            core.take_pending_hostcall_result_label(),
+            Some(Label::Secret)
+        );
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
     #[test]
     fn tail_checks_do_not_require_dense_or_writable_preceding_elements() {
         let mut object = array(80_000);

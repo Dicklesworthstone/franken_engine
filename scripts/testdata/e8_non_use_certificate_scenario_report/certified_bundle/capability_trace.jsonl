@@ -1,0 +1,11 @@
+{"kind":"grant","capability":"VmDispatch","source":"data_contract.allowed_capabilities"}
+{"kind":"grant","capability":"HeapAllocate","source":"data_contract.allowed_capabilities"}
+{"kind":"grant","capability":"Console","source":"data_contract.allowed_capabilities"}
+{"kind":"grant","capability":"Builtin","source":"data_contract.allowed_capabilities"}
+{"kind":"grant","capability":"VmDispatch","source":"runtime_profile"}
+{"kind":"grant","capability":"GcInvoke","source":"runtime_profile"}
+{"kind":"grant","capability":"IrLowering","source":"runtime_profile"}
+{"kind":"grant","capability":"HeapAllocate","source":"runtime_profile"}
+{"kind":"grant","capability":"Console","source":"runtime_profile"}
+{"kind":"grant","capability":"Timer","source":"runtime_profile"}
+{"kind":"grant","capability":"Builtin","source":"runtime_profile"}

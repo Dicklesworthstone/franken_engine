@@ -120,6 +120,47 @@ assessment interface. Its previous false permission result remains false;
 three existing tests retain the denial assertion and now require the exact
 blocking advisory instead of claiming no declassification is pending.
 
+## Cryptographic Authenticator (`HMAC`) IFC Ingress-Denial Contract (`bd-vw7s1`)
+
+Cryptographic one-wayness is not information-flow declassification: for a known
+message and a low-entropy secret key (such as Node compatibility fixture
+`crypto/0015` using `'secret'`), an emitted HMAC tag acts as an offline key
+verifier. Furthermore, generic `DeclassificationReceipt` records authorize a
+`(source_label, sink_clearance)` obligation pre-execution and do not bind the
+computed authenticator bytes at the sink.
+
+Accordingly, `franken_engine` enforces a strict **authenticated-ingress denial
+contract** across both static IR2 flow inference (`lowering_pipeline`) and
+baseline-interpreter runtime execution (`core_objects_and_descriptors.rs`):
+
+- **Finite ingress clearance (`Internal`):** Both `crypto.createHmac(alg, key)`
+  (`builtin:CryptoCreateHmac`) and `hmac.update(data, encoding)`
+  (`builtin:CryptoObjectUpdate` when the receiver is an HMAC handle) carry
+  effective sink clearance `Label::Internal`. Any input with sensitivity above
+  `Internal` (including `Confidential`, `Secret`, `TopSecret`, or same/higher
+  numeric custom labels, whether direct, backing-storage-mutated on a `Buffer` /
+  `TypedArray` / `DataView`, or tainted via active execution-context / PC flow)
+  is denied before an `HmacActive` lifecycle can be created or advanced.
+- **No generic receipt bypass:** Runtime HMAC ingress enforcement checks
+  `label.can_flow_to(&Label::Internal)` directly and records the audit verdict
+  without consulting generic `declassification_receipts`, because extant
+  receipts do not bind authenticator output commitments.
+- **Defense-in-depth `Secret` preservation:** `Hmac` state and `hmac.digest()`
+  continue to join and preserve input/handle/backing-storage labels rather than
+  downgrading sensitivity by literal position or digest encoding.
+- **Documented compatibility divergence (`crypto/0015`):** Node compatibility
+  vector `crypto/0015` (`createHmac('sha256', 'secret').update('msg').digest('hex')`
+  flowing to `console.log`) is pinned as an intentional fail-closed product-policy
+  divergence rather than weakened via literal demotion or console-clearance
+  inflation.
+- **Future explicit authenticator-release requirements:** Any future route that
+  permits releasing an authenticator derived from `Secret` material must bind
+  all six properties at verification time: (1) an explicit authenticator-release
+  policy route, (2) cryptographic key-purpose and key-strength/entropy evidence,
+  (3) a domain-separated commitment to the exact emitted tag bytes, (4) the
+  exact output encoding, (5) the exact trace, call-site, and destination sink
+  identities, and (6) sink-time verification with replay-status enforcement.
+
 ## Capability Authority Algebra
 
 Let `C` be the finite set of `RuntimeCapability` variants. A

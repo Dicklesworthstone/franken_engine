@@ -1,0 +1,228 @@
+{
+  "schema_version": "franken-engine.non-use-certificate.v2",
+  "certificate_id": "e8-nuc-34c362de3780422408a5d6544e15883cd7296675429426e5f896fed6f01b7a2c",
+  "producer_id": "franken-engine.e8-certifier:frankenctl-run:0:bf6a05ace937fe393f99df01f51d65e70e4d2abe21774782e751e771f064a041",
+  "scope": {
+    "engine_version": "0.3.0",
+    "policy_id": "default-policy",
+    "policy_epoch": 1,
+    "parse_goal": "script",
+    "contract_id": "contract-support-summary",
+    "contract_hash_hex": "3ad5a125e25886750a4133e0dcc76658d74a2f79b8cf526e221afd3fcad902d6",
+    "extension_id": "agent-support-summarizer",
+    "run_input_binding_id": "support-ticket-batch",
+    "run_input_object_ref": "object://support-ticket-batch",
+    "run_input_path": "/data/projects/franken_engine/examples/26_non_exfiltration_certificate/out/agent_honest.js",
+    "run_input_content_hash_hex": "d8ff2668924fab8bd0a71cbdd439088b4c652180403fcb9ca711cd17d3019e31",
+    "purpose": "runtime_execution",
+    "trace_id": "frankenctl-run:0",
+    "decision_id": "frankenctl-run:decision:0",
+    "containment_action": "allow",
+    "replay_trace_content_hash_hex": "eb01cd03aa0e5e00f34691bd4ee1b1f4087c598c7b641275b4dad0815525ceca",
+    "declared_sinks": [
+      {
+        "sink_id": "audited-summary-report",
+        "clearance": "AuditedSink",
+        "location": "report://weekly-summary",
+        "allowed_labels": [
+          "Public",
+          "Internal",
+          "Confidential"
+        ]
+      }
+    ],
+    "contract_capabilities": [
+      "VmDispatch",
+      "HeapAllocate",
+      "Console",
+      "Builtin"
+    ],
+    "runtime_granted_capabilities": [
+      "VmDispatch",
+      "GcInvoke",
+      "IrLowering",
+      "HeapAllocate",
+      "Console",
+      "Timer",
+      "Builtin"
+    ],
+    "declassification_route_ids": [],
+    "threat_model_scope": "explicit_flow_ifc_v1",
+    "analysis_posture": "conservative_ingress_over_approximation_v1"
+  },
+  "certificate_status": "certified_within_analyzed_scope",
+  "refusal_ledger_id": "e8-preflight-7be2431488de1d3ad7676a580f706b1d10c54148e4d7df2fc870523c40ae1449",
+  "refusal_ledger_result_class": "certifiable_subset",
+  "refusal_ledger_content_hash_hex": "a1fa53262c0c178f1372b04b3036fcdb3e50d0115fcb7f401831937a603aeeb1",
+  "claims": [
+    {
+      "claim_id": "no-secret-open-sink",
+      "claim": {
+        "claim_type": "no_flow",
+        "claim_id": "no-secret-open-sink",
+        "source_label": "Secret",
+        "sink_clearance": "OpenSink"
+      },
+      "evaluation": "holds_within_analyzed_scope",
+      "evidence_refs": [
+        "host_boundary:no_matching_sink"
+      ],
+      "detail": "no declared sink of clearance OpenSink exists in the host boundary; undeclared sinks are fail-closed by the membrane"
+    },
+    {
+      "claim_id": "no-process-spawn",
+      "claim": {
+        "claim_type": "capability_not_used",
+        "claim_id": "no-process-spawn",
+        "capability": "ProcessSpawn"
+      },
+      "evaluation": "holds_within_analyzed_scope",
+      "evidence_refs": [
+        "enforcement:ungranted:ProcessSpawn"
+      ],
+      "detail": "capability ProcessSpawn was granted by neither the contract envelope nor the runtime profile; the hostcall membrane denies ungranted capabilities fail-closed"
+    },
+    {
+      "claim_id": "no-network-egress",
+      "claim": {
+        "claim_type": "capability_not_used",
+        "claim_id": "no-network-egress",
+        "capability": "NetworkEgress"
+      },
+      "evaluation": "holds_within_analyzed_scope",
+      "evidence_refs": [
+        "enforcement:ungranted:NetworkEgress"
+      ],
+      "detail": "capability NetworkEgress was granted by neither the contract envelope nor the runtime profile; the hostcall membrane denies ungranted capabilities fail-closed"
+    }
+  ],
+  "flow_events": [
+    {
+      "event_id": "dc-ingress-contract-support-summary-support-ticket-batch-audited-summary-report",
+      "extension_id": "agent-support-summarizer",
+      "source_label": "Confidential",
+      "sink_clearance": "Confidential",
+      "flow_location": "data_contract:contract-support-summary:sink:audited-summary-report:purpose:runtime_execution",
+      "decision": "Allowed",
+      "receipt_ref": null,
+      "timestamp_ms": 1
+    }
+  ],
+  "declassification_receipt_count": 0,
+  "signature_envelope": {
+    "producer_id": "franken-engine.e8-certifier:frankenctl-run:0:bf6a05ace937fe393f99df01f51d65e70e4d2abe21774782e751e771f064a041",
+    "key_provenance": {
+      "authority_class": "runtime",
+      "key_id": "ed25519:b3c65dbcb6c95661102a866e72f7200e7d3c6a25b6cab2fbe0aab2608a3edfd7",
+      "activation_epoch": 1,
+      "rotation_sequence": 1
+    },
+    "signed_epoch": 1,
+    "verification_key": {
+      "inner": [
+        119,
+        127,
+        165,
+        63,
+        41,
+        98,
+        4,
+        85,
+        36,
+        231,
+        115,
+        221,
+        152,
+        195,
+        153,
+        79,
+        140,
+        179,
+        175,
+        82,
+        210,
+        229,
+        0,
+        58,
+        150,
+        208,
+        64,
+        127,
+        70,
+        42,
+        108,
+        200
+      ]
+    },
+    "signature": {
+      "lower": [
+        187,
+        217,
+        195,
+        23,
+        240,
+        162,
+        215,
+        70,
+        3,
+        17,
+        65,
+        159,
+        27,
+        242,
+        214,
+        17,
+        205,
+        249,
+        162,
+        147,
+        55,
+        205,
+        151,
+        44,
+        229,
+        135,
+        3,
+        61,
+        7,
+        50,
+        9,
+        240
+      ],
+      "upper": [
+        254,
+        41,
+        228,
+        78,
+        4,
+        35,
+        235,
+        190,
+        39,
+        61,
+        152,
+        116,
+        165,
+        71,
+        189,
+        178,
+        139,
+        103,
+        217,
+        83,
+        137,
+        119,
+        111,
+        234,
+        42,
+        129,
+        238,
+        15,
+        206,
+        155,
+        116,
+        9
+      ]
+    }
+  }
+}

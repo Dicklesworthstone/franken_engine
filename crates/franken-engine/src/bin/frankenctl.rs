@@ -163,6 +163,8 @@ const RUN_REPLAY_INPUT_SIGNATURE_DOMAIN: &str = "franken-engine.frankenctl.run-r
 const AGENT_SANDBOX_COMMAND_SCHEMA_VERSION: &str = "franken-engine.frankenctl.agent-sandbox.v2";
 const ORCHESTRATION_FAILURE_SCHEMA_VERSION: &str =
     "franken-engine.frankenctl.orchestration-failure.v1";
+const FAILED_RUN_REPLAY_INPUT_SIGNATURE_DOMAIN: &str =
+    "franken-engine.frankenctl.failed-run-replay-input.v1";
 const LOWERING_REJECTION_SCHEMA_VERSION: &str = "franken-engine.frankenctl.lowering-rejection.v1";
 const COMPILE_ARTIFACT_SCHEMA_VERSION: &str = "franken-engine.frankenctl.compile-artifact.v1";
 const RUN_REPORT_SCHEMA_VERSION: &str = RUN_COMMAND_SCHEMA_VERSION;
@@ -1177,6 +1179,49 @@ struct ReplayableRunReport {
     evidence_chain_artifact: EvidenceChainArtifact,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct FailedRunReplayInput {
+    source: String,
+    source_label: String,
+    extension_id: String,
+    parse_goal: String,
+    policy_id: String,
+    policy_epoch: u64,
+    cell_close_budget_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    instruction_budget: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    parser_max_token_count: Option<u64>,
+    #[serde(flatten)]
+    limits: ExecutionLimitOverrides,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    commonjs_entry: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    module_root: Option<String>,
+    denied_capability: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReplayableFailedRunReport {
+    schema_version: String,
+    command: String,
+    trace_id: String,
+    #[serde(default)]
+    outcome: Option<String>,
+    #[serde(default)]
+    classification: Option<String>,
+    evidence_chain_instance_id: String,
+    evidence_ledger_id: String,
+    #[serde(default)]
+    evidence_chain_head: Option<String>,
+    #[serde(default)]
+    committed_evidence_chain: Option<EvidenceChainArtifact>,
+    #[serde(default)]
+    replay_input: Option<FailedRunReplayInput>,
+    #[serde(default)]
+    replay_input_signature: Option<EvidenceSignatureEnvelope>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct OrchestrationFailureOutput {
     schema_version: String,
@@ -1185,6 +1230,8 @@ struct OrchestrationFailureOutput {
     trace_id: String,
     exit_code: i32,
     error: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    outcome: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     classification: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1196,24 +1243,41 @@ struct OrchestrationFailureOutput {
     evidence_chain_next_sequence: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     evidence_chain_head: Option<String>,
-    uncommitted_evidence_chain: UncommittedEvidenceChainEvidence,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    evidence_trust_snapshot_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    committed_evidence_chain: Option<EvidenceChainArtifact>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    uncommitted_evidence_chain: Option<UncommittedEvidenceChainEvidence>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    replay_input: Option<FailedRunReplayInput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    replay_input_signature: Option<EvidenceSignatureEnvelope>,
     observability_mode: ObservabilityModeOutput,
 }
 
 /// bd-9vouw.61: `frankenctl run` refused the program while lowering it (an
 /// ambient-authority access or an unauthorized information flow), before any
-/// execution cell existed. There is no execution evidence to chain; the
-/// report records what was refused and where, so the refusal is no longer a
-/// bare stderr line.
+/// execution cell existed. The report records `outcome: rejected_at_lowering`,
+/// the violated effect and span, and a signed, hash-chained `SecurityAction`
+/// decision artifact anchored in the run's runtime authority.
 #[derive(Debug, Clone, Serialize)]
 struct LoweringRejectionOutput {
     schema_version: String,
     command: String,
     input_path: String,
+    trace_id: String,
     exit_code: i32,
     error: String,
+    outcome: String,
     classification: String,
     rejection: LoweringRejection,
+    evidence_chain_instance_id: String,
+    evidence_ledger_id: String,
+    evidence_chain_head: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    evidence_trust_snapshot_digest: Option<String>,
+    evidence_chain_artifact: EvidenceChainArtifact,
     #[serde(skip_serializing_if = "Option::is_none")]
     report_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -5505,6 +5569,7 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         orchestrator_config.epoch = configured.snapshot.current_epoch;
     }
     let replay_cell_close_budget_ms = orchestrator_config.cell_close_budget_ms;
+    let run_epoch = orchestrator_config.epoch;
     let evidence_authority = if let Some(configured) = configured_evidence.as_ref() {
         configured.authority.clone()
     } else {
@@ -5516,13 +5581,17 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         )
         .map_err(|error| format!("failed to initialize runtime evidence authority: {error}"))?
     };
-    let mut orchestrator = ExecutionOrchestrator::try_new_with_runtime_config_and_authority(
-        orchestrator_config,
-        run_runtime_config(args.instruction_budget, &args.limits),
-        AmbientAuthorityGrant::DenyAll,
-        evidence_authority.clone(),
-    )
-    .map_err(|error| format!("failed to initialize execution orchestrator: {error}"))?;
+    let mut orchestrator =
+        ExecutionOrchestrator::try_new_with_runtime_config_authority_and_identities(
+            orchestrator_config,
+            run_runtime_config(args.instruction_budget, &args.limits),
+            AmbientAuthorityGrant::DenyAll,
+            evidence_authority.clone(),
+            configured_evidence
+                .as_ref()
+                .map_or(&[], |configured| configured.snapshot.identities.as_slice()),
+        )
+        .map_err(|error| format!("failed to initialize execution orchestrator: {error}"))?;
     if let Some(state_db) = args.state_db.as_ref() {
         orchestrator.open_state_db(state_db).map_err(|error| {
             format!(
@@ -5550,16 +5619,32 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
                     "run",
                     &args.input,
                     args.out.as_deref(),
+                    args.emit_evidence_trust.as_deref(),
+                    configured_evidence.as_ref(),
+                    run_epoch,
+                    &mut orchestrator,
+                    &package.extension_id,
                     &error,
                     rejection,
                 );
             }
+            let failed_ctx = FailedRunEmitContext {
+                args: &args,
+                package: &package,
+                source_label: &source_label,
+                policy_id: &policy_id,
+                epoch: run_epoch,
+                replay_cell_close_budget_ms,
+                evidence_authority: &evidence_authority,
+                configured_evidence: configured_evidence.as_ref(),
+            };
             return emit_orchestration_failure(
                 "run",
                 &args.input,
                 args.out.as_deref(),
                 &orchestrator,
                 &error,
+                Some(&failed_ctx),
             );
         }
     };
@@ -5979,6 +6064,7 @@ fn execute_agent_sandbox(args: AgentSandboxArgs) -> Result<i32, String> {
                 args.out.as_deref(),
                 &orchestrator,
                 &error,
+                None,
             );
         }
     };
@@ -7846,18 +7932,69 @@ fn derive_claim_explanation_receipt_id(output: &ClaimExplanationOutput) -> Strin
     format!("claim-explain-{}", ContentHash::compute(&encoded).to_hex())
 }
 
+struct FailedRunEmitContext<'a> {
+    args: &'a RunArgs,
+    package: &'a ExtensionPackage,
+    source_label: &'a str,
+    policy_id: &'a str,
+    epoch: SecurityEpoch,
+    replay_cell_close_budget_ms: u64,
+    evidence_authority: &'a RuntimeEvidenceAuthority,
+    configured_evidence: Option<&'a LoadedRunEvidenceAuthority>,
+}
+
+fn export_run_evidence_trust_snapshot(
+    emit_evidence_trust: Option<&Path>,
+    configured_evidence: Option<&LoadedRunEvidenceAuthority>,
+    epoch: SecurityEpoch,
+    trusted_identity: EvidenceVerificationIdentity,
+) -> Result<Option<String>, String> {
+    if let Some(configured) = configured_evidence {
+        if let Some(path) = emit_evidence_trust {
+            write_json_file(path, &configured.snapshot)?;
+        }
+        Ok(Some(configured.digest.clone()))
+    } else if let Some(path) = emit_evidence_trust {
+        let snapshot = EvidenceTrustSnapshot::from_runtime_identities(epoch, [trusted_identity])
+            .map_err(|error| format!("failed to export runtime evidence trust: {error}"))?;
+        let digest = snapshot
+            .canonical_digest()
+            .map_err(|error| format!("failed to hash runtime evidence trust: {error}"))?
+            .to_hex();
+        write_json_file(path, &snapshot)?;
+        Ok(Some(digest))
+    } else {
+        Ok(None)
+    }
+}
+
+fn failed_run_replay_input_preimage(
+    trace_id: &str,
+    ledger_id: &str,
+    chain_head: &str,
+    input: &FailedRunReplayInput,
+) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(&(
+        FAILED_RUN_REPLAY_INPUT_SIGNATURE_DOMAIN,
+        ORCHESTRATION_FAILURE_SCHEMA_VERSION,
+        trace_id,
+        ledger_id,
+        chain_head,
+        input,
+    ))
+    .map_err(|error| format!("failed to encode signed failed-run replay input: {error}"))
+}
+
 fn emit_orchestration_failure(
     command: &str,
     input: &Path,
     out: Option<&Path>,
     orchestrator: &ExecutionOrchestrator,
     error: &OrchestratorError,
+    run_ctx: Option<&FailedRunEmitContext<'_>>,
 ) -> Result<i32, String> {
     let lifecycle = error
         .post_cell_failure()
-        .ok_or_else(|| format_orchestration_error(command, input, error))?;
-    let uncommitted_evidence_chain = error
-        .uncommitted_evidence_chain()
         .ok_or_else(|| format_orchestration_error(command, input, error))?;
     let trusted_identity = orchestrator.evidence_verification_identity();
     let evidence_chain_instance_id = orchestrator.evidence_chain_instance_id().to_string();
@@ -7867,21 +8004,97 @@ fn emit_orchestration_failure(
         .ledger()
         .evidence_chain_head()
         .map(str::to_string);
-    uncommitted_evidence_chain
-        .verify_with_context(
-            &trusted_identity,
-            &evidence_chain_instance_id,
-            &evidence_ledger_id,
-            &lifecycle.cleanup.trace_id,
-            evidence_chain_next_sequence,
-            evidence_chain_head.as_deref(),
-        )
-        .map_err(|verification_error| {
-            format!(
-                "{}; refusing to emit unverified failure evidence: {verification_error}",
-                format_orchestration_error(command, input, error)
+
+    let (committed_evidence_chain, uncommitted_evidence_chain) = if let Some(committed) =
+        lifecycle.committed_evidence_chain.as_ref()
+    {
+        committed
+                .verify_genesis(
+                    &trusted_identity,
+                    &evidence_ledger_id,
+                    &lifecycle.cleanup.trace_id,
+                )
+                .map_err(|verification_error| {
+                    format!(
+                        "{}; refusing to emit unverified committed failure evidence: {verification_error}",
+                        format_orchestration_error(command, input, error)
+                    )
+                })?;
+        (Some(committed.clone()), None)
+    } else {
+        let uncommitted = error
+            .uncommitted_evidence_chain()
+            .ok_or_else(|| format_orchestration_error(command, input, error))?;
+        uncommitted
+            .verify_with_context(
+                &trusted_identity,
+                &evidence_chain_instance_id,
+                &evidence_ledger_id,
+                &lifecycle.cleanup.trace_id,
+                evidence_chain_next_sequence,
+                evidence_chain_head.as_deref(),
             )
-        })?;
+            .map_err(|verification_error| {
+                format!(
+                    "{}; refusing to emit unverified failure evidence: {verification_error}",
+                    format_orchestration_error(command, input, error)
+                )
+            })?;
+        (None, Some(uncommitted.clone()))
+    };
+
+    let classification = classify_run_error(error).map(str::to_string);
+    let outcome = classification.clone();
+    let (evidence_trust_snapshot_digest, replay_input, replay_input_signature) =
+        if let Some(ctx) = run_ctx {
+            let epoch = ctx.epoch;
+            let digest = export_run_evidence_trust_snapshot(
+                ctx.args.emit_evidence_trust.as_deref(),
+                ctx.configured_evidence,
+                epoch,
+                trusted_identity,
+            )?;
+            if let (
+                OrchestratorError::Interpreter(InterpreterError::CapabilityDenied { capability }),
+                Some(committed),
+            ) = (error.primary_error(), committed_evidence_chain.as_ref())
+            {
+                let input_payload = FailedRunReplayInput {
+                    source: ctx.package.source.clone(),
+                    source_label: ctx.source_label.to_string(),
+                    extension_id: ctx.package.extension_id.clone(),
+                    parse_goal: ctx.args.parse_goal.as_str().to_string(),
+                    policy_id: ctx.policy_id.to_string(),
+                    policy_epoch: epoch.as_u64(),
+                    cell_close_budget_ms: ctx.replay_cell_close_budget_ms,
+                    instruction_budget: ctx.args.instruction_budget,
+                    parser_max_token_count: ctx.args.parser_max_token_count,
+                    limits: ctx.args.limits,
+                    commonjs_entry: ctx.args.commonjs_entry,
+                    module_root: ctx.package.module_root.clone(),
+                    denied_capability: capability.clone(),
+                };
+                let sig = ctx
+                    .evidence_authority
+                    .sign_detached(
+                        &failed_run_replay_input_preimage(
+                            &lifecycle.cleanup.trace_id,
+                            &evidence_ledger_id,
+                            &committed.receipt.head_chain_hash,
+                            &input_payload,
+                        )?,
+                        epoch,
+                    )
+                    .map_err(|sign_err| {
+                        format!("failed to sign failed-run replay input: {sign_err}")
+                    })?;
+                (digest, Some(input_payload), Some(sig))
+            } else {
+                (digest, None, None)
+            }
+        } else {
+            (None, None, None)
+        };
 
     let error_message = format_orchestration_error(command, input, error);
     let mut output = OrchestrationFailureOutput {
@@ -7891,14 +8104,19 @@ fn emit_orchestration_failure(
         trace_id: lifecycle.cleanup.trace_id.clone(),
         exit_code: 2,
         error: error_message.clone(),
-        classification: classify_run_error(error).map(str::to_string),
+        outcome,
+        classification,
         report_path: out.map(|path| path.display().to_string()),
         report_write_error: None,
         evidence_chain_instance_id,
         evidence_ledger_id,
         evidence_chain_next_sequence,
         evidence_chain_head,
-        uncommitted_evidence_chain: uncommitted_evidence_chain.clone(),
+        evidence_trust_snapshot_digest,
+        committed_evidence_chain,
+        uncommitted_evidence_chain,
+        replay_input,
+        replay_input_signature,
         observability_mode: default_capture_observability_mode(),
     };
     if let Some(path) = out
@@ -7994,23 +8212,59 @@ fn lowering_rejection(error: &OrchestratorError) -> Option<LoweringRejection> {
 }
 
 /// bd-9vouw.61: write the refusal report (stdout and `--out`) for a program
-/// rejected while lowering, then the usual stderr line; exit 2 as before.
+/// rejected while lowering, including a signed, hash-chained `SecurityAction`
+/// decision record anchored in the run's runtime authority; exit 2 as before.
 fn emit_lowering_rejection(
     command: &str,
     input: &Path,
     out: Option<&Path>,
+    emit_evidence_trust: Option<&Path>,
+    configured_evidence: Option<&LoadedRunEvidenceAuthority>,
+    epoch: SecurityEpoch,
+    orchestrator: &mut ExecutionOrchestrator,
+    extension_id: &str,
     error: &OrchestratorError,
     rejection: LoweringRejection,
 ) -> Result<i32, String> {
     let error_message = format_orchestration_error(command, input, error);
+    let (trace_id, evidence_chain_artifact) = orchestrator
+        .record_lowering_rejection_evidence(extension_id, error)
+        .map_err(|evidence_err| {
+            format!("{error_message}; failed to record lowering rejection evidence: {evidence_err}")
+        })?
+        .ok_or_else(|| {
+            format!("{error_message}; lowering error did not produce a rejection decision")
+        })?;
+    let trusted_identity = orchestrator.evidence_verification_identity();
+    let evidence_chain_instance_id = orchestrator.evidence_chain_instance_id().to_string();
+    let evidence_ledger_id = orchestrator.evidence_ledger_id().to_string();
+    evidence_chain_artifact
+        .verify_genesis(&trusted_identity, &evidence_ledger_id, &trace_id)
+        .map_err(|verify_err| {
+            format!("{error_message}; refusing to emit unverified lowering rejection evidence: {verify_err}")
+        })?;
+    let evidence_trust_snapshot_digest = export_run_evidence_trust_snapshot(
+        emit_evidence_trust,
+        configured_evidence,
+        epoch,
+        trusted_identity,
+    )?;
+    let evidence_chain_head = evidence_chain_artifact.receipt.head_chain_hash.clone();
     let mut output = LoweringRejectionOutput {
         schema_version: LOWERING_REJECTION_SCHEMA_VERSION.to_string(),
         command: command.to_string(),
         input_path: input.display().to_string(),
+        trace_id,
         exit_code: 2,
         error: error_message.clone(),
+        outcome: "rejected_at_lowering".to_string(),
         classification: "rejected_at_lowering".to_string(),
         rejection,
+        evidence_chain_instance_id,
+        evidence_ledger_id,
+        evidence_chain_head,
+        evidence_trust_snapshot_digest,
+        evidence_chain_artifact,
         report_path: out.map(|path| path.display().to_string()),
         report_write_error: None,
     };
@@ -10346,7 +10600,23 @@ fn snapshot_module_root_hashes(root: &Path) -> Result<BTreeMap<String, String>, 
 }
 
 fn execute_run_report_replay(args: ReplayArgs) -> Result<i32, String> {
-    let report = load_json_file::<ReplayableRunReport>(&args.trace).map_err(|error| {
+    let raw_value = load_json_file::<serde_json::Value>(&args.trace).map_err(|error| {
+        format!(
+            "replay without --compare-trace requires a replayable frankenctl run report: {error}"
+        )
+    })?;
+    if raw_value
+        .get("schema_version")
+        .and_then(serde_json::Value::as_str)
+        == Some(ORCHESTRATION_FAILURE_SCHEMA_VERSION)
+    {
+        let failed_report: ReplayableFailedRunReport =
+            serde_json::from_value(raw_value).map_err(|error| {
+                format!("failed to parse replayable orchestration failure report: {error}")
+            })?;
+        return execute_failed_run_report_replay(args, failed_report);
+    }
+    let report: ReplayableRunReport = serde_json::from_value(raw_value).map_err(|error| {
         format!(
             "replay without --compare-trace requires a replayable frankenctl run report: {error}"
         )
@@ -10665,6 +10935,282 @@ fn authenticate_run_report_evidence(
             return Err(
                 "report IR4 witness differs from the authenticated execution commitment"
                     .to_string(),
+            );
+        }
+        Ok(digest)
+    };
+    verify()
+        .map_err(|error| format!("run evidence authentication failed before re-execution: {error}"))
+}
+
+fn execute_failed_run_report_replay(
+    args: ReplayArgs,
+    report: ReplayableFailedRunReport,
+) -> Result<i32, String> {
+    if report.command != "run" {
+        return Err(format!(
+            "replayable orchestration failure report must originate from `run`, got `{}`",
+            report.command
+        ));
+    }
+    if report.outcome.as_deref() != Some("capability_denied")
+        && report.classification.as_deref() != Some("capability_denied")
+    {
+        return Err(format!(
+            "orchestration failure report outcome `{:?}` is not replayable (expected `capability_denied`)",
+            report.outcome.or(report.classification)
+        ));
+    }
+    let artifact = report.committed_evidence_chain.as_ref().ok_or_else(|| {
+        "replayable capability-denied report requires a committed_evidence_chain artifact"
+            .to_string()
+    })?;
+    let input = report.replay_input.as_ref().ok_or_else(|| {
+        "replayable capability-denied report requires a replay_input payload".to_string()
+    })?;
+    if report.evidence_chain_head.as_deref() != Some(artifact.receipt.head_chain_hash.as_str()) {
+        return Err(
+            "reported evidence_chain_head differs from committed_evidence_chain receipt head"
+                .to_string(),
+        );
+    }
+
+    let evidence_trust_snapshot_digest = args
+        .evidence_trust
+        .as_ref()
+        .map(|trust| authenticate_failed_run_report_evidence(&report, artifact, input, trust))
+        .transpose()?;
+
+    let mut divergences = Vec::new();
+    let denial_entry = artifact.entries.iter().find(|entry| {
+        entry.metadata.get("outcome").map(String::as_str) == Some("capability_denied")
+    });
+    match denial_entry {
+        Some(entry) => {
+            if entry.metadata.get("denied_capability") != Some(&input.denied_capability) {
+                divergences.push(
+                    "denied_capability differs between evidence chain and replay_input".to_string(),
+                );
+            }
+            if entry.metadata.get("extension_id") != Some(&input.extension_id) {
+                divergences.push(
+                    "extension_id differs between evidence chain and replay_input".to_string(),
+                );
+            }
+        }
+        None => {
+            divergences.push("committed_evidence_chain lacks capability_denied entry".to_string());
+        }
+    }
+    if args.mode == ReplayMode::Strict
+        && let Some(divergence) = divergences.first()
+    {
+        return Err(format!("strict re-execution divergence: {divergence}"));
+    }
+
+    let parse_goal = parse_goal(&input.parse_goal)?;
+    let capabilities = run_cli_capabilities(parse_goal, input.commonjs_entry);
+    let package = ExtensionPackage {
+        extension_id: input.extension_id.clone(),
+        source: input.source.clone(),
+        source_file: Some(input.source_label.clone()),
+        module_root: input.module_root.clone(),
+        capabilities,
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        metadata: BTreeMap::new(),
+    };
+    let source_hash = ContentHash::compute(input.source.as_bytes());
+    let mut orchestrator_config = OrchestratorConfig {
+        parse_goal,
+        commonjs_entry: input.commonjs_entry,
+        auto_size_register_window: true,
+        trace_id_prefix: "frankenctl-run".to_string(),
+        policy_id: input.policy_id.clone(),
+        epoch: SecurityEpoch::from_raw(input.policy_epoch),
+        cell_close_budget_ms: input.cell_close_budget_ms,
+        parser_options: input.limits.parser_options(),
+        ..OrchestratorConfig::default()
+    };
+    if let Some(tokens) = input.parser_max_token_count {
+        orchestrator_config.parser_options.budget.max_token_count = tokens;
+    }
+    let evidence_authority = RuntimeEvidenceAuthority::generate_runtime_owned(
+        fresh_runtime_evidence_producer_id("frankenctl.replay", &source_hash.to_hex())?,
+        orchestrator_config.epoch,
+        1,
+        None,
+    )
+    .map_err(|error| format!("failed to initialize replay evidence authority: {error}"))?;
+    let mut orchestrator = ExecutionOrchestrator::try_new_with_runtime_config_and_authority(
+        orchestrator_config,
+        run_runtime_config(input.instruction_budget, &input.limits),
+        AmbientAuthorityGrant::DenyAll,
+        evidence_authority,
+    )
+    .map_err(|error| format!("failed to initialize replay execution orchestrator: {error}"))?;
+
+    match orchestrator.execute(&package) {
+        Ok(_) => {
+            divergences.push(format!(
+                "expected capability_denied (`{}`), but re-execution completed without denial",
+                input.denied_capability
+            ));
+        }
+        Err(replayed_error) => {
+            match replayed_error.primary_error() {
+                OrchestratorError::Interpreter(InterpreterError::CapabilityDenied {
+                    capability,
+                }) => {
+                    if capability != &input.denied_capability {
+                        divergences.push(format!(
+                            "re-executed capability denial `{capability}` differs from recorded `{}`",
+                            input.denied_capability
+                        ));
+                    }
+                }
+                other => {
+                    divergences.push(format!(
+                        "re-execution failed with `{other}` instead of capability_denied `{}`",
+                        input.denied_capability
+                    ));
+                }
+            }
+            let replayed_committed = replayed_error
+                .post_cell_failure()
+                .and_then(|lc| lc.committed_evidence_chain.as_ref());
+            if replayed_committed.is_none() {
+                divergences.push(
+                    "re-executed capability denial did not produce a committed evidence chain"
+                        .to_string(),
+                );
+            }
+        }
+    }
+
+    if args.mode == ReplayMode::Strict
+        && let Some(divergence) = divergences.first()
+    {
+        return Err(format!("strict re-execution divergence: {divergence}"));
+    }
+
+    let decisions_match = divergences.is_empty();
+    let session_id = format!("{}:capability-denied", report.trace_id);
+    let (trace_id, decision_id, policy_id) = cli_replay_ids(&session_id, args.mode);
+    let output = ReplayCommandOutput {
+        schema_version: FRANKENCTL_SCHEMA_VERSION.to_string(),
+        trace_id,
+        decision_id,
+        policy_id,
+        trace_path: args.trace.display().to_string(),
+        mode: replay_mode_name(args.mode).to_string(),
+        session_id,
+        event_count: artifact.entries.len(),
+        replayed_events: artifact.entries.len() as u64,
+        divergence_count: divergences.len(),
+        critical_divergences: if args.mode == ReplayMode::Strict {
+            divergences.len()
+        } else {
+            0
+        },
+        complete: divergences.is_empty(),
+        replay_kind: "reexecution".to_string(),
+        evidence_authenticated: evidence_trust_snapshot_digest.is_some(),
+        evidence_trust_snapshot_digest,
+        ir3_hash_match: None,
+        unsigned_execution_content_match: None,
+        randomness_transcript_match: None,
+        decisions_match: Some(decisions_match),
+        fleet_nodes: None,
+        observability_mode: default_capture_observability_mode(),
+    };
+    if let Some(path) = args.out {
+        write_json_file(&path, &output)?;
+    }
+    print_json(&output)?;
+    Ok(0)
+}
+
+fn authenticate_failed_run_report_evidence(
+    report: &ReplayableFailedRunReport,
+    artifact: &EvidenceChainArtifact,
+    input: &FailedRunReplayInput,
+    trust: &ReplayEvidenceTrustArgs,
+) -> Result<String, String> {
+    let verify = || -> Result<String, String> {
+        if report.schema_version != ORCHESTRATION_FAILURE_SCHEMA_VERSION {
+            return Err(format!(
+                "unsupported failed-run report schema_version `{}`",
+                report.schema_version
+            ));
+        }
+        let (snapshot, digest) = load_pinned_runtime_snapshot(trust)?;
+        let registry = snapshot
+            .to_runtime_registry()
+            .map_err(|error| format!("invalid runtime trust registry: {error}"))?;
+        registry
+            .verify_chain_artifact(
+                artifact,
+                &report.evidence_ledger_id,
+                &report.trace_id,
+                0,
+                None,
+            )
+            .map_err(|error| format!("signed evidence chain rejected: {error}"))?;
+        let epoch = SecurityEpoch::from_raw(input.policy_epoch);
+        for entry in &artifact.entries {
+            if entry.policy_id != input.policy_id || entry.epoch_id != epoch {
+                return Err(
+                    "report policy/epoch differs from the authenticated evidence".to_string(),
+                );
+            }
+            if entry.metadata.get("extension_id") != Some(&input.extension_id) {
+                return Err("report extension differs from the authenticated evidence".to_string());
+            }
+        }
+        let signer = artifact.receipt.signed_envelope();
+        let input_signature = report
+            .replay_input_signature
+            .as_ref()
+            .ok_or_else(|| "authenticated replay requires a signed replay input".to_string())?;
+        if input_signature.producer_id != signer.producer_id
+            || input_signature.key_provenance != signer.key_provenance
+            || input_signature.verification_key != signer.verification_key
+        {
+            return Err(
+                "replay input and evidence chain must have the same runtime signer".to_string(),
+            );
+        }
+        registry
+            .verify_detached(
+                input_signature,
+                &failed_run_replay_input_preimage(
+                    &report.trace_id,
+                    &report.evidence_ledger_id,
+                    &artifact.receipt.head_chain_hash,
+                    input,
+                )?,
+                epoch,
+            )
+            .map_err(|error| format!("signed replay input rejected: {error}"))?;
+        let identity = snapshot
+            .identities
+            .iter()
+            .find(|identity| {
+                identity.producer_id == signer.producer_id
+                    && identity.key_provenance.key_id == signer.key_provenance.key_id
+            })
+            .ok_or_else(|| "authenticated signer is absent from the trust snapshot".to_string())?;
+        let expected_ledger = derive_runtime_evidence_ledger_id(
+            &input.policy_id,
+            epoch,
+            "frankenctl-run",
+            identity,
+            &report.evidence_chain_instance_id,
+        )
+        .map_err(|error| format!("invalid evidence chain instance: {error}"))?;
+        if report.evidence_ledger_id != expected_ledger {
+            return Err(
+                "reported chain instance does not derive the authenticated ledger".to_string(),
             );
         }
         Ok(digest)

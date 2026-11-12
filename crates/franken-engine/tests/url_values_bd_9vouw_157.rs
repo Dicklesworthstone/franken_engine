@@ -14,8 +14,7 @@
 //!
 //! No-claim: `URL(...)` without `new` constructs instead of throwing a
 //! TypeError; URL.prototype has no accessors of its own (instances answer
-//! href, host, ...), and URLSearchParams.prototype no methods (instances
-//! answer them); URL.createObjectURL and revokeObjectURL are not covered; an
+//! href, host, ...); URL.createObjectURL and revokeObjectURL are not covered; an
 //! object argument with its own toString is converted without calling it
 //! (bd-9vouw.168; a URL object converts to its href).
 
@@ -47,10 +46,11 @@ fn url_instances_and_aliases() {
          const p = new P({ a: '1', b: 'two words' });\n\
          [u.host, u.pathname, u.searchParams.get('y'), u.hash, u instanceof URL, u.searchParams instanceof URLSearchParams,\n\
           Object.getPrototypeOf(u) === URL.prototype, u.constructor === URL, Object.prototype.toString.call(u),\n\
-          Object.prototype.toString.call(p), p.toString(), p instanceof URLSearchParams, new URL('http://x') instanceof URL].join(' ');";
+          Object.prototype.toString.call(p), p.toString(), URLSearchParams.prototype.toString.call(p),\n\
+          URLSearchParams.prototype.append.length, p instanceof URLSearchParams, new URL('http://x') instanceof URL].join(' ');";
     assert_eq!(
         eval(source),
-        "a.example:8080 /p/q 2 #h true true true true [object URL] [object URLSearchParams] a=1&b=two+words true true"
+        "a.example:8080 /p/q 2 #h true true true true [object URL] [object URLSearchParams] a=1&b=two+words a=1&b=two+words 2 true true"
     );
 }
 

@@ -12403,7 +12403,8 @@ impl InterpreterCore {
             | "WeakRef"
             | "FinalizationRegistry"
             | "TextEncoder"
-            | "TextDecoder" => {
+            | "TextDecoder"
+            | "URLSearchParams" => {
                 Self::collection_prototype_method(name, key).map(Value::BuiltinFunction)
             }
             // The shared typed array methods are element-type agnostic.

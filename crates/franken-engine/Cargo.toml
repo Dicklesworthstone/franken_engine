@@ -1833,7 +1833,6 @@ required-features = ["governance-surfaces"]
 [[test]]
 name = "fleet_transport_ingress"
 path = "tests/fleet_transport_ingress.rs"
-required-features = ["governance-surfaces"]
 
 [[test]]
 name = "flow_envelope_edge_cases"

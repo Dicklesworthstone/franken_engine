@@ -1092,7 +1092,7 @@ fn inherited_array_elements_cannot_launder_secrets_through_aggregates() {
     ];
     const RECEIVERS: [&str; 2] = [
         "const a = []; a.__proto__ = p; a.length = 1;",
-        "const a = Object.create(p); a.length = 1;",
+        "const a = Object.create(p, { length: { value: 1 } });",
     ];
     for receiver in RECEIVERS {
         for (expression, public_output) in AGGREGATES {
@@ -1149,7 +1149,7 @@ fn inherited_array_elements_cannot_launder_secrets_through_aggregates() {
             // the inherited element or depend on secret prototype selection.
             let source = format!(
                 "const crypto = require('crypto'); const p = []; {receiver} \
-                 a[0] = 'public'; Reflect.set(p, 0, crypto.randomUUID()); \
+                 Reflect.set(a, 0, 'public'); Reflect.set(p, 0, crypto.randomUUID()); \
                  const output = {expression}; const print = console.log; print(output);"
             );
             let provider = Arc::new(ScriptedRandomHostIo::bytes([vec![0x11; 16]]));

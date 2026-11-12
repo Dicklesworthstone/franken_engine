@@ -6191,6 +6191,18 @@ impl BuiltinFunction {
             | K::ConsoleMethod => "console",
             K::UrlMethod => "URL.prototype",
             K::UrlStatic => "URL",
+            K::UrlSearchParamsGet
+            | K::UrlSearchParamsHas
+            | K::UrlSearchParamsGetAll
+            | K::UrlSearchParamsAppend
+            | K::UrlSearchParamsSort
+            | K::UrlSearchParamsDelete
+            | K::UrlSearchParamsSet
+            | K::UrlSearchParamsToString
+            | K::UrlSearchParamsKeys
+            | K::UrlSearchParamsValues
+            | K::UrlSearchParamsEntries
+            | K::UrlSearchParamsForEach => "URLSearchParams.prototype",
             K::EventTargetMethod => event_target::EVENT_TARGET_METHODS
                 .iter()
                 .find(|(specifier, _, _)| self.module_specifier.0.as_deref() == Some(*specifier))
@@ -6766,7 +6778,7 @@ const ARRAY_UNSCOPABLE_NAMES: [&str; 16] = [
 /// Canonical prototypes (`builtin_prototypes` keys) whose methods are served
 /// virtually by [`InterpreterCore::canonical_prototype_method`] instead of
 /// being stored as own heap properties (bd-9vouw.17).
-const VIRTUAL_METHOD_PROTOTYPES: [&str; 29] = [
+const VIRTUAL_METHOD_PROTOTYPES: [&str; 30] = [
     "Array",
     "String",
     "Number",
@@ -6790,6 +6802,7 @@ const VIRTUAL_METHOD_PROTOTYPES: [&str; 29] = [
     "TextDecoder",
     "Buffer",
     "URL",
+    "URLSearchParams",
     "EventTarget",
     "Event",
     "AbortController",
@@ -13521,6 +13534,16 @@ impl ExecutionResult {
 /// public caller can pair compact instructions with a different module. Each
 /// cell corresponds to exactly one source IR3 instruction; unsupported cells
 /// retain the baseline opcode and execute through Tier R at the same source IP.
+/// Verified Tarjan SCC loop-header quantum (`[RC-E1]` / `g2vrp.15`).
+/// When `max_iter_cost > 0` at `header_ip`, every path starting at `header_ip`
+/// that stays within `scc_id` without re-entering `header_ip` is acyclic and
+/// executes at most `max_iter_cost` Compact Tier-I instructions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CompactLoopQuantum {
+    pub(crate) max_iter_cost: u16,
+    pub(crate) header_scc_id: u32,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct CompactTier1Program {
     source_module_hash: ContentHash,
@@ -13530,6 +13553,11 @@ pub(crate) struct CompactTier1Program {
     /// with different rest-parameter binding behavior.
     source_rest_param_indices: Arc<[Option<u32>]>,
     instructions: Arc<[CompactTier1Instruction]>,
+    /// Per-IP Tarjan SCC membership (`0` = not in any hoisted Compact loop SCC)
+    /// and loop-header AARA iteration cost quanta (`max_iter_cost > 0` on
+    /// verified single-entry acyclic-body loop headers).
+    loop_scc_ids: Arc<[u32]>,
+    loop_quanta: Arc<[CompactLoopQuantum]>,
     compact_instruction_count: usize,
     /// Largest verified callable frame in this exact module.
     /// `None` keeps the canonical full-width reset for hand-authored or
@@ -13725,6 +13753,7 @@ impl CompactTier1Program {
             };
             cells[idx].aara_block_run = run;
         }
+        let (loop_scc_ids, loop_quanta) = Self::compute_tarjan_loop_quanta(&cells);
         let instructions: Arc<[CompactTier1Instruction]> = cells.into();
         let source_module_hash = source_hash.unwrap_or_else(|| module.content_hash());
         debug_assert_eq!(source_module_hash, module.content_hash());
@@ -13736,11 +13765,249 @@ impl CompactTier1Program {
                 .map(|function| function.rest_param_index)
                 .collect::<Arc<[_]>>(),
             instructions,
+            loop_scc_ids,
+            loop_quanta,
             compact_instruction_count,
             verified_function_frame_clear_width,
             verified_function_frame_clear_widths,
             verified_scope_inert_leaf_functions,
         })
+    }
+
+    /// Iterative Tarjan SCC + Kahn acyclic longest-path AARA bound pass
+    /// (`[RC-E1]` / `g2vrp.15`). Decomposes nested loops until innermost
+    /// single-entry Compact-only loop SCCs are isolated and statically bounded.
+    fn compute_tarjan_loop_quanta(
+        cells: &[CompactTier1Instruction],
+    ) -> (Arc<[u32]>, Arc<[CompactLoopQuantum]>) {
+        let n = cells.len();
+        let mut scc_ids = vec![0u32; n];
+        let mut quanta = vec![
+            CompactLoopQuantum {
+                max_iter_cost: 0,
+                header_scc_id: 0,
+            };
+            n
+        ];
+        if n == 0 {
+            return (scc_ids.into(), quanta.into());
+        }
+
+        let mut succs: Vec<[Option<usize>; 2]> = vec![[None, None]; n];
+        let mut preds: Vec<Vec<usize>> = vec![Vec::new(); n];
+        for (u, cell) in cells.iter().enumerate() {
+            let edges = match cell.opcode {
+                CompactTier1Opcode::Baseline | CompactTier1Opcode::Halt => [None, None],
+                CompactTier1Opcode::Jump => {
+                    let t = usize::try_from(cell.payload).ok().filter(|&t| t < n);
+                    [t, None]
+                }
+                CompactTier1Opcode::JumpIf | CompactTier1Opcode::JumpIfNullish => {
+                    let t = usize::try_from(cell.payload).ok().filter(|&t| t < n);
+                    let f = u.checked_add(1).filter(|&f| f < n);
+                    if t == f { [t, None] } else { [t, f] }
+                }
+                _ => [u.checked_add(1).filter(|&f| f < n), None],
+            };
+            succs[u] = edges;
+            for v in edges.into_iter().flatten() {
+                preds[v].push(u);
+            }
+        }
+
+        let mut in_subset = vec![false; n];
+        let mut index_of = vec![0u32; n];
+        let mut lowlink = vec![0u32; n];
+        let mut on_stack = vec![false; n];
+        let mut tarjan_stack: Vec<usize> = Vec::new();
+        let mut dfs_frames: Vec<(usize, u8)> = Vec::new();
+        let mut next_scc_tag = 1u32;
+
+        let mut worklist: Vec<Vec<usize>> = vec![(0..n).collect()];
+        while let Some(subset) = worklist.pop() {
+            if subset.is_empty() {
+                continue;
+            }
+            for &v in &subset {
+                in_subset[v] = true;
+                index_of[v] = 0;
+                lowlink[v] = 0;
+                on_stack[v] = false;
+            }
+            let mut next_index = 1u32;
+            let mut found_sccs: Vec<Vec<usize>> = Vec::new();
+
+            for &start in &subset {
+                if index_of[start] != 0 {
+                    continue;
+                }
+                index_of[start] = next_index;
+                lowlink[start] = next_index;
+                next_index = next_index.saturating_add(1);
+                tarjan_stack.push(start);
+                on_stack[start] = true;
+                dfs_frames.push((start, 0));
+
+                while let Some((u, edge_slot)) = dfs_frames.pop() {
+                    if edge_slot < 2 {
+                        dfs_frames.push((u, edge_slot + 1));
+                        if let Some(w) = succs[u][usize::from(edge_slot)]
+                            && in_subset[w]
+                        {
+                            if index_of[w] == 0 {
+                                index_of[w] = next_index;
+                                lowlink[w] = next_index;
+                                next_index = next_index.saturating_add(1);
+                                tarjan_stack.push(w);
+                                on_stack[w] = true;
+                                dfs_frames.push((w, 0));
+                            } else if on_stack[w] {
+                                lowlink[u] = lowlink[u].min(index_of[w]);
+                            }
+                        }
+                    } else {
+                        for w in succs[u].into_iter().flatten() {
+                            if in_subset[w] && index_of[w] > index_of[u] && on_stack[w] {
+                                lowlink[u] = lowlink[u].min(lowlink[w]);
+                            }
+                        }
+                        if lowlink[u] == index_of[u] {
+                            let mut comp = Vec::new();
+                            while let Some(w) = tarjan_stack.pop() {
+                                on_stack[w] = false;
+                                comp.push(w);
+                                if w == u {
+                                    break;
+                                }
+                            }
+                            found_sccs.push(comp);
+                        }
+                    }
+                }
+            }
+
+            for &v in &subset {
+                in_subset[v] = false;
+            }
+
+            for mut comp in found_sccs {
+                comp.sort_unstable();
+                let is_loop = comp.len() >= 2 || {
+                    let only = comp[0];
+                    succs[only].into_iter().flatten().any(|w| w == only)
+                };
+                if !is_loop {
+                    continue;
+                }
+                if comp.iter().any(|&v| {
+                    matches!(
+                        cells[v].opcode,
+                        CompactTier1Opcode::Baseline | CompactTier1Opcode::Halt
+                    )
+                }) {
+                    // Non-compact op inside outer SCC: strip min vertex to still
+                    // expose any pure-Compact inner loop SCCs.
+                    if comp.len() > 1 {
+                        comp.remove(0);
+                        worklist.push(comp);
+                    }
+                    continue;
+                }
+
+                for &v in &comp {
+                    in_subset[v] = true;
+                }
+                let mut entries = Vec::new();
+                for &v in &comp {
+                    let is_entry = v == 0 || preds[v].iter().any(|&p| !in_subset[p]);
+                    if is_entry {
+                        entries.push(v);
+                    }
+                }
+                if entries.len() > 1 {
+                    for &v in &comp {
+                        in_subset[v] = false;
+                    }
+                    continue;
+                }
+                let header = entries.first().copied().unwrap_or(comp[0]);
+
+                // Build loop-body DAG by cutting backedges `* -> header`.
+                let mut indegree = vec![0u32; comp.len()];
+                for (idx_v, &v) in comp.iter().enumerate() {
+                    if v == header {
+                        continue;
+                    }
+                    for &p in &preds[v] {
+                        if in_subset[p] {
+                            indegree[idx_v] = indegree[idx_v].saturating_add(1);
+                        }
+                    }
+                }
+                let header_pos = comp.binary_search(&header).expect("header in sorted comp");
+                let mut queue = std::collections::VecDeque::new();
+                let mut dist = vec![0u32; comp.len()];
+                for (i, &deg) in indegree.iter().enumerate() {
+                    if deg == 0 {
+                        queue.push_back(i);
+                    }
+                }
+                dist[header_pos] = 1;
+                let mut visited = 0usize;
+                let mut max_steps = 1u32;
+                while let Some(u_pos) = queue.pop_front() {
+                    visited += 1;
+                    let u = comp[u_pos];
+                    let du = dist[u_pos];
+                    if du > max_steps {
+                        max_steps = du;
+                    }
+                    for w in succs[u].into_iter().flatten() {
+                        if !in_subset[w] || w == header {
+                            continue;
+                        }
+                        let w_pos = comp.binary_search(&w).expect("member in sorted comp");
+                        if du > 0 {
+                            dist[w_pos] = dist[w_pos].max(du.saturating_add(1));
+                        }
+                        indegree[w_pos] = indegree[w_pos].saturating_sub(1);
+                        if indegree[w_pos] == 0 {
+                            queue.push_back(w_pos);
+                        }
+                    }
+                }
+                for &v in &comp {
+                    in_subset[v] = false;
+                }
+
+                if visited < comp.len() {
+                    // Nested inner loop exists inside `comp \ {header}`: decompose
+                    // recursively so the innermost hot loop gets hoisted!
+                    let residual: Vec<usize> = comp.into_iter().filter(|&v| v != header).collect();
+                    if !residual.is_empty() {
+                        worklist.push(residual);
+                    }
+                    continue;
+                }
+
+                if let Ok(cost_u16) = u16::try_from(max_steps)
+                    && cost_u16 >= 1
+                    && next_scc_tag < u32::MAX
+                {
+                    let tag = next_scc_tag;
+                    next_scc_tag += 1;
+                    for &v in &comp {
+                        scc_ids[v] = tag;
+                    }
+                    quanta[header] = CompactLoopQuantum {
+                        max_iter_cost: cost_u16,
+                        header_scc_id: tag,
+                    };
+                }
+            }
+        }
+
+        (scc_ids.into(), quanta.into())
     }
 
     fn verified_scope_inert_leaf_functions(module: &Ir3Module) -> Vec<bool> {
@@ -14280,6 +14547,24 @@ impl CompactTier1Program {
             return None;
         }
         self.instructions.get(ip..ip.checked_add(run)?)
+    }
+
+    #[inline(always)]
+    fn loop_quantum_at(&self, ip: usize) -> Option<CompactLoopQuantum> {
+        self.loop_quanta
+            .get(ip)
+            .copied()
+            .filter(|q| q.max_iter_cost >= 1)
+    }
+
+    #[inline(always)]
+    fn ip_in_loop_scc(&self, header_scc_id: u32, ip: usize) -> bool {
+        self.loop_scc_ids.get(ip).copied() == Some(header_scc_id)
+    }
+
+    #[inline(always)]
+    fn raw_cell_at(&self, ip: usize) -> Option<CompactTier1Instruction> {
+        self.instructions.get(ip).copied()
     }
 
     pub(crate) fn compact_instruction_count(&self) -> usize {

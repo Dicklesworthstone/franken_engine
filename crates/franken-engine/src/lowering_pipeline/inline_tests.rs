@@ -3927,6 +3927,7 @@ fn sink_clearance_destructuring_intrinsics_are_finite_internal_computation() {
         "builtin:DestructureIteratorNext",
         "builtin:DestructureIteratorElide",
         "builtin:DestructureIteratorDone",
+        "builtin:ObjectCreate",
     ] {
         assert_eq!(sink_clearance_from_capability(capability), Label::TopSecret);
     }
@@ -5516,7 +5517,8 @@ fn querystring_first_class_source_keeps_mutable_method_provenance_bd_305gi() {
         // A sibling module may have installed a closure or getter; the
         // factory cannot authenticate immutable native members.
         assert!(
-            ir1.ops.iter().any(|op| matches!(op,
+            ops_deep_match(&ir1.ops, &|op| matches!(
+                op,
                 Ir1Op::HostCall { capability, arg_count: 0 }
                     if capability == "builtin:QuerystringModule"
             )),

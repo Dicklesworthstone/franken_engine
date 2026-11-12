@@ -1792,11 +1792,21 @@ impl InterpreterCore {
 
     pub(super) fn legacy_url_format(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
         let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        if let Value::Str(input) = value {
+            self.check_temporary_memory_budget(Self::url_parse_working_upper_bound(
+                Self::estimate_js_string_bytes(&input),
+                0,
+            ))?;
+            let parsed = self.parse_whatwg_url(&input, None)?;
+            let href = parsed.as_str().to_string();
+            self.check_temporary_memory_budget(Self::estimate_string_bytes(&href))?;
+            return Ok(Value::str(href));
+        }
         let Value::Object(object_id) = value else {
             return Err(self.throw_legacy_url_type_error(
                 "ERR_INVALID_ARG_TYPE",
                 format!(
-                    "The urlObject argument must be of type object. Received {}",
+                    "The urlObject argument must be of type object or string. Received {}",
                     value.type_name()
                 ),
             ));

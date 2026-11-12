@@ -839,11 +839,26 @@ fn builtin_module_requires_before_the_alias_keep_it_authenticated() {
     for source in [
         "const path = require('path'); const cp = require('child_process'); \
          cp.execFileSync(path.join('/bin', 'true'), []);",
+        "const url = require('url'); const cp = require('child_process'); \
+         cp.execFileSync('/bin/true', [url.format('https://example.com')]);",
         "const qs = require('querystring'); const cp = require('child_process'); \
-         cp.execFileSync('/bin/true', [qs.stringify({ a: 1 })]);",
+         qs.stringify({ a: 1 }); cp.execFileSync('/bin/true', []);",
     ] {
         assert_process_spawn_denial(source);
     }
+    // bd-305gi: `querystring` materializes a mutable cached realm object whose
+    // method return stays conservatively `Internal` in static flow proof; `cp`
+    // remains authenticated (no ambient `require` denial), while passing that
+    // dynamic method result into `process_spawn`'s `Public` sink is refused by
+    // static IFC.
+    let qs_sink_error = eval_error(
+        "const qs = require('querystring'); const cp = require('child_process'); \
+         cp.execFileSync('/bin/true', [qs.stringify({ a: 1 })]);",
+    );
+    assert!(
+        qs_sink_error.contains("unauthorized flow") && qs_sink_error.contains("Internal -> Public"),
+        "authenticated cp must reach static Public-sink IFC rather than ambient require denial: {qs_sink_error}"
+    );
     let error = eval_error(
         "function peek() { return typeof cp; } peek(); const cp = require('child_process'); \
          cp.spawnSync('/bin/true');",
@@ -1541,7 +1556,7 @@ fn no_mock_native_child_signal_is_audited_and_parent_recovers() {
 
     let error = orchestrator
         .execute(&process_package(
-            "const cp = require('child_process'); cp.execFileSync('native-sh', ['-c', 'kill -SEGV $$']);",
+            "const cp = require('child_process'); cp.execFileSync('native-sh', ['-c', 'ulimit -c 0; kill -SEGV $$']);",
         ))
         .expect_err("a child fatal signal must fail only the guest execution");
     assert!(matches!(

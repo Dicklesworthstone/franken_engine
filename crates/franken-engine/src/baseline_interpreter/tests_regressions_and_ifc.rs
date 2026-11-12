@@ -3927,4 +3927,173 @@ mod ifc_taint_closures_rc_c1 {
         );
         assert_eq!(compact_err, baseline_err);
     }
+
+    #[test]
+    fn compact_tier1_tarjan_loop_quantum_hoists_multi_chunk_loops_with_exact_budget_g2vrp_15() {
+        let mut module = Ir3Module::new(
+            ContentHash::compute(b"g2vrp-15-tarjan-single"),
+            "g2vrp-15-single.js",
+        );
+        // Canonical while-loop:
+        // 0: r0 = 0 (acc)
+        // 1: r1 = 0 (i)
+        // 2: r2 = 5000 (limit)
+        // 3: r3 = r1 >= r2   [header]
+        // 4: JumpIf r3 -> 8  [exit if i >= 5000]
+        // 5: r0 = r0 + r1
+        // 6: r1 = r1 + 1
+        // 7: Jump -> 3
+        // 8: Return r0
+        module.instructions = vec![
+            Ir3Instruction::LoadInt { dst: 0, value: 0 },
+            Ir3Instruction::LoadInt { dst: 1, value: 0 },
+            Ir3Instruction::LoadInt {
+                dst: 2,
+                value: 5_000,
+            },
+            Ir3Instruction::Gte {
+                dst: 3,
+                lhs: 1,
+                rhs: 2,
+            },
+            Ir3Instruction::JumpIf { cond: 3, target: 8 },
+            Ir3Instruction::Add {
+                dst: 0,
+                lhs: 0,
+                rhs: 1,
+            },
+            Ir3Instruction::Inc { dst: 1, src: 1 },
+            Ir3Instruction::Jump { target: 3 },
+            Ir3Instruction::Return { value: 0 },
+        ];
+        let program = CompactTier1Program::compile(&module).expect("compact program compiles");
+        assert!(program.loop_quantum_at(0).is_none());
+        assert!(program.loop_quantum_at(5).is_none());
+        let header_q = program
+            .loop_quantum_at(3)
+            .expect("Tarjan SCC pass must discover single-entry loop header at IP 3");
+        assert_eq!(header_q.max_iter_cost, 5);
+        for ip in 3..=7 {
+            assert!(program.ip_in_loop_scc(header_q.header_scc_id, ip));
+        }
+        assert!(!program.ip_in_loop_scc(header_q.header_scc_id, 8));
+
+        let mut full_cfg = ifc_test_config();
+        full_cfg.instruction_budget = 100_000;
+        let compact = QuickJsLane::with_config(full_cfg.clone())
+            .execute_with_compact_tier1(&module, "g2vrp-15-compact", &program)
+            .expect("multi-chunk hoisted loop completes");
+        let baseline = QuickJsLane::with_config(full_cfg)
+            .execute(&module, "g2vrp-15-baseline")
+            .expect("baseline loop completes");
+        // sum(0..5000) = 4999 * 5000 / 2 = 12_497_500
+        assert_eq!(compact.value, Value::Int(12_497_500));
+        assert_eq!(baseline.value, Value::Int(12_497_500));
+        assert_eq!(
+            compact.instructions_executed,
+            baseline.instructions_executed
+        );
+
+        // Cross two 2048-iteration chunks (2 * 2048 * 5 = 20_480) plus partial tail:
+        let mut cross_chunk_cfg = ifc_test_config();
+        cross_chunk_cfg.instruction_budget = 20_492;
+        let compact_err = QuickJsLane::with_config(cross_chunk_cfg.clone())
+            .execute_with_compact_tier1(&module, "g2vrp-15-tight-compact", &program)
+            .expect_err("compact must exhaust at exact instruction boundary");
+        let baseline_err = QuickJsLane::with_config(cross_chunk_cfg)
+            .execute(&module, "g2vrp-15-tight-baseline")
+            .expect_err("baseline must exhaust at exact instruction boundary");
+        assert_eq!(
+            compact_err,
+            InterpreterError::BudgetExhausted {
+                executed: 20_492,
+                budget: 20_492,
+            }
+        );
+        assert_eq!(compact_err, baseline_err);
+    }
+
+    #[test]
+    fn compact_tier1_tarjan_nested_loop_decomposes_outer_scc_to_hoist_innermost_header_g2vrp_15() {
+        let mut module = Ir3Module::new(
+            ContentHash::compute(b"g2vrp-15-tarjan-nested"),
+            "g2vrp-15-nested.js",
+        );
+        // 2D nested loop:
+        // 0: r0 = 0 (acc)
+        // 1: r1 = 0 (i)
+        // 2: r2 = 20 (outer_limit)
+        // 3: r3 = 30 (inner_limit)
+        // 4: r4 = r1 >= r2        [outer header]
+        // 5: JumpIf r4 -> 14      [exit outer]
+        // 6: r5 = 0 (j)
+        // 7: r6 = r5 >= r3        [inner header]
+        // 8: JumpIf r6 -> 12      [exit inner]
+        // 9: r0 = r0 + r5
+        // 10: r5 = r5 + 1
+        // 11: Jump -> 7           [inner backedge]
+        // 12: r1 = r1 + 1
+        // 13: Jump -> 4           [outer backedge]
+        // 14: Return r0
+        module.instructions = vec![
+            Ir3Instruction::LoadInt { dst: 0, value: 0 },
+            Ir3Instruction::LoadInt { dst: 1, value: 0 },
+            Ir3Instruction::LoadInt { dst: 2, value: 20 },
+            Ir3Instruction::LoadInt { dst: 3, value: 30 },
+            Ir3Instruction::Gte {
+                dst: 4,
+                lhs: 1,
+                rhs: 2,
+            },
+            Ir3Instruction::JumpIf {
+                cond: 4,
+                target: 14,
+            },
+            Ir3Instruction::LoadInt { dst: 5, value: 0 },
+            Ir3Instruction::Gte {
+                dst: 6,
+                lhs: 5,
+                rhs: 3,
+            },
+            Ir3Instruction::JumpIf {
+                cond: 6,
+                target: 12,
+            },
+            Ir3Instruction::Add {
+                dst: 0,
+                lhs: 0,
+                rhs: 5,
+            },
+            Ir3Instruction::Inc { dst: 5, src: 5 },
+            Ir3Instruction::Jump { target: 7 },
+            Ir3Instruction::Inc { dst: 1, src: 1 },
+            Ir3Instruction::Jump { target: 4 },
+            Ir3Instruction::Return { value: 0 },
+        ];
+        let program = CompactTier1Program::compile(&module).expect("compact program compiles");
+        assert!(
+            program.loop_quantum_at(4).is_none(),
+            "outer loop body contains inner cycle and must decompose rather than claim flat bound"
+        );
+        let inner_q = program
+            .loop_quantum_at(7)
+            .expect("recursive Tarjan decomposition must isolate and hoist innermost header IP 7");
+        assert_eq!(inner_q.max_iter_cost, 5);
+
+        let mut full_cfg = ifc_test_config();
+        full_cfg.instruction_budget = 50_000;
+        let compact = QuickJsLane::with_config(full_cfg.clone())
+            .execute_with_compact_tier1(&module, "g2vrp-15-nested-compact", &program)
+            .expect("nested loop completes");
+        let baseline = QuickJsLane::with_config(full_cfg)
+            .execute(&module, "g2vrp-15-nested-baseline")
+            .expect("baseline nested loop completes");
+        // 20 * (29 * 30 / 2) = 20 * 435 = 8700
+        assert_eq!(compact.value, Value::Int(8_700));
+        assert_eq!(baseline.value, Value::Int(8_700));
+        assert_eq!(
+            compact.instructions_executed,
+            baseline.instructions_executed
+        );
+    }
 }

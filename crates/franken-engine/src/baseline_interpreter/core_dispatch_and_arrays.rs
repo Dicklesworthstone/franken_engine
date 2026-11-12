@@ -11463,6 +11463,67 @@ impl InterpreterCore {
                 });
             }
 
+            // [RC-E1 / g2vrp.15] Tarjan SCC loop-header AARA iteration hoisting:
+            // hoist budget, safepoint, PC-label, and trampoline checks across up to
+            // 2048 verified single-entry acyclic-body Compact Tier-I loop iterations.
+            if self.all_register_labels_public
+                && self.profiling_data.is_none()
+                && checkpoint_guard.is_none()
+                && self.state_capture_tick.is_none()
+                && self.pc_label_stack.is_empty()
+                && !self.gc_safe_point_due()
+                && let Some(program) = compact_tier1
+                && let Some(quantum) = program.loop_quantum_at(self.ip)
+            {
+                let budget_limit = self.config.instruction_budget;
+                let max_iter_cost = u64::from(quantum.max_iter_cost);
+                let mut iters_left = budget_limit
+                    .saturating_sub(self.instructions_executed)
+                    .checked_div(max_iter_cost)
+                    .unwrap_or(0)
+                    .min(2048);
+                if iters_left > 0 {
+                    let header_ip = self.ip;
+                    let mut ran_any = false;
+                    loop {
+                        let Some(cell) = program.raw_cell_at(self.ip) else {
+                            break;
+                        };
+                        if matches!(
+                            cell.opcode,
+                            CompactTier1Opcode::Baseline | CompactTier1Opcode::Halt
+                        ) || self.compact_operator_needs_to_primitive(&cell)
+                        {
+                            break;
+                        }
+                        ran_any = true;
+                        self.instructions_executed += 1;
+                        self.tier_i_instructions_executed =
+                            self.tier_i_instructions_executed.saturating_add(1);
+                        self.execute_compact_tier1_instruction(module, cell)?;
+                        if !self.all_register_labels_public
+                            || !self.pc_label_stack.is_empty()
+                            || !program.ip_in_loop_scc(quantum.header_scc_id, self.ip)
+                        {
+                            break;
+                        }
+                        if self.ip == header_ip {
+                            iters_left -= 1;
+                            if iters_left == 0
+                                || self.gc_safe_point_due()
+                                || self.instructions_executed.saturating_add(max_iter_cost)
+                                    > budget_limit
+                            {
+                                break;
+                            }
+                        }
+                    }
+                    if ran_any {
+                        continue;
+                    }
+                }
+            }
+
             // [RC-E1] Hoist budget, safepoint, PC-label, and trampoline checks
             // to basic-block entry for straight-line Compact Tier-I runs.
             if self.profiling_data.is_none()

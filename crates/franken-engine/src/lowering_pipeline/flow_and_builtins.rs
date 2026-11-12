@@ -1076,17 +1076,7 @@ pub(super) fn confirmed_querystring_module_aliases(
         if let Statement::VariableDeclaration(vd) = stmt {
             for d in &vd.declarations {
                 if let (BindingPattern::Identifier(name), Some(init)) = (&d.pattern, &d.initializer)
-                    && (is_require_querystring_module_initializer(init, binding_lookup)
-                        || matches!(
-                            init,
-                            Expression::Call { callee, arguments, .. }
-                                if arguments.is_empty()
-                                    && matches!(
-                                        callee.as_ref(),
-                                        Expression::Identifier(fn_name)
-                                            if fn_name == "__franken_querystring_module"
-                                    )
-                        ))
+                    && is_require_querystring_module_initializer(init, binding_lookup)
                 {
                     candidates.insert(name.clone());
                 }
@@ -12499,6 +12489,7 @@ pub(crate) fn sink_clearance_from_capability(capability: &str) -> Label {
             | "builtin:ReflectSetPrototypeOf"
             | "builtin:ReflectIsExtensible"
             | "builtin:ReflectPreventExtensions"
+            | "builtin:ObjectCreate"
             | "builtin:ObjectGetPrototypeOf"
             | "builtin:ObjectSetPrototypeOf"
             | "builtin:ObjectIsExtensible"

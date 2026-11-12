@@ -351,7 +351,6 @@ pub mod fleet_immune_protocol;
 pub mod fleet_privacy_budget;
 pub mod fleet_simulator;
 pub mod fleet_trace_total_order;
-#[cfg(feature = "governance-surfaces")]
 pub mod fleet_transport;
 #[cfg(feature = "governance-surfaces")]
 pub mod flow_envelope;

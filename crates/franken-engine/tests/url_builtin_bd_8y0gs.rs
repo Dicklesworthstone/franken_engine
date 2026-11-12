@@ -292,6 +292,7 @@ fn legacy_url_helpers_match_node_corpus_fixtures_bd_4awsz() {
 
         console.log(url.format({ protocol: 'https', hostname: 'example.com', pathname: '/pth', search: 'x=1' }));
         console.log(url.format({ protocol: 'http:', hostname: 'h.test', pathname: '/a' }));
+        console.log(url.format('https://example.com'));
 
         const parsed = url.parse('http://example.com:8080/p/a?x=1&y=2#frag');
         console.log(parsed.protocol, parsed.host, parsed.hostname, parsed.port);
@@ -299,7 +300,7 @@ fn legacy_url_helpers_match_node_corpus_fixtures_bd_4awsz() {
     "#;
     assert_eq!(
         eval_console(src),
-        "/a/b.txt\n/dir/with space/f.txt\nhttps://example.com/pth?x=1\nhttp://h.test/a\nhttp: example.com:8080 example.com 8080\n/p/a ?x=1&y=2 #frag"
+        "/a/b.txt\n/dir/with space/f.txt\nhttps://example.com/pth?x=1\nhttp://h.test/a\nhttps://example.com/\nhttp: example.com:8080 example.com 8080\n/p/a ?x=1&y=2 #frag"
     );
 }
 

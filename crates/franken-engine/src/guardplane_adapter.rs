@@ -959,12 +959,13 @@ impl InterpreterHook for GuardplaneAdapter {
         // evidence only; they cannot turn the live `allowed` bit into a grant.
         if allowed
             && !self.hostcall_is_witness_denied(capability)
-            && crate::capability::hostcall_registry_row(capability).is_some_and(|row| {
-                matches!(
-                    row.authority,
-                    None | Some(crate::capability::RuntimeCapability::Builtin)
-                )
-            })
+            && (capability == "builtin:QueueMicrotask"
+                || crate::capability::hostcall_registry_row(capability).is_some_and(|row| {
+                    matches!(
+                        row.authority,
+                        None | Some(crate::capability::RuntimeCapability::Builtin)
+                    )
+                }))
         {
             return HookAction::Allow;
         }
@@ -1739,5 +1740,210 @@ mod tests {
             matches!(action, HookAction::Terminate(_)),
             "interleaved benign operations must not decay accumulated e-value below threshold, got {action:?}"
         );
+    }
+
+    #[test]
+    fn effect_free_queue_microtask_hostcall_skips_decision_transcript_unless_denied_bd_mpu1z() {
+        let adapter = agent_sandbox_adapter();
+        let ctx = test_hook_context(1);
+        for _ in 0..257 {
+            assert_eq!(
+                adapter.pre_hostcall(&ctx, "builtin:QueueMicrotask", true),
+                HookAction::Allow
+            );
+        }
+        assert_eq!(
+            adapter.summary().decision_count,
+            0,
+            "allowed queueMicrotask must not bloat the signed evidence chain"
+        );
+
+        let _denied = adapter.pre_hostcall(&ctx, "builtin:QueueMicrotask", false);
+        assert_eq!(
+            adapter.summary().decision_count,
+            1,
+            "denied queueMicrotask must still be evaluated and recorded"
+        );
+
+        let witness_denied = adapter_with_metadata(&[
+            ("guardplane.enable_instruction_hooks", "true"),
+            (
+                "capability_witness.denied_capabilities",
+                "builtin:QueueMicrotask",
+            ),
+        ]);
+        let _ = witness_denied.pre_hostcall(&ctx, "builtin:QueueMicrotask", true);
+        assert_eq!(
+            witness_denied.summary().decision_count,
+            1,
+            "witness-denied queueMicrotask must still reach guardplane evaluation"
+        );
+    }
+
+    mod martingale_proptests {
+        use super::*;
+        use crate::hash_tiers::ContentHash;
+        use proptest::prelude::*;
+
+        fn benign_step(adapter: &GuardplaneAdapter, step: u64, selector: u8) -> HookAction {
+            let ctx = test_hook_context(step);
+            match selector % 8 {
+                0 => adapter.pre_allocation(&ctx, AllocKind::Object, 4),
+                1 => adapter.pre_allocation(&ctx, AllocKind::Array, 16),
+                2 => adapter.pre_allocation(&ctx, AllocKind::Closure, 0),
+                3 => adapter.pre_allocation(&ctx, AllocKind::Function, 0),
+                4 => adapter.pre_property_access(&ctx, &ObjectId(3), &"length".to_string()),
+                5 => adapter.pre_property_access(&ctx, &ObjectId(3), &"prototype".to_string()),
+                6 => adapter.pre_call(&ctx, &named_call("retrieval"), &[Value::Int(1)]),
+                _ => adapter.pre_hostcall(&ctx, "builtin:QueueMicrotask", true),
+            }
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(128))]
+
+            #[test]
+            fn martingale_benign_traces_stay_ville_neutral_with_zero_false_suspends_g2vrp_18(
+                ops in proptest::collection::vec(0u8..8u8, 1..96),
+            ) {
+                let adapter = agent_sandbox_adapter();
+                for (idx, op_code) in ops.into_iter().enumerate() {
+                    let step = (idx + 1) as u64;
+                    let action = benign_step(&adapter, step, op_code);
+                    prop_assert!(
+                        hook_action_rank(&action) < hook_action_rank(&HookAction::Suspend),
+                        "false containment on H0 benign trace at step {step}: {action:?}"
+                    );
+                    let state = adapter.lock_state("proptest_benign_martingale");
+                    let m_state = state
+                        .unified_guardrail_registry
+                        .get("unified-ext:test")
+                        .expect("unified guardrail exists")
+                        .martingale_state();
+                    prop_assert!(
+                        m_state.last_log_likelihood_ratio_millionths <= 0,
+                        "Ville supermartingale violated under H0: log L_t = {} > 0",
+                        m_state.last_log_likelihood_ratio_millionths
+                    );
+                    prop_assert_eq!(m_state.log_m_millionths, 0);
+                }
+            }
+
+            #[test]
+            fn interleaved_adversarial_probes_never_decay_and_contain_with_chained_jsonl_g2vrp_18(
+                pad_counts in proptest::collection::vec(0usize..8usize, 5..9),
+                probe_kinds in proptest::collection::vec(0u8..3u8, 5..9),
+            ) {
+                let adapter = agent_sandbox_adapter();
+                let mut step = 0u64;
+                let mut prev_log_m = 0i64;
+                let mut prev_hash = "genesis".to_string();
+                let mut contained = false;
+                let mut jsonl_lines = Vec::new();
+
+                for (&pad_len, &probe_kind) in pad_counts.iter().zip(probe_kinds.iter()) {
+                    for pad in 0..pad_len {
+                        step += 1;
+                        let action = benign_step(&adapter, step, (pad % 7) as u8);
+                        let (log_m, p_malicious) = {
+                            let state = adapter.lock_state("proptest_interleaved_pad");
+                            let m = state
+                                .unified_guardrail_registry
+                                .get("unified-ext:test")
+                                .expect("unified guardrail")
+                                .martingale_state()
+                                .log_m_millionths;
+                            let p = state
+                                .decisions
+                                .last()
+                                .map_or(0, |d| d.posterior.p_malicious);
+                            (m, p)
+                        };
+                        prop_assert!(
+                            log_m >= prev_log_m,
+                            "benign padding decayed accumulated e-value: {log_m} < {prev_log_m}"
+                        );
+                        prev_log_m = log_m;
+                        if hook_action_rank(&action) >= hook_action_rank(&HookAction::Suspend) {
+                            contained = true;
+                        }
+                        let exit_code = if hook_action_rank(&action) >= hook_action_rank(&HookAction::Challenge(ChallengeToken { token: String::new() })) { 3 } else { 0 };
+                        let line = serde_json::json!({
+                            "step": step,
+                            "op": "benign_pad",
+                            "e_value": (f64::from(log_m as i32) / 1_000_000.0).exp(),
+                            "posterior_malicious": p_malicious,
+                            "action": format!("{action:?}"),
+                            "exit_code": exit_code,
+                            "prev_hash": prev_hash,
+                        })
+                        .to_string();
+                        prev_hash = ContentHash::compute(line.as_bytes()).to_hex();
+                        jsonl_lines.push(line);
+                    }
+
+                    step += 1;
+                    let ctx = test_hook_context(step);
+                    let (op_label, action) = match probe_kind % 3 {
+                        0 => (
+                            "denied_net_hostcall",
+                            adapter.pre_hostcall(&ctx, "net:request", false),
+                        ),
+                        1 => (
+                            "proto_pollution",
+                            adapter.pre_property_access(&ctx, &ObjectId(9), &"__proto__".to_string()),
+                        ),
+                        _ => (
+                            "dynamic_codegen",
+                            adapter.pre_call(&ctx, &named_call("Function"), &[Value::Int(1)]),
+                        ),
+                    };
+                    let (log_m, p_malicious) = {
+                        let state = adapter.lock_state("proptest_interleaved_probe");
+                        let m = state
+                            .unified_guardrail_registry
+                            .get("unified-ext:test")
+                            .expect("unified guardrail")
+                            .martingale_state()
+                            .log_m_millionths;
+                        let p = state
+                            .decisions
+                            .last()
+                            .map_or(0, |d| d.posterior.p_malicious);
+                        (m, p)
+                    };
+                    prop_assert!(log_m >= prev_log_m);
+                    prev_log_m = log_m;
+                    let exit_code = if hook_action_rank(&action) >= hook_action_rank(&HookAction::Suspend) {
+                        contained = true;
+                        3
+                    } else {
+                        0
+                    };
+                    let line = serde_json::json!({
+                        "step": step,
+                        "op": op_label,
+                        "e_value": (f64::from(log_m as i32) / 1_000_000.0).exp(),
+                        "posterior_malicious": p_malicious,
+                        "action": format!("{action:?}"),
+                        "exit_code": exit_code,
+                        "prev_hash": prev_hash,
+                    })
+                    .to_string();
+                    prev_hash = ContentHash::compute(line.as_bytes()).to_hex();
+                    jsonl_lines.push(line);
+                }
+
+                prop_assert!(
+                    contained,
+                    "interleaved adversarial probes escaped containment across {} steps",
+                    jsonl_lines.len()
+                );
+                let parsed_last: serde_json::Value =
+                    serde_json::from_str(jsonl_lines.last().expect("telemetry emitted"))
+                        .expect("valid JSONL");
+                prop_assert!(parsed_last["prev_hash"].as_str().is_some());
+            }
+        }
     }
 }

@@ -2070,6 +2070,25 @@ impl ExecutionOrchestrator {
         ambient_authority_grant: AmbientAuthorityGrant,
         evidence_authority: RuntimeEvidenceAuthority,
     ) -> Result<Self, OrchestratorError> {
+        Self::try_new_with_runtime_config_authority_and_identities(
+            config,
+            runtime_config,
+            ambient_authority_grant,
+            evidence_authority,
+            &[],
+        )
+    }
+
+    /// Production constructor accepting the pinned runtime trust lineage so a
+    /// rotated runtime signing authority can register its verified predecessor
+    /// chain before binding the evidence ledger.
+    pub fn try_new_with_runtime_config_authority_and_identities(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+        ambient_authority_grant: AmbientAuthorityGrant,
+        evidence_authority: RuntimeEvidenceAuthority,
+        lineage_identities: &[EvidenceVerificationIdentity],
+    ) -> Result<Self, OrchestratorError> {
         let evidence_chain_instance_id = Self::fresh_runtime_evidence_chain_instance_id()?;
         Self::try_new_with_resolved_evidence_authority(
             config,
@@ -2077,6 +2096,7 @@ impl ExecutionOrchestrator {
             ambient_authority_grant,
             EvidenceSigningAuthority::Runtime(evidence_authority),
             evidence_chain_instance_id,
+            lineage_identities,
         )
     }
 
@@ -2172,6 +2192,7 @@ impl ExecutionOrchestrator {
             ambient_authority_grant,
             EvidenceSigningAuthority::Lab(evidence_authority),
             LAB_EVIDENCE_CHAIN_INSTANCE_ID.to_string(),
+            &[],
         )
     }
 
@@ -2181,6 +2202,7 @@ impl ExecutionOrchestrator {
         ambient_authority_grant: AmbientAuthorityGrant,
         evidence_signing_authority: EvidenceSigningAuthority,
         evidence_chain_instance_id: String,
+        lineage_identities: &[EvidenceVerificationIdentity],
     ) -> Result<Self, OrchestratorError> {
         Self::validate_concurrency_envelope(config.max_concurrent_sagas)?;
         InterpreterConfig::validate_module_conditions(&config.module_conditions).map_err(
@@ -2198,8 +2220,33 @@ impl ExecutionOrchestrator {
         )?;
         let mut ledger = if evidence_signing_authority.is_lab() {
             InMemoryLedger::for_lab_verification_identity(config.epoch, &verification_identity)?
-        } else {
+        } else if lineage_identities.is_empty() {
             InMemoryLedger::for_verification_identity(config.epoch, &verification_identity)?
+        } else {
+            let mut ordered: Vec<&EvidenceVerificationIdentity> = lineage_identities
+                .iter()
+                .filter(|identity| {
+                    identity.producer_id == verification_identity.producer_id
+                        && identity.key_provenance.rotation_sequence
+                            <= verification_identity.key_provenance.rotation_sequence
+                })
+                .collect();
+            ordered.sort_by(|left, right| {
+                left.key_provenance
+                    .rotation_sequence
+                    .cmp(&right.key_provenance.rotation_sequence)
+                    .then_with(|| left.key_provenance.key_id.cmp(&right.key_provenance.key_id))
+            });
+            if let Some((first, rest)) = ordered.split_first() {
+                let mut seeded = InMemoryLedger::for_verification_identity(config.epoch, first)?;
+                for next in rest {
+                    seeded.authorize_verification_identity(next)?;
+                }
+                seeded.authorize_verification_identity(&verification_identity)?;
+                seeded
+            } else {
+                InMemoryLedger::for_verification_identity(config.epoch, &verification_identity)?
+            }
         };
         ledger.bind_evidence_chain(evidence_ledger_id)?;
         let loss_matrix = config.loss_matrix_preset.to_loss_matrix();
@@ -3526,6 +3573,99 @@ impl ExecutionOrchestrator {
                 )))
             }
         }
+    }
+
+    /// Commit a signed, hash-chained `SecurityAction` decision record when a
+    /// program is refused at lowering (`bd-9vouw.61`), binding the refusal to
+    /// the attempt's `trace_id` and the orchestrator's runtime signing key.
+    pub fn record_lowering_rejection_evidence(
+        &mut self,
+        extension_id: &str,
+        error: &OrchestratorError,
+    ) -> Result<Option<(String, EvidenceChainArtifact)>, OrchestratorError> {
+        let OrchestratorError::Lowering(lowering) = error.primary_error() else {
+            return Ok(None);
+        };
+        let (rationale, kind, effect_or_flow, accessor_or_detail, span_line) =
+            match lowering.as_ref() {
+                LoweringPipelineError::AmbientAuthorityViolation {
+                    required_effect,
+                    caller_profile,
+                    accessor,
+                    span,
+                } => (
+                    format!(
+                        "rejected_at_lowering kind=ambient_authority accessor={accessor} \
+                         required_effect={required_effect} caller_profile={caller_profile} \
+                         extension_id={extension_id}"
+                    ),
+                    "ambient_authority",
+                    required_effect.to_string(),
+                    accessor.clone(),
+                    span.map(|s| s.start_line.to_string()),
+                ),
+                LoweringPipelineError::UnauthorizedFlow {
+                    op_index,
+                    source_label,
+                    sink_clearance,
+                    detail,
+                } => (
+                    format!(
+                        "rejected_at_lowering kind=unauthorized_flow op_index={op_index} \
+                         source_label={source_label} sink_clearance={sink_clearance} \
+                         extension_id={extension_id}"
+                    ),
+                    "unauthorized_flow",
+                    format!("{source_label}->{sink_clearance}"),
+                    detail.clone(),
+                    None,
+                ),
+                _ => return Ok(None),
+            };
+        let trace_id = match self.last_failed_trace_id.clone() {
+            Some(existing) => existing,
+            None => self.allocate_attempt_identifiers().1,
+        };
+        let mut builder = EvidenceEntryBuilder::new_with_authority(
+            &trace_id,
+            format!("{trace_id}:decision:lowering-rejected"),
+            &self.config.policy_id,
+            self.config.epoch,
+            DecisionType::SecurityAction,
+            &self.evidence_signing_authority,
+        )
+        .timestamp_ns(0)
+        .candidate(CandidateAction::new(
+            format!("{:?}", ContainmentAction::Terminate),
+            0,
+        ))
+        .chosen(ChosenAction {
+            action_name: format!("{}", ContainmentAction::Terminate),
+            expected_loss_millionths: 0,
+            rationale,
+        })
+        .meta("outcome", "rejected_at_lowering")
+        .meta("rejection_kind", kind)
+        .meta("violated_effect", effect_or_flow)
+        .meta("rejection_target", accessor_or_detail)
+        .meta("extension_id", extension_id.to_string());
+        if let Some(line) = span_line {
+            builder = builder.meta("span_start_line", line);
+        }
+        let entry = builder.build()?;
+        let entries = vec![entry];
+        let receipt = EvidenceChainReceipt::issue_with_authority(
+            self.evidence_ledger_id().to_string(),
+            self.ledger.evidence_chain_next_sequence(),
+            self.ledger.evidence_chain_head(),
+            &entries,
+            &self.evidence_signing_authority,
+        )?;
+        self.commit_evidence_chain_batch(entries.clone(), receipt.clone())?;
+        Ok(Some((
+            trace_id,
+            EvidenceChainArtifact::new(entries, receipt),
+        )))
     }
 
     // -- Private helpers -----------------------------------------------------
@@ -6920,7 +7060,9 @@ mod tests {
                 assert_eq!(orchestrator.ledger().evidence_chain_head(), head.as_deref());
                 assert_eq!(orchestrator.saga_orchestrator.total_count(), sagas);
                 assert_eq!(
-                    orchestrator.containment_executor.receipts(&package.extension_id),
+                    orchestrator
+                        .containment_executor
+                        .receipts(&package.extension_id),
                     vec![receipt]
                 );
 
@@ -6930,7 +7072,10 @@ mod tests {
                 let allowed = orchestrator
                     .execute(&package)
                     .expect("independent extension");
-                assert_eq!(std::fs::read(root.path().join("effect.txt")).unwrap(), b"effect");
+                assert_eq!(
+                    std::fs::read(root.path().join("effect.txt")).unwrap(),
+                    b"effect"
+                );
                 assert_eq!(allowed.host_effect_transcript.len(), 1);
                 assert_eq!(allowed.host_effect_transcript[0].0.kind(), "fs_write");
             }
@@ -7067,7 +7212,9 @@ mod tests {
             assert!(!orchestrator.last_failed_console_output().is_empty());
             assert!(orchestrator.last_failed_trace_id().is_some());
             assert_eq!(
-                orchestrator.containment_executor.state(&package.extension_id),
+                orchestrator
+                    .containment_executor
+                    .state(&package.extension_id),
                 Some(crate::containment_executor::ContainmentState::Running)
             );
             let previous_effect = HostEffectJournalEntry::HostIo {
@@ -7122,7 +7269,10 @@ mod tests {
                         .module
                         .record
                         .dependencies
-                        .push(ModuleDependency::new("./dependency.js", ImportStyle::Import));
+                        .push(ModuleDependency::new(
+                            "./dependency.js",
+                            ImportStyle::Import,
+                        ));
                     "runtime resolver injection is required"
                 }
                 "resolver_identity" => "runtime resolver entry identity",

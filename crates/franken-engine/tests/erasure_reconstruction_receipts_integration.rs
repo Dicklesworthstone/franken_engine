@@ -783,3 +783,193 @@ fn receipt_json_is_self_describing_snake_case() {
         serde_json::Value::from("unsigned");
     assert!(serde_json::from_value::<ReconstructionReceipt>(nested_shadow).is_err());
 }
+
+#[test]
+fn v2_authenticated_receipt_and_trusted_ledger_round_trip_end_to_end() {
+    use std::cell::RefCell;
+    use std::collections::BTreeMap;
+
+    use frankenengine_engine::erasure_reconstruction_receipts::{
+        RECONSTRUCTION_RECEIPT_SCHEMA_ID_V2, TrustedReconstructionReceiptLedger,
+        reconstruct_live_with_receipt_v2,
+    };
+    use frankenengine_engine::fleet_immune_protocol::{
+        FleetAuthorityId, FleetIdentityError, FleetRegistryAnchorAuthority,
+        FleetRegistrySnapshotAnchorClaim, FleetSigner, FleetVerificationRegistryPersistence,
+        encode_erasure_shards_v2,
+    };
+    use frankenengine_engine::security_epoch::SecurityEpoch;
+    use frankenengine_engine::signature_preimage::SigningKey;
+    use frankenengine_engine::storage_adapter::{EventContext, InMemoryStorageAdapter};
+
+    type Claim = FleetRegistrySnapshotAnchorClaim;
+
+    #[derive(Default)]
+    struct Anchor {
+        current: Option<Claim>,
+        permits: BTreeMap<Vec<u8>, (Option<Claim>, Claim)>,
+        seq: u64,
+    }
+
+    struct Authority {
+        id: FleetAuthorityId,
+        state: RefCell<Anchor>,
+    }
+
+    impl FleetRegistryAnchorAuthority for Authority {
+        fn fleet_authority_id(&self) -> FleetAuthorityId {
+            self.id
+        }
+
+        fn authenticate_current_registry_anchor(
+            &self,
+            claim: &Claim,
+        ) -> Result<String, FleetIdentityError> {
+            if self.state.borrow().current.as_ref() != Some(claim) {
+                return Err(FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: "stale anchor".to_string(),
+                });
+            }
+            Ok(format!("ok-{}", claim.generation))
+        }
+
+        fn prepare_registry_anchor_advance(
+            &self,
+            expected: Option<&Claim>,
+            next: &Claim,
+        ) -> Result<Vec<u8>, FleetIdentityError> {
+            let mut state = self.state.borrow_mut();
+            if state.current.as_ref() != expected || next.fleet_authority_id != self.id {
+                return Err(FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: "cas mismatch".to_string(),
+                });
+            }
+            state.seq += 1;
+            let permit = state.seq.to_be_bytes().to_vec();
+            state
+                .permits
+                .insert(permit.clone(), (expected.cloned(), next.clone()));
+            Ok(permit)
+        }
+
+        fn finalize_registry_anchor_advance(
+            &self,
+            permit: &[u8],
+            next: &Claim,
+        ) -> Result<String, FleetIdentityError> {
+            let mut state = self.state.borrow_mut();
+            let Some((expected, authorized)) = state.permits.get(permit).cloned() else {
+                return Err(FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: "missing permit".to_string(),
+                });
+            };
+            if authorized != *next
+                || (state.current != expected && state.current.as_ref() != Some(next))
+            {
+                return Err(FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: "transition mismatch".to_string(),
+                });
+            }
+            state.current = Some(next.clone());
+            Ok(format!("fin-{}", next.generation))
+        }
+    }
+
+    let id = FleetAuthorityId::from_provisioned_bytes([0x77; 32]).unwrap();
+    let authority = Authority {
+        id,
+        state: RefCell::new(Anchor::default()),
+    };
+    let epoch = SecurityEpoch::from_raw(5);
+    let origin = FleetSigner::new(
+        id,
+        node("origin-int-v2"),
+        1,
+        SigningKey::from_bytes([0x51; 32]).unwrap(),
+    )
+    .unwrap();
+    let recon = FleetSigner::new(
+        id,
+        node("recon-int-v2"),
+        1,
+        SigningKey::from_bytes([0x52; 32]).unwrap(),
+    )
+    .unwrap();
+    let mut storage = InMemoryStorageAdapter::new();
+    let event = EventContext::new("int-trace", "int-decision", "int-policy").unwrap();
+    let registry = FleetVerificationRegistryPersistence::new(&mut storage, &event)
+        .prepare_initial_registration(
+            origin.identity().signer.clone(),
+            1,
+            origin.verification_key().clone(),
+            epoch,
+            &authority,
+        )
+        .unwrap()
+        .finalize_and_publish(&authority)
+        .unwrap();
+    let registry = FleetVerificationRegistryPersistence::new(&mut storage, &event)
+        .prepare_register_node(
+            &registry,
+            recon.identity().signer.clone(),
+            1,
+            recon.verification_key().clone(),
+            epoch,
+            &authority,
+        )
+        .unwrap()
+        .finalize_and_publish(&authority)
+        .unwrap();
+
+    let plan = ErasureCodingPlan::new(3, 4).unwrap();
+    let signed_shards: Vec<_> = encode_erasure_shards_v2(
+        "int-set-v2",
+        origin.identity().signer.clone(),
+        10,
+        100_000,
+        epoch,
+        b"end-to-end v2 erasure payload",
+        plan,
+    )
+    .unwrap()
+    .into_iter()
+    .filter(|shard| shard.shard.shard_index != 2)
+    .map(|shard| origin.sign_erasure_shard_v2(shard).unwrap())
+    .collect();
+
+    let (payload, signed_receipt) = reconstruct_live_with_receipt_v2(
+        &signed_shards,
+        &recon,
+        101_000,
+        &registry,
+        epoch,
+        &authority,
+    )
+    .unwrap();
+    assert_eq!(payload, b"end-to-end v2 erasure payload");
+    assert_eq!(
+        signed_receipt.receipt.schema_id,
+        RECONSTRUCTION_RECEIPT_SCHEMA_ID_V2
+    );
+    signed_receipt
+        .verify_live_against_signed_shards(&signed_shards, true, &registry, epoch, &authority)
+        .unwrap();
+
+    let mut ledger = TrustedReconstructionReceiptLedger::new();
+    assert!(
+        ledger
+            .record_live(signed_receipt.clone(), &registry, epoch, &authority)
+            .unwrap()
+    );
+    let persisted = serde_json::to_vec(&ledger).unwrap();
+    let mut restored = TrustedReconstructionReceiptLedger::restore_live_verified(
+        &persisted, &registry, epoch, &authority,
+    )
+    .unwrap();
+    assert_eq!(restored, ledger);
+    assert!(
+        !restored
+            .record_live(signed_receipt, &registry, epoch, &authority)
+            .unwrap()
+    );
+}

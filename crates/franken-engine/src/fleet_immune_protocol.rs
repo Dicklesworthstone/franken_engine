@@ -714,7 +714,7 @@ pub struct FleetHistoricalAcceptanceContext {
 
 impl FleetHistoricalAcceptanceContext {
     #[cfg(test)]
-    fn for_authority(
+    pub(crate) fn for_authority(
         fleet_authority_id: FleetAuthorityId,
         trusted_registry_generation: u64,
         trusted_authority_head: ContentHash,
@@ -738,7 +738,7 @@ impl FleetHistoricalAcceptanceContext {
     }
 
     #[cfg(test)]
-    fn with_accepted_preimage_hash(mut self, preimage_hash: ContentHash) -> Self {
+    pub(crate) fn with_accepted_preimage_hash(mut self, preimage_hash: ContentHash) -> Self {
         self.accepted_preimage_hashes.insert(preimage_hash);
         self
     }
@@ -1984,7 +1984,12 @@ impl DurableFleetVerificationRegistry {
         &self.authority_receipt_id
     }
 
-    fn ensure_current<A: FleetRegistryAnchorAuthority>(
+    #[cfg(test)]
+    pub(crate) fn authority_head_at(&self, generation: u64) -> Option<ContentHash> {
+        self.registry.authority_head_at(generation).ok()
+    }
+
+    pub(crate) fn ensure_current<A: FleetRegistryAnchorAuthority>(
         &self,
         authority: &A,
     ) -> Result<(), FleetIdentityError> {
@@ -3412,13 +3417,13 @@ pub fn validate_fleet_v2_frame_len(frame_len: usize) -> Result<(), FleetIdentity
 }
 
 #[derive(Debug, Default)]
-struct FleetV2IngressBudget {
+pub(crate) struct FleetV2IngressBudget {
     dynamic_bytes: usize,
     collection_items: usize,
 }
 
 impl FleetV2IngressBudget {
-    fn charge_identifier(
+    pub(crate) fn charge_identifier(
         &mut self,
         message_type: &str,
         field: &str,
@@ -3433,7 +3438,7 @@ impl FleetV2IngressBudget {
         self.charge_dynamic_bytes(message_type, field, value.len())
     }
 
-    fn charge_value(
+    pub(crate) fn charge_value(
         &mut self,
         message_type: &str,
         field: &str,
@@ -3443,7 +3448,7 @@ impl FleetV2IngressBudget {
         self.charge_dynamic_bytes(message_type, field, value.len())
     }
 
-    fn charge_node_id(
+    pub(crate) fn charge_node_id(
         &mut self,
         message_type: &str,
         field: &str,
@@ -3452,7 +3457,7 @@ impl FleetV2IngressBudget {
         self.charge_identifier(message_type, field, node_id.as_str())
     }
 
-    fn charge_collection(
+    pub(crate) fn charge_collection(
         &mut self,
         message_type: &str,
         field: &str,
@@ -3499,7 +3504,7 @@ impl FleetV2IngressBudget {
         Ok(())
     }
 
-    fn charge_string_map(
+    pub(crate) fn charge_string_map(
         &mut self,
         message_type: &str,
         field: &str,
@@ -3592,7 +3597,7 @@ fn ingress_limit_error_u64(
     }
 }
 
-fn validate_fleet_signing_identity_ingress(
+pub(crate) fn validate_fleet_signing_identity_ingress(
     identity: &FleetSigningIdentity,
 ) -> Result<(), FleetIdentityError> {
     validate_fleet_authority_id(identity.fleet_authority_id)?;
@@ -3632,7 +3637,7 @@ fn ensure_fleet_authority_matches(
     }
 }
 
-fn validate_fleet_node_id(node_id: &NodeId) -> Result<(), FleetIdentityError> {
+pub(crate) fn validate_fleet_node_id(node_id: &NodeId) -> Result<(), FleetIdentityError> {
     let value = node_id.as_str();
     let reason = if value.is_empty() {
         Some("identity is empty")
@@ -3914,7 +3919,11 @@ pub(crate) struct VerifiedErasureShardSet {
 }
 
 impl VerifiedErasureShardSet {
-    fn reconstruct(self) -> Result<Vec<u8>, ProtocolError> {
+    pub(crate) fn shards(&self) -> &[ErasureShard] {
+        &self.shards
+    }
+
+    pub(crate) fn reconstruct(self) -> Result<Vec<u8>, ProtocolError> {
         reconstruct_erasure_payload_intrinsic(&self.shards)
     }
 }
@@ -4546,7 +4555,7 @@ static CHECKPOINT_SIGNATURE_SCHEMA_HASH_V2: LazyLock<SchemaHash> =
 /// methods already encode the target v2 signer metadata and Ed25519 sentinel,
 /// so callers can stage and verify the exact future preimage without relying
 /// on the forgeable v1 field.
-mod fleet_signature_preimage_v2_sealed {
+pub(crate) mod fleet_signature_preimage_v2_sealed {
     pub trait Sealed {}
 }
 
@@ -5372,11 +5381,11 @@ impl FleetSignaturePreimageV2 for QuorumCheckpoint {
     }
 }
 
-fn canonical_content_hash(hash: ContentHash) -> CanonicalValue {
+pub(crate) fn canonical_content_hash(hash: ContentHash) -> CanonicalValue {
     CanonicalValue::Bytes(hash.as_bytes().to_vec())
 }
 
-fn canonical_protocol_version(version: ProtocolVersion) -> CanonicalValue {
+pub(crate) fn canonical_protocol_version(version: ProtocolVersion) -> CanonicalValue {
     CanonicalValue::Map(BTreeMap::from([
         (
             "major".to_string(),
@@ -5389,7 +5398,7 @@ fn canonical_protocol_version(version: ProtocolVersion) -> CanonicalValue {
     ]))
 }
 
-fn canonical_string_map(values: &BTreeMap<String, String>) -> CanonicalValue {
+pub(crate) fn canonical_string_map(values: &BTreeMap<String, String>) -> CanonicalValue {
     CanonicalValue::Map(
         values
             .iter()
@@ -5407,7 +5416,7 @@ fn canonical_string_array(values: &[String]) -> CanonicalValue {
     )
 }
 
-fn canonical_signature_identity(identity: &FleetSigningIdentity) -> CanonicalValue {
+pub(crate) fn canonical_signature_identity(identity: &FleetSigningIdentity) -> CanonicalValue {
     CanonicalValue::Map(BTreeMap::from([
         (
             "fleet_authority_id".to_string(),
@@ -5453,7 +5462,7 @@ fn canonical_containment_decision(decision: &ResolvedContainmentDecision) -> Can
     ]))
 }
 
-fn validate_exact_message_signer(
+pub(crate) fn validate_exact_message_signer(
     message_type: &str,
     expected: &NodeId,
     actual: &NodeId,
@@ -5484,7 +5493,7 @@ fn validate_sorted_unique(
     }
 }
 
-fn validate_protocol_v2(
+pub(crate) fn validate_protocol_v2(
     message_type: &str,
     version: ProtocolVersion,
 ) -> Result<(), FleetIdentityError> {

@@ -41,7 +41,7 @@ RCH_EXEC_TIMEOUT_SECONDS="${RCH_EXEC_TIMEOUT_SECONDS:-5400}"
 CURRENT_RUSTFLAGS="-C force-frame-pointers=yes -C linker=cc -Clinker-features=-lld"
 UNIT_SEPARATOR=$'\037'
 CURRENT_ENCODED_RUSTFLAGS="-Cforce-frame-pointers=yes${UNIT_SEPARATOR}-Clinker=cc${UNIT_SEPARATOR}-Clinker-features=-lld"
-CARGO="${CARGO:-/home/ubuntu/.cargo/bin/cargo}"
+CARGO="${CARGO:-cargo}"
 EVENTS_FILE="${RUN_DIR}/events.jsonl"
 SUMMARY_FILE="${RUN_DIR}/summary.md"
 FINGERPRINT_FILE="${RUN_DIR}/fingerprint.json"
@@ -153,11 +153,15 @@ run_rch_capture() {
     local label="$1"
     local log_path="$2"
     shift 2
+    local -a worker_args=()
+    if [[ -n "${RCH_WORKER:-}" ]]; then
+        worker_args=(--worker "$RCH_WORKER")
+    fi
     log "running ${label} through rch"
     set +e
     env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS \
         RCH_REQUIRE_REMOTE=1 RCH_BUILD_TIMEOUT_SEC="$RCH_EXEC_TIMEOUT_SECONDS" \
-        timeout "$RCH_EXEC_TIMEOUT_SECONDS" rch exec -- "$@" 2>&1 | tee "$log_path"
+        timeout "$RCH_EXEC_TIMEOUT_SECONDS" rch exec "${worker_args[@]}" -- "$@" 2>&1 | tee "$log_path"
     local -a pipe_status=("${PIPESTATUS[@]}")
     set -e
     local rch_status="${pipe_status[0]}"
@@ -224,7 +228,7 @@ status_is_ok() {
 
 golden_log_passed() {
     local log_path="$1"
-    grep -Eq 'test evidence_ledger::tests::evidence_entry_signature_unchanged_post_cache \.\.\. ok' < <(strip_ansi_file "$log_path")
+    grep -Eq 'test evidence_ledger::tests::(evidence_entry_signature_unchanged_post_cache|signature_byte_equal_with_cached_runtime_key) \.\.\. ok' < <(strip_ansi_file "$log_path")
 }
 
 prepare_criterion_pass1() {
@@ -333,7 +337,7 @@ payload = {
     "kernel": platform.release(),
     "python": platform.python_version(),
     "rch": sh("rch", "--version"),
-    "cargo_path": os.environ.get("CARGO", "/home/ubuntu/.cargo/bin/cargo"),
+    "cargo_path": os.environ.get("CARGO", "cargo"),
     "execution": {
         "mode": "rch_remote",
         "cargo_target_dir": cargo_target_dir,
@@ -450,12 +454,12 @@ if ! grep -q "\"${TARGET}\"" "crates/franken-engine/benches/hot_paths.rs"; then
     fail_log "target sub-bench not found in hot_paths.rs: ${TARGET}"
     PREREQ_OK=0
 fi
-if ! grep -q "DEFAULT_EVIDENCE_SIGNING_KEY: std::sync::LazyLock" "crates/franken-engine/src/evidence_ledger.rs"; then
-    fail_log "cached default signing key LazyLock not found"
+if ! grep -Eq "DEFAULT_EVIDENCE_SIGNING_KEY: std::sync::LazyLock|prepared_signing_key: Arc<PreparedSigningKey>" "crates/franken-engine/src/evidence_ledger.rs"; then
+    fail_log "cached/prepared signing key not found in evidence_ledger.rs"
     PREREQ_OK=0
 fi
-if ! grep -q "fn evidence_entry_signature_unchanged_post_cache" "crates/franken-engine/src/evidence_ledger.rs"; then
-    fail_log "H1.3 signature golden test not found"
+if ! grep -Eq "fn (evidence_entry_signature_unchanged_post_cache|signature_byte_equal_with_cached_runtime_key)" "crates/franken-engine/src/evidence_ledger.rs"; then
+    fail_log "H1.3 signature parity test not found in evidence_ledger.rs"
     PREREQ_OK=0
 fi
 if ! command -v python3 >/dev/null 2>&1; then
@@ -506,7 +510,7 @@ fi
 COMMON_ENV=(
     env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS
     RCH_CARGO_WRAPPER_BYPASS=1
-    CARGO_BUILD_JOBS=1
+    CARGO_BUILD_JOBS="${H1_SMOKE_JOBS:-2}"
     CARGO_ENCODED_RUSTFLAGS="$CURRENT_ENCODED_RUSTFLAGS"
     CARGO_INCREMENTAL=0
     CARGO_PROFILE_DEV_DEBUG=0
@@ -514,20 +518,21 @@ COMMON_ENV=(
 )
 TEST_CMD=(
     "${COMMON_ENV[@]}"
-    "$CARGO" test -p frankenengine-engine --lib evidence_ledger
+    "$CARGO" test -j "${H1_SMOKE_JOBS:-2}" -p frankenengine-engine --lib evidence_ledger
 )
 BENCH_CMD=(
     env -u RUSTFLAGS
     RCH_CARGO_WRAPPER_BYPASS=1
+    CARGO_BUILD_JOBS="${H1_SMOKE_JOBS:-2}"
     CRITERION_HOME="$CRITERION_HOME_DIR"
     CARGO_ENCODED_RUSTFLAGS="$CURRENT_ENCODED_RUSTFLAGS"
     CARGO_INCREMENTAL=0
     CARGO_TARGET_DIR="$EFFECTIVE_CARGO_TARGET_DIR"
-    "$CARGO" bench -p frankenengine-engine --bench hot_paths --
+    "$CARGO" bench -j "${H1_SMOKE_JOBS:-2}" -p frankenengine-engine --bench hot_paths --
     --sample-size 20
     --warm-up-time 0.5
     --measurement-time 2
-    --baseline pass1
+    --save-baseline h1_smoke
     "${GROUP}/${TARGET}"
 )
 

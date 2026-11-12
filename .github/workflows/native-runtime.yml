@@ -450,6 +450,13 @@ jobs:
           cargo test --locked -j1 -p frankenengine-engine --lib \
             containment_admission_ -- --nocapture --test-threads=1 \
             2>&1 | tee native-buffer-containment-admission-tests.log
+      - name: Execute resolved-entry attempt admission regressions
+        if: always()
+        run: |
+          set -euo pipefail
+          cargo test --locked -j1 -p frankenengine-engine --lib \
+            execution_attempt_admission_ -- --nocapture --test-threads=1 \
+            2>&1 | tee native-buffer-execution-attempt-admission-tests.log
       - name: Execute complete native JSON parse and stringify source regressions
         if: always()
         run: |
@@ -593,6 +600,7 @@ jobs:
           for log in native-buffer-inputs.log native-buffer-test-list.log native-buffer-tests.log \
             native-buffer-esm-live-bindings-tests.log native-buffer-live-export-tests.log \
             native-buffer-containment-admission-tests.log \
+            native-buffer-execution-attempt-admission-tests.log \
             native-buffer-json-tests.log \
             native-buffer-http-test-list.log native-buffer-http-tests.log \
             native-buffer-regexp-source-tests.log native-buffer-regexp-tests.log \

@@ -2626,7 +2626,18 @@ impl ExecutionOrchestrator {
         package: &ExtensionPackage,
         resolved: &ResolutionOutcome,
     ) -> Result<OrchestratorResult, OrchestratorError> {
-        self.ensure_resolved_entry_containment_admission(package)?;
+        let process_spawn_attempt = self.begin_execution_attempt()?;
+        self.execute_resolved_entry_admitted(package, resolved, process_spawn_attempt)
+    }
+
+    fn execute_resolved_entry_admitted(
+        &mut self,
+        package: &ExtensionPackage,
+        resolved: &ResolutionOutcome,
+        process_spawn_attempt: Option<InstalledProcessSpawnAttempt>,
+    ) -> Result<OrchestratorResult, OrchestratorError> {
+        self.containment_executor
+            .ensure_execution_allowed(&package.extension_id)?;
         let record = &resolved.module.record;
         if record.id.is_empty()
             || resolved.module.canonical_specifier.is_empty()
@@ -2707,7 +2718,7 @@ impl ExecutionOrchestrator {
         // Source delivery is already closed-world. Do not reinterpret the
         // opaque resolver id as a filesystem containment root.
         delivered.module_root = None;
-        self.execute(&delivered)
+        self.execute_admitted(&delivered, process_spawn_attempt)
     }
 
     /// Execute the exact authorized source graph through the ordinary runtime.
@@ -2722,7 +2733,9 @@ impl ExecutionOrchestrator {
         resolved: &ResolutionOutcome,
         resolver: ExecutionModuleResolver,
     ) -> Result<OrchestratorResult, OrchestratorError> {
-        self.ensure_resolved_entry_containment_admission(package)?;
+        let process_spawn_attempt = self.begin_execution_attempt()?;
+        self.containment_executor
+            .ensure_execution_allowed(&package.extension_id)?;
         if resolver.entry_referrer() != resolved.module.record.id {
             return Err(OrchestratorError::ResolvedEntryRejected {
                 detail: "runtime resolver entry identity does not match the resolved entry"
@@ -2733,7 +2746,7 @@ impl ExecutionOrchestrator {
             .module_resolver
             .replace((resolver, resolved.module.content_hash));
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.execute_resolved_entry(package, resolved)
+            self.execute_resolved_entry_admitted(package, resolved, process_spawn_attempt)
         }));
         self.module_resolver = previous;
         match result {
@@ -2766,30 +2779,22 @@ impl ExecutionOrchestrator {
         Ok(process_spawn_attempt)
     }
 
-    /// Refuse a contained delivered entry before inspecting its source or
-    /// temporarily installing a resolver. Successful delivery delegates attempt
-    /// admission to `execute`; a refusal performs the same cleanup and authority
-    /// consumption so callers cannot observe a previous attempt's effects.
-    fn ensure_resolved_entry_containment_admission(
-        &mut self,
-        package: &ExtensionPackage,
-    ) -> Result<(), OrchestratorError> {
-        if let Err(error) = self
-            .containment_executor
-            .ensure_execution_allowed(&package.extension_id)
-        {
-            let _ = self.begin_execution_attempt()?;
-            return Err(error.into());
-        }
-        Ok(())
-    }
-
     /// Execute an extension package through the full pipeline.
     pub fn execute(
         &mut self,
         package: &ExtensionPackage,
     ) -> Result<OrchestratorResult, OrchestratorError> {
         let process_spawn_attempt = self.begin_execution_attempt()?;
+        self.execute_admitted(package, process_spawn_attempt)
+    }
+
+    // Public entrypoints consume authority before their own validation. Carry
+    // that admitted attempt through delivery instead of re-entering execute.
+    fn execute_admitted(
+        &mut self,
+        package: &ExtensionPackage,
+        process_spawn_attempt: Option<InstalledProcessSpawnAttempt>,
+    ) -> Result<OrchestratorResult, OrchestratorError> {
         let process_spawn = process_spawn_attempt
             .as_ref()
             .map(|attempt| Arc::clone(&attempt.provider));
@@ -6970,6 +6975,291 @@ mod tests {
         assert!(orchestrator.reserved_execution_context.is_none());
         assert_eq!(orchestrator.attempt_counter, 0);
         assert!(orchestrator.ledger().is_empty());
+    }
+
+    fn resolved_entry_for_attempt_test() -> ResolutionOutcome {
+        use crate::module_resolver::{
+            ModuleProvenance, ModuleRecord, ModuleSourceKind, ResolutionEvent, ResolvedModule,
+        };
+
+        let record = ModuleRecord {
+            id: "delivered:attempt-entry".to_string(),
+            syntax: ModuleSyntax::EsModule,
+            source: "console.log('delivered entry'); 40 + 2;".to_string(),
+            dependencies: Vec::new(),
+            required_capabilities: BTreeSet::new(),
+            provenance: ModuleProvenance {
+                kind: ModuleSourceKind::Workspace,
+                origin: "execution-attempt-admission-test".to_string(),
+            },
+        };
+        ResolutionOutcome {
+            module: ResolvedModule {
+                request_specifier: record.id.clone(),
+                canonical_specifier: record.id.clone(),
+                content_hash: record.canonical_hash(),
+                record,
+                probe_sequence: Vec::new(),
+            },
+            event: ResolutionEvent {
+                trace_id: "resolution-trace".to_string(),
+                decision_id: "resolution-decision".to_string(),
+                policy_id: "resolution-policy".to_string(),
+                component: "module-resolver".to_string(),
+                event: "resolve".to_string(),
+                outcome: "resolved".to_string(),
+                error_code: String::new(),
+            },
+        }
+    }
+
+    fn resolver_for_attempt_test(entry: &str) -> ExecutionModuleResolver {
+        use crate::module_resolver::{AllowAllPolicy, DeterministicModuleResolver};
+
+        ExecutionModuleResolver::new(
+            entry.to_string(),
+            Arc::new(DeterministicModuleResolver::default()),
+            Arc::new(AllowAllPolicy),
+        )
+    }
+
+    fn authority_for_attempt_test() -> ProcessSpawnAttemptAuthority {
+        let expires_at = u64::try_from(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis(),
+        )
+        .unwrap()
+        .checked_add(60_000)
+        .unwrap();
+        ProcessSpawnAttemptAuthority::expiring_at_unix_ms(expires_at)
+    }
+
+    #[test]
+    fn execution_attempt_admission_resolved_validation_consumes_authority_and_clears_failures() {
+        use crate::module_resolver::{ImportStyle, ModuleDependency};
+        use frankenengine_extension_host::process_spawn::DenyAllProcessSpawn;
+
+        for (case, with_resolver) in [
+            ("identity", false),
+            ("identity", true),
+            ("canonical_specifier", false),
+            ("canonical_specifier", true),
+            ("content_hash", false),
+            ("content_hash", true),
+            ("syntax", false),
+            ("syntax", true),
+            ("capability", false),
+            ("capability", true),
+            ("missing_resolver", false),
+            ("resolver_identity", true),
+        ] {
+            let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig {
+                parse_goal: ParseGoal::Module,
+                ..OrchestratorConfig::default()
+            });
+            let mut package =
+                package_with_source("console.log('previous attempt'); throw 'previous failure';");
+            orchestrator
+                .execute(&package)
+                .expect_err("seed a real failed execution");
+            assert!(!orchestrator.last_failed_console_output().is_empty());
+            assert!(orchestrator.last_failed_trace_id().is_some());
+            assert_eq!(
+                orchestrator.containment_executor.state(&package.extension_id),
+                Some(crate::containment_executor::ContainmentState::Running)
+            );
+            let previous_effect = HostEffectJournalEntry::HostIo {
+                request: HostIoRequest::FsRead {
+                    path: "previous-attempt.txt".to_string(),
+                },
+                outcome: Err(HostIoError::Denied {
+                    reason: "previous-attempt".to_string(),
+                }),
+            };
+            orchestrator.last_failed_host_effect_journal = vec![previous_effect.clone()];
+            orchestrator.last_failed_host_effect_journal_records =
+                vec![HostEffectJournalAttemptRecord::Completed {
+                    sequence: 0,
+                    entry: previous_effect,
+                }];
+            let attempts = orchestrator.attempt_counter;
+            let executions = orchestrator.execution_count();
+            let authority = authority_for_attempt_test();
+            let journal = Arc::new(InMemoryHostEffectJournal::recording());
+            orchestrator.set_process_spawn(
+                Arc::new(DenyAllProcessSpawn),
+                journal.clone(),
+                authority.clone(),
+            );
+            package.source = "throw 'package source must not run';".to_string();
+            let mut resolved = resolved_entry_for_attempt_test();
+            let expected_detail = match case {
+                "identity" => {
+                    resolved.module.record.id.clear();
+                    "identity or canonical content hash"
+                }
+                "canonical_specifier" => {
+                    resolved.module.canonical_specifier.clear();
+                    "identity or canonical content hash"
+                }
+                "content_hash" => "identity or canonical content hash",
+                "syntax" => {
+                    resolved.module.record.syntax = ModuleSyntax::CommonJs;
+                    "requires Script goal"
+                }
+                "capability" => {
+                    resolved
+                        .module
+                        .record
+                        .required_capabilities
+                        .insert(RuntimeCapability::FsWrite);
+                    "capabilities not granted"
+                }
+                "missing_resolver" => {
+                    resolved
+                        .module
+                        .record
+                        .dependencies
+                        .push(ModuleDependency::new("./dependency.js", ImportStyle::Import));
+                    "runtime resolver injection is required"
+                }
+                "resolver_identity" => "runtime resolver entry identity",
+                _ => unreachable!(),
+            };
+            resolved.module.content_hash = if case == "content_hash" {
+                ContentHash::compute(b"incorrect delivered content")
+            } else {
+                resolved.module.record.canonical_hash()
+            };
+
+            let previous_hash = ContentHash::compute(b"previous resolver");
+            if with_resolver {
+                orchestrator.module_resolver = Some((
+                    resolver_for_attempt_test("delivered:previous-entry"),
+                    previous_hash,
+                ));
+            }
+            let error = if with_resolver {
+                let entry = if case == "resolver_identity" {
+                    "delivered:wrong-entry"
+                } else {
+                    &resolved.module.record.id
+                };
+                orchestrator.execute_resolved_entry_with_resolver(
+                    &package,
+                    &resolved,
+                    resolver_for_attempt_test(entry),
+                )
+            } else {
+                orchestrator.execute_resolved_entry(&package, &resolved)
+            }
+            .expect_err("invalid delivery must fail before executing guest source");
+            assert!(
+                matches!(
+                    &error,
+                    OrchestratorError::ResolvedEntryRejected { detail }
+                        if detail.contains(expected_detail)
+                ),
+                "{case}, with_resolver={with_resolver}: {error:?}"
+            );
+            assert_eq!(orchestrator.attempt_counter, attempts);
+            assert_eq!(orchestrator.execution_count(), executions);
+            assert!(orchestrator.last_failed_host_effect_journal().is_empty());
+            assert!(
+                orchestrator
+                    .last_failed_host_effect_journal_records()
+                    .is_empty()
+            );
+            assert!(orchestrator.last_failed_console_output().is_empty());
+            assert!(orchestrator.last_failed_trace_id().is_none());
+            if with_resolver {
+                let (previous, hash) = orchestrator.module_resolver.as_ref().unwrap();
+                assert_eq!(previous.entry_referrer(), "delivered:previous-entry");
+                assert_eq!(*hash, previous_hash);
+            } else {
+                assert!(orchestrator.module_resolver.is_none());
+            }
+
+            // Reinstalling a cloned authority elsewhere must not turn a
+            // refused delivery into permission for an unrelated execution.
+            let mut reused = ExecutionOrchestrator::with_defaults();
+            reused.set_process_spawn(Arc::new(DenyAllProcessSpawn), journal.clone(), authority);
+            assert!(matches!(
+                reused.execute(&simple_package()),
+                Err(OrchestratorError::ProcessSpawnAttempt(
+                    ProcessSpawnAttemptError::AlreadyAdmitted
+                ))
+            ));
+            assert_eq!(reused.attempt_counter, 0);
+            assert!(reused.ledger().is_empty());
+            journal.begin_execution().unwrap();
+            assert!(journal.finish_execution().unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn execution_attempt_admission_resolved_success_admits_once_and_restores_resolver() {
+        use frankenengine_extension_host::process_spawn::DenyAllProcessSpawn;
+
+        for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+            for with_resolver in [false, true] {
+                let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig {
+                    force_lane: Some(lane),
+                    parse_goal: ParseGoal::Module,
+                    ..OrchestratorConfig::default()
+                });
+                let package = package_with_source("throw 'package source must not run';");
+                let resolved = resolved_entry_for_attempt_test();
+                let authority = authority_for_attempt_test();
+                let journal = Arc::new(InMemoryHostEffectJournal::recording());
+                orchestrator.set_process_spawn(
+                    Arc::new(DenyAllProcessSpawn),
+                    journal,
+                    authority.clone(),
+                );
+                let previous_hash = ContentHash::compute(b"previous resolver");
+                if with_resolver {
+                    orchestrator.module_resolver = Some((
+                        resolver_for_attempt_test("delivered:previous-entry"),
+                        previous_hash,
+                    ));
+                }
+                let result = if with_resolver {
+                    orchestrator.execute_resolved_entry_with_resolver(
+                        &package,
+                        &resolved,
+                        resolver_for_attempt_test(&resolved.module.record.id),
+                    )
+                } else {
+                    orchestrator.execute_resolved_entry(&package, &resolved)
+                }
+                .expect("successful delivery must consume authority exactly once");
+                assert_eq!(result.execution_value, "42");
+                assert_eq!(
+                    result
+                        .console_output
+                        .iter()
+                        .map(|entry| entry.message.as_str())
+                        .collect::<Vec<_>>(),
+                    vec!["delivered entry"]
+                );
+                assert_eq!(orchestrator.attempt_counter, 1);
+                assert_eq!(orchestrator.execution_count(), 1);
+                assert_eq!(
+                    authority.admit_once(),
+                    Err(ProcessSpawnAttemptError::AlreadyAdmitted)
+                );
+                if with_resolver {
+                    let (previous, hash) = orchestrator.module_resolver.as_ref().unwrap();
+                    assert_eq!(previous.entry_referrer(), "delivered:previous-entry");
+                    assert_eq!(*hash, previous_hash);
+                } else {
+                    assert!(orchestrator.module_resolver.is_none());
+                }
+            }
+        }
     }
 
     #[test]

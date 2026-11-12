@@ -56,7 +56,35 @@ fn loop_local_loaders_are_called_instead_of_the_filesystem_facade() {
 
 #[test]
 fn dynamic_require_getter_keeps_its_receiver_and_observable_lookup() {
+    // Unshadowed `require` inside `with` retains its ambient-authority rejection
+    // (`bd-9vouw.101`: `with_body_names_keep_their_ambient_authority_checks`).
+    let mut unshadowed_orch = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    let unshadowed_pkg = ExtensionPackage {
+        extension_id: "fs-require-scope-unshadowed-with".into(),
+        source: "const loader = { get require() { return name => name; } }; with (loader) { require('fs'); }"
+            .into(),
+        source_file: None,
+        module_root: None,
+        capabilities: ["vm_dispatch", "heap_allocate", "builtin", "console"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        version: "1.0.0".into(),
+        metadata: BTreeMap::new(),
+    };
+    let err = unshadowed_orch
+        .execute(&unshadowed_pkg)
+        .expect_err("unshadowed require in with-body must fail closed at lowering");
+    assert!(
+        format!("{err:?}").contains("AmbientAuthorityViolation"),
+        "expected AmbientAuthorityViolation, got {err:?}"
+    );
+
+    // When a source lexical binding shadows `require`, neither `fs_module` nor
+    // ambient-authority rejection replaces it, and `with (loader)` resolves the
+    // dynamic `require` getter on `loader` with `this === loader`.
     let output = run(r#"
+        const require = () => 'outer';
         let gets = 0;
         const loader = {
             prefix: 'custom:',
@@ -66,9 +94,10 @@ fn dynamic_require_getter_keeps_its_receiver_and_observable_lookup() {
             }
         };
         with (loader) { console.log(require('fs')); }
+        with ({}) { console.log(require('fs')); }
         console.log(gets);
         "#);
-    assert_eq!(output, ["custom:fs", "1"]);
+    assert_eq!(output, ["custom:fs", "outer", "1"]);
 }
 
 #[test]

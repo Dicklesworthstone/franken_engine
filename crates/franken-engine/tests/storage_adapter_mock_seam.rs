@@ -44,7 +44,7 @@ use frankenengine_engine::storage_adapter::{
     StoreQuery, StoreRecord,
 };
 use frankenengine_engine::typed_persistence_models::{
-    IfcProvenanceEntry, ReplacementLineageEntry, ShadowEvidenceJournalEntry,
+    IfcProvenanceEntry, PlasWitnessEntry, ReplacementLineageEntry, ShadowEvidenceJournalEntry,
     SpecializationIndexEntry, TypedStoreRecord,
 };
 
@@ -70,6 +70,7 @@ fn typed_heavy_store_kind(store: StoreKind) -> bool {
     matches!(
         store,
         StoreKind::ShadowEvidenceJournal
+            | StoreKind::PlasWitness
             | StoreKind::ReplacementLineage
             | StoreKind::IfcProvenance
             | StoreKind::SpecializationIndex
@@ -150,12 +151,33 @@ fn specialization_index_fixture(specialization_id: i64) -> SpecializationIndexEn
     }
 }
 
+fn plas_witness_fixture(witness_record_id: i64) -> PlasWitnessEntry {
+    PlasWitnessEntry {
+        witness_record_id,
+        witness_id: format!("aa{:062x}", witness_record_id),
+        extension_id: "bb".repeat(32),
+        policy_id: "cc".repeat(32),
+        lifecycle_state: "promoted".to_string(),
+        security_epoch: 3,
+        promotion_timestamp_ms: 1_700_000_400_000 + witness_record_id,
+        content_hash: "dd".repeat(32),
+        required_capabilities_json: r#"["fs.read"]"#.to_string(),
+        witness_json: r#"{"schema":"plas-witness-mock-seam"}"#.to_string(),
+        metadata_json: "{}".to_string(),
+    }
+}
+
 fn typed_store_record(store: StoreKind, ordinal: i64) -> Option<StoreRecord> {
     match store {
         StoreKind::ShadowEvidenceJournal => Some(
             shadow_evidence_journal_fixture(ordinal)
                 .to_store_record(0)
                 .expect("shadow journal fixture is valid"),
+        ),
+        StoreKind::PlasWitness => Some(
+            plas_witness_fixture(ordinal)
+                .to_store_record(0)
+                .expect("plas witness fixture is valid"),
         ),
         StoreKind::ReplacementLineage => Some(
             replacement_lineage_fixture(ordinal)
@@ -887,7 +909,7 @@ fn batch_put_is_atomic_equivalent_to_individual_puts() {
 
     let compat_meta = BTreeMap::from([(
         "typed_authority_mode".to_string(),
-        "legacy_generic_compat".to_string(),
+        "explicit_legacy_compat_v1".to_string(),
     )]);
     let batch = vec![
         BatchPutEntry {
@@ -912,7 +934,14 @@ fn batch_put_is_atomic_equivalent_to_individual_puts() {
         .expect("batch put");
 
     let results = adapter
-        .query(StoreKind::PlasWitness, &StoreQuery::default(), &context)
+        .query(
+            StoreKind::PlasWitness,
+            &StoreQuery {
+                key_prefix: Some("witnesses/batch/".to_string()),
+                ..StoreQuery::default()
+            },
+            &context,
+        )
         .expect("query all");
     assert_eq!(results.len(), 3);
     assert_eq!(results[0].key, "witnesses/batch/alpha");
@@ -2483,7 +2512,14 @@ fn enrichment_frankensqlite_query_empty_store_returns_empty() {
     let mut adapter = FrankensqliteStorageAdapter::new(backend).expect("init");
     let ctx = context();
     let rows = adapter
-        .query(StoreKind::PlasWitness, &StoreQuery::default(), &ctx)
+        .query(
+            StoreKind::PlasWitness,
+            &StoreQuery {
+                key_prefix: Some("typed/plas_witness/".to_string()),
+                ..StoreQuery::default()
+            },
+            &ctx,
+        )
         .expect("query");
     assert!(rows.is_empty());
 }
@@ -2803,7 +2839,7 @@ fn enrichment_cross_concern_batch_then_individual_overwrites() {
 
     let compat_meta = BTreeMap::from([(
         "typed_authority_mode".to_string(),
-        "legacy_generic_compat".to_string(),
+        "explicit_legacy_compat_v1".to_string(),
     )]);
     let entries = vec![
         BatchPutEntry {

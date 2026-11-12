@@ -950,6 +950,11 @@ pub(super) fn is_require_querystring_module_initializer(
     else {
         return false;
     };
+    if matches!(callee.as_ref(), Expression::Identifier(name) if name == "__franken_querystring_module")
+        && arguments.is_empty()
+    {
+        return true;
+    }
     if !matches!(callee.as_ref(), Expression::Identifier(name)
         if is_builtin_require_callee(binding_lookup, name))
     {
@@ -999,11 +1004,13 @@ pub(super) fn is_querystring_module_object(
         Expression::Call {
             callee, arguments, ..
         } => {
-            matches!(callee.as_ref(), Expression::Identifier(name)
-                if is_builtin_require_callee(binding_lookup, name))
-                && matches!(arguments.as_slice(), [spec]
-                    if well_formed_string_literal(spec)
-                        .is_some_and(is_querystring_module_specifier))
+            (matches!(callee.as_ref(), Expression::Identifier(name) if name == "__franken_querystring_module")
+                && arguments.is_empty())
+                || (matches!(callee.as_ref(), Expression::Identifier(name)
+                    if is_builtin_require_callee(binding_lookup, name))
+                    && matches!(arguments.as_slice(), [spec]
+                        if well_formed_string_literal(spec)
+                            .is_some_and(is_querystring_module_specifier)))
         }
         _ => false,
     }
@@ -12462,6 +12469,8 @@ pub(crate) fn sink_clearance_from_capability(capability: &str) -> Label {
             | "builtin:ObjectSetPrototypeOf"
             | "builtin:ObjectIsExtensible"
             | "builtin:ObjectPreventExtensions"
+            | "builtin:ArrayPrototypeSome"
+            | "builtin:StringPrototypeCharAt"
     ) {
         return Label::TopSecret;
     }

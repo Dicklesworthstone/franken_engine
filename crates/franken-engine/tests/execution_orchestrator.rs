@@ -4026,7 +4026,7 @@ fn error_message_read_in_catch_reaches_completion_bd_8y64t() {
     // stays operand-derived instead of failing high to the unit ceiling.
     let mut package = simple_package(
         "ext-8y64t-positive",
-        r#"const _seed = "hostcall<\"credential.read\"> secret"; const out = { m: false }; try { throw new Error("test"); } catch (e) { out.m = e.message; } out.m;"#,
+        r#"function _unused_seed() { return "hostcall<\"credential.read\"> secret"; } const out = { m: false }; try { throw new Error("test"); } catch (e) { out.m = e.message; } out.m;"#,
     );
     // The builtin hostcall is separately capability-gated; the IFC precision
     // under test is orthogonal to the grant (frankenctl's run path grants the

@@ -1143,7 +1143,14 @@ fn enrichment_query_limit_zero_errors() {
 fn enrichment_query_empty_store_returns_empty() {
     let mut adapter = InMemoryStorageAdapter::new();
     let rows = adapter
-        .query(StoreKind::PlasWitness, &StoreQuery::default(), &ctx())
+        .query(
+            StoreKind::PlasWitness,
+            &StoreQuery {
+                key_prefix: Some("typed/plas_witness/".to_string()),
+                ..StoreQuery::default()
+            },
+            &ctx(),
+        )
         .unwrap();
     assert!(rows.is_empty());
 }
@@ -2048,7 +2055,14 @@ fn enrichment_multi_store_batch_fill_and_query_all() {
     }
     // Stores not touched should be empty
     let rows = adapter
-        .query(StoreKind::PlasWitness, &StoreQuery::default(), &context)
+        .query(
+            StoreKind::PlasWitness,
+            &StoreQuery {
+                key_prefix: Some("typed/plas_witness/".to_string()),
+                ..StoreQuery::default()
+            },
+            &context,
+        )
         .unwrap();
     assert!(rows.is_empty());
 }
@@ -2063,8 +2077,8 @@ fn enrichment_put_with_rich_metadata() {
     meta.insert("version".to_string(), "v2".to_string());
     let record = adapter
         .put(
-            StoreKind::IfcProvenance,
-            "prov/001".to_string(),
+            StoreKind::PolicyCache,
+            "policy/001".to_string(),
             vec![42],
             meta.clone(),
             &context,
@@ -2073,7 +2087,7 @@ fn enrichment_put_with_rich_metadata() {
     assert_eq!(record.metadata.len(), 3);
     assert_eq!(record.metadata.get("region"), Some(&"us-east".to_string()));
     let got = adapter
-        .get(StoreKind::IfcProvenance, "prov/001", &context)
+        .get(StoreKind::PolicyCache, "policy/001", &context)
         .unwrap()
         .unwrap();
     assert_eq!(got.metadata, meta);

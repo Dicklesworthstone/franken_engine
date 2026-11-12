@@ -6812,73 +6812,84 @@ impl InterpreterCore {
             ) => Some(BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterOnce)),
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster"
+                | "ChildProcess" | "ChildProcessStream",
                 "off" | "removeListener",
             ) => Some(BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterOff)),
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster"
+                | "ChildProcess" | "ChildProcessStream",
                 "removeAllListeners",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterRemoveAllListeners,
             )),
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster"
+                | "ChildProcess" | "ChildProcessStream",
                 "listenerCount",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterListenerCount,
             )),
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster"
+                | "ChildProcess" | "ChildProcessStream",
                 "eventNames",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterEventNames,
             )),
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster"
+                | "ChildProcess" | "ChildProcessStream",
                 "prependListener",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterPrependListener,
             )),
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster"
+                | "ChildProcess" | "ChildProcessStream",
                 "prependOnceListener",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterPrependOnceListener,
             )),
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster"
+                | "ChildProcess" | "ChildProcessStream",
                 "emit",
             ) => Some(BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterEmit)),
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster"
+                | "ChildProcess" | "ChildProcessStream",
                 "getMaxListeners",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterGetMaxListeners,
             )),
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster"
+                | "ChildProcess" | "ChildProcessStream",
                 "setMaxListeners",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterSetMaxListeners,
             )),
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster"
+                | "ChildProcess" | "ChildProcessStream",
                 "listeners",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterListeners,
             )),
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster"
+                | "ChildProcess" | "ChildProcessStream",
                 "rawListeners",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterRawListeners,
@@ -9016,7 +9027,18 @@ impl InterpreterCore {
                 )?;
                 return Ok(false);
             }
-            self.set_object_runtime_property(receiver_id, key.clone(), value)?;
+            if let Some(context_label) = self.active_inline_callback_context_label.clone() {
+                let existing = self.own_stored_runtime_property_label(receiver_id, key);
+                let combined = existing.join(&context_label);
+                self.set_own_runtime_property_label(receiver_id, key, &combined)?;
+                if let Err(err) = self.set_object_runtime_property(receiver_id, key.clone(), value)
+                {
+                    self.set_own_runtime_property_label(receiver_id, key, &existing)?;
+                    return Err(err);
+                }
+            } else {
+                self.set_object_runtime_property(receiver_id, key.clone(), value)?;
+            }
             // An array receiver's length grows with the index written, for
             // every caller of [[Set]]: the SetProperty instruction,
             // Object.assign (`Object.assign(vals, [4, 4])`, cli-table3's

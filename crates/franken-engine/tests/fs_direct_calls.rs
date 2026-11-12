@@ -110,6 +110,21 @@ fn direct_writer_still_requires_write_authority_and_never_fakes_success() {
 fn inline_read_keeps_operand_order_and_catchable_filesystem_errors() {
     let root = tempfile::tempdir().expect("sandbox");
     std::fs::write(root.path().join("input.txt"), "payload").unwrap();
+    // Safe primitive options lower directly without requiring `builtin` authority.
+    let direct_output = run(
+        "function path() { console.log('path'); return 'input.txt'; } \
+         console.log(require('fs').readFileSync(path(), 'utf8')); \
+         try { require('node:fs').readFileSync('missing.txt', 'utf8'); } \
+         catch (error) { console.log(error.code); }",
+        root.path(),
+        &["vm_dispatch", "heap_allocate", "console", "fs_read"],
+    )
+    .expect("direct operand order and original exception boundary");
+    assert_eq!(direct_output, ["path", "payload", "ENOENT"]);
+
+    // Dynamic options (`encoding()`) intentionally stay on the complete JS facade
+    // (9bdb551a2) so JavaScript option property semantics execute, preserving
+    // operand evaluation order and catchable filesystem errors.
     let output = run(
         "function path() { console.log('path'); return 'input.txt'; } \
          function encoding() { console.log('encoding'); return 'utf8'; } \
@@ -117,7 +132,13 @@ fn inline_read_keeps_operand_order_and_catchable_filesystem_errors() {
          try { require('node:fs').readFileSync('missing.txt', 'utf8'); } \
          catch (error) { console.log(error.code); }",
         root.path(),
-        &["vm_dispatch", "heap_allocate", "console", "fs_read"],
+        &[
+            "vm_dispatch",
+            "heap_allocate",
+            "builtin",
+            "console",
+            "fs_read",
+        ],
     )
     .expect("operand order and original exception boundary");
     assert_eq!(output, ["path", "encoding", "payload", "ENOENT"]);
@@ -271,10 +292,37 @@ const BOUND_ORDER_EXPECTED: &str = "before\nafter\npath\nencoding\n1 2 payload t
 fn alias_expansion_preserves_operand_order_and_catchable_error_boundaries() {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("input.txt"), "payload").unwrap();
+    // Direct-lowered bound read with safe literal encoding needs no `builtin` authority.
+    let direct_actual = run(
+        r#"
+function before() { console.log('before'); return 1; }
+function after() { console.log('after'); return 2; }
+function path() { console.log('path'); return 'input.txt'; }
+const a = before(), {readFileSync: read, existsSync: exists} = require('fs'), z = after();
+console.log(a, z, read(path(), 'utf8'), exists('input.txt'));
+try { read('missing.txt', 'utf8'); } catch (error) { console.log(error.code); }
+"#,
+        root.path(),
+        &["vm_dispatch", "heap_allocate", "console", "fs_read"],
+    )
+    .expect("direct declarations, operand effects and native exception");
+    assert_eq!(
+        direct_actual.join("\n"),
+        "before\nafter\npath\n1 2 payload true\nENOENT"
+    );
+
+    // Dynamic options (`encoding()`) route through the complete JS facade (9bdb551a2),
+    // preserving declaration/operand order and catchable error boundaries.
     let actual = run(
         BOUND_ORDER_SOURCE,
         root.path(),
-        &["vm_dispatch", "heap_allocate", "console", "fs_read"],
+        &[
+            "vm_dispatch",
+            "heap_allocate",
+            "builtin",
+            "console",
+            "fs_read",
+        ],
     )
     .expect("declarations, operand effects and native exception");
     assert_eq!(actual.join("\n"), BOUND_ORDER_EXPECTED);

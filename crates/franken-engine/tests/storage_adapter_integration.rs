@@ -1312,10 +1312,21 @@ fn in_memory_delete_then_get_returns_none() {
 #[test]
 fn in_memory_query_empty_store_returns_empty() {
     let mut adapter = InMemoryStorageAdapter::new();
-    let rows = adapter
-        .query(StoreKind::PlasWitness, &StoreQuery::default(), &ctx())
+    let generic_rows = adapter
+        .query(StoreKind::ReplayIndex, &StoreQuery::default(), &ctx())
         .unwrap();
-    assert!(rows.is_empty());
+    assert!(generic_rows.is_empty());
+    let typed_rows = adapter
+        .query(
+            StoreKind::PlasWitness,
+            &StoreQuery {
+                key_prefix: Some("typed/plas_witness/".to_string()),
+                ..StoreQuery::default()
+            },
+            &ctx(),
+        )
+        .unwrap();
+    assert!(typed_rows.is_empty());
 }
 
 #[test]
@@ -2465,7 +2476,14 @@ fn cross_concern_full_crud_lifecycle_across_multiple_stores() {
         StoreKind::SpecializationIndex,
     ] {
         let rows = adapter
-            .query(store, &StoreQuery::default(), &context)
+            .query(
+                store,
+                &StoreQuery {
+                    key_prefix: Some(format!("typed/{}/", store.as_str())),
+                    ..StoreQuery::default()
+                },
+                &context,
+            )
             .unwrap();
         assert!(rows.is_empty(), "store {store:?} should be empty");
     }

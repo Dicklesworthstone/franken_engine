@@ -194,9 +194,13 @@ fn force_terminate_child(child: &mut Child) -> std::io::Result<std::process::Exi
 fn run_node_with_measurement(node: &Path, path: &Path) -> std::io::Result<NodeMeasurement> {
     let timeout = Duration::from_secs(30);
     let mut command = Command::new(node);
-    command.arg(path);
-    command.stdout(Stdio::piped());
-    command.stderr(Stdio::piped());
+    command
+        .arg(path)
+        .env("NO_COLOR", "1")
+        .env_remove("FORCE_COLOR")
+        .env_remove("CLICOLOR_FORCE")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     #[cfg(unix)]
     command.process_group(0);
 
@@ -315,9 +319,10 @@ fn frankenctl_path() -> Option<PathBuf> {
 
 fn frankenctl_in_current_target_dir() -> Option<PathBuf> {
     let current_exe = env::current_exe().ok()?;
-    let deps_dir = current_exe.parent()?;
-    let profile_dir = deps_dir.parent()?;
-    command_in_dir(profile_dir, "frankenctl")
+    current_exe
+        .ancestors()
+        .skip(1)
+        .find_map(|dir| command_in_dir(dir, "frankenctl"))
 }
 
 fn command_in_dir(dir: &Path, command: &str) -> Option<PathBuf> {
@@ -515,6 +520,9 @@ fn run_node_measured(node: &Path, path: &Path) -> NodeMeasurement {
 fn run_checked(program: &Path, args: &[OsString]) -> Output {
     let output = Command::new(program)
         .args(args)
+        .env("NO_COLOR", "1")
+        .env_remove("FORCE_COLOR")
+        .env_remove("CLICOLOR_FORCE")
         .output()
         .unwrap_or_else(|error| panic!("failed to spawn {}: {error}", program.display()));
     assert!(

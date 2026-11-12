@@ -5614,20 +5614,6 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
     let result = match orchestrator.execute(&package) {
         Ok(result) => result,
         Err(error) => {
-            if let Some(rejection) = lowering_rejection(&error) {
-                return emit_lowering_rejection(
-                    "run",
-                    &args.input,
-                    args.out.as_deref(),
-                    args.emit_evidence_trust.as_deref(),
-                    configured_evidence.as_ref(),
-                    run_epoch,
-                    &mut orchestrator,
-                    &package.extension_id,
-                    &error,
-                    rejection,
-                );
-            }
             let failed_ctx = FailedRunEmitContext {
                 args: &args,
                 package: &package,
@@ -5638,6 +5624,15 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
                 evidence_authority: &evidence_authority,
                 configured_evidence: configured_evidence.as_ref(),
             };
+            if let Some(rejection) = lowering_rejection(&error) {
+                return emit_lowering_rejection(
+                    "run",
+                    &failed_ctx,
+                    &mut orchestrator,
+                    &error,
+                    rejection,
+                );
+            }
             return emit_orchestration_failure(
                 "run",
                 &args.input,
@@ -8216,19 +8211,16 @@ fn lowering_rejection(error: &OrchestratorError) -> Option<LoweringRejection> {
 /// decision record anchored in the run's runtime authority; exit 2 as before.
 fn emit_lowering_rejection(
     command: &str,
-    input: &Path,
-    out: Option<&Path>,
-    emit_evidence_trust: Option<&Path>,
-    configured_evidence: Option<&LoadedRunEvidenceAuthority>,
-    epoch: SecurityEpoch,
+    run_ctx: &FailedRunEmitContext<'_>,
     orchestrator: &mut ExecutionOrchestrator,
-    extension_id: &str,
     error: &OrchestratorError,
     rejection: LoweringRejection,
 ) -> Result<i32, String> {
+    let input = run_ctx.args.input.as_path();
+    let out = run_ctx.args.out.as_deref();
     let error_message = format_orchestration_error(command, input, error);
     let (trace_id, evidence_chain_artifact) = orchestrator
-        .record_lowering_rejection_evidence(extension_id, error)
+        .record_lowering_rejection_evidence(&run_ctx.package.extension_id, error)
         .map_err(|evidence_err| {
             format!("{error_message}; failed to record lowering rejection evidence: {evidence_err}")
         })?
@@ -8244,9 +8236,9 @@ fn emit_lowering_rejection(
             format!("{error_message}; refusing to emit unverified lowering rejection evidence: {verify_err}")
         })?;
     let evidence_trust_snapshot_digest = export_run_evidence_trust_snapshot(
-        emit_evidence_trust,
-        configured_evidence,
-        epoch,
+        run_ctx.args.emit_evidence_trust.as_deref(),
+        run_ctx.configured_evidence,
+        run_ctx.epoch,
         trusted_identity,
     )?;
     let evidence_chain_head = evidence_chain_artifact.receipt.head_chain_hash.clone();

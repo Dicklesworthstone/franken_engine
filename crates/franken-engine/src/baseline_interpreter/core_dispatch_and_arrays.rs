@@ -11485,10 +11485,7 @@ impl InterpreterCore {
                 if iters_left > 0 {
                     let header_ip = self.ip;
                     let mut ran_any = false;
-                    loop {
-                        let Some(cell) = program.raw_cell_at(self.ip) else {
-                            break;
-                        };
+                    while let Some(cell) = program.raw_cell_at(self.ip) {
                         if matches!(
                             cell.opcode,
                             CompactTier1Opcode::Baseline | CompactTier1Opcode::Halt

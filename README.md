@@ -247,7 +247,7 @@ The orchestrated extension path composes capability, security-epoch, evidence, a
 
 | Surface | Count / size (tracked HEAD, verified 2026-09-22) |
 |---|---|
-| Source modules in `crates/franken-engine/src/` | 636 top-level `.rs` files / 625 `pub mod` declarations in `lib.rs` (`baseline_interpreter.rs` alone is ~0.6 MB / 16,728 LoC). The generated companion [`docs/ARCHITECTURE_INVENTORY.md`](./docs/ARCHITECTURE_INVENTORY.md) counts module files recursively (excluding `lib.rs` itself). |
+| Source modules in `crates/franken-engine/src/` | 636 top-level `.rs` files / 625 `pub mod` declarations in `lib.rs` (`baseline_interpreter.rs` alone is ~0.6 MB / 16,996 LoC). The generated companion [`docs/ARCHITECTURE_INVENTORY.md`](./docs/ARCHITECTURE_INVENTORY.md) counts module files recursively (excluding `lib.rs` itself). |
 | Internal operator binaries in `crates/franken-engine/src/bin/` | 73 `.rs` files in total (6 of them are the release binaries listed above; 67 are internal operator tools) |
 | Integration tests in `crates/franken-engine/tests/` | 2,247 top-level `.rs` files (41 are RGC gate tests) |
 | Operator gate scripts in `scripts/run_*.sh` | 296 (RGC, parser, and FRX families plus claim/evidence/build plumbing) |

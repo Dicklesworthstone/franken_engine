@@ -10258,10 +10258,6 @@ struct LiveExport {
     exports: Vec<(String, JsString)>,
 }
 
-/// How many re-export hops one write republishes through (an exported
-/// import binding republishes when its export is published).
-const LIVE_EXPORT_CASCADE_LIMIT: u32 = 64;
-
 /// Whose publication of an export it is (bd-1lsy.4.10.1): the module's own
 /// export (which wins over a star re-export of the name), or a source
 /// module's value reaching a module that `export * from` it.

@@ -88,7 +88,6 @@ impl InterpreterCore {
                     value,
                     ceiling,
                     ExportPublication::Own,
-                    0,
                 )?;
                 self.set_object_property(module_object, "loaded".to_string(), Value::Bool(true))?;
                 let record = self.module_state.modules.get_mut(resolved).ok_or_else(|| {

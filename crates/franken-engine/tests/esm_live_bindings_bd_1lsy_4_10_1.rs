@@ -170,3 +170,78 @@ fn a_captured_exported_var_is_hoisted_and_live() {
         ["undefined function", "0", "2"]
     );
 }
+
+/// Publication is a graph operation, not a bounded recursive walk. Load the
+/// relays in dependency order to isolate propagation from module-load nesting.
+#[test]
+fn live_updates_cross_more_than_sixty_four_reexport_hops() {
+    for star in [false, true] {
+        let root = tempfile::tempdir().expect("temp dir");
+        std::fs::write(
+            root.path().join("state.mjs"),
+            "export let count = 1; export function inc() { count++; }\n",
+        )
+        .expect("write state");
+        let mut entry = String::from("import { inc } from './state.mjs';\n");
+        let mut previous = String::from("state.mjs");
+        for index in 0..72 {
+            let filename = format!("relay-{index}.mjs");
+            let exports = if star { "*" } else { "{ count }" };
+            std::fs::write(
+                root.path().join(&filename),
+                format!("export {exports} from './{previous}';\n"),
+            )
+            .expect("write relay");
+            entry.push_str(&format!("import './{filename}';\n"));
+            previous = filename;
+        }
+        entry.push_str(&format!(
+            "import {{ count }} from './{previous}';\n\
+             import * as namespace from './{previous}';\n\
+             console.log(count, namespace.count);\n\
+             inc(); console.log(count, namespace.count);\n\
+             inc(); console.log(count, namespace.count);\n"
+        ));
+        std::fs::write(root.path().join("main.mjs"), entry).expect("write entry");
+        assert_eq!(
+            run_module(root.path(), "main.mjs"),
+            ["1 1", "2 2", "3 3"],
+            "star={star}"
+        );
+    }
+}
+
+#[test]
+fn live_updates_follow_shared_diamond_paths_without_repeating_the_graph() {
+    let root = tempfile::tempdir().expect("temp dir");
+    std::fs::write(
+        root.path().join("state.mjs"),
+        "export let count = 0; export function inc() { count++; }\n",
+    )
+    .expect("write state");
+    let mut entry = String::from("import { inc } from './state.mjs';\n");
+    let mut sources = vec![String::from("state.mjs")];
+    for level in 0..12 {
+        let mut next = Vec::new();
+        for side in ["left", "right"] {
+            let filename = format!("{side}-{level}.mjs");
+            let mut source = String::new();
+            for dependency in &sources {
+                source.push_str(&format!("export * from './{dependency}';\n"));
+            }
+            std::fs::write(root.path().join(&filename), source).expect("write diamond");
+            entry.push_str(&format!("import './{filename}';\n"));
+            next.push(filename);
+        }
+        sources = next;
+    }
+    entry.push_str(&format!(
+        "import {{ count as left }} from './{}';\n\
+         import {{ count as right }} from './{}';\n\
+         inc(); console.log(left, right);\n\
+         inc(); console.log(left, right);\n",
+        sources[0], sources[1]
+    ));
+    std::fs::write(root.path().join("main.mjs"), entry).expect("write entry");
+    assert_eq!(run_module(root.path(), "main.mjs"), ["1 1", "2 2"]);
+}

@@ -5141,6 +5141,119 @@ mod function_prototype_call_apply_tests_current {
     }
 
     #[test]
+    fn live_export_diamond_revisits_a_namespace_when_a_later_path_is_secret() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        let name = JsString::from("count");
+        let mut namespaces = BTreeMap::new();
+        for specifier in ["a-source", "b-first", "c-join", "d-tail", "z-late"] {
+            let namespace = core.ensure_module_record(&module, specifier).unwrap();
+            namespaces.insert(specifier, namespace);
+            core.publish_module_export(
+                specifier,
+                name.clone(),
+                Value::Int(0),
+                Label::Public,
+                ExportPublication::Own,
+            )
+            .unwrap();
+        }
+        for (source, target) in [
+            ("a-source", "b-first"),
+            ("b-first", "c-join"),
+            ("c-join", "d-tail"),
+            ("z-late", "c-join"),
+        ] {
+            core.module_state
+                .modules
+                .get_mut(source)
+                .unwrap()
+                .star_reexporters
+                .insert(target.to_string());
+            core.module_state
+                .modules
+                .get_mut(target)
+                .unwrap()
+                .star_exports
+                .insert(name.clone(), StarExportOrigin::Provided);
+        }
+        // This re-exporting import retains a historical Secret label even
+        // after its source writes a new Public value. Its lexical path sorts
+        // after the Public path, so the join and tail have already published.
+        let imported = ScopeBinding::with_labeled_state(
+            BindingKind::Import,
+            Value::Int(0),
+            Label::Secret,
+            true,
+        );
+        core.watch_module_export(namespaces["a-source"], name.clone(), &imported.state)
+            .unwrap();
+        core.track_live_export(&imported.state, "z-late".to_string(), name.clone())
+            .unwrap();
+        core.sync_estimated_memory_bytes().unwrap();
+        let temporary_before = core.json_parse_temporary_bytes;
+        core.publish_module_export(
+            "a-source",
+            name.clone(),
+            Value::Int(9),
+            Label::Public,
+            ExportPublication::Own,
+        )
+        .unwrap();
+        let key = RuntimePropertyKey::String(name);
+        for specifier in ["z-late", "c-join", "d-tail"] {
+            let namespace = namespaces[specifier];
+            assert_eq!(core.prototype_chain_get(namespace, "count"), Ok(Value::Int(9)));
+            assert_eq!(core.runtime_property_label(namespace, &key), Label::Secret);
+        }
+        assert_eq!(core.json_parse_temporary_bytes, temporary_before);
+    }
+
+    #[test]
+    fn live_export_cycles_terminate_and_budget_failure_releases_scratch() {
+        for exhausted in [false, true] {
+            let module = test_module_with_functions(Vec::new(), Vec::new());
+            let mut core = test_interpreter();
+            let name = JsString::from("count");
+            let left = core.ensure_module_record(&module, "left").unwrap();
+            let right = core.ensure_module_record(&module, "right").unwrap();
+            for (source, target) in [("left", "right"), ("right", "left")] {
+                core.publish_module_export(
+                    source,
+                    name.clone(),
+                    Value::Int(0),
+                    Label::Public,
+                    ExportPublication::Own,
+                )
+                .unwrap();
+                let record = core.module_state.modules.get_mut(source).unwrap();
+                record
+                    .star_exports
+                    .insert(name.clone(), StarExportOrigin::Provided);
+                record.star_reexporters.insert(target.to_string());
+            }
+            let before = core.instructions_executed;
+            core.config.instruction_budget = before + if exhausted { 1 } else { 8 };
+            let result = core.publish_module_export(
+                "left",
+                name,
+                Value::Int(17),
+                Label::Public,
+                ExportPublication::Star,
+            );
+            if exhausted {
+                assert!(matches!(result, Err(InterpreterError::BudgetExhausted { .. })));
+            } else {
+                result.unwrap();
+                assert_eq!(core.prototype_chain_get(left, "count"), Ok(Value::Int(17)));
+                assert_eq!(core.prototype_chain_get(right, "count"), Ok(Value::Int(17)));
+                assert!(core.instructions_executed > before);
+            }
+            assert_eq!(core.json_parse_temporary_bytes, 0);
+        }
+    }
+
+    #[test]
     fn module_namespace_prototype_is_null_without_changing_ordinary_objects() {
         let module = test_module_with_functions(Vec::new(), Vec::new());
         let mut core = test_interpreter();

@@ -12464,7 +12464,6 @@ impl InterpreterCore {
                         member,
                         label.clone(),
                         ExportPublication::Own,
-                        0,
                     )?;
                     self.set_own_runtime_property_label(namespace, &key, &label)?;
                 }
@@ -12478,7 +12477,6 @@ impl InterpreterCore {
                     value.clone(),
                     default_label.clone(),
                     ExportPublication::Own,
-                    0,
                 )?;
                 self.set_own_runtime_property_label(namespace, &key, &default_label)?;
                 self.sort_module_namespace_keys(specifier)?;

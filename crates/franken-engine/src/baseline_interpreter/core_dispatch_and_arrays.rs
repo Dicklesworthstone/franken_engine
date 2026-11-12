@@ -1,5 +1,15 @@
 use super::*;
 
+/// A synchronous publication carries one value through a finite export graph.
+/// Keep the strongest label observed for each export, and revisit a completed
+/// node only when a later path raises its provenance or promotes an own export.
+#[derive(Default)]
+struct ModuleExportCascade {
+    pending: BTreeSet<(String, JsString)>,
+    states: BTreeMap<(String, JsString), (Label, ExportPublication)>,
+    temporary_bytes: u64,
+}
+
 impl InterpreterCore {
     #[inline(never)]
     pub(super) fn dispatch_builtin_function_inner(
@@ -5111,7 +5121,7 @@ impl InterpreterCore {
                 name: name.to_string(),
             });
         };
-        self.publish_module_export(&specifier, name, value, label, ExportPublication::Own, 0)
+        self.publish_module_export(&specifier, name, value, label, ExportPublication::Own)
     }
 
     /// Publish `value` as export `name` of module `specifier`: its export
@@ -5127,7 +5137,135 @@ impl InterpreterCore {
         value: Value,
         label: Label,
         publication: ExportPublication,
-        depth: u32,
+    ) -> Result<(), InterpreterError> {
+        let mut cascade = ModuleExportCascade::default();
+        let outcome = (|| {
+            self.queue_module_export(&mut cascade, specifier, &name, &label, publication)?;
+            self.drain_module_export_cascade(&mut cascade, &value)
+        })();
+        let temporary_bytes = cascade.temporary_bytes;
+        drop(cascade);
+        self.json_release_temporary(temporary_bytes);
+        outcome
+    }
+
+    fn module_export_key_bytes(specifier: &str, name: &JsString) -> u64 {
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(std::mem::size_of::<(String, JsString)>() as u64)
+            .saturating_add(Self::estimate_string_bytes(specifier))
+            .saturating_add(Self::estimate_js_string_bytes(name))
+    }
+
+    fn queue_module_export(
+        &mut self,
+        cascade: &mut ModuleExportCascade,
+        specifier: &str,
+        name: &JsString,
+        label: &Label,
+        publication: ExportPublication,
+    ) -> Result<(), InterpreterError> {
+        // Meter edges as well as publications: repeated diamond paths must not
+        // create unbounded native work outside the guest instruction budget.
+        self.json_charge_work()?;
+        let key_bytes = Self::module_export_key_bytes(specifier, name);
+        self.json_reserve_temporary(key_bytes)?;
+        let key = (specifier.to_string(), name.clone());
+        let outcome = (|| {
+            let previous = cascade.states.get(&key);
+            let next_publication = if publication == ExportPublication::Own
+                || previous.is_some_and(|(_, prior)| *prior == ExportPublication::Own)
+            {
+                ExportPublication::Own
+            } else {
+                ExportPublication::Star
+            };
+            if previous.is_some_and(|(prior_label, prior_publication)| {
+                prior_label >= label && *prior_publication == next_publication
+            }) {
+                return Ok(());
+            }
+            let next_label = previous.map(|(prior, _)| prior.max(label)).unwrap_or(label);
+            let previous_label_bytes = previous
+                .map(|(prior, _)| Self::estimate_label_bytes(prior))
+                .unwrap_or(0);
+            let next_label_bytes = Self::estimate_label_bytes(next_label);
+            let new_state_bytes = if previous.is_none() {
+                key_bytes.saturating_add(std::mem::size_of::<(Label, ExportPublication)>() as u64)
+            } else {
+                0
+            };
+            let new_pending_bytes = if cascade.pending.contains(&key) {
+                0
+            } else {
+                key_bytes
+            };
+            let additional = new_state_bytes
+                .saturating_add(new_pending_bytes)
+                .saturating_add(next_label_bytes.saturating_sub(previous_label_bytes));
+            // The replacement label can coexist with the old map entry until
+            // insert returns. Reserve that temporary copy before cloning it.
+            self.json_reserve_temporary(additional.saturating_add(next_label_bytes))?;
+            let next_label = next_label.clone();
+            if let Some(state) = cascade.states.get_mut(&key) {
+                *state = (next_label, next_publication);
+            } else {
+                cascade
+                    .states
+                    .insert(key.clone(), (next_label, next_publication));
+            }
+            if new_pending_bytes != 0 {
+                cascade.pending.insert(key.clone());
+            }
+            cascade.temporary_bytes = cascade.temporary_bytes.saturating_add(additional);
+            let released = previous_label_bytes.saturating_sub(next_label_bytes);
+            cascade.temporary_bytes = cascade.temporary_bytes.saturating_sub(released);
+            self.json_release_temporary(next_label_bytes.saturating_add(released));
+            Ok(())
+        })();
+        drop(key);
+        self.json_release_temporary(key_bytes);
+        outcome
+    }
+
+    fn drain_module_export_cascade(
+        &mut self,
+        cascade: &mut ModuleExportCascade,
+        value: &Value,
+    ) -> Result<(), InterpreterError> {
+        while let Some(key) = cascade.pending.pop_first() {
+            let key_bytes = Self::module_export_key_bytes(&key.0, &key.1);
+            let (label, publication) = cascade
+                .states
+                .get(&key)
+                .expect("queued export has publication state");
+            let label_bytes = Self::estimate_label_bytes(label);
+            self.json_reserve_temporary(label_bytes)?;
+            let label = label.clone();
+            let publication = *publication;
+            let outcome = self.publish_module_export_step(
+                &key.0,
+                key.1.clone(),
+                value.clone(),
+                label,
+                publication,
+                cascade,
+            );
+            drop(key);
+            cascade.temporary_bytes = cascade.temporary_bytes.saturating_sub(key_bytes);
+            self.json_release_temporary(key_bytes.saturating_add(label_bytes));
+            outcome?;
+        }
+        Ok(())
+    }
+
+    fn publish_module_export_step(
+        &mut self,
+        specifier: &str,
+        name: JsString,
+        value: Value,
+        label: Label,
+        publication: ExportPublication,
+        cascade: &mut ModuleExportCascade,
     ) -> Result<(), InterpreterError> {
         let diagnostic_name = name.to_string();
         let (namespace_object, previous_export_bytes, pending_cells) = {
@@ -5246,40 +5384,37 @@ impl InterpreterCore {
                     record.star_exports.remove(&name);
                 }
                 let star_reexporters = record.star_reexporters.clone();
-                if depth < LIVE_EXPORT_CASCADE_LIMIT {
-                    for cell in &pending_cells {
-                        let live_export = cell
-                            .try_borrow()
-                            .map_err(|_| InterpreterError::InternalError {
-                                details: "module import binding is already mutably borrowed"
-                                    .to_string(),
-                            })?
-                            .live_export;
-                        if let Some(live_export) = live_export {
-                            self.publish_live_export(cell, live_export, depth + 1)?;
-                        }
+                for cell in &pending_cells {
+                    let live_export = cell
+                        .try_borrow()
+                        .map_err(|_| InterpreterError::InternalError {
+                            details: "module import binding is already mutably borrowed"
+                                .to_string(),
+                        })?
+                        .live_export;
+                    if let Some(live_export) = live_export {
+                        self.queue_live_export(cascade, cell, live_export)?;
                     }
-                    // A module that still provides this name through
-                    // `export * from` this one republishes it.
-                    for reexporter in star_reexporters {
-                        let provided =
-                            self.module_state
-                                .modules
-                                .get(&reexporter)
-                                .is_some_and(|record| {
-                                    record.star_exports.get(&name)
-                                        == Some(&StarExportOrigin::Provided)
-                                });
-                        if provided {
-                            self.publish_module_export(
-                                &reexporter,
-                                name.clone(),
-                                value.clone(),
-                                label.clone(),
-                                ExportPublication::Star,
-                                depth + 1,
-                            )?;
-                        }
+                }
+                // A module that still provides this name through
+                // `export * from` this one republishes it.
+                for reexporter in star_reexporters {
+                    let provided =
+                        self.module_state
+                            .modules
+                            .get(&reexporter)
+                            .is_some_and(|record| {
+                                record.star_exports.get(&name)
+                                    == Some(&StarExportOrigin::Provided)
+                            });
+                    if provided {
+                        self.queue_module_export(
+                            cascade,
+                            &reexporter,
+                            &name,
+                            &label,
+                            ExportPublication::Star,
+                        )?;
                     }
                 }
                 Ok(())
@@ -5472,7 +5607,33 @@ impl InterpreterCore {
         &mut self,
         cell: &Rc<RefCell<ScopeBindingState>>,
         live_export: std::num::NonZeroU32,
-        depth: u32,
+    ) -> Result<(), InterpreterError> {
+        let mut cascade = ModuleExportCascade::default();
+        let outcome = (|| {
+            self.queue_live_export(&mut cascade, cell, live_export)?;
+            if cascade.pending.is_empty() {
+                return Ok(());
+            }
+            let value = cell
+                .try_borrow()
+                .map_err(|_| InterpreterError::InternalError {
+                    details: "exported module binding is already mutably borrowed".to_string(),
+                })?
+                .value
+                .clone();
+            self.drain_module_export_cascade(&mut cascade, &value)
+        })();
+        let temporary_bytes = cascade.temporary_bytes;
+        drop(cascade);
+        self.json_release_temporary(temporary_bytes);
+        outcome
+    }
+
+    fn queue_live_export(
+        &mut self,
+        cascade: &mut ModuleExportCascade,
+        cell: &Rc<RefCell<ScopeBindingState>>,
+        live_export: std::num::NonZeroU32,
     ) -> Result<(), InterpreterError> {
         let Some(entry) = self
             .module_state
@@ -5484,26 +5645,43 @@ impl InterpreterCore {
         if !Rc::ptr_eq(&entry.cell, cell) {
             return Ok(());
         }
-        let exports = entry.exports.clone();
-        let (value, label) = {
+        let export_bytes = entry.exports.iter().fold(0u64, |total, (specifier, name)| {
+            total.saturating_add(Self::module_export_key_bytes(specifier, name))
+        });
+        let label_bytes = {
             let state = cell
                 .try_borrow()
                 .map_err(|_| InterpreterError::InternalError {
                     details: "exported module binding is already mutably borrowed".to_string(),
                 })?;
-            (state.value.clone(), state.label.clone())
+            Self::estimate_label_bytes(&state.label)
         };
-        for (specifier, name) in exports {
-            self.publish_module_export(
-                &specifier,
-                name,
-                value.clone(),
-                label.clone(),
-                ExportPublication::Own,
-                depth,
-            )?;
-        }
-        Ok(())
+        let temporary_bytes = export_bytes.saturating_add(label_bytes);
+        self.json_reserve_temporary(temporary_bytes)?;
+        let outcome = (|| {
+            let exports = self.module_state.live_exports[live_export.get() as usize - 1]
+                .exports
+                .clone();
+            let label = cell
+                .try_borrow()
+                .map_err(|_| InterpreterError::InternalError {
+                    details: "exported module binding is already mutably borrowed".to_string(),
+                })?
+                .label
+                .clone();
+            for (specifier, name) in &exports {
+                self.queue_module_export(
+                    cascade,
+                    specifier,
+                    name,
+                    &label,
+                    ExportPublication::Own,
+                )?;
+            }
+            Ok(())
+        })();
+        self.json_release_temporary(temporary_bytes);
+        outcome
     }
 
     /// `export * from m` (bd-332pq): every export of `m` except `default`
@@ -16789,7 +16967,7 @@ impl InterpreterCore {
                         // republishes them (namespace object and importers).
                         let live_export = binding.state()?.live_export;
                         if let Some(live_export) = live_export {
-                            self.publish_live_export(&binding.state, live_export, 0)?;
+                            self.publish_live_export(&binding.state, live_export)?;
                         }
                     }
                     self.ip += 1;
@@ -16886,7 +17064,7 @@ impl InterpreterCore {
                         let live_export = binding.state()?.live_export;
                         if let Some(live_export) = live_export {
                             let cell = Rc::clone(&binding.state);
-                            self.publish_live_export(&cell, live_export, 0)?;
+                            self.publish_live_export(&cell, live_export)?;
                         }
                     }
                     // bd-1lsy.4.10.1: an import binding initialized from its

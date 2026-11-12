@@ -32,6 +32,7 @@ on:
       - 'crates/franken-engine/src/promise_model*.rs'
       - 'crates/franken-engine/tests/async_generator_execution.rs'
       - 'crates/franken-engine/tests/esm_function_exports.rs'
+      - 'crates/franken-engine/tests/esm_live_bindings_bd_1lsy_4_10_1.rs'
       - 'crates/franken-engine/tests/generator_next_bd_v6cv1_regression.rs'
       - 'crates/franken-engine/tests/array_species_bd_9vouw_94.rs'
       - 'crates/franken-engine/tests/proxy_descriptor_traps_bd_9vouw_147.rs'
@@ -427,6 +428,20 @@ jobs:
               crates/franken-engine/tests/timers_module_objects.rs \
               crates/franken-engine/tests/runtime_module_resolver_execution.rs
           } | tee native-buffer-inputs.log
+      - name: Execute the complete live ESM binding regression target
+        if: always()
+        run: |
+          set -euo pipefail
+          cargo test --locked -j1 -p frankenengine-engine \
+            --test esm_live_bindings_bd_1lsy_4_10_1 \
+            -- --nocapture --test-threads=1 2>&1 | tee native-buffer-esm-live-bindings-tests.log
+      - name: Execute live export graph provenance and budget regressions
+        if: always()
+        run: |
+          set -euo pipefail
+          cargo test --locked -j1 -p frankenengine-engine --lib \
+            live_export_ -- --nocapture --test-threads=1 \
+            2>&1 | tee native-buffer-live-export-tests.log
       - name: Execute complete native JSON parse and stringify source regressions
         if: always()
         run: |
@@ -568,6 +583,7 @@ jobs:
           printf 'Native workflow log retention: %s days\n' "$GITHUB_RETENTION_DAYS"
           status=0
           for log in native-buffer-inputs.log native-buffer-test-list.log native-buffer-tests.log \
+            native-buffer-esm-live-bindings-tests.log native-buffer-live-export-tests.log \
             native-buffer-json-tests.log \
             native-buffer-http-test-list.log native-buffer-http-tests.log \
             native-buffer-regexp-source-tests.log native-buffer-regexp-tests.log \

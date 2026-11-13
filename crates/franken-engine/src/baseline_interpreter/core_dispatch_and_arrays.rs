@@ -4950,6 +4950,14 @@ impl InterpreterCore {
         self.rearm_nested_module_throw(thrown)?;
         result?;
         if let Some(reason) = async_settlement_failure {
+            if self
+                .module_state
+                .modules
+                .get(specifier)
+                .is_some_and(|record| record.evaluation_exception.is_some())
+            {
+                return self.rethrow_cached_module_exception(specifier);
+            }
             return Err(InterpreterError::ModuleEvaluationFailed {
                 specifier: specifier.to_string(),
                 reason,
@@ -7359,12 +7367,12 @@ impl InterpreterCore {
                 self.resume_top_level_after_await(resumption_context, settled, label.clone())
             {
                 if self.entry_module_specifier.as_deref() == Some(specifier.as_str()) {
-                    self.replace_top_level_await_outcome(Err(error));
+                    self.record_resumed_entry_outcome(Err(error))?;
                 } else {
                     self.settle_imported_module_evaluation(&specifier, Err(error), label)?;
                 }
             } else {
-                self.continue_resumed_top_level(module, &specifier, label);
+                self.continue_resumed_top_level(module, &specifier, label)?;
             }
             return Ok(());
         }
@@ -7393,36 +7401,57 @@ impl InterpreterCore {
             (owner_module, suspended_execution)
         };
 
-        let caller_execution = self.snapshot_module_execution()?;
-        self.restore_module_execution(suspended_execution, true);
-        let resume_result =
-            self.resume_top_level_after_await(resumption_context, settled, label.clone());
-        if let Err(error) = resume_result {
-            self.settle_imported_module_evaluation(&specifier, Err(error), label.clone())?;
-        } else {
-            self.continue_resumed_top_level(Some(owner_module.as_ref()), &specifier, label.clone());
-        }
-
-        let still_suspended = self
-            .top_level_await_resumption_contexts
-            .values()
-            .any(|context| context.module_specifier == specifier);
-        let parked_execution = if still_suspended {
-            Some(self.snapshot_module_execution()?)
-        } else {
-            None
+        let caller_execution = match self.snapshot_module_execution() {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                // Admission ran no guest code. Put the owned activation back
+                // so its roots and snapshot charge retain the same owner.
+                self.module_state
+                    .modules
+                    .get_mut(&specifier)
+                    .expect("validated parked module remains present during snapshot admission")
+                    .async_execution = Some(suspended_execution);
+                return Err(error);
+            }
         };
+        self.restore_module_execution(suspended_execution, true);
+        // No fallible continuation work may return before restoring the
+        // caller. This includes retaining/rejecting an exception and parking
+        // an activation that suspended again.
+        let resumed = (|| -> Result<Option<ModuleExecutionSnapshot>, InterpreterError> {
+            match self.resume_top_level_after_await(resumption_context, settled, label.clone()) {
+                Err(error) => {
+                    self.settle_imported_module_evaluation(&specifier, Err(error), label.clone())?;
+                }
+                Ok(()) => {
+                    self.continue_resumed_top_level(
+                        Some(owner_module.as_ref()),
+                        &specifier,
+                        label.clone(),
+                    )?;
+                }
+            }
+            if self
+                .top_level_await_resumption_contexts
+                .values()
+                .any(|context| context.module_specifier == specifier)
+            {
+                self.snapshot_module_execution().map(Some)
+            } else {
+                Ok(None)
+            }
+        })();
         self.restore_module_execution(caller_execution, true);
+        let parked_execution = resumed?;
         if let Some(execution) = parked_execution {
-            let record = self
-                .module_state
-                .modules
-                .get_mut(&specifier)
-                .ok_or_else(|| InterpreterError::ModuleEvaluationFailed {
+            let Some(record) = self.module_state.modules.get_mut(&specifier) else {
+                self.discard_module_execution_snapshot(execution);
+                return Err(InterpreterError::ModuleEvaluationFailed {
                     specifier: specifier.clone(),
                     reason: "async module record disappeared while re-parking continuation"
                         .to_string(),
-                })?;
+                });
+            };
             record.status = ModuleRuntimeStatus::AsyncEvaluating;
             record.async_execution = Some(execution);
         }
@@ -7449,12 +7478,40 @@ impl InterpreterCore {
                 let _ = self.raise_await_rejection_with_label(error_value, label)?;
             }
             (ModuleAwaitContinuation::Dependency { .. }, Ok(_)) => {}
-            (ModuleAwaitContinuation::Dependency { specifier }, Err(reason)) => {
-                return Err(InterpreterError::ModuleEvaluationFailed {
-                    specifier,
-                    reason: format!("async dependency rejected: {reason:?}"),
+            (ModuleAwaitContinuation::Dependency { .. }, Err(reason)) => {
+                // Static dependency failures abort the importing module; they
+                // do not enter its guest catch handlers or replace the value
+                // with a description of the rejected Promise.
+                let value = self.js_value_to_value(&reason);
+                self.rearm_nested_module_throw(Some((value, label)))?;
+                return Err(InterpreterError::UncaughtException {
+                    value: "async module dependency rejected".to_string(),
                 });
             }
+        }
+        Ok(())
+    }
+
+    /// Store an entry module's guest completion, but stop the current
+    /// checkpoint immediately for resource, cancellation, or policy failures.
+    pub(super) fn record_resumed_entry_outcome(
+        &mut self,
+        outcome: Result<LabeledReturn, InterpreterError>,
+    ) -> Result<(), InterpreterError> {
+        if outcome.as_ref().is_err_and(Self::stops_guest_execution) {
+            return outcome.map(|_| ());
+        }
+        self.replace_top_level_await_outcome(outcome);
+        // Retaining the completion can itself exceed the memory budget.
+        if self
+            .top_level_await_outcome
+            .as_ref()
+            .is_some_and(|outcome| outcome.as_ref().is_err_and(Self::stops_guest_execution))
+        {
+            return self
+                .take_top_level_await_outcome()
+                .expect("terminal top-level outcome was just observed")
+                .map(|_| ());
         }
         Ok(())
     }
@@ -7464,7 +7521,7 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
         module_specifier: &str,
         settlement_label: Label,
-    ) {
+    ) -> Result<(), InterpreterError> {
         let outcome = match module {
             Some(module) => self.run_loop_labeled(module),
             None => Err(InterpreterError::TypeError {
@@ -7477,31 +7534,24 @@ impl InterpreterCore {
             .top_level_await_resumption_contexts
             .values()
             .any(|context| context.module_specifier == module_specifier);
-        if !module_still_suspended {
-            let outcome = match outcome {
+        if module_still_suspended && outcome.is_ok() {
+            return Ok(());
+        }
+        let outcome = if module_still_suspended {
+            outcome
+        } else {
+            match outcome {
                 Err(InterpreterError::Halted) => self.read_reg(0).map(|value| {
                     let label = self.get_register_label(0).cloned().unwrap_or(Label::Public);
                     LabeledReturn { value, label }
                 }),
                 other => other,
-            };
-            if self.entry_module_specifier.as_deref() == Some(module_specifier) {
-                self.replace_top_level_await_outcome(outcome);
-            } else if let Err(error) =
-                self.settle_imported_module_evaluation(module_specifier, outcome, settlement_label)
-            {
-                self.replace_top_level_await_outcome(Err(error));
             }
-        } else if let Err(error) = outcome {
-            if self.entry_module_specifier.as_deref() == Some(module_specifier) {
-                self.replace_top_level_await_outcome(Err(error));
-            } else if let Err(settlement_error) = self.settle_imported_module_evaluation(
-                module_specifier,
-                Err(error),
-                settlement_label,
-            ) {
-                self.replace_top_level_await_outcome(Err(settlement_error));
-            }
+        };
+        if self.entry_module_specifier.as_deref() == Some(module_specifier) {
+            self.record_resumed_entry_outcome(outcome)
+        } else {
+            self.settle_imported_module_evaluation(module_specifier, outcome, settlement_label)
         }
     }
 
@@ -7534,12 +7584,20 @@ impl InterpreterCore {
                 self.fulfill_promise(evaluation_promise, namespace, label)
             }
             Err(error) => {
-                let reason = Self::promise_rejection_from_error(&error);
                 if let Some(record) = self.module_state.modules.get_mut(specifier) {
                     record.status = ModuleRuntimeStatus::Failed(error.to_string());
                     record.async_execution = None;
                 }
-                self.reject_promise(evaluation_promise, reason, label)
+                if matches!(&error, InterpreterError::UncaughtException { .. })
+                    && self.pending_exception.is_some()
+                {
+                    // Cache the same effective provenance as the first
+                    // rejection, including its async settlement context.
+                    self.join_pending_exception_label(&label)?;
+                    self.cache_pending_module_exception(specifier)?;
+                }
+                let (reason, rejection_label) = self.dynamic_import_rejection(error, &label)?;
+                self.reject_promise(evaluation_promise, reason, rejection_label)
             }
         }
     }

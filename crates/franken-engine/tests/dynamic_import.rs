@@ -358,3 +358,114 @@ main();"
         );
     }
 }
+
+#[test]
+fn top_level_await_rejection_keeps_original_object_on_every_import() {
+    assert_output(
+        &[
+            (
+                "failed.mjs",
+                "console.log('evaluate once'); await Promise.resolve(); throw { tag: 'original' };",
+            ),
+            (
+                "entry.mjs",
+                "async function main() {
+  let first;
+  try { await import('./failed.mjs'); } catch (error) { first = error; console.log(error.tag); }
+  try { await import('./failed.mjs'); } catch (error) { console.log(error === first, error.tag); }
+}
+main();",
+            ),
+        ],
+        "entry.mjs",
+        ParseGoal::Module,
+        &["evaluate once", "original", "true original"],
+    );
+}
+
+#[test]
+fn async_dependency_rejection_reaches_importers_without_replacing_its_value() {
+    assert_output(
+        &[
+            (
+                "failed.mjs",
+                "console.log('dependency once'); await Promise.resolve(); throw { tag: 'dependency' };",
+            ),
+            (
+                "middle.mjs",
+                "import './failed.mjs'; console.log('middle must not execute'); export const value = 1;",
+            ),
+            (
+                "outer.mjs",
+                "import './middle.mjs'; console.log('outer must not execute'); export const value = 2;",
+            ),
+            (
+                "entry.mjs",
+                "async function main() {
+  let first;
+  try { await import('./outer.mjs'); } catch (error) { first = error; console.log(error.tag); }
+  try { await import('./failed.mjs'); } catch (error) { console.log(error === first, error.tag); }
+  try { await import('./middle.mjs'); } catch (error) { console.log(error === first, error.tag); }
+  try { await import('./outer.mjs'); } catch (error) { console.log(error === first, error.tag); }
+}
+main();",
+            ),
+        ],
+        "entry.mjs",
+        ParseGoal::Module,
+        &[
+            "dependency once",
+            "dependency",
+            "true dependency",
+            "true dependency",
+            "true dependency",
+        ],
+    );
+}
+
+#[test]
+fn rejected_await_preserves_undefined_instead_of_an_error_description() {
+    assert_output(
+        &[
+            (
+                "failed.mjs",
+                "console.log('undefined once'); await Promise.reject(undefined);",
+            ),
+            (
+                "entry.mjs",
+                "async function main() {
+  try { await import('./failed.mjs'); } catch (error) { console.log(error === undefined); }
+  try { await import('./failed.mjs'); } catch (error) { console.log(error === undefined); }
+}
+main();",
+            ),
+        ],
+        "entry.mjs",
+        ParseGoal::Module,
+        &["undefined once", "true", "true"],
+    );
+}
+
+#[test]
+fn top_level_await_preserves_callable_rejection_carriers() {
+    assert_output(
+        &[
+            (
+                "failed.mjs",
+                "await Promise.resolve(); throw () => 42;",
+            ),
+            (
+                "entry.mjs",
+                "async function main() {
+  let first;
+  try { await import('./failed.mjs'); } catch (error) { first = error; console.log(error()); }
+  try { await import('./failed.mjs'); } catch (error) { console.log(error === first, error()); }
+}
+main();",
+            ),
+        ],
+        "entry.mjs",
+        ParseGoal::Module,
+        &["42", "true 42"],
+    );
+}

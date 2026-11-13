@@ -182,6 +182,7 @@ const KNOWN_INTERNAL_HOSTCALLS: &[&str] = &[
     "timer:clearInterval",
     "builtin:ReferenceError",
     "builtin:TypeError",
+    "builtin:ConstructSuperSpread",
     "builtin:ArrayPrototypePush",
     "builtin:ArrayPrototypePop",
     "builtin:ArrayIsArray",
@@ -2659,6 +2660,27 @@ struct AccessorCallReturnSite {
     context_label: crate::ifc_artifacts::Label,
 }
 
+/// Constructor arguments stay in their existing storage until the callee's
+/// fixed slots and rest array have been prepared. A spread list therefore
+/// never needs to fit in the caller's register frame or an unbounded Vec.
+enum ConstructorArguments {
+    Registers(RegRange),
+    Array {
+        object: ObjectId,
+        count: u32,
+        label: crate::ifc_artifacts::Label,
+    },
+}
+
+impl ConstructorArguments {
+    fn count(&self) -> u32 {
+        match self {
+            Self::Registers(args) => args.count,
+            Self::Array { count, .. } => *count,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct CallFrame {
     /// Return address (instruction index to resume at in caller).
@@ -2718,8 +2740,9 @@ struct CallFrame {
     saved_module_specifier: Option<String>,
     /// Async function ID if this frame is executing an async function.
     async_function_id: Option<u32>,
-    /// Provenance of the property read/write that selected an accessor. Kept
-    /// on the activation so nested calls, returns, and throws cannot erase it.
+    /// Provenance of the operation that selected this activation: an accessor
+    /// receiver or a constructor argument-list shape. Kept on the frame so
+    /// defaults, nested calls, side effects, and returns cannot erase it.
     accessor_context_label: crate::ifc_artifacts::Label,
 }
 
@@ -7434,7 +7457,7 @@ impl InterpreterCore {
         module: &Ir3Module,
         callee_value: Value,
         callee_label: crate::ifc_artifacts::Label,
-        args: RegRange,
+        args: ConstructorArguments,
         return_ip: usize,
         return_reg: Option<u32>,
         new_target_value: Value,
@@ -7503,38 +7526,63 @@ impl InterpreterCore {
         )?;
         self.validate_function_rest_param(function)?;
         self.ensure_call_depth_available()?;
-
-        let mut argument_values = Vec::new();
-        let mut argument_labels = Vec::new();
-        for offset in 0..args.count {
-            let register =
-                args.start
-                    .checked_add(offset)
-                    .ok_or(InterpreterError::RegisterOutOfBounds {
-                        register: args.start,
-                        max: self.config.max_registers,
-                    })?;
-            argument_values.push(self.read_reg(register)?);
-            argument_labels.push(self.read_reg_label(register)?);
+        if let ConstructorArguments::Registers(registers) = &args
+            && registers.count > 0
+        {
+            let last = registers.start.checked_add(registers.count - 1).ok_or(
+                InterpreterError::RegisterOutOfBounds {
+                    register: registers.start,
+                    max: self.config.max_registers,
+                },
+            )?;
+            if last >= self.config.max_registers {
+                return Err(InterpreterError::RegisterOutOfBounds {
+                    register: last,
+                    max: self.config.max_registers,
+                });
+            }
         }
-        argument_values.truncate(function.arity as usize);
-        argument_labels.truncate(function.arity as usize);
+        if function.arity > self.config.max_registers {
+            return Err(InterpreterError::RegisterOutOfBounds {
+                register: function.arity - 1,
+                max: self.config.max_registers,
+            });
+        }
+
+        // Only fixed callee slots are buffered. The potentially much longer
+        // rest tail is copied directly from its source into the rest array.
+        // Retain the buffer's charge across allocation and frame setup, whose
+        // memory resynchronizations must not lose this native ownership.
+        let fixed_count = function
+            .rest_param_index
+            .unwrap_or(function.arity)
+            .min(args.count());
+        let mut temporary_bytes = u64::from(function.arity).saturating_mul(
+            (std::mem::size_of::<Value>() + std::mem::size_of::<crate::ifc_artifacts::Label>())
+                as u64,
+        );
+        if let ConstructorArguments::Array { label, .. } = &args {
+            // The list's shape label remains owned even for a zero-arity
+            // superclass that does not retain any individual arguments.
+            temporary_bytes = temporary_bytes.saturating_add(Self::estimate_label_bytes(label));
+        }
+        for offset in 0..fixed_count {
+            self.charge_array_method_step()?;
+            let (value, label) = self.constructor_argument(&args, offset)?;
+            temporary_bytes = temporary_bytes
+                .saturating_add(Self::estimate_value_bytes(&value))
+                .saturating_add(Self::estimate_label_bytes(&label));
+        }
+        self.check_temporary_memory_budget(temporary_bytes)?;
+        let previous_temporary_bytes = self.array_method_temporary_bytes;
+        self.array_method_temporary_bytes =
+            previous_temporary_bytes.saturating_add(temporary_bytes);
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_add(temporary_bytes);
 
         let setup_snapshot = self.snapshot_call_setup(None, true);
         let setup_result = (|| -> Result<(), InterpreterError> {
-            self.apply_rest_param(
-                module,
-                &mut argument_values,
-                function.rest_param_index,
-                function.arity,
-                args,
-            )?;
-            self.apply_rest_param_labels(
-                &mut argument_labels,
-                function.rest_param_index,
-                function.arity,
-                args,
-            )?;
+            let (argument_values, argument_labels) =
+                self.constructor_parameter_values(module, &args, function)?;
 
             let (this_value, construct_this, this_initialized) = if derived_constructor {
                 (Value::Undefined, None, false)
@@ -7587,7 +7635,10 @@ impl InterpreterCore {
                 saved_scope_depth: scope_depth,
                 saved_scope_chain,
                 async_function_id: None,
-                accessor_context_label: crate::ifc_artifacts::Label::Public,
+                accessor_context_label: match &args {
+                    ConstructorArguments::Registers(_) => crate::ifc_artifacts::Label::Public,
+                    ConstructorArguments::Array { label, .. } => label.clone(),
+                },
             });
 
             if let Some(environment) = captured_env {
@@ -7618,11 +7669,192 @@ impl InterpreterCore {
             self.sync_estimated_memory_bytes()?;
             Ok(())
         })();
-        if let Err(error) = setup_result {
+        if setup_result.is_err() {
             self.restore_call_setup(setup_snapshot);
-            return Err(error);
         }
-        Ok(())
+        self.array_method_temporary_bytes = previous_temporary_bytes;
+        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+        setup_result
+    }
+
+    fn constructor_argument(
+        &self,
+        args: &ConstructorArguments,
+        offset: u32,
+    ) -> Result<(Value, crate::ifc_artifacts::Label), InterpreterError> {
+        match args {
+            ConstructorArguments::Registers(args) => self.promise_hostcall_argument(*args, offset),
+            ConstructorArguments::Array { object, label, .. } => {
+                // The lowering has already evaluated every getter and
+                // iterator step into own data properties on a private array.
+                let key = RuntimePropertyKey::String(JsString::from(offset.to_string()));
+                let value = self.array_index_value(*object, offset)?.ok_or_else(|| {
+                    InterpreterError::TypeError {
+                        expected: "dense internal constructor argument array".into(),
+                        got: format!("missing argument {offset}"),
+                    }
+                })?;
+                let label = label.join(&self.own_stored_runtime_property_label(*object, &key));
+                Ok((value, label))
+            }
+        }
+    }
+
+    fn constructor_parameter_values(
+        &mut self,
+        module: &Ir3Module,
+        args: &ConstructorArguments,
+        function: &Ir3FunctionDesc,
+    ) -> Result<(Vec<Value>, Vec<crate::ifc_artifacts::Label>), InterpreterError> {
+        let fixed_count = function
+            .rest_param_index
+            .unwrap_or(function.arity)
+            .min(args.count());
+        let mut values = Vec::with_capacity(function.arity as usize);
+        let mut labels = Vec::with_capacity(function.arity as usize);
+        for offset in 0..fixed_count {
+            let (value, label) = self.constructor_argument(args, offset)?;
+            values.push(value);
+            labels.push(label);
+        }
+        if let Some(rest_index) = function.rest_param_index {
+            let count = args.count().saturating_sub(rest_index);
+            self.run_pre_allocation_hook(module, AllocKind::Array, count as usize)?;
+            let rest_array = self.alloc_array_with_prototype(None)?;
+            let mut rest_label = match args {
+                ConstructorArguments::Registers(_) => crate::ifc_artifacts::Label::Public,
+                ConstructorArguments::Array { label, .. } => label.clone(),
+            };
+            let mut retained_rest_label_bytes = Self::estimate_label_bytes(&rest_label);
+            self.check_temporary_memory_budget(retained_rest_label_bytes)?;
+            self.array_method_temporary_bytes = self
+                .array_method_temporary_bytes
+                .saturating_add(retained_rest_label_bytes);
+            self.estimated_memory_bytes = self
+                .estimated_memory_bytes
+                .saturating_add(retained_rest_label_bytes);
+            for index in 0..count {
+                self.charge_array_method_step()?;
+                let (value, label) = self.constructor_argument(args, rest_index + index)?;
+                let key = RuntimePropertyKey::String(JsString::from(index.to_string()));
+                let bytes = Self::estimate_value_bytes(&value)
+                    .saturating_add(Self::estimate_label_bytes(&label))
+                    .saturating_add(Self::estimate_label_bytes(&rest_label));
+                self.with_array_method_temporary(bytes, |core| {
+                    core.set_own_runtime_property_label(rest_array, &key, &label)?;
+                    core.set_object_property(rest_array, index.to_string(), value)?;
+                    let next_label_bytes =
+                        Self::estimate_label_bytes(std::cmp::max(&rest_label, &label));
+                    core.check_temporary_memory_budget(
+                        next_label_bytes.saturating_sub(retained_rest_label_bytes),
+                    )?;
+                    core.array_method_temporary_bytes = core
+                        .array_method_temporary_bytes
+                        .saturating_sub(retained_rest_label_bytes)
+                        .saturating_add(next_label_bytes);
+                    core.estimated_memory_bytes = core
+                        .estimated_memory_bytes
+                        .saturating_sub(retained_rest_label_bytes)
+                        .saturating_add(next_label_bytes);
+                    rest_label = rest_label.join(&label);
+                    retained_rest_label_bytes = next_label_bytes;
+                    Ok(())
+                })?;
+            }
+            self.set_object_property(rest_array, "length".into(), Value::Int(i64::from(count)))?;
+            self.set_own_runtime_property_label(
+                rest_array,
+                &RuntimePropertyKey::String(JsString::from("length")),
+                &rest_label,
+            )?;
+            values.resize(rest_index as usize + 1, Value::Undefined);
+            labels.resize(rest_index as usize + 1, crate::ifc_artifacts::Label::Public);
+            values[rest_index as usize] = Value::Object(rest_array);
+            labels[rest_index as usize] = rest_label;
+        }
+        Ok((values, labels))
+    }
+
+    fn enter_super_constructor_call(
+        &mut self,
+        module: &Ir3Module,
+        args: ConstructorArguments,
+        dst: u32,
+    ) -> Result<(), InterpreterError> {
+        let frame = self
+            .call_stack
+            .last()
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "active derived constructor".into(),
+                got: "super() outside a constructor".into(),
+            })?;
+        if !frame.derived_constructor || frame.this_initialized {
+            return Err(InterpreterError::TypeError {
+                expected: "uninitialized derived-constructor this binding".into(),
+                got: if frame.derived_constructor {
+                    "super() called more than once".into()
+                } else {
+                    "super() in a base constructor".into()
+                },
+            });
+        }
+        self.enter_constructor_call(
+            module,
+            frame.super_value.clone(),
+            frame.super_label.clone(),
+            args,
+            self.ip + 1,
+            Some(dst),
+            frame.new_target_value.clone(),
+            frame.new_target_label.clone(),
+            true,
+        )
+    }
+
+    fn enter_super_spread_call(
+        &mut self,
+        module: &Ir3Module,
+        args: RegRange,
+        dst: u32,
+    ) -> Result<(), InterpreterError> {
+        if args.count == 0 {
+            return Err(InterpreterError::TypeError {
+                expected: "internal superclass argument array and iterator provenance".into(),
+                got: format!("{} operands", args.count),
+            });
+        }
+        let value = self.read_reg(args.start)?;
+        let object = self.expect_object(value, "internal superclass argument array")?;
+        if !self.heap[object.0 as usize].is_array {
+            return Err(InterpreterError::TypeError {
+                expected: "internal superclass argument array".into(),
+                got: "non-array object".into(),
+            });
+        }
+        let count = self.array_like_length(object)?;
+        let mut label =
+            self.read_reg_label(args.start)?
+                .join(&self.own_stored_runtime_property_label(
+                    object,
+                    &RuntimePropertyKey::String(JsString::from("length")),
+                ));
+        for offset in 1..args.count {
+            self.charge_array_method_step()?;
+            let (iterator, iterator_label) = self.promise_hostcall_argument(args, offset)?;
+            let handle = self.expect_iterator_handle(iterator)?;
+            label = label
+                .join(&iterator_label)
+                .join(&self.for_of_iterator_label(handle)?);
+        }
+        self.enter_super_constructor_call(
+            module,
+            ConstructorArguments::Array {
+                object,
+                count,
+                label,
+            },
+            dst,
+        )
     }
 
     fn run_pre_allocation_hook(
@@ -9525,6 +9757,19 @@ impl InterpreterCore {
                         continue;
                     }
 
+                    if capability.0 == "builtin:ConstructSuperSpread" {
+                        if let Err(error) = self.enter_super_spread_call(module, args, dst) {
+                            match self.route_run_loop_javascript_error(module, error, mode)? {
+                                None => continue,
+                                Some(error) => return Err(error),
+                            }
+                        }
+                        // Constructor return binds the derived receiver and
+                        // resumes at this hostcall's successor. Its frame owns
+                        // the result destination until then.
+                        continue;
+                    }
+
                     // Promise hostcalls return an explicit label for their
                     // Promise-handle result.  Keep this separate from generic
                     // hostcalls, whose current contract remains Public.
@@ -10348,40 +10593,10 @@ impl InterpreterCore {
                     self.ip += 1;
                 }
                 Ir3Instruction::ConstructSuper { args, dst } => {
-                    let Some(frame) = self.call_stack.last() else {
-                        return Err(InterpreterError::TypeError {
-                            expected: "active derived constructor".to_string(),
-                            got: "super() outside a constructor".to_string(),
-                        });
-                    };
-                    if !frame.derived_constructor || frame.this_initialized {
-                        let error = InterpreterError::TypeError {
-                            expected: "uninitialized derived-constructor this binding".to_string(),
-                            got: if frame.derived_constructor {
-                                "super() called more than once".to_string()
-                            } else {
-                                "super() in a base constructor".to_string()
-                            },
-                        };
-                        match self.route_run_loop_javascript_error(module, error, mode)? {
-                            None => continue,
-                            Some(error) => return Err(error),
-                        }
-                    }
-                    let parent = frame.super_value.clone();
-                    let parent_label = frame.super_label.clone();
-                    let new_target = frame.new_target_value.clone();
-                    let new_target_label = frame.new_target_label.clone();
-                    if let Err(error) = self.enter_constructor_call(
+                    if let Err(error) = self.enter_super_constructor_call(
                         module,
-                        parent,
-                        parent_label,
-                        args,
-                        self.ip + 1,
-                        Some(dst),
-                        new_target,
-                        new_target_label,
-                        true,
+                        ConstructorArguments::Registers(args),
+                        dst,
                     ) {
                         match self.route_run_loop_javascript_error(module, error, mode)? {
                             None => continue,
@@ -10420,7 +10635,7 @@ impl InterpreterCore {
                         module,
                         callee_value,
                         callee_label,
-                        args,
+                        ConstructorArguments::Registers(args),
                         self.ip + 1,
                         Some(dst),
                         new_target_value,
@@ -10452,7 +10667,7 @@ impl InterpreterCore {
                             module,
                             callee_val.clone(),
                             callee_label.clone(),
-                            args,
+                            ConstructorArguments::Registers(args),
                             self.ip + 1,
                             Some(dst),
                             callee_val,

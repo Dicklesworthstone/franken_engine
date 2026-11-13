@@ -11722,6 +11722,25 @@ fn lower_expression_to_ir1(
         }
         Expression::Call { callee, arguments } => {
             if matches!(callee.as_ref(), Expression::Super) {
+                if arguments
+                    .iter()
+                    .any(|argument| matches!(argument, Expression::SpreadElement(_)))
+                {
+                    let arg_count = lower_super_argument_array_to_ir1(
+                        arguments,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                    ops.push(Ir1Op::HostCall {
+                        capability: "builtin:ConstructSuperSpread".to_string(),
+                        arg_count,
+                    });
+                    return Ok(());
+                }
                 for arg in arguments {
                     lower_expression_to_ir1(
                         arg,
@@ -12901,6 +12920,122 @@ fn lower_expression_to_ir1(
     Ok(())
 }
 
+/// Expand a super-call argument list using the actual iterator protocol.
+/// Keep the fresh array in an inaccessible binding so each loop has a fixed
+/// register footprint, regardless of the number of values it produces. The
+/// ordinary ForOf instructions retain getter/iterator throws and labels and
+/// charge every iteration against the execution budget.
+#[allow(clippy::too_many_arguments)]
+fn lower_super_argument_array_to_ir1(
+    arguments: &[Expression],
+    ops: &mut Vec<Ir1Op>,
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    root_scope_id: ScopeId,
+    label_counter: &mut u32,
+) -> Result<u32, LoweringPipelineError> {
+    let array_binding = alloc_internal_binding(
+        bindings,
+        binding_lookup,
+        binding_index,
+        root_scope_id,
+        "super_arguments",
+    )?;
+    ops.push(Ir1Op::NewArray { count: 0 });
+    ops.push(Ir1Op::StoreBinding {
+        binding_id: array_binding,
+    });
+    ops.push(Ir1Op::Pop);
+    let mut iterator_bindings = Vec::new();
+
+    for argument in arguments {
+        if let Expression::SpreadElement(iterable) = argument {
+            lower_expression_to_ir1(
+                iterable,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                label_counter,
+            )?;
+            ops.push(Ir1Op::ForOfInit);
+            let iterator_binding = alloc_internal_binding(
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                "super_argument_iterator",
+            )?;
+            ops.push(Ir1Op::StoreBinding {
+                binding_id: iterator_binding,
+            });
+            iterator_bindings.push(iterator_binding);
+            let element_binding = alloc_internal_binding(
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                "super_argument",
+            )?;
+            let loop_label = alloc_label(label_counter);
+            let done_label = alloc_label(label_counter);
+            ops.push(Ir1Op::Label { id: loop_label });
+            ops.push(Ir1Op::ForOfNext { done_label });
+            ops.push(Ir1Op::StoreBinding {
+                binding_id: element_binding,
+            });
+            ops.push(Ir1Op::Pop);
+            ops.push(Ir1Op::LoadBinding {
+                binding_id: array_binding,
+            });
+            ops.push(Ir1Op::LoadBinding {
+                binding_id: element_binding,
+            });
+            ops.push(Ir1Op::ArrayPush);
+            ops.push(Ir1Op::Pop);
+            ops.push(Ir1Op::Jump {
+                label_id: loop_label,
+            });
+            // ForOfNext's done target removes its retained iterator from the
+            // lowering stack. IteratorStep/IteratorValue abrupt completions
+            // propagate directly, as required for argument-list spread.
+            ops.push(Ir1Op::Label { id: done_label });
+        } else {
+            ops.push(Ir1Op::LoadBinding {
+                binding_id: array_binding,
+            });
+            lower_expression_to_ir1(
+                argument,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                label_counter,
+            )?;
+            ops.push(Ir1Op::ArrayPush);
+            ops.push(Ir1Op::Pop);
+        }
+    }
+    ops.push(Ir1Op::LoadBinding {
+        binding_id: array_binding,
+    });
+    // Retain the completed iterators as provenance operands. Even a spread
+    // that yields nothing can determine the list's length and the positions
+    // of later arguments; its final `done` label must reach the constructor.
+    let arg_count = u32::try_from(iterator_bindings.len().saturating_add(1)).map_err(|_| {
+        LoweringPipelineError::InvariantViolation {
+            detail: "super argument provenance exceeds addressable operand count",
+        }
+    })?;
+    for binding_id in iterator_bindings {
+        ops.push(Ir1Op::LoadBinding { binding_id });
+    }
+    Ok(arg_count)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn lower_member_property_key_to_ir1(
     property: &Expression,
@@ -13137,6 +13272,14 @@ fn infer_sink_clearance(
     data_label: &Label,
 ) -> Label {
     if let Some(capability) = required_capability {
+        if capability.0 == "builtin:ConstructSuperSpread" {
+            // This tag enters a guest constructor and preserves its argument
+            // labels; it is a language operation, not an external sink. Host
+            // effects performed by that constructor keep their own clearance
+            // checks. In particular, retaining a secret iterator's shape as
+            // an operand must not itself require declassification.
+            return data_label.clone();
+        }
         return sink_clearance_from_capability(&capability.0);
     }
 

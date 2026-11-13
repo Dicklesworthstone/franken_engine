@@ -3094,7 +3094,7 @@ fn exact_keys_respect_legacy_string_callback_boundary_bd_b12xs_4() {
     let mut unhooked = quickjs_test_core();
     let unhooked_object = unhooked.alloc_object_with_prototype(None).unwrap();
     unhooked
-        .set_object_property_or_call_accessor(
+        .set_runtime_property_with_receiver(
             &module,
             Value::Object(unhooked_object),
             unhooked_object,
@@ -3121,7 +3121,7 @@ fn exact_keys_respect_legacy_string_callback_boundary_bd_b12xs_4() {
     let memory_before = core.estimated_memory_bytes();
 
     let error = core
-        .set_object_property_or_call_accessor(
+        .set_runtime_property_with_receiver(
             &module,
             Value::Object(object),
             object,
@@ -3160,12 +3160,13 @@ fn exact_keys_respect_legacy_string_callback_boundary_bd_b12xs_4() {
 
     let function_objects_before = core.function_objects.clone();
     assert!(matches!(
-        core.set_function_like_property_or_call_accessor(
+        core.set_property_for_instruction(
             &module,
+            &Value::Function(0),
             Value::Function(0),
-            &RuntimePropertyKey::String(d800),
+            RuntimePropertyKey::String(d800),
             Value::Int(9),
-            crate::ifc_artifacts::Label::Public,
+            &mut crate::ifc_artifacts::Label::Public,
         ),
         Err(InterpreterError::TypeError { .. })
     ));
@@ -3174,7 +3175,7 @@ fn exact_keys_respect_legacy_string_callback_boundary_bd_b12xs_4() {
     assert_eq!(serde_json::to_string(&core.heap).unwrap(), heap_before);
     assert_eq!(core.estimated_memory_bytes(), memory_before);
 
-    core.set_object_property_or_call_accessor(
+    core.set_runtime_property_with_receiver(
         &module,
         Value::Object(object),
         object,
@@ -12507,12 +12508,15 @@ fn static_method_on_constructor() {
     );
     let output = lower_ir0_to_ir3(&ir0, &ctx).expect("static class method should lower");
     assert!(
-        output
-            .ir3
-            .instructions
-            .iter()
-            .any(|instruction| matches!(instruction, Ir3Instruction::SetProperty { .. })),
-        "static method lowering should attach the method to the constructor value"
+        output.ir3.instructions.iter().any(|instruction| matches!(
+            instruction,
+            Ir3Instruction::DefineOwnProperty {
+                enumerable: false,
+                accessor_kind: None,
+                ..
+            }
+        )),
+        "static methods must be non-enumerable own data properties"
     );
 
     let mut core = quickjs_test_core();
@@ -12587,20 +12591,26 @@ fn getter_setter() {
     );
     let output = lower_ir0_to_ir3(&ir0, &ctx).expect("class accessors should lower");
     assert!(
-        output
-            .ir3
-            .constant_pool
-            .iter()
-            .any(|key| key.starts_with(IR_ACCESSOR_GET_PREFIX)),
-        "getter lowering should define an accessor descriptor"
+        output.ir3.instructions.iter().any(|instruction| matches!(
+            instruction,
+            Ir3Instruction::DefineOwnProperty {
+                enumerable: false,
+                accessor_kind: Some(AccessorKind::Get),
+                ..
+            }
+        )),
+        "class getters must use typed non-enumerable accessor definitions"
     );
     assert!(
-        output
-            .ir3
-            .constant_pool
-            .iter()
-            .any(|key| key.starts_with(IR_ACCESSOR_SET_PREFIX)),
-        "setter lowering should define an accessor descriptor"
+        output.ir3.instructions.iter().any(|instruction| matches!(
+            instruction,
+            Ir3Instruction::DefineOwnProperty {
+                enumerable: false,
+                accessor_kind: Some(AccessorKind::Set),
+                ..
+            }
+        )),
+        "class setters must use typed non-enumerable accessor definitions"
     );
 
     let mut core = quickjs_test_core();
@@ -13104,6 +13114,7 @@ fn copy_data_properties_state_is_budgeted_and_cleaned_on_failure_bd_f1ixz() {
         call_depth: 0,
         target_id: target,
         source: Value::Object(source),
+        source_label: crate::ifc_artifacts::Label::Public,
         string_units: None,
         keys: core
             .copy_data_properties_keys(&Value::Object(source))

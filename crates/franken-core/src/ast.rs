@@ -16,7 +16,7 @@ use crate::js_string::JsString;
 /// Versioned canonical AST contract binding schema + hash semantics.
 pub const CANONICAL_AST_CONTRACT_VERSION: &str = "franken-engine.parser-ast.contract.v1";
 /// Versioned schema identifier for canonical AST structure and key ordering.
-pub const CANONICAL_AST_SCHEMA_VERSION: &str = "franken-engine.parser-ast.schema.v7";
+pub const CANONICAL_AST_SCHEMA_VERSION: &str = "franken-engine.parser-ast.schema.v8";
 /// Hash algorithm used by `SyntaxTree::canonical_hash`.
 pub const CANONICAL_AST_HASH_ALGORITHM: &str = "sha256";
 /// Prefix used in canonical AST hash strings.
@@ -1030,6 +1030,12 @@ impl VariableDeclaration {
 pub struct ExpressionStatement {
     pub expression: Expression,
     pub span: SourceSpan,
+    /// Raw contents of a bare string-literal statement, without its quotes.
+    /// Only an initial sequence of these statements is a directive prologue.
+    /// Keeping the uncooked spelling distinguishes `"use strict"` from
+    /// `"use\x20strict"` and from a parenthesized string expression.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_directive: Option<String>,
 }
 
 impl ExpressionStatement {
@@ -1037,6 +1043,12 @@ impl ExpressionStatement {
         let mut map = BTreeMap::new();
         map.insert("expression".to_string(), self.expression.canonical_value());
         map.insert("span".to_string(), self.span.canonical_value());
+        if let Some(raw) = &self.raw_directive {
+            map.insert(
+                "raw_directive".to_string(),
+                CanonicalValue::String(raw.clone()),
+            );
+        }
         CanonicalValue::Map(map)
     }
 }
@@ -2471,6 +2483,7 @@ mod tests {
         Statement::Expression(ExpressionStatement {
             expression: expr,
             span: make_span(),
+            raw_directive: None,
         })
     }
 
@@ -2549,7 +2562,7 @@ mod tests {
         );
         assert_eq!(
             CANONICAL_AST_SCHEMA_VERSION,
-            "franken-engine.parser-ast.schema.v7"
+            "franken-engine.parser-ast.schema.v8"
         );
         assert_eq!(CANONICAL_AST_HASH_ALGORITHM, "sha256");
         assert_eq!(CANONICAL_AST_HASH_PREFIX, "sha256:");
@@ -2658,6 +2671,7 @@ mod tests {
         let expr = Statement::Expression(ExpressionStatement {
             expression: Expression::NumericLiteral(0),
             span: span.clone(),
+            raw_directive: None,
         });
         assert_eq!(expr.span(), &span);
 
@@ -3420,6 +3434,7 @@ mod tests {
         let original = ExpressionStatement {
             expression: Expression::Await(Box::new(Expression::Identifier("f".to_string()))),
             span: make_span(),
+            raw_directive: None,
         };
         let cloned = original.clone();
         assert_eq!(original, cloned);
@@ -4630,6 +4645,7 @@ mod tests {
             Statement::Expression(ExpressionStatement {
                 expression: Expression::NullLiteral,
                 span: span.clone(),
+                raw_directive: None,
             }),
             Statement::Block(BlockStatement {
                 body: vec![],

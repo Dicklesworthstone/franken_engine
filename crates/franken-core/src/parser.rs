@@ -4665,11 +4665,12 @@ fn trim_directive_trivia(mut source: &str) -> (&str, bool) {
     }
 }
 
-fn has_use_strict_directive(mut source: &str) -> bool {
+fn raw_directive_prologue(mut source: &str) -> Vec<&str> {
+    let mut directives = Vec::new();
     loop {
         (source, _) = trim_directive_trivia(source);
         let Some(delimiter) = source.chars().next().filter(|ch| matches!(ch, '\'' | '"')) else {
-            return false;
+            return directives;
         };
 
         let mut escaped = false;
@@ -4683,11 +4684,11 @@ fn has_use_strict_directive(mut source: &str) -> bool {
                 closing_index = Some(delimiter.len_utf8() + index);
                 break;
             } else if matches!(ch, '\n' | '\r') {
-                return false;
+                return directives;
             }
         }
         let Some(closing_index) = closing_index else {
-            return false;
+            return directives;
         };
         let directive = &source[delimiter.len_utf8()..closing_index];
         let after_literal = &source[closing_index + delimiter.len_utf8()..];
@@ -4696,19 +4697,32 @@ fn has_use_strict_directive(mut source: &str) -> bool {
             || after_trivia.starts_with(';')
             || (saw_line_terminator && !starts_directive_expression_continuation(after_trivia));
         if !terminated {
-            return false;
+            return directives;
         }
-        if directive == "use strict" {
-            return true;
-        }
+        directives.push(directive);
 
         source = if let Some(rest) = after_trivia.strip_prefix(';') {
             rest
         } else if saw_line_terminator {
             after_trivia
         } else {
-            return false;
+            return directives;
         };
+    }
+}
+
+fn has_use_strict_directive(source: &str) -> bool {
+    raw_directive_prologue(source).contains(&"use strict")
+}
+
+/// Empty statements are omitted from this AST, so source-level prologue
+/// membership must be retained before lowering loses that distinction.
+fn retain_directive_prologue(statements: &mut [Statement], source: &str) {
+    let directives = raw_directive_prologue(source);
+    for (index, statement) in statements.iter_mut().enumerate() {
+        if let Statement::Expression(statement) = statement {
+            statement.raw_directive = directives.get(index).map(|raw| (*raw).to_string());
+        }
     }
 }
 
@@ -4887,6 +4901,7 @@ fn parse_source_on_current_stack(
         }
     }
 
+    retain_directive_prologue(&mut statements, text);
     let source_len = to_u64(text.len(), source_label, None)?;
     let (end_line, end_column) =
         source_end_position(&source_line_starts, source_len, source_label)?;
@@ -6160,6 +6175,7 @@ fn parse_statement_inner(
     Ok(Statement::Expression(ExpressionStatement {
         expression,
         span,
+        raw_directive: None,
     }))
 }
 
@@ -13387,6 +13403,7 @@ fn parse_body_statements(
             }
         }
     }
+    retain_directive_prologue(&mut stmts, trimmed);
     Ok(stmts)
 }
 

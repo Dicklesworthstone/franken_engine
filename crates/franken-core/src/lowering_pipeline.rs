@@ -19,14 +19,15 @@ use crate::hash_tiers::ContentHash;
 use crate::ifc_artifacts::{Label, ProofMethod};
 use crate::ir_contract::{
     AccessorKind, BindingId, BindingKind, CapabilityTag, EffectBoundary, FlowAnnotation,
-    IR_ACCESSOR_GET_PREFIX, IR_ACCESSOR_SET_PREFIX, IR_SUPER_PROTOTYPE_PROPERTY, Ir0Module,
-    Ir1Literal, Ir1Module, Ir1Op, Ir1PropertyKey, Ir2Module, Ir2Op, Ir3FunctionDesc,
-    Ir3Instruction, Ir3Module, IrError, IrLevel, IteratorCloseReason, Reg, RegRange,
-    ResolvedBinding, ScopeId, ScopeKind, ScopeNode, verify_ir1_accessor_definition_schema,
-    verify_ir1_derived_constructor_schema, verify_ir1_generator_boundaries,
-    verify_ir1_method_definition_schema, verify_ir1_source, verify_ir2_accessor_definition_schema,
+    IR_SUPER_PROTOTYPE_PROPERTY, Ir0Module, Ir1Literal, Ir1Module, Ir1Op, Ir1PropertyKey,
+    Ir2Module, Ir2Op, Ir3FunctionDesc, Ir3Instruction, Ir3Module, IrError, IrLevel,
+    IrSchemaVersion, IteratorCloseReason, Reg, RegRange, ResolvedBinding, ScopeId, ScopeKind,
+    ScopeNode, verify_ir1_accessor_definition_schema, verify_ir1_derived_constructor_schema,
+    verify_ir1_generator_boundaries, verify_ir1_method_definition_schema,
+    verify_ir1_property_write_schema, verify_ir1_source, verify_ir2_accessor_definition_schema,
     verify_ir2_derived_constructor_schema, verify_ir2_generator_boundaries,
-    verify_ir2_method_definition_schema, verify_ir3_specialization, verify_schema_version,
+    verify_ir2_method_definition_schema, verify_ir2_property_write_schema,
+    verify_ir3_specialization, verify_schema_version,
 };
 use crate::js_string::JsString;
 use crate::parser::{
@@ -51,7 +52,44 @@ pub(crate) const FUNCTION_EXPRESSION_SELF_CAPTURE_PREFIX: &str = "\0function-exp
 const ARROW_LEXICAL_THIS_CAPTURE: &str = "\0arrow-lexical-this\0";
 const ARROW_LEXICAL_NEW_TARGET_CAPTURE: &str = "\0arrow-lexical-new-target\0";
 const ARROW_LEXICAL_SUPER_CAPTURE: &str = "\0arrow-lexical-super\0";
+/// Lexical mode only: this marker never allocates a source binding or capture.
+const STRICT_MODE_CONTEXT: &str = "\0strict-mode-context";
 const GLOBAL_VALUE_NAMES: [&str; 3] = ["undefined", "NaN", "Infinity"];
+
+fn has_use_strict_directive(statements: &[Statement]) -> bool {
+    statements
+        .iter()
+        .map_while(|statement| match statement {
+            Statement::Expression(statement) => statement.raw_directive.as_deref(),
+            _ => None,
+        })
+        .any(|raw| raw == "use strict")
+}
+
+fn is_strict_context(binding_lookup: &BTreeMap<String, BindingId>) -> bool {
+    binding_lookup.contains_key(STRICT_MODE_CONTEXT)
+}
+
+fn inherit_function_strictness(
+    outer_lookup: &BTreeMap<String, BindingId>,
+    body_lookup: &mut BTreeMap<String, BindingId>,
+    statements: Option<&[Statement]>,
+) {
+    if is_strict_context(outer_lookup) || statements.is_some_and(has_use_strict_directive) {
+        body_lookup.insert(STRICT_MODE_CONTEXT.to_string(), 0);
+    }
+}
+
+fn restore_strictness_context(
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    previous: Option<BindingId>,
+) {
+    if let Some(previous) = previous {
+        binding_lookup.insert(STRICT_MODE_CONTEXT.to_string(), previous);
+    } else {
+        binding_lookup.remove(STRICT_MODE_CONTEXT);
+    }
+}
 
 /// These are immutable global properties, not lexical tokens. Only fold a
 /// reference after the current scope and its enclosing captures have been
@@ -72,14 +110,14 @@ fn unshadowed_global_value(
 }
 
 fn immutable_global_write_error() -> LoweringPipelineError {
-    // The core AST does not yet carry strictness provenance for assignments.
+    // Global-value PutValue remains separate from the property mutation path.
     // A sloppy write must be ignored and a strict write must throw after its
     // RHS runs. Do not turn either into a mutable forward-reference binding.
     unsupported_frontier_expression_error(
         "immutable_global_write",
         "FE-LOWER-GLOBAL-VALUE-WRITE-0001",
         "lower_ir0_to_ir1.immutable_global_write",
-        "assignment to an unshadowed immutable global requires strictness provenance",
+        "assignment to an unshadowed immutable global is not yet implemented",
         None,
     )
 }
@@ -1448,6 +1486,9 @@ fn static_builtin_call_capability(
         ("Object", "values") => Some("builtin:ObjectValues"),
         ("Object", "entries") => Some("builtin:ObjectEntries"),
         ("Object", "assign") => Some("builtin:ObjectAssign"),
+        ("Object", "defineProperty") => Some("builtin:ObjectDefineProperty"),
+        ("Object", "getOwnPropertyDescriptor") => Some("builtin:ObjectGetOwnPropertyDescriptor"),
+        ("Reflect", "defineProperty") => Some("builtin:ReflectDefineProperty"),
         ("Object", "getOwnPropertyNames") => Some("builtin:ObjectGetOwnPropertyNames"),
         ("Object", "getOwnPropertySymbols") => Some("builtin:ObjectGetOwnPropertySymbols"),
         ("Array", "isArray") => Some("builtin:ArrayIsArray"),
@@ -1529,6 +1570,11 @@ fn static_builtin_member_factory_capability(
     };
     match (global.as_str(), property_name) {
         ("Array", "isArray") => Some("builtin:ArrayIsArrayFunction"),
+        ("Object", "defineProperty") => Some("builtin:ObjectDefinePropertyFunction"),
+        ("Object", "getOwnPropertyDescriptor") => {
+            Some("builtin:ObjectGetOwnPropertyDescriptorFunction")
+        }
+        ("Reflect", "defineProperty") => Some("builtin:ReflectDefinePropertyFunction"),
         ("Symbol", "iterator") => Some("builtin:SymbolIterator"),
         ("Symbol", "toPrimitive") => Some("builtin:SymbolToPrimitive"),
         ("Symbol", "hasInstance") => Some("builtin:SymbolHasInstance"),
@@ -1666,6 +1712,9 @@ pub fn lower_ir0_to_ir1(
     };
     let mut bindings = Vec::<ResolvedBinding>::new();
     let mut binding_lookup = BTreeMap::<String, BindingId>::new();
+    if ir0.tree.goal == ParseGoal::Module || has_use_strict_directive(&ir0.tree.body) {
+        binding_lookup.insert(STRICT_MODE_CONTEXT.to_string(), 0);
+    }
     let mut declared_root_bindings =
         reserve_root_scope_bindings(&ir0.tree.body, &mut binding_lookup, &mut binding_index);
     declared_root_bindings.extend(reserve_hoisted_var_bindings(
@@ -5073,6 +5122,7 @@ fn lower_statement_to_ir1_with_flow(
             };
             let mut body_bindings = Vec::new();
             let mut body_lookup = BTreeMap::new();
+            inherit_function_strictness(binding_lookup, &mut body_lookup, Some(&func.body.body));
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
@@ -5177,6 +5227,8 @@ fn lower_statement_to_ir1_with_flow(
             ops.push(Ir1Op::Pop);
         }
         Statement::ClassDeclaration(cls) => {
+            // ClassDefinitionEvaluation is strict, including heritage and keys.
+            let previous_strictness = binding_lookup.insert(STRICT_MODE_CONTEXT.to_string(), 0);
             let class_name = cls.name.clone().unwrap_or_else(|| "anonymous".to_string());
             // The class binding is the live self cell for constructor and
             // method parameter defaults. Allocate it before lowering those
@@ -5196,6 +5248,7 @@ fn lower_statement_to_ir1_with_flow(
             let mut body_ops = Vec::new();
             let mut body_bindings = Vec::new();
             let mut body_lookup = BTreeMap::new();
+            inherit_function_strictness(binding_lookup, &mut body_lookup, None);
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
@@ -5375,6 +5428,7 @@ fn lower_statement_to_ir1_with_flow(
                 };
                 let mut m_bindings = Vec::new();
                 let mut m_lookup = BTreeMap::new();
+                inherit_function_strictness(binding_lookup, &mut m_lookup, None);
                 let mut m_binding_index: BindingId = 0;
                 let m_scope = ScopeId { depth: 0, index: 0 };
                 let mut m_label_counter: u32 = 0;
@@ -5489,10 +5543,21 @@ fn lower_statement_to_ir1_with_flow(
                         key: Ir1PropertyKey::Static("prototype".into()),
                     });
                 }
+                if method.computed {
+                    lower_expression_to_ir1(
+                        &method.key,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        label_counter,
+                    )?;
+                }
 
                 // Push the method function value.
                 ops.push(Ir1Op::CreateFunction {
-                    name: Some(method_name.clone()),
+                    name: (!method.computed).then_some(method_name.clone()),
                     param_names: m_param_names,
                     body_ops: m_body_ops,
                     free_vars: method_free_vars,
@@ -5509,22 +5574,20 @@ fn lower_statement_to_ir1_with_flow(
                     });
                 }
 
-                let property_key = match method.kind {
-                    MethodKind::Get => {
-                        exact_prefixed_property_key(IR_ACCESSOR_GET_PREFIX, &method_property_key)
-                    }
-                    MethodKind::Set => {
-                        exact_prefixed_property_key(IR_ACCESSOR_SET_PREFIX, &method_property_key)
-                    }
-                    MethodKind::Method | MethodKind::Constructor | MethodKind::AsyncMethod => {
-                        method_property_key
-                    }
-                };
-
-                // SetProperty pops value (top), then object (next).
-                // Stack is now: [target_obj, method_fn]
-                ops.push(Ir1Op::SetProperty {
-                    key: Ir1PropertyKey::Static(property_key),
+                ops.push(Ir1Op::DefineOwnProperty {
+                    key: if method.computed {
+                        Ir1PropertyKey::Dynamic
+                    } else {
+                        Ir1PropertyKey::Static(method_property_key)
+                    },
+                    enumerable: false,
+                    infer_name: method.computed
+                        && !matches!(method.kind, MethodKind::Get | MethodKind::Set),
+                    accessor_kind: match method.kind {
+                        MethodKind::Get => Some(AccessorKind::Get),
+                        MethodKind::Set => Some(AccessorKind::Set),
+                        _ => None,
+                    },
                 });
                 if let (Some(super_class), Some(method_binding)) =
                     (&cls.super_class, method_super_binding)
@@ -5554,6 +5617,7 @@ fn lower_statement_to_ir1_with_flow(
                 // completion register and can clobber the class binding when
                 // the constructor lives in register 0.
             }
+            restore_strictness_context(binding_lookup, previous_strictness);
         }
         Statement::Import(_) | Statement::Export(_) => {
             // Handled at top level only.
@@ -5976,6 +6040,7 @@ pub fn lower_ir1_to_ir2(
     verify_ir1_derived_constructor_schema(ir1).map_err(lowering_error_from_ir_error)?;
     verify_ir1_method_definition_schema(ir1).map_err(lowering_error_from_ir_error)?;
     verify_ir1_accessor_definition_schema(ir1).map_err(lowering_error_from_ir_error)?;
+    verify_ir1_property_write_schema(ir1).map_err(lowering_error_from_ir_error)?;
     verify_ir1_generator_boundaries(ir1).map_err(lowering_error_from_ir_error)?;
     let ir1_hash = ir1.content_hash();
     let mut ir2 = Ir2Module::new(ir1_hash, ir1.header.source_label.clone());
@@ -6124,6 +6189,46 @@ fn lower_unary_op_to_ir3(operator: UnaryOperator, dst: Reg, src: Reg) -> Ir3Inst
         UnaryOperator::UnaryPlus => Ir3Instruction::UnaryPlus { dst, src },
         // delete is lowered through DeleteProperty before reaching here.
         UnaryOperator::Delete => Ir3Instruction::LoadBool { dst, value: true },
+    }
+}
+
+fn lower_property_set_to_ir3(
+    op: &Ir1Op,
+    obj: Reg,
+    key: Reg,
+    val: Reg,
+    receiver: Option<Reg>,
+) -> Ir3Instruction {
+    match op {
+        Ir1Op::SetPropertyStrict { .. } => Ir3Instruction::SetPropertyStrict { obj, key, val },
+        Ir1Op::SetPropertyWithReceiverStrict { .. } => {
+            Ir3Instruction::SetPropertyWithReceiverStrict {
+                obj,
+                key,
+                receiver: receiver.expect("receiver-aware property operation"),
+                val,
+            }
+        }
+        Ir1Op::SetPropertyWithReceiver { .. } => Ir3Instruction::SetPropertyWithReceiver {
+            obj,
+            key,
+            receiver: receiver.expect("receiver-aware property operation"),
+            val,
+        },
+        Ir1Op::DefineOwnProperty {
+            enumerable,
+            infer_name,
+            accessor_kind,
+            ..
+        } => Ir3Instruction::DefineOwnProperty {
+            obj,
+            key,
+            val,
+            enumerable: *enumerable,
+            infer_name: *infer_name,
+            accessor_kind: *accessor_kind,
+        },
+        _ => Ir3Instruction::SetProperty { obj, key, val },
     }
 }
 
@@ -6317,6 +6422,7 @@ pub fn lower_ir2_to_ir3(
     verify_ir2_derived_constructor_schema(ir2).map_err(lowering_error_from_ir_error)?;
     verify_ir2_method_definition_schema(ir2).map_err(lowering_error_from_ir_error)?;
     verify_ir2_accessor_definition_schema(ir2).map_err(lowering_error_from_ir_error)?;
+    verify_ir2_property_write_schema(ir2).map_err(lowering_error_from_ir_error)?;
     verify_ir2_generator_boundaries(ir2).map_err(lowering_error_from_ir_error)?;
     enum PendingJump {
         Unconditional {
@@ -7167,9 +7273,17 @@ pub fn lower_ir2_to_ir3(
                 });
                 value_stack.push(dst);
             }
-            Ir1Op::SetProperty { key } | Ir1Op::SetPropertyWithReceiver { key } => {
-                let receiver = matches!(&op.inner, Ir1Op::SetPropertyWithReceiver { .. })
-                    .then(|| value_stack.pop().unwrap_or(0));
+            Ir1Op::SetProperty { key }
+            | Ir1Op::SetPropertyStrict { key }
+            | Ir1Op::SetPropertyWithReceiver { key }
+            | Ir1Op::SetPropertyWithReceiverStrict { key }
+            | Ir1Op::DefineOwnProperty { key, .. } => {
+                let receiver = matches!(
+                    &op.inner,
+                    Ir1Op::SetPropertyWithReceiver { .. }
+                        | Ir1Op::SetPropertyWithReceiverStrict { .. }
+                )
+                .then(|| value_stack.pop().unwrap_or(0));
                 let val = value_stack.pop().unwrap_or(0);
                 let (obj, key_reg) = match key {
                     Ir1PropertyKey::Static(key) => {
@@ -7188,19 +7302,9 @@ pub fn lower_ir2_to_ir3(
                         (obj, key_reg)
                     }
                 };
-                ir3.instructions.push(match receiver {
-                    Some(receiver) => Ir3Instruction::SetPropertyWithReceiver {
-                        obj,
-                        key: key_reg,
-                        receiver,
-                        val,
-                    },
-                    None => Ir3Instruction::SetProperty {
-                        obj,
-                        key: key_reg,
-                        val,
-                    },
-                });
+                ir3.instructions.push(lower_property_set_to_ir3(
+                    &op.inner, obj, key_reg, val, receiver,
+                ));
                 value_stack.push(val);
             }
             Ir1Op::DefineMethod { key } | Ir1Op::DefineAccessor { key, .. } => {
@@ -7237,7 +7341,7 @@ pub fn lower_ir2_to_ir3(
                 });
                 value_stack.push(obj);
             }
-            Ir1Op::DeleteProperty { key } => {
+            Ir1Op::DeleteProperty { key } | Ir1Op::DeletePropertyStrict { key } => {
                 let (obj, key_reg) = match key {
                     Ir1PropertyKey::Static(key) => {
                         let obj = value_stack.pop().unwrap_or(0);
@@ -7256,11 +7360,20 @@ pub fn lower_ir2_to_ir3(
                     }
                 };
                 let dst = alloc_register(&mut register_cursor);
-                ir3.instructions.push(Ir3Instruction::DeleteProperty {
-                    obj,
-                    key: key_reg,
-                    dst,
-                });
+                ir3.instructions
+                    .push(if matches!(&op.inner, Ir1Op::DeletePropertyStrict { .. }) {
+                        Ir3Instruction::DeletePropertyStrict {
+                            obj,
+                            key: key_reg,
+                            dst,
+                        }
+                    } else {
+                        Ir3Instruction::DeleteProperty {
+                            obj,
+                            key: key_reg,
+                            dst,
+                        }
+                    });
                 value_stack.push(dst);
             }
             Ir1Op::NewArray { count } => {
@@ -7307,10 +7420,13 @@ pub fn lower_ir2_to_ir3(
                         dst: key_reg,
                         pool_index,
                     });
-                    ir3.instructions.push(Ir3Instruction::SetProperty {
+                    ir3.instructions.push(Ir3Instruction::DefineOwnProperty {
                         obj: dst,
                         key: key_reg,
                         val: val_reg,
+                        enumerable: true,
+                        infer_name: false,
+                        accessor_kind: None,
                     });
                 }
                 value_stack.push(dst);
@@ -7337,10 +7453,13 @@ pub fn lower_ir2_to_ir3(
                 ir3.instructions.push(Ir3Instruction::NewObject { dst });
 
                 for (key_reg, val_reg) in properties {
-                    ir3.instructions.push(Ir3Instruction::SetProperty {
+                    ir3.instructions.push(Ir3Instruction::DefineOwnProperty {
                         obj: dst,
                         key: key_reg,
                         val: val_reg,
+                        enumerable: true,
+                        infer_name: false,
+                        accessor_kind: None,
                     });
                 }
                 value_stack.push(dst);
@@ -8738,9 +8857,17 @@ pub fn lower_ir2_to_ir3(
                     });
                     fn_value_stack.push(dst);
                 }
-                Ir1Op::SetProperty { key } | Ir1Op::SetPropertyWithReceiver { key } => {
-                    let receiver = matches!(&ir2_op.inner, Ir1Op::SetPropertyWithReceiver { .. })
-                        .then(|| fn_value_stack.pop().unwrap_or(0));
+                Ir1Op::SetProperty { key }
+                | Ir1Op::SetPropertyStrict { key }
+                | Ir1Op::SetPropertyWithReceiver { key }
+                | Ir1Op::SetPropertyWithReceiverStrict { key }
+                | Ir1Op::DefineOwnProperty { key, .. } => {
+                    let receiver = matches!(
+                        &ir2_op.inner,
+                        Ir1Op::SetPropertyWithReceiver { .. }
+                            | Ir1Op::SetPropertyWithReceiverStrict { .. }
+                    )
+                    .then(|| fn_value_stack.pop().unwrap_or(0));
                     let value = fn_value_stack.pop().unwrap_or(0);
                     let (obj, key_reg) = match key {
                         Ir1PropertyKey::Static(k) => {
@@ -8759,19 +8886,13 @@ pub fn lower_ir2_to_ir3(
                             (obj, kr)
                         }
                     };
-                    ir3.instructions.push(match receiver {
-                        Some(receiver) => Ir3Instruction::SetPropertyWithReceiver {
-                            obj,
-                            key: key_reg,
-                            receiver,
-                            val: value,
-                        },
-                        None => Ir3Instruction::SetProperty {
-                            obj,
-                            key: key_reg,
-                            val: value,
-                        },
-                    });
+                    ir3.instructions.push(lower_property_set_to_ir3(
+                        &ir2_op.inner,
+                        obj,
+                        key_reg,
+                        value,
+                        receiver,
+                    ));
                     fn_value_stack.push(value);
                 }
                 Ir1Op::DefineMethod { key } | Ir1Op::DefineAccessor { key, .. } => {
@@ -8808,7 +8929,7 @@ pub fn lower_ir2_to_ir3(
                     });
                     fn_value_stack.push(obj);
                 }
-                Ir1Op::DeleteProperty { key } => {
+                Ir1Op::DeleteProperty { key } | Ir1Op::DeletePropertyStrict { key } => {
                     let (obj, key_reg) = match key {
                         Ir1PropertyKey::Static(key) => {
                             let obj = fn_value_stack.pop().ok_or(
@@ -8842,11 +8963,21 @@ pub fn lower_ir2_to_ir3(
                         }
                     };
                     let dst = alloc_register(&mut fn_reg);
-                    ir3.instructions.push(Ir3Instruction::DeleteProperty {
-                        obj,
-                        key: key_reg,
-                        dst,
-                    });
+                    ir3.instructions.push(
+                        if matches!(&ir2_op.inner, Ir1Op::DeletePropertyStrict { .. }) {
+                            Ir3Instruction::DeletePropertyStrict {
+                                obj,
+                                key: key_reg,
+                                dst,
+                            }
+                        } else {
+                            Ir3Instruction::DeleteProperty {
+                                obj,
+                                key: key_reg,
+                                dst,
+                            }
+                        },
+                    );
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::LoadThis => {
@@ -8938,10 +9069,13 @@ pub fn lower_ir2_to_ir3(
                             dst: key_reg,
                             pool_index,
                         });
-                        ir3.instructions.push(Ir3Instruction::SetProperty {
+                        ir3.instructions.push(Ir3Instruction::DefineOwnProperty {
                             obj: dst,
                             key: key_reg,
                             val: val_reg,
+                            enumerable: true,
+                            infer_name: false,
+                            accessor_kind: None,
                         });
                     }
                     fn_value_stack.push(dst);
@@ -8958,10 +9092,13 @@ pub fn lower_ir2_to_ir3(
                     let dst = alloc_register(&mut fn_reg);
                     ir3.instructions.push(Ir3Instruction::NewObject { dst });
                     for (key_reg, val_reg) in properties {
-                        ir3.instructions.push(Ir3Instruction::SetProperty {
+                        ir3.instructions.push(Ir3Instruction::DefineOwnProperty {
                             obj: dst,
                             key: key_reg,
                             val: val_reg,
+                            enumerable: true,
+                            infer_name: false,
+                            accessor_kind: None,
                         });
                     }
                     fn_value_stack.push(dst);
@@ -9714,6 +9851,21 @@ pub fn lower_ir2_to_ir3(
         .map(CapabilityTag)
         .collect();
 
+    // Lowering historical object/array literals now emits explicit own
+    // definitions. Their source hash remains historical, but the emitted
+    // instruction wire must advertise the schema that can execute it.
+    if ir3.instructions.iter().any(|instruction| {
+        matches!(
+            instruction,
+            Ir3Instruction::DefineOwnProperty { .. }
+                | Ir3Instruction::SetPropertyStrict { .. }
+                | Ir3Instruction::SetPropertyWithReceiverStrict { .. }
+                | Ir3Instruction::DeletePropertyStrict { .. }
+        )
+    }) {
+        ir3.header.schema_version = IrSchemaVersion::CURRENT;
+    }
+
     verify_ir3_specialization(&ir3).map_err(lowering_error_from_ir_error)?;
 
     let source_hash_matches = ir3.header.source_hash.as_ref() == Some(&ir2_hash);
@@ -10173,6 +10325,7 @@ fn lower_class_expression_to_ir1(
     scope_id: ScopeId,
     label_counter: &mut u32,
 ) -> Result<(), LoweringPipelineError> {
+    let previous_strictness = binding_lookup.insert(STRICT_MODE_CONTEXT.to_string(), 0);
     let constructor = body
         .iter()
         .find(|method| method.kind == MethodKind::Constructor);
@@ -10188,6 +10341,7 @@ fn lower_class_expression_to_ir1(
     let mut body_ops = Vec::new();
     let mut body_bindings = Vec::new();
     let mut body_lookup = BTreeMap::new();
+    inherit_function_strictness(binding_lookup, &mut body_lookup, None);
     let mut body_binding_index: BindingId = 0;
     let body_scope = ScopeId { depth: 0, index: 0 };
     let mut body_label_counter: u32 = 0;
@@ -10376,6 +10530,7 @@ fn lower_class_expression_to_ir1(
         };
         let mut method_bindings = Vec::new();
         let mut method_lookup = BTreeMap::new();
+        inherit_function_strictness(binding_lookup, &mut method_lookup, None);
         let mut method_binding_index: BindingId = 0;
         let method_scope = ScopeId { depth: 0, index: 0 };
         let mut method_label_counter: u32 = 0;
@@ -10509,8 +10664,19 @@ fn lower_class_expression_to_ir1(
                 key: Ir1PropertyKey::Static("prototype".into()),
             });
         }
+        if method.computed {
+            lower_expression_to_ir1(
+                &method.key,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                label_counter,
+            )?;
+        }
         ops.push(Ir1Op::CreateFunction {
-            name: Some(method_name.clone()),
+            name: (!method.computed).then_some(method_name.clone()),
             param_names: method_param_names,
             body_ops: method_body_ops,
             free_vars: method_free_vars,
@@ -10527,19 +10693,20 @@ fn lower_class_expression_to_ir1(
             });
         }
 
-        let property_key = match method.kind {
-            MethodKind::Get => {
-                exact_prefixed_property_key(IR_ACCESSOR_GET_PREFIX, &method_property_key)
-            }
-            MethodKind::Set => {
-                exact_prefixed_property_key(IR_ACCESSOR_SET_PREFIX, &method_property_key)
-            }
-            MethodKind::Method | MethodKind::Constructor | MethodKind::AsyncMethod => {
-                method_property_key
-            }
-        };
-        ops.push(Ir1Op::SetProperty {
-            key: Ir1PropertyKey::Static(property_key),
+        ops.push(Ir1Op::DefineOwnProperty {
+            key: if method.computed {
+                Ir1PropertyKey::Dynamic
+            } else {
+                Ir1PropertyKey::Static(method_property_key)
+            },
+            enumerable: false,
+            infer_name: method.computed
+                && !matches!(method.kind, MethodKind::Get | MethodKind::Set),
+            accessor_kind: match method.kind {
+                MethodKind::Get => Some(AccessorKind::Get),
+                MethodKind::Set => Some(AccessorKind::Set),
+                _ => None,
+            },
         });
         ops.push(Ir1Op::Nop);
 
@@ -10571,6 +10738,7 @@ fn lower_class_expression_to_ir1(
     ops.push(Ir1Op::LoadBinding {
         binding_id: class_binding,
     });
+    restore_strictness_context(binding_lookup, previous_strictness);
     Ok(())
 }
 
@@ -10615,10 +10783,6 @@ fn property_key_function_display_name(key: &JsString) -> String {
     display
 }
 
-fn exact_prefixed_property_key(prefix: &str, key: &JsString) -> JsString {
-    JsString::from(prefix).concat(key)
-}
-
 fn push_member_get(ops: &mut Vec<Ir1Op>, object: &Expression, key: Ir1PropertyKey) {
     if matches!(object, Expression::Super) {
         ops.push(Ir1Op::LoadThis);
@@ -10628,12 +10792,20 @@ fn push_member_get(ops: &mut Vec<Ir1Op>, object: &Expression, key: Ir1PropertyKe
     }
 }
 
-fn push_member_set(ops: &mut Vec<Ir1Op>, object: &Expression, key: Ir1PropertyKey) {
+fn push_member_set(ops: &mut Vec<Ir1Op>, object: &Expression, key: Ir1PropertyKey, strict: bool) {
     if matches!(object, Expression::Super) {
         ops.push(Ir1Op::LoadThis);
-        ops.push(Ir1Op::SetPropertyWithReceiver { key });
+        ops.push(if strict {
+            Ir1Op::SetPropertyWithReceiverStrict { key }
+        } else {
+            Ir1Op::SetPropertyWithReceiver { key }
+        });
     } else {
-        ops.push(Ir1Op::SetProperty { key });
+        ops.push(if strict {
+            Ir1Op::SetPropertyStrict { key }
+        } else {
+            Ir1Op::SetProperty { key }
+        });
     }
 }
 
@@ -10946,7 +11118,11 @@ fn lower_expression_to_ir1(
                             root_scope_id,
                             label_counter,
                         )?;
-                        ops.push(Ir1Op::DeleteProperty { key });
+                        ops.push(if is_strict_context(binding_lookup) {
+                            Ir1Op::DeletePropertyStrict { key }
+                        } else {
+                            Ir1Op::DeleteProperty { key }
+                        });
                     }
                     _ => {
                         lower_expression_to_ir1(
@@ -11191,7 +11367,7 @@ fn lower_expression_to_ir1(
                     });
                     // SetProperty leaves the new value on the stack (the prefix
                     // result). For a postfix update, drop it and reload the prior.
-                    push_member_set(ops, object, key);
+                    push_member_set(ops, object, key, is_strict_context(binding_lookup));
                     if let Some(tmp) = prior_binding {
                         ops.push(Ir1Op::Pop);
                         ops.push(Ir1Op::LoadBinding { binding_id: tmp });
@@ -11480,7 +11656,7 @@ fn lower_expression_to_ir1(
                     ops.push(Ir1Op::LoadBinding {
                         binding_id: current_binding,
                     });
-                    push_member_set(ops, object, key);
+                    push_member_set(ops, object, key, is_strict_context(binding_lookup));
                     ops.push(Ir1Op::Pop);
                     ops.push(Ir1Op::Label { id: end_label });
                     ops.push(Ir1Op::LoadBinding {
@@ -11610,7 +11786,7 @@ fn lower_expression_to_ir1(
                     });
                     // SetProperty leaves the assigned value on the stack, so the
                     // compound assignment yields the combined value (as ES requires).
-                    push_member_set(ops, object, key);
+                    push_member_set(ops, object, key, is_strict_context(binding_lookup));
                     return Ok(());
                 }
 
@@ -11642,7 +11818,7 @@ fn lower_expression_to_ir1(
                     root_scope_id,
                     label_counter,
                 )?;
-                push_member_set(ops, object, key);
+                push_member_set(ops, object, key, is_strict_context(binding_lookup));
             } else {
                 return Err(unsupported_frontier_expression_error(
                     "assignment_target",
@@ -12385,8 +12561,15 @@ fn lower_expression_to_ir1(
             let has_method = properties
                 .iter()
                 .any(|prop| prop.kind != ObjectPropertyKind::Data);
+            let has_proto_setter = properties.iter().any(|prop| {
+                prop.kind == ObjectPropertyKind::Data
+                    && !prop.computed
+                    && !prop.shorthand
+                    && canonical_static_object_property_key(&prop.key)
+                        .is_ok_and(|key| key.as_str() == Some("__proto__"))
+            });
 
-            if has_spread || has_method {
+            if has_spread || has_method || has_proto_setter {
                 // With spreads/methods, use incremental construction:
                 // 1. Create empty object
                 // 2. Apply each entry in source order while retaining it.
@@ -12450,16 +12633,6 @@ fn lower_expression_to_ir1(
                         // Annex B.3.1: non-computed, non-shorthand `__proto__: v`
                         // mutates [[Prototype]] directly while preserving the
                         // object literal receiver on the operand stack.
-                        let target_bid = alloc_internal_binding(
-                            bindings,
-                            binding_lookup,
-                            binding_index,
-                            root_scope_id,
-                            "object_literal_proto_target",
-                        )?;
-                        ops.push(Ir1Op::StoreBinding {
-                            binding_id: target_bid,
-                        });
                         lower_expression_to_ir1(
                             &prop.value,
                             ops,
@@ -12469,12 +12642,9 @@ fn lower_expression_to_ir1(
                             root_scope_id,
                             label_counter,
                         )?;
-                        ops.push(Ir1Op::SetProperty {
-                            key: Ir1PropertyKey::Static("__proto__".into()),
-                        });
-                        ops.push(Ir1Op::Pop);
-                        ops.push(Ir1Op::LoadBinding {
-                            binding_id: target_bid,
+                        ops.push(Ir1Op::HostCall {
+                            capability: "builtin:ObjectLiteralSetPrototype".to_string(),
+                            arg_count: 2,
                         });
                     } else {
                         // Data property - emit key and value, then merge a
@@ -12559,6 +12729,14 @@ fn lower_expression_to_ir1(
             };
             let mut body_bindings = Vec::new();
             let mut body_lookup = BTreeMap::new();
+            inherit_function_strictness(
+                binding_lookup,
+                &mut body_lookup,
+                match body {
+                    ArrowBody::Block(block) => Some(&block.body),
+                    ArrowBody::Expression(_) => None,
+                },
+            );
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
@@ -12708,6 +12886,7 @@ fn lower_expression_to_ir1(
             };
             let mut body_bindings = Vec::new();
             let mut body_lookup = BTreeMap::new();
+            inherit_function_strictness(binding_lookup, &mut body_lookup, Some(&body.body));
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
@@ -13147,11 +13326,15 @@ fn classify_ir1_op(
         ),
         Ir1Op::GetProperty { .. }
         | Ir1Op::SetProperty { .. }
+        | Ir1Op::SetPropertyStrict { .. }
         | Ir1Op::GetPropertyWithReceiver { .. }
         | Ir1Op::SetPropertyWithReceiver { .. }
+        | Ir1Op::SetPropertyWithReceiverStrict { .. }
         | Ir1Op::DefineMethod { .. }
         | Ir1Op::DefineAccessor { .. }
+        | Ir1Op::DefineOwnProperty { .. }
         | Ir1Op::DeleteProperty { .. }
+        | Ir1Op::DeletePropertyStrict { .. }
         | Ir1Op::CopyDataProperties { .. } => (EffectBoundary::ReadEffect, None, None),
         Ir1Op::ForInInit
         | Ir1Op::ForInNext { .. }
@@ -13272,12 +13455,18 @@ fn infer_sink_clearance(
     data_label: &Label,
 ) -> Label {
     if let Some(capability) = required_capability {
-        if capability.0 == "builtin:ConstructSuperSpread" {
-            // This tag enters a guest constructor and preserves its argument
-            // labels; it is a language operation, not an external sink. Host
-            // effects performed by that constructor keep their own clearance
-            // checks. In particular, retaining a secret iterator's shape as
-            // an operand must not itself require declassification.
+        if matches!(
+            capability.0.as_str(),
+            "builtin:ConstructSuperSpread"
+                | "builtin:ObjectLiteralSetPrototype"
+                | "builtin:ObjectDefineProperty"
+                | "builtin:ObjectGetOwnPropertyDescriptor"
+                | "builtin:ReflectDefineProperty"
+        ) {
+            // These exact language operations preserve argument and property
+            // labels. They do not export their inputs. Any external effect
+            // performed by a constructor, getter, or setter retains its own
+            // clearance check; similarly named capabilities are not exempt.
             return data_label.clone();
         }
         return sink_clearance_from_capability(&capability.0);
@@ -13483,6 +13672,7 @@ mod tests {
         let tree = SyntaxTree {
             goal: ParseGoal::Script,
             body: vec![Statement::Expression(ExpressionStatement {
+                raw_directive: None,
                 expression: Expression::NumericLiteral(42),
                 span: span(),
             })],
@@ -15646,6 +15836,7 @@ mod tests {
         let tree = SyntaxTree {
             goal: ParseGoal::Script,
             body: vec![Statement::Expression(ExpressionStatement {
+                raw_directive: None,
                 expression: Expression::Await(Box::new(Expression::Identifier(
                     "promise".to_string(),
                 ))),
@@ -15823,6 +16014,7 @@ mod tests {
         let tree = SyntaxTree {
             goal: ParseGoal::Script,
             body: vec![Statement::Expression(ExpressionStatement {
+                raw_directive: None,
                 expression: Expression::Raw("console.log(42)".to_string()),
                 span: span(),
             })],
@@ -15844,6 +16036,7 @@ mod tests {
         let tree = SyntaxTree {
             goal: ParseGoal::Script,
             body: vec![Statement::Expression(ExpressionStatement {
+                raw_directive: None,
                 expression: Expression::Raw("console".to_string()),
                 span: span(),
             })],
@@ -15908,6 +16101,7 @@ mod tests {
         let tree = SyntaxTree {
             goal: ParseGoal::Script,
             body: vec![Statement::Expression(ExpressionStatement {
+                raw_directive: None,
                 expression: Expression::StringLiteral("hello world".into()),
                 span: span(),
             })],
@@ -16363,6 +16557,7 @@ mod tests {
         let tree = SyntaxTree {
             goal: ParseGoal::Script,
             body: vec![Statement::Expression(ExpressionStatement {
+                raw_directive: None,
                 expression,
                 span: span(),
             })],
@@ -17203,7 +17398,7 @@ mod tests {
     }
 
     #[test]
-    fn class_property_keys_preserve_exact_units_and_accessor_prefixes_bd_b12xs_6() {
+    fn class_property_keys_preserve_exact_units_and_typed_accessors_bd_b12xs_6() {
         let tree = CanonicalEs2020Parser
             .parse(
                 r#"class Exact { "\uD800"() {} get "\uD801"() {} }"#,
@@ -17218,10 +17413,7 @@ mod tests {
         .module;
 
         let method_key = JsString::from_code_units(&[0xD800]);
-        let getter_key = exact_prefixed_property_key(
-            IR_ACCESSOR_GET_PREFIX,
-            &JsString::from_code_units(&[0xD801]),
-        );
+        let getter_key = JsString::from_code_units(&[0xD801]);
         assert!(module.ops.iter().any(|op| matches!(
             op,
             Ir1Op::CreateFunction {
@@ -17230,14 +17422,20 @@ mod tests {
         )));
         assert!(module.ops.iter().any(|op| matches!(
             op,
-            Ir1Op::SetProperty {
-                key: Ir1PropertyKey::Static(key)
+            Ir1Op::DefineOwnProperty {
+                key: Ir1PropertyKey::Static(key),
+                accessor_kind: None,
+                enumerable: false,
+                ..
             } if key == &method_key
         )));
         assert!(module.ops.iter().any(|op| matches!(
             op,
-            Ir1Op::SetProperty {
-                key: Ir1PropertyKey::Static(key)
+            Ir1Op::DefineOwnProperty {
+                key: Ir1PropertyKey::Static(key),
+                accessor_kind: Some(AccessorKind::Get),
+                enumerable: false,
+                ..
             } if key == &getter_key
         )));
         assert_ne!(
@@ -17324,6 +17522,7 @@ mod tests {
             Statement::If(IfStatement {
                 condition: Expression::BooleanLiteral(true),
                 consequent: Box::new(Statement::Expression(ExpressionStatement {
+                    raw_directive: None,
                     expression: Expression::NumericLiteral(1),
                     span: span(),
                 })),
@@ -17331,6 +17530,7 @@ mod tests {
                 span: span(),
             }),
             Statement::Expression(ExpressionStatement {
+                raw_directive: None,
                 expression: Expression::ArrowFunction {
                     params: vec![],
                     body: ArrowBody::Block(BlockStatement {
@@ -17440,6 +17640,7 @@ mod tests {
     fn lower_block_statement() {
         let ir0 = stmt_ir0(vec![Statement::Block(BlockStatement {
             body: vec![Statement::Expression(ExpressionStatement {
+                raw_directive: None,
                 expression: Expression::NumericLiteral(1),
                 span: span(),
             })],
@@ -17460,10 +17661,12 @@ mod tests {
         let ir0 = stmt_ir0(vec![Statement::If(IfStatement {
             condition: Expression::BooleanLiteral(true),
             consequent: Box::new(Statement::Expression(ExpressionStatement {
+                raw_directive: None,
                 expression: Expression::NumericLiteral(1),
                 span: span(),
             })),
             alternate: Some(Box::new(Statement::Expression(ExpressionStatement {
+                raw_directive: None,
                 expression: Expression::NumericLiteral(2),
                 span: span(),
             }))),
@@ -17491,6 +17694,7 @@ mod tests {
         let ir0 = stmt_ir0(vec![Statement::If(IfStatement {
             condition: Expression::BooleanLiteral(false),
             consequent: Box::new(Statement::Expression(ExpressionStatement {
+                raw_directive: None,
                 expression: Expression::NumericLiteral(1),
                 span: span(),
             })),
@@ -17524,6 +17728,7 @@ mod tests {
             condition: Some(Expression::BooleanLiteral(true)),
             update: Some(Expression::NumericLiteral(1)),
             body: Box::new(Statement::Expression(ExpressionStatement {
+                raw_directive: None,
                 expression: Expression::NumericLiteral(99),
                 span: span(),
             })),
@@ -17547,6 +17752,7 @@ mod tests {
             pre_loop_initializer: None,
             object: Expression::Identifier("obj".into()),
             body: Box::new(Statement::Expression(ExpressionStatement {
+                raw_directive: None,
                 expression: Expression::Identifier("k".into()),
                 span: span(),
             })),
@@ -17577,6 +17783,7 @@ mod tests {
             pre_loop_initializer: Some(call("init")),
             object: call("rhs"),
             body: Box::new(Statement::Expression(ExpressionStatement {
+                raw_directive: None,
                 expression: Expression::Identifier("key".into()),
                 span: span(),
             })),
@@ -17661,6 +17868,7 @@ mod tests {
             binding_kind: Some(VariableDeclarationKind::Const),
             iterable: Expression::Identifier("arr".into()),
             body: Box::new(Statement::Expression(ExpressionStatement {
+                raw_directive: None,
                 expression: Expression::Identifier("v".into()),
                 span: span(),
             })),
@@ -18215,6 +18423,7 @@ mod tests {
             Statement::Labeled(LabeledStatement {
                 label: "reusable".into(),
                 body: Box::new(Statement::Expression(ExpressionStatement {
+                    raw_directive: None,
                     expression: Expression::NumericLiteral(value),
                     span: span(),
                 })),
@@ -18231,6 +18440,7 @@ mod tests {
         let ir0 = stmt_ir0(vec![Statement::While(WhileStatement {
             condition: Expression::BooleanLiteral(true),
             body: Box::new(Statement::Expression(ExpressionStatement {
+                raw_directive: None,
                 expression: Expression::NumericLiteral(1),
                 span: span(),
             })),
@@ -18351,6 +18561,7 @@ mod tests {
         let ir0 = stmt_ir0(vec![Statement::TryCatch(TryCatchStatement {
             block: BlockStatement {
                 body: vec![Statement::Expression(ExpressionStatement {
+                    raw_directive: None,
                     expression: Expression::NumericLiteral(1),
                     span: span(),
                 })],
@@ -18360,6 +18571,7 @@ mod tests {
                 parameter: Some("e".into()),
                 body: BlockStatement {
                     body: vec![Statement::Expression(ExpressionStatement {
+                        raw_directive: None,
                         expression: Expression::Identifier("e".into()),
                         span: span(),
                     })],
@@ -18401,6 +18613,7 @@ mod tests {
         let ir0 = stmt_ir0(vec![Statement::TryCatch(TryCatchStatement {
             block: BlockStatement {
                 body: vec![Statement::Expression(ExpressionStatement {
+                    raw_directive: None,
                     expression: Expression::NumericLiteral(1),
                     span: span(),
                 })],
@@ -18409,6 +18622,7 @@ mod tests {
             handler: None,
             finalizer: Some(BlockStatement {
                 body: vec![Statement::Expression(ExpressionStatement {
+                    raw_directive: None,
                     expression: Expression::NumericLiteral(99),
                     span: span(),
                 })],
@@ -18464,6 +18678,7 @@ mod tests {
         let ir0 = stmt_ir0(vec![Statement::TryCatch(TryCatchStatement {
             block: BlockStatement {
                 body: vec![Statement::Expression(ExpressionStatement {
+                    raw_directive: None,
                     expression: Expression::NumericLiteral(1),
                     span: span(),
                 })],
@@ -18472,6 +18687,7 @@ mod tests {
             handler: None,
             finalizer: Some(BlockStatement {
                 body: vec![Statement::Expression(ExpressionStatement {
+                    raw_directive: None,
                     expression: Expression::NumericLiteral(99),
                     span: span(),
                 })],
@@ -18522,6 +18738,7 @@ mod tests {
         let ir0 = stmt_ir0(vec![Statement::TryCatch(TryCatchStatement {
             block: BlockStatement {
                 body: vec![Statement::Expression(ExpressionStatement {
+                    raw_directive: None,
                     expression: Expression::NumericLiteral(1),
                     span: span(),
                 })],
@@ -18531,6 +18748,7 @@ mod tests {
                 parameter: Some("e".into()),
                 body: BlockStatement {
                     body: vec![Statement::Expression(ExpressionStatement {
+                        raw_directive: None,
                         expression: Expression::Identifier("e".into()),
                         span: span(),
                     })],
@@ -18540,6 +18758,7 @@ mod tests {
             }),
             finalizer: Some(BlockStatement {
                 body: vec![Statement::Expression(ExpressionStatement {
+                    raw_directive: None,
                     expression: Expression::NumericLiteral(42),
                     span: span(),
                 })],
@@ -18679,6 +18898,7 @@ mod tests {
         let ir0 = stmt_ir0(vec![Statement::TryCatch(TryCatchStatement {
             block: BlockStatement {
                 body: vec![Statement::Expression(ExpressionStatement {
+                    raw_directive: None,
                     expression: Expression::NumericLiteral(1),
                     span: span(),
                 })],
@@ -18688,6 +18908,7 @@ mod tests {
                 parameter: Some("e".into()),
                 body: BlockStatement {
                     body: vec![Statement::Expression(ExpressionStatement {
+                        raw_directive: None,
                         expression: Expression::Identifier("e".into()),
                         span: span(),
                     })],
@@ -18726,6 +18947,7 @@ mod tests {
                 SwitchCase {
                     test: Some(Expression::NumericLiteral(1)),
                     consequent: vec![Statement::Expression(ExpressionStatement {
+                        raw_directive: None,
                         expression: Expression::StringLiteral("one".into()),
                         span: span(),
                     })],
@@ -18734,6 +18956,7 @@ mod tests {
                 SwitchCase {
                     test: None,
                     consequent: vec![Statement::Expression(ExpressionStatement {
+                        raw_directive: None,
                         expression: Expression::StringLiteral("default".into()),
                         span: span(),
                     })],
@@ -21563,6 +21786,7 @@ mod tests {
                 pre_loop_initializer: None,
                 object: Expression::Identifier("obj".into()),
                 body: Box::new(Statement::Expression(ExpressionStatement {
+                    raw_directive: None,
                     expression: Expression::NumericLiteral(1),
                     span: span(),
                 })),
@@ -21573,6 +21797,7 @@ mod tests {
                 binding_kind: Some(VariableDeclarationKind::Const),
                 iterable: Expression::Identifier("arr".into()),
                 body: Box::new(Statement::Expression(ExpressionStatement {
+                    raw_directive: None,
                     expression: Expression::NumericLiteral(2),
                     span: span(),
                 })),
@@ -21602,6 +21827,7 @@ mod tests {
         let ir0 = stmt_ir0(vec![Statement::If(IfStatement {
             condition: Expression::BooleanLiteral(true),
             consequent: Box::new(Statement::Expression(ExpressionStatement {
+                raw_directive: None,
                 expression: Expression::NumericLiteral(1),
                 span: span(),
             })),
@@ -21619,6 +21845,7 @@ mod tests {
         let ir0 = stmt_ir0(vec![Statement::While(WhileStatement {
             condition: Expression::BooleanLiteral(false),
             body: Box::new(Statement::Expression(ExpressionStatement {
+                raw_directive: None,
                 expression: Expression::NumericLiteral(1),
                 span: span(),
             })),
@@ -21647,6 +21874,7 @@ mod tests {
                 pre_loop_initializer: None,
                 object: Expression::Identifier("obj".into()),
                 body: Box::new(Statement::Expression(ExpressionStatement {
+                    raw_directive: None,
                     expression: Expression::NumericLiteral(1),
                     span: span(),
                 })),
@@ -22471,13 +22699,13 @@ mod tests {
     #[test]
     fn object_rest_filters_exclusions_before_accessor_reads_bd_f1ixz() {
         let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
-            "let source = { marker: 7, excludedReads: 0, includedReads: 0 };\
-             source['__franken_ir_accessor_get__:excluded'] = function() {\
+            "let source = { marker: 7, excludedReads: 0, includedReads: 0,\
+             get excluded() {\
                  this.excludedReads = this.excludedReads + 1; return 2;\
-             };\
-             source['__franken_ir_accessor_get__:included'] = function() {\
+             },\
+             get included() {\
                  this.includedReads = this.includedReads + 1; return this.marker;\
-             };\
+             } };\
              let { excluded, ...rest } = source;\
              source.excludedReads * 1000 + source.includedReads * 100\
                  + excluded * 10 + rest.included;",

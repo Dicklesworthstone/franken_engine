@@ -7352,6 +7352,7 @@ fn statement_kind_label_covers_all_variants() {
         statement_kind_label(&Statement::Expression(ExpressionStatement {
             expression: Expression::NullLiteral,
             span,
+            raw_directive: None,
         })),
         "expression"
     );

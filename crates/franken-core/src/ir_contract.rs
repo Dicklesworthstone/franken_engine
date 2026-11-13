@@ -37,6 +37,9 @@ pub struct IrSchemaVersion {
 }
 
 impl IrSchemaVersion {
+    /// `0.21.0` preserves strict property-write/delete semantics and separates
+    /// own-property initialization from ordinary assignment. Core minor
+    /// `0.20.0` is skipped because it identifies an incompatible engine wire.
     /// `0.19.0` adds typed object-literal accessor definition operations to
     /// IR1, IR2, and IR3. Core minors `0.16.0` through `0.18.0` are skipped
     /// because they identify incompatible `franken-engine` IR wires.
@@ -68,7 +71,7 @@ impl IrSchemaVersion {
     /// lone-surrogate values use `$wtf16`.
     pub const CURRENT: Self = Self {
         major: 0,
-        minor: 19,
+        minor: 21,
         patch: 0,
     };
 
@@ -421,11 +424,10 @@ impl AccessorKind {
     }
 }
 
-/// Private IR1/IR3 static-key prefix used by class lowering to define accessor
-/// descriptors without extending the register-machine instruction set.
+/// Historical class-accessor encoding, rejected in legacy artifacts that use
+/// property writes. Current source treats this spelling as an ordinary key.
 pub const IR_ACCESSOR_GET_PREFIX: &str = "__franken_ir_accessor_get__:";
-/// Private IR1/IR3 static-key prefix used by class lowering to define accessor
-/// descriptors without extending the register-machine instruction set.
+/// Historical setter counterpart of `IR_ACCESSOR_GET_PREFIX`.
 pub const IR_ACCESSOR_SET_PREFIX: &str = "__franken_ir_accessor_set__:";
 /// Private function-object key carrying the parent constructor for `super()`.
 pub const IR_SUPER_CONSTRUCTOR_PROPERTY: &str = "__franken_ir_super_constructor__";
@@ -711,6 +713,22 @@ pub enum Ir1Op {
     /// Property write with a distinct receiver (for `super`). The receiver is
     /// above the ordinary SetProperty operands, including the assigned value.
     SetPropertyWithReceiver { key: Ir1PropertyKey },
+    /// Strict assignment: a refused [[Set]] throws a TypeError.
+    SetPropertyStrict { key: Ir1PropertyKey },
+    /// Strict assignment through a distinct receiver, as for class `super`.
+    SetPropertyWithReceiverStrict { key: Ir1PropertyKey },
+    /// Strict deletion: a refused [[Delete]] throws a TypeError.
+    DeletePropertyStrict { key: Ir1PropertyKey },
+    /// Define an own writable/configurable data property without consulting
+    /// inherited setters. The stack shape and completion match SetProperty.
+    DefineOwnProperty {
+        key: Ir1PropertyKey,
+        enumerable: bool,
+        /// SetFunctionName for a freshly created computed class method.
+        infer_name: bool,
+        /// A typed class accessor definition; raw property names never select it.
+        accessor_kind: Option<AccessorKind>,
+    },
 }
 
 impl Ir1Op {
@@ -911,10 +929,17 @@ impl Ir1Op {
                 );
                 map.insert("key".to_string(), key.canonical_value());
             }
-            Self::SetProperty { key } => {
+            Self::SetProperty { key } | Self::SetPropertyStrict { key } => {
                 map.insert(
                     "op".to_string(),
-                    CanonicalValue::String("set_property".to_string()),
+                    CanonicalValue::String(
+                        if matches!(self, Self::SetPropertyStrict { .. }) {
+                            "set_property_strict"
+                        } else {
+                            "set_property"
+                        }
+                        .to_string(),
+                    ),
                 );
                 map.insert("key".to_string(), key.canonical_value());
             }
@@ -936,12 +961,17 @@ impl Ir1Op {
                     CanonicalValue::String(kind.as_str().to_string()),
                 );
             }
-            Self::GetPropertyWithReceiver { key } | Self::SetPropertyWithReceiver { key } => {
+            Self::GetPropertyWithReceiver { key }
+            | Self::SetPropertyWithReceiver { key }
+            | Self::SetPropertyWithReceiverStrict { key } => {
                 map.insert(
                     "op".to_string(),
                     CanonicalValue::String(
                         match self {
                             Self::GetPropertyWithReceiver { .. } => "get_property_with_receiver",
+                            Self::SetPropertyWithReceiverStrict { .. } => {
+                                "set_property_with_receiver_strict"
+                            }
                             _ => "set_property_with_receiver",
                         }
                         .to_string(),
@@ -949,12 +979,39 @@ impl Ir1Op {
                 );
                 map.insert("key".to_string(), key.canonical_value());
             }
-            Self::DeleteProperty { key } => {
+            Self::DeleteProperty { key } | Self::DeletePropertyStrict { key } => {
                 map.insert(
                     "op".to_string(),
-                    CanonicalValue::String("delete_property".to_string()),
+                    CanonicalValue::String(
+                        if matches!(self, Self::DeletePropertyStrict { .. }) {
+                            "delete_property_strict"
+                        } else {
+                            "delete_property"
+                        }
+                        .to_string(),
+                    ),
                 );
                 map.insert("key".to_string(), key.canonical_value());
+            }
+            Self::DefineOwnProperty {
+                key,
+                enumerable,
+                infer_name,
+                accessor_kind,
+            } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("define_own_property".to_string()),
+                );
+                map.insert("key".to_string(), key.canonical_value());
+                map.insert("enumerable".to_string(), CanonicalValue::Bool(*enumerable));
+                map.insert("infer_name".to_string(), CanonicalValue::Bool(*infer_name));
+                if let Some(kind) = accessor_kind {
+                    map.insert(
+                        "accessor_kind".to_string(),
+                        CanonicalValue::String(kind.as_str().to_string()),
+                    );
+                }
             }
             Self::NewArray { count } => {
                 map.insert(
@@ -1979,6 +2036,27 @@ pub enum Ir3Instruction {
         receiver: Reg,
         val: Reg,
     },
+    /// Strict-mode [[Set]], preserving refusal as a catchable TypeError.
+    SetPropertyStrict { obj: Reg, key: Reg, val: Reg },
+    /// Strict-mode [[Set]] with an explicit receiver.
+    SetPropertyWithReceiverStrict {
+        obj: Reg,
+        key: Reg,
+        receiver: Reg,
+        val: Reg,
+    },
+    /// Strict-mode [[Delete]], preserving refusal as a catchable TypeError.
+    DeletePropertyStrict { obj: Reg, key: Reg, dst: Reg },
+    /// Own writable/configurable property initialization, bypassing inherited
+    /// setters and inherited non-writable data properties.
+    DefineOwnProperty {
+        obj: Reg,
+        key: Reg,
+        val: Reg,
+        enumerable: bool,
+        infer_name: bool,
+        accessor_kind: Option<AccessorKind>,
+    },
 }
 
 impl Ir3Instruction {
@@ -2225,10 +2303,17 @@ impl Ir3Instruction {
                 map.insert("key".to_string(), CanonicalValue::U64(u64::from(*key)));
                 map.insert("obj".to_string(), CanonicalValue::U64(u64::from(*obj)));
             }
-            Self::SetProperty { obj, key, val } => {
+            Self::SetProperty { obj, key, val } | Self::SetPropertyStrict { obj, key, val } => {
                 map.insert(
                     "op".to_string(),
-                    CanonicalValue::String("set_property".to_string()),
+                    CanonicalValue::String(
+                        if matches!(self, Self::SetPropertyStrict { .. }) {
+                            "set_property_strict"
+                        } else {
+                            "set_property"
+                        }
+                        .to_string(),
+                    ),
                 );
                 map.insert("key".to_string(), CanonicalValue::U64(u64::from(*key)));
                 map.insert("obj".to_string(), CanonicalValue::U64(u64::from(*obj)));
@@ -2284,10 +2369,23 @@ impl Ir3Instruction {
                 key,
                 receiver,
                 val,
+            }
+            | Self::SetPropertyWithReceiverStrict {
+                obj,
+                key,
+                receiver,
+                val,
             } => {
                 map.insert(
                     "op".to_string(),
-                    CanonicalValue::String("set_property_with_receiver".to_string()),
+                    CanonicalValue::String(
+                        if matches!(self, Self::SetPropertyWithReceiverStrict { .. }) {
+                            "set_property_with_receiver_strict"
+                        } else {
+                            "set_property_with_receiver"
+                        }
+                        .to_string(),
+                    ),
                 );
                 map.insert("obj".to_string(), CanonicalValue::U64(u64::from(*obj)));
                 map.insert("key".to_string(), CanonicalValue::U64(u64::from(*key)));
@@ -2297,14 +2395,46 @@ impl Ir3Instruction {
                 );
                 map.insert("val".to_string(), CanonicalValue::U64(u64::from(*val)));
             }
-            Self::DeleteProperty { obj, key, dst } => {
+            Self::DeleteProperty { obj, key, dst }
+            | Self::DeletePropertyStrict { obj, key, dst } => {
                 map.insert(
                     "op".to_string(),
-                    CanonicalValue::String("delete_property".to_string()),
+                    CanonicalValue::String(
+                        if matches!(self, Self::DeletePropertyStrict { .. }) {
+                            "delete_property_strict"
+                        } else {
+                            "delete_property"
+                        }
+                        .to_string(),
+                    ),
                 );
                 map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
                 map.insert("key".to_string(), CanonicalValue::U64(u64::from(*key)));
                 map.insert("obj".to_string(), CanonicalValue::U64(u64::from(*obj)));
+            }
+            Self::DefineOwnProperty {
+                obj,
+                key,
+                val,
+                enumerable,
+                infer_name,
+                accessor_kind,
+            } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("define_own_property".to_string()),
+                );
+                map.insert("key".to_string(), CanonicalValue::U64(u64::from(*key)));
+                map.insert("obj".to_string(), CanonicalValue::U64(u64::from(*obj)));
+                map.insert("val".to_string(), CanonicalValue::U64(u64::from(*val)));
+                map.insert("enumerable".to_string(), CanonicalValue::Bool(*enumerable));
+                map.insert("infer_name".to_string(), CanonicalValue::Bool(*infer_name));
+                if let Some(kind) = accessor_kind {
+                    map.insert(
+                        "accessor_kind".to_string(),
+                        CanonicalValue::String(kind.as_str().to_string()),
+                    );
+                }
             }
             Self::NewObject { dst } => {
                 map.insert(
@@ -3474,6 +3604,7 @@ pub fn verify_ir1_source(module: &Ir1Module, ir0_hash: &ContentHash) -> Result<(
     verify_ir1_derived_constructor_schema(module)?;
     verify_ir1_method_definition_schema(module)?;
     verify_ir1_accessor_definition_schema(module)?;
+    verify_ir1_property_write_schema(module)?;
     verify_ir1_generator_boundaries(module)?;
     match &module.header.source_hash {
         Some(source_hash) if source_hash == ir0_hash => Ok(()),
@@ -3500,6 +3631,7 @@ pub fn verify_ir3_specialization(module: &Ir3Module) -> Result<(), IrError> {
     verify_ir3_derived_constructor_schema(module)?;
     verify_ir3_method_definition_schema(module)?;
     verify_ir3_accessor_definition_schema(module)?;
+    verify_ir3_property_write_schema(module)?;
     verify_ir3_generator_boundaries(module)?;
     if let Some(spec) = &module.specialization {
         if spec.proof_input_ids.is_empty() {
@@ -3603,12 +3735,12 @@ pub fn verify_schema_version(header: &IrHeader) -> Result<(), IrError> {
         ));
     }
 
-    // Core 0.6.0, 0.7.0, 0.12.0, 0.14.0, and 0.16.0 through 0.18.0 never existed.
+    // Core 0.6.0, 0.7.0, 0.12.0, 0.14.0, 0.16.0 through 0.18.0, and 0.20.0 never existed.
     // Those numeric versions
     // identify incompatible franken-engine IR shapes. Accepting them as
     // historical core artifacts would make the schema gate ambiguous for the
     // overlapping enum variants.
-    if provided.major == 0 && matches!(provided.minor, 6 | 7 | 12 | 14 | 16..=18) {
+    if provided.major == 0 && matches!(provided.minor, 6 | 7 | 12 | 14 | 16..=18 | 20) {
         return Err(IrError::new(
             IrErrorCode::SchemaVersionMismatch,
             format!(
@@ -3851,6 +3983,152 @@ fn verify_ir3_accessor_definition_schema(module: &Ir3Module) -> Result<(), IrErr
         return Err(IrError::new(
             IrErrorCode::SchemaVersionMismatch,
             "accessor-definition IR3 instructions require schema 0.19.0",
+            IrLevel::Ir3,
+        ));
+    }
+    Ok(())
+}
+
+const PROPERTY_WRITE_SCHEMA_VERSION: IrSchemaVersion = IrSchemaVersion {
+    major: 0,
+    minor: 21,
+    patch: 0,
+};
+
+fn is_legacy_accessor_key(key: &JsString) -> bool {
+    key.as_str().is_some_and(|key| {
+        key.starts_with(IR_ACCESSOR_GET_PREFIX) || key.starts_with(IR_ACCESSOR_SET_PREFIX)
+    })
+}
+
+fn ir1_op_has_legacy_accessor_key(op: &Ir1Op) -> bool {
+    match op {
+        Ir1Op::SetProperty {
+            key: Ir1PropertyKey::Static(key),
+        }
+        | Ir1Op::LoadLiteral {
+            value: Ir1Literal::String(key),
+        } => is_legacy_accessor_key(key),
+        Ir1Op::DeclareFunction { body_ops, .. } | Ir1Op::CreateFunction { body_ops, .. } => {
+            body_ops.iter().any(ir1_op_has_legacy_accessor_key)
+        }
+        _ => false,
+    }
+}
+
+fn ir1_op_has_legacy_property_write(op: &Ir1Op) -> bool {
+    match op {
+        Ir1Op::SetProperty { .. } | Ir1Op::SetPropertyWithReceiver { .. } => true,
+        Ir1Op::DeclareFunction { body_ops, .. } | Ir1Op::CreateFunction { body_ops, .. } => {
+            body_ops.iter().any(ir1_op_has_legacy_property_write)
+        }
+        _ => false,
+    }
+}
+
+fn verify_legacy_accessor_encoding(
+    header: &IrHeader,
+    has_legacy_key: bool,
+    has_property_write: bool,
+) -> Result<(), IrError> {
+    // Before typed definitions, class accessors and ordinary source writes
+    // shared a source-spellable key prefix. Register operands can carry that
+    // key across control flow, so a legacy artifact with both a matching
+    // literal and a property write is ambiguous and must be re-lowered. Do
+    // not silently replay it with the new ordinary-property semantics.
+    if header.schema_version < PROPERTY_WRITE_SCHEMA_VERSION && has_legacy_key && has_property_write
+    {
+        return Err(IrError::new(
+            IrErrorCode::SchemaVersionMismatch,
+            "legacy accessor-key encoding requires re-lowering with schema 0.21.0 or later",
+            header.level,
+        ));
+    }
+    Ok(())
+}
+
+fn ir1_op_uses_property_write_schema(op: &Ir1Op) -> bool {
+    match op {
+        Ir1Op::SetPropertyStrict { .. }
+        | Ir1Op::SetPropertyWithReceiverStrict { .. }
+        | Ir1Op::DeletePropertyStrict { .. }
+        | Ir1Op::DefineOwnProperty { .. } => true,
+        Ir1Op::DeclareFunction { body_ops, .. } | Ir1Op::CreateFunction { body_ops, .. } => {
+            body_ops.iter().any(ir1_op_uses_property_write_schema)
+        }
+        _ => false,
+    }
+}
+
+pub(crate) fn verify_ir1_property_write_schema(module: &Ir1Module) -> Result<(), IrError> {
+    verify_legacy_accessor_encoding(
+        &module.header,
+        module.ops.iter().any(ir1_op_has_legacy_accessor_key),
+        module.ops.iter().any(ir1_op_has_legacy_property_write),
+    )?;
+    if module.ops.iter().any(ir1_op_uses_property_write_schema)
+        && module.header.schema_version < PROPERTY_WRITE_SCHEMA_VERSION
+    {
+        return Err(IrError::new(
+            IrErrorCode::SchemaVersionMismatch,
+            "property-write IR1 operations require schema 0.21.0",
+            IrLevel::Ir1,
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn verify_ir2_property_write_schema(module: &Ir2Module) -> Result<(), IrError> {
+    verify_legacy_accessor_encoding(
+        &module.header,
+        module
+            .ops
+            .iter()
+            .any(|op| ir1_op_has_legacy_accessor_key(&op.inner)),
+        module
+            .ops
+            .iter()
+            .any(|op| ir1_op_has_legacy_property_write(&op.inner)),
+    )?;
+    if module
+        .ops
+        .iter()
+        .any(|op| ir1_op_uses_property_write_schema(&op.inner))
+        && module.header.schema_version < PROPERTY_WRITE_SCHEMA_VERSION
+    {
+        return Err(IrError::new(
+            IrErrorCode::SchemaVersionMismatch,
+            "property-write IR2 operations require schema 0.21.0",
+            IrLevel::Ir2,
+        ));
+    }
+    Ok(())
+}
+
+fn verify_ir3_property_write_schema(module: &Ir3Module) -> Result<(), IrError> {
+    verify_legacy_accessor_encoding(
+        &module.header,
+        module.constant_pool.iter().any(is_legacy_accessor_key),
+        module.instructions.iter().any(|instruction| {
+            matches!(
+                instruction,
+                Ir3Instruction::SetProperty { .. } | Ir3Instruction::SetPropertyWithReceiver { .. }
+            )
+        }),
+    )?;
+    if module.instructions.iter().any(|instruction| {
+        matches!(
+            instruction,
+            Ir3Instruction::SetPropertyStrict { .. }
+                | Ir3Instruction::SetPropertyWithReceiverStrict { .. }
+                | Ir3Instruction::DeletePropertyStrict { .. }
+                | Ir3Instruction::DefineOwnProperty { .. }
+        )
+    }) && module.header.schema_version < PROPERTY_WRITE_SCHEMA_VERSION
+    {
+        return Err(IrError::new(
+            IrErrorCode::SchemaVersionMismatch,
+            "property-write IR3 instructions require schema 0.21.0",
             IrLevel::Ir3,
         ));
     }
@@ -4335,6 +4613,7 @@ mod tests {
             body: vec![Statement::Expression(ExpressionStatement {
                 expression: Expression::NumericLiteral(42),
                 span: make_span(),
+                raw_directive: None,
             })],
             span: make_span(),
         }
@@ -4344,7 +4623,7 @@ mod tests {
 
     #[test]
     fn schema_version_display() {
-        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.19.0");
+        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.21.0");
     }
 
     #[test]
@@ -5734,7 +6013,7 @@ mod tests {
         assert_eq!(json["outcome"], "Contained");
         assert_eq!(
             json["header"]["schema_version"],
-            serde_json::json!({"major": 0, "minor": 19, "patch": 0})
+            serde_json::json!({"major": 0, "minor": 21, "patch": 0})
         );
         let restored: Ir4Module = serde_json::from_value(json).unwrap();
         assert_eq!(restored, witness);
@@ -5802,7 +6081,7 @@ mod tests {
         for (minor, reason) in [
             (14, "skipped core minor"),
             (16, "skipped core minor"),
-            (20, "unsupported future minor"),
+            (20, "skipped core minor"),
         ] {
             for patch in [0, u32::MAX] {
                 let mut witness = Ir4Module::new(ir3_hash, "peer.js");
@@ -7046,7 +7325,7 @@ mod tests {
     fn schema_version_current_value() {
         let v = IrSchemaVersion::CURRENT;
         assert_eq!(v.major, 0);
-        assert_eq!(v.minor, 19);
+        assert_eq!(v.minor, 21);
         assert_eq!(v.patch, 0);
     }
 

@@ -67,11 +67,13 @@ use crate::runtime_config::ExecutionConfig;
 mod array_methods;
 mod async_generator;
 mod function_methods;
+mod property_descriptors;
 mod string_methods;
 use async_generator::{
     AsyncGeneratorAwaitKind, AsyncGeneratorContinuation, AsyncGeneratorObject,
     AsyncGeneratorResumeKind,
 };
+use property_descriptors::{PropertyAttributes, PropertyAttributesWire};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -183,6 +185,7 @@ const KNOWN_INTERNAL_HOSTCALLS: &[&str] = &[
     "builtin:ReferenceError",
     "builtin:TypeError",
     "builtin:ConstructSuperSpread",
+    "builtin:ObjectLiteralSetPrototype",
     "builtin:ArrayPrototypePush",
     "builtin:ArrayPrototypePop",
     "builtin:ArrayIsArray",
@@ -210,6 +213,12 @@ const KNOWN_INTERNAL_HOSTCALLS: &[&str] = &[
     "builtin:ObjectGetOwnPropertySymbols",
     "builtin:ReflectOwnKeys",
     "builtin:ObjectAssign",
+    "builtin:ObjectDefineProperty",
+    "builtin:ObjectGetOwnPropertyDescriptor",
+    "builtin:ReflectDefineProperty",
+    "builtin:ObjectDefinePropertyFunction",
+    "builtin:ObjectGetOwnPropertyDescriptorFunction",
+    "builtin:ReflectDefinePropertyFunction",
     "builtin:StringPrototypeCharAt",
     "builtin:StringPrototypeCharCodeAt",
     "builtin:StringPrototypeCodePointAt",
@@ -1388,6 +1397,11 @@ pub struct HeapObject {
     /// Without it, a `Secret` value written to a property of a lower-labeled
     /// object would launder back out as the object's label on later reads.
     property_labels: OrderedStringMap<crate::ifc_artifacts::Label>,
+    /// Non-default descriptor bits, keyed by exact UTF-16 or Symbol identity.
+    property_attributes: BTreeMap<RuntimePropertyKey, PropertyAttributes>,
+    /// Descriptor/presence observations survive deletion and later writes.
+    /// This protects enumeration and missing-property reads as well as values.
+    property_structure_label: Option<crate::ifc_artifacts::Label>,
     /// Accessor descriptor storage, parallel to `properties` so the baseline
     /// heap can model the object_model accessor/data split.
     pub accessors: BTreeMap<String, AccessorProperty>,
@@ -1475,6 +1489,9 @@ impl Serialize for HeapObject {
                 1
             }
             + if has_constructor_metadata { 4 } else { 0 };
+        let field_count = field_count
+            + usize::from(!self.property_attributes.is_empty())
+            + usize::from(self.property_structure_label.is_some());
         let mut object = serializer.serialize_struct("HeapObject", field_count)?;
         object.serialize_field("properties", &self.properties)?;
         if has_accessors {
@@ -1511,6 +1528,17 @@ impl Serialize for HeapObject {
         if !symbol_properties.is_empty() {
             object.serialize_field("symbol_properties", &symbol_properties)?;
         }
+        if !self.property_attributes.is_empty() {
+            let attributes = self
+                .property_attributes
+                .iter()
+                .map(|(key, attributes)| PropertyAttributesWire::from_entry(key, *attributes))
+                .collect::<Vec<_>>();
+            object.serialize_field("property_attributes", &attributes)?;
+        }
+        if let Some(label) = &self.property_structure_label {
+            object.serialize_field("property_structure_label", label)?;
+        }
         object.end()
     }
 }
@@ -1542,6 +1570,10 @@ impl<'de> Deserialize<'de> for HeapObject {
             property_labels: OrderedStringMap<crate::ifc_artifacts::Label>,
             #[serde(default)]
             symbol_properties: Vec<HeapSymbolPropertyWire>,
+            #[serde(default)]
+            property_attributes: Vec<PropertyAttributesWire>,
+            #[serde(default)]
+            property_structure_label: Option<crate::ifc_artifacts::Label>,
         }
 
         #[derive(Deserialize)]
@@ -1577,6 +1609,8 @@ impl<'de> Deserialize<'de> for HeapObject {
         let mut object = Self {
             properties: wire.properties,
             property_labels: wire.property_labels,
+            property_attributes: BTreeMap::new(),
+            property_structure_label: wire.property_structure_label,
             accessors: BTreeMap::new(),
             prototype: wire.prototype,
             constructor_function: wire.constructor_function,
@@ -1670,6 +1704,17 @@ impl<'de> Deserialize<'de> for HeapObject {
                 .insert_baseline_symbol_property(symbol_id, property);
         }
 
+        for record in wire.property_attributes {
+            let (key, attributes) = record.into_entry().map_err(D::Error::custom)?;
+            if !object.contains_own_runtime_property(&key) {
+                return Err(D::Error::custom(
+                    "attributes require an existing own property",
+                ));
+            }
+            if object.property_attributes.insert(key, attributes).is_some() {
+                return Err(D::Error::custom("duplicate property attributes"));
+            }
+        }
         Ok(object)
     }
 }
@@ -1677,6 +1722,8 @@ impl<'de> Deserialize<'de> for HeapObject {
 impl PartialEq for HeapObject {
     fn eq(&self, other: &Self) -> bool {
         self.properties == other.properties
+            && self.property_attributes == other.property_attributes
+            && self.property_structure_label == other.property_structure_label
             && self.accessors == other.accessors
             && self.prototype == other.prototype
             && self.constructor_function == other.constructor_function
@@ -2122,7 +2169,6 @@ enum CopyDataPropertiesWriteMode {
 #[derive(Debug, Clone)]
 enum CopyDataPropertiesAwaiting {
     Getter(RuntimePropertyKey),
-    Setter,
 }
 
 #[derive(Debug, Clone)]
@@ -2132,6 +2178,7 @@ struct CopyDataPropertiesState {
     call_depth: usize,
     target_id: ObjectId,
     source: Value,
+    source_label: crate::ifc_artifacts::Label,
     /// Exact immutable code-unit snapshot for string sources. Keeping it once
     /// makes indexed property reads linear overall instead of rescanning the
     /// prefix for every code-unit key.
@@ -4486,6 +4533,8 @@ impl InterpreterCore {
             self.heap.push(HeapObject {
                 properties: OrderedStringMap::new(),
                 property_labels: OrderedStringMap::new(),
+                property_attributes: BTreeMap::new(),
+                property_structure_label: None,
                 accessors: std::collections::BTreeMap::new(),
                 prototype: None,
                 constructor_function: None,
@@ -5298,6 +5347,16 @@ impl InterpreterCore {
         receiver_label: crate::ifc_artifacts::Label,
     ) -> Result<(Value, crate::ifc_artifacts::Label), InterpreterError> {
         let result = match builtin.kind {
+            BuiltinFunctionKind::ObjectDefineProperty
+            | BuiltinFunctionKind::ObjectGetOwnPropertyDescriptor
+            | BuiltinFunctionKind::ReflectDefineProperty => {
+                return self.dispatch_descriptor_builtin(
+                    module,
+                    builtin.kind,
+                    args,
+                    receiver_label,
+                );
+            }
             BuiltinFunctionKind::FunctionPrototypeCall
             | BuiltinFunctionKind::FunctionPrototypeApply => {
                 return self.dispatch_function_method(
@@ -5619,7 +5678,10 @@ impl InterpreterCore {
                     | BuiltinFunctionKind::StringPrototypeSlice
                     | BuiltinFunctionKind::StringPrototypeSubstring
                     | BuiltinFunctionKind::FunctionPrototypeCall
-                    | BuiltinFunctionKind::FunctionPrototypeApply => {
+                    | BuiltinFunctionKind::FunctionPrototypeApply
+                    | BuiltinFunctionKind::ObjectDefineProperty
+                    | BuiltinFunctionKind::ObjectGetOwnPropertyDescriptor
+                    | BuiltinFunctionKind::ReflectDefineProperty => {
                         unreachable!("handled above")
                     }
                 }
@@ -8618,8 +8680,12 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::ForInInit { src, dst } => {
                     let value = self.read_reg(src)?;
+                    let mut label = self.read_reg_label(src)?;
+                    if let Some(object) = self.copy_data_properties_object_id(&value) {
+                        label = label.join(&self.observe_property_structure(object, true));
+                    }
                     let iterator = self.init_for_in_iterator(value)?;
-                    self.write_reg(dst, iterator)?;
+                    self.write_reg_with_label(dst, iterator, label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::ForInNext {
@@ -8627,9 +8693,10 @@ impl InterpreterCore {
                     value_dst,
                     done_target,
                 } => {
+                    let label = self.read_reg_label(iterator)?;
                     let iterator = self.read_reg(iterator)?;
                     if let Some(value) = self.advance_for_in_iterator(iterator)? {
-                        self.write_reg(value_dst, value)?;
+                        self.write_reg_with_label(value_dst, value, label)?;
                         self.ip += 1;
                     } else {
                         self.ip = done_target as usize;
@@ -9752,10 +9819,112 @@ impl InterpreterCore {
                         });
                     }
 
+                    if capability.0 == "builtin:ObjectLiteralSetPrototype" {
+                        match self.initialize_object_literal_prototype(args) {
+                            Ok((result, label)) => {
+                                self.write_reg_with_label(dst, result, label)?;
+                                self.ip += 1;
+                            }
+                            Err(error) => {
+                                if let Some(error) =
+                                    self.route_run_loop_javascript_error(module, error, mode)?
+                                {
+                                    return Err(error);
+                                }
+                            }
+                        }
+                        continue;
+                    }
+
+                    let array_mutator = match capability.0.as_str() {
+                        "builtin:ArrayPrototypePush" => {
+                            Some(BuiltinFunctionKind::ArrayPrototypePush)
+                        }
+                        "builtin:ArrayPrototypePop" => Some(BuiltinFunctionKind::ArrayPrototypePop),
+                        _ => None,
+                    };
+                    if let Some(kind) = array_mutator {
+                        let receiver = self.optional_arg(args, 0)?.unwrap_or(Value::Undefined);
+                        let receiver_label = if args.count == 0 {
+                            crate::ifc_artifacts::Label::Public
+                        } else {
+                            self.read_reg_label(args.start)?
+                        };
+                        let remaining = RegRange {
+                            start: args.start.saturating_add(u32::from(args.count > 0)),
+                            count: args.count.saturating_sub(1),
+                        };
+                        match self.dispatch_array_method(
+                            module,
+                            kind,
+                            Some(&receiver),
+                            remaining,
+                            receiver_label,
+                        ) {
+                            Ok((result, label)) => {
+                                self.write_reg_with_label(dst, result, label)?;
+                                self.ip += 1;
+                            }
+                            Err(error) => {
+                                match self.route_run_loop_javascript_error(module, error, mode)? {
+                                    None => {}
+                                    Some(error) => return Err(error),
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    if Self::is_descriptor_enumeration(&capability.0) {
+                        match self.dispatch_descriptor_enumeration(module, &capability.0, args) {
+                            Ok((result, label)) => {
+                                self.write_reg_with_label(dst, result, label)?;
+                                self.ip += 1;
+                            }
+                            Err(error) => {
+                                match self.route_run_loop_javascript_error(module, error, mode)? {
+                                    None => {}
+                                    Some(error) => return Err(error),
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    if let Some(kind) = Self::descriptor_builtin_kind(&capability.0) {
+                        match self.dispatch_descriptor_builtin(
+                            module,
+                            kind,
+                            args,
+                            crate::ifc_artifacts::Label::Public,
+                        ) {
+                            Ok((result, label)) => {
+                                self.write_reg_with_label(dst, result, label)?;
+                                self.ip += 1;
+                            }
+                            Err(error) => {
+                                match self.route_run_loop_javascript_error(module, error, mode)? {
+                                    None => {}
+                                    Some(error) => return Err(error),
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    if let Some(result) = Self::descriptor_factory_value(&capability.0) {
+                        self.write_reg(dst, result)?;
+                        self.ip += 1;
+                        continue;
+                    }
+
                     if capability.0 == "builtin:ObjectAssign" {
-                        let entered_accessor = self.execute_object_assign(module, args, dst)?;
-                        if !entered_accessor {
-                            self.ip += 1;
+                        match self.execute_object_assign(module, args, dst) {
+                            Ok(false) => self.ip += 1,
+                            Ok(true) => {}
+                            Err(error) => {
+                                match self.route_run_loop_javascript_error(module, error, mode)? {
+                                    None => {}
+                                    Some(error) => return Err(error),
+                                }
+                            }
                         }
                         continue;
                     }
@@ -9998,43 +10167,45 @@ impl InterpreterCore {
                         self.ip += 1;
                     }
                 }
-                Ir3Instruction::SetProperty { obj, key, val } => {
+                Ir3Instruction::SetProperty { obj, key, val }
+                | Ir3Instruction::SetPropertyStrict { obj, key, val } => {
+                    let strict = matches!(instr, Ir3Instruction::SetPropertyStrict { .. });
                     let obj_val = self.read_reg(obj)?;
                     let key_val = self.read_reg(key)?;
                     let set_val = self.read_reg(val)?;
-                    let value_label = self
+                    let mut value_label = self
                         .read_reg_label(val)?
                         .join(&self.read_reg_label(obj)?)
                         .join(&self.read_reg_label(key)?);
                     let property_key = Self::executable_property_key(&key_val);
                     self.validate_executable_property_key(&property_key)?;
 
-                    let called_accessor = match &obj_val {
-                        Value::Object(oid) => self.set_object_property_or_call_accessor(
+                    let outcome = self
+                        .set_property_for_instruction(
                             module,
+                            &obj_val,
                             obj_val.clone(),
-                            *oid,
-                            property_key.clone(),
+                            property_key,
                             set_val,
-                            value_label.clone(),
-                        )?,
-                        _ if Self::function_object_key(&obj_val).is_some() => self
-                            .set_function_like_property_or_call_accessor(
-                                module,
-                                obj_val.clone(),
-                                &property_key,
-                                set_val,
-                                value_label,
-                            )?,
-                        _ => {
-                            return Err(InterpreterError::TypeError {
-                                expected: "object".to_string(),
-                                got: obj_val.type_name().to_string(),
-                            });
+                            &mut value_label,
+                        )
+                        .and_then(|accepted| {
+                            if strict && !accepted {
+                                Err(Self::property_mutation_refused("assignment"))
+                            } else {
+                                Ok(())
+                            }
+                        });
+                    match outcome {
+                        Ok(()) => self.ip += 1,
+                        Err(error) => {
+                            let error = self.preserve_property_error_label(error, value_label)?;
+                            if let Some(error) =
+                                self.route_run_loop_javascript_error(module, error, mode)?
+                            {
+                                return Err(error);
+                            }
                         }
-                    };
-                    if !called_accessor {
-                        self.ip += 1;
                     }
                 }
                 Ir3Instruction::GetPropertyWithReceiver {
@@ -10079,38 +10250,51 @@ impl InterpreterCore {
                     key,
                     receiver,
                     val,
+                }
+                | Ir3Instruction::SetPropertyWithReceiverStrict {
+                    obj,
+                    key,
+                    receiver,
+                    val,
                 } => {
+                    let strict =
+                        matches!(instr, Ir3Instruction::SetPropertyWithReceiverStrict { .. });
                     let base = self.read_reg(obj)?;
                     let receiver_value = self.read_reg(receiver)?;
                     let property_key = Self::executable_property_key(&self.read_reg(key)?);
                     self.validate_executable_property_key(&property_key)?;
-                    let object_id = match base {
-                        Value::Object(id) => id,
-                        ref function if Self::function_object_key(function).is_some() => self
-                            .ensure_function_object(function)?
-                            .expect("function object"),
-                        other => {
-                            return Err(InterpreterError::TypeError {
-                                expected: "object super base".into(),
-                                got: other.type_name().into(),
-                            });
-                        }
-                    };
-                    let label = self
+                    let mut label = self
                         .read_reg_label(obj)?
                         .join(&self.read_reg_label(key)?)
                         .join(&self.read_reg_label(receiver)?)
                         .join(&self.read_reg_label(val)?);
                     let value = self.read_reg(val)?;
-                    if !self.set_object_property_or_call_accessor(
-                        module,
-                        receiver_value,
-                        object_id,
-                        property_key,
-                        value,
-                        label,
-                    )? {
-                        self.ip += 1;
+                    let outcome = self
+                        .set_property_for_instruction(
+                            module,
+                            &base,
+                            receiver_value,
+                            property_key,
+                            value,
+                            &mut label,
+                        )
+                        .and_then(|accepted| {
+                            if strict && !accepted {
+                                Err(Self::property_mutation_refused("assignment"))
+                            } else {
+                                Ok(())
+                            }
+                        });
+                    match outcome {
+                        Ok(()) => self.ip += 1,
+                        Err(error) => {
+                            let error = self.preserve_property_error_label(error, label)?;
+                            if let Some(error) =
+                                self.route_run_loop_javascript_error(module, error, mode)?
+                            {
+                                return Err(error);
+                            }
+                        }
                     }
                 }
                 Ir3Instruction::DefineMethod { obj, key, func }
@@ -10159,45 +10343,122 @@ impl InterpreterCore {
                     }
                     self.ip += 1;
                 }
-                Ir3Instruction::DeleteProperty { obj, key, dst } => {
+                Ir3Instruction::DeleteProperty { obj, key, dst }
+                | Ir3Instruction::DeletePropertyStrict { obj, key, dst } => {
+                    let strict = matches!(instr, Ir3Instruction::DeletePropertyStrict { .. });
                     let obj_val = self.read_reg(obj)?;
                     let key_val = self.read_reg(key)?;
                     let property_key = Self::executable_property_key(&key_val);
                     self.validate_executable_property_key(&property_key)?;
 
-                    match obj_val {
-                        Value::Object(oid) => {
-                            self.run_pre_runtime_property_access_hook(module, oid, &property_key)?;
-                            self.remove_object_runtime_property(oid, &property_key)?;
-                            if let RuntimePropertyKey::String(key) = &property_key {
-                                self.mark_deleted_for_in_iterators(oid, key);
-                            }
-                            self.write_reg(dst, Value::Bool(true))?;
+                    let mut label = self.read_reg_label(obj)?.join(&self.read_reg_label(key)?);
+                    let outcome = (|| -> Result<bool, InterpreterError> {
+                        let accepted = if let Some(object) =
+                            self.property_mutation_target(&obj_val)?
+                        {
+                            self.materialize_function_descriptor(&obj_val, object, &property_key)?;
+                            self.run_pre_runtime_property_access_hook(
+                                module,
+                                object,
+                                &property_key,
+                            )?;
+                            label = label
+                                .join(&self.runtime_property_label(object, &property_key))
+                                .join(&self.observe_property_structure(object, false));
+                            self.delete_own_runtime_property(object, &property_key)?
+                        } else {
+                            // String wrapper indices and length are the only
+                            // non-configurable own properties on primitives.
+                            !matches!((&obj_val, &property_key), (Value::Str(text), RuntimePropertyKey::String(key))
+                                if key.as_str() == Some("length")
+                                    || key.as_str().and_then(canonical_array_index)
+                                        .is_some_and(|index| (index as usize) < text.utf16_len()))
+                        };
+                        if strict && !accepted {
+                            Err(Self::property_mutation_refused("deletion"))
+                        } else {
+                            Ok(accepted)
                         }
-                        function_like if Self::function_object_key(&function_like).is_some() => {
-                            if let Some(oid) = self.function_object_id(&function_like) {
-                                self.run_pre_runtime_property_access_hook(
-                                    module,
-                                    oid,
-                                    &property_key,
-                                )?;
-                                self.remove_object_runtime_property(oid, &property_key)?;
-                                if let RuntimePropertyKey::String(key) = &property_key {
-                                    self.mark_deleted_for_in_iterators(oid, key);
-                                }
-                            } else {
-                                self.preflight_legacy_property_key_for_hook(&property_key)?;
-                            }
-                            self.write_reg(dst, Value::Bool(true))?;
+                    })();
+                    match outcome {
+                        Ok(accepted) => {
+                            self.write_reg_with_label(dst, Value::Bool(accepted), label)?;
+                            self.ip += 1;
                         }
-                        _ => {
-                            return Err(InterpreterError::TypeError {
-                                expected: "object".to_string(),
-                                got: obj_val.type_name().to_string(),
-                            });
+                        Err(error) => {
+                            let error = self.preserve_property_error_label(error, label)?;
+                            if let Some(error) =
+                                self.route_run_loop_javascript_error(module, error, mode)?
+                            {
+                                return Err(error);
+                            }
                         }
                     }
-                    self.ip += 1;
+                }
+                Ir3Instruction::DefineOwnProperty {
+                    obj,
+                    key,
+                    val,
+                    enumerable,
+                    infer_name,
+                    accessor_kind,
+                } => {
+                    let target = self.read_reg(obj)?;
+                    let value = self.read_reg(val)?;
+                    let key_label = self.read_reg_label(key)?;
+                    let key = Self::executable_property_key(&self.read_reg(key)?);
+                    self.validate_executable_property_key(&key)?;
+                    let mut label = self
+                        .read_reg_label(obj)?
+                        .join(&self.read_reg_label(val)?)
+                        .join(&key_label);
+                    let outcome = (|| -> Result<(), InterpreterError> {
+                        let object = self.property_mutation_target(&target)?.ok_or_else(|| {
+                            InterpreterError::TypeError {
+                                expected: "object for own property definition".into(),
+                                got: target.type_name().into(),
+                            }
+                        })?;
+                        self.run_pre_runtime_property_access_hook(module, object, &key)?;
+                        label = label.join(&self.observe_property_structure(object, false));
+                        if infer_name {
+                            self.set_function_name_from_property_key(&value, &key)?;
+                        }
+                        let accepted = if let Some(kind) = accessor_kind {
+                            self.define_own_accessor_runtime_property(
+                                object,
+                                key,
+                                value,
+                                kind,
+                                label.clone(),
+                                enumerable,
+                            )?
+                        } else {
+                            self.define_own_data_runtime_property(
+                                object,
+                                key,
+                                value,
+                                label.clone(),
+                                enumerable,
+                            )?
+                        };
+                        if accepted {
+                            Ok(())
+                        } else {
+                            Err(Self::property_mutation_refused("definition"))
+                        }
+                    })();
+                    match outcome {
+                        Ok(()) => self.ip += 1,
+                        Err(error) => {
+                            let error = self.preserve_property_error_label(error, label)?;
+                            if let Some(error) =
+                                self.route_run_loop_javascript_error(module, error, mode)?
+                            {
+                                return Err(error);
+                            }
+                        }
+                    }
                 }
                 Ir3Instruction::NewObject { dst } => {
                     self.run_pre_allocation_hook(module, AllocKind::Object, 0)?;
@@ -10480,7 +10741,12 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::InOp { dst, lhs, rhs } => {
                     let result = self.eval_in_operator(module, lhs, rhs)?;
-                    self.write_reg(dst, result)?;
+                    let mut label = self.read_reg_label(lhs)?.join(&self.read_reg_label(rhs)?);
+                    if let Some(object) = self.copy_data_properties_object_id(&self.read_reg(rhs)?)
+                    {
+                        label = label.join(&self.observe_property_structure(object, true));
+                    }
+                    self.write_reg_with_label(dst, result, label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::RegisterDerivedConstructor {
@@ -12144,7 +12410,7 @@ impl InterpreterCore {
             .join(&self.read_reg_label(array)?)
             .join(&self.own_stored_runtime_property_label(object, &length_key));
         let next_index = self.array_like_length(object)?;
-        let length = next_index
+        next_index
             .checked_add(1)
             .ok_or_else(|| InterpreterError::RangeError {
                 message: "Invalid array length".into(),
@@ -12153,34 +12419,12 @@ impl InterpreterCore {
             .saturating_add(Self::estimate_label_bytes(&label));
         self.with_array_method_temporary(retained_bytes, |core| {
             let element_key = RuntimePropertyKey::String(JsString::from(next_index.to_string()));
-            core.define_array_literal_property(object, element_key, value, &label)?;
-            core.define_array_literal_property(
-                object,
-                length_key,
-                Value::Int(i64::from(length)),
-                &label,
-            )?;
+            // Defining the index grows an array's length through its exotic
+            // [[DefineOwnProperty]] operation. The length property itself
+            // retains its non-enumerable, non-configurable descriptor.
+            core.create_data_property_or_throw(object, element_key, value, &label)?;
+            core.set_own_runtime_property_label(object, &length_key, &label)?;
             core.write_reg_with_label(array, Value::Object(object), label)
-        })
-    }
-
-    /// Own-only data definition shared by the literal append operation. This
-    /// deliberately bypasses ordinary [[Set]] and any inherited setter.
-    fn define_array_literal_property(
-        &mut self,
-        object: ObjectId,
-        key: RuntimePropertyKey,
-        value: Value,
-        label: &crate::ifc_artifacts::Label,
-    ) -> Result<(), InterpreterError> {
-        let previous_label = self.own_stored_runtime_property_label(object, &key);
-        self.with_array_method_temporary(Self::estimate_label_bytes(&previous_label), |core| {
-            core.set_own_runtime_property_label(object, &key, label)?;
-            if let Err(error) = core.set_plain_data_runtime_property(object, key.clone(), value) {
-                core.set_own_runtime_property_label(object, &key, &previous_label)?;
-                return Err(error);
-            }
-            Ok(())
         })
     }
 
@@ -13150,18 +13394,7 @@ impl InterpreterCore {
                     .heap
                     .get(object_id.0 as usize)
                     .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
-                Ok(object
-                    .own_runtime_property_keys()
-                    .into_iter()
-                    // Array length is a non-enumerable own data property. The
-                    // current baseline descriptor carrier has no general
-                    // enumerable bit yet, so preserve this shipped invariant
-                    // explicitly for array-backed objects.
-                    .filter(|key| {
-                        !(object.is_array
-                            && matches!(key, RuntimePropertyKey::String(key) if key.as_str() == Some("length")))
-                    })
-                    .collect())
+                Ok(object.own_runtime_property_keys().into_iter().collect())
             }
         }
     }
@@ -13194,9 +13427,7 @@ impl InterpreterCore {
             .heap
             .get(object_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
-        if object.is_array
-            && matches!(key, RuntimePropertyKey::String(key) if key.as_str() == Some("length"))
-        {
+        if !object.own_property_attributes(key).enumerable {
             return Ok(None);
         }
         Ok(match key {
@@ -13247,8 +13478,14 @@ impl InterpreterCore {
         state_index: usize,
         key: RuntimePropertyKey,
         value: Value,
+        mut label: crate::ifc_artifacts::Label,
     ) -> Result<bool, InterpreterError> {
         let target_id = self.copy_data_properties_states[state_index].target_id;
+        let state = &self.copy_data_properties_states[state_index];
+        label = label.join(&state.source_label);
+        if let Some(source) = self.copy_data_properties_object_id(&state.source) {
+            label = label.join(&self.runtime_property_label(source, &key));
+        }
         let write_mode = self.copy_data_properties_states[state_index]
             .write_mode
             .clone();
@@ -13256,59 +13493,21 @@ impl InterpreterCore {
             target_receiver, ..
         } = write_mode
         else {
-            self.set_plain_data_runtime_property(target_id, key, value)?;
+            self.create_data_property_or_throw(target_id, key, value, &label)?;
             return Ok(false);
         };
-
-        self.run_pre_runtime_property_access_hook(module, target_id, &key)?;
-        if matches!(&key, RuntimePropertyKey::String(key) if key.as_str() == Some("__proto__")) {
-            let prototype = match value {
-                Value::Object(id) => Some(id),
-                Value::Null => None,
-                _ => return Ok(false),
-            };
-            self.heap
-                .get_mut(target_id.0 as usize)
-                .ok_or(InterpreterError::ObjectNotFound { id: target_id.0 })?
-                .prototype = prototype;
-            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
-            return Ok(false);
+        let accepted = self.set_runtime_property_with_receiver(
+            module,
+            target_receiver,
+            target_id,
+            key,
+            value,
+            label,
+        )?;
+        if !accepted {
+            return Err(Self::property_definition_error());
         }
-
-        match self.prototype_chain_lookup_runtime_property(target_id, &key)? {
-            Some(RuntimeProperty::Accessor(accessor)) => {
-                let Some(setter) = accessor.set else {
-                    return Err(InterpreterError::TypeError {
-                        expected: "writable Object.assign target property".to_string(),
-                        got: match key {
-                            RuntimePropertyKey::String(key) => key.to_string(),
-                            RuntimePropertyKey::Symbol(symbol) => {
-                                format!("Symbol({})", symbol.0)
-                            }
-                        },
-                    });
-                };
-                self.copy_data_properties_states[state_index].awaiting =
-                    Some(CopyDataPropertiesAwaiting::Setter);
-                self.sync_estimated_memory_bytes()?;
-                self.enter_function_call(
-                    module,
-                    setter,
-                    target_receiver,
-                    vec![value],
-                    AccessorCallReturnSite {
-                        return_ip: self.ip,
-                        return_reg: None,
-                        context_label: self.runtime_property_label(target_id, &key),
-                    },
-                )?;
-                Ok(true)
-            }
-            _ => {
-                self.set_object_runtime_property(target_id, key, value)?;
-                Ok(false)
-            }
-        }
+        Ok(false)
     }
 
     /// Execute or resume one typed own-property copy. Returns `true` when
@@ -13368,6 +13567,12 @@ impl InterpreterCore {
                 },
             };
             let source_value = self.read_reg(source)?;
+            let mut source_label = self.read_reg_label(source)?;
+            if let Some(source_id) = self.copy_data_properties_object_id(&source_value) {
+                source_label =
+                    source_label.join(&self.observe_property_structure(source_id, false));
+            }
+            self.join_descriptor_structure_label(target_id, &source_label)?;
             let keys = self.copy_data_properties_keys(&source_value)?;
             let string_units = match &source_value {
                 Value::Str(text) => Some(text.code_units_vec()),
@@ -13389,6 +13594,7 @@ impl InterpreterCore {
                 call_depth,
                 target_id,
                 source: source_value,
+                source_label,
                 string_units,
                 keys,
                 excluded: excluded_keys,
@@ -13420,7 +13626,13 @@ impl InterpreterCore {
                     return Err(err);
                 }
             };
-            match self.write_copied_property(module, state_index, key, value) {
+            match self.write_copied_property(
+                module,
+                state_index,
+                key,
+                value,
+                self.read_reg_label(value_dst)?,
+            ) {
                 Ok(true) => return Ok(true),
                 Ok(false) => {}
                 Err(err) => {
@@ -13467,8 +13679,13 @@ impl InterpreterCore {
                 Some(RuntimeProperty::Data(value)) => value,
                 Some(RuntimeProperty::Accessor(accessor)) => {
                     let Some(getter) = accessor.get else {
-                        match self.write_copied_property(module, state_index, key, Value::Undefined)
-                        {
+                        match self.write_copied_property(
+                            module,
+                            state_index,
+                            key,
+                            Value::Undefined,
+                            crate::ifc_artifacts::Label::Public,
+                        ) {
                             Ok(true) => return Ok(true),
                             Ok(false) => continue,
                             Err(err) => {
@@ -13495,7 +13712,8 @@ impl InterpreterCore {
                         AccessorCallReturnSite {
                             return_ip: self.ip,
                             return_reg: Some(value_dst),
-                            context_label: getter_label,
+                            context_label: getter_label
+                                .join(&self.copy_data_properties_states[state_index].source_label),
                         },
                     ) {
                         self.discard_copy_data_properties_state(state_index);
@@ -13504,7 +13722,13 @@ impl InterpreterCore {
                     return Ok(true);
                 }
             };
-            match self.write_copied_property(module, state_index, key, value) {
+            match self.write_copied_property(
+                module,
+                state_index,
+                key,
+                value,
+                crate::ifc_artifacts::Label::Public,
+            ) {
                 Ok(true) => return Ok(true),
                 Ok(false) => {}
                 Err(err) => {
@@ -13569,82 +13793,138 @@ impl InterpreterCore {
         self.load_runtime_property(module, receiver, property, dst, read_label)
     }
 
-    fn set_object_property_or_call_accessor(
+    /// The object-literal prototype initializer bypasses ordinary [[Set]],
+    /// including an earlier own data property or accessor named `__proto__`.
+    fn initialize_object_literal_prototype(
+        &mut self,
+        args: RegRange,
+    ) -> Result<(Value, crate::ifc_artifacts::Label), InterpreterError> {
+        let (target, target_label) = self.promise_hostcall_argument(args, 0)?;
+        let (value, value_label) = self.promise_hostcall_argument(args, 1)?;
+        let object = self.expect_object(target.clone(), "object literal target")?;
+        let label = target_label
+            .join(&value_label)
+            .join(&self.observe_property_structure(object, false));
+        let previous_prototype = self.heap[object.0 as usize].prototype;
+        let previous_label = self.heap[object.0 as usize]
+            .property_structure_label
+            .clone();
+        let snapshot = self.snapshot_call_setup(None, false);
+        let outcome = (|| -> Result<(), InterpreterError> {
+            let prototype = match &value {
+                Value::Object(_) => Some(Some(
+                    self.expect_object(value.clone(), "object literal prototype")?,
+                )),
+                Value::Null => Some(None),
+                function if Self::function_object_key(function).is_some() => {
+                    Some(self.ensure_function_object(function)?)
+                }
+                // Non-object, non-null initializer values are ignored.
+                _ => None,
+            };
+            // Even an ignored primitive can select whether a prototype is
+            // installed. Preserve that decision for reads through public aliases.
+            self.join_descriptor_structure_label(object, &label)?;
+            if let Some(prototype) = prototype {
+                self.heap[object.0 as usize].prototype = prototype;
+            }
+            self.sync_estimated_memory_bytes().map(|_| ())
+        })();
+        if let Err(error) = outcome {
+            self.heap[object.0 as usize].prototype = previous_prototype;
+            self.heap[object.0 as usize].property_structure_label = previous_label;
+            self.restore_call_setup(snapshot);
+            return Err(self.preserve_property_error_label(error, label)?);
+        }
+        Ok((target, label))
+    }
+
+    /// Property mutation observes function own descriptors lazily, while
+    /// primitive receivers cannot acquire persistent data properties.
+    fn property_mutation_target(
+        &mut self,
+        value: &Value,
+    ) -> Result<Option<ObjectId>, InterpreterError> {
+        match value {
+            Value::Object(object) => Ok(Some(*object)),
+            function if Self::function_object_key(function).is_some() => {
+                self.ensure_function_object(function)
+            }
+            Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_) | Value::Symbol(_) => {
+                Ok(None)
+            }
+            other => Err(InterpreterError::TypeError {
+                expected: "object-coercible property base".into(),
+                got: other.type_name().into(),
+            }),
+        }
+    }
+
+    fn set_property_for_instruction(
         &mut self,
         module: &Ir3Module,
+        base: &Value,
         receiver: Value,
-        object_id: ObjectId,
         key: RuntimePropertyKey,
         value: Value,
-        value_label: crate::ifc_artifacts::Label,
+        label: &mut crate::ifc_artifacts::Label,
     ) -> Result<bool, InterpreterError> {
-        self.run_pre_runtime_property_access_hook(module, object_id, &key)?;
-        let property = self.prototype_chain_lookup_runtime_property(object_id, &key)?;
-        if !matches!(&property, Some(RuntimeProperty::Accessor(_)))
-            && matches!(&key, RuntimePropertyKey::String(key) if key.as_str() == Some("__proto__"))
-        {
-            let prototype = match value {
-                Value::Object(id) => Some(id),
-                Value::Null => None,
-                _ => {
-                    return Ok(false);
-                }
-            };
-            self.set_array_prototype_metadata(object_id, prototype)?;
-            self.set_function_prototype_metadata(&receiver, object_id, prototype)?;
-            self.heap
-                .get_mut(object_id.0 as usize)
-                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
-                .prototype = prototype;
-            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+        // Legacy hooks cannot observe an exact key they cannot represent.
+        // Refuse before a lazy function backing or prototype is allocated.
+        self.preflight_legacy_property_key_for_hook(&key)?;
+        let Some(lookup_object) = self.property_mutation_target(base)? else {
             return Ok(false);
+        };
+        self.materialize_function_descriptor(base, lookup_object, &key)?;
+        *label = label
+            .join(&self.runtime_property_label(lookup_object, &key))
+            .join(&self.observe_property_structure(lookup_object, true));
+        // A super setter may receive a primitive or nullish `this`. Only a
+        // data write requires an object receiver; defer that distinction to
+        // OrdinarySetWithOwnDescriptor after finding the inherited property.
+        if (matches!(&receiver, Value::Object(_)) || Self::function_object_key(&receiver).is_some())
+            && let Some(receiver_object) = self.property_mutation_target(&receiver)?
+        {
+            self.materialize_function_descriptor(&receiver, receiver_object, &key)?;
+            *label = label.join(&self.observe_property_structure(receiver_object, false));
         }
-        match property {
-            Some(RuntimeProperty::Accessor(accessor)) => {
-                if let Some(setter) = accessor.set {
-                    self.enter_function_call(
-                        module,
-                        setter,
-                        receiver,
-                        vec![value],
-                        AccessorCallReturnSite {
-                            return_ip: self.ip + 1,
-                            return_reg: None,
-                            context_label: value_label
-                                .join(&self.runtime_property_label(object_id, &key)),
-                        },
-                    )?;
-                    Ok(true)
-                } else {
-                    Ok(false)
-                }
-            }
-            _ => {
-                // A super assignment looks up the descriptor on its base but
-                // creates or updates a data property on the actual receiver.
-                let object_id = match &receiver {
-                    Value::Object(id) => *id,
-                    function if Self::function_object_key(function).is_some() => self
-                        .ensure_function_object(function)?
-                        .expect("function receiver"),
-                    other => {
-                        return Err(InterpreterError::TypeError {
-                            expected: "object property receiver".into(),
-                            got: other.type_name().into(),
-                        });
-                    }
-                };
-                let previous_label = self.own_stored_runtime_property_label(object_id, &key);
-                self.set_own_runtime_property_label(object_id, &key, &value_label)?;
-                if let Err(error) = self.set_object_runtime_property(object_id, key.clone(), value)
-                {
-                    self.set_own_runtime_property_label(object_id, &key, &previous_label)?;
-                    return Err(error);
-                }
-                self.grow_array_length_after_own_index_write(object_id, &key, &value_label)?;
-                Ok(false)
-            }
+        self.set_runtime_property_with_receiver(
+            module,
+            receiver,
+            lookup_object,
+            key,
+            value,
+            label.clone(),
+        )
+    }
+
+    fn property_mutation_refused(operation: &str) -> InterpreterError {
+        InterpreterError::TypeError {
+            expected: format!("successful property {operation}"),
+            got: "property descriptor refused the mutation".into(),
         }
+    }
+
+    /// Descriptor metadata can itself be secret. A catchable refusal must
+    /// retain that provenance just like an explicit throw from a setter.
+    fn preserve_property_error_label(
+        &mut self,
+        error: InterpreterError,
+        label: crate::ifc_artifacts::Label,
+    ) -> Result<InterpreterError, InterpreterError> {
+        if matches!(error, InterpreterError::UncaughtException { .. }) {
+            if let Some(exception) = &mut self.pending_exception {
+                exception.label = exception.label.join(&label);
+            }
+            return Ok(error);
+        }
+        if Self::is_js_catchable_error(&error)
+            && !matches!(label, crate::ifc_artifacts::Label::Public)
+        {
+            let value = self.promise_error_value(&error)?;
+            return Ok(self.rearm_inline_throw(LabeledException { value, label }));
+        }
+        Ok(error)
     }
 
     fn load_function_like_property_or_call_accessor(
@@ -13687,6 +13967,10 @@ impl InterpreterCore {
 
         if let Some(object_id) = self.function_object_id(&receiver) {
             self.run_pre_runtime_property_access_hook(module, object_id, key)?;
+            // A derived constructor inherits static properties, but its lazy
+            // own `prototype` must shadow a materialized parent's descriptor.
+            // Existing own data/accessor descriptors remain authoritative.
+            self.materialize_function_descriptor(&receiver, object_id, key)?;
             if let Some(property) = self.prototype_chain_lookup_runtime_property(object_id, key)? {
                 let read_label = read_label.join(&self.runtime_property_label(object_id, key));
                 return self.load_runtime_property(
@@ -13715,41 +13999,6 @@ impl InterpreterCore {
 
         self.write_reg(dst, Value::Undefined)?;
         Ok(false)
-    }
-
-    fn set_function_like_property_or_call_accessor(
-        &mut self,
-        module: &Ir3Module,
-        receiver: Value,
-        key: &RuntimePropertyKey,
-        value: Value,
-        value_label: crate::ifc_artifacts::Label,
-    ) -> Result<bool, InterpreterError> {
-        if self.function_object_id(&receiver).is_none() {
-            self.preflight_legacy_property_key_for_hook(key)?;
-        }
-        let Some(object_id) = self.ensure_function_object(&receiver)? else {
-            return Err(InterpreterError::TypeError {
-                expected: "function".to_string(),
-                got: receiver.type_name().to_string(),
-            });
-        };
-        let called = self.set_object_property_or_call_accessor(
-            module,
-            receiver.clone(),
-            object_id,
-            key.clone(),
-            value.clone(),
-            value_label,
-        )?;
-        if !called
-            && matches!(key, RuntimePropertyKey::String(key) if key.as_str() == Some("prototype"))
-            && let Value::Object(prototype) = value
-            && let Some(function_key) = self.function_prototype_key_for_value(&receiver)?
-        {
-            self.function_prototypes.insert(function_key, prototype);
-        }
-        Ok(called)
     }
 
     #[cfg(test)]
@@ -16556,6 +16805,12 @@ impl InterpreterCore {
                 } else {
                     let mut members = Vec::new();
                     for key in object.own_exact_property_keys() {
+                        if !object
+                            .own_property_attributes(&RuntimePropertyKey::String(key.clone()))
+                            .enumerable
+                        {
+                            continue;
+                        }
                         if key.as_str().is_some_and(|key| key.starts_with("__")) {
                             continue;
                         }
@@ -17745,7 +18000,11 @@ impl InterpreterCore {
         Ok(object
             .own_exact_property_keys()
             .into_iter()
-            .filter(|key| !(object.is_array && key.as_str() == Some("length")))
+            .filter(|key| {
+                object
+                    .own_property_attributes(&RuntimePropertyKey::String(key.clone()))
+                    .enumerable
+            })
             .collect())
     }
 
@@ -18125,6 +18384,7 @@ impl InterpreterCore {
         let mut current = Some(object_id);
         let mut depth = 0u32;
         let mut visited = std::collections::BTreeSet::new();
+        let mut label = crate::ifc_artifacts::Label::Public;
         while let Some(id) = current {
             if depth >= MAX_PROTOTYPE_CHAIN_DEPTH || !visited.insert(id) {
                 break;
@@ -18132,13 +18392,16 @@ impl InterpreterCore {
             let Some(object) = self.heap.get(id.0 as usize) else {
                 break;
             };
+            if let Some(structure_label) = &object.property_structure_label {
+                label = label.join(structure_label);
+            }
             if object.contains_own_runtime_property(key) {
-                return self.own_stored_runtime_property_label(id, key);
+                return label.join(&self.own_stored_runtime_property_label(id, key));
             }
             current = object.prototype;
             depth += 1;
         }
-        crate::ifc_artifacts::Label::Public
+        label
     }
 
     #[cfg(test)]
@@ -18565,6 +18828,15 @@ impl InterpreterCore {
         let symbol_order = (object.properties.baseline_symbol_key_order().len() as u64)
             .saturating_mul(std::mem::size_of::<SymbolId>() as u64);
         let property_labels = Self::estimate_ordered_label_map_bytes(&object.property_labels);
+        let property_attributes = object
+            .property_attributes
+            .keys()
+            .map(|key| {
+                MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                    .saturating_add(Self::estimate_property_key_bytes(key))
+                    .saturating_add(std::mem::size_of::<PropertyAttributes>() as u64)
+            })
+            .sum::<u64>();
         MEMORY_ESTIMATE_HEAP_OBJECT_BASE_BYTES
             .saturating_add(properties)
             .saturating_add(exact_data_order_well_formed_copies)
@@ -18573,6 +18845,14 @@ impl InterpreterCore {
             .saturating_add(symbol_properties)
             .saturating_add(symbol_order)
             .saturating_add(property_labels)
+            .saturating_add(property_attributes)
+            .saturating_add(
+                object
+                    .property_structure_label
+                    .as_ref()
+                    .map(Self::estimate_label_bytes)
+                    .unwrap_or(0),
+            )
             .saturating_add(
                 object
                     .derived_constructor_parent
@@ -18643,7 +18923,7 @@ impl InterpreterCore {
             .sum::<u64>();
         let awaiting_key = match state.awaiting.as_ref() {
             Some(CopyDataPropertiesAwaiting::Getter(key)) => Self::estimate_property_key_bytes(key),
-            Some(CopyDataPropertiesAwaiting::Setter) | None => 0,
+            None => 0,
         };
         let write_mode = match &state.write_mode {
             CopyDataPropertiesWriteMode::CreateData => 0,
@@ -18653,6 +18933,7 @@ impl InterpreterCore {
         };
         MEMORY_ESTIMATE_COPY_DATA_PROPERTIES_STATE_BASE_BYTES
             .saturating_add(Self::estimate_value_bytes(&state.source))
+            .saturating_add(Self::estimate_label_bytes(&state.source_label))
             .saturating_add(
                 state
                     .string_units
@@ -19273,6 +19554,8 @@ impl InterpreterCore {
 
         self.async_functions.truncate(snapshot.async_functions_len);
         self.heap.truncate(snapshot.heap_len);
+        self.function_objects
+            .retain(|_, id| (id.0 as usize) < snapshot.heap_len);
         self.array_null_prototypes
             .retain(|id| (id.0 as usize) < snapshot.heap_len);
         self.function_null_prototypes
@@ -19440,7 +19723,11 @@ impl InterpreterCore {
                 .get(id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
             for key in object.own_exact_property_keys() {
-                if seen.insert(key.clone()) {
+                if seen.insert(key.clone())
+                    && object
+                        .own_property_attributes(&RuntimePropertyKey::String(key.clone()))
+                        .enumerable
+                {
                     keys.push(key);
                 }
             }
@@ -20009,6 +20296,9 @@ impl InterpreterCore {
                 removed
             }
         };
+        if removed {
+            object.property_attributes.remove(key);
+        }
         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
         Ok(removed)
     }
@@ -20083,7 +20373,10 @@ impl InterpreterCore {
             Value::BuiltinFunction(BuiltinFunction {
                 kind:
                     BuiltinFunctionKind::FunctionPrototypeCall
-                    | BuiltinFunctionKind::FunctionPrototypeApply,
+                    | BuiltinFunctionKind::FunctionPrototypeApply
+                    | BuiltinFunctionKind::ObjectDefineProperty
+                    | BuiltinFunctionKind::ObjectGetOwnPropertyDescriptor
+                    | BuiltinFunctionKind::ReflectDefineProperty,
                 ..
             }) => Ok(None),
             Value::BuiltinFunction(builtin) => Ok(Some(FunctionObjectKey::Builtin(builtin.kind))),
@@ -20169,41 +20462,72 @@ impl InterpreterCore {
         parent_label: crate::ifc_artifacts::Label,
         default_constructor: bool,
     ) -> Result<(), InterpreterError> {
-        let prototype = self
-            .function_prototype_for_value(constructor)?
-            .ok_or_else(|| InterpreterError::TypeError {
-                expected: "constructor function".to_string(),
-                got: constructor.type_name().to_string(),
+        let snapshot = self.snapshot_call_setup(None, true);
+        let mut previous_metadata = None;
+        let mut previous_backing = None;
+        let outcome = (|| -> Result<(), InterpreterError> {
+            let backing = self.ensure_function_object(constructor)?.ok_or_else(|| {
+                InterpreterError::TypeError {
+                    expected: "constructor function".into(),
+                    got: constructor.type_name().into(),
+                }
             })?;
-        let index = prototype.0 as usize;
-        let object = self
-            .heap
-            .get(index)
-            .ok_or(InterpreterError::ObjectNotFound { id: prototype.0 })?;
-        let previous = (
-            object.derived_constructor_parent.clone(),
-            object.derived_constructor_parent_label.clone(),
-            object.is_derived_constructor,
-            object.is_default_derived_constructor,
-        );
-        let object = self
-            .heap
-            .get_mut(index)
-            .ok_or(InterpreterError::ObjectNotFound { id: prototype.0 })?;
-        object.derived_constructor_parent = Some(parent);
-        object.derived_constructor_parent_label = Some(parent_label);
-        object.is_derived_constructor = true;
-        object.is_default_derived_constructor = default_constructor;
-        if let Err(error) = self.sync_estimated_memory_bytes() {
-            let object = self
-                .heap
-                .get_mut(index)
-                .expect("constructor metadata prototype remained allocated");
-            object.derived_constructor_parent = previous.0;
-            object.derived_constructor_parent_label = previous.1;
-            object.is_derived_constructor = previous.2;
-            object.is_default_derived_constructor = previous.3;
-            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            let parent_backing = if matches!(parent, Value::Null) {
+                None
+            } else {
+                Some(self.ensure_function_object(&parent)?.ok_or_else(|| {
+                    InterpreterError::TypeError {
+                        expected: "superclass constructor or null".into(),
+                        got: parent.type_name().into(),
+                    }
+                })?)
+            };
+            let prototype = self
+                .function_prototype_for_value(constructor)?
+                .ok_or_else(|| InterpreterError::TypeError {
+                    expected: "constructor prototype".into(),
+                    got: constructor.type_name().into(),
+                })?;
+            let object = &self.heap[prototype.0 as usize];
+            previous_metadata = Some((
+                prototype,
+                object.derived_constructor_parent.clone(),
+                object.derived_constructor_parent_label.clone(),
+                object.is_derived_constructor,
+                object.is_default_derived_constructor,
+            ));
+            let object = &self.heap[backing.0 as usize];
+            previous_backing = Some((
+                backing,
+                object.prototype,
+                object.property_structure_label.clone(),
+            ));
+            // ClassDefinitionEvaluation links the constructor itself as well
+            // as its instance prototype. Static inheritance and accessor
+            // [[HomeObject]] super reads use this first link.
+            self.join_descriptor_structure_label(backing, &parent_label)?;
+            self.heap[backing.0 as usize].prototype = parent_backing;
+            let object = &mut self.heap[prototype.0 as usize];
+            object.derived_constructor_parent = Some(parent);
+            object.derived_constructor_parent_label = Some(parent_label);
+            object.is_derived_constructor = true;
+            object.is_default_derived_constructor = default_constructor;
+            self.sync_estimated_memory_bytes()?;
+            Ok(())
+        })();
+        if let Err(error) = outcome {
+            if let Some((prototype, parent, label, derived, default)) = previous_metadata {
+                let object = &mut self.heap[prototype.0 as usize];
+                object.derived_constructor_parent = parent;
+                object.derived_constructor_parent_label = label;
+                object.is_derived_constructor = derived;
+                object.is_default_derived_constructor = default;
+            }
+            if let Some((backing, prototype, label)) = previous_backing {
+                self.heap[backing.0 as usize].prototype = prototype;
+                self.heap[backing.0 as usize].property_structure_label = label;
+            }
+            self.restore_call_setup(snapshot);
             return Err(error);
         }
         Ok(())
@@ -20283,7 +20607,9 @@ impl InterpreterCore {
         )?;
         Ok(Some((
             home.prototype.map(Value::Object).unwrap_or(Value::Null),
-            metadata.definition_label.clone(),
+            metadata
+                .definition_label
+                .join(&self.observe_property_structure(metadata.home_object, false)),
         )))
     }
 

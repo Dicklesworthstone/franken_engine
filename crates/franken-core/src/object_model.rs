@@ -2226,6 +2226,9 @@ pub enum BuiltinFunctionKind {
     StringPrototypeSubstring,
     FunctionPrototypeCall,
     FunctionPrototypeApply,
+    ObjectDefineProperty,
+    ObjectGetOwnPropertyDescriptor,
+    ReflectDefineProperty,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -2290,6 +2293,9 @@ impl BuiltinFunction {
             BuiltinFunctionKind::StringPrototypeSubstring => "substring",
             BuiltinFunctionKind::FunctionPrototypeCall => "call",
             BuiltinFunctionKind::FunctionPrototypeApply => "apply",
+            BuiltinFunctionKind::ObjectDefineProperty => "defineProperty",
+            BuiltinFunctionKind::ObjectGetOwnPropertyDescriptor => "getOwnPropertyDescriptor",
+            BuiltinFunctionKind::ReflectDefineProperty => "defineProperty",
         }
     }
 }

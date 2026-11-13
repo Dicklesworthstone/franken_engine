@@ -117,6 +117,10 @@ profiling_opcodes! {
         DefineAccessor,
         GetPropertyWithReceiver,
         SetPropertyWithReceiver,
+        SetPropertyStrict,
+        SetPropertyWithReceiverStrict,
+        DeletePropertyStrict,
+        DefineOwnProperty,
     ],
     unit: [
         Halt,

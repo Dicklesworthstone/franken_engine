@@ -5869,6 +5869,13 @@ impl InterpreterCore {
         std::mem::take(&mut self.ifc_runtime_flow_audit)
     }
 
+    /// Configure an explicit deterministic epoch (ms) against which runtime
+    /// declassification receipts are checked for `not_before_ms`/`not_after_ms`
+    /// validity (`bd-9vouw.8`).
+    pub fn set_ifc_validation_epoch_ms(&mut self, epoch_ms: Option<u64>) {
+        self.ifc_validation_epoch_ms = epoch_ms;
+    }
+
     pub(super) fn compute_ipdom_table(module: &Ir3Module) -> Arc<[usize]> {
         let n = module.instructions.len();
         let exit = n;

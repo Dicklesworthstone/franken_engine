@@ -16893,6 +16893,9 @@ pub struct InterpreterCore {
     ipdom_cache: BTreeMap<(usize, usize), Arc<[usize]>>,
     /// Bounded structured audit trail of runtime IFC sink flow checks.
     ifc_runtime_flow_audit: Vec<IfcRuntimeFlowAuditEntry>,
+    /// Optional deterministic epoch (ms) for runtime declassification-receipt
+    /// freshness/expiry validation (`bd-9vouw.8`).
+    ifc_validation_epoch_ms: Option<u64>,
     /// Transaction probes for isolated callbacks whose caller publishes an
     /// in-flight state before invocation. The innermost probe flips after
     /// CallMethod validates the callee but before any persistent callee setup

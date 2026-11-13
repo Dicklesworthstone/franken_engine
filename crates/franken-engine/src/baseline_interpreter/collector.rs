@@ -1974,6 +1974,7 @@ impl InterpreterCore {
             pc_label_stack: _,
             ipdom_cache: _,
             ifc_runtime_flow_audit: _,
+            ifc_validation_epoch_ms: _,
             inline_callback_start_probes: _,
             proxy_trap_lookup_depth: _,
             weakmap_storage: _,

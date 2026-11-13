@@ -1089,6 +1089,7 @@ impl InterpreterCore {
             pc_label_stack: Vec::new(),
             ipdom_cache: BTreeMap::new(),
             ifc_runtime_flow_audit: Vec::new(),
+            ifc_validation_epoch_ms: None,
             inline_callback_start_probes: Vec::new(),
             proxy_trap_lookup_depth: 0,
             weakmap_storage: BTreeMap::new(),
@@ -8251,7 +8252,10 @@ impl InterpreterCore {
             )
         };
         self.validate_http_client_terminal_slots(request)?;
-        if !egress_label.can_flow_to(&Label::Public) {
+        if self
+            .evaluate_sink_flow_decision("net:request", &egress_label, &Label::Public)
+            .is_err()
+        {
             // Use the same exact-request refusal journal as the legacy facade.
             // Reserve delivery first, then roll it back if evidence cannot be
             // accepted. Neither a missing sink nor a replay mismatch may consume

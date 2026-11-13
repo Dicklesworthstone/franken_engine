@@ -5203,7 +5203,10 @@ mod function_prototype_call_apply_tests_current {
         let key = RuntimePropertyKey::String(name);
         for specifier in ["z-late", "c-join", "d-tail"] {
             let namespace = namespaces[specifier];
-            assert_eq!(core.prototype_chain_get(namespace, "count"), Ok(Value::Int(9)));
+            assert_eq!(
+                core.prototype_chain_get(namespace, "count"),
+                Ok(Value::Int(9))
+            );
             assert_eq!(core.runtime_property_label(namespace, &key), Label::Secret);
         }
         assert_eq!(core.json_parse_temporary_bytes, temporary_before);
@@ -5242,7 +5245,10 @@ mod function_prototype_call_apply_tests_current {
                 ExportPublication::Star,
             );
             if exhausted {
-                assert!(matches!(result, Err(InterpreterError::BudgetExhausted { .. })));
+                assert!(matches!(
+                    result,
+                    Err(InterpreterError::BudgetExhausted { .. })
+                ));
             } else {
                 result.unwrap();
                 assert_eq!(core.prototype_chain_get(left, "count"), Ok(Value::Int(17)));

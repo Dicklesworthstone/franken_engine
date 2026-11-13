@@ -12184,12 +12184,65 @@ pub(super) fn accumulate_ir1_flow_label_ceiling(
         {
             Label::Public
         }
-        Ir1Op::HostCall { capability, .. } => hostcall_flow_label_ceiling_with_catch(
-            capability,
-            host_io_exception_provenance,
-            has_try_begin,
-        ),
-        _ => return,
+        Ir1Op::HostCall { capability, .. } => {
+            hostcall_flow_label_ceiling(capability, host_io_exception_provenance, has_try_begin)
+        }
+        Ir1Op::LoadBinding { .. }
+        | Ir1Op::LoadName { .. }
+        | Ir1Op::ResolveNameStatus { .. }
+        | Ir1Op::DeleteName { .. }
+        | Ir1Op::StoreBinding { .. }
+        | Ir1Op::PutName { .. }
+        | Ir1Op::PutNameWithStatus { .. }
+        | Ir1Op::InitializeBinding { .. }
+        | Ir1Op::CreatePerIterationBinding { .. }
+        | Ir1Op::Call { .. }
+        | Ir1Op::CallMethod { .. }
+        | Ir1Op::ConstructSuper { .. }
+        | Ir1Op::RegisterDerivedConstructor { .. }
+        | Ir1Op::Return
+        | Ir1Op::ExportBinding { .. }
+        | Ir1Op::Await
+        | Ir1Op::Yield { .. }
+        | Ir1Op::Nop
+        | Ir1Op::BinaryOp { .. }
+        | Ir1Op::UnaryOp { .. }
+        | Ir1Op::AssignOp { .. }
+        | Ir1Op::Label { .. }
+        | Ir1Op::Jump { .. }
+        | Ir1Op::JumpIfFalsy { .. }
+        | Ir1Op::JumpIfFalsyConsume { .. }
+        | Ir1Op::JumpIfTruthy { .. }
+        | Ir1Op::JumpIfNullish { .. }
+        | Ir1Op::GetProperty { .. }
+        | Ir1Op::SetProperty { .. }
+        | Ir1Op::DefineAccessor { .. }
+        | Ir1Op::DefineMethod { .. }
+        | Ir1Op::DeleteProperty { .. }
+        | Ir1Op::NewArray { .. }
+        | Ir1Op::NewObject { .. }
+        | Ir1Op::ArrayPush
+        | Ir1Op::ArraySlice
+        | Ir1Op::SpreadIntoArray
+        | Ir1Op::SpreadIntoObject
+        | Ir1Op::Throw
+        | Ir1Op::LoadThis
+        | Ir1Op::LoadNewTarget
+        | Ir1Op::LoadSuper
+        | Ir1Op::BeginTry { .. }
+        | Ir1Op::EndTry
+        | Ir1Op::EnterFinally
+        | Ir1Op::EndFinally
+        | Ir1Op::DiscardAbruptCompletion
+        | Ir1Op::Pop
+        | Ir1Op::Discard
+        | Ir1Op::ForInInit
+        | Ir1Op::ForInNext { .. }
+        | Ir1Op::ForOfInit
+        | Ir1Op::ForOfNext { .. }
+        | Ir1Op::IteratorClose { .. }
+        | Ir1Op::Construct { .. }
+        | Ir1Op::TemplateLiteral { .. } => return,
     };
     *ceiling = ceiling.join(&contribution);
 }
@@ -12197,7 +12250,7 @@ pub(super) fn accumulate_ir1_flow_label_ceiling(
 /// Highest label one HostCall can introduce: its result contract applied to
 /// public operands, joined with whatever its exceptional completion can carry
 /// from outside the program.
-pub(super) fn hostcall_flow_label_ceiling_with_catch(
+pub(super) fn hostcall_flow_label_ceiling(
     capability: &str,
     host_io_exception_provenance: HostIoExceptionProvenance,
     has_try_begin: bool,
@@ -12219,11 +12272,11 @@ pub(super) fn hostcall_flow_label_ceiling_with_catch(
         return Label::TopSecret;
     };
     let result_label = row.result_contract.result_label(&Label::Public, None);
-    if !has_try_begin {
-        return result_label;
-    }
-    // Native crypto failures are rethrown with a fail-high label at runtime.
-    if capability.starts_with("builtin:Crypto") {
+    // Native crypto failures are rethrown with a fail-high label at runtime
+    // when catchable (`has_try_begin`), and entropy-bearing crypto hostcalls
+    // (`result_label > Label::Internal`) raise the module ceiling regardless.
+    if (has_try_begin || result_label > Label::Internal) && capability.starts_with("builtin:Crypto")
+    {
         return Label::TopSecret;
     }
     let exception_label = match row.authority {

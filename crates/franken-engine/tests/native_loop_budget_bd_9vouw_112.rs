@@ -69,33 +69,29 @@ fn console(result: &ExecutionResult) -> String {
         .join("\n")
 }
 
-/// Each loop ends at the budget. Before this change, on main (723cfac0c,
-/// frankenctl drill): copyWithin on the array-like and indexOf/join on the
-/// sparse real array ran past 120 s; the array-like includes, join, fill,
-/// reverse and find already ended at the budget and stay covered here.
+/// Every native loop whose trip count a guest controls either charges a work
+/// unit per iteration against the instruction budget (hole-visiting methods
+/// and observable Proxy receivers) or is bounded by the heap's actual indexed
+/// keys for ordinary sparse array-likes/arrays (LiveArrayCursor / MoveCursor).
 #[test]
 fn loops_over_a_guest_chosen_length_end_at_the_budget() {
     let huge = "{ length: 2 ** 40 }";
-    let cases = [
+    let huge_proxy = "new Proxy({ length: 2 ** 40 }, { has() { return false; } })";
+    let budget_exhausted_cases = [
         format!("Array.prototype.includes.call({huge}, 1);"),
         format!("Array.prototype.join.call({huge});"),
-        format!("Array.prototype.copyWithin.call({huge}, 1, 0);"),
-        format!("Array.prototype.reverse.call({huge});"),
         format!("Array.prototype.find.call({huge}, function () {{ return false; }});"),
         format!("Array.prototype.fill.call({huge}, 0);"),
-        "var a = []; a.length = 2 ** 32 - 1; a.indexOf(1);".to_string(),
+        format!("Array.prototype.copyWithin.call({huge_proxy}, 1, 0);"),
+        format!("Array.prototype.reverse.call({huge_proxy});"),
+        format!("Array.prototype.indexOf.call({huge_proxy}, 1);"),
+        format!("Array.prototype.lastIndexOf.call({huge_proxy}, 2);"),
         "var a = []; a.length = 2 ** 32 - 1; a.join();".to_string(),
-        "var a = [1]; a.length = 2 ** 32 - 1; a.lastIndexOf(2);".to_string(),
-        // A DIRECT call reaches the generic copyWithin loop with no inline
-        // callback context, so only a per-step charge stops it (v0.3.0 review).
-        "var a = []; a.length = 2 ** 32 - 1; a.copyWithin(0, 1);".to_string(),
-        "var o = { length: 2 ** 53 - 1, copyWithin: Array.prototype.copyWithin }; \
-         o.copyWithin(1, 0);"
-            .to_string(),
+        "var a = []; a.length = 2 ** 32 - 1; new Proxy(a, { has() { return false; } }).copyWithin(0, 1);".to_string(),
         // Below the string limit, so only the budget can stop it.
         "Array.prototype.toLocaleString.call({ length: 10000000 });".to_string(),
     ];
-    for source in cases {
+    for source in budget_exhausted_cases {
         let started = Instant::now();
         let outcome = run(&source);
         assert!(
@@ -107,6 +103,29 @@ fn loops_over_a_guest_chosen_length_end_at_the_budget() {
         );
         assert!(
             started.elapsed() < Duration::from_secs(60),
+            "{source} took {:?}",
+            started.elapsed()
+        );
+    }
+
+    // Ordinary sparse array-likes and arrays with proven-absent holes are
+    // bounded by actual indexed keys (bd-9vouw.112 second acceptance clause).
+    let sparse_bounded_cases = [
+        format!("Array.prototype.copyWithin.call({huge}, 1, 0);"),
+        format!("Array.prototype.reverse.call({huge});"),
+        "var a = []; a.length = 2 ** 32 - 1; a.indexOf(1);".to_string(),
+        "var a = [1]; a.length = 2 ** 32 - 1; a.lastIndexOf(2);".to_string(),
+        "var a = []; a.length = 2 ** 32 - 1; a.copyWithin(0, 1);".to_string(),
+        "var o = { length: 2 ** 53 - 1, copyWithin: Array.prototype.copyWithin }; \
+         o.copyWithin(1, 0);"
+            .to_string(),
+    ];
+    for source in sparse_bounded_cases {
+        let started = Instant::now();
+        let outcome = run(&source);
+        assert!(outcome.is_ok(), "{source}: {outcome:?}");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
             "{source} took {:?}",
             started.elapsed()
         );

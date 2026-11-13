@@ -327,7 +327,7 @@ impl InterpreterCore {
         });
     }
 
-    fn evaluate_sink_flow_decision(
+    pub(super) fn evaluate_sink_flow_decision(
         &mut self,
         capability: &str,
         label: &Label,
@@ -360,16 +360,21 @@ impl InterpreterCore {
                     return Ok(());
                 }
                 FlowCheckResult::DeclassificationRequired { route_id } => {
+                    let validation_epoch_ms = self.ifc_validation_epoch_ms;
                     let matching_receipt = self
                         .config
                         .declassification_receipts
                         .iter()
                         .find(|receipt| {
+                            let valid_for_epoch = match validation_epoch_ms {
+                                Some(epoch_ms) => receipt.validate_at(epoch_ms).is_ok(),
+                                None => receipt.validate().is_ok(),
+                            };
                             receipt.decision == DeclassificationDecision::Allow
                                 && receipt.source_label == *label
                                 && receipt.sink_clearance == *clearance
                                 && receipt.declassification_route_ref == route_id
-                                && receipt.validate().is_ok()
+                                && valid_for_epoch
                                 && receipt.verify(&receipt.authorized_by).is_ok()
                         })
                         .map(|receipt| receipt.receipt_id.clone());

@@ -256,6 +256,9 @@ pub(super) fn rewrite_path_requires(
     let mut root = BTreeSet::new();
     var_names(&tree.body, &mut root);
     lexical_names(&tree.body, &mut root);
+    if super::util_module::mutates_global_require(tree) {
+        root.insert("require".to_string());
+    }
     for statement in &tree.body {
         if let Statement::Import(import) = statement {
             root.extend(

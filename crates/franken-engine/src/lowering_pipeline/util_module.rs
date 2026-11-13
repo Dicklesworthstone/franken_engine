@@ -607,6 +607,10 @@ pub(crate) fn has_ambient_fs_require(tree: &SyntaxTree) -> Result<bool, Lowering
     fs_module::has_ambient_fs_require(tree)
 }
 
+pub(super) fn mutates_global_require(tree: &SyntaxTree) -> bool {
+    fs_module::mutates_global_require(tree)
+}
+
 /// Install private first-use loaders through the existing lowering hook.
 /// Filesystem and pure modules, including private dependencies, share one
 /// final AST pass. Direct-call facades and shadowed/nonliteral requires keep
@@ -956,6 +960,9 @@ fn rewrite_module_objects_with_options(
     let mut root = BTreeSet::new();
     var_names(&tree.body, &mut root);
     lexical_names(&tree.body, &mut root);
+    if fs_module::mutates_global_require(tree) {
+        root.insert("require".to_string());
+    }
     for statement in &tree.body {
         if let Statement::Import(import) = statement {
             root.extend(

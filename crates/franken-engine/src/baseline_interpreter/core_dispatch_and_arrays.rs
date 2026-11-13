@@ -5407,8 +5407,7 @@ impl InterpreterCore {
                             .modules
                             .get(&reexporter)
                             .is_some_and(|record| {
-                                record.star_exports.get(&name)
-                                    == Some(&StarExportOrigin::Provided)
+                                record.star_exports.get(&name) == Some(&StarExportOrigin::Provided)
                             });
                     if provided {
                         self.queue_module_export(
@@ -5673,13 +5672,7 @@ impl InterpreterCore {
                 .label
                 .clone();
             for (specifier, name) in &exports {
-                self.queue_module_export(
-                    cascade,
-                    specifier,
-                    name,
-                    &label,
-                    ExportPublication::Own,
-                )?;
+                self.queue_module_export(cascade, specifier, name, &label, ExportPublication::Own)?;
             }
             Ok(())
         })();

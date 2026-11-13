@@ -106,6 +106,129 @@ const SEARCH: Search = Search {
     expression: |expression| require_member(expression).is_some(),
 };
 
+fn is_global_object_receiver(expression: &Expression) -> bool {
+    match expression {
+        Expression::Identifier(name) => {
+            matches!(name.as_str(), "globalThis" | "global" | "self" | "window")
+        }
+        Expression::This | Expression::SloppyThis => true,
+        Expression::Member {
+            object,
+            property,
+            computed,
+            ..
+        }
+        | Expression::OptionalMember {
+            object,
+            property,
+            computed,
+            ..
+        } => {
+            is_global_object_receiver(object)
+                && if *computed {
+                    super::super::well_formed_string_literal(property)
+                } else {
+                    super::super::well_formed_static_name(property)
+                }
+                .is_some_and(|prop| matches!(prop, "globalThis" | "global" | "self" | "window"))
+        }
+        _ => false,
+    }
+}
+
+fn member_targets_global_require(
+    object: &Expression,
+    property: &Expression,
+    computed: bool,
+) -> bool {
+    if !is_global_object_receiver(object) {
+        return false;
+    }
+    let resolved = if computed {
+        super::super::well_formed_string_literal(property)
+    } else {
+        super::super::well_formed_static_name(property)
+    };
+    match resolved {
+        Some(prop) => prop == "require",
+        None => computed,
+    }
+}
+
+fn expression_mutates_global_require(expression: &Expression) -> bool {
+    match expression {
+        Expression::Assignment { left, .. } => match left.as_ref() {
+            Expression::Identifier(name) => name == "require",
+            Expression::Member {
+                object,
+                property,
+                computed,
+                ..
+            } => member_targets_global_require(object, property, *computed),
+            _ => false,
+        },
+        Expression::Unary {
+            operator: UnaryOperator::Delete,
+            argument,
+        } => matches!(
+            argument.as_ref(),
+            Expression::Member {
+                object,
+                property,
+                computed,
+                ..
+            } if member_targets_global_require(object, property, *computed)
+        ),
+        Expression::Call {
+            callee, arguments, ..
+        } => {
+            let Expression::Member {
+                object,
+                property,
+                computed: false,
+                ..
+            } = callee.as_ref()
+            else {
+                return false;
+            };
+            let Expression::Identifier(namespace) = object.as_ref() else {
+                return false;
+            };
+            let Some(method) = super::super::well_formed_static_name(property) else {
+                return false;
+            };
+            let Some(target) = arguments.first() else {
+                return false;
+            };
+            if !is_global_object_receiver(target) {
+                return false;
+            }
+            match (namespace.as_str(), method) {
+                ("Object", "defineProperties" | "assign") => true,
+                ("Object", "defineProperty")
+                | ("Reflect", "set" | "defineProperty" | "deleteProperty") => {
+                    arguments.get(1).is_none_or(|key| {
+                        super::super::well_formed_string_literal(key).is_none_or(|k| k == "require")
+                    })
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+const GLOBAL_REQUIRE_MUTATION_SEARCH: Search = Search {
+    statement: |_| false,
+    expression: expression_mutates_global_require,
+};
+
+pub(super) fn mutates_global_require(tree: &SyntaxTree) -> bool {
+    tree.body
+        .iter()
+        .any(|statement| GLOBAL_REQUIRE_MUTATION_SEARCH.in_statement(statement))
+}
+
 pub(super) fn is_module_declaration(statement: &Statement) -> bool {
     matches!(statement, Statement::VariableDeclaration(declaration)
         if matches!(declaration.declarations.as_slice(),
@@ -167,6 +290,9 @@ pub(super) fn rewrite_fs_requires_with_runtime_sources(
     let mut names = BTreeSet::new();
     var_names(&tree.body, &mut names);
     lexical_names(&tree.body, &mut names);
+    if mutates_global_require(tree) {
+        names.insert("require".to_string());
+    }
     // Imports are module-scope bindings too. Besides keeping an imported
     // require out of the builtin path, this protects the facade's realm
     // helpers from imports named Buffer, Promise, WeakMap, and so on.

@@ -4731,59 +4731,94 @@ mod containment_tests {
         InterpreterCore::new(test_quickjs_config(), "test-containment")
     }
 
+    fn add_receipt_fixture(interpreter: &mut InterpreterCore, action: &str, risk: i64) {
+        // EvidenceLog's cryptographic contract is independent of enforcement.
+        // Runtime risk comes from the real guardplane report, never from an
+        // action-to-score lookup in the interpreter.
+        interpreter.decision_receipts.add_receipt(
+            "extension:current".to_string(),
+            action.to_string(),
+            risk,
+            action.to_string(),
+            interpreter.ip,
+            &interpreter.registers,
+            interpreter.instructions_executed,
+        );
+    }
+
+    fn assert_sandbox_interruption(result: Result<(), InterpreterError>) {
+        assert!(matches!(
+            result,
+            Err(InterpreterError::ContainmentActionRequested { action, reason: None })
+                if action == "sandbox"
+        ));
+    }
+
     #[test]
     fn allow_continues() {
-        let mut interpreter = test_interpreter();
-        let result = interpreter.handle_containment_action(HookAction::Allow);
+        let interpreter = test_interpreter();
+        let result = interpreter.enforce_hook_action(HookAction::Allow);
         assert!(result.is_ok());
-        assert!(!interpreter.suspended);
-        assert!(!interpreter.sandboxed);
-        assert!(!interpreter.quarantined);
+        assert!(interpreter.active_sandbox.get().is_none());
     }
 
     #[test]
     fn terminate_aborts() {
-        let mut interpreter = test_interpreter();
-        let result = interpreter
-            .handle_containment_action(HookAction::Terminate("policy violation".to_string()));
+        let interpreter = test_interpreter();
+        let result =
+            interpreter.enforce_hook_action(HookAction::Terminate("policy violation".to_string()));
         match result {
-            Err(InterpreterError::Terminated { reason }) => {
-                assert_eq!(reason, "policy violation");
+            Err(InterpreterError::ContainmentActionRequested { action, reason }) => {
+                assert_eq!(action, "terminate");
+                assert_eq!(reason.as_deref(), Some("policy violation"));
             }
-            _ => panic!("Expected Terminated error"),
+            _ => panic!("Expected terminal containment interruption"),
         }
-        assert!(!interpreter.suspended);
-        assert!(!interpreter.sandboxed);
-        assert!(!interpreter.quarantined);
+        assert!(interpreter.active_sandbox.get().is_none());
     }
 
     #[test]
     fn suspend_pauses() {
-        let mut interpreter = test_interpreter();
-        let result = interpreter.handle_containment_action(HookAction::Suspend);
-        assert!(result.is_ok());
-        assert!(interpreter.suspended);
-        assert!(!interpreter.sandboxed);
-        assert!(!interpreter.quarantined);
+        let interpreter = test_interpreter();
+        assert!(matches!(
+            interpreter.enforce_hook_action(HookAction::Suspend),
+            Err(InterpreterError::ContainmentActionRequested { action, reason: None })
+                if action == "suspend"
+        ));
+        assert!(interpreter.active_sandbox.get().is_none());
     }
 
     #[test]
     fn sandbox_restricts() {
         let mut interpreter = test_interpreter();
-        let result = interpreter.handle_containment_action(HookAction::Sandbox);
+        let result = interpreter.enforce_hook_action(HookAction::Sandbox);
         assert!(result.is_ok());
-        assert!(!interpreter.suspended);
-        assert!(interpreter.sandboxed);
-        assert!(!interpreter.quarantined);
+        assert!(interpreter.active_sandbox.get().is_some());
+        assert!(!interpreter.sandbox_allows_hostcall("net:request"));
+        assert!(!interpreter.sandbox_allows_hostcall("fs:write"));
+        assert!(interpreter.sandbox_allows_hostcall("fs:read"));
+        let before = (
+            interpreter.heap_size(),
+            interpreter.estimated_memory_bytes(),
+        );
+        assert_sandbox_interruption(interpreter.alloc_object_with_prototype(None).map(|_| ()));
+        assert_eq!(
+            before,
+            (
+                interpreter.heap_size(),
+                interpreter.estimated_memory_bytes()
+            )
+        );
+        assert!(interpreter.decision_receipts().is_empty());
     }
 
     #[test]
     fn challenge_blocks() {
-        let mut interpreter = test_interpreter();
+        let interpreter = test_interpreter();
         let token = ChallengeToken {
             token: "challenge-123".to_string(),
         };
-        let result = interpreter.handle_containment_action(HookAction::Challenge(token.clone()));
+        let result = interpreter.enforce_hook_action(HookAction::Challenge(token.clone()));
         match result {
             Err(InterpreterError::ContainmentActionRequested { action, reason }) => {
                 assert_eq!(action, "challenge");
@@ -4791,60 +4826,397 @@ mod containment_tests {
             }
             _ => panic!("Expected ContainmentActionRequested error"),
         }
-        assert_eq!(interpreter.pending_challenges.len(), 1);
-        assert_eq!(interpreter.pending_challenges[0].token, "challenge-123");
     }
 
     #[test]
-    fn quarantine_terminates_and_marks() {
-        let mut interpreter = test_interpreter();
+    fn quarantine_requests_terminal_orchestrator_enforcement() {
+        let interpreter = test_interpreter();
         let result = interpreter
-            .handle_containment_action(HookAction::Quarantine("malicious behavior".to_string()));
+            .enforce_hook_action(HookAction::Quarantine("malicious behavior".to_string()));
         match result {
-            Err(InterpreterError::Terminated { reason }) => {
-                assert_eq!(reason, "malicious behavior");
+            Err(InterpreterError::ContainmentActionRequested { action, reason }) => {
+                assert_eq!(action, "quarantine");
+                assert_eq!(reason.as_deref(), Some("malicious behavior"));
             }
-            _ => panic!("Expected Terminated error"),
+            _ => panic!("Expected quarantine containment interruption"),
         }
-        assert!(!interpreter.suspended);
-        assert!(!interpreter.sandboxed);
-        assert!(interpreter.quarantined);
+        assert!(interpreter.active_sandbox.get().is_none());
     }
 
     #[test]
-    fn evidence_emitted_per_action() {
+    fn sandbox_activation_witness_is_deterministic_and_emitted_once() {
         let mut interpreter = test_interpreter();
-        let initial_evidence_count = interpreter.containment_evidence.len();
         let initial_witness_count = interpreter.witness_events.len();
+        interpreter.ip = 7;
+        interpreter.instructions_executed = 11;
 
         interpreter
-            .handle_containment_action(HookAction::Sandbox)
+            .enforce_hook_action(HookAction::Sandbox)
             .expect("operation should succeed for valid inputs");
-
-        assert_eq!(
-            interpreter.containment_evidence.len(),
-            initial_evidence_count + 1
-        );
+        interpreter.flush_sandbox_witness();
+        interpreter
+            .enforce_hook_action(HookAction::Sandbox)
+            .unwrap();
+        interpreter.flush_sandbox_witness();
         assert_eq!(interpreter.witness_events.len(), initial_witness_count + 1);
-
-        let evidence = &interpreter.containment_evidence[0];
+        let evidence = &interpreter.witness_events[initial_witness_count];
         assert_eq!(evidence.kind, WitnessEventKind::ContainmentAction);
-        assert_eq!(evidence.instruction_index as usize, interpreter.ip);
+        assert_eq!(evidence.instruction_index, 7);
+        assert_eq!(evidence.timestamp_tick, 11);
+        let sandbox = interpreter.active_sandbox.get().unwrap();
+        let payload = format!(
+            "sandbox_v1:{}:{}",
+            interpreter.config.sandbox_policy.content_hash().to_hex(),
+            sandbox.memory_ceiling_bytes,
+        );
+        assert_eq!(
+            evidence.payload_hash,
+            ContentHash::compute(payload.as_bytes())
+        );
     }
 
     #[test]
     fn interpreter_consistent_after_terminate() {
-        let mut interpreter = test_interpreter();
+        let interpreter = test_interpreter();
         let initial_ip = interpreter.ip;
         let initial_register_base = interpreter.register_base;
 
-        let _ = interpreter
-            .handle_containment_action(HookAction::Terminate("test termination".to_string()));
+        let _ =
+            interpreter.enforce_hook_action(HookAction::Terminate("test termination".to_string()));
 
         // Interpreter state should remain consistent (no half-executed instructions)
         assert_eq!(interpreter.ip, initial_ip);
         assert_eq!(interpreter.register_base, initial_register_base);
-        assert_eq!(interpreter.containment_evidence.len(), 1);
+        assert!(interpreter.decision_receipts().is_empty());
+    }
+
+    struct SandboxOnHostcall;
+
+    impl InterpreterHook for SandboxOnHostcall {
+        fn pre_property_access(
+            &self,
+            _ctx: &HookContext,
+            _target: &ObjectRef,
+            _key: &PropertyKey,
+        ) -> HookAction {
+            HookAction::Allow
+        }
+
+        fn pre_call(
+            &self,
+            _ctx: &HookContext,
+            _callee: &FunctionRef,
+            _args: &[Value],
+        ) -> HookAction {
+            HookAction::Allow
+        }
+
+        fn pre_allocation(
+            &self,
+            _ctx: &HookContext,
+            _kind: AllocKind,
+            _size_hint: usize,
+        ) -> HookAction {
+            HookAction::Allow
+        }
+
+        fn pre_import(&self, _ctx: &HookContext, _specifier: &str) -> HookAction {
+            HookAction::Allow
+        }
+
+        fn pre_hostcall(
+            &self,
+            _ctx: &HookContext,
+            _capability: &str,
+            _allowed: bool,
+        ) -> HookAction {
+            HookAction::Sandbox
+        }
+    }
+
+    fn bounded_sandbox_interpreter(capabilities: &[&str]) -> InterpreterCore {
+        let mut config = test_quickjs_config();
+        config.sandbox_policy.allowed_capabilities = capabilities
+            .iter()
+            .map(|capability| (*capability).to_string())
+            .collect();
+        config.sandbox_policy.max_memory_bytes = config.max_total_memory_bytes;
+        InterpreterCore::new(config, "test-bounded-sandbox")
+    }
+
+    #[test]
+    fn sandbox_rechecks_the_triggering_cached_hostcall_before_dispatch() {
+        let mut interpreter = bounded_sandbox_interpreter(&["fs_read", "heap_allocate"]);
+        interpreter.pruned_hostcall_dispatch = Some(PrunedHostcallDispatch::from_decisions(
+            BTreeMap::from([("fs:write".to_string(), true)]),
+        ));
+        interpreter.set_hook(Arc::new(SandboxOnHostcall));
+        assert_sandbox_interruption(
+            check_hostcall_capability_gate(&mut interpreter, "fs:write", 0).map(|_| ()),
+        );
+        assert_eq!(interpreter.hostcall_decisions.len(), 1);
+        assert!(!interpreter.hostcall_decisions[0].allowed);
+        assert_eq!(
+            interpreter.witness_events[0].kind,
+            WitnessEventKind::ContainmentAction
+        );
+        assert!(check_hostcall_capability_gate(&mut interpreter, "fs:read", 1).is_ok());
+        assert!(interpreter.hostcall_decisions[1].allowed);
+    }
+
+    #[test]
+    fn sandbox_policy_and_cached_allow_never_grant_missing_authority() {
+        let mut interpreter = bounded_sandbox_interpreter(&["fs-read"]);
+        interpreter
+            .config
+            .granted_capabilities
+            .remove(&RuntimeCapability::FsRead);
+        interpreter.pruned_hostcall_dispatch =
+            Some(PrunedHostcallDispatch::from_decisions(BTreeMap::from([
+                ("fs:read".to_string(), true),
+                ("unknown:operation".to_string(), true),
+            ])));
+        interpreter
+            .enforce_hook_action(HookAction::Sandbox)
+            .unwrap();
+        for tag in ["fs:read", "unknown:operation"] {
+            assert!(matches!(
+                check_hostcall_capability_gate(&mut interpreter, tag, 0),
+                Err(InterpreterError::CapabilityDenied { .. })
+            ));
+        }
+        assert!(
+            interpreter
+                .hostcall_decisions
+                .iter()
+                .all(|decision| !decision.allowed)
+        );
+    }
+
+    #[test]
+    fn sandbox_revokes_folded_effect_free_grants() {
+        let mut interpreter = bounded_sandbox_interpreter(&["heap_allocate"]);
+        assert!(check_hostcall_capability_gate(&mut interpreter, "builtin:MathAbs", 0).is_ok());
+        assert!(
+            interpreter
+                .recorded_effect_free_grants
+                .contains("builtin:MathAbs")
+        );
+        interpreter
+            .enforce_hook_action(HookAction::Sandbox)
+            .unwrap();
+        assert_sandbox_interruption(
+            check_hostcall_capability_gate(&mut interpreter, "builtin:MathAbs", 1).map(|_| ()),
+        );
+        assert!(
+            !interpreter
+                .recorded_effect_free_grants
+                .contains("builtin:MathAbs")
+        );
+        assert!(!interpreter.hostcall_decisions.last().unwrap().allowed);
+    }
+
+    #[test]
+    fn sandbox_memory_limit_admits_exact_boundary_and_refuses_atomically() {
+        let mut interpreter = bounded_sandbox_interpreter(&["heap_allocate"]);
+        let before = interpreter.estimated_memory_bytes();
+        let object_bytes = InterpreterCore::estimate_heap_object_bytes(&HeapObject::new());
+        interpreter.config.sandbox_policy.max_memory_bytes = before + object_bytes;
+        interpreter
+            .enforce_hook_action(HookAction::Sandbox)
+            .unwrap();
+        interpreter.alloc_object_with_prototype(None).unwrap();
+        assert_eq!(interpreter.estimated_memory_bytes(), before + object_bytes);
+        let heap_size = interpreter.heap_size();
+        assert_sandbox_interruption(interpreter.alloc_object_with_prototype(None).map(|_| ()));
+        assert_eq!(interpreter.heap_size(), heap_size);
+        assert_eq!(interpreter.estimated_memory_bytes(), before + object_bytes);
+        interpreter.enforce_hook_action(HookAction::Allow).unwrap();
+        interpreter
+            .enforce_hook_action(HookAction::Sandbox)
+            .unwrap();
+        assert_eq!(
+            interpreter
+                .active_sandbox
+                .get()
+                .unwrap()
+                .memory_ceiling_bytes,
+            before + object_bytes
+        );
+    }
+
+    #[test]
+    fn sandbox_default_disallows_growth_even_after_memory_is_released() {
+        let mut interpreter = test_interpreter();
+        interpreter
+            .enforce_hook_action(HookAction::Sandbox)
+            .unwrap();
+        interpreter.apply_memory_component_delta(8, 0).unwrap();
+        let before = interpreter.estimated_memory_bytes();
+        assert_sandbox_interruption(interpreter.apply_memory_component_delta(0, 1));
+        assert_eq!(interpreter.estimated_memory_bytes(), before);
+        assert_sandbox_interruption(interpreter.alloc_buffer_object(0, false).map(|_| ()));
+        assert_sandbox_interruption(
+            interpreter
+                .alloc_timer_handle_object(0, "Timeout")
+                .map(|_| ()),
+        );
+        assert_sandbox_interruption(
+            interpreter.push_console_output(ConsoleLevel::Log, "blocked".to_string()),
+        );
+        assert!(interpreter.console_output.is_empty());
+    }
+
+    #[test]
+    fn sandbox_console_retention_shares_the_allocation_ceiling() {
+        let mut interpreter = bounded_sandbox_interpreter(&["console", "heap_allocate"]);
+        interpreter.config.sandbox_policy.max_memory_bytes =
+            interpreter.estimated_memory_bytes() + std::mem::size_of::<ConsoleEntry>() as u64 + 3;
+        interpreter
+            .enforce_hook_action(HookAction::Sandbox)
+            .unwrap();
+        interpreter
+            .push_console_output(ConsoleLevel::Log, "abc".to_string())
+            .unwrap();
+        assert_sandbox_interruption(interpreter.alloc_object_with_prototype(None).map(|_| ()));
+        assert_sandbox_interruption(
+            interpreter.push_console_output(ConsoleLevel::Log, String::new()),
+        );
+        assert_eq!(interpreter.console_output.len(), 1);
+    }
+
+    #[test]
+    fn sandbox_spread_keeps_rollback_memory_reserved_until_mutation_finishes() {
+        let mut interpreter = bounded_sandbox_interpreter(&["heap_allocate", "builtin"]);
+        let target = interpreter
+            .alloc_array_from_values(&[Value::Int(7)])
+            .unwrap();
+        interpreter.write_reg(0, Value::Object(target)).unwrap();
+        interpreter.write_reg(1, Value::str("x")).unwrap();
+        let baseline = interpreter.sync_estimated_memory_bytes().unwrap();
+        let snapshot = interpreter.heap[target.0 as usize].clone();
+        let snapshot_bytes = InterpreterCore::estimate_heap_object_bytes(&snapshot);
+        interpreter.config.sandbox_policy.max_memory_bytes = baseline + snapshot_bytes;
+        interpreter
+            .enforce_hook_action(HookAction::Sandbox)
+            .unwrap();
+        assert_sandbox_interruption(interpreter.spread_into_array_transaction(
+            &test_module(vec![]),
+            0,
+            1,
+        ));
+        assert_eq!(interpreter.heap[target.0 as usize], snapshot);
+        assert_eq!(interpreter.json_parse_temporary_bytes, 0);
+        assert_eq!(interpreter.estimated_memory_bytes(), baseline);
+        assert_eq!(
+            interpreter.estimated_memory_bytes(),
+            interpreter.recompute_estimated_memory_bytes()
+        );
+        // Once the transaction's snapshot is released, its old reservation
+        // must not permanently consume the sandbox's remaining headroom.
+        interpreter
+            .set_object_property(target, "1".to_string(), Value::str("x"))
+            .unwrap();
+    }
+
+    #[test]
+    fn sandbox_cannot_raise_the_original_memory_limit() {
+        let mut interpreter = bounded_sandbox_interpreter(&["heap_allocate"]);
+        interpreter.config.max_total_memory_bytes = interpreter.estimated_memory_bytes();
+        interpreter.config.sandbox_policy.max_memory_bytes = u64::MAX;
+        interpreter
+            .enforce_hook_action(HookAction::Sandbox)
+            .unwrap();
+        assert_eq!(
+            interpreter
+                .active_sandbox
+                .get()
+                .unwrap()
+                .memory_ceiling_bytes,
+            interpreter.config.max_total_memory_bytes,
+        );
+        assert!(matches!(
+            interpreter.alloc_object_with_prototype(None),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+    }
+
+    #[test]
+    fn sandbox_survives_codegen_grant_and_execution_seed_restoration() {
+        let mut interpreter = bounded_sandbox_interpreter(&["heap_allocate", "builtin"]);
+        let seed = interpreter.capture_execution_seed().unwrap();
+        let grant = InterpreterCore::validate_contained_codegen_grant(&[
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+        ])
+        .unwrap();
+        let replaced = interpreter.replace_with_contained_codegen_grant(Some(grant));
+        interpreter
+            .enforce_hook_action(HookAction::Sandbox)
+            .unwrap();
+        let ceiling = interpreter
+            .active_sandbox
+            .get()
+            .unwrap()
+            .memory_ceiling_bytes;
+        interpreter.restore_replaced_codegen_grants(replaced);
+        assert!(
+            interpreter
+                .config
+                .granted_capabilities
+                .contains(&RuntimeCapability::NetworkEgress)
+        );
+        assert_sandbox_interruption(
+            check_hostcall_capability_gate(&mut interpreter, "net:request", 0).map(|_| ()),
+        );
+        interpreter.reset_execution_state_from_seed(&seed).unwrap();
+        interpreter.reset_repeat_execution_state().unwrap();
+        assert_eq!(
+            interpreter
+                .active_sandbox
+                .get()
+                .unwrap()
+                .memory_ceiling_bytes,
+            ceiling
+        );
+        assert_sandbox_interruption(
+            check_hostcall_capability_gate(&mut interpreter, "net:request", 0).map(|_| ()),
+        );
+        assert_sandbox_interruption(
+            interpreter.run_pre_import_hook(&test_module(vec![]), "node:fs"),
+        );
+    }
+
+    #[test]
+    fn normal_completion_preserves_applied_sandbox_and_terminal_escalation() {
+        let mut interpreter = bounded_sandbox_interpreter(&["heap_allocate"]);
+        interpreter
+            .enforce_hook_action(HookAction::Sandbox)
+            .unwrap();
+        let result = interpreter.take_execution_result(
+            LabeledReturn {
+                value: Value::Int(42),
+                label: Label::Public,
+            },
+            None,
+        );
+        assert_eq!(result.value, Value::Int(42));
+        assert_eq!(result.requested_hook_action, Some(HookAction::Sandbox));
+        assert!(
+            result
+                .witness_events
+                .iter()
+                .any(|event| event.kind == WitnessEventKind::ContainmentAction)
+        );
+        let terminal = HookAction::Quarantine("later escalation".to_string());
+        let result = interpreter.take_execution_result(
+            LabeledReturn {
+                value: Value::Undefined,
+                label: Label::Public,
+            },
+            Some(terminal.clone()),
+        );
+        assert_eq!(result.requested_hook_action, Some(terminal));
     }
 
     // RC-4.4 Decision Receipt Tests
@@ -4859,9 +5231,7 @@ mod containment_tests {
         // the `timestamp > 0` field check holds. `ip` is left at 0, keeping the
         // `instruction_pointer == 0` assertion below intact.
         interpreter.instructions_executed = 1;
-        interpreter
-            .handle_containment_action(HookAction::Terminate("test".to_string()))
-            .ok();
+        add_receipt_fixture(&mut interpreter, "terminate", 900_000);
 
         let receipts = interpreter.decision_receipts().receipts();
         assert_eq!(receipts.len(), 1);
@@ -4880,12 +5250,8 @@ mod containment_tests {
     #[test]
     fn receipt_chain_linked() {
         let mut interpreter = test_interpreter();
-        interpreter
-            .handle_containment_action(HookAction::Sandbox)
-            .ok();
-        interpreter
-            .handle_containment_action(HookAction::Suspend)
-            .ok();
+        add_receipt_fixture(&mut interpreter, "sandbox", 125_000);
+        add_receipt_fixture(&mut interpreter, "suspend", 500_000);
 
         let receipts = interpreter.decision_receipts().receipts();
         assert_eq!(receipts.len(), 2);
@@ -4900,12 +5266,8 @@ mod containment_tests {
     #[test]
     fn chain_verification_valid() {
         let mut interpreter = test_interpreter();
-        interpreter
-            .handle_containment_action(HookAction::Sandbox)
-            .ok();
-        interpreter
-            .handle_containment_action(HookAction::Suspend)
-            .ok();
+        add_receipt_fixture(&mut interpreter, "sandbox", 125_000);
+        add_receipt_fixture(&mut interpreter, "suspend", 500_000);
 
         assert!(interpreter.verify_decision_receipt_chain());
     }
@@ -4913,9 +5275,7 @@ mod containment_tests {
     #[test]
     fn chain_verification_tampered() {
         let mut interpreter = test_interpreter();
-        interpreter
-            .handle_containment_action(HookAction::Sandbox)
-            .ok();
+        add_receipt_fixture(&mut interpreter, "sandbox", 125_000);
 
         // Tamper with the receipt signature
         interpreter.decision_receipts.receipts[0].signature = "tampered".to_string();
@@ -4983,9 +5343,7 @@ mod containment_tests {
     #[test]
     fn export_json_schema() {
         let mut interpreter = test_interpreter();
-        interpreter
-            .handle_containment_action(HookAction::Sandbox)
-            .ok();
+        add_receipt_fixture(&mut interpreter, "sandbox", 125_000);
 
         let json_export = interpreter
             .export_decision_receipts()
@@ -5008,25 +5366,21 @@ mod containment_tests {
     #[test]
     fn receipt_includes_risk_score() {
         let mut interpreter = test_interpreter();
-        interpreter
-            .handle_containment_action(HookAction::Terminate("test".to_string()))
-            .ok();
+        add_receipt_fixture(&mut interpreter, "terminate", 875_123);
 
         let receipt = &interpreter.decision_receipts().receipts()[0];
-        assert_eq!(receipt.risk_score, 900_000); // High risk for terminate action
+        assert_eq!(receipt.risk_score, 875_123);
     }
 
     #[test]
     fn receipt_includes_action() {
         let mut interpreter = test_interpreter();
-        interpreter
-            .handle_containment_action(HookAction::Quarantine("malicious".to_string()))
-            .ok();
+        add_receipt_fixture(&mut interpreter, "quarantine", 950_000);
 
         let receipt = &interpreter.decision_receipts().receipts()[0];
         assert_eq!(receipt.operation_type, "quarantine");
         assert!(receipt.action_taken.contains("quarantine"));
-        assert!(receipt.action_taken.contains("malicious"));
+        assert_eq!(receipt.action_taken, "quarantine");
     }
 }
 

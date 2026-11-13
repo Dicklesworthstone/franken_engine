@@ -2133,15 +2133,7 @@ impl InterpreterCore {
         timer_id: u32,
         marker: &str,
     ) -> Result<Value, InterpreterError> {
-        if !self
-            .config
-            .granted_capabilities
-            .contains(&RuntimeCapability::HeapAllocate)
-        {
-            return Err(InterpreterError::CapabilityDenied {
-                capability: "HeapAllocate".to_string(),
-            });
-        }
+        self.ensure_heap_allocation_allowed()?;
         let requested_heap_objects = self.heap_object_count_u32().saturating_add(1);
         if requested_heap_objects > self.config.max_heap_objects {
             return Err(

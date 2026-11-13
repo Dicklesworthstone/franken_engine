@@ -272,16 +272,27 @@ fn terminal_containment_stops_queued_effects_and_core_reuse_drops_them_bd_9vouw_
             assert_eq!(hook.calls.load(Ordering::SeqCst), 1);
             assert_eq!(transcript.entries().len(), 1, "{action:?}");
 
-            // A new execution restores the pre-run seed. It may execute new
-            // work, but cannot resurrect the prior execution's queued jobs.
+            // A new execution cannot resurrect queued jobs. Clearing a hook
+            // also cannot revoke the sandbox restriction already applied to
+            // this core, even when preparation restores its pre-run seed.
             core.clear_hook();
-            core.execute(&next_module)
-                .expect("fresh execution after containment");
-            assert_eq!(
-                std::fs::read(directory.path().join("fresh.txt")).unwrap(),
-                b"fresh execution"
-            );
-            assert_eq!(transcript.entries().len(), 2, "{action:?}");
+            if action == HookAction::Sandbox {
+                assert!(matches!(
+                    core.execute(&next_module),
+                    Err(InterpreterError::ContainmentActionRequested { action, .. })
+                        if action == "sandbox"
+                ));
+                assert!(!directory.path().join("fresh.txt").exists());
+                assert_eq!(transcript.entries().len(), 1);
+            } else {
+                core.execute(&next_module)
+                    .expect("fresh execution after containment");
+                assert_eq!(
+                    std::fs::read(directory.path().join("fresh.txt")).unwrap(),
+                    b"fresh execution"
+                );
+                assert_eq!(transcript.entries().len(), 2, "{action:?}");
+            }
             for path in [
                 "tick.txt",
                 "microtask.txt",

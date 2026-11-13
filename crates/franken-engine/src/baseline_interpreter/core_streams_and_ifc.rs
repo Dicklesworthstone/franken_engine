@@ -4683,19 +4683,14 @@ impl InterpreterCore {
             .saturating_add(u64::try_from(std::mem::size_of::<ExecutionSeed>()).unwrap_or(u64::MAX))
             .saturating_add(Self::pending_execution_seed_entry_bytes());
         let requested_base_bytes = self.estimated_memory_bytes;
-        let requested_total_bytes = self
-            .total_memory_bytes_from_base(requested_base_bytes)
-            .saturating_add(reserved_bytes);
         if self.memory_request_exceeds_budget(
             requested_base_bytes.saturating_add(reserved_bytes),
             self.config.max_total_memory_bytes,
         ) {
-            return Err(InterpreterError::MemoryBudgetExceeded {
-                requested_bytes: requested_total_bytes,
-                max_bytes: self.config.max_total_memory_bytes,
-                requested_heap_objects: self.heap_object_count_u32(),
-                max_heap_objects: self.config.max_heap_objects,
-            });
+            return Err(self.memory_budget_error(
+                requested_base_bytes.saturating_add(reserved_bytes),
+                self.heap_object_count_u32(),
+            ));
         }
 
         let Some(next_reserved_bytes) = self
@@ -4954,17 +4949,13 @@ impl InterpreterCore {
                 .estimated_memory_bytes
                 .saturating_sub(previous_seed_surface_bytes)
                 .saturating_add(next_seed_surface_bytes);
-            let projected_total_bytes = self.total_memory_bytes_from_base(projected_base_bytes);
             if self.memory_request_exceeds_budget(
                 projected_base_bytes,
                 self.config.max_total_memory_bytes,
             ) {
-                return Err(InterpreterError::MemoryBudgetExceeded {
-                    requested_bytes: projected_total_bytes,
-                    max_bytes: self.config.max_total_memory_bytes,
-                    requested_heap_objects: self.heap_object_count_u32(),
-                    max_heap_objects: self.config.max_heap_objects,
-                });
+                return Err(
+                    self.memory_budget_error(projected_base_bytes, self.heap_object_count_u32())
+                );
             }
         }
 
@@ -5493,8 +5484,10 @@ impl InterpreterCore {
 
         let target_was_remembered = self.gc_remembered_set.contains(&array_id);
         let original_memory_ceiling = self.config.max_total_memory_bytes;
-        self.config.max_total_memory_bytes =
-            original_memory_ceiling.saturating_sub(transaction_temporary_bytes);
+        // Keep the rollback snapshot in the shared temporary ledger. Reducing
+        // only the original config ceiling would lose this reservation when a
+        // tighter live sandbox is applied before or during guest iteration.
+        self.json_reserve_temporary(transaction_temporary_bytes)?;
 
         let mutation_result = (|| {
             // Length, not the highest populated index, owns the insertion
@@ -5666,7 +5659,7 @@ impl InterpreterCore {
             )
         })();
 
-        self.config.max_total_memory_bytes = original_memory_ceiling;
+        self.json_release_temporary(transaction_temporary_bytes);
         if let Err(error) = mutation_result {
             self.mutate_heap(|heap| {
                 if let Some(target) = heap.get_mut(heap_index) {
@@ -5680,20 +5673,7 @@ impl InterpreterCore {
             // state. Keep those observable effects and re-derive accounting
             // after restoring only the transaction-owned target object.
             self.estimated_memory_bytes = self.recompute_base_estimated_memory_bytes();
-            return Err(match error {
-                InterpreterError::MemoryBudgetExceeded {
-                    requested_bytes,
-                    requested_heap_objects,
-                    max_heap_objects,
-                    ..
-                } => InterpreterError::MemoryBudgetExceeded {
-                    requested_bytes: requested_bytes.saturating_add(transaction_temporary_bytes),
-                    max_bytes: original_memory_ceiling,
-                    requested_heap_objects,
-                    max_heap_objects,
-                },
-                other => other,
-            });
+            return Err(error);
         }
 
         let final_label_bytes = final_label
@@ -6372,6 +6352,9 @@ impl InterpreterCore {
     /// Record a new count/time label, charging its bytes to the console
     /// budget like output.
     pub(super) fn charge_console_label(&mut self, label: &str) -> Result<(), InterpreterError> {
+        self.check_sandbox_console_allocation(
+            (label.len() as u64).saturating_add(std::mem::size_of::<(String, u64)>() as u64),
+        )?;
         let entries = self
             .console_counts
             .len()
@@ -6755,6 +6738,10 @@ impl InterpreterCore {
             return Ok(());
         }
 
+        self.check_sandbox_console_allocation(
+            (message.len() as u64).saturating_add(std::mem::size_of::<ConsoleEntry>() as u64),
+        )?;
+
         let entries = self.console_output.len().saturating_add(1);
         let bytes = self.console_output_bytes.saturating_add(message.len());
         let max_bytes = self.config.max_console_bytes;
@@ -6795,6 +6782,16 @@ impl InterpreterCore {
         requested_hook_action: Option<HookAction>,
         trace_handoff: TraceHandoff,
     ) -> ExecutionResult {
+        self.flush_sandbox_witness();
+        let requested_hook_action = if self.active_sandbox.get().is_some()
+            && matches!(
+                requested_hook_action,
+                None | Some(HookAction::Allow | HookAction::Challenge(_))
+            ) {
+            Some(HookAction::Sandbox)
+        } else {
+            requested_hook_action
+        };
         self.seal_timer_callback_witness();
         self.seal_microtask_enqueue_witness();
         // Finalise the nondeterminism trace at the end-of-execution virtual
@@ -7256,6 +7253,20 @@ impl InterpreterCore {
         // equality cannot be resurrected by a wrapping counter (bd-bgq16).
         let repeat_execute =
             self.last_pre_run_seed.is_some() && self.last_post_run_epoch == Some(self.seed_epoch);
+        if let Some(mut sandbox) = self.active_sandbox.get() {
+            // A restriction survives into the new run, but its witness must
+            // refer to this module's entry, not an instruction in the previous
+            // module. Preserve the installed ceiling exactly, even when a
+            // smaller restored heap would otherwise create fresh headroom.
+            sandbox.instruction_index = 0;
+            sandbox.timestamp_tick = if repeat_execute {
+                0
+            } else {
+                self.instructions_executed
+            };
+            self.active_sandbox.set(Some(sandbox));
+            self.sandbox_witness_pending.set(true);
+        }
         let seed = if repeat_execute {
             self.last_pre_run_seed
                 .clone()

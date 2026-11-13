@@ -677,6 +677,10 @@ pub struct OrchestratorConfig {
     pub loss_matrix_preset: LossMatrixPreset,
     /// Force a specific interpreter lane.
     pub force_lane: Option<LaneChoice>,
+    /// Authority and memory restrictions applied immediately when a live
+    /// guardplane hook requests Sandbox. The same policy is bound into the
+    /// signed decision and containment receipt.
+    pub sandbox_policy: SandboxPolicy,
     /// Optional shared, non-refundable instruction allowance supplied by the
     /// trusted host. Cloning this configuration shares the same balance.
     /// Every ordinary `execute` reserves the selected profile's full budget
@@ -725,6 +729,7 @@ impl Default for OrchestratorConfig {
         Self {
             loss_matrix_preset: LossMatrixPreset::Balanced,
             force_lane: None,
+            sandbox_policy: SandboxPolicy::default(),
             work_pool: None,
             drain_deadline_ticks: runtime_orchestrator.drain_deadline_ticks,
             cell_close_budget_ms: runtime_orchestrator.cell_close_budget_ms,
@@ -1445,6 +1450,16 @@ impl UncommittedEvidenceChainEvidence {
             if primary_entry.chosen_action.action_name != receipt.action.to_string() {
                 return Err(LedgerError::SchemaValidationFailed {
                     reason: "containment receipt action does not match the signed primary entry"
+                        .to_string(),
+                });
+            }
+            if receipt.action == ContainmentAction::Sandbox
+                && (primary_entry.metadata.get("sandbox_policy_hash").is_none()
+                    || primary_entry.metadata.get("sandbox_policy_hash")
+                        != receipt.metadata.get("sandbox_policy_hash"))
+            {
+                return Err(LedgerError::SchemaValidationFailed {
+                    reason: "sandbox receipt policy does not match the signed primary entry"
                         .to_string(),
                 });
             }
@@ -4289,6 +4304,7 @@ impl ExecutionOrchestrator {
             .max_total_memory_bytes
             .min(memory_budget_bytes);
         quickjs_config.granted_capabilities = granted_capabilities.clone();
+        quickjs_config.sandbox_policy = self.config.sandbox_policy.clone();
         quickjs_config.extension_id = Some(package.extension_id.clone());
         quickjs_config.cancellation_token = cancellation_token.cloned();
         quickjs_config.commonjs_entry = self.commonjs_entry();
@@ -4310,6 +4326,7 @@ impl ExecutionOrchestrator {
         v8_config.max_total_memory_bytes =
             v8_config.max_total_memory_bytes.min(memory_budget_bytes);
         v8_config.granted_capabilities = granted_capabilities;
+        v8_config.sandbox_policy = self.config.sandbox_policy.clone();
         v8_config.extension_id = Some(package.extension_id.clone());
         v8_config.cancellation_token = cancellation_token.cloned();
         v8_config.commonjs_entry = self.commonjs_entry();
@@ -5310,6 +5327,19 @@ impl ExecutionOrchestrator {
             builder = builder.meta(
                 "hook_requested_action".to_string(),
                 format_guardplane_hook_action(requested),
+            );
+        }
+        if effective_action == ContainmentAction::Sandbox
+            || guardplane_report.is_some_and(|report| {
+                report
+                    .decisions
+                    .iter()
+                    .any(|decision| decision.action == HookAction::Sandbox)
+            })
+        {
+            builder = builder.meta(
+                "sandbox_policy_hash".to_string(),
+                self.config.sandbox_policy.content_hash().to_string(),
             );
         }
 
@@ -6317,7 +6347,7 @@ impl ExecutionOrchestrator {
             evidence_refs: vec![trace_id.to_string()],
             grace_period_ns: 0,
             challenge_timeout_ns: 0,
-            sandbox_policy: SandboxPolicy::default(),
+            sandbox_policy: self.config.sandbox_policy.clone(),
         };
 
         let receipt = self

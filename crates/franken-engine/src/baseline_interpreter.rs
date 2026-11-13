@@ -2095,10 +2095,10 @@ fn check_hostcall_capability_gate(
     }
     // E9.T4 (bd-fqlfw.9.4): consult the capability-pruned dispatch table
     // first when one is installed; any miss falls through to the live
-    // classification (fail-closed per-call fallback). Only the allow/deny
-    // bit is precomputed — every witness and decision-record emission below
-    // is identical on both paths.
-    let capability_denied = (matches!(
+    // classification (fail-closed per-call fallback). A cached allow must
+    // still fit the current grant: generated-code entry can narrow it after
+    // the table was built. Witness and decision emission share both paths.
+    let base_capability_denied = (matches!(
         operation_tag,
         crate::capability::UTIL_PROCESS_ARGV_CAPABILITY
             | crate::capability::UTIL_PROCESS_EXEC_ARGV_CAPABILITY
@@ -2108,11 +2108,19 @@ fn check_hostcall_capability_gate(
             .as_ref()
             .and_then(|table| table.lookup(capability_tag))
         {
-            Some(allowed) => !allowed,
+            Some(allowed) => {
+                !allowed
+                    || !live_hostcall_decision(
+                        capability_tag,
+                        &interpreter.config.granted_capabilities,
+                    )
+            }
             None => {
                 !live_hostcall_decision(capability_tag, &interpreter.config.granted_capabilities)
             }
         };
+    let capability_denied =
+        base_capability_denied || !interpreter.sandbox_allows_hostcall(capability_tag);
 
     // bd-hxukn: cap the tag length at the recording sites so an attacker
     // who controls the `HostCall` capability string cannot inflate the
@@ -2140,7 +2148,14 @@ fn check_hostcall_capability_gate(
         )
     });
 
-    if capability_denied {
+    // Applying Sandbox changes the authority of the operation which triggered
+    // it, not just later operations. Do not trust a cached allow after the hook.
+    // An original capability denial remains the primary error.
+    if !base_capability_denied && let Some(action) = hook_action {
+        interpreter.enforce_hook_action(action)?;
+    }
+    let sandbox_denied = !interpreter.sandbox_allows_hostcall(capability_tag);
+    if base_capability_denied || sandbox_denied {
         interpreter
             .recorded_effect_free_grants
             .remove(recordable_tag.as_ref());
@@ -2165,13 +2180,13 @@ fn check_hostcall_capability_gate(
             CapabilityDenialReason::InsufficientAuthority,
             recordable_tag.as_ref(),
         );
-        return Err(InterpreterError::CapabilityDenied {
-            capability: recordable_tag.into_owned(),
+        return Err(if base_capability_denied {
+            InterpreterError::CapabilityDenied {
+                capability: recordable_tag.into_owned(),
+            }
+        } else {
+            InterpreterCore::sandbox_interruption()
         });
-    }
-
-    if let Some(action) = hook_action {
-        interpreter.enforce_hook_action(action)?;
     }
 
     // bd-9vouw.83: an effect-free hostcall in a loop (`JSON.stringify`,
@@ -12710,7 +12725,8 @@ pub trait InterpreterHook: Send + Sync {
 
     /// Observe the live capability decision before any hostcall effect.
     /// `allowed` reports the existing capability membrane; returning Allow
-    /// never overrides a denial. Non-Allow stops an authorized dispatch.
+    /// never overrides a denial. Sandbox narrows the triggering operation and
+    /// later execution; the other non-Allow actions stop dispatch.
     fn pre_hostcall(&self, _ctx: &HookContext, _capability: &str, _allowed: bool) -> HookAction {
         HookAction::Allow
     }
@@ -13090,6 +13106,10 @@ pub struct InterpreterConfig {
     pub canonical_module_root: Option<PathBuf>,
     /// Set of capabilities granted to this execution context.
     pub granted_capabilities: BTreeSet<RuntimeCapability>,
+    /// Monotone authority and memory restriction installed by a live Sandbox
+    /// hook action. The policy never grants authority absent from the context.
+    #[serde(default)]
+    pub sandbox_policy: crate::containment_executor::SandboxPolicy,
     /// Optional extension ID for logging and diagnostics.
     pub extension_id: Option<String>,
     /// Optional cancellation token for checkpoint-based cancellation.
@@ -13151,6 +13171,7 @@ impl PartialEq for InterpreterConfig {
             && self.max_scope_depth == other.max_scope_depth
             && self.module_root == other.module_root
             && self.granted_capabilities == other.granted_capabilities
+            && self.sandbox_policy == other.sandbox_policy
             && self.extension_id == other.extension_id
             && self.checkpoint_density == other.checkpoint_density
             && self.module_parser_options == other.module_parser_options
@@ -13190,6 +13211,7 @@ impl InterpreterConfig {
             ifc_flow_policy: None,
             declassification_receipts: Vec::new(),
             granted_capabilities: BTreeSet::new(),
+            sandbox_policy: crate::containment_executor::SandboxPolicy::default(),
             extension_id: None,
             cancellation_token: None,
             checkpoint_density: 1000,
@@ -13219,6 +13241,7 @@ impl InterpreterConfig {
             ifc_flow_policy: None,
             declassification_receipts: Vec::new(),
             granted_capabilities: BTreeSet::new(),
+            sandbox_policy: crate::containment_executor::SandboxPolicy::default(),
             extension_id: None,
             cancellation_token: None,
             checkpoint_density: 1000,
@@ -13254,6 +13277,7 @@ impl InterpreterConfig {
             ifc_flow_policy: None,
             declassification_receipts: Vec::new(),
             granted_capabilities: BTreeSet::new(),
+            sandbox_policy: crate::containment_executor::SandboxPolicy::default(),
             extension_id: None,
             cancellation_token: None,
             checkpoint_density: 1000,
@@ -13289,6 +13313,7 @@ impl InterpreterConfig {
             ifc_flow_policy: None,
             declassification_receipts: Vec::new(),
             granted_capabilities: BTreeSet::new(),
+            sandbox_policy: crate::containment_executor::SandboxPolicy::default(),
             extension_id: None,
             cancellation_token: None,
             checkpoint_density: 1000,
@@ -13490,7 +13515,8 @@ pub struct ExecutionResult {
     /// Tier-I instructions that additionally took a guarded borrowed/scalar
     /// specialization rather than delegating to the rich Tier-R helper path.
     pub tier_i_specialized_instructions_executed: u64,
-    /// Optional containment action requested by an interpreter hook.
+    /// Strongest containment action requested by an interpreter hook. A
+    /// successfully applied Sandbox remains present after normal completion.
     pub requested_hook_action: Option<HookAction>,
     /// Witness events collected during execution.
     pub witness_events: Vec<WitnessEvent>,
@@ -16133,6 +16159,15 @@ impl<'de> Deserialize<'de> for CapturedInterpreterState {
     }
 }
 
+/// A live restriction belongs to the interpreter, not a saved guest frame or
+/// prepared execution seed. Restoring either must never restore authority.
+#[derive(Debug, Clone, Copy)]
+struct ActiveSandbox {
+    memory_ceiling_bytes: u64,
+    instruction_index: u32,
+    timestamp_tick: u64,
+}
+
 pub struct InterpreterCore {
     config: InterpreterConfig,
     hook: Option<Arc<dyn InterpreterHook>>,
@@ -16858,21 +16893,11 @@ pub struct InterpreterCore {
     /// bd-9vouw.286: pending `Atomics.waitAsync` waiters, in arrival order
     /// (the order `Atomics.notify` wakes them in).
     atomics_async_waiters: Vec<atomics::AtomicsAsyncWaiter>,
-    /// Containment state: whether execution is suspended due to guardplane action.
-    #[allow(dead_code)]
-    suspended: bool,
-    /// Containment state: whether execution is sandboxed (capabilities restricted).
-    #[allow(dead_code)]
-    sandboxed: bool,
-    /// Containment state: whether extension is marked for quarantine.
-    #[allow(dead_code)]
-    quarantined: bool,
-    /// Pending challenge tokens requiring resolution.
-    #[allow(dead_code)]
-    pending_challenges: Vec<ChallengeToken>,
-    /// Evidence records for containment actions taken.
-    #[allow(dead_code)]
-    containment_evidence: Vec<WitnessEvent>,
+    /// Monotone live sandbox overlay. Instruction hooks borrow the core
+    /// immutably, so activation is interior mutable; no guest restore clears it.
+    active_sandbox: Cell<Option<ActiveSandbox>>,
+    /// The activation witness is flushed before the next witness or result.
+    sandbox_witness_pending: Cell<bool>,
     /// Decision receipt log for signed evidence chain.
     decision_receipts: EvidenceLog,
     /// Nondeterminism trace for deterministic replay.

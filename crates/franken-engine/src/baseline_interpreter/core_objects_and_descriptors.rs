@@ -12060,6 +12060,12 @@ impl InterpreterCore {
                     Value::Object(id) => id,
                     _ => return Ok(Value::Undefined), // Non-arrays return undefined
                 };
+                self.ensure_heap_allocation_allowed()?;
+                let requested_heap_objects = self.heap_object_count_u32().saturating_add(1);
+                if requested_heap_objects > self.config.max_heap_objects {
+                    return Err(self
+                        .memory_budget_error(self.estimated_memory_bytes, requested_heap_objects));
+                }
 
                 let start = if args.count > 1 {
                     let start_val = self.read_reg(args.start + 1)?;

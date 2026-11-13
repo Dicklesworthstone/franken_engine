@@ -667,7 +667,7 @@ impl GuardplaneAdapter {
         // An operation whose own evidence is neutral leaves the posterior
         // where it was. The expected-loss selector can still prefer Challenge
         // over Allow at an unchanged, uncertain posterior (the prior tax), and
-        // every non-Allow hook action stops execution, so letting it act on
+        // restrictive hook actions can stop execution, so letting it act on
         // no evidence stopped benign programs at their first operation
         // (bd-9vouw.60). Such an operation is judged by the posterior
         // threshold policy alone: an extension whose posterior already sits

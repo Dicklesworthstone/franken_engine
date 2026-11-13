@@ -1958,11 +1958,8 @@ impl InterpreterCore {
             pending_timer_tasks,
             unref_timer_ids: _,
             atomics_async_waiters,
-            suspended: _,
-            sandboxed: _,
-            quarantined: _,
-            pending_challenges: _,
-            containment_evidence: _,
+            active_sandbox: _,
+            sandbox_witness_pending: _,
             decision_receipts: _,
             nondeterminism_trace: _,
             // Scalar enqueue count + 32-byte ContentHash digest; holds no heap references.

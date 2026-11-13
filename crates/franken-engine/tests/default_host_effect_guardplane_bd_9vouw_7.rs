@@ -11,9 +11,12 @@ use frankenengine_engine::baseline_interpreter::{
     HookAction, InterpreterConfig, InterpreterError, LaneChoice, LaneRouter, Value,
 };
 use frankenengine_engine::capability::RuntimeCapability;
-use frankenengine_engine::containment_executor::{ContainmentError, ContainmentState};
+use frankenengine_engine::containment_executor::{
+    ContainmentContext, ContainmentError, ContainmentExecutor, ContainmentState, SandboxPolicy,
+};
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig, OrchestratorError,
+    OrchestratorResult,
 };
 use frankenengine_engine::expected_loss_selector::{ContainmentAction, LossMatrix};
 use frankenengine_engine::guardplane_adapter::{
@@ -359,6 +362,227 @@ fn explicit_instruction_policy_retains_its_scope_and_containment() {
             Some("instructions_and_host_effects")
         );
     }
+}
+
+fn sandbox_runtime_config() -> RuntimeConfig {
+    // The real neutral-hostcall threshold policy selects Sandbox at this
+    // anomalous prior. No action override or fabricated risk observation.
+    let mut runtime = RuntimeConfig::default();
+    runtime.guardplane.priors.benign_millionths = 399_800;
+    runtime.guardplane.priors.anomalous_millionths = 600_000;
+    runtime.guardplane.priors.malicious_millionths = 100;
+    runtime.guardplane.priors.unknown_millionths = 100;
+    runtime.validate().expect("valid sandbox prior");
+    runtime
+}
+
+fn computation_sandbox_policy() -> SandboxPolicy {
+    SandboxPolicy {
+        allowed_capabilities: vec!["console".into(), "heap-allocate".into(), "builtin".into()],
+        max_memory_bytes: 32 * 1024 * 1024,
+        ..SandboxPolicy::default()
+    }
+}
+
+fn assert_signed_sandbox_policy(
+    orchestrator: &ExecutionOrchestrator,
+    result: &OrchestratorResult,
+    policy: &SandboxPolicy,
+) {
+    assert!(result.containment_action.severity() >= ContainmentAction::Sandbox.severity());
+    let receipt = result
+        .containment_receipt
+        .as_ref()
+        .expect("containment receipt");
+    assert_eq!(receipt.action, result.containment_action);
+    assert!(receipt.success && receipt.verify_integrity());
+    let hash = policy.content_hash().to_string();
+    if receipt.action == ContainmentAction::Sandbox {
+        assert_eq!(receipt.new_state, ContainmentState::Sandboxed);
+        assert_eq!(receipt.metadata.get("sandbox_policy_hash"), Some(&hash));
+    }
+    let primary = &result.evidence_entries[0];
+    assert_eq!(primary.metadata.get("sandbox_policy_hash"), Some(&hash));
+    let hook_action = primary
+        .metadata
+        .get("hook_requested_action")
+        .expect("live action");
+    let requested = match hook_action.split(':').next().unwrap() {
+        "sandbox" => ContainmentAction::Sandbox,
+        "suspend" => ContainmentAction::Suspend,
+        "terminate" => ContainmentAction::Terminate,
+        "quarantine" => ContainmentAction::Quarantine,
+        other => panic!("applied sandbox was lost: {other}"),
+    };
+    assert!(result.containment_action.severity() >= requested.severity());
+    assert!(result.evidence_entries.iter().any(|entry| {
+        entry.metadata.get("guardplane_action").map(String::as_str) == Some("sandbox")
+    }));
+    let identity = orchestrator.evidence_verification_identity();
+    result
+        .evidence_chain_receipt
+        .verify_exact_batch(
+            &result.evidence_entries,
+            &identity,
+            orchestrator.evidence_ledger_id(),
+            &result.trace_id,
+            0,
+            None,
+        )
+        .expect("the applied sandbox policy is authenticated in the exact run batch");
+}
+
+#[test]
+fn live_sandbox_continues_computation_with_the_signed_policy_in_both_lanes() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let policy = computation_sandbox_policy();
+        let mut orchestrator = ExecutionOrchestrator::new_lab_with_runtime_config(
+            OrchestratorConfig {
+                force_lane: Some(lane),
+                sandbox_policy: policy.clone(),
+                ..OrchestratorConfig::default()
+            },
+            sandbox_runtime_config(),
+        );
+        let result = orchestrator.execute(&package(
+            "console.log('admitted'); let total = 0; for (let i = 0; i < 5; i++) { total += i; } const values = [total, 32]; console.log(values[0] + values[1]); 42;",
+            &[],
+        )).expect("sandbox permits bounded computation after the triggering effect");
+        assert_eq!(result.containment_action, ContainmentAction::Sandbox);
+        assert_eq!(result.execution_value, "42", "{lane:?}");
+        assert_eq!(
+            result
+                .console_output
+                .iter()
+                .map(|record| record.message.as_str())
+                .collect::<Vec<_>>(),
+            ["admitted", "42"],
+            "{lane:?}"
+        );
+        assert_signed_sandbox_policy(&orchestrator, &result, &policy);
+    }
+}
+
+#[test]
+fn live_sandbox_rechecks_the_effect_that_triggered_it_in_both_lanes() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let policy = SandboxPolicy {
+            allowed_capabilities: vec!["heap_allocate".into(), "builtin".into()],
+            ..computation_sandbox_policy()
+        };
+        let mut orchestrator = ExecutionOrchestrator::new_lab_with_runtime_config(
+            OrchestratorConfig {
+                force_lane: Some(lane),
+                sandbox_policy: policy.clone(),
+                ..OrchestratorConfig::default()
+            },
+            sandbox_runtime_config(),
+        );
+        let result = orchestrator
+            .execute(&package("console.log('forbidden'); 42;", &[]))
+            .expect("sandbox refusal remains a structured containment outcome");
+        assert_eq!(result.containment_action, ContainmentAction::Sandbox);
+        assert!(result.console_output.is_empty(), "{lane:?}");
+        assert!(result.host_effect_transcript.is_empty());
+        assert!(result.host_effect_journal.is_empty());
+        assert_signed_sandbox_policy(&orchestrator, &result, &policy);
+    }
+}
+
+#[test]
+fn live_sandbox_preserves_completed_effects_but_refuses_later_authority() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let policy = computation_sandbox_policy();
+        let mut orchestrator = ExecutionOrchestrator::new_lab_with_runtime_config(
+            OrchestratorConfig {
+                force_lane: Some(lane),
+                sandbox_policy: policy.clone(),
+                ..OrchestratorConfig::default()
+            },
+            sandbox_runtime_config(),
+        );
+        let transcript = Arc::new(InMemoryHostIoTranscript::recording());
+        let provider =
+            EnvironmentSnapshotHostIo::new(BTreeMap::from([("KEY".into(), "secret".into())]))
+                .expect("explicit host snapshot");
+        orchestrator.set_host_io(Arc::new(provider), Some(transcript.clone()));
+        let mut input = package(
+            "console.log('admitted'); process.env.KEY; console.log('unreachable');",
+            &[],
+        );
+        input.capabilities.push("env_read".into());
+        let result = orchestrator.execute(&input).expect("later sandbox refusal");
+        assert_eq!(result.console_output.len(), 1, "{lane:?}");
+        assert_eq!(result.console_output[0].message, "admitted");
+        assert!(
+            transcript.entries().is_empty(),
+            "no environment provider call after sandboxing"
+        );
+        assert!(result.host_effect_transcript.is_empty());
+        assert!(result.host_effect_journal.is_empty());
+        assert_signed_sandbox_policy(&orchestrator, &result, &policy);
+    }
+}
+
+#[test]
+fn failed_close_cannot_substitute_a_different_sandbox_policy_receipt() {
+    let policy = computation_sandbox_policy();
+    let mut orchestrator = ExecutionOrchestrator::new_lab_with_runtime_config(
+        OrchestratorConfig {
+            force_lane: Some(LaneChoice::QuickJs),
+            sandbox_policy: policy.clone(),
+            cell_close_budget_ms: 1,
+            ..OrchestratorConfig::default()
+        },
+        sandbox_runtime_config(),
+    );
+    let error = orchestrator
+        .execute(&package("console.log('admitted'); 42;", &[]))
+        .expect_err("insufficient close budget retains the signed batch");
+    let staged = error.uncommitted_evidence_chain().expect("staged evidence");
+    let run_id = &staged.artifact.entries[0].trace_id;
+    let verify = |artifact: &frankenengine_engine::execution_orchestrator::UncommittedEvidenceChainEvidence| {
+        artifact.verify_with_context(
+            &orchestrator.evidence_verification_identity(),
+            orchestrator.evidence_chain_instance_id(),
+            orchestrator.evidence_ledger_id(),
+            run_id,
+            0,
+            None,
+        )
+    };
+    verify(staged).expect("the actual applied policy remains verifiable");
+    let original_receipt = staged
+        .containment_receipt
+        .as_ref()
+        .expect("sandbox applied");
+    assert_eq!(original_receipt.action, ContainmentAction::Sandbox);
+    let primary = &staged.artifact.entries[0];
+    let mut alternative_executor = ContainmentExecutor::new();
+    alternative_executor.register(&original_receipt.target_extension_id);
+    let alternative = alternative_executor
+        .execute(
+            ContainmentAction::Sandbox,
+            &original_receipt.target_extension_id,
+            &ContainmentContext {
+                decision_id: primary.decision_id.clone(),
+                epoch: primary.epoch_id,
+                evidence_refs: vec![run_id.clone()],
+                sandbox_policy: SandboxPolicy {
+                    max_memory_bytes: policy.max_memory_bytes + 1,
+                    ..policy
+                },
+                ..ContainmentContext::default()
+            },
+        )
+        .expect("a self-consistent receipt for a different policy");
+    assert!(alternative.verify_integrity());
+    let mut spliced = staged.clone();
+    spliced.containment_receipt = Some(alternative);
+    assert!(
+        verify(&spliced).is_err(),
+        "a different enforced policy cannot replace the signed policy"
+    );
 }
 
 fn quarantine_orchestrator(lane: LaneChoice) -> ExecutionOrchestrator {

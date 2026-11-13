@@ -5169,7 +5169,90 @@ impl InterpreterCore {
         // accounting. Admitting it would make a later subtraction lossy
         // (`MAX - MAX == 0`) and allow the incremental total to drift from
         // eager recomputation, even when the configured ceiling is unlimited.
-        requested_bytes == u64::MAX || requested_bytes > max_bytes
+        requested_bytes == u64::MAX
+            || requested_bytes > max_bytes
+            || self.sandbox_memory_request_exceeds_budget(requested_bytes)
+            || self.sandbox_forbids_memory_growth(requested_base_bytes)
+    }
+
+    // Console retention has its own ordinary budget and is not part of the
+    // legacy live-memory accumulator. Include it in the sandbox ceiling so
+    // allowing Console cannot evade the narrowed allocation budget.
+    fn sandbox_console_memory_bytes(&self) -> u64 {
+        (self.console_output_bytes as u64)
+            .saturating_add(
+                (self.console_output.len() as u64)
+                    .saturating_mul(std::mem::size_of::<ConsoleEntry>() as u64),
+            )
+            .saturating_add(
+                (self
+                    .console_counts
+                    .len()
+                    .saturating_add(self.console_timers.len()) as u64)
+                    .saturating_mul(std::mem::size_of::<(String, u64)>() as u64),
+            )
+    }
+
+    pub(super) fn sandbox_memory_usage(&self) -> u64 {
+        self.estimated_memory_bytes()
+            .saturating_add(self.sandbox_console_memory_bytes())
+    }
+
+    fn sandbox_memory_request_exceeds_budget(&self, requested_bytes: u64) -> bool {
+        self.active_sandbox.get().is_some_and(|sandbox| {
+            requested_bytes.saturating_add(self.sandbox_console_memory_bytes())
+                > sandbox.memory_ceiling_bytes
+        })
+    }
+
+    pub(super) fn check_sandbox_console_allocation(
+        &self,
+        added_bytes: u64,
+    ) -> Result<(), InterpreterError> {
+        if let Some(sandbox) = self.active_sandbox.get()
+            && (self.config.sandbox_policy.max_memory_bytes == 0
+                || self.sandbox_memory_usage().saturating_add(added_bytes)
+                    > sandbox.memory_ceiling_bytes)
+        {
+            return Err(Self::sandbox_interruption());
+        }
+        Ok(())
+    }
+
+    pub(super) fn effective_memory_budget(&self, max_bytes: u64) -> u64 {
+        self.active_sandbox.get().map_or(max_bytes, |sandbox| {
+            max_bytes.min(sandbox.memory_ceiling_bytes)
+        })
+    }
+
+    fn sandbox_forbids_memory_growth(&self, requested_base_bytes: u64) -> bool {
+        self.active_sandbox.get().is_some()
+            && self.config.sandbox_policy.max_memory_bytes == 0
+            && requested_base_bytes > self.estimated_memory_bytes
+    }
+
+    /// Shared by every managed object allocator, including builtin buffer and
+    /// view constructors that bypass instruction-level allocation hooks.
+    pub(super) fn ensure_heap_allocation_allowed(&self) -> Result<(), InterpreterError> {
+        if !self
+            .config
+            .granted_capabilities
+            .contains(&RuntimeCapability::HeapAllocate)
+        {
+            return Err(InterpreterError::CapabilityDenied {
+                capability: "HeapAllocate".to_string(),
+            });
+        }
+        if self.active_sandbox.get().is_some()
+            && (self.config.sandbox_policy.max_memory_bytes == 0
+                || !self
+                    .config
+                    .sandbox_policy
+                    .allows_runtime_capability(RuntimeCapability::HeapAllocate))
+        {
+            return Err(Self::sandbox_interruption());
+        }
+        Ok(())
     }
 
     pub(super) fn memory_budget_error(
@@ -5177,9 +5260,17 @@ impl InterpreterCore {
         requested_base_bytes: u64,
         requested_heap_objects: u32,
     ) -> InterpreterError {
+        let requested_bytes = self.total_memory_bytes_from_base(requested_base_bytes);
+        if requested_heap_objects <= self.config.max_heap_objects
+            && requested_bytes <= self.config.max_total_memory_bytes
+            && (self.sandbox_memory_request_exceeds_budget(requested_bytes)
+                || self.sandbox_forbids_memory_growth(requested_base_bytes))
+        {
+            return Self::sandbox_interruption();
+        }
         InterpreterError::MemoryBudgetExceeded {
-            requested_bytes: self.total_memory_bytes_from_base(requested_base_bytes),
-            max_bytes: self.config.max_total_memory_bytes,
+            requested_bytes,
+            max_bytes: self.effective_memory_budget(self.config.max_total_memory_bytes),
             requested_heap_objects,
             max_heap_objects: self.config.max_heap_objects,
         }
@@ -5742,15 +5833,7 @@ impl InterpreterCore {
         } else {
             "ArrayBuffer"
         };
-        if !self
-            .config
-            .granted_capabilities
-            .contains(&RuntimeCapability::HeapAllocate)
-        {
-            return Err(InterpreterError::CapabilityDenied {
-                capability: "HeapAllocate".to_string(),
-            });
-        }
+        self.ensure_heap_allocation_allowed()?;
 
         let byte_length_u64 = u64::try_from(byte_length).map_err(|_| InterpreterError::RangeError {
             message: format!(
@@ -5882,15 +5965,7 @@ impl InterpreterCore {
         length: usize,
         is_buffer: bool,
     ) -> Result<ObjectId, InterpreterError> {
-        if !self
-            .config
-            .granted_capabilities
-            .contains(&RuntimeCapability::HeapAllocate)
-        {
-            return Err(InterpreterError::CapabilityDenied {
-                capability: "HeapAllocate".to_string(),
-            });
-        }
+        self.ensure_heap_allocation_allowed()?;
 
         let length_i64 = i64::try_from(length).map_err(|_| InterpreterError::RangeError {
             message: format!(
@@ -6017,15 +6092,7 @@ impl InterpreterCore {
                 message: "Buffer contents length does not match requested allocation".to_string(),
             });
         }
-        if !self
-            .config
-            .granted_capabilities
-            .contains(&RuntimeCapability::HeapAllocate)
-        {
-            return Err(InterpreterError::CapabilityDenied {
-                capability: "HeapAllocate".to_string(),
-            });
-        }
+        self.ensure_heap_allocation_allowed()?;
         // Materialized before the heap indices below are taken: the first
         // use allocates the prototype objects (bd-9vouw.104). A refusal below
         // takes them back with the pair.
@@ -6374,15 +6441,7 @@ impl InterpreterCore {
         byte_offset: usize,
         byte_length: usize,
     ) -> Result<ObjectId, InterpreterError> {
-        if !self
-            .config
-            .granted_capabilities
-            .contains(&RuntimeCapability::HeapAllocate)
-        {
-            return Err(InterpreterError::CapabilityDenied {
-                capability: "HeapAllocate".to_string(),
-            });
-        }
+        self.ensure_heap_allocation_allowed()?;
 
         let byte_length_i64 =
             i64::try_from(byte_length).map_err(|_| InterpreterError::RangeError {
@@ -6545,16 +6604,7 @@ impl InterpreterCore {
         prototype: Option<ObjectId>,
         is_array: bool,
     ) -> Result<ObjectId, InterpreterError> {
-        // Check HeapAllocate capability before allocating objects
-        if !self
-            .config
-            .granted_capabilities
-            .contains(&RuntimeCapability::HeapAllocate)
-        {
-            return Err(InterpreterError::CapabilityDenied {
-                capability: "HeapAllocate".to_string(),
-            });
-        }
+        self.ensure_heap_allocation_allowed()?;
 
         let requested_heap_objects = self.heap_object_count_u32().saturating_add(1);
         if requested_heap_objects > self.config.max_heap_objects {
@@ -13083,6 +13133,7 @@ impl InterpreterCore {
     }
 
     pub(super) fn emit_witness(&mut self, kind: WitnessEventKind, detail: Option<&str>) {
+        self.flush_sandbox_witness();
         let payload = detail.unwrap_or("").as_bytes();
         self.witness_events.push(WitnessEvent {
             seq: self.witness_seq,

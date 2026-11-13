@@ -8012,10 +8012,36 @@ impl InterpreterCore {
                 action: "challenge".to_string(),
                 reason: Some(token.token),
             }),
-            HookAction::Sandbox => Err(InterpreterError::ContainmentActionRequested {
-                action: "sandbox".to_string(),
-                reason: None,
-            }),
+            HookAction::Sandbox => {
+                if self.active_sandbox.get().is_none() {
+                    let configured_ceiling = self.config.sandbox_policy.max_memory_bytes;
+                    let memory_ceiling_bytes = if configured_ceiling == 0 {
+                        self.sandbox_memory_usage()
+                    } else {
+                        configured_ceiling
+                    }
+                    .min(self.config.max_total_memory_bytes);
+                    self.active_sandbox.set(Some(ActiveSandbox {
+                        memory_ceiling_bytes,
+                        instruction_index: self.ip as u32,
+                        timestamp_tick: self.instructions_executed,
+                    }));
+                    self.sandbox_witness_pending.set(true);
+                }
+                // A tighter policy may already be below the live footprint.
+                // Install it first, then stop before the triggering operation;
+                // subsequent Allow decisions must not undo the restriction.
+                if self.sandbox_memory_usage()
+                    > self
+                        .active_sandbox
+                        .get()
+                        .expect("sandbox activated")
+                        .memory_ceiling_bytes
+                {
+                    return Err(Self::sandbox_interruption());
+                }
+                Ok(())
+            }
             HookAction::Suspend => Err(InterpreterError::ContainmentActionRequested {
                 action: "suspend".to_string(),
                 reason: None,
@@ -8031,132 +8057,48 @@ impl InterpreterCore {
         }
     }
 
-    /// Handle containment action enforcement with proper state management and evidence emission.
-    /// This replaces the simple error-throwing approach of enforce_hook_action with actual
-    /// containment behaviors as required by RC-4.3.
-    #[allow(dead_code)]
-    pub(super) fn handle_containment_action(
-        &mut self,
-        action: HookAction,
-    ) -> Result<(), InterpreterError> {
-        match action {
-            HookAction::Allow => Ok(()),
-            HookAction::Challenge(ref token) => {
-                // Pause execution, emit challenge token, require resolution before continuing
-                self.pending_challenges.push(token.clone());
-                self.emit_containment_evidence(&action);
-                Err(InterpreterError::ContainmentActionRequested {
-                    action: "challenge".to_string(),
-                    reason: Some(token.token.clone()),
-                })
-            }
-            HookAction::Sandbox => {
-                // Restrict extension's capability set (no more network/fs access)
-                self.sandboxed = true;
-                self.emit_containment_evidence(&action);
-                // Sandbox doesn't stop execution, just restricts future capabilities
-                Ok(())
-            }
-            HookAction::Suspend => {
-                // Pause extension execution, preserve state, can be resumed by operator
-                self.suspended = true;
-                self.emit_containment_evidence(&action);
-                Ok(())
-            }
-            HookAction::Terminate(ref reason) => {
-                // Abort extension execution, clean up resources, emit termination receipt
-                self.emit_containment_evidence(&action);
-                Err(InterpreterError::Terminated {
-                    reason: reason.clone(),
-                })
-            }
-            HookAction::Quarantine(ref reason) => {
-                // Terminate + mark extension for fleet-wide quarantine propagation
-                self.quarantined = true;
-                self.emit_containment_evidence(&action);
-                Err(InterpreterError::Terminated {
-                    reason: reason.clone(),
-                })
-            }
+    pub(super) fn sandbox_interruption() -> InterpreterError {
+        InterpreterError::ContainmentActionRequested {
+            action: "sandbox".to_string(),
+            reason: None,
         }
     }
 
-    /// Emit evidence record for containment actions taken.
-    /// Creates a signed evidence record and decision receipt that can be verified later.
-    #[allow(dead_code)]
-    pub(super) fn emit_containment_evidence(&mut self, action: &HookAction) {
-        // Create decision receipt for signed evidence chain
-        let (operation_type, action_taken, risk_score) = match action {
-            HookAction::Allow => ("allow".to_string(), "allow".to_string(), 0),
-            HookAction::Challenge(token) => (
-                "challenge".to_string(),
-                format!("challenge:{}", token.token),
-                150_000,
-            ),
-            HookAction::Sandbox => ("sandbox".to_string(), "sandbox".to_string(), 300_000),
-            HookAction::Suspend => ("suspend".to_string(), "suspend".to_string(), 600_000),
-            HookAction::Terminate(reason) => (
-                "terminate".to_string(),
-                format!("terminate:{}", reason),
-                900_000,
-            ),
-            HookAction::Quarantine(reason) => (
-                "quarantine".to_string(),
-                format!("quarantine:{}", reason),
-                950_000,
-            ),
-        };
+    /// Cached/pruned grants and generated-code grant restoration only describe
+    /// the original authority. A live sandbox is an independent intersection.
+    pub(super) fn sandbox_allows_hostcall(&self, tag: &str) -> bool {
+        self.active_sandbox.get().is_none()
+            || match classify_hostcall_capability(tag) {
+                HostcallCapabilityClass::InternalAllowed => true,
+                HostcallCapabilityClass::Runtime(capability) => self
+                    .config
+                    .sandbox_policy
+                    .allows_runtime_capability(capability),
+                HostcallCapabilityClass::Unknown => false,
+            }
+    }
 
-        // Add decision receipt to the evidence chain. The timestamp is the
-        // interpreter's deterministic instruction counter (bd-jn3uv.1) so
-        // the receipt-chain HMAC preimage round-trips across replays.
-        self.decision_receipts.add_receipt(
-            self.config
-                .extension_id
-                .clone()
-                .unwrap_or_else(|| "extension:current".to_string()),
-            operation_type,
-            risk_score,
-            action_taken,
-            self.ip,
-            &self.registers,
-            self.instructions_executed,
+    /// Instruction hooks use an immutable core borrow. Flush their activation
+    /// before the next recorded event, preserving the original logical tick.
+    /// Actual risk and signatures belong to the live guardplane report; this
+    /// witness commits only to the policy that the interpreter applied.
+    pub(super) fn flush_sandbox_witness(&mut self) {
+        if !self.sandbox_witness_pending.replace(false) {
+            return;
+        }
+        let sandbox = self.active_sandbox.get().expect("pending active sandbox");
+        let payload = format!(
+            "sandbox_v1:{}:{}",
+            self.config.sandbox_policy.content_hash().to_hex(),
+            sandbox.memory_ceiling_bytes,
         );
-
-        // Create witness event with current structure
-        let payload_data = serde_json::json!({
-            "action": match action {
-                HookAction::Allow => "allow",
-                HookAction::Challenge(_) => "challenge",
-                HookAction::Sandbox => "sandbox",
-                HookAction::Suspend => "suspend",
-                HookAction::Terminate(_) => "terminate",
-                HookAction::Quarantine(_) => "quarantine",
-            },
-            "reason": match action {
-                HookAction::Challenge(token) => Some(token.token.clone()),
-                HookAction::Terminate(reason) => Some(reason.clone()),
-                HookAction::Quarantine(reason) => Some(reason.clone()),
-                _ => None,
-            },
-            "suspended": self.suspended,
-            "sandboxed": self.sandboxed,
-            "quarantined": self.quarantined,
-        });
-        let payload_bytes = serde_json::to_vec(&payload_data).unwrap_or_default();
-        let evidence = WitnessEvent {
+        self.witness_events.push(WitnessEvent {
             seq: self.witness_seq,
             kind: WitnessEventKind::ContainmentAction,
-            instruction_index: self.ip as u32,
-            payload_hash: ContentHash::compute(&payload_bytes),
-            // Logical tick, NOT wall-clock: timestamp_tick participates in the
-            // canonical IR4 witness encoding, so wall-clock here breaks replay
-            // identity for any execution that records a containment action.
-            timestamp_tick: self.instructions_executed,
-        };
-
-        self.containment_evidence.push(evidence.clone());
-        self.witness_events.push(evidence);
+            instruction_index: sandbox.instruction_index,
+            payload_hash: ContentHash::compute(payload.as_bytes()),
+            timestamp_tick: sandbox.timestamp_tick,
+        });
         self.witness_seq = self.witness_seq.saturating_add(1);
     }
 
@@ -8664,23 +8606,23 @@ impl InterpreterCore {
         kind: AllocKind,
         size_hint: usize,
     ) -> Result<(), InterpreterError> {
-        // Engine-internal prepare-phase allocations are exempt: no extension
+        // Engine-internal prepare-phase allocations are exempt from hooks: no extension
         // instruction has executed yet, so there is nothing for a containment
         // policy to attribute (bd-gug3l). Mid-execution module allocations
         // (dynamic import / require) still run the hook — this flag is only
         // set inside prepare_execution.
-        if self.preparing_execution {
-            return Ok(());
+        // A sandbox carried across a seed/repeat reset still applies during
+        // preparation; the exemption cannot revive allocation authority.
+        if !self.preparing_execution
+            && let Some(hook) = self
+                .hook
+                .as_ref()
+                .filter(|hook| hook.instruction_hooks_enabled())
+        {
+            let ctx = self.hook_context(module);
+            self.enforce_hook_action(hook.pre_allocation(&ctx, kind, size_hint))?;
         }
-        let Some(hook) = self
-            .hook
-            .as_ref()
-            .filter(|hook| hook.instruction_hooks_enabled())
-        else {
-            return Ok(());
-        };
-        let ctx = self.hook_context(module);
-        self.enforce_hook_action(hook.pre_allocation(&ctx, kind, size_hint))
+        self.ensure_heap_allocation_allowed()
     }
 
     pub(super) fn run_pre_import_hook(
@@ -8688,15 +8630,20 @@ impl InterpreterCore {
         module: &Ir3Module,
         specifier: &str,
     ) -> Result<(), InterpreterError> {
-        let Some(hook) = self
+        if let Some(hook) = self
             .hook
             .as_ref()
             .filter(|hook| hook.instruction_hooks_enabled())
-        else {
-            return Ok(());
-        };
-        let ctx = self.hook_context(module);
-        self.enforce_hook_action(hook.pre_import(&ctx, specifier))
+        {
+            let ctx = self.hook_context(module);
+            self.enforce_hook_action(hook.pre_import(&ctx, specifier))?;
+        }
+        // The import hook runs after the outer HostCall gate. Recheck the
+        // narrowed authority before resolver/provider work or cache access.
+        if !self.sandbox_allows_hostcall("module:import") {
+            return Err(Self::sandbox_interruption());
+        }
+        Ok(())
     }
 
     pub(super) fn generator_result_object(

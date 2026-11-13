@@ -13357,7 +13357,9 @@ fn async_module_failure_caches_the_joined_rejection_label() {
         .get_mut("failed.mjs")
         .expect("module record")
         .evaluation_promise = Some(promise);
-    let thrown = core.alloc_object_with_prototype(None).expect("thrown object");
+    let thrown = core
+        .alloc_object_with_prototype(None)
+        .expect("thrown object");
     let value = Value::Object(thrown);
     let settlement_label = Label::Custom {
         name: "async settlement provenance".to_string(),
@@ -13485,7 +13487,8 @@ fn parked_module_survives_caller_snapshot_admission_failure() {
 
     core.current_module_specifier = Some("caller.mjs".to_string());
     let caller_value = Value::str("caller register".repeat(64));
-    core.write_reg(3, caller_value.clone()).expect("caller value");
+    core.write_reg(3, caller_value.clone())
+        .expect("caller value");
     core.set_register_label(3, Label::Secret)
         .expect("caller label");
     let before = core.sync_estimated_memory_bytes().expect("caller baseline");
@@ -13576,8 +13579,7 @@ const object = {{ blocked: 1 }};
 object.blocked;"
             );
             let source = if imported {
-                std::fs::write(root.path().join("failed.mjs"), &failing)
-                    .expect("imported module");
+                std::fs::write(root.path().join("failed.mjs"), &failing).expect("imported module");
                 "console.log('entry'); import('./failed.mjs').catch(() => console.log('caught fatal'));"
                     .to_string()
             } else {
@@ -13615,4 +13617,99 @@ object.blocked;"
             );
         }
     }
+}
+
+#[test]
+fn native_module_error_preserves_execution_and_hostcall_provenance() {
+    for context_is_higher in [false, true] {
+        let lower = Label::Custom {
+            name: "native failure source".to_string(),
+            level: 3,
+        };
+        let higher = Label::Custom {
+            name: "native failure context".to_string(),
+            level: 8,
+        };
+        let (context, hostcall) = if context_is_higher {
+            (higher.clone(), lower)
+        } else {
+            (lower, higher.clone())
+        };
+        let mut core = test_interpreter();
+        core.active_inline_callback_context_label = Some(context.clone());
+        core.pending_hostcall_result_label = Some(hostcall);
+        core.sync_estimated_memory_bytes()
+            .expect("native failure provenance accounting");
+
+        assert!(matches!(
+            core.materialize_module_guest_exception::<()>(Err(InterpreterError::TypeError {
+                expected: "object".to_string(),
+                got: "null (reading 'field')".to_string(),
+            })),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        let Some(Value::Object(error)) = core.pending_exception.as_ref() else {
+            panic!("native failure must retain its JavaScript Error object");
+        };
+        assert_eq!(
+            core.chain_data_property(*error, "name"),
+            Some(&Value::str("TypeError"))
+        );
+        assert_eq!(core.pending_exception_label, higher);
+        assert_eq!(core.active_inline_callback_context_label, Some(context));
+        assert!(core.pending_hostcall_result_label.is_none());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+}
+
+#[test]
+fn native_module_error_allocation_refusal_stops_without_rejecting_its_promise() {
+    let mut core = test_interpreter();
+    let module = test_module_with_functions(Vec::new(), Vec::new());
+    core.ensure_module_record(&module, "failed.mjs")
+        .expect("module record");
+    let promise = core.create_promise().expect("evaluation promise");
+    core.module_state
+        .modules
+        .get_mut("failed.mjs")
+        .expect("module record")
+        .evaluation_promise = Some(promise);
+    let hostcall_label = Label::Custom {
+        name: "native allocation provenance".to_string(),
+        level: 4,
+    };
+    core.pending_hostcall_result_label = Some(hostcall_label.clone());
+    let before = core.sync_estimated_memory_bytes().expect("baseline memory");
+    core.config.max_total_memory_bytes = before;
+
+    assert!(matches!(
+        core.settle_imported_module_evaluation(
+            "failed.mjs",
+            Err(InterpreterError::TypeError {
+                expected: "object".to_string(),
+                got: "null (reading 'field')".to_string(),
+            }),
+            Label::Public,
+        ),
+        Err(InterpreterError::MemoryBudgetExceeded { .. })
+    ));
+    assert!(matches!(
+        core.promise_store.get(promise).expect("promise").state,
+        crate::promise_model::PromiseState::Pending
+    ));
+    assert!(
+        core.module_state.modules["failed.mjs"]
+            .evaluation_exception
+            .is_none()
+    );
+    assert!(core.pending_exception.is_none());
+    assert_eq!(core.pending_hostcall_result_label, Some(hostcall_label));
+    assert!(core.event_loop.microtasks.is_empty());
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
 }

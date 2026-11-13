@@ -4918,7 +4918,7 @@ impl InterpreterCore {
             self.restore_module_execution(snapshot, false);
             return Err(err);
         }
-        let result = self.run_nested_module_execution(module);
+        let result = self.run_nested_module_execution(module, true);
         let suspended = result.is_ok()
             && self
                 .top_level_await_resumption_contexts
@@ -5005,7 +5005,7 @@ impl InterpreterCore {
         }
         self.active_cjs_context = Some(cjs_context.clone());
         let gc_armed = self.gc_arm_cjs_entry(&snapshot);
-        let eval_outcome = self.run_nested_module_execution(module);
+        let eval_outcome = self.run_nested_module_execution(module, false);
         if let Some(previous) = gc_armed {
             self.gc_restore_safe_depth(previous);
         }
@@ -5104,15 +5104,55 @@ impl InterpreterCore {
         }
     }
 
+    /// Native guest faults need one stable JavaScript Error object before an
+    /// ESM evaluation is cached. Keep resource and policy errors as host
+    /// failures, and capture provenance while the failing module is active.
+    pub(super) fn materialize_module_guest_exception<T>(
+        &mut self,
+        outcome: Result<T, InterpreterError>,
+    ) -> Result<T, InterpreterError> {
+        let error = match outcome {
+            Err(error) if Self::js_catchable_error_name(&error).is_some() => error,
+            other => return other,
+        };
+        let thrown = self.native_error_to_thrown_value(&error)?;
+        let mut label = self
+            .take_pending_hostcall_result_label()
+            .unwrap_or(Label::Public);
+        if let Some(context) = self.active_execution_context_label() {
+            label = self.join_owned_label_with_temporary_budget(label, context)?;
+        }
+        self.pending_finally_entry = None;
+        self.rearm_nested_module_throw(Some((thrown, label)))?;
+        // The guest receives the Error object above, including its original
+        // message. Do not allocate another unbounded diagnostic copy.
+        Err(InterpreterError::UncaughtException {
+            value: "module evaluation raised a native JavaScript error".to_string(),
+        })
+    }
+
     pub(super) fn run_nested_module_execution(
         &mut self,
         module: &Ir3Module,
+        materialize_guest_errors: bool,
     ) -> Result<(), InterpreterError> {
-        let result = match self.run_loop(module) {
+        let result = self.run_loop(module);
+        let result = if materialize_guest_errors {
+            self.materialize_module_guest_exception(result)
+        } else {
+            result
+        };
+        let result = match result {
             // Imported code shares the execution's jobs and authority. A
             // terminal failure must not run that shared queue before the
             // loader restores the caller and propagates the original error.
             Err(error) if Self::stops_guest_execution(&error) => return Err(error),
+            // Publish an ESM failure before the outer checkpoint runs jobs.
+            // A handled reaction can replace and consume the pending throw;
+            // a queued re-import must already see this module as failed.
+            Err(error @ InterpreterError::UncaughtException { .. }) if materialize_guest_errors => {
+                return Err(error);
+            }
             result => result,
         };
         self.drain_runtime_checkpoint(Some(module))?;
@@ -7570,6 +7610,7 @@ impl InterpreterCore {
                 specifier: specifier.to_string(),
                 reason: "async module completion has no evaluation Promise".to_string(),
             })?;
+        let outcome = self.materialize_module_guest_exception(outcome);
         match outcome {
             Ok(_) => {
                 // Static importers ignore the fulfillment value; an `import()`

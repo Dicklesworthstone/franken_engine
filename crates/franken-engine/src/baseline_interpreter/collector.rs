@@ -2329,7 +2329,6 @@ mod tests {
     use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
     use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 
-
     #[test]
     fn cached_module_exception_is_a_gc_root_after_pending_throw_is_consumed() {
         let tree = CanonicalEs2020Parser

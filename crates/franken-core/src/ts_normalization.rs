@@ -12,6 +12,7 @@ use crate::lowering_pipeline::{LoweringContext, LoweringPipelineOutput, lower_ir
 use crate::parser::{CanonicalEs2020Parser, ParseEventIr, ParserOptions};
 
 pub mod namespaces;
+pub mod type_erasure;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TsCompilerOptions {
@@ -2174,179 +2175,7 @@ fn class_header_precedes_implements(source: &str, index: usize) -> bool {
 }
 
 fn strip_type_annotations(source: &str) -> String {
-    let mut output = String::new();
-    let bytes = source.as_bytes();
-    let len = bytes.len();
-    let mut i = 0;
-
-    // Track string/comment/template-literal state to avoid stripping colons
-    // inside literal contexts.
-    #[derive(PartialEq)]
-    enum Ctx {
-        Code,
-        SingleQuote,
-        DoubleQuote,
-        TemplateLiteral,
-        LineComment,
-        BlockComment,
-    }
-
-    // Helper: advance index past one full UTF-8 codepoint starting at `start`
-    // and return the end index. All context-switching characters are ASCII, so
-    // multi-byte codepoints are always opaque content.
-    #[inline]
-    fn utf8_advance(bytes: &[u8], start: usize) -> usize {
-        if start >= bytes.len() {
-            return start;
-        }
-        let b = bytes[start];
-        if b < 0x80 {
-            start + 1
-        } else if b & 0xE0 == 0xC0 {
-            start + 2
-        } else if b & 0xF0 == 0xE0 {
-            start + 3
-        } else {
-            start + 4
-        }
-        .min(bytes.len())
-    }
-
-    let mut ctx = Ctx::Code;
-
-    while i < len {
-        let ch = bytes[i];
-
-        match ctx {
-            Ctx::LineComment => {
-                if ch == b'\n' {
-                    output.push('\n');
-                    i += 1;
-                    ctx = Ctx::Code;
-                } else {
-                    let end = utf8_advance(bytes, i);
-                    output.push_str(&source[i..end]);
-                    i = end;
-                }
-                continue;
-            }
-            Ctx::BlockComment => {
-                if ch == b'*' && i + 1 < len && bytes[i + 1] == b'/' {
-                    output.push_str("*/");
-                    i += 2;
-                    ctx = Ctx::Code;
-                } else {
-                    let end = utf8_advance(bytes, i);
-                    output.push_str(&source[i..end]);
-                    i = end;
-                }
-                continue;
-            }
-            Ctx::SingleQuote => {
-                if ch == b'\\' && i + 1 < len {
-                    // Escaped character: copy backslash + full next codepoint.
-                    let esc_end = utf8_advance(bytes, i + 1);
-                    output.push_str(&source[i..esc_end]);
-                    i = esc_end;
-                } else if ch == b'\'' {
-                    output.push('\'');
-                    ctx = Ctx::Code;
-                    i += 1;
-                } else {
-                    let end = utf8_advance(bytes, i);
-                    output.push_str(&source[i..end]);
-                    i = end;
-                }
-                continue;
-            }
-            Ctx::DoubleQuote => {
-                if ch == b'\\' && i + 1 < len {
-                    let esc_end = utf8_advance(bytes, i + 1);
-                    output.push_str(&source[i..esc_end]);
-                    i = esc_end;
-                } else if ch == b'"' {
-                    output.push('"');
-                    ctx = Ctx::Code;
-                    i += 1;
-                } else {
-                    let end = utf8_advance(bytes, i);
-                    output.push_str(&source[i..end]);
-                    i = end;
-                }
-                continue;
-            }
-            Ctx::TemplateLiteral => {
-                if ch == b'\\' && i + 1 < len {
-                    let esc_end = utf8_advance(bytes, i + 1);
-                    output.push_str(&source[i..esc_end]);
-                    i = esc_end;
-                } else if ch == b'`' {
-                    output.push('`');
-                    ctx = Ctx::Code;
-                    i += 1;
-                } else {
-                    let end = utf8_advance(bytes, i);
-                    output.push_str(&source[i..end]);
-                    i = end;
-                }
-                continue;
-            }
-            Ctx::Code => {}
-        }
-
-        // In code context: detect string/comment openings.
-        if ch == b'\'' {
-            ctx = Ctx::SingleQuote;
-            output.push('\'');
-            i += 1;
-            continue;
-        }
-        if ch == b'"' {
-            ctx = Ctx::DoubleQuote;
-            output.push('"');
-            i += 1;
-            continue;
-        }
-        if ch == b'`' {
-            ctx = Ctx::TemplateLiteral;
-            output.push('`');
-            i += 1;
-            continue;
-        }
-        if ch == b'/' && i + 1 < len {
-            if bytes[i + 1] == b'/' {
-                ctx = Ctx::LineComment;
-                output.push_str("//");
-                i += 2;
-                continue;
-            }
-            if bytes[i + 1] == b'*' {
-                ctx = Ctx::BlockComment;
-                output.push_str("/*");
-                i += 2;
-                continue;
-            }
-        }
-
-        // Strip type annotations: skip from colon until the next delimiter.
-        if ch == b':' {
-            i += 1;
-            while i < len {
-                if matches!(bytes[i], b',' | b')' | b'=' | b';' | b'{' | b'}' | b'\n') {
-                    break;
-                }
-                i += 1;
-            }
-            continue;
-        }
-
-        // Default: copy the full UTF-8 codepoint.
-        let end = utf8_advance(bytes, i);
-        output.push_str(&source[i..end]);
-        i = end;
-    }
-
-    output
+    type_erasure::erase(source)
 }
 
 fn lower_simple_jsx(source: &str) -> String {
@@ -2453,6 +2282,41 @@ fn sha256_hex(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::baseline_interpreter::{InterpreterConfig, InterpreterCore};
+    use crate::capability::RuntimeCapability;
+
+    fn assert_normalized_output(source: &str, expected: &[&str]) -> TsNormalizationOutput {
+        let artifacts = ingest_typescript_to_pipeline_artifacts_default(
+            source,
+            &TsNormalizationConfig::default(),
+            "core-type-erasure.ts",
+            "type-erasure-trace",
+            "type-erasure-decision",
+            "type-erasure-policy",
+        )
+        .expect("core TypeScript ingestion must normalize, parse, and lower");
+        for mut config in [
+            InterpreterConfig::quickjs_defaults(),
+            InterpreterConfig::v8_defaults(),
+        ] {
+            config.granted_capabilities = [
+                RuntimeCapability::VmDispatch,
+                RuntimeCapability::HeapAllocate,
+            ]
+            .into_iter()
+            .collect();
+            let result = InterpreterCore::new(config, "core-type-erasure")
+                .execute(&artifacts.lowering_output.ir3)
+                .expect("normalized TypeScript must execute in both lanes");
+            let actual: Vec<&str> = result
+                .console_output
+                .iter()
+                .map(|entry| entry.message.as_str())
+                .collect();
+            assert_eq!(actual, expected);
+        }
+        artifacts.normalization_output
+    }
 
     #[test]
     fn strips_type_only_imports() {
@@ -2735,26 +2599,79 @@ namespace Demo {
     }
 
     #[test]
-    fn rejects_namespace_export_function_with_object_shaped_return_type() {
-        // The legacy core eraser mistakes the type's braces for a function
-        // body. The namespace reader must refuse the resulting stray return
-        // instead of accepting a different executable program.
-        let source =
-            "namespace Demo { export function make(): { value: number } { return { value: 1 }; } }";
-        let error = normalize_typescript_to_es2020(
-            source,
-            &TsNormalizationConfig::default(),
-            "trace",
-            "decision",
-            "policy",
-        )
-        .expect_err("object-shaped return types remain unsupported");
+    fn namespace_object_return_values_survive_both_annotation_passes() {
+        let source = "namespace Demo { export function make(): { value: number } { return { value: 1 }; } }\nconsole.log(Demo.make().value);";
+        let output = assert_normalized_output(source, &["1"]);
+        let compact: String = output
+            .normalized_source
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .collect();
+        assert!(compact.contains("functionmake(){return{value:1};}"));
+        assert!(
+            output
+                .normalized_source
+                .contains("__franken_namespace_0.make = make;")
+        );
+    }
 
-        assert_eq!(
-            error,
-            TsNormalizationError::UnsupportedSyntax {
-                feature: "return is not allowed in a namespace body",
+    #[test]
+    fn annotation_erasure_preserves_runtime_colons_and_conditional_branches() {
+        assert_normalized_output(
+            r#"
+            const state: {left: number; right: number} = {left: 3, right: 4};
+            const {left: renamed}: {left: number} = state;
+            function choose(flag: boolean, candidate: number): {value: number} {
+                return {value: flag ? candidate : state.right};
             }
+            let walked = 0;
+            outer: for (let index: number = 0; index < 3; index++) {
+                walked++;
+                if (index === 1) { break outer; }
+            }
+            console.log(renamed, choose(true, 7).value, choose(false, 7).value, walked);
+            switch (state.left) {
+                case 3: console.log('three'); break;
+                default: console.log('wrong');
+            }
+            "#,
+            &["3 7 4 2", "three"],
+        );
+    }
+
+    #[test]
+    fn annotation_erasure_keeps_overload_implementations_and_parameter_effects() {
+        assert_normalized_output(
+            r#"
+            console.log(select(2), select('ok'));
+            function select(value: number): number;
+            function select(value: string): string;
+            function select(value: number | string) {
+                return typeof value === 'number' ? value + 1 : value + '!';
+            }
+            let defaults = 0;
+            function defaulted(value?: number): number;
+            function defaulted(value: number = (++defaults, 4)): number { return value + 1; }
+            console.log(defaults);
+            console.log(defaulted(), defaults);
+            console.log(defaulted(8), defaults);
+            "#,
+            &["3 ok!", "0", "5 1", "9 1"],
+        );
+    }
+
+    #[test]
+    fn annotation_erasure_retains_constructor_parameter_properties_for_lowering() {
+        assert_normalized_output(
+            r#"
+            class Pair {
+                constructor(public left: number, private right: number) {}
+                sum(): number { return this.left + this.right; }
+            }
+            const pair = new Pair(3, 4);
+            console.log(pair.left, pair.sum());
+            "#,
+            &["3 7"],
         );
     }
 
@@ -3512,7 +3429,7 @@ abstract class Base { }"#;
     #[test]
     fn strip_type_annotations_basic() {
         let result = strip_type_annotations("let x: number = 5;");
-        // The colon and everything until the next delimiter is stripped
+        // Only the binding's annotation is erased; its initializer remains.
         assert!(result.contains("let x"));
         assert!(result.contains("= 5;"));
         assert!(!result.contains("number"));

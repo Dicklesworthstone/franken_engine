@@ -565,3 +565,28 @@ fn namespace_functions_preserve_object_return_types_and_values() {
         &["7 true false"],
     );
 }
+
+#[test]
+fn namespace_local_classes_preserve_parameter_properties_and_live_defaults() {
+    assert_output(
+        r#"
+        namespace Factory {
+            export let initial: number = 3;
+            export function make() {
+                class Box { constructor(public readonly value: number = initial) {}
+                    read(): number { return this.value + initial; }
+                }
+                return Box;
+            }
+        }
+        const Box = Factory.make();
+        const first = new Box();
+        Factory.initial = 7;
+        const second = new Box();
+        const explicit = new Box(2);
+        console.log(first.value, second.value, explicit.value,
+            first.read(), second.read(), Factory.initial);
+        "#,
+        &["3 7 2 10 14 7"],
+    );
+}

@@ -3219,6 +3219,47 @@ const route = "/api/x";"#;
     }
 
     #[test]
+    fn namespace_hostcall_annotations_survive_until_capability_contract_lowering() {
+        let source = r#"namespace Sampling {
+  export function sample(path: string) {
+    const contents = hostcall<"fs.read">(path,);
+    const time = hostcall<"clock.now">();
+    return { contents, time };
+  }
+}"#;
+        let artifacts = ingest_typescript_to_pipeline_artifacts(
+            source,
+            &TsNormalizationConfig::default(),
+            "namespace_hostcalls.ts",
+            ParseGoal::Module,
+            &ParserOptions::default(),
+            TsIngestionProvenance::new("trace", "decision", "policy"),
+        )
+        .expect("namespace hostcalls must normalize, parse, and retain their lowered contracts");
+        let output = artifacts.normalization_output;
+        assert_eq!(
+            output.capability_intents,
+            vec![
+                CapabilityIntent {
+                    symbol: "hostcall".to_string(),
+                    capability: "clock.now".to_string(),
+                },
+                CapabilityIntent {
+                    symbol: "hostcall".to_string(),
+                    capability: "fs.read".to_string(),
+                },
+            ]
+        );
+        assert_eq!(
+            output.ordered_hostcall_capabilities,
+            ["fs.read", "clock.now"]
+        );
+        assert!(!output.normalized_source.contains("hostcall<"));
+        assert!(output.normalized_source.contains("hostcall(path,)"));
+        assert!(output.normalized_source.contains("hostcall()"));
+    }
+
+    #[test]
     fn lowers_simple_namespace_declaration() {
         let source = "namespace Demo { export const value = 1; }";
         let output = normalize_typescript_to_es2020(

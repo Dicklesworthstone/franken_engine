@@ -504,7 +504,7 @@ impl Resolver<'_> {
         } else {
             outer
         };
-        self.function_tail(parent, false, is_async, generator)
+        self.function_tail(parent, false, is_async, generator, false)
     }
 
     fn function_tail(
@@ -513,6 +513,7 @@ impl Resolver<'_> {
         arrow: bool,
         is_async: bool,
         generator: bool,
+        parameter_properties: bool,
     ) -> Result<(), &'static str> {
         let parameters = self.scope(parent, false);
         self.function_context(parameters, true, is_async, generator);
@@ -523,6 +524,9 @@ impl Resolver<'_> {
         }
         self.expect("(")?;
         while !self.at(")") {
+            if parameter_properties {
+                self.parameter_property_modifiers()?;
+            }
             self.pattern(parameters, parameters)?;
             if self.eat("=") {
                 self.expression(parameters, 1, true)?;
@@ -543,6 +547,28 @@ impl Resolver<'_> {
         } else {
             Err(UNSUPPORTED)
         }
+    }
+
+    fn parameter_property_modifiers(&mut self) -> Result<(), &'static str> {
+        let mut access = false;
+        let mut readonly = false;
+        let mut overrides = false;
+        while self.word(self.cursor + 1) {
+            match self.text(self.cursor) {
+                "public" | "private" | "protected" if !access => access = true,
+                "readonly" if !readonly => readonly = true,
+                "override" if !overrides => overrides = true,
+                "public" | "private" | "protected" | "readonly" | "override" => {
+                    return Err(UNSUPPORTED);
+                }
+                _ => break,
+            }
+            // The normalizer's later parameter-property pass owns these
+            // modifier bytes and `this.name = name` emission. Only the name
+            // after them belongs in the constructor's lexical parameter scope.
+            self.cursor += 1;
+        }
+        Ok(())
     }
 
     fn single_parameter_arrow(
@@ -591,17 +617,23 @@ impl Resolver<'_> {
                 self.block_in(block)?;
                 continue;
             }
-            if self.at("static")
+            let is_static = if self.at("static")
                 && !matches!(self.text(self.cursor + 1), "(" | "=" | ";" | "}")
-                && !self.line_break(self.cursor, self.cursor + 1)
             {
                 self.cursor += 1;
-            }
+                true
+            } else {
+                false
+            };
+            let modifier_start = self.cursor;
             let is_async = self.method_modifier();
+            let accessor = self.cursor != modifier_start && !is_async;
             let generator = self.eat("*");
+            let constructor =
+                !is_static && !is_async && !accessor && !generator && self.at("constructor");
             self.key(class_scope)?;
             if self.at("(") {
-                self.function_tail(class_scope, false, is_async, generator)?;
+                self.function_tail(class_scope, false, is_async, generator, constructor)?;
             } else {
                 if self.eat("=") {
                     let initializer = self.scope(class_scope, false);
@@ -766,6 +798,15 @@ impl Resolver<'_> {
     ) -> Result<(), &'static str> {
         self.prefix(scope, allow_in)?;
         loop {
+            // The annotation eraser deliberately retains this capability
+            // marker until the normalizer extracts its hostcall contract.
+            // Read its arguments as a call, including zero arguments and a
+            // trailing comma, without removing any annotation bytes here.
+            if self.retained_hostcall_arguments() {
+                self.cursor += 3;
+                self.arguments(scope)?;
+                continue;
+            }
             match self.text(self.cursor) {
                 "." => {
                     self.cursor += 1;
@@ -852,7 +893,7 @@ impl Resolver<'_> {
                     .flatten()
                     .ok_or(UNSUPPORTED)?;
                 if self.text(end + 1) == "=>" {
-                    self.function_tail(scope, true, false, false)
+                    self.function_tail(scope, true, false, false, false)
                 } else {
                     self.parenthesized(scope)
                 }
@@ -881,7 +922,7 @@ impl Resolver<'_> {
                         .is_some_and(|end| self.text(end + 1) == "=>")
                 {
                     self.cursor += 1;
-                    self.function_tail(scope, true, true, false)
+                    self.function_tail(scope, true, true, false, false)
                 } else if self.text(self.cursor + 1) == "=>" {
                     self.single_parameter_arrow(scope, false)
                 } else {
@@ -959,6 +1000,37 @@ impl Resolver<'_> {
         self.expect(")")
     }
 
+    fn retained_hostcall_arguments(&self) -> bool {
+        if self.cursor == 0
+            || !self.at("<")
+            || self.text(self.cursor - 1) != "hostcall"
+            || self.text(self.cursor + 2) != ">"
+            || self.text(self.cursor + 3) != "("
+        {
+            return false;
+        }
+        let name = &self.tokens[self.cursor - 1];
+        let open = &self.tokens[self.cursor];
+        let Some(literal) = self.tokens.get(self.cursor + 1) else {
+            return false;
+        };
+        let close = &self.tokens[self.cursor + 2];
+        if !matches!(literal.kind, TokenKind::Literal)
+            || &self.source[name.start..name.end] != "hostcall"
+            || name.end != open.start
+            || open.end != literal.start
+            || literal.end != close.start
+        {
+            return false;
+        }
+        // Match the normalizer's deliberate DSL, rather than admitting an
+        // invalid ordinary comparison such as `hostcall < "cap" > ()`.
+        self.source[literal.start..literal.end]
+            .strip_prefix('"')
+            .and_then(|value| value.strip_suffix('"'))
+            .is_some_and(|value| !value.contains(['"', '\\', '\n', '\r']))
+    }
+
     fn array(&mut self, scope: usize) -> Result<(), &'static str> {
         self.expect("[")?;
         while !self.at("]") {
@@ -987,7 +1059,7 @@ impl Resolver<'_> {
                 if self.eat(":") {
                     self.expression(scope, 1, true)?;
                 } else if self.at("(") {
-                    self.function_tail(scope, false, is_async, generator)?;
+                    self.function_tail(scope, false, is_async, generator, false)?;
                 } else if !computed && !generator && self.word(key) {
                     self.reference(scope, key, true);
                     if self.eat("=") {
@@ -1205,5 +1277,91 @@ mod tests {
             rewritten("outer:while(x){function f(){return x;}break outer;}"),
             "outer:while(__namespace.x){function f(){return __namespace.x;}break outer;}"
         );
+    }
+
+    #[test]
+    fn retained_hostcall_capabilities_keep_zero_and_trailing_comma_arguments() {
+        assert_eq!(
+            rewritten(
+                "function now(){return hostcall<\"clock.now\">();}function read(){return hostcall<\"fs.read\">(x,);}object.hostcall<\"fs.read\">(x,);"
+            ),
+            "function now(){return hostcall<\"clock.now\">();}function read(){return hostcall<\"fs.read\">(__namespace.x,);}object.hostcall<\"fs.read\">(__namespace.x,);"
+        );
+        assert_eq!(
+            rewritten("const comparison=hostcall < \"clock.now\" > (x);"),
+            "const comparison=hostcall < \"clock.now\" > (__namespace.x);"
+        );
+        for source in [
+            "hostcall < \"clock.now\" > ();",
+            "hostcall < \"clock.now\" > (x,);",
+            "other<\"clock.now\">();",
+            "hostcall<'clock.now'>();",
+            "hostcall<\"clock\\.now\">();",
+        ] {
+            let lexed = super::super::lex(source).expect("comparison fixture tokens");
+            assert!(
+                rewrite(source, &lexed, &BTreeMap::new(), &BTreeSet::new()).is_err(),
+                "ordinary invalid comparison must not become a capability call: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn constructor_property_modifiers_preserve_local_parameter_bindings() {
+        assert_eq!(
+            rewritten(
+                "class C extends B{constructor(public override readonly x,protected y=x){super();use(x,y);}}use(x);"
+            ),
+            "class C extends B{constructor(public override readonly x,protected y=x){super();use(x,y);}}use(__namespace.x);"
+        );
+        assert_eq!(
+            rewritten("class C{constructor(private readonly value=x){use(value,x);}}"),
+            "class C{constructor(private readonly value=__namespace.x){use(value,__namespace.x);}}"
+        );
+        assert_eq!(
+            rewritten("class C{constructor(override readonly value=x){use(value,x);}}"),
+            "class C{constructor(override readonly value=__namespace.x){use(value,__namespace.x);}}"
+        );
+    }
+
+    #[test]
+    fn modifier_words_are_ordinary_parameter_names_when_not_modifiers() {
+        assert_eq!(
+            rewritten(
+                "function f(readonly,override){return readonly+override+x;}const o={constructor(readonly){return readonly+x;}};class C{public(readonly){return readonly+x;}readonly(override){return override+x;}constructor(readonly=x){use(readonly,x);}}"
+            ),
+            "function f(readonly,override){return readonly+override+__namespace.x;}const o={constructor(readonly){return readonly+__namespace.x;}};class C{public(readonly){return readonly+__namespace.x;}readonly(override){return override+__namespace.x;}constructor(readonly=__namespace.x){use(readonly,__namespace.x);}}"
+        );
+        // These are role checks, independent of strict-mode restrictions on
+        // the identifier `public`: no modifier pass owns ordinary functions.
+        assert_eq!(
+            rewritten(
+                "function f(public){return public+x;}class C{constructor(public=x){use(public,x);}}"
+            ),
+            "function f(public){return public+__namespace.x;}class C{constructor(public=__namespace.x){use(public,__namespace.x);}}"
+        );
+    }
+
+    #[test]
+    fn parameter_properties_require_an_actual_constructor() {
+        for source in [
+            "function constructor(public x){}",
+            "const o={constructor(public x){}};",
+            "class C{static constructor(public x){}}",
+            "class C{static\nconstructor(public x){}}",
+            "class C{[\"constructor\"](public x){}}",
+            "class C{get constructor(public x){}}",
+            "class C{async constructor(public x){}}",
+            "class C{*constructor(public x){}}",
+            "class C{constructor(private {x}){}}",
+            "class C{constructor(public private x){}}",
+            "class C{constructor(override override x){}}",
+        ] {
+            let lexed = super::super::lex(source).expect("constructor fixture tokens");
+            assert!(
+                rewrite(source, &lexed, &BTreeMap::new(), &BTreeSet::new()).is_err(),
+                "parameter properties must reject unsupported context: {source}"
+            );
+        }
     }
 }

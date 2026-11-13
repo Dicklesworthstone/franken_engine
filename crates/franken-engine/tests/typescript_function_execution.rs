@@ -343,3 +343,225 @@ fn newline_separated_declare_identifiers_still_execute() {
         &["ReferenceError", "ReferenceError", "after"],
     );
 }
+
+#[test]
+fn namespace_exported_variables_share_live_property_storage() {
+    assert_output(
+        r#"
+        namespace Counter {
+            export let value: number = 1;
+            export var step: number = 2;
+            export function inc() { return value += step; }
+            export function read() { return value; }
+            export function post() { return value++; }
+        }
+        Counter.step = 3;
+        console.log(Counter.inc(), Counter.value);
+        Counter.value = 10;
+        console.log(Counter.read(), Counter.inc(), Counter.value);
+        console.log(Counter.post(), Counter.value);
+        const descriptor = Object.getOwnPropertyDescriptor(Counter, 'value')!;
+        console.log(descriptor.value, descriptor.writable, descriptor.enumerable,
+            descriptor.configurable, typeof descriptor.get);
+        "#,
+        &["4 4", "10 13 13", "13 14", "14 true true true undefined"],
+    );
+}
+
+#[test]
+fn namespace_merged_bodies_keep_source_order_and_private_scopes() {
+    assert_output(
+        r#"
+        let trace = '';
+        namespace Ordered {
+            const privateValue = 'left';
+            export const first = (trace += 'a');
+            export function left() { return privateValue; }
+        }
+        trace += 'b';
+        namespace Ordered {
+            const privateValue = 'right';
+            export const second = (trace += 'c');
+            export function right() { return privateValue; }
+        }
+        console.log(trace, Ordered.first, Ordered.second, Ordered.left(), Ordered.right());
+        "#,
+        &["abc a abc left right"],
+    );
+}
+
+#[test]
+fn namespace_functions_keep_local_identity_and_resolve_other_bodies() {
+    assert_output(
+        r#"
+        namespace Actions {
+            export function factorial(value: number): number {
+                return value <= 1 ? 1 : value * factorial(value - 1);
+            }
+            export function original() { return 'local'; }
+            export function local() { return original(); }
+            export function callLater() { return later(); }
+        }
+        namespace Actions {
+            export function later() { return 'late'; }
+            export function other() { return original(); }
+        }
+        const original = Actions.original;
+        Actions.original = function () { return 'replacement'; };
+        console.log(Actions.factorial(4), Actions.local(), Actions.other(),
+            Actions.callLater(), original === Actions.original);
+        "#,
+        &["24 local replacement late false"],
+    );
+}
+
+#[test]
+fn namespace_wrappers_preserve_user_names_and_initialize_self_references() {
+    assert_output(
+        r#"
+        const ns = 40;
+        namespace Hygiene {
+            export const outer = ns;
+            export const self: object = Hygiene;
+            export function same() { return self === Hygiene; }
+        }
+        namespace Member {
+            export let ns = 3;
+            export function inc() { return ++ns; }
+        }
+        console.log(Hygiene.outer, Hygiene.self === Hygiene, Hygiene.same(),
+            Member.inc(), Member.ns);
+        "#,
+        &["40 true true 4 4"],
+    );
+}
+
+#[test]
+fn namespace_references_respect_parameter_block_and_loop_scopes() {
+    assert_output(
+        r#"
+        namespace Scoped {
+            export let value = 10;
+            export function withDefault(input = value) {
+                var value = 99;
+                return input;
+            }
+            export function parameter(value: number) { return ++value; }
+            export function hoisted() {
+                if (false) { var value = 88; }
+                return typeof value;
+            }
+            export function caught() {
+                try { throw 4; } catch (value) { return (value as number) + 1; }
+            }
+            export function loop() {
+                let total = 0;
+                for (let value of [1, 2]) { total += value; }
+                return total + value;
+            }
+            export function block() {
+                let total = 0;
+                { const value = 7; total = value; }
+                return total + value;
+            }
+            export function temporal() {
+                let blocked = false;
+                const read = () => value;
+                try { read(); } catch (error) { blocked = error instanceof ReferenceError; }
+                let value = 50;
+                return blocked && read() === 50;
+            }
+        }
+        console.log(Scoped.withDefault(), Scoped.parameter(2), Scoped.hoisted(),
+            Scoped.caught(), Scoped.loop(), Scoped.block(), Scoped.temporal(), Scoped.value);
+        "#,
+        &["10 3 undefined 5 13 17 true 10"],
+    );
+}
+
+#[test]
+fn namespace_references_preserve_property_names_and_template_expressions() {
+    assert_output(
+        r#"
+        namespace Snapshots {
+            export let value = 2;
+            export function summary() {
+                const object = {
+                    value,
+                    fixed: {value: 8},
+                    read(value: number) { return value + 1; }
+                };
+                return `${object.value}:${object.fixed.value}:${object.read(3)}:${value}:${/value/.test('value')}`;
+            }
+        }
+        Snapshots.value = 6;
+        console.log(Snapshots.summary());
+        "#,
+        &["6:8:4:6:true"],
+    );
+}
+
+#[test]
+fn namespace_exports_execute_as_module_bindings() {
+    assert_module_output(
+        r#"
+        export namespace Public {
+            export let value = 1;
+            export function inc() { return ++value; }
+        }
+        export namespace Public {
+            export function read() { return value; }
+        }
+        const same = Public;
+        console.log(this === undefined, Public.inc(), Public.read(), same === Public);
+        Public.value = 8;
+        console.log(same.read());
+        "#,
+        &["true 2 2 true", "8"],
+    );
+}
+
+#[test]
+fn namespace_augmentation_preserves_callable_and_constructor_identity() {
+    assert_output(
+        r#"
+        function make(value: number) { return value + 1; }
+        const originalFactory = make;
+        namespace make {
+            export let version = 1;
+            export function describe() { return version; }
+        }
+        class Box {
+            value = 0;
+            constructor(value: number) { this.value = value; }
+        }
+        const OriginalBox = Box;
+        namespace Box {
+            export const label = 'box';
+            export function create(value: number) { return new Box(value); }
+        }
+        console.log(make(3), make.version, make.describe(), make === originalFactory);
+        make.version = 2;
+        const instance = Box.create(7);
+        console.log(make.describe(), Box.label, instance.value,
+            instance instanceof OriginalBox, Box === OriginalBox);
+        "#,
+        &["4 1 1 true", "2 box 7 true true"],
+    );
+}
+
+#[test]
+fn namespace_functions_preserve_object_return_types_and_values() {
+    assert_output(
+        r#"
+        namespace Factory {
+            export function make(value: number): {value: number; nested: {valid: boolean}} {
+                return {value, nested: {valid: value > 0}};
+            }
+        }
+        const result = Factory.make(7);
+        console.log(result.value, result.nested.valid, Factory.make(-1).nested.valid);
+        "#,
+        &["7 true false"],
+    );
+}

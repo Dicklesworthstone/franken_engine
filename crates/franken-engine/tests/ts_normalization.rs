@@ -119,9 +119,24 @@ namespace Demo { export const other = 2; }
     )
     .expect("simple namespace merge should normalize");
 
-    assert!(output.normalized_source.contains("const Demo = (() => {"));
-    assert!(output.normalized_source.contains("ns.value = 1;"));
-    assert!(output.normalized_source.contains("ns.other = 2;"));
+    assert_eq!(output.normalized_source.matches("var Demo;").count(), 1);
+    assert!(
+        output
+            .normalized_source
+            .contains("__franken_namespace_0.value = 1;")
+    );
+    assert!(
+        output
+            .normalized_source
+            .contains("__franken_namespace_1.other = 2;")
+    );
+    assert_eq!(
+        output
+            .normalized_source
+            .matches("})(Demo || (Demo = {}));")
+            .count(),
+        2
+    );
 }
 
 #[test]

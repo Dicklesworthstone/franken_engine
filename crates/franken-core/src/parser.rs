@@ -6156,7 +6156,7 @@ fn parse_statement_inner(
     }
 
     let expression_source = statement.strip_suffix(';').unwrap_or(statement).trim();
-    let expression = parse_expression(expression_source, &span, context, 1)?;
+    let expression = parse_expression_allowing_sequence(expression_source, &span, context, 1)?;
     Ok(Statement::Expression(ExpressionStatement {
         expression,
         span,
@@ -8858,6 +8858,9 @@ fn split_var_declarator_assignment(
     (segment, None)
 }
 
+/// Parse the AssignmentExpression grammar. Callers whose grammar admits the
+/// comma operator must use `parse_expression_allowing_sequence`; argument,
+/// initializer, and property lists keep their own comma separators.
 fn parse_expression(
     expression: &str,
     span: &SourceSpan,
@@ -8908,6 +8911,13 @@ fn parse_expression(
             Some(span.clone()),
         ));
     }
+    if split_top_level_commas_with_context(expression, scan_context).len() > 1 {
+        return Err(unsupported_expression_syntax_error(
+            "a comma expression requires parentheses in this grammar position",
+            span,
+            context,
+        ));
+    }
 
     // Arrow function: lowest precedence (lower than assignment).
     if let Some(result) = try_parse_arrow_function(expression, span, context, recursion_depth) {
@@ -8919,7 +8929,7 @@ fn parse_expression(
     if context.allow_yield_expression
         && let Some(rest) = strip_contextual_keyword(expression, "yield")
     {
-        return parse_yield_expression(expression, rest, span, context, recursion_depth);
+        return parse_yield_expression(rest, span, context, recursion_depth);
     }
 
     // Try assignment first (lowest precedence apart from comma).
@@ -8973,19 +8983,12 @@ fn strip_async_function_keyword(source: &str) -> Option<&str> {
 }
 
 fn parse_yield_expression(
-    expression: &str,
     rest: &str,
     span: &SourceSpan,
     context: &mut ParseExecutionContext<'_>,
     recursion_depth: u64,
 ) -> ParseResult<Expression> {
     let (rest, saw_line_terminator) = trim_directive_trivia(rest);
-    if rest.starts_with(',') {
-        // SequenceExpression does not yet have a dedicated AST carrier. Keep
-        // the legacy deterministic fallback without misattaching the sequence
-        // tail as YieldExpression's argument.
-        return Ok(Expression::Raw(canonicalize_whitespace(expression)));
-    }
     if saw_line_terminator
         && !rest.is_empty()
         && !rest.starts_with(';')
@@ -9181,28 +9184,7 @@ fn parse_primary_expression(
         )
         && rest.trim().is_empty()
     {
-        let inner = inner.trim();
-        let grammar_context = ScanGrammarContext::from_execution_context(context).expression();
-        let parts = split_top_level_commas_with_context(inner, grammar_context);
-        if parts.len() > 1 {
-            // A sequence has no missing operands or trailing comma. Parsing
-            // each operand directly also keeps call-list spread syntax out of
-            // the synthetic call used to carry its result.
-            let mut operands = Vec::with_capacity(parts.len());
-            for part in parts {
-                let operand = parse_expression(part, span, context, recursion_depth + 1)?;
-                if matches!(&operand, Expression::SpreadElement(_)) {
-                    return Err(unsupported_expression_syntax_error(
-                        "spread is not allowed in a parenthesized sequence",
-                        span,
-                        context,
-                    ));
-                }
-                operands.push(operand);
-            }
-            return Ok(build_parenthesized_sequence(operands, span));
-        }
-        return parse_expression(inner, span, context, recursion_depth + 1);
+        return parse_expression_allowing_sequence(inner, span, context, recursion_depth + 1);
     }
 
     // Array literal: [a, b, c]
@@ -9907,7 +9889,12 @@ fn parse_template_literal(
             };
             i = start.saturating_add(relative_end);
             let expr_src = &inner[start..i];
-            let expr = parse_expression(expr_src.trim(), span, context, recursion_depth + 1)?;
+            let expr = parse_expression_allowing_sequence(
+                expr_src.trim(),
+                span,
+                context,
+                recursion_depth + 1,
+            )?;
             expressions.push(expr);
             i += 1; // skip closing `}`
             continue;
@@ -10916,7 +10903,12 @@ fn try_parse_postfix(
             Ok(e) => e,
             Err(e) => return Some(Err(e)),
         };
-        let property = match parse_expression(prop_src, span, context, recursion_depth + 1) {
+        let property = match parse_expression_allowing_sequence(
+            prop_src,
+            span,
+            context,
+            recursion_depth + 1,
+        ) {
             Ok(e) => e,
             Err(e) => return Some(Err(e)),
         };
@@ -11395,7 +11387,15 @@ fn parse_object_literal(
                     ScanGrammarContext::from_execution_context(context).expression(),
                 )
                 .ok_or_else(&invalid_computed_key)?;
-                if inner.trim().is_empty() || !rest.trim().is_empty() {
+                if inner.trim().is_empty()
+                    || !rest.trim().is_empty()
+                    || split_top_level_commas_with_context(
+                        inner,
+                        ScanGrammarContext::from_execution_context(context).expression(),
+                    )
+                    .len()
+                        > 1
+                {
                     return Err(invalid_computed_key());
                 }
                 let key = parse_expression(inner.trim(), span, context, recursion_depth + 1)?;
@@ -11711,11 +11711,41 @@ fn split_top_level_commas_with_context(s: &str, grammar_context: ScanGrammarCont
     parts
 }
 
+/// Parse the full Expression grammar, including its lowest-precedence comma
+/// operator. Each operand is an AssignmentExpression; missing operands,
+/// trailing commas, and spread syntax are not valid sequence expressions.
+fn parse_expression_allowing_sequence(
+    expression: &str,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+    recursion_depth: u64,
+) -> ParseResult<Expression> {
+    let grammar_context = ScanGrammarContext::from_execution_context(context).expression();
+    let parts = split_top_level_commas_with_context(expression, grammar_context);
+    if parts.len() == 1 {
+        return parse_expression(expression, span, context, recursion_depth);
+    }
+
+    let mut operands = Vec::with_capacity(parts.len());
+    for part in parts {
+        let operand = parse_expression(part, span, context, recursion_depth)?;
+        if matches!(&operand, Expression::SpreadElement(_)) {
+            return Err(unsupported_expression_syntax_error(
+                "spread is not allowed in a sequence expression",
+                span,
+                context,
+            ));
+        }
+        operands.push(operand);
+    }
+    Ok(build_sequence_expression(operands, span))
+}
+
 /// Evaluate sequence operands as call arguments in their original scope, then
 /// return the last argument from an identity arrow. Its generated parameter
 /// names cannot shadow operands, which execute before entering that arrow.
 /// Chunks keep long sequences within the existing call-register budget.
-fn build_parenthesized_sequence(operands: Vec<Expression>, span: &SourceSpan) -> Expression {
+fn build_sequence_expression(operands: Vec<Expression>, span: &SourceSpan) -> Expression {
     const SEQUENCE_CHUNK: usize = 64;
 
     fn sequence_call(operands: Vec<Expression>, span: &SourceSpan) -> Expression {
@@ -13383,7 +13413,7 @@ fn parse_if_statement(
             Some(span.clone()),
         )
     })?;
-    let condition = parse_expression(condition_src.trim(), &span, context, 1)?;
+    let condition = parse_expression_allowing_sequence(condition_src.trim(), &span, context, 1)?;
 
     let rest = rest.trim();
     // Split consequent from optional else.
@@ -13652,12 +13682,16 @@ fn parse_for_statement(
     let condition = if cond_src.is_empty() {
         None
     } else {
-        Some(parse_expression(cond_src, &span, context, 1)?)
+        Some(parse_expression_allowing_sequence(
+            cond_src, &span, context, 1,
+        )?)
     };
     let update = if update_src.is_empty() {
         None
     } else {
-        Some(parse_expression(update_src, &span, context, 1)?)
+        Some(parse_expression_allowing_sequence(
+            update_src, &span, context, 1,
+        )?)
     };
 
     let body_src = rest.trim();
@@ -13792,7 +13826,7 @@ fn try_parse_for_in_of(
     let body = parse_statement(body_src, goal, span.clone(), context)?;
 
     if keyword == "in" {
-        let object = parse_expression(rhs, span, context, 1)?;
+        let object = parse_expression_allowing_sequence(rhs, span, context, 1)?;
         Ok(Some(Statement::ForIn(ForInStatement {
             binding,
             binding_kind,
@@ -13802,6 +13836,8 @@ fn try_parse_for_in_of(
             span: span.clone(),
         })))
     } else {
+        // ForIn accepts Expression, but ForOf requires AssignmentExpression:
+        // `of first, second` is invalid unless the sequence is parenthesized.
         let iterable = parse_expression(rhs, span, context, 1)?;
         Ok(Some(Statement::ForOf(ForOfStatement {
             binding,
@@ -13873,7 +13909,7 @@ fn parse_while_statement(
             Some(span.clone()),
         )
     })?;
-    let condition = parse_expression(condition_src.trim(), &span, context, 1)?;
+    let condition = parse_expression_allowing_sequence(condition_src.trim(), &span, context, 1)?;
     let body = parse_statement(rest.trim(), goal, span.clone(), context)?;
     Ok(Statement::While(WhileStatement {
         condition,
@@ -13946,7 +13982,7 @@ fn parse_do_while_statement(
             Some(span.clone()),
         )
     })?;
-    let condition = parse_expression(condition_src.trim(), &span, context, 1)?;
+    let condition = parse_expression_allowing_sequence(condition_src.trim(), &span, context, 1)?;
 
     Ok(Statement::DoWhile(DoWhileStatement {
         body: Box::new(body),
@@ -13965,7 +14001,7 @@ fn parse_return_statement(
     let argument = if body.is_empty() {
         None
     } else {
-        Some(parse_expression(body, &span, context, 1)?)
+        Some(parse_expression_allowing_sequence(body, &span, context, 1)?)
     };
     Ok(Statement::Return(ReturnStatement { argument, span }))
 }
@@ -13985,7 +14021,7 @@ fn parse_throw_statement(
             Some(span),
         ));
     }
-    let argument = parse_expression(body, &span, context, 1)?;
+    let argument = parse_expression_allowing_sequence(body, &span, context, 1)?;
     Ok(Statement::Throw(ThrowStatement { argument, span }))
 }
 
@@ -14188,7 +14224,7 @@ fn parse_switch_statement(
             Some(span.clone()),
         )
     })?;
-    let discriminant = parse_expression(disc_src.trim(), &span, context, 1)?;
+    let discriminant = parse_expression_allowing_sequence(disc_src.trim(), &span, context, 1)?;
 
     let rest = rest.trim();
     let (body_src, _) = extract_balanced_with_context(
@@ -14212,7 +14248,11 @@ fn parse_switch_statement(
     while !remaining.is_empty() {
         if remaining.starts_with("case ") {
             let after_case = remaining.strip_prefix("case ").unwrap_or(remaining);
-            let colon_idx = after_case.find(':').ok_or_else(|| {
+            let colon_idx = find_ternary_colon(
+                after_case,
+                ScanGrammarContext::from_execution_context(context).expression(),
+            )
+            .ok_or_else(|| {
                 ParseError::new(
                     ParseErrorCode::UnsupportedSyntax,
                     "switch case requires a colon after test expression",
@@ -14221,7 +14261,9 @@ fn parse_switch_statement(
                 )
             })?;
             let test_src = after_case[..colon_idx].trim();
-            let test = Some(parse_expression(test_src, &span, context, 1)?);
+            let test = Some(parse_expression_allowing_sequence(
+                test_src, &span, context, 1,
+            )?);
             let after_colon = after_case[colon_idx + 1..].trim();
             let (consequent_src, next) = split_at_next_case(after_colon);
             let consequent = parse_body_statements(consequent_src.trim(), goal, &span, context)?;

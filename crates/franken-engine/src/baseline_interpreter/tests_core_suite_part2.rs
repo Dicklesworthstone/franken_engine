@@ -50,10 +50,8 @@ fn exact_active_collection_backing_stays_memory_exact_bd_b12xs_5() {
         .expect("Map allocation should succeed");
     core.set_object_brand(map, "Map")
         .expect("Map type tag should fit");
-    core.set_object_property(map, "__entries".to_string(), Value::Object(entries))
+    core.set_collection_storage(map, entries)
         .expect("Map backing link should fit");
-    core.set_object_property(map, COLLECTION_SIZE_SLOT.to_string(), Value::Int(0))
-        .expect("Map size should fit");
     let exact = JsString::from_code_units(&[0xD800]);
     core.set_object_runtime_property(
         entries,
@@ -71,22 +69,17 @@ fn exact_active_collection_backing_stays_memory_exact_bd_b12xs_5() {
     core.mutate_heap(|heap| heap[entries.0 as usize].is_frozen = true);
     assert!(
         !core
-            .collection_delete(map, "Map", "__entries", &Value::str("direct"))
+            .collection_delete(map, "Map", &Value::str("direct"))
             .expect("frozen backing deletion should fail closed")
     );
-    assert_eq!(
-        core.heap[map.0 as usize]
-            .properties
-            .get(COLLECTION_SIZE_SLOT),
-        Some(&Value::Int(1))
-    );
+    assert_eq!(core.collection_size(map, "Map"), Some(1));
     assert_eq!(
         core.estimated_memory_bytes(),
         core.recompute_estimated_memory_bytes()
     );
     core.mutate_heap(|heap| heap[entries.0 as usize].is_frozen = false);
     assert!(
-        core.collection_delete(map, "Map", "__entries", &Value::str("direct"))
+        core.collection_delete(map, "Map", &Value::str("direct"))
             .expect("unfrozen backing deletion should succeed")
     );
     assert_eq!(
@@ -126,15 +119,10 @@ fn exact_active_collection_backing_stays_memory_exact_bd_b12xs_5() {
 
     core.map_collection_set(map, Value::str("clear-me"), Value::Int(3))
         .expect("ordinary entry before exact-aware clear should fit");
-    core.collection_clear(map, "Map", "__entries")
+    core.collection_clear(map, "Map")
         .expect("Map.clear should release ordinary and exact backing keys");
     assert!(core.heap[entries.0 as usize].properties.exact_is_empty());
-    assert_eq!(
-        core.heap[map.0 as usize]
-            .properties
-            .get(COLLECTION_SIZE_SLOT),
-        Some(&Value::Int(0))
-    );
+    assert_eq!(core.collection_size(map, "Map"), Some(0));
     assert_eq!(
         core.estimated_memory_bytes(),
         core.recompute_estimated_memory_bytes()
@@ -168,6 +156,153 @@ fn exact_property_edges_participate_in_state_capture_bd_b12xs_5() {
         Some(0),
         "state capture must traverse object references stored under exact-only keys"
     );
+}
+
+#[test]
+fn private_collection_storage_round_trips_without_guest_properties() {
+    let mut core = quickjs_test_core();
+    let (map, map_storage) = core.alloc_empty_map().expect("allocate Map");
+    let set = core.alloc_empty_set().expect("allocate Set");
+    core.map_collection_set(map, Value::str("key"), Value::Object(set))
+        .expect("insert Map entry");
+    core.set_collection_add(set, Value::Object(map))
+        .expect("insert Set entry");
+    let set_storage = core.collection_storage_id(set, "Set").unwrap();
+    let original: Vec<_> = core.heap.iter().cloned().collect();
+    let encoded = serde_json::to_string(&original).expect("serialize heap");
+    let restored: Vec<HeapObject> = serde_json::from_str(&encoded).expect("deserialize heap");
+    assert_eq!(restored, original);
+    assert_eq!(
+        restored[map.0 as usize].collection_storage.as_deref(),
+        Some(&map_storage)
+    );
+    assert_eq!(
+        restored[set.0 as usize].collection_storage.as_deref(),
+        Some(&set_storage)
+    );
+    assert!(restored[map.0 as usize].properties.is_empty());
+    assert!(restored[set.0 as usize].properties.is_empty());
+    assert_eq!(
+        restored[map_storage.0 as usize]
+            .properties
+            .get(&InterpreterCore::collection_key_repr(&Value::str("key"))),
+        Some(&Value::Object(set))
+    );
+    assert_eq!(
+        restored[set_storage.0 as usize]
+            .properties
+            .get(&InterpreterCore::collection_key_repr(&Value::Object(map))),
+        Some(&Value::Object(map))
+    );
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+}
+
+#[test]
+fn private_collection_storage_and_contents_restore_from_execution_seed() {
+    let mut core = quickjs_test_core();
+    let (map, map_storage) = core.alloc_empty_map().expect("allocate Map");
+    let set = core.alloc_empty_set().expect("allocate Set");
+    let replacement = core
+        .alloc_object_with_prototype(None)
+        .expect("allocate replacement backing");
+    core.map_collection_set(map, Value::str("before"), Value::Int(11))
+        .expect("insert Map entry");
+    core.set_collection_add(set, Value::Int(22))
+        .expect("insert Set entry");
+    core.write_reg(0, Value::Object(map)).unwrap();
+    core.write_reg(1, Value::Object(set)).unwrap();
+    let seed = core
+        .capture_execution_seed()
+        .expect("capture collection seed");
+
+    // Replacing the private edge must materialize the original seed just as
+    // an ordinary property write does; mutations of either backing also roll
+    // back, along with the derived size.
+    core.set_collection_storage(map, replacement)
+        .expect("replace private Map storage");
+    core.map_collection_set(map, Value::str("after"), Value::Int(33))
+        .expect("insert replacement entry");
+    core.collection_clear(set, "Set").expect("clear Set");
+    core.set_collection_add(set, Value::Int(44))
+        .expect("insert changed Set entry");
+    core.set_object_property(map, "__size".into(), Value::Int(99))
+        .expect("add ordinary guest property");
+    assert!(!seed.is_lazy());
+    core.reset_execution_state_from_seed(&seed)
+        .expect("restore collection seed");
+
+    assert_eq!(core.collection_storage_id(map, "Map"), Some(map_storage));
+    assert_eq!(core.collection_size(map, "Map"), Some(1));
+    assert_eq!(core.collection_size(set, "Set"), Some(1));
+    assert_eq!(
+        core.collection_get(map, "Map", &Value::str("before")),
+        Value::Int(11)
+    );
+    assert!(!core.collection_has(map, "Map", &Value::str("after")));
+    assert!(core.collection_has(set, "Set", &Value::Int(22)));
+    assert!(!core.collection_has(set, "Set", &Value::Int(44)));
+    assert!(!core.heap[map.0 as usize].properties.contains_key("__size"));
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+}
+
+#[test]
+fn private_collection_storage_refusal_preserves_heap_and_accounting() {
+    let mut core = quickjs_test_core();
+    let map = core.alloc_object_with_prototype(None).unwrap();
+    let storage = core.alloc_object_with_prototype(None).unwrap();
+    core.set_object_brand(map, "Map").unwrap();
+    let previous = core.heap[map.0 as usize].clone();
+    let before = core.estimated_memory_bytes();
+    let limit = core.config.max_total_memory_bytes;
+    core.config.max_total_memory_bytes = before + std::mem::size_of::<ObjectId>() as u64 - 1;
+    assert!(matches!(
+        core.set_collection_storage(map, storage),
+        Err(InterpreterError::MemoryBudgetExceeded { .. })
+    ));
+    assert_eq!(core.heap[map.0 as usize], previous);
+    assert_eq!(core.estimated_memory_bytes(), before);
+
+    core.config.max_total_memory_bytes = limit;
+    core.set_collection_storage(map, storage).unwrap();
+    let installed = core.heap[map.0 as usize].clone();
+    let installed_bytes = core.estimated_memory_bytes();
+    assert!(core.gc_is_remembered(map));
+    assert!(matches!(
+        core.set_collection_storage(map, ObjectId(u32::MAX)),
+        Err(InterpreterError::ObjectNotFound { .. })
+    ));
+    assert_eq!(core.heap[map.0 as usize], installed);
+    assert_eq!(core.estimated_memory_bytes(), installed_bytes);
+    assert_eq!(installed_bytes, core.recompute_estimated_memory_bytes());
+}
+
+#[test]
+fn private_collection_edges_participate_in_state_capture() {
+    let mut core = quickjs_test_core();
+    let (map, map_storage) = core.alloc_empty_map().unwrap();
+    let set = core.alloc_empty_set().unwrap();
+    let value = core.alloc_object_with_prototype(None).unwrap();
+    let set_storage = core.collection_storage_id(set, "Set").unwrap();
+    core.map_collection_set(map, Value::str("set"), Value::Object(set))
+        .unwrap();
+    core.set_collection_add(set, Value::Object(value)).unwrap();
+    core.write_reg(0, Value::Object(map)).unwrap();
+    core.set_register_label(0, Label::Secret).unwrap();
+
+    let sources = core.capture_heap_label_sources();
+    for id in [map, map_storage, set, set_storage, value] {
+        assert_eq!(
+            sources[id.0 as usize],
+            Some(0),
+            "state capture must follow private collection edge to {id:?}"
+        );
+    }
 }
 
 #[test]

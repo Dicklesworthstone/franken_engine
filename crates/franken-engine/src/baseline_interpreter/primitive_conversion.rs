@@ -832,10 +832,8 @@ mod console_confidentiality_tests {
         let map = object(core, None);
         let storage = object(core, None);
         core.set_object_brand(map, "Map").expect("map tag");
-        core.set_object_property(map, "__entries".to_string(), Value::Object(storage))
+        core.set_collection_storage(map, storage)
             .expect("map storage");
-        core.set_object_property(map, COLLECTION_SIZE_SLOT.to_string(), Value::Int(0))
-            .expect("map size");
         core.map_collection_set(map, Value::Object(key), Value::Int(1))
             .expect("map set");
         map

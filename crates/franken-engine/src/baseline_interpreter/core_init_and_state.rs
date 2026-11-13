@@ -2895,8 +2895,8 @@ impl InterpreterCore {
         Ok(Value::Object(date_id))
     }
 
-    /// Engine-internal slots still stored as own properties (collection
-    /// storage, a Map/Set's cached size) stay out of
+    /// Engine-internal slots still stored as own properties (WeakSet
+    /// storage, WeakRef targets and FinalizationRegistry tokens) stay out of
     /// Object.keys, for-in, JSON.stringify, spread and Object.assign, like the
     /// internal slots they stand in for.
     pub(super) fn hide_internal_slots(

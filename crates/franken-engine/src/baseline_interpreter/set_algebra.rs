@@ -51,9 +51,7 @@ impl InterpreterCore {
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         let this_id = match &receiver {
-            Value::Object(id) if self.collection_storage_id(*id, "Set", "__values").is_some() => {
-                *id
-            }
+            Value::Object(id) if self.collection_storage_id(*id, "Set").is_some() => *id,
             other => {
                 return Err(InterpreterError::TypeError {
                     expected: format!("Set receiver for Set.prototype.{method}"),
@@ -158,7 +156,7 @@ impl InterpreterCore {
                 } else {
                     let keys = self.set_record_keys(module, &record)?;
                     self.for_each_set_record_key(module, keys, |core, value| {
-                        if core.collection_has(this_id, "Set", "__values", &value) {
+                        if core.collection_has(this_id, "Set", &value) {
                             core.set_collection_add(result, value)?;
                         }
                         Ok(true)
@@ -173,14 +171,14 @@ impl InterpreterCore {
                     // copied entries even if `has` clears the receiver.
                     self.for_each_live_set_value(result, |core, value| {
                         if core.set_record_has(module, &record, &value)? {
-                            core.collection_delete(result, "Set", "__values", &value)?;
+                            core.collection_delete(result, "Set", &value)?;
                         }
                         Ok(true)
                     })?;
                 } else {
                     let keys = self.set_record_keys(module, &record)?;
                     self.for_each_set_record_key(module, keys, |core, value| {
-                        core.collection_delete(result, "Set", "__values", &value)?;
+                        core.collection_delete(result, "Set", &value)?;
                         Ok(true)
                     })?;
                 }
@@ -190,8 +188,8 @@ impl InterpreterCore {
                 let keys = self.set_record_keys(module, &record)?;
                 let result = self.copy_set_data(this_id)?;
                 self.for_each_set_record_key(module, keys, |core, value| {
-                    if core.collection_has(this_id, "Set", "__values", &value) {
-                        core.collection_delete(result, "Set", "__values", &value)?;
+                    if core.collection_has(this_id, "Set", &value) {
+                        core.collection_delete(result, "Set", &value)?;
                     } else {
                         core.set_collection_add(result, value)?;
                     }
@@ -214,7 +212,7 @@ impl InterpreterCore {
                 if superset {
                     let keys = self.set_record_keys(module, &record)?;
                     self.for_each_set_record_key(module, keys, |core, value| {
-                        superset = core.collection_has(this_id, "Set", "__values", &value);
+                        superset = core.collection_has(this_id, "Set", &value);
                         Ok(superset)
                     })?;
                 }
@@ -230,7 +228,7 @@ impl InterpreterCore {
                 } else {
                     let keys = self.set_record_keys(module, &record)?;
                     self.for_each_set_record_key(module, keys, |core, value| {
-                        disjoint = !core.collection_has(this_id, "Set", "__values", &value);
+                        disjoint = !core.collection_has(this_id, "Set", &value);
                         Ok(disjoint)
                     })?;
                 }
@@ -459,7 +457,7 @@ impl InterpreterCore {
 
     /// Size comes from internal storage, never an overridable `size` getter.
     fn set_data_size(&self, set_id: ObjectId) -> usize {
-        self.collection_storage_id(set_id, "Set", "__values")
+        self.collection_storage_id(set_id, "Set")
             .and_then(|storage| self.heap.get(storage.0 as usize))
             .map_or(0, |storage| storage.properties.len())
     }
@@ -484,11 +482,11 @@ impl InterpreterCore {
         set_id: ObjectId,
         mut visit: impl FnMut(&mut Self, Value) -> Result<bool, InterpreterError>,
     ) -> Result<(), InterpreterError> {
-        let storage = self
-            .collection_storage_id(set_id, "Set", "__values")
-            .ok_or_else(|| InterpreterError::InternalError {
+        let storage = self.collection_storage_id(set_id, "Set").ok_or_else(|| {
+            InterpreterError::InternalError {
                 details: "Set algebra lost its internal storage".to_string(),
-            })?;
+            }
+        })?;
         let depth = self.collection_for_each_cursors.len();
         self.collection_for_each_cursors.push((storage, 0));
         let outcome = (|| {

@@ -5512,13 +5512,9 @@ impl InterpreterCore {
                 // (Map: `[key, value]` pairs, Set: values) in insertion order,
                 // unless @@iterator is overridden (a subclass's own generator).
                 Value::Object(iterable_id)
-                    if (self
-                        .collection_storage_id(iterable_id, "Map", "__entries")
-                        .is_some()
+                    if (self.collection_storage_id(iterable_id, "Map").is_some()
                         && self.collection_iterates_intrinsically(iterable_id, "Map"))
-                        || (self
-                            .collection_storage_id(iterable_id, "Set", "__values")
-                            .is_some()
+                        || (self.collection_storage_id(iterable_id, "Set").is_some()
                             && self.collection_iterates_intrinsically(iterable_id, "Set")) =>
                 {
                     let values = self
@@ -7024,7 +7020,8 @@ impl InterpreterCore {
     /// Snapshot registers (value + label) and live heap objects (with
     /// labels derived by joining, onto each object, the label of every
     /// register from whose value it is transitively reachable via property
-    /// values and prototype links). See [`CapturedHeapState`] for why this
+    /// values, private collection storage and prototype links). See
+    /// [`CapturedHeapState`] for why this
     /// is a projection of the register-granularity IFC state.
     pub(super) fn capture_label_projection_working_bytes(&self) -> u64 {
         u64::try_from(self.heap.len())
@@ -7074,6 +7071,13 @@ impl InterpreterCore {
                 let object = &self.heap[object_index];
                 for property_value in object.properties.all_data_values() {
                     Self::queue_object_id_from_value(property_value, &mut frontier, &mut queued);
+                }
+                if let Some(storage) = object.collection_storage.as_deref() {
+                    Self::queue_object_id_from_value(
+                        &Value::Object(*storage),
+                        &mut frontier,
+                        &mut queued,
+                    );
                 }
                 if let Some(prototype) = object.prototype {
                     Self::queue_object_id_from_value(

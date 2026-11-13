@@ -515,8 +515,7 @@ impl InterpreterCore {
             Some("Map") => {
                 let (clone, _) = self.alloc_empty_map()?;
                 state.memory.insert(id, clone);
-                let entries =
-                    self.structured_clone_collection_entries(id, "Map", "__entries", state)?;
+                let entries = self.structured_clone_collection_entries(id, "Map", state)?;
                 tasks.push(CloneTask::MapEntries {
                     target: clone,
                     entries,
@@ -527,8 +526,7 @@ impl InterpreterCore {
             Some("Set") => {
                 let clone = self.alloc_empty_set()?;
                 state.memory.insert(id, clone);
-                let values =
-                    self.structured_clone_collection_entries(id, "Set", "__values", state)?;
+                let values = self.structured_clone_collection_entries(id, "Set", state)?;
                 tasks.push(CloneTask::SetValues {
                     target: clone,
                     values,
@@ -605,10 +603,9 @@ impl InterpreterCore {
         &mut self,
         id: ObjectId,
         type_tag: &str,
-        storage_prop: &str,
         state: &mut CloneState,
     ) -> Result<CloneSnapshot<(Value, Value)>, InterpreterError> {
-        let Some(storage_id) = self.collection_storage_id(id, type_tag, storage_prop) else {
+        let Some(storage_id) = self.collection_storage_id(id, type_tag) else {
             return Ok(CloneSnapshot {
                 values: Vec::new(),
                 charged: 0,
@@ -710,9 +707,7 @@ impl InterpreterCore {
         let set_id = self.alloc_object_with_prototype(Some(prototype))?;
         let values_id = self.alloc_object_with_prototype(None)?;
         self.set_object_brand(set_id, "Set")?;
-        self.set_object_property(set_id, "__values".to_string(), Value::Object(values_id))?;
-        self.set_object_property(set_id, COLLECTION_SIZE_SLOT.to_string(), Value::Int(0))?;
-        self.hide_internal_slots(set_id, &["__values", COLLECTION_SIZE_SLOT])?;
+        self.set_collection_storage(set_id, values_id)?;
         Ok(set_id)
     }
 
@@ -837,12 +832,8 @@ mod resource_tests {
             let before = core.estimated_memory_bytes();
             core.config.max_total_memory_bytes = before;
             let mut state = state();
-            let (tag, slot) = if is_map {
-                ("Map", "__entries")
-            } else {
-                ("Set", "__values")
-            };
-            let result = core.structured_clone_collection_entries(source, tag, slot, &mut state);
+            let tag = if is_map { "Map" } else { "Set" };
+            let result = core.structured_clone_collection_entries(source, tag, &mut state);
             assert!(matches!(
                 result,
                 Err(InterpreterError::MemoryBudgetExceeded { .. })
@@ -864,7 +855,7 @@ mod resource_tests {
         core.json_reserve_temporary(37).unwrap();
         let mut state = state();
         let snapshot = core
-            .structured_clone_collection_entries(source, "Map", "__entries", &mut state)
+            .structured_clone_collection_entries(source, "Map", &mut state)
             .unwrap();
         assert_eq!(snapshot.values.len(), 16);
         assert!(snapshot.charged >= 16 * std::mem::size_of::<(Value, Value)>() as u64);

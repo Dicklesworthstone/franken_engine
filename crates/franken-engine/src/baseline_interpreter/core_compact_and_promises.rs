@@ -1942,12 +1942,12 @@ impl InterpreterCore {
         // itself with its own generator).
         if let Value::Object(object_id) = iterable {
             let collection = if let Some(storage) = self
-                .collection_storage_id(*object_id, "Map", "__entries")
+                .collection_storage_id(*object_id, "Map")
                 .filter(|_| self.collection_iterates_intrinsically(*object_id, "Map"))
             {
                 Some((storage, true, RuntimeTypedArrayIteratorKind::Entries))
             } else {
-                self.collection_storage_id(*object_id, "Set", "__values")
+                self.collection_storage_id(*object_id, "Set")
                     .filter(|_| self.collection_iterates_intrinsically(*object_id, "Set"))
                     .map(|storage| (storage, false, RuntimeTypedArrayIteratorKind::Values))
             };
@@ -5798,13 +5798,7 @@ impl InterpreterCore {
     /// %Set.prototype% (a subclass instance, `Object.create(Map.prototype)`).
     pub(super) fn collection_size_owner(&self, object_id: ObjectId) -> Option<&'static str> {
         ["Map", "Set"].into_iter().find(|owner| {
-            let storage = if *owner == "Map" {
-                "__entries"
-            } else {
-                "__values"
-            };
-            self.collection_storage_id(object_id, owner, storage)
-                .is_some()
+            self.collection_storage_id(object_id, owner).is_some()
                 || self.chain_reaches_canonical_prototype(object_id, owner)
         })
     }
@@ -7526,7 +7520,7 @@ impl InterpreterCore {
         &mut self,
         object_id: ObjectId,
     ) -> Result<Option<Vec<Value>>, InterpreterError> {
-        if let Some(values_id) = self.collection_storage_id(object_id, "Set", "__values") {
+        if let Some(values_id) = self.collection_storage_id(object_id, "Set") {
             let values = self
                 .heap
                 .get(values_id.0 as usize)
@@ -7534,7 +7528,7 @@ impl InterpreterCore {
                 .unwrap_or_default();
             return Ok(Some(values));
         }
-        let Some(entries_id) = self.collection_storage_id(object_id, "Map", "__entries") else {
+        let Some(entries_id) = self.collection_storage_id(object_id, "Map") else {
             return Ok(None);
         };
         let entries: Vec<(String, Value)> = self
@@ -7557,22 +7551,72 @@ impl InterpreterCore {
         Ok(Some(pairs))
     }
 
-    /// Internal storage object id (`__entries` for Map / `__values` for Set),
-    /// gated on the receiver actually being the matching collection type.
+    /// The receiver's collection storage, gated on its private brand. Map
+    /// and Set never consult guest properties for their backing object;
+    /// WeakSet and FinalizationRegistry retain their separate representations.
     pub(super) fn collection_storage_id(
         &self,
         obj_id: ObjectId,
         type_tag: &str,
-        storage_prop: &str,
     ) -> Option<ObjectId> {
         let obj = self.heap.get(obj_id.0 as usize)?;
         if obj.brand() != Some(type_tag) {
             return None;
         }
-        match obj.properties.get(storage_prop) {
-            Some(Value::Object(id)) => Some(*id),
+        match type_tag {
+            "Map" | "Set" => obj.collection_storage.as_deref().copied(),
+            "WeakSet" => match obj.properties.get("__values") {
+                Some(Value::Object(id)) => Some(*id),
+                _ => None,
+            },
+            "FinalizationRegistry" => match obj.properties.get("__tokens") {
+                Some(Value::Object(id)) => Some(*id),
+                _ => None,
+            },
             _ => None,
         }
+    }
+
+    /// Publish a private Map/Set backing edge after charging its allocation.
+    /// A collection's integrity level governs its ordinary properties only.
+    pub(super) fn set_collection_storage(
+        &mut self,
+        obj_id: ObjectId,
+        storage_id: ObjectId,
+    ) -> Result<(), InterpreterError> {
+        let object = self
+            .heap
+            .get(obj_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: obj_id.0 })?;
+        if !matches!(object.brand(), Some("Map" | "Set")) {
+            return Err(InterpreterError::TypeError {
+                expected: "Map or Set receiver for private collection storage".to_string(),
+                got: "object".to_string(),
+            });
+        }
+        let previous_bytes = object
+            .collection_storage
+            .as_ref()
+            .map_or(0, |_| std::mem::size_of::<ObjectId>() as u64);
+        if self.heap.get(storage_id.0 as usize).is_none() {
+            return Err(InterpreterError::ObjectNotFound { id: storage_id.0 });
+        }
+        self.apply_memory_component_delta(previous_bytes, std::mem::size_of::<ObjectId>() as u64)?;
+        self.mutate_heap(|heap| {
+            let storage = &mut heap[obj_id.0 as usize].collection_storage;
+            match storage.as_deref_mut() {
+                Some(current) => *current = storage_id,
+                None => *storage = Some(Box::new(storage_id)),
+            }
+        });
+        self.gc_write_barrier(obj_id);
+        Ok(())
+    }
+
+    pub(super) fn collection_size(&self, obj_id: ObjectId, type_tag: &str) -> Option<usize> {
+        self.collection_storage_id(obj_id, type_tag)
+            .and_then(|storage| self.heap.get(storage.0 as usize))
+            .map(|storage| storage.properties.len())
     }
 
     /// ES2020 23.1.3 / 23.2.3: every Map and Set method requires a receiver
@@ -7584,17 +7628,10 @@ impl InterpreterCore {
         &self,
         receiver: &Value,
         type_tag: &str,
-        storage_prop: &str,
         method: &str,
     ) -> Result<ObjectId, InterpreterError> {
         match receiver {
-            Value::Object(id)
-                if self
-                    .collection_storage_id(*id, type_tag, storage_prop)
-                    .is_some() =>
-            {
-                Ok(*id)
-            }
+            Value::Object(id) if self.collection_storage_id(*id, type_tag).is_some() => Ok(*id),
             other => Err(InterpreterError::TypeError {
                 expected: format!("{type_tag} receiver for {type_tag}.prototype.{method}"),
                 got: other.type_name().to_string(),
@@ -7608,23 +7645,9 @@ impl InterpreterCore {
         key: Value,
         value: Value,
     ) -> Result<Value, InterpreterError> {
-        if let Some(entries_id) = self.collection_storage_id(map_id, "Map", "__entries") {
+        if let Some(entries_id) = self.collection_storage_id(map_id, "Map") {
             let repr = Self::collection_key_repr(&key);
-            let map_index = map_id.0 as usize;
-            let is_new = self
-                .heap
-                .get(entries_id.0 as usize)
-                .map(|e| !e.properties.contains_key(&repr))
-                .unwrap_or(false);
             self.set_object_property(entries_id, repr, value)?;
-            self.mutate_heap(|heap| {
-                if is_new
-                    && let Some(map_obj) = heap.get_mut(map_index)
-                    && let Some(Value::Int(size)) = map_obj.properties.get_mut(COLLECTION_SIZE_SLOT)
-                {
-                    *size = size.saturating_add(1);
-                }
-            });
         }
         Ok(Value::Object(map_id))
     }
@@ -7635,9 +7658,7 @@ impl InterpreterCore {
         let map_id = self.alloc_object_with_prototype(Some(prototype))?;
         let entries_id = self.alloc_object_with_prototype(None)?;
         self.set_object_brand(map_id, "Map")?;
-        self.set_object_property(map_id, "__entries".to_string(), Value::Object(entries_id))?;
-        self.set_object_property(map_id, COLLECTION_SIZE_SLOT.to_string(), Value::Int(0))?;
-        self.hide_internal_slots(map_id, &["__entries", COLLECTION_SIZE_SLOT])?;
+        self.set_collection_storage(map_id, entries_id)?;
         Ok((map_id, entries_id))
     }
 
@@ -7730,35 +7751,15 @@ impl InterpreterCore {
         value: Value,
     ) -> Result<Value, InterpreterError> {
         let value = Self::collection_canonical_member(value);
-        if let Some(values_id) = self.collection_storage_id(set_id, "Set", "__values") {
+        if let Some(values_id) = self.collection_storage_id(set_id, "Set") {
             let repr = Self::collection_key_repr(&value);
-            let set_index = set_id.0 as usize;
-            let is_new = self
-                .heap
-                .get(values_id.0 as usize)
-                .map(|v| !v.properties.contains_key(&repr))
-                .unwrap_or(false);
             self.set_object_property(values_id, repr, value)?;
-            self.mutate_heap(|heap| {
-                if is_new
-                    && let Some(set_obj) = heap.get_mut(set_index)
-                    && let Some(Value::Int(size)) = set_obj.properties.get_mut(COLLECTION_SIZE_SLOT)
-                {
-                    *size = size.saturating_add(1);
-                }
-            });
         }
         Ok(Value::Object(set_id))
     }
 
-    pub(super) fn collection_get(
-        &self,
-        obj_id: ObjectId,
-        type_tag: &str,
-        storage_prop: &str,
-        key: &Value,
-    ) -> Value {
-        if let Some(storage_id) = self.collection_storage_id(obj_id, type_tag, storage_prop)
+    pub(super) fn collection_get(&self, obj_id: ObjectId, type_tag: &str, key: &Value) -> Value {
+        if let Some(storage_id) = self.collection_storage_id(obj_id, type_tag)
             && let Some(storage) = self.heap.get(storage_id.0 as usize)
             && let Some(v) = storage.properties.get(&Self::collection_key_repr(key))
         {
@@ -7767,14 +7768,8 @@ impl InterpreterCore {
         Value::Undefined
     }
 
-    pub(super) fn collection_has(
-        &self,
-        obj_id: ObjectId,
-        type_tag: &str,
-        storage_prop: &str,
-        key: &Value,
-    ) -> bool {
-        self.collection_storage_id(obj_id, type_tag, storage_prop)
+    pub(super) fn collection_has(&self, obj_id: ObjectId, type_tag: &str, key: &Value) -> bool {
+        self.collection_storage_id(obj_id, type_tag)
             .and_then(|sid| self.heap.get(sid.0 as usize))
             .map(|storage| {
                 storage
@@ -7788,10 +7783,9 @@ impl InterpreterCore {
         &mut self,
         obj_id: ObjectId,
         type_tag: &str,
-        storage_prop: &str,
         key: &Value,
     ) -> Result<bool, InterpreterError> {
-        let Some(storage_id) = self.collection_storage_id(obj_id, type_tag, storage_prop) else {
+        let Some(storage_id) = self.collection_storage_id(obj_id, type_tag) else {
             return Ok(false);
         };
         let repr = Self::collection_key_repr(key);
@@ -7815,16 +7809,6 @@ impl InterpreterCore {
         if removed && let Some(position) = position {
             self.collection_entry_removed(storage_id, position);
         }
-        if removed {
-            let obj_index = obj_id.0 as usize;
-            self.mutate_heap(|heap| {
-                if let Some(obj) = heap.get_mut(obj_index)
-                    && let Some(Value::Int(size)) = obj.properties.get_mut(COLLECTION_SIZE_SLOT)
-                {
-                    *size = size.saturating_sub(1);
-                }
-            });
-        }
         Ok(removed)
     }
 
@@ -7836,19 +7820,10 @@ impl InterpreterCore {
         &mut self,
         obj_id: ObjectId,
         type_tag: &str,
-        storage_prop: &str,
     ) -> Result<Value, InterpreterError> {
-        if let Some(storage_id) = self.collection_storage_id(obj_id, type_tag, storage_prop) {
-            let obj_index = obj_id.0 as usize;
+        if let Some(storage_id) = self.collection_storage_id(obj_id, type_tag) {
             self.clear_object_properties(storage_id)?;
             self.collection_storage_cleared(storage_id);
-            self.mutate_heap(|heap| {
-                if let Some(obj) = heap.get_mut(obj_index)
-                    && let Some(Value::Int(size)) = obj.properties.get_mut(COLLECTION_SIZE_SLOT)
-                {
-                    *size = 0;
-                }
-            });
         }
         Ok(Value::Undefined)
     }

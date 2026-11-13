@@ -1410,8 +1410,8 @@ impl InterpreterCore {
         let object = self.heap.get(id.0 as usize)?;
         let kind = object.brand()?.to_string();
         let native = match kind.as_str() {
-            "Map" => self.collection_storage_id(id, "Map", "__entries").is_some(),
-            "Set" => self.collection_storage_id(id, "Set", "__values").is_some(),
+            "Map" => self.collection_storage_id(id, "Map").is_some(),
+            "Set" => self.collection_storage_id(id, "Set").is_some(),
             "Date" => object.date_value.is_some(),
             "RegExp"
             | "WeakMap"
@@ -1611,9 +1611,9 @@ impl InterpreterCore {
         } else if matches!(internal.as_deref(), Some("Map" | "Set")) {
             let is_map = internal.as_deref() == Some("Map");
             let size = if is_map {
-                self.collection_storage_id(id, "Map", "__entries")
+                self.collection_storage_id(id, "Map")
             } else {
-                self.collection_storage_id(id, "Set", "__values")
+                self.collection_storage_id(id, "Set")
             }
             .and_then(|storage| self.heap.get(storage.0 as usize))
             .map_or(0, |storage| storage.properties.len());
@@ -1790,7 +1790,7 @@ impl InterpreterCore {
                 }
             }
             Body::Map => {
-                let storage = self.collection_storage_id(id, "Map", "__entries");
+                let storage = self.collection_storage_id(id, "Map");
                 let pairs: Vec<(Value, Value)> = storage
                     .and_then(|storage| self.heap.get(storage.0 as usize))
                     .map(|storage| {
@@ -1825,7 +1825,7 @@ impl InterpreterCore {
                 }
             }
             Body::Set => {
-                let storage = self.collection_storage_id(id, "Set", "__values");
+                let storage = self.collection_storage_id(id, "Set");
                 let values: Vec<Value> = storage
                     .and_then(|storage| self.heap.get(storage.0 as usize))
                     .map(|storage| storage.properties.values().cloned().collect())

@@ -1631,6 +1631,8 @@ impl InterpreterCore {
                 regexp: _,
                 // A Date's Number: no references.
                 date_value: _,
+                // Map/Set data is private but keeps its backing object alive.
+                collection_storage,
             } = object;
             for value in private_elements.values().flat_map(PrivateElement::values) {
                 marker.value(value);
@@ -1666,6 +1668,9 @@ impl InterpreterCore {
             if let Some(value) = primitive_value {
                 marker.value(value);
             }
+            if let Some(storage) = collection_storage {
+                marker.object(**storage);
+            }
             if let Some(view) = typed_array {
                 marker.object(view.buffer);
             }
@@ -1674,8 +1679,7 @@ impl InterpreterCore {
             }
             // Map keys live in the storage object's property names (see
             // `collection_key_repr`); an object key is reachable through them.
-            if let Some(storage_id) =
-                self.collection_storage_id(ObjectId(index), "Map", "__entries")
+            if let Some(storage_id) = self.collection_storage_id(ObjectId(index), "Map")
                 && let Some(storage) = self.heap.get(storage_id.0 as usize)
             {
                 for repr in storage.properties.keys() {

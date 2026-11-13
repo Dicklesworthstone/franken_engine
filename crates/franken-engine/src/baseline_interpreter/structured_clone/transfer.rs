@@ -249,10 +249,8 @@ impl InterpreterCore {
                         !explicit
                             && (self.heap.get(id.0 as usize).is_some_and(|object| {
                                 object.is_array || object.typed_array.is_some()
-                            }) || self.collection_storage_id(*id, "Set", "__values").is_some()
-                                || self
-                                    .collection_storage_id(*id, "Map", "__entries")
-                                    .is_some())
+                            }) || self.collection_storage_id(*id, "Set").is_some()
+                                || self.collection_storage_id(*id, "Map").is_some())
                     }
                     _ => false,
                 };

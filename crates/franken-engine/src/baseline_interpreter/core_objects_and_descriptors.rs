@@ -2322,8 +2322,8 @@ impl InterpreterCore {
                 .lookup_symbol_iterator_method(module, object, init.clone())?
                 .is_some(),
             Some(object) => {
-                let map = self.collection_storage_id(object, "Map", "__entries");
-                let set = self.collection_storage_id(object, "Set", "__values");
+                let map = self.collection_storage_id(object, "Map");
+                let set = self.collection_storage_id(object, "Set");
                 map.is_some()
                     || set.is_some()
                     || self
@@ -12661,12 +12661,9 @@ impl InterpreterCore {
                 let iterable = self.arg_or_undefined(args, 0)?;
                 if !matches!(iterable, Value::Undefined | Value::Null) {
                     match self.collection_seed_adder(module, map_id, "Map")? {
-                        None => self.seed_map_entries_from_iterable(
-                            module,
-                            entries_id,
-                            Some(map_id),
-                            iterable,
-                        )?,
+                        None => {
+                            self.seed_map_entries_from_iterable(module, entries_id, iterable)?
+                        }
                         Some(adder) => {
                             self.seed_collection_with_adder(module, map_id, adder, true, iterable)?
                         }
@@ -12679,19 +12676,15 @@ impl InterpreterCore {
                 // Set([iterable]) constructor implementation
                 let set_id = self.alloc_empty_set()?;
                 let values_id = self
-                    .collection_storage_id(set_id, "Set", "__values")
+                    .collection_storage_id(set_id, "Set")
                     .expect("a new Set has its value storage");
 
                 let iterable = self.arg_or_undefined(args, 0)?;
                 if !matches!(iterable, Value::Undefined | Value::Null) {
                     match self.collection_seed_adder(module, set_id, "Set")? {
-                        None => self.seed_set_values_from_iterable(
-                            module,
-                            values_id,
-                            Some(set_id),
-                            iterable,
-                            false,
-                        )?,
+                        None => {
+                            self.seed_set_values_from_iterable(module, values_id, iterable, false)?
+                        }
                         Some(adder) => {
                             self.seed_collection_with_adder(module, set_id, adder, false, iterable)?
                         }
@@ -12760,9 +12753,9 @@ impl InterpreterCore {
                 let iterable = self.arg_or_undefined(args, 0)?;
                 if !matches!(iterable, Value::Undefined | Value::Null) {
                     match self.collection_seed_adder(module, weakset_id, "WeakSet")? {
-                        None => self.seed_set_values_from_iterable(
-                            module, values_id, None, iterable, true,
-                        )?,
+                        None => {
+                            self.seed_set_values_from_iterable(module, values_id, iterable, true)?
+                        }
                         Some(adder) => self.seed_collection_with_adder(
                             module, weakset_id, adder, false, iterable,
                         )?,
@@ -12815,20 +12808,7 @@ impl InterpreterCore {
 
                 let key = self.read_reg(args.start + 1)?;
 
-                // Get the value from the map
-                if let Some(map_obj) = self.heap.get(map_id.0 as usize) {
-                    if let Some(Value::Object(entries_id)) = map_obj.properties.get("__entries") {
-                        if let Some(entries_obj) = self.heap.get(entries_id.0 as usize) {
-                            let key_str = Self::collection_key_repr(&key);
-
-                            if let Some(value) = entries_obj.properties.get(&key_str) {
-                                return Ok(value.clone());
-                            }
-                        }
-                    }
-                }
-
-                Ok(Value::Undefined)
+                Ok(self.collection_get(map_id, "Map", &key))
             }
             "builtin:SetPrototypeAdd" => {
                 // Set.prototype.add(value) implementation
@@ -12873,20 +12853,7 @@ impl InterpreterCore {
 
                 let value = self.read_reg(args.start + 1)?;
 
-                // Check if the set has the value
-                if let Some(set_obj) = self.heap.get(set_id.0 as usize) {
-                    if let Some(Value::Object(values_id)) = set_obj.properties.get("__values") {
-                        if let Some(values_obj) = self.heap.get(values_id.0 as usize) {
-                            let value_str = Self::collection_key_repr(&value);
-
-                            if values_obj.properties.contains_key(&value_str) {
-                                return Ok(Value::Bool(true));
-                            }
-                        }
-                    }
-                }
-
-                Ok(Value::Bool(false))
+                Ok(Value::Bool(self.collection_has(set_id, "Set", &value)))
             }
 
             "builtin:MapPrototypeHas" => {
@@ -12910,20 +12877,7 @@ impl InterpreterCore {
 
                 let key = self.read_reg(args.start + 1)?;
 
-                // Check if the map has the key
-                if let Some(map_obj) = self.heap.get(map_id.0 as usize) {
-                    if let Some(Value::Object(entries_id)) = map_obj.properties.get("__entries") {
-                        if let Some(entries_obj) = self.heap.get(entries_id.0 as usize) {
-                            let key_str = Self::collection_key_repr(&key);
-
-                            if entries_obj.properties.contains_key(&key_str) {
-                                return Ok(Value::Bool(true));
-                            }
-                        }
-                    }
-                }
-
-                Ok(Value::Bool(false))
+                Ok(Value::Bool(self.collection_has(map_id, "Map", &key)))
             }
 
             "builtin:MapPrototypeDelete" => {
@@ -12948,12 +12902,7 @@ impl InterpreterCore {
                 }
 
                 let key = self.read_reg(args.start + 1)?;
-                Ok(Value::Bool(self.collection_delete(
-                    map_id,
-                    "Map",
-                    "__entries",
-                    &key,
-                )?))
+                Ok(Value::Bool(self.collection_delete(map_id, "Map", &key)?))
             }
 
             "builtin:SetPrototypeDelete" => {
@@ -12978,9 +12927,7 @@ impl InterpreterCore {
                 }
 
                 let value = self.read_reg(args.start + 1)?;
-                Ok(Value::Bool(
-                    self.collection_delete(set_id, "Set", "__values", &value)?,
-                ))
+                Ok(Value::Bool(self.collection_delete(set_id, "Set", &value)?))
             }
 
             "builtin:SetPrototypeClear" => {
@@ -13000,7 +12947,7 @@ impl InterpreterCore {
                     return Ok(Value::Undefined);
                 }
 
-                self.collection_clear(set_id, "Set", "__values")
+                self.collection_clear(set_id, "Set")
             }
 
             "builtin:ArrayPrototypeLastIndexOf" => {

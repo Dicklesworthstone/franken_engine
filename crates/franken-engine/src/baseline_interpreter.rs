@@ -436,10 +436,6 @@ const PROXY_REVOKED_SLOT: &str = "__proxy_revoked";
 /// `PROXY_TARGET_SLOT` then holds the target's own-property storage, which
 /// the traps' fallbacks for [[Set]], [[Delete]], ... act on.
 const PROXY_CALL_TARGET_SLOT: &str = "__proxy_call_target";
-/// A Map's or Set's entry count (bd-9vouw.140): an internal slot, not an own
-/// `size` property, so %Map.prototype%.size / %Set.prototype%.size (and a
-/// subclass's `get size()`) answer `size` reads.
-const COLLECTION_SIZE_SLOT: &str = "__size";
 /// The TypeError Object.defineProperty raises for a definition the target
 /// rejects; Reflect.defineProperty answers false for exactly this one.
 const DEFINE_PROPERTY_REJECTED: &str = "definable property for Object.defineProperty";
@@ -9093,6 +9089,11 @@ pub struct HeapObject {
     /// levels (ES2020 20.4.5). A boxed Number keeps ordinary objects small
     /// and preserves NaN exactly in execution seeds and serialized heaps.
     date_value: Option<Box<Float64>>,
+    /// A Map's [[MapData]] or Set's [[SetData]] backing object. This edge is
+    /// private: reflection, guest properties and Object.freeze never expose
+    /// or alter the collection's contents. The backing map's length is the
+    /// authoritative entry count, so there is no separate mutable size slot.
+    collection_storage: Option<Box<ObjectId>>,
 }
 
 /// A RegExp's pattern, escaped as `source` reads it back (bd-9vouw.243),
@@ -9363,6 +9364,7 @@ impl Serialize for HeapObject {
                 + usize::from(self.blob.is_some())
                 + usize::from(self.regexp.is_some())
                 + usize::from(self.date_value.is_some())
+                + usize::from(self.collection_storage.is_some())
                 + if has_constructor_metadata { 4 } else { 0 },
         )?;
         object.serialize_field("properties", &self.properties)?;
@@ -9413,6 +9415,9 @@ impl Serialize for HeapObject {
         }
         if let Some(date_value) = &self.date_value {
             object.serialize_field("date_value", date_value)?;
+        }
+        if let Some(storage) = &self.collection_storage {
+            object.serialize_field("collection_storage", storage)?;
         }
         if !self.private_elements.is_empty() {
             let elements = self
@@ -9523,6 +9528,8 @@ impl<'de> Deserialize<'de> for HeapObject {
             regexp: Option<Box<RegExpSlots>>,
             #[serde(default)]
             date_value: Option<Box<Float64>>,
+            #[serde(default)]
+            collection_storage: Option<Box<ObjectId>>,
         }
 
         #[derive(Deserialize)]
@@ -9646,6 +9653,7 @@ impl<'de> Deserialize<'de> for HeapObject {
             blob: wire.blob,
             regexp: wire.regexp,
             date_value: wire.date_value,
+            collection_storage: wire.collection_storage,
         };
         for record in wire.symbol_properties {
             let symbol = SymbolId(record.symbol_id);
@@ -16032,7 +16040,8 @@ pub struct CapturedRegisterState {
 /// tick (bd-fqlfw.3.5.5 / E3.T5d). The engine's IFC model tracks labels at
 /// REGISTER granularity, so a heap object's label here is the join of the
 /// labels of every register from whose value the object is transitively
-/// reachable (property values and prototype links), defaulting to `Public`
+/// reachable (property values, private collection storage and prototype
+/// links), defaulting to `Public`
 /// when unreachable from any register. This is a projection of the real
 /// register-label state, not an independent model.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

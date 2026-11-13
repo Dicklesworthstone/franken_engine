@@ -93,18 +93,6 @@ impl InterpreterCore {
         }
     }
 
-    pub(super) fn increment_collection_size(&mut self, collection_id: ObjectId) {
-        let collection_index = collection_id.0 as usize;
-        self.mutate_heap(|heap| {
-            if let Some(collection_obj) = heap.get_mut(collection_index)
-                && let Some(Value::Int(size)) =
-                    collection_obj.properties.get_mut(COLLECTION_SIZE_SLOT)
-            {
-                *size = size.saturating_add(1);
-            }
-        });
-    }
-
     /// Where a collection constructor reads its seed values (ES2020
     /// 23.1.1.1, 23.2.1.1, 23.3.1.1, 23.4.1.1): `undefined` and `null` seed
     /// nothing, and anything else goes through the for-of iteration
@@ -287,7 +275,6 @@ impl InterpreterCore {
         &mut self,
         module: Option<&Ir3Module>,
         entries_id: ObjectId,
-        size_owner: Option<ObjectId>,
         iterable: Value,
     ) -> Result<(), InterpreterError> {
         let mut label = Label::Public;
@@ -305,15 +292,7 @@ impl InterpreterCore {
             // entries (and a duplicate key's replacement growth) out of the
             // running estimate, which only the full re-walk at every
             // microtask checkpoint used to repair.
-            let inserted = self
-                .heap
-                .get(entries_id.0 as usize)
-                .is_some_and(|entries| !entries.properties.contains_key(&key_str));
             self.set_object_property(entries_id, key_str, value)?;
-
-            if inserted && let Some(collection_id) = size_owner {
-                self.increment_collection_size(collection_id);
-            }
         }
 
         self.finish_collection_seed(label)
@@ -323,7 +302,6 @@ impl InterpreterCore {
         &mut self,
         module: Option<&Ir3Module>,
         values_id: ObjectId,
-        size_owner: Option<ObjectId>,
         iterable: Value,
         weak_values_only: bool,
     ) -> Result<(), InterpreterError> {
@@ -362,20 +340,13 @@ impl InterpreterCore {
                 let new_bytes = Self::estimate_property_entry_bytes(&value_str, &stored);
                 self.apply_memory_component_delta(0, new_bytes)?;
             }
-            let mut inserted = false;
-
             self.mutate_heap(|heap| {
                 if let Some(values_obj) = heap.get_mut(values_index) {
                     if !values_obj.properties.contains_key(&value_str) {
                         values_obj.properties.insert(value_str, stored);
-                        inserted = true;
                     }
                 }
             });
-
-            if inserted && let Some(collection_id) = size_owner {
-                self.increment_collection_size(collection_id);
-            }
         }
 
         self.finish_collection_seed(label)
@@ -2629,6 +2600,12 @@ impl InterpreterCore {
             )
             .saturating_add(
                 object
+                    .collection_storage
+                    .as_ref()
+                    .map_or(0, |_| std::mem::size_of::<ObjectId>() as u64),
+            )
+            .saturating_add(
+                object
                     .array_buffer
                     .as_ref()
                     .map(|backing| {
@@ -4186,6 +4163,12 @@ impl InterpreterCore {
                     .date_value
                     .as_ref()
                     .map_or(0, |_| std::mem::size_of::<Float64>() as u64),
+            )
+            .saturating_add(
+                object
+                    .collection_storage
+                    .as_ref()
+                    .map_or(0, |_| std::mem::size_of::<ObjectId>() as u64),
             )
             .saturating_add(array_buffer_bytes)
             .saturating_add(typed_array_bytes)
@@ -6280,8 +6263,8 @@ impl InterpreterCore {
                 } else if is_array {
                     self.array_from_has_explicit_iterator(*id)?
                 } else {
-                    let map = self.collection_storage_id(*id, "Map", "__entries");
-                    let set = self.collection_storage_id(*id, "Set", "__values");
+                    let map = self.collection_storage_id(*id, "Map");
+                    let set = self.collection_storage_id(*id, "Set");
                     map.is_some()
                         || set.is_some()
                         || (self.array_from_has_explicit_iterator(*id)?
@@ -10101,26 +10084,13 @@ impl InterpreterCore {
             "Map" => {
                 let entries_id = self.alloc_object_with_prototype(None)?;
                 self.set_object_brand(object_id, "Map")?;
-                self.set_object_property(
-                    object_id,
-                    "__entries".to_string(),
-                    Value::Object(entries_id),
-                )?;
-                self.set_object_property(
-                    object_id,
-                    COLLECTION_SIZE_SLOT.to_string(),
-                    Value::Int(0),
-                )?;
-                self.hide_internal_slots(object_id, &["__entries", COLLECTION_SIZE_SLOT])?;
+                self.set_collection_storage(object_id, entries_id)?;
                 let iterable = self.arg_or_undefined(args, 0)?;
                 if !matches!(iterable, Value::Undefined | Value::Null) {
                     match self.collection_seed_adder(module, object_id, "Map")? {
-                        None => self.seed_map_entries_from_iterable(
-                            module,
-                            entries_id,
-                            Some(object_id),
-                            iterable,
-                        )?,
+                        None => {
+                            self.seed_map_entries_from_iterable(module, entries_id, iterable)?
+                        }
                         Some(adder) => self
                             .seed_collection_with_adder(module, object_id, adder, true, iterable)?,
                     }
@@ -10129,27 +10099,13 @@ impl InterpreterCore {
             "Set" => {
                 let values_id = self.alloc_object_with_prototype(None)?;
                 self.set_object_brand(object_id, "Set")?;
-                self.set_object_property(
-                    object_id,
-                    "__values".to_string(),
-                    Value::Object(values_id),
-                )?;
-                self.set_object_property(
-                    object_id,
-                    COLLECTION_SIZE_SLOT.to_string(),
-                    Value::Int(0),
-                )?;
-                self.hide_internal_slots(object_id, &["__values", COLLECTION_SIZE_SLOT])?;
+                self.set_collection_storage(object_id, values_id)?;
                 let iterable = self.arg_or_undefined(args, 0)?;
                 if !matches!(iterable, Value::Undefined | Value::Null) {
                     match self.collection_seed_adder(module, object_id, "Set")? {
-                        None => self.seed_set_values_from_iterable(
-                            module,
-                            values_id,
-                            Some(object_id),
-                            iterable,
-                            false,
-                        )?,
+                        None => {
+                            self.seed_set_values_from_iterable(module, values_id, iterable, false)?
+                        }
                         Some(adder) => self.seed_collection_with_adder(
                             module, object_id, adder, false, iterable,
                         )?,

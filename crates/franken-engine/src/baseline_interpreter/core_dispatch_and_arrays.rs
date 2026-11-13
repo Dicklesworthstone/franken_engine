@@ -2726,70 +2726,68 @@ impl InterpreterCore {
             // normal property walk, so it is not a method here.
             BuiltinFunctionKind::MapSet => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let map_id = self.collection_receiver(&receiver, "Map", "__entries", "set")?;
+                let map_id = self.collection_receiver(&receiver, "Map", "set")?;
                 let key = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 let value = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
                 self.map_collection_set(map_id, key, value)
             }
             BuiltinFunctionKind::MapGet => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let map_id = self.collection_receiver(&receiver, "Map", "__entries", "get")?;
+                let map_id = self.collection_receiver(&receiver, "Map", "get")?;
                 let key = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-                Ok(self.collection_get(map_id, "Map", "__entries", &key))
+                Ok(self.collection_get(map_id, "Map", &key))
             }
             BuiltinFunctionKind::MapHas => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let map_id = self.collection_receiver(&receiver, "Map", "__entries", "has")?;
+                let map_id = self.collection_receiver(&receiver, "Map", "has")?;
                 let key = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 Ok(Value::Bool(self.collection_has(
                     map_id,
                     "Map",
-                    "__entries",
                     &key,
                 )))
             }
             BuiltinFunctionKind::MapDelete => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let map_id = self.collection_receiver(&receiver, "Map", "__entries", "delete")?;
+                let map_id = self.collection_receiver(&receiver, "Map", "delete")?;
                 let key = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 Ok(Value::Bool(self.collection_delete(
                     map_id,
                     "Map",
-                    "__entries",
                     &key,
                 )?))
             }
             BuiltinFunctionKind::SetAdd => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let set_id = self.collection_receiver(&receiver, "Set", "__values", "add")?;
+                let set_id = self.collection_receiver(&receiver, "Set", "add")?;
                 let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 self.set_collection_add(set_id, value)
             }
             BuiltinFunctionKind::SetHas => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let set_id = self.collection_receiver(&receiver, "Set", "__values", "has")?;
+                let set_id = self.collection_receiver(&receiver, "Set", "has")?;
                 let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 Ok(Value::Bool(
-                    self.collection_has(set_id, "Set", "__values", &value),
+                    self.collection_has(set_id, "Set", &value),
                 ))
             }
             BuiltinFunctionKind::SetDelete => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let set_id = self.collection_receiver(&receiver, "Set", "__values", "delete")?;
+                let set_id = self.collection_receiver(&receiver, "Set", "delete")?;
                 let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 Ok(Value::Bool(self.collection_delete(
-                    set_id, "Set", "__values", &value,
+                    set_id, "Set", &value,
                 )?))
             }
             BuiltinFunctionKind::MapClear => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let map_id = self.collection_receiver(&receiver, "Map", "__entries", "clear")?;
-                self.collection_clear(map_id, "Map", "__entries")
+                let map_id = self.collection_receiver(&receiver, "Map", "clear")?;
+                self.collection_clear(map_id, "Map")
             }
             BuiltinFunctionKind::SetClear => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let set_id = self.collection_receiver(&receiver, "Set", "__values", "clear")?;
-                self.collection_clear(set_id, "Set", "__values")
+                let set_id = self.collection_receiver(&receiver, "Set", "clear")?;
+                self.collection_clear(set_id, "Set")
             }
             BuiltinFunctionKind::PromiseThenFinally | BuiltinFunctionKind::PromiseCatchFinally => {
                 self.promise_finally_step(module, builtin, args)
@@ -5407,8 +5405,7 @@ impl InterpreterCore {
                             .modules
                             .get(&reexporter)
                             .is_some_and(|record| {
-                                record.star_exports.get(&name)
-                                    == Some(&StarExportOrigin::Provided)
+                                record.star_exports.get(&name) == Some(&StarExportOrigin::Provided)
                             });
                     if provided {
                         self.queue_module_export(
@@ -5673,13 +5670,7 @@ impl InterpreterCore {
                 .label
                 .clone();
             for (specifier, name) in &exports {
-                self.queue_module_export(
-                    cascade,
-                    specifier,
-                    name,
-                    &label,
-                    ExportPublication::Own,
-                )?;
+                self.queue_module_export(cascade, specifier, name, &label, ExportPublication::Own)?;
             }
             Ok(())
         })();

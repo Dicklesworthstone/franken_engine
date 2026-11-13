@@ -7880,12 +7880,12 @@ fn array_slice_instruction_returns_remaining_elements() {
 }
 
 #[test]
-fn array_push_does_not_overflow_on_u32_max_index_key() {
+fn array_push_does_not_treat_u32_max_property_as_an_array_index() {
     // Regression (bd-qsz8t): a property key that parses to `u32::MAX`
     // ("4294967295") fed the `ArrayPush` sparse-length fold a `n + 1`,
     // overflowing u32 — a debug-build panic / release-build wrap. The fold
-    // now saturates (matching `array_like_length`), so the op completes
-    // instead of crashing on this adversarial key.
+    // ArrayPush now follows the explicit array length. The maximum u32 key
+    // is an ordinary property, not an array index, and must remain untouched.
     let module = test_module_with_pool(
         vec![
             Ir3Instruction::NewArray { dst: 1 },
@@ -7910,18 +7910,22 @@ fn array_push_does_not_overflow_on_u32_max_index_key() {
         vec!["4294967295".to_string()],
     );
     let mut core = quickjs_test_core();
-    // The load-bearing assertion: this must not panic on the u32::MAX
-    // sparse-fold (it did before the fix in debug builds).
     let result = core
         .execute(&module)
         .expect("array push must not overflow on a u32::MAX index key");
     let arr_id = object_id_from_value(&result.value, "array push result");
-    // Saturating fold yields next_idx == u32::MAX, so the push writes at
-    // that index, overwriting the pathological key with the pushed value.
     assert_eq!(
         core.heap[arr_id.0 as usize].properties.get("4294967295"),
+        Some(&Value::Int(1)),
+        "the non-index property must remain unchanged"
+    );
+    assert_eq!(
+        core.heap[arr_id.0 as usize].properties.get("0"),
         Some(&Value::Int(42)),
-        "push must have completed and written the element"
+    );
+    assert_eq!(
+        core.heap[arr_id.0 as usize].properties.get("length"),
+        Some(&Value::Int(1)),
     );
 }
 

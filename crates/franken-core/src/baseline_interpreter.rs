@@ -6159,6 +6159,7 @@ impl InterpreterCore {
                 register_labels[index] = label;
             }
         }
+        let context_label = setup.this_label.join(&setup.super_label);
         let execution = ModuleExecutionSnapshot {
             registers,
             register_labels,
@@ -6185,7 +6186,7 @@ impl InterpreterCore {
                 saved_scope_depth,
                 saved_scope_chain: None,
                 async_function_id: Some(async_id),
-                accessor_context_label: crate::ifc_artifacts::Label::Public,
+                accessor_context_label: context_label,
             }],
             ip: setup.function_entry as usize,
             register_base: 0,
@@ -7958,6 +7959,7 @@ impl InterpreterCore {
         self.temporarily_suspended_call_depth =
             previous_suspended_call_depth.saturating_add(caller_execution.call_stack.len());
         let module_specifier = Some(module.header.source_label.clone());
+        let context_label = setup.this_label.join(&setup.super_label);
         self.install_module_execution(ModuleExecutionSnapshot {
             registers,
             register_labels,
@@ -7984,7 +7986,7 @@ impl InterpreterCore {
                 saved_scope_depth,
                 saved_scope_chain: None,
                 async_function_id: None,
-                accessor_context_label: crate::ifc_artifacts::Label::Public,
+                accessor_context_label: context_label,
             }],
             ip: setup.function_entry as usize,
             register_base: 0,
@@ -9520,6 +9522,7 @@ impl InterpreterCore {
                         )?;
                         self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
+                        let context_label = receiver_label.join(&callee_label);
                         let (super_value, super_label) = if let Some(binding) =
                             self.concise_method_super_binding(&callee_val)?
                         {
@@ -9584,7 +9587,7 @@ impl InterpreterCore {
                             saved_scope_depth: scope_depth,
                             saved_scope_chain: saved_chain,
                             async_function_id: None,
-                            accessor_context_label: crate::ifc_artifacts::Label::Public,
+                            accessor_context_label: context_label,
                         });
 
                         if let Some(env) = captured_env {
@@ -10209,56 +10212,17 @@ impl InterpreterCore {
                     self.ip += 1;
                 }
                 Ir3Instruction::ArrayPush { array, element } => {
-                    // Push a single element onto an array
-                    let arr_val = self.read_reg(array)?;
-                    let elem_val = self.read_reg(element)?;
-                    let element_label = self.read_reg_label(element)?;
-                    if let Value::Object(arr_id) = arr_val {
-                        let next_idx = self
-                            .heap
-                            .get(arr_id.0 as usize)
-                            .map(|obj| {
-                                let explicit_len = match obj.properties.get("length") {
-                                    Some(Value::Int(length)) => {
-                                        u32::try_from((*length).max(0)).unwrap_or(u32::MAX)
-                                    }
-                                    Some(Value::Float(f)) if f.0.is_finite() && f.0 > 0.0 => {
-                                        (f.0.trunc() as u64).min(u32::MAX as u64) as u32
-                                    }
-                                    _ => 0,
-                                };
-                                obj.properties.keys().fold(explicit_len, |current, key| {
-                                    // `n + 1` would overflow on a property key that
-                                    // parses to `u32::MAX` (e.g. "4294967295");
-                                    // saturate to match `array_like_length`.
-                                    key.parse::<u32>()
-                                        .ok()
-                                        .map_or(current, |n| current.max(n.saturating_add(1)))
-                                })
-                            })
-                            .unwrap_or(0);
-                        let element_key =
-                            RuntimePropertyKey::String(JsString::from(next_idx.to_string()));
-                        let previous_label =
-                            self.own_stored_runtime_property_label(arr_id, &element_key);
-                        self.set_own_runtime_property_label(arr_id, &element_key, &element_label)?;
-                        if let Err(error) =
-                            self.set_object_property(arr_id, next_idx.to_string(), elem_val)
-                        {
-                            self.set_own_runtime_property_label(
-                                arr_id,
-                                &element_key,
-                                &previous_label,
-                            )?;
-                            return Err(error);
+                    let value = self.read_reg(element)?;
+                    let label = self.read_reg_label(element)?;
+                    match self.append_array_literal_element(array, value, label) {
+                        Ok(()) => self.ip += 1,
+                        Err(error) => {
+                            match self.route_run_loop_javascript_error(module, error, mode)? {
+                                None => continue,
+                                Some(error) => return Err(error),
+                            }
                         }
-                        self.set_object_property(
-                            arr_id,
-                            "length".to_string(),
-                            Value::Int(i64::from(next_idx.saturating_add(1))),
-                        )?;
                     }
-                    self.ip += 1;
                 }
                 Ir3Instruction::ArraySlice { array, start, dst } => {
                     let arr_val = self.read_reg(array)?;
@@ -10338,72 +10302,15 @@ impl InterpreterCore {
                     self.ip += 1;
                 }
                 Ir3Instruction::SpreadIntoArray { array, iterable } => {
-                    // Spread iterable elements into an array
-                    let arr_val = self.read_reg(array)?;
-                    let iter_val = self.read_reg(iterable)?;
-                    if let Value::Object(arr_id) = arr_val {
-                        // Get elements from the iterable: an array-like
-                        // object, or a string spread per code point with
-                        // lone surrogates preserved exactly (ES string
-                        // iteration; bd-7zwar, engine parity with bd-rdnhc —
-                        // previously a string iterable was silently skipped).
-                        let elements: Vec<Value> = match &iter_val {
-                            Value::Object(iter_id) => {
-                                let iter_len = self.array_like_length(*iter_id)?;
-                                if let Some(obj) = self.heap.get(iter_id.0 as usize) {
-                                    let mut elems = Vec::with_capacity(iter_len as usize);
-                                    for idx in 0..iter_len {
-                                        elems.push(
-                                            obj.properties
-                                                .get(&idx.to_string())
-                                                .cloned()
-                                                .unwrap_or(Value::Undefined),
-                                        );
-                                    }
-                                    elems
-                                } else {
-                                    Vec::new()
-                                }
+                    match self.spread_into_array(module, array, iterable) {
+                        Ok(()) => self.ip += 1,
+                        Err(error) => {
+                            match self.route_run_loop_javascript_error(module, error, mode)? {
+                                None => continue,
+                                Some(error) => return Err(error),
                             }
-                            Value::Str(text) => text
-                                .code_point_elements()
-                                .into_iter()
-                                .map(Value::Str)
-                                .collect(),
-                            _ => Vec::new(),
-                        };
-                        // Push elements to target array starting at `.length` so leading/interior
-                        // sparse holes are preserved (matching ArraySlice and franken-engine).
-                        if self.heap.get(arr_id.0 as usize).is_some() {
-                            let next_idx = self.array_like_length(arr_id)?;
-                            let mut end_idx = next_idx;
-                            for (offset, elem) in elements.into_iter().enumerate() {
-                                let offset = u32::try_from(offset).map_err(|_| {
-                                    InterpreterError::TypeError {
-                                        expected: "array index capacity".into(),
-                                        got: format!("spread element offset {offset}"),
-                                    }
-                                })?;
-                                let idx = next_idx.checked_add(offset).ok_or_else(|| {
-                                    InterpreterError::TypeError {
-                                        expected: "array index capacity".into(),
-                                        got: format!("array index overflow at {next_idx}+{offset}"),
-                                    }
-                                })?;
-                                self.set_object_property(arr_id, idx.to_string(), elem)?;
-                                end_idx = idx.saturating_add(1);
-                            }
-                            // Maintain `length` like ArrayPush does (engine
-                            // parity; bd-7zwar — spread results previously
-                            // had no length property in this lane).
-                            self.set_object_property(
-                                arr_id,
-                                "length".to_string(),
-                                Value::Int(i64::from(end_idx)),
-                            )?;
                         }
                     }
-                    self.ip += 1;
                 }
                 Ir3Instruction::SpreadIntoObject { target, source } => {
                     let state_was_active =
@@ -12222,6 +12129,127 @@ impl InterpreterCore {
         }
     }
 
+    /// Array literal elements define own data properties, including when an
+    /// inherited index is an accessor. Retain length provenance because a
+    /// preceding spread controls the position of this element.
+    fn append_array_literal_element(
+        &mut self,
+        array: u32,
+        value: Value,
+        label: crate::ifc_artifacts::Label,
+    ) -> Result<(), InterpreterError> {
+        let object = self.expect_object(self.read_reg(array)?, "array literal target")?;
+        let length_key = RuntimePropertyKey::String(JsString::from("length"));
+        let label = label
+            .join(&self.read_reg_label(array)?)
+            .join(&self.own_stored_runtime_property_label(object, &length_key));
+        let next_index = self.array_like_length(object)?;
+        let length = next_index
+            .checked_add(1)
+            .ok_or_else(|| InterpreterError::RangeError {
+                message: "Invalid array length".into(),
+            })?;
+        let retained_bytes = Self::estimate_timer_value_bytes(&value)
+            .saturating_add(Self::estimate_label_bytes(&label));
+        self.with_array_method_temporary(retained_bytes, |core| {
+            let element_key = RuntimePropertyKey::String(JsString::from(next_index.to_string()));
+            core.define_array_literal_property(object, element_key, value, &label)?;
+            core.define_array_literal_property(
+                object,
+                length_key,
+                Value::Int(i64::from(length)),
+                &label,
+            )?;
+            core.write_reg_with_label(array, Value::Object(object), label)
+        })
+    }
+
+    /// Own-only data definition shared by the literal append operation. This
+    /// deliberately bypasses ordinary [[Set]] and any inherited setter.
+    fn define_array_literal_property(
+        &mut self,
+        object: ObjectId,
+        key: RuntimePropertyKey,
+        value: Value,
+        label: &crate::ifc_artifacts::Label,
+    ) -> Result<(), InterpreterError> {
+        let previous_label = self.own_stored_runtime_property_label(object, &key);
+        self.with_array_method_temporary(Self::estimate_label_bytes(&previous_label), |core| {
+            core.set_own_runtime_property_label(object, &key, label)?;
+            if let Err(error) = core.set_plain_data_runtime_property(object, key.clone(), value) {
+                core.set_own_runtime_property_label(object, &key, &previous_label)?;
+                return Err(error);
+            }
+            Ok(())
+        })
+    }
+
+    fn spread_into_array(
+        &mut self,
+        module: &Ir3Module,
+        array: u32,
+        iterable: u32,
+    ) -> Result<(), InterpreterError> {
+        self.expect_object(self.read_reg(array)?, "array literal target")?;
+        // Do not stage values in a native Vec: each iterator step can execute
+        // arbitrary guest code, mutate later values, throw, or never finish.
+        let iterator = {
+            let value = self.read_reg(iterable)?;
+            let mut label = self.read_reg_label(iterable)?;
+            let retained_bytes = Self::estimate_timer_value_bytes(&value)
+                .saturating_add(Self::estimate_label_bytes(&label));
+            self.with_array_method_temporary(retained_bytes, |core| {
+                core.init_for_of_iterator(module, value, &mut label)
+            })?
+        };
+        let handle = self.expect_iterator_handle(iterator)?;
+        loop {
+            self.charge_array_method_step()?;
+            let mut label = self.for_of_iterator_label(handle)?;
+            let finished =
+                self.with_array_method_temporary(Self::estimate_label_bytes(&label), |core| {
+                    // IteratorStep/IteratorValue failures propagate directly.
+                    // Array spread must not call return() after these throws.
+                    match core.advance_for_of_iterator(
+                        module,
+                        Value::Iterator(handle),
+                        &mut label,
+                    )? {
+                        Some(value) => {
+                            core.append_array_literal_element(array, value, label)?;
+                            Ok(false)
+                        }
+                        None => {
+                            let object =
+                                core.expect_object(core.read_reg(array)?, "array literal target")?;
+                            let length_key = RuntimePropertyKey::String(JsString::from("length"));
+                            let label = label
+                                .join(&core.read_reg_label(array)?)
+                                .join(&core.own_stored_runtime_property_label(object, &length_key));
+                            // A spread that yields nothing, or whose final
+                            // done flag is private, still controls array shape
+                            // and the positions of subsequent literal values.
+                            core.with_array_method_temporary(
+                                Self::estimate_label_bytes(&label),
+                                |core| {
+                                    core.set_own_runtime_property_label(
+                                        object,
+                                        &length_key,
+                                        &label,
+                                    )?;
+                                    core.write_reg_with_label(array, Value::Object(object), label)
+                                },
+                            )?;
+                            Ok(true)
+                        }
+                    }
+                })?;
+            if finished {
+                return Ok(());
+            }
+        }
+    }
+
     fn init_for_of_iterator(
         &mut self,
         module: &Ir3Module,
@@ -12286,8 +12314,18 @@ impl InterpreterCore {
                             got: method.type_name().to_string(),
                         });
                     }
-                    let (completion, iterator_label) =
-                        self.invoke_inline_method_call_labeled(module, method, value, &[])?;
+                    let (completion, iterator_label) = self.with_array_method_temporary(
+                        Self::estimate_label_bytes(label),
+                        |core| {
+                            core.invoke_inline_method_call_with_receiver_label(
+                                module,
+                                method,
+                                value,
+                                label.clone(),
+                                &[],
+                            )
+                        },
+                    )?;
                     *label = label.join(&iterator_label);
                     let iterator = self.complete_inline_call(completion)?;
                     match iterator {
@@ -12425,7 +12463,15 @@ impl InterpreterCore {
 
         let (receiver, next_method) = custom_step.expect("captured iterator.next");
         let (completion, result_label) =
-            self.invoke_inline_method_call_labeled(module, next_method, receiver, &[])?;
+            self.with_array_method_temporary(Self::estimate_label_bytes(label), |core| {
+                core.invoke_inline_method_call_with_receiver_label(
+                    module,
+                    next_method,
+                    receiver,
+                    label.clone(),
+                    &[],
+                )
+            })?;
         *label = label.join(&result_label);
         let result = self.complete_inline_call(completion)?;
         self.iterator_carrier_backing_id(&result, "iterator result object")?;
@@ -18562,6 +18608,10 @@ impl InterpreterCore {
                 MEMORY_ESTIMATE_ITERATOR_BASE_BYTES
                     .saturating_add(values)
                     .saturating_add(
+                        (state.values.len() as u64)
+                            .saturating_mul(std::mem::size_of::<Value>() as u64),
+                    )
+                    .saturating_add(
                         state
                             .iterator_receiver
                             .as_ref()
@@ -19348,7 +19398,10 @@ impl InterpreterCore {
                 expected: "iterator table capacity".into(),
                 got: format!("exceeded u32::MAX ({})", self.iterators.len()),
             })?;
+        let retained_bytes = Self::estimate_iterator_bytes(&iterator);
+        self.check_temporary_memory_budget(retained_bytes)?;
         self.iterators.push(iterator);
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_add(retained_bytes);
         Ok(handle)
     }
 
@@ -19404,11 +19457,23 @@ impl InterpreterCore {
             // unpaired surrogate preserved as its own single-unit element
             // (bd-7zwar, engine parity with bd-rdnhc; previously iterated the
             // U+FFFD projection).
-            Value::Str(text) => Ok(text
-                .code_point_elements()
-                .into_iter()
-                .map(Value::Str)
-                .collect()),
+            Value::Str(text) => {
+                // A code point occupies at most one slot per UTF-16 unit.
+                // Check both transient Vec representations and their string
+                // storage before expanding a potentially large string.
+                let per_element = (std::mem::size_of::<JsString>() as u64)
+                    .saturating_add(std::mem::size_of::<Value>() as u64)
+                    .saturating_add(MEMORY_ESTIMATE_STRING_BASE_BYTES)
+                    .saturating_add(8);
+                self.check_temporary_memory_budget(
+                    (text.utf16_len() as u64).saturating_mul(per_element),
+                )?;
+                Ok(text
+                    .code_point_elements()
+                    .into_iter()
+                    .map(Value::Str)
+                    .collect())
+            }
             Value::Object(object_id) => {
                 let object = self
                     .heap

@@ -152,6 +152,16 @@ impl RuntimeCapability {
     }
 }
 
+impl crate::containment_executor::SandboxPolicy {
+    /// Intersect a registry-resolved runtime authority with this policy.
+    /// Resolving the hostcall first prevents aliases and wrapper tags from
+    /// bypassing sandbox restrictions. The interpreter also checks the
+    /// original grant; a sandbox policy cannot create new authority.
+    pub fn allows_runtime_capability(&self, capability: RuntimeCapability) -> bool {
+        self.is_allowed(&capability.to_string())
+    }
+}
+
 /// Production dispatcher selected by the canonical HostCall registry.
 ///
 /// The variants name existing implementation families rather than duplicating
@@ -1010,6 +1020,36 @@ pub fn require_all(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sandbox_policy_resolves_every_runtime_capability_without_implicit_grants() {
+        use crate::containment_executor::SandboxPolicy;
+
+        for selected in RuntimeCapability::ALL {
+            let policy = SandboxPolicy {
+                allowed_capabilities: vec![selected.to_string().replace('_', "-")],
+                allow_network: true,
+                allow_fs_write: true,
+                allow_process_spawn: true,
+                max_memory_bytes: 1024,
+            };
+            for candidate in RuntimeCapability::ALL {
+                assert_eq!(
+                    policy.allows_runtime_capability(candidate),
+                    candidate == selected,
+                    "{selected:?} must not grant {candidate:?}"
+                );
+            }
+        }
+        let default = SandboxPolicy::default();
+        for capability in RuntimeCapability::ALL {
+            assert_eq!(
+                default.allows_runtime_capability(capability),
+                capability == RuntimeCapability::FsRead,
+                "{capability:?}"
+            );
+        }
+    }
 
     // -- Profile contents --
 

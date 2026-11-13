@@ -411,6 +411,140 @@ fn receipts_empty_for_unknown_extension() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn sandbox_capability_aliases_have_one_enforced_identity() {
+    let canonical = SandboxPolicy {
+        allowed_capabilities: vec!["fs_read".into(), "env_read".into()],
+        ..SandboxPolicy::default()
+    };
+    let aliases = SandboxPolicy {
+        allowed_capabilities: vec!["env-read".into(), "fs-read".into(), "fs_read".into()],
+        ..canonical.clone()
+    };
+    for name in ["fs_read", "fs-read", "env_read", "env-read"] {
+        assert!(canonical.is_allowed(name), "{name}");
+        assert!(aliases.is_allowed(name), "{name}");
+    }
+    for name in ["fs:read", "FS_READ", "fs_write", "network_egress", ""] {
+        assert!(!canonical.is_allowed(name), "{name}");
+        assert!(!aliases.is_allowed(name), "{name}");
+    }
+    assert_eq!(canonical.content_hash(), aliases.content_hash());
+    assert!(SandboxPolicy::default().is_allowed("fs_read"));
+}
+
+#[test]
+fn sandbox_sensitive_effects_require_membership_and_their_own_flag() {
+    for listed in [false, true] {
+        for mask in 0..8 {
+            let policy = SandboxPolicy {
+                allowed_capabilities: if listed {
+                    vec![
+                        "network-egress".into(),
+                        "fs-write".into(),
+                        "process-spawn".into(),
+                    ]
+                } else {
+                    Vec::new()
+                },
+                allow_network: mask & 1 != 0,
+                allow_fs_write: mask & 2 != 0,
+                allow_process_spawn: mask & 4 != 0,
+                max_memory_bytes: 1024,
+            };
+            for (canonical, alias, flag) in [
+                ("network_egress", "network-egress", 1),
+                ("fs_write", "fs-write", 2),
+                ("process_spawn", "process-spawn", 4),
+            ] {
+                let expected = listed && mask & flag != 0;
+                assert_eq!(
+                    policy.is_allowed(canonical),
+                    expected,
+                    "{listed}/{mask}/{canonical}"
+                );
+                assert_eq!(
+                    policy.is_allowed(alias),
+                    expected,
+                    "{listed}/{mask}/{alias}"
+                );
+            }
+            assert!(!policy.is_allowed("env_read"));
+        }
+    }
+}
+
+#[test]
+fn sandbox_receipt_binds_exact_capability_flags_and_memory_limit() {
+    let base = SandboxPolicy {
+        allowed_capabilities: vec!["fs-read".into(), "network-egress".into()],
+        max_memory_bytes: 4096,
+        ..SandboxPolicy::default()
+    };
+    let mut variants = vec![base.clone(); 5];
+    variants[0].allowed_capabilities.push("env_read".into());
+    variants[1].allow_network = true;
+    variants[2].allow_fs_write = true;
+    variants[3].allow_process_spawn = true;
+    variants[4].max_memory_bytes = 0;
+    for policy in variants {
+        assert_ne!(policy.content_hash(), base.content_hash());
+        let mut executor = setup_executor();
+        let context = ContainmentContext {
+            sandbox_policy: policy.clone(),
+            ..test_context()
+        };
+        let receipt = executor
+            .execute(ContainmentAction::Sandbox, "ext-001", &context)
+            .unwrap();
+        assert!(receipt.verify_integrity());
+        assert_eq!(executor.sandbox_policy("ext-001"), Some(&policy));
+        assert_eq!(
+            receipt.metadata.get("sandbox_policy_hash"),
+            Some(&policy.content_hash().to_string())
+        );
+        let repeated = executor
+            .execute(ContainmentAction::Sandbox, "ext-001", &context)
+            .unwrap();
+        assert_eq!(receipt, repeated);
+    }
+}
+
+#[test]
+fn sandbox_revokes_network_unless_both_policy_controls_allow_it() {
+    use frankenengine_extension_host::host_io::SandboxedHostIo;
+
+    for listed in [false, true] {
+        for flag in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let provider = SandboxedHostIo::with_root(root.path()).unwrap();
+            let revocation = provider.network_revocation();
+            let mut executor = setup_executor();
+            executor.register_network_revocation("ext-001", revocation.clone());
+            let context = ContainmentContext {
+                sandbox_policy: SandboxPolicy {
+                    allowed_capabilities: if listed {
+                        vec!["network-egress".into()]
+                    } else {
+                        Vec::new()
+                    },
+                    allow_network: flag,
+                    ..SandboxPolicy::default()
+                },
+                ..test_context()
+            };
+            executor
+                .execute(ContainmentAction::Sandbox, "ext-001", &context)
+                .unwrap();
+            assert_eq!(
+                revocation.is_revoked(),
+                !(listed && flag),
+                "{listed}/{flag}"
+            );
+        }
+    }
+}
+
+#[test]
 fn sandbox_applies_policy() {
     let mut executor = setup_executor();
     let ctx = test_context();

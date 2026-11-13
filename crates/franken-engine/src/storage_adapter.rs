@@ -1061,17 +1061,12 @@ impl InMemoryStorageAdapter {
         });
     }
 
-    fn state_hash(&self) -> String {
-        let bytes = serde_json::to_vec(&(self.schema_version, &self.stores)).unwrap_or_else(|_e| {
-            // Fallback to deterministic representation on serialization failure
-            format!(
-                "schema_v{}_stores_{}",
-                self.schema_version,
-                self.stores.len()
-            )
-            .into_bytes()
-        });
-        digest_hex(&bytes)
+    fn state_hash(&self, to_version: u32) -> Result<String, StorageError> {
+        encode_migration_state_hash(
+            &(self.schema_version, &self.stores),
+            self.schema_version,
+            to_version,
+        )
     }
 
     fn total_records(&self) -> u64 {
@@ -1123,9 +1118,15 @@ impl StorageAdapter for InMemoryStorageAdapter {
         }
 
         let from_version = self.schema_version;
-        let state_hash_before = self.state_hash();
+        let state_hash_before = self.state_hash(target_version)?;
         self.schema_version = target_version;
-        let state_hash_after = self.state_hash();
+        let state_hash_after = match self.state_hash(target_version) {
+            Ok(hash) => hash,
+            Err(err) => {
+                self.schema_version = from_version;
+                return Err(err);
+            }
+        };
         let stores_touched = self.stores.keys().copied().collect();
 
         Ok(MigrationReceipt {
@@ -2945,6 +2946,21 @@ impl<B: FrankensqliteBackend> StorageAdapter for FrankensqliteStorageAdapter<B> 
     fn events(&self) -> &[StorageEvent] {
         &self.events
     }
+}
+
+/// Encode canonical state material into a deterministic content hash, failing
+/// closed instead of substituting a synthetic fallback digest on encoding error.
+pub fn encode_migration_state_hash<S: Serialize>(
+    state: &S,
+    from: u32,
+    to: u32,
+) -> Result<String, StorageError> {
+    let bytes = serde_json::to_vec(state).map_err(|err| StorageError::MigrationFailed {
+        from,
+        to,
+        reason: format!("content-hash encoding failed: {err}"),
+    })?;
+    Ok(digest_hex(&bytes))
 }
 
 fn digest_hex(bytes: &[u8]) -> String {
@@ -6205,6 +6221,68 @@ mod tests {
         assert_eq!(
             loaded.metadata.get("extension_id"),
             Some(&"ext-alpha".to_string())
+        );
+    }
+
+    #[test]
+    fn content_hash_encoding_failure_fails_closed_without_synthetic_fallback_g2vrp_22() {
+        struct UnencodableState;
+        impl Serialize for UnencodableState {
+            fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                Err(serde::ser::Error::custom(
+                    "injected content-hash serialization failure",
+                ))
+            }
+        }
+
+        let err = encode_migration_state_hash(&UnencodableState, 1, 2)
+            .expect_err("content-hash encoding failure must fail closed");
+        assert_eq!(err.code(), "FE-STOR-0006");
+        assert!(
+            matches!(
+                err,
+                StorageError::MigrationFailed {
+                    from: 1,
+                    to: 2,
+                    ref reason
+                } if reason.contains("content-hash encoding failed")
+            ),
+            "unexpected error: {err:?}"
+        );
+
+        let mut non_string_key_map = BTreeMap::new();
+        non_string_key_map.insert((1u32, 2u32), 99u32);
+        let map_err = encode_migration_state_hash(&non_string_key_map, 2, 3)
+            .expect_err("non-string JSON map keys must fail closed");
+        assert_eq!(map_err.code(), "FE-STOR-0006");
+
+        let mut left = InMemoryStorageAdapter::new();
+        let mut right = InMemoryStorageAdapter::new();
+        left.put(
+            StoreKind::ReplayIndex,
+            "runs/alpha".to_string(),
+            b"payload-a".to_vec(),
+            BTreeMap::new(),
+            &ctx(),
+        )
+        .expect("put left");
+        right
+            .put(
+                StoreKind::ReplayIndex,
+                "runs/alpha".to_string(),
+                b"payload-b".to_vec(),
+                BTreeMap::new(),
+                &ctx(),
+            )
+            .expect("put right");
+        let left_receipt = left.migrate_to(2).expect("migrate left");
+        let right_receipt = right.migrate_to(2).expect("migrate right");
+        assert_ne!(
+            left_receipt.state_hash_before, right_receipt.state_hash_before,
+            "distinct store contents with identical schema/store-count must never collide"
         );
     }
 }

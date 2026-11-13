@@ -14742,22 +14742,19 @@ fn parse_class_body(
 
     // Split on top-level method boundaries.  Each method looks like:
     // [static] [async|get|set] name(...) { ... }
-    // We scan for `}` at brace_depth==0 to find method boundaries.
+    // A closing brace at the outer member depth ends a method. Semicolon
+    // segments are retained so unsupported native fields cannot disappear.
     let segments = split_class_members(body);
     for segment in segments {
-        let segment = segment.trim();
+        let segment = trim_directive_trivia(segment).0.trim_end();
         if segment.is_empty() || segment == ";" {
             continue;
         }
-        let is_static = segment.starts_with("static ");
-        let rest = if is_static {
-            segment
-                .strip_prefix("static ")
-                .unwrap_or(segment)
-                .trim_start()
-        } else {
-            segment
-        };
+        let static_prefix = strip_contextual_keyword(segment, "static")
+            .map(|after| trim_directive_trivia(after).0)
+            .filter(|after| !after.is_empty() && !after.starts_with('('));
+        let is_static = static_prefix.is_some();
+        let rest = static_prefix.unwrap_or(segment);
 
         let (is_async, rest) = if let Some(after_async) = strip_contextual_keyword(rest, "async") {
             let (after_trivia, saw_line_terminator) = trim_directive_trivia(after_async);
@@ -14789,28 +14786,92 @@ fn parse_class_body(
         let rest = if is_async {
             kind = MethodKind::AsyncMethod;
             rest
-        } else if starts_with_keyword(rest, "get") {
+        } else if let Some(after) = strip_contextual_keyword(rest, "get")
+            .map(|after| trim_directive_trivia(after).0)
+            .filter(|after| !after.starts_with('('))
+        {
             kind = MethodKind::Get;
-            rest.strip_prefix("get").unwrap_or(rest).trim_start()
-        } else if starts_with_keyword(rest, "set") {
+            after
+        } else if let Some(after) = strip_contextual_keyword(rest, "set")
+            .map(|after| trim_directive_trivia(after).0)
+            .filter(|after| !after.starts_with('('))
+        {
             kind = MethodKind::Set;
-            rest.strip_prefix("set").unwrap_or(rest).trim_start()
+            after
         } else {
             kind = MethodKind::Method;
             rest
         };
 
-        // Extract method name (up to `(`).
-        let paren_idx = rest.find('(').ok_or_else(|| {
+        // Core represents methods, not native fields/private elements. A
+        // parameter list must follow one complete property key: searching for
+        // any `(` accepted `field = function() {}` as a bogus method name.
+        // The lexical depth also skips calls and braces inside computed keys.
+        let error_source_label = context.source_label.to_string();
+        let unsupported_member = || {
             ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
-                format!("class method requires parameter list: {}", segment),
-                context.source_label.to_string(),
+                format!(
+                    "unsupported class member (native fields and private elements are not implemented): `{segment}`"
+                ),
+                error_source_label.clone(),
                 Some(span.clone()),
             )
-        })?;
-        let method_name = rest[..paren_idx].trim();
-        if is_async && !is_static && method_name == "constructor" {
+        };
+        let mut paren_idx = None;
+        scan_binding_pattern_source_until_with_context(
+            rest,
+            ScanGrammarContext::STRICT_SCRIPT.expression(),
+            |index, ch, depth, quoted| {
+                if !quoted && depth == 0 && ch == '(' {
+                    paren_idx = Some(index);
+                    false
+                } else {
+                    true
+                }
+            },
+        );
+        let paren_idx = paren_idx.ok_or_else(&unsupported_member)?;
+        // This slice is an IdentifierName/property key, not a strict-mode
+        // IdentifierReference: `yield()` and `return()` are valid names.
+        // Computed-key expressions are still parsed in strict mode below.
+        let method_name =
+            trim_binding_pattern_trivia(&rest[..paren_idx]).ok_or_else(&unsupported_member)?;
+        let (key, computed) = if method_name.starts_with('[') {
+            let (inner, trailing) = extract_balanced_with_context(
+                method_name,
+                '[',
+                ']',
+                ScanGrammarContext::STRICT_SCRIPT.expression(),
+            )
+            .ok_or_else(&unsupported_member)?;
+            if inner.trim().is_empty() || !trim_directive_trivia(trailing).0.is_empty() {
+                return Err(unsupported_member());
+            }
+            let key = with_grammar_context(context, true, false, false, false, false, |context| {
+                parse_expression(inner.trim(), span, context, 1)
+            })?;
+            if matches!(key, Expression::Raw(_) | Expression::SpreadElement(_)) {
+                return Err(unsupported_member());
+            }
+            (key, true)
+        } else {
+            (
+                with_grammar_context(context, true, false, false, false, false, |context| {
+                    parse_static_property_name(method_name, span, context, "class-method")
+                })
+                .map_err(|_| unsupported_member())?,
+                false,
+            )
+        };
+        let is_constructor = !is_static
+            && !computed
+            && match &key {
+                Expression::Identifier(name) => name == "constructor",
+                Expression::StringLiteral(name) => name.as_str() == Some("constructor"),
+                _ => false,
+            };
+        if is_async && is_constructor {
             return Err(ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
                 "class constructors cannot be async",
@@ -14818,30 +14879,10 @@ fn parse_class_body(
                 Some(span.clone()),
             ));
         }
-        let actual_kind = if method_name == "constructor" && !is_static {
+        let actual_kind = if is_constructor {
             MethodKind::Constructor
         } else {
             kind
-        };
-        let (key, computed) = if let Some(inner) = method_name
-            .strip_prefix('[')
-            .and_then(|name| name.strip_suffix(']'))
-        {
-            (
-                with_grammar_context(context, true, false, false, false, false, |context| {
-                    parse_expression(inner.trim(), span, context, 1)
-                })?,
-                true,
-            )
-        } else if matches!(method_name.as_bytes().first(), Some(b'\'' | b'"')) {
-            (
-                with_grammar_context(context, true, false, false, false, false, |context| {
-                    parse_static_property_name(method_name, span, context, "class-method")
-                })?,
-                false,
-            )
-        } else {
-            (Expression::Identifier(method_name.to_string()), false)
         };
         let rest = &rest[paren_idx..];
 
@@ -14861,7 +14902,7 @@ fn parse_class_body(
             )
         })?;
         // Parse method body.
-        let rest = rest.trim_start();
+        let rest = trim_directive_trivia(rest).0;
         let (body_src, _) = extract_balanced_with_context(
             rest,
             '{',
@@ -14910,34 +14951,27 @@ fn parse_class_body(
 fn split_class_members(body: &str) -> Vec<&str> {
     let mut segments = Vec::new();
     let mut start = 0;
-    let mut brace_depth = 0usize;
-    let mut paren_depth = 0usize;
 
     scan_binding_pattern_source_with_context_seeded(
         body,
         ScanGrammarContext::STRICT_SCRIPT,
         0,
-        |index, ch, _, quoted| {
+        |index, ch, depth, quoted| {
             if quoted {
                 return;
             }
             match ch {
-                '(' => paren_depth = paren_depth.saturating_add(1),
-                ')' => paren_depth = paren_depth.saturating_sub(1),
-                '{' => brace_depth = brace_depth.saturating_add(1),
-                '}' => {
-                    if brace_depth > 0 {
-                        brace_depth = brace_depth.saturating_sub(1);
-                    }
-                    if brace_depth == 0 && paren_depth == 0 {
-                        let end = index.saturating_add(ch.len_utf8());
-                        segments.push(&body[start..end]);
-                        start = end;
-                    }
+                '}' if depth == 1 => {
+                    let end = index.saturating_add(ch.len_utf8());
+                    segments.push(&body[start..end]);
+                    start = end;
                 }
-                ';' if brace_depth == 0 && paren_depth == 0 => {
-                    // Semicolons between methods — skip.
-                    start = index.saturating_add(ch.len_utf8());
+                ';' if depth == 0 => {
+                    // Preserve fields for the parser's UnsupportedSyntax path;
+                    // dropping their text silently removed initialization.
+                    let end = index.saturating_add(ch.len_utf8());
+                    segments.push(&body[start..end]);
+                    start = end;
                 }
                 _ => {}
             }

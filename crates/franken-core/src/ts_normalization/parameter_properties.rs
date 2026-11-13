@@ -1,10 +1,13 @@
-//! Lower constructor parameter properties after annotation erasure.
+//! Lower TypeScript instance initialization after annotation erasure.
 //!
 //! Source tokens and delimiter pairs keep comments, regular expressions and
 //! defaults out of the syntax being rewritten. The generated assignments follow
 //! a direct `super(...)` statement (including redundant parentheses), or the
-//! constructor's directive prologue when there is no such statement. Existing
-//! class-field initialization is left to the class lowering/runtime contract.
+//! constructor's directive prologue when there is no such statement. Ordinary
+//! public instance fields use ES2020 assignment semantics: parameter properties
+//! initialize first, then field initializers in declaration order. Uninitialized
+//! fields do not create an own property. Native JavaScript class parsing and its
+//! ES2022 field initialization contract are not changed by this source pass.
 
 use super::namespaces::{Lexed, TokenKind, lex};
 
@@ -28,9 +31,41 @@ struct Constructor<'a> {
     close: usize,
 }
 
-/// Lower parameter-property modifiers into ordinary parameters and assignments.
-/// Unbalanced or unsupported syntax is retained for the ordinary parser.
+struct Field {
+    start: usize,
+    end: usize,
+    key: usize,
+    initializer: Option<(usize, usize)>,
+}
+
+struct Class {
+    constructor: Option<usize>,
+    fields: Vec<Field>,
+}
+
+/// Lower ordinary public instance fields and constructor parameter properties.
+/// Unsupported class-field combinations retain their original field syntax;
+/// parameter-property lowering keeps its existing independent contract.
 pub fn lower(source: &str) -> String {
+    let source = lower_instance_fields(source);
+    lower_parameter_properties(&source)
+}
+
+fn lower_instance_fields(source: &str) -> String {
+    let Ok(lexed) = lex(source) else {
+        return source.to_owned();
+    };
+    let syntax = Syntax {
+        source,
+        lexed: &lexed,
+    };
+    syntax
+        .class_edits(0, lexed.tokens.len(), 0)
+        .and_then(|edits| apply_edits(source, &edits, 0, source.len()))
+        .unwrap_or_else(|()| source.to_owned())
+}
+
+fn lower_parameter_properties(source: &str) -> String {
     let Ok(lexed) = lex(source) else {
         return source.to_owned();
     };
@@ -94,18 +129,25 @@ pub fn lower(source: &str) -> String {
         edits.extend(insertion);
     }
     edits.sort_by_key(|edit| (edit.start, edit.end));
-    let mut output = String::with_capacity(source.len());
-    let mut cursor = 0;
-    for edit in edits {
+    apply_edits(source, &edits, 0, source.len()).unwrap_or_else(|()| source.to_owned())
+}
+
+fn apply_edits(source: &str, edits: &[Edit], start: usize, end: usize) -> Result<String, ()> {
+    let mut output = String::with_capacity(end - start);
+    let mut cursor = start;
+    for edit in edits
+        .iter()
+        .filter(|edit| edit.start >= start && edit.end <= end)
+    {
         if edit.start < cursor {
-            return source.to_owned();
+            return Err(());
         }
         output.push_str(&source[cursor..edit.start]);
         output.push_str(&edit.replacement);
         cursor = edit.end;
     }
-    output.push_str(&source[cursor..]);
-    output
+    output.push_str(&source[cursor..end]);
+    Ok(output)
 }
 
 struct Syntax<'a> {
@@ -114,6 +156,282 @@ struct Syntax<'a> {
 }
 
 impl<'a> Syntax<'a> {
+    /// Recursively render nested classes before relocating a containing field's
+    /// initializer. A nested class must be lowered exactly once even when its
+    /// source moves from a field into a synthesized constructor.
+    fn class_edits(&self, start: usize, end: usize, depth: usize) -> Result<Vec<Edit>, ()> {
+        if depth >= MAX_STATEMENT_DEPTH {
+            return Err(());
+        }
+        let mut edits = Vec::new();
+        let mut cursor = start;
+        while cursor < end {
+            if self.text(cursor) != "class"
+                || cursor > 0 && matches!(self.text(cursor - 1), "." | "?.")
+            {
+                cursor += 1;
+                continue;
+            }
+            let Ok(after) = self.class_end(cursor, end, depth + 1) else {
+                cursor += 1;
+                continue;
+            };
+            let close = after - 1;
+            let body = self.pair(close).ok_or(())?;
+            let nested = self.class_edits(cursor + 1, close, depth + 1)?;
+            let replacement = self.render_class(cursor, body, close, nested)?;
+            let start = self.lexed.tokens[cursor].start;
+            let end = self.lexed.tokens[close].end;
+            if replacement != self.source[start..end] {
+                edits.push(Edit {
+                    start,
+                    end,
+                    replacement,
+                });
+            }
+            cursor = after;
+        }
+        Ok(edits)
+    }
+
+    fn render_class(
+        &self,
+        start: usize,
+        body: usize,
+        close: usize,
+        mut edits: Vec<Edit>,
+    ) -> Result<String, ()> {
+        let source_start = self.lexed.tokens[start].start;
+        let source_end = self.lexed.tokens[close].end;
+        let Some(class) = self.class_members(body, close) else {
+            return apply_edits(self.source, &edits, source_start, source_end);
+        };
+        if class.fields.is_empty() {
+            return apply_edits(self.source, &edits, source_start, source_end);
+        }
+        let name = start + 1;
+        let heritage = name + usize::from(self.word(name) && self.text(name) != "extends");
+        // Core's implicit derived constructor forwards its arguments internally,
+        // but it does not expose an `arguments` object. A rest-array substitute
+        // for TypeScript's `super(...arguments)` would invoke a user-overridden
+        // Array iterator. Retain the class until forwarding can preserve that
+        // observable distinction, even when ordinary super spread is supported.
+        if class.constructor.is_none()
+            && self.text(heritage) == "extends"
+            && class.fields.iter().any(|field| field.initializer.is_some())
+        {
+            return apply_edits(self.source, &edits, source_start, source_end);
+        }
+        let mut assignments = String::new();
+        for field in &class.fields {
+            let Some((first, after)) = field.initializer else {
+                continue;
+            };
+            let key = &self.lexed.tokens[field.key];
+            let spelling = &self.source[key.start..key.end];
+            let target = if key.kind == TokenKind::Word {
+                format!("this.{spelling}")
+            } else {
+                format!("this[{spelling}]")
+            };
+            let initializer = apply_edits(
+                self.source,
+                &edits,
+                self.lexed.tokens[first].start,
+                self.lexed.tokens[after - 1].end,
+            )?;
+            assignments.push_str(&format!(" {target} = {initializer};"));
+        }
+        if !assignments.is_empty() {
+            let insertion = if let Some(constructor) = class.constructor {
+                let parameters = constructor + 1;
+                let open = self.pair(parameters).ok_or(())? + 1;
+                let end = self.pair(open).ok_or(())?;
+                let Ok(insertion) = self.constructor_insertion(open, end) else {
+                    return apply_edits(self.source, &edits, source_start, source_end);
+                };
+                if insertion.semicolon {
+                    assignments.insert(0, ';');
+                }
+                assignments.push(' ');
+                insertion.offset
+            } else {
+                assignments = format!(" constructor() {{{assignments} }} ");
+                self.lexed.tokens[body].end
+            };
+            edits.push(Edit {
+                start: insertion,
+                end: insertion,
+                replacement: assignments,
+            });
+        }
+        for field in class.fields {
+            let start = self.lexed.tokens[field.start].start;
+            let end = self.lexed.tokens[field.end - 1].end;
+            // Nested edits inside an initializer already appear in its moved
+            // expression. Remove their old location together with the field.
+            edits.retain(|edit| edit.start == edit.end || edit.start < start || edit.end > end);
+            edits.push(Edit {
+                start,
+                end,
+                replacement: self.source[start..end]
+                    .chars()
+                    .map(|ch| match ch {
+                        '\n' | '\r' | '\u{2028}' | '\u{2029}' => ch,
+                        _ => ' ',
+                    })
+                    .collect(),
+            });
+        }
+        edits.sort_by_key(|edit| (edit.start, edit.end));
+        apply_edits(self.source, &edits, source_start, source_end)
+    }
+
+    /// Recognize complete member boundaries before changing any instance field.
+    /// Computed instance fields need class-evaluation temporaries; private
+    /// elements need their branding/initializer schedule. Leave either class
+    /// untouched instead of moving only some of its instance elements.
+    fn class_members(&self, body: usize, close: usize) -> Option<Class> {
+        let mut cursor = body + 1;
+        let mut constructor = None;
+        let mut fields = Vec::new();
+        while cursor < close {
+            if self.text(cursor) == ";" {
+                cursor += 1;
+                continue;
+            }
+            let start = cursor;
+            let is_static = self.text(cursor) == "static"
+                && (self.member_key(cursor + 1)
+                    || matches!(self.text(cursor + 1), "[" | "#" | "*" | "{"));
+            cursor += usize::from(is_static);
+            if is_static && self.text(cursor) == "{" {
+                cursor = self.pair(cursor)? + 1;
+                continue;
+            }
+            let mut method_modifier = false;
+            if matches!(self.text(cursor), "get" | "set" | "async")
+                && (self.member_key(cursor + 1) || matches!(self.text(cursor + 1), "[" | "#" | "*"))
+                && (self.text(cursor) != "async" || !self.newline_before(cursor + 1))
+            {
+                method_modifier = true;
+                cursor += 1;
+            }
+            if self.text(cursor) == "*" {
+                method_modifier = true;
+                cursor += 1;
+            }
+            if self.text(cursor) == "#" {
+                return None;
+            }
+            let key = cursor;
+            let computed = self.text(cursor) == "[";
+            cursor = if computed {
+                self.pair(cursor)? + 1
+            } else if self.member_key(cursor) {
+                cursor + 1
+            } else {
+                return None;
+            };
+            if self.text(cursor) == "(" {
+                let after_parameters = self.pair(cursor)? + 1;
+                if self.text(after_parameters) != "{" {
+                    return None;
+                }
+                if !is_static && !computed && !method_modifier {
+                    let token = &self.lexed.tokens[key];
+                    let spelling = &self.source[token.start..token.end];
+                    if token.kind == TokenKind::Literal && spelling.contains('\\') {
+                        // An escaped quoted name can spell `constructor`.
+                        return None;
+                    }
+                    if (self.text(key) == "constructor"
+                        || matches!(spelling, "'constructor'" | "\"constructor\""))
+                        && constructor.replace(key).is_some()
+                    {
+                        return None;
+                    }
+                }
+                cursor = self.pair(after_parameters)? + 1;
+                continue;
+            }
+            if method_modifier || computed && !is_static || self.text(key) == "constructor" {
+                return None;
+            }
+            let initializer = if self.text(cursor) == "=" {
+                let first = cursor + 1;
+                cursor = self.field_initializer_end(first, close)?;
+                if cursor == first {
+                    return None;
+                }
+                Some((first, cursor))
+            } else {
+                None
+            };
+            if self.text(cursor) == ";" {
+                cursor += 1;
+            } else if cursor != close && !self.newline_before(cursor) {
+                return None;
+            }
+            if !is_static {
+                fields.push(Field {
+                    start,
+                    end: cursor,
+                    key,
+                    initializer,
+                });
+            }
+        }
+        Some(Class {
+            constructor,
+            fields,
+        })
+    }
+
+    fn member_key(&self, index: usize) -> bool {
+        self.lexed.tokens.get(index).is_some_and(|token| {
+            token.kind == TokenKind::Word
+                || token.kind == TokenKind::Literal
+                    && self.source[token.start..token.end]
+                        .starts_with(|ch: char| ch.is_ascii_digit() || matches!(ch, '\'' | '"'))
+        })
+    }
+
+    fn field_initializer_end(&self, start: usize, end: usize) -> Option<usize> {
+        let mut cursor = start;
+        while cursor < end {
+            if self.text(cursor) == ";" {
+                break;
+            }
+            // A field initializer is an AssignmentExpression, not a bare
+            // comma expression. Parenthesized commas are inside a group.
+            if matches!(self.text(cursor), "," | ")" | "]" | "}") {
+                return None;
+            }
+            if cursor > start
+                && self.newline_before(cursor)
+                && (self.word(cursor - 1)
+                    && cursor > 1
+                    && matches!(self.text(cursor - 2), "." | "?.")
+                    || self.ends_expression(cursor - 1)
+                        && !matches!(self.text(cursor - 1), "class" | "function" | "extends"))
+                && !self.continues_expression(cursor)
+            {
+                break;
+            }
+            cursor = if cursor == 0 || !matches!(self.text(cursor - 1), "." | "?.") {
+                match self.text(cursor) {
+                    "class" => self.class_end(cursor, end, 0).ok()?,
+                    "function" => self.function_end(cursor, end).ok()?,
+                    _ => self.after_group(cursor).unwrap_or(cursor + 1),
+                }
+            } else {
+                self.after_group(cursor).unwrap_or(cursor + 1)
+            };
+        }
+        Some(cursor)
+    }
+
     fn text(&self, index: usize) -> &str {
         self.lexed
             .tokens
@@ -713,5 +1031,117 @@ mod tests {
         assert_eq!(compact(&output), "constructor(x:number);");
         let output = lower_typescript("constructor(private x: number) { use(x); }");
         assert_eq!(compact(&output), "constructor(x){this.x=x;use(x);}");
+    }
+
+    #[test]
+    fn instance_fields_follow_parameter_properties_in_source_order() {
+        let output = lower_typescript(
+            "class C { first = this.x; missing: number; constructor(public x: number = 3) { observe(this.first); } second = this.first + 1; }",
+        );
+        assert_eq!(
+            compact(&output),
+            "classC{constructor(x=3){this.x=x;this.first=this.x;this.second=this.first+1;observe(this.first);}}"
+        );
+    }
+
+    #[test]
+    fn fields_synthesize_base_constructors_and_elide_uninitialized_properties() {
+        assert_eq!(
+            compact(&lower_typescript(
+                "class C{x=1; 'hy-phen'=2; 42=3; absent?: number;}"
+            )),
+            "classC{constructor(){this.x=1;this['hy-phen']=2;this[42]=3;}}"
+        );
+        assert_eq!(
+            compact(&lower_typescript("class C { x: number; y; }")),
+            "classC{}"
+        );
+        assert_eq!(
+            compact(&lower_typescript("const C = class { x = 1; };")),
+            "constC=class{constructor(){this.x=1;}};"
+        );
+        assert_eq!(
+            compact(&lower_typescript("class C extends B { x?: number; y; }")),
+            "classCextendsB{}"
+        );
+    }
+
+    #[test]
+    fn fields_keep_directives_and_derived_early_returns_before_super() {
+        let output = lower_typescript(
+            "class C extends B { field=this.x; constructor(public x=3, skip=false) { 'tag'; if(skip) return {field:9}; (super())\nobserve(this.field); } }",
+        );
+        assert_eq!(
+            compact(&output),
+            "classCextendsB{constructor(x=3,skip=false){'tag';if(skip)return{field:9};(super());this.x=x;this.field=this.x;observe(this.field);}}"
+        );
+        assert!(
+            lower("class C {x=1;constructor(){'tag'; use(this.x);}}")
+                .contains("'tag'; this.x = 1;")
+        );
+    }
+
+    #[test]
+    fn static_members_accessors_computed_methods_and_contextual_fields_keep_their_roles() {
+        let output = lower(
+            "class C { static=1; get=2; set=3; async=4; static count=5; static make(){return new C();} get value(){return this.get;} set value(x){this.get=x;} [key()](){return this.set;} *gen(){yield this.async;} }",
+        );
+        let output = compact(&output);
+        assert!(
+            output.contains("constructor(){this.static=1;this.get=2;this.set=3;this.async=4;}")
+        );
+        assert!(output.contains("staticcount=5;staticmake(){returnnewC();}"));
+        assert!(output.contains("getvalue(){returnthis.get;}setvalue(x){this.get=x;}"));
+        assert!(output.contains("[key()](){returnthis.set;}*gen(){yieldthis.async;}"));
+    }
+
+    #[test]
+    fn semicolonless_fields_preserve_grouped_initializers_regex_and_templates() {
+        let output = lower_typescript(
+            "class C {\n first = /[;{}]/.test(';')\n missing: number\n next = (1, 2)\n method() { return this.next; }\n text = `x;${this.next}`\n arrow = () => ({value: this.next})\n}",
+        );
+        let output = compact(&output);
+        assert!(output.contains("constructor(){this.first=/[;{}]/.test(';');this.next=(1,2);this.text=`x;${this.next}`;this.arrow=()=>({value:this.next});}"));
+        assert!(output.contains("method(){returnthis.next;}"));
+        assert!(!output.contains("missing"));
+    }
+
+    #[test]
+    fn nested_classes_are_lowered_once_before_their_initializer_moves() {
+        let output = lower_typescript(
+            "class Outer { factory = class Inner { value=this.x; constructor(public x=2){} }; constructor(public tag=1){} method(){return class Local {x=3;};} }",
+        );
+        let output = compact(&output);
+        assert!(output.contains("constructor(tag=1){this.tag=tag;this.factory=classInner{constructor(x=2){this.x=x;this.value=this.x;}};}"));
+        assert!(output.contains("method(){returnclassLocal{constructor(){this.x=3;}};}"));
+        assert_eq!(output.matches("this.value=this.x;").count(), 1);
+    }
+
+    #[test]
+    fn initializer_asi_distinguishes_function_headers_and_keyword_property_names() {
+        let output = lower(
+            "class C { factory = class\n Inner { value=1; }\n make = function named()\n {return 2;}\n keyword = object.class\n next = object.new\n last = 3\n}",
+        );
+        assert_eq!(
+            compact(&output),
+            "classC{constructor(){this.factory=classInner{constructor(){this.value=1;}};this.make=functionnamed(){return2;};this.keyword=object.class;this.next=object.new;this.last=3;}}"
+        );
+    }
+
+    #[test]
+    fn unsupported_instance_element_combinations_keep_all_their_fields() {
+        for source in [
+            "class C extends B { x=1; }",
+            "class C { x=first(); [key()]=second(); }",
+            "class C { x=first(); #y=second(); }",
+            "class C { x=first(); #method(){} }",
+            "class C { x=first(); accessor y=second(); }",
+            "class C { x=1,2; }",
+        ] {
+            assert_eq!(lower(source), source, "{source}");
+        }
+        let output = lower("class C { x=first(); #y=second(); constructor(public value){} }");
+        assert!(output.contains("x=first(); #y=second();"));
+        assert!(output.contains("this.value = value;"));
     }
 }

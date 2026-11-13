@@ -50,10 +50,8 @@ fn exact_active_collection_backing_stays_memory_exact_bd_b12xs_5() {
         .expect("Map allocation should succeed");
     core.set_object_brand(map, "Map")
         .expect("Map type tag should fit");
-    core.set_object_property(map, "__entries".to_string(), Value::Object(entries))
+    core.set_collection_storage(map, entries)
         .expect("Map backing link should fit");
-    core.set_object_property(map, COLLECTION_SIZE_SLOT.to_string(), Value::Int(0))
-        .expect("Map size should fit");
     let exact = JsString::from_code_units(&[0xD800]);
     core.set_object_runtime_property(
         entries,
@@ -71,22 +69,17 @@ fn exact_active_collection_backing_stays_memory_exact_bd_b12xs_5() {
     core.mutate_heap(|heap| heap[entries.0 as usize].is_frozen = true);
     assert!(
         !core
-            .collection_delete(map, "Map", "__entries", &Value::str("direct"))
+            .collection_delete(map, "Map", &Value::str("direct"))
             .expect("frozen backing deletion should fail closed")
     );
-    assert_eq!(
-        core.heap[map.0 as usize]
-            .properties
-            .get(COLLECTION_SIZE_SLOT),
-        Some(&Value::Int(1))
-    );
+    assert_eq!(core.collection_size(map, "Map"), Some(1));
     assert_eq!(
         core.estimated_memory_bytes(),
         core.recompute_estimated_memory_bytes()
     );
     core.mutate_heap(|heap| heap[entries.0 as usize].is_frozen = false);
     assert!(
-        core.collection_delete(map, "Map", "__entries", &Value::str("direct"))
+        core.collection_delete(map, "Map", &Value::str("direct"))
             .expect("unfrozen backing deletion should succeed")
     );
     assert_eq!(
@@ -126,15 +119,10 @@ fn exact_active_collection_backing_stays_memory_exact_bd_b12xs_5() {
 
     core.map_collection_set(map, Value::str("clear-me"), Value::Int(3))
         .expect("ordinary entry before exact-aware clear should fit");
-    core.collection_clear(map, "Map", "__entries")
+    core.collection_clear(map, "Map")
         .expect("Map.clear should release ordinary and exact backing keys");
     assert!(core.heap[entries.0 as usize].properties.exact_is_empty());
-    assert_eq!(
-        core.heap[map.0 as usize]
-            .properties
-            .get(COLLECTION_SIZE_SLOT),
-        Some(&Value::Int(0))
-    );
+    assert_eq!(core.collection_size(map, "Map"), Some(0));
     assert_eq!(
         core.estimated_memory_bytes(),
         core.recompute_estimated_memory_bytes()
@@ -168,6 +156,153 @@ fn exact_property_edges_participate_in_state_capture_bd_b12xs_5() {
         Some(0),
         "state capture must traverse object references stored under exact-only keys"
     );
+}
+
+#[test]
+fn private_collection_storage_round_trips_without_guest_properties() {
+    let mut core = quickjs_test_core();
+    let (map, map_storage) = core.alloc_empty_map().expect("allocate Map");
+    let set = core.alloc_empty_set().expect("allocate Set");
+    core.map_collection_set(map, Value::str("key"), Value::Object(set))
+        .expect("insert Map entry");
+    core.set_collection_add(set, Value::Object(map))
+        .expect("insert Set entry");
+    let set_storage = core.collection_storage_id(set, "Set").unwrap();
+    let original: Vec<_> = core.heap.iter().cloned().collect();
+    let encoded = serde_json::to_string(&original).expect("serialize heap");
+    let restored: Vec<HeapObject> = serde_json::from_str(&encoded).expect("deserialize heap");
+    assert_eq!(restored, original);
+    assert_eq!(
+        restored[map.0 as usize].collection_storage.as_deref(),
+        Some(&map_storage)
+    );
+    assert_eq!(
+        restored[set.0 as usize].collection_storage.as_deref(),
+        Some(&set_storage)
+    );
+    assert!(restored[map.0 as usize].properties.is_empty());
+    assert!(restored[set.0 as usize].properties.is_empty());
+    assert_eq!(
+        restored[map_storage.0 as usize]
+            .properties
+            .get(&InterpreterCore::collection_key_repr(&Value::str("key"))),
+        Some(&Value::Object(set))
+    );
+    assert_eq!(
+        restored[set_storage.0 as usize]
+            .properties
+            .get(&InterpreterCore::collection_key_repr(&Value::Object(map))),
+        Some(&Value::Object(map))
+    );
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+}
+
+#[test]
+fn private_collection_storage_and_contents_restore_from_execution_seed() {
+    let mut core = quickjs_test_core();
+    let (map, map_storage) = core.alloc_empty_map().expect("allocate Map");
+    let set = core.alloc_empty_set().expect("allocate Set");
+    let replacement = core
+        .alloc_object_with_prototype(None)
+        .expect("allocate replacement backing");
+    core.map_collection_set(map, Value::str("before"), Value::Int(11))
+        .expect("insert Map entry");
+    core.set_collection_add(set, Value::Int(22))
+        .expect("insert Set entry");
+    core.write_reg(0, Value::Object(map)).unwrap();
+    core.write_reg(1, Value::Object(set)).unwrap();
+    let seed = core
+        .capture_execution_seed()
+        .expect("capture collection seed");
+
+    // Replacing the private edge must materialize the original seed just as
+    // an ordinary property write does; mutations of either backing also roll
+    // back, along with the derived size.
+    core.set_collection_storage(map, replacement)
+        .expect("replace private Map storage");
+    core.map_collection_set(map, Value::str("after"), Value::Int(33))
+        .expect("insert replacement entry");
+    core.collection_clear(set, "Set").expect("clear Set");
+    core.set_collection_add(set, Value::Int(44))
+        .expect("insert changed Set entry");
+    core.set_object_property(map, "__size".into(), Value::Int(99))
+        .expect("add ordinary guest property");
+    assert!(!seed.is_lazy());
+    core.reset_execution_state_from_seed(&seed)
+        .expect("restore collection seed");
+
+    assert_eq!(core.collection_storage_id(map, "Map"), Some(map_storage));
+    assert_eq!(core.collection_size(map, "Map"), Some(1));
+    assert_eq!(core.collection_size(set, "Set"), Some(1));
+    assert_eq!(
+        core.collection_get(map, "Map", &Value::str("before")),
+        Value::Int(11)
+    );
+    assert!(!core.collection_has(map, "Map", &Value::str("after")));
+    assert!(core.collection_has(set, "Set", &Value::Int(22)));
+    assert!(!core.collection_has(set, "Set", &Value::Int(44)));
+    assert!(!core.heap[map.0 as usize].properties.contains_key("__size"));
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+}
+
+#[test]
+fn private_collection_storage_refusal_preserves_heap_and_accounting() {
+    let mut core = quickjs_test_core();
+    let map = core.alloc_object_with_prototype(None).unwrap();
+    let storage = core.alloc_object_with_prototype(None).unwrap();
+    core.set_object_brand(map, "Map").unwrap();
+    let previous = core.heap[map.0 as usize].clone();
+    let before = core.estimated_memory_bytes();
+    let limit = core.config.max_total_memory_bytes;
+    core.config.max_total_memory_bytes = before + std::mem::size_of::<ObjectId>() as u64 - 1;
+    assert!(matches!(
+        core.set_collection_storage(map, storage),
+        Err(InterpreterError::MemoryBudgetExceeded { .. })
+    ));
+    assert_eq!(core.heap[map.0 as usize], previous);
+    assert_eq!(core.estimated_memory_bytes(), before);
+
+    core.config.max_total_memory_bytes = limit;
+    core.set_collection_storage(map, storage).unwrap();
+    let installed = core.heap[map.0 as usize].clone();
+    let installed_bytes = core.estimated_memory_bytes();
+    assert!(core.gc_is_remembered(map));
+    assert!(matches!(
+        core.set_collection_storage(map, ObjectId(u32::MAX)),
+        Err(InterpreterError::ObjectNotFound { .. })
+    ));
+    assert_eq!(core.heap[map.0 as usize], installed);
+    assert_eq!(core.estimated_memory_bytes(), installed_bytes);
+    assert_eq!(installed_bytes, core.recompute_estimated_memory_bytes());
+}
+
+#[test]
+fn private_collection_edges_participate_in_state_capture() {
+    let mut core = quickjs_test_core();
+    let (map, map_storage) = core.alloc_empty_map().unwrap();
+    let set = core.alloc_empty_set().unwrap();
+    let value = core.alloc_object_with_prototype(None).unwrap();
+    let set_storage = core.collection_storage_id(set, "Set").unwrap();
+    core.map_collection_set(map, Value::str("set"), Value::Object(set))
+        .unwrap();
+    core.set_collection_add(set, Value::Object(value)).unwrap();
+    core.write_reg(0, Value::Object(map)).unwrap();
+    core.set_register_label(0, Label::Secret).unwrap();
+
+    let sources = core.capture_heap_label_sources();
+    for id in [map, map_storage, set, set_storage, value] {
+        assert_eq!(
+            sources[id.0 as usize],
+            Some(0),
+            "state capture must follow private collection edge to {id:?}"
+        );
+    }
 }
 
 #[test]
@@ -4596,59 +4731,94 @@ mod containment_tests {
         InterpreterCore::new(test_quickjs_config(), "test-containment")
     }
 
+    fn add_receipt_fixture(interpreter: &mut InterpreterCore, action: &str, risk: i64) {
+        // EvidenceLog's cryptographic contract is independent of enforcement.
+        // Runtime risk comes from the real guardplane report, never from an
+        // action-to-score lookup in the interpreter.
+        interpreter.decision_receipts.add_receipt(
+            "extension:current".to_string(),
+            action.to_string(),
+            risk,
+            action.to_string(),
+            interpreter.ip,
+            &interpreter.registers,
+            interpreter.instructions_executed,
+        );
+    }
+
+    fn assert_sandbox_interruption(result: Result<(), InterpreterError>) {
+        assert!(matches!(
+            result,
+            Err(InterpreterError::ContainmentActionRequested { action, reason: None })
+                if action == "sandbox"
+        ));
+    }
+
     #[test]
     fn allow_continues() {
-        let mut interpreter = test_interpreter();
-        let result = interpreter.handle_containment_action(HookAction::Allow);
+        let interpreter = test_interpreter();
+        let result = interpreter.enforce_hook_action(HookAction::Allow);
         assert!(result.is_ok());
-        assert!(!interpreter.suspended);
-        assert!(!interpreter.sandboxed);
-        assert!(!interpreter.quarantined);
+        assert!(interpreter.active_sandbox.get().is_none());
     }
 
     #[test]
     fn terminate_aborts() {
-        let mut interpreter = test_interpreter();
-        let result = interpreter
-            .handle_containment_action(HookAction::Terminate("policy violation".to_string()));
+        let interpreter = test_interpreter();
+        let result =
+            interpreter.enforce_hook_action(HookAction::Terminate("policy violation".to_string()));
         match result {
-            Err(InterpreterError::Terminated { reason }) => {
-                assert_eq!(reason, "policy violation");
+            Err(InterpreterError::ContainmentActionRequested { action, reason }) => {
+                assert_eq!(action, "terminate");
+                assert_eq!(reason.as_deref(), Some("policy violation"));
             }
-            _ => panic!("Expected Terminated error"),
+            _ => panic!("Expected terminal containment interruption"),
         }
-        assert!(!interpreter.suspended);
-        assert!(!interpreter.sandboxed);
-        assert!(!interpreter.quarantined);
+        assert!(interpreter.active_sandbox.get().is_none());
     }
 
     #[test]
     fn suspend_pauses() {
-        let mut interpreter = test_interpreter();
-        let result = interpreter.handle_containment_action(HookAction::Suspend);
-        assert!(result.is_ok());
-        assert!(interpreter.suspended);
-        assert!(!interpreter.sandboxed);
-        assert!(!interpreter.quarantined);
+        let interpreter = test_interpreter();
+        assert!(matches!(
+            interpreter.enforce_hook_action(HookAction::Suspend),
+            Err(InterpreterError::ContainmentActionRequested { action, reason: None })
+                if action == "suspend"
+        ));
+        assert!(interpreter.active_sandbox.get().is_none());
     }
 
     #[test]
     fn sandbox_restricts() {
         let mut interpreter = test_interpreter();
-        let result = interpreter.handle_containment_action(HookAction::Sandbox);
+        let result = interpreter.enforce_hook_action(HookAction::Sandbox);
         assert!(result.is_ok());
-        assert!(!interpreter.suspended);
-        assert!(interpreter.sandboxed);
-        assert!(!interpreter.quarantined);
+        assert!(interpreter.active_sandbox.get().is_some());
+        assert!(!interpreter.sandbox_allows_hostcall("net:request"));
+        assert!(!interpreter.sandbox_allows_hostcall("fs:write"));
+        assert!(interpreter.sandbox_allows_hostcall("fs:read"));
+        let before = (
+            interpreter.heap_size(),
+            interpreter.estimated_memory_bytes(),
+        );
+        assert_sandbox_interruption(interpreter.alloc_object_with_prototype(None).map(|_| ()));
+        assert_eq!(
+            before,
+            (
+                interpreter.heap_size(),
+                interpreter.estimated_memory_bytes()
+            )
+        );
+        assert!(interpreter.decision_receipts().is_empty());
     }
 
     #[test]
     fn challenge_blocks() {
-        let mut interpreter = test_interpreter();
+        let interpreter = test_interpreter();
         let token = ChallengeToken {
             token: "challenge-123".to_string(),
         };
-        let result = interpreter.handle_containment_action(HookAction::Challenge(token.clone()));
+        let result = interpreter.enforce_hook_action(HookAction::Challenge(token.clone()));
         match result {
             Err(InterpreterError::ContainmentActionRequested { action, reason }) => {
                 assert_eq!(action, "challenge");
@@ -4656,60 +4826,397 @@ mod containment_tests {
             }
             _ => panic!("Expected ContainmentActionRequested error"),
         }
-        assert_eq!(interpreter.pending_challenges.len(), 1);
-        assert_eq!(interpreter.pending_challenges[0].token, "challenge-123");
     }
 
     #[test]
-    fn quarantine_terminates_and_marks() {
-        let mut interpreter = test_interpreter();
+    fn quarantine_requests_terminal_orchestrator_enforcement() {
+        let interpreter = test_interpreter();
         let result = interpreter
-            .handle_containment_action(HookAction::Quarantine("malicious behavior".to_string()));
+            .enforce_hook_action(HookAction::Quarantine("malicious behavior".to_string()));
         match result {
-            Err(InterpreterError::Terminated { reason }) => {
-                assert_eq!(reason, "malicious behavior");
+            Err(InterpreterError::ContainmentActionRequested { action, reason }) => {
+                assert_eq!(action, "quarantine");
+                assert_eq!(reason.as_deref(), Some("malicious behavior"));
             }
-            _ => panic!("Expected Terminated error"),
+            _ => panic!("Expected quarantine containment interruption"),
         }
-        assert!(!interpreter.suspended);
-        assert!(!interpreter.sandboxed);
-        assert!(interpreter.quarantined);
+        assert!(interpreter.active_sandbox.get().is_none());
     }
 
     #[test]
-    fn evidence_emitted_per_action() {
+    fn sandbox_activation_witness_is_deterministic_and_emitted_once() {
         let mut interpreter = test_interpreter();
-        let initial_evidence_count = interpreter.containment_evidence.len();
         let initial_witness_count = interpreter.witness_events.len();
+        interpreter.ip = 7;
+        interpreter.instructions_executed = 11;
 
         interpreter
-            .handle_containment_action(HookAction::Sandbox)
+            .enforce_hook_action(HookAction::Sandbox)
             .expect("operation should succeed for valid inputs");
-
-        assert_eq!(
-            interpreter.containment_evidence.len(),
-            initial_evidence_count + 1
-        );
+        interpreter.flush_sandbox_witness();
+        interpreter
+            .enforce_hook_action(HookAction::Sandbox)
+            .unwrap();
+        interpreter.flush_sandbox_witness();
         assert_eq!(interpreter.witness_events.len(), initial_witness_count + 1);
-
-        let evidence = &interpreter.containment_evidence[0];
+        let evidence = &interpreter.witness_events[initial_witness_count];
         assert_eq!(evidence.kind, WitnessEventKind::ContainmentAction);
-        assert_eq!(evidence.instruction_index as usize, interpreter.ip);
+        assert_eq!(evidence.instruction_index, 7);
+        assert_eq!(evidence.timestamp_tick, 11);
+        let sandbox = interpreter.active_sandbox.get().unwrap();
+        let payload = format!(
+            "sandbox_v1:{}:{}",
+            interpreter.config.sandbox_policy.content_hash().to_hex(),
+            sandbox.memory_ceiling_bytes,
+        );
+        assert_eq!(
+            evidence.payload_hash,
+            ContentHash::compute(payload.as_bytes())
+        );
     }
 
     #[test]
     fn interpreter_consistent_after_terminate() {
-        let mut interpreter = test_interpreter();
+        let interpreter = test_interpreter();
         let initial_ip = interpreter.ip;
         let initial_register_base = interpreter.register_base;
 
-        let _ = interpreter
-            .handle_containment_action(HookAction::Terminate("test termination".to_string()));
+        let _ =
+            interpreter.enforce_hook_action(HookAction::Terminate("test termination".to_string()));
 
         // Interpreter state should remain consistent (no half-executed instructions)
         assert_eq!(interpreter.ip, initial_ip);
         assert_eq!(interpreter.register_base, initial_register_base);
-        assert_eq!(interpreter.containment_evidence.len(), 1);
+        assert!(interpreter.decision_receipts().is_empty());
+    }
+
+    struct SandboxOnHostcall;
+
+    impl InterpreterHook for SandboxOnHostcall {
+        fn pre_property_access(
+            &self,
+            _ctx: &HookContext,
+            _target: &ObjectRef,
+            _key: &PropertyKey,
+        ) -> HookAction {
+            HookAction::Allow
+        }
+
+        fn pre_call(
+            &self,
+            _ctx: &HookContext,
+            _callee: &FunctionRef,
+            _args: &[Value],
+        ) -> HookAction {
+            HookAction::Allow
+        }
+
+        fn pre_allocation(
+            &self,
+            _ctx: &HookContext,
+            _kind: AllocKind,
+            _size_hint: usize,
+        ) -> HookAction {
+            HookAction::Allow
+        }
+
+        fn pre_import(&self, _ctx: &HookContext, _specifier: &str) -> HookAction {
+            HookAction::Allow
+        }
+
+        fn pre_hostcall(
+            &self,
+            _ctx: &HookContext,
+            _capability: &str,
+            _allowed: bool,
+        ) -> HookAction {
+            HookAction::Sandbox
+        }
+    }
+
+    fn bounded_sandbox_interpreter(capabilities: &[&str]) -> InterpreterCore {
+        let mut config = test_quickjs_config();
+        config.sandbox_policy.allowed_capabilities = capabilities
+            .iter()
+            .map(|capability| (*capability).to_string())
+            .collect();
+        config.sandbox_policy.max_memory_bytes = config.max_total_memory_bytes;
+        InterpreterCore::new(config, "test-bounded-sandbox")
+    }
+
+    #[test]
+    fn sandbox_rechecks_the_triggering_cached_hostcall_before_dispatch() {
+        let mut interpreter = bounded_sandbox_interpreter(&["fs_read", "heap_allocate"]);
+        interpreter.pruned_hostcall_dispatch = Some(PrunedHostcallDispatch::from_decisions(
+            BTreeMap::from([("fs:write".to_string(), true)]),
+        ));
+        interpreter.set_hook(Arc::new(SandboxOnHostcall));
+        assert_sandbox_interruption(
+            check_hostcall_capability_gate(&mut interpreter, "fs:write", 0).map(|_| ()),
+        );
+        assert_eq!(interpreter.hostcall_decisions.len(), 1);
+        assert!(!interpreter.hostcall_decisions[0].allowed);
+        assert_eq!(
+            interpreter.witness_events[0].kind,
+            WitnessEventKind::ContainmentAction
+        );
+        assert!(check_hostcall_capability_gate(&mut interpreter, "fs:read", 1).is_ok());
+        assert!(interpreter.hostcall_decisions[1].allowed);
+    }
+
+    #[test]
+    fn sandbox_policy_and_cached_allow_never_grant_missing_authority() {
+        let mut interpreter = bounded_sandbox_interpreter(&["fs-read"]);
+        interpreter
+            .config
+            .granted_capabilities
+            .remove(&RuntimeCapability::FsRead);
+        interpreter.pruned_hostcall_dispatch =
+            Some(PrunedHostcallDispatch::from_decisions(BTreeMap::from([
+                ("fs:read".to_string(), true),
+                ("unknown:operation".to_string(), true),
+            ])));
+        interpreter
+            .enforce_hook_action(HookAction::Sandbox)
+            .unwrap();
+        for tag in ["fs:read", "unknown:operation"] {
+            assert!(matches!(
+                check_hostcall_capability_gate(&mut interpreter, tag, 0),
+                Err(InterpreterError::CapabilityDenied { .. })
+            ));
+        }
+        assert!(
+            interpreter
+                .hostcall_decisions
+                .iter()
+                .all(|decision| !decision.allowed)
+        );
+    }
+
+    #[test]
+    fn sandbox_revokes_folded_effect_free_grants() {
+        let mut interpreter = bounded_sandbox_interpreter(&["heap_allocate"]);
+        assert!(check_hostcall_capability_gate(&mut interpreter, "builtin:MathAbs", 0).is_ok());
+        assert!(
+            interpreter
+                .recorded_effect_free_grants
+                .contains("builtin:MathAbs")
+        );
+        interpreter
+            .enforce_hook_action(HookAction::Sandbox)
+            .unwrap();
+        assert_sandbox_interruption(
+            check_hostcall_capability_gate(&mut interpreter, "builtin:MathAbs", 1).map(|_| ()),
+        );
+        assert!(
+            !interpreter
+                .recorded_effect_free_grants
+                .contains("builtin:MathAbs")
+        );
+        assert!(!interpreter.hostcall_decisions.last().unwrap().allowed);
+    }
+
+    #[test]
+    fn sandbox_memory_limit_admits_exact_boundary_and_refuses_atomically() {
+        let mut interpreter = bounded_sandbox_interpreter(&["heap_allocate"]);
+        let before = interpreter.estimated_memory_bytes();
+        let object_bytes = InterpreterCore::estimate_heap_object_bytes(&HeapObject::new());
+        interpreter.config.sandbox_policy.max_memory_bytes = before + object_bytes;
+        interpreter
+            .enforce_hook_action(HookAction::Sandbox)
+            .unwrap();
+        interpreter.alloc_object_with_prototype(None).unwrap();
+        assert_eq!(interpreter.estimated_memory_bytes(), before + object_bytes);
+        let heap_size = interpreter.heap_size();
+        assert_sandbox_interruption(interpreter.alloc_object_with_prototype(None).map(|_| ()));
+        assert_eq!(interpreter.heap_size(), heap_size);
+        assert_eq!(interpreter.estimated_memory_bytes(), before + object_bytes);
+        interpreter.enforce_hook_action(HookAction::Allow).unwrap();
+        interpreter
+            .enforce_hook_action(HookAction::Sandbox)
+            .unwrap();
+        assert_eq!(
+            interpreter
+                .active_sandbox
+                .get()
+                .unwrap()
+                .memory_ceiling_bytes,
+            before + object_bytes
+        );
+    }
+
+    #[test]
+    fn sandbox_default_disallows_growth_even_after_memory_is_released() {
+        let mut interpreter = test_interpreter();
+        interpreter
+            .enforce_hook_action(HookAction::Sandbox)
+            .unwrap();
+        interpreter.apply_memory_component_delta(8, 0).unwrap();
+        let before = interpreter.estimated_memory_bytes();
+        assert_sandbox_interruption(interpreter.apply_memory_component_delta(0, 1));
+        assert_eq!(interpreter.estimated_memory_bytes(), before);
+        assert_sandbox_interruption(interpreter.alloc_buffer_object(0, false).map(|_| ()));
+        assert_sandbox_interruption(
+            interpreter
+                .alloc_timer_handle_object(0, "Timeout")
+                .map(|_| ()),
+        );
+        assert_sandbox_interruption(
+            interpreter.push_console_output(ConsoleLevel::Log, "blocked".to_string()),
+        );
+        assert!(interpreter.console_output.is_empty());
+    }
+
+    #[test]
+    fn sandbox_console_retention_shares_the_allocation_ceiling() {
+        let mut interpreter = bounded_sandbox_interpreter(&["console", "heap_allocate"]);
+        interpreter.config.sandbox_policy.max_memory_bytes =
+            interpreter.estimated_memory_bytes() + std::mem::size_of::<ConsoleEntry>() as u64 + 3;
+        interpreter
+            .enforce_hook_action(HookAction::Sandbox)
+            .unwrap();
+        interpreter
+            .push_console_output(ConsoleLevel::Log, "abc".to_string())
+            .unwrap();
+        assert_sandbox_interruption(interpreter.alloc_object_with_prototype(None).map(|_| ()));
+        assert_sandbox_interruption(
+            interpreter.push_console_output(ConsoleLevel::Log, String::new()),
+        );
+        assert_eq!(interpreter.console_output.len(), 1);
+    }
+
+    #[test]
+    fn sandbox_spread_keeps_rollback_memory_reserved_until_mutation_finishes() {
+        let mut interpreter = bounded_sandbox_interpreter(&["heap_allocate", "builtin"]);
+        let target = interpreter
+            .alloc_array_from_values(&[Value::Int(7)])
+            .unwrap();
+        interpreter.write_reg(0, Value::Object(target)).unwrap();
+        interpreter.write_reg(1, Value::str("x")).unwrap();
+        let baseline = interpreter.sync_estimated_memory_bytes().unwrap();
+        let snapshot = interpreter.heap[target.0 as usize].clone();
+        let snapshot_bytes = InterpreterCore::estimate_heap_object_bytes(&snapshot);
+        interpreter.config.sandbox_policy.max_memory_bytes = baseline + snapshot_bytes;
+        interpreter
+            .enforce_hook_action(HookAction::Sandbox)
+            .unwrap();
+        assert_sandbox_interruption(interpreter.spread_into_array_transaction(
+            &test_module(vec![]),
+            0,
+            1,
+        ));
+        assert_eq!(interpreter.heap[target.0 as usize], snapshot);
+        assert_eq!(interpreter.json_parse_temporary_bytes, 0);
+        assert_eq!(interpreter.estimated_memory_bytes(), baseline);
+        assert_eq!(
+            interpreter.estimated_memory_bytes(),
+            interpreter.recompute_estimated_memory_bytes()
+        );
+        // Once the transaction's snapshot is released, its old reservation
+        // must not permanently consume the sandbox's remaining headroom.
+        interpreter
+            .set_object_property(target, "1".to_string(), Value::str("x"))
+            .unwrap();
+    }
+
+    #[test]
+    fn sandbox_cannot_raise_the_original_memory_limit() {
+        let mut interpreter = bounded_sandbox_interpreter(&["heap_allocate"]);
+        interpreter.config.max_total_memory_bytes = interpreter.estimated_memory_bytes();
+        interpreter.config.sandbox_policy.max_memory_bytes = u64::MAX;
+        interpreter
+            .enforce_hook_action(HookAction::Sandbox)
+            .unwrap();
+        assert_eq!(
+            interpreter
+                .active_sandbox
+                .get()
+                .unwrap()
+                .memory_ceiling_bytes,
+            interpreter.config.max_total_memory_bytes,
+        );
+        assert!(matches!(
+            interpreter.alloc_object_with_prototype(None),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+    }
+
+    #[test]
+    fn sandbox_survives_codegen_grant_and_execution_seed_restoration() {
+        let mut interpreter = bounded_sandbox_interpreter(&["heap_allocate", "builtin"]);
+        let seed = interpreter.capture_execution_seed().unwrap();
+        let grant = InterpreterCore::validate_contained_codegen_grant(&[
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+        ])
+        .unwrap();
+        let replaced = interpreter.replace_with_contained_codegen_grant(Some(grant));
+        interpreter
+            .enforce_hook_action(HookAction::Sandbox)
+            .unwrap();
+        let ceiling = interpreter
+            .active_sandbox
+            .get()
+            .unwrap()
+            .memory_ceiling_bytes;
+        interpreter.restore_replaced_codegen_grants(replaced);
+        assert!(
+            interpreter
+                .config
+                .granted_capabilities
+                .contains(&RuntimeCapability::NetworkEgress)
+        );
+        assert_sandbox_interruption(
+            check_hostcall_capability_gate(&mut interpreter, "net:request", 0).map(|_| ()),
+        );
+        interpreter.reset_execution_state_from_seed(&seed).unwrap();
+        interpreter.reset_repeat_execution_state().unwrap();
+        assert_eq!(
+            interpreter
+                .active_sandbox
+                .get()
+                .unwrap()
+                .memory_ceiling_bytes,
+            ceiling
+        );
+        assert_sandbox_interruption(
+            check_hostcall_capability_gate(&mut interpreter, "net:request", 0).map(|_| ()),
+        );
+        assert_sandbox_interruption(
+            interpreter.run_pre_import_hook(&test_module(vec![]), "node:fs"),
+        );
+    }
+
+    #[test]
+    fn normal_completion_preserves_applied_sandbox_and_terminal_escalation() {
+        let mut interpreter = bounded_sandbox_interpreter(&["heap_allocate"]);
+        interpreter
+            .enforce_hook_action(HookAction::Sandbox)
+            .unwrap();
+        let result = interpreter.take_execution_result(
+            LabeledReturn {
+                value: Value::Int(42),
+                label: Label::Public,
+            },
+            None,
+        );
+        assert_eq!(result.value, Value::Int(42));
+        assert_eq!(result.requested_hook_action, Some(HookAction::Sandbox));
+        assert!(
+            result
+                .witness_events
+                .iter()
+                .any(|event| event.kind == WitnessEventKind::ContainmentAction)
+        );
+        let terminal = HookAction::Quarantine("later escalation".to_string());
+        let result = interpreter.take_execution_result(
+            LabeledReturn {
+                value: Value::Undefined,
+                label: Label::Public,
+            },
+            Some(terminal.clone()),
+        );
+        assert_eq!(result.requested_hook_action, Some(terminal));
     }
 
     // RC-4.4 Decision Receipt Tests
@@ -4724,9 +5231,7 @@ mod containment_tests {
         // the `timestamp > 0` field check holds. `ip` is left at 0, keeping the
         // `instruction_pointer == 0` assertion below intact.
         interpreter.instructions_executed = 1;
-        interpreter
-            .handle_containment_action(HookAction::Terminate("test".to_string()))
-            .ok();
+        add_receipt_fixture(&mut interpreter, "terminate", 900_000);
 
         let receipts = interpreter.decision_receipts().receipts();
         assert_eq!(receipts.len(), 1);
@@ -4745,12 +5250,8 @@ mod containment_tests {
     #[test]
     fn receipt_chain_linked() {
         let mut interpreter = test_interpreter();
-        interpreter
-            .handle_containment_action(HookAction::Sandbox)
-            .ok();
-        interpreter
-            .handle_containment_action(HookAction::Suspend)
-            .ok();
+        add_receipt_fixture(&mut interpreter, "sandbox", 125_000);
+        add_receipt_fixture(&mut interpreter, "suspend", 500_000);
 
         let receipts = interpreter.decision_receipts().receipts();
         assert_eq!(receipts.len(), 2);
@@ -4765,12 +5266,8 @@ mod containment_tests {
     #[test]
     fn chain_verification_valid() {
         let mut interpreter = test_interpreter();
-        interpreter
-            .handle_containment_action(HookAction::Sandbox)
-            .ok();
-        interpreter
-            .handle_containment_action(HookAction::Suspend)
-            .ok();
+        add_receipt_fixture(&mut interpreter, "sandbox", 125_000);
+        add_receipt_fixture(&mut interpreter, "suspend", 500_000);
 
         assert!(interpreter.verify_decision_receipt_chain());
     }
@@ -4778,9 +5275,7 @@ mod containment_tests {
     #[test]
     fn chain_verification_tampered() {
         let mut interpreter = test_interpreter();
-        interpreter
-            .handle_containment_action(HookAction::Sandbox)
-            .ok();
+        add_receipt_fixture(&mut interpreter, "sandbox", 125_000);
 
         // Tamper with the receipt signature
         interpreter.decision_receipts.receipts[0].signature = "tampered".to_string();
@@ -4848,9 +5343,7 @@ mod containment_tests {
     #[test]
     fn export_json_schema() {
         let mut interpreter = test_interpreter();
-        interpreter
-            .handle_containment_action(HookAction::Sandbox)
-            .ok();
+        add_receipt_fixture(&mut interpreter, "sandbox", 125_000);
 
         let json_export = interpreter
             .export_decision_receipts()
@@ -4873,25 +5366,21 @@ mod containment_tests {
     #[test]
     fn receipt_includes_risk_score() {
         let mut interpreter = test_interpreter();
-        interpreter
-            .handle_containment_action(HookAction::Terminate("test".to_string()))
-            .ok();
+        add_receipt_fixture(&mut interpreter, "terminate", 875_123);
 
         let receipt = &interpreter.decision_receipts().receipts()[0];
-        assert_eq!(receipt.risk_score, 900_000); // High risk for terminate action
+        assert_eq!(receipt.risk_score, 875_123);
     }
 
     #[test]
     fn receipt_includes_action() {
         let mut interpreter = test_interpreter();
-        interpreter
-            .handle_containment_action(HookAction::Quarantine("malicious".to_string()))
-            .ok();
+        add_receipt_fixture(&mut interpreter, "quarantine", 950_000);
 
         let receipt = &interpreter.decision_receipts().receipts()[0];
         assert_eq!(receipt.operation_type, "quarantine");
         assert!(receipt.action_taken.contains("quarantine"));
-        assert!(receipt.action_taken.contains("malicious"));
+        assert_eq!(receipt.action_taken, "quarantine");
     }
 }
 
@@ -9903,6 +10392,10 @@ fn commonjs_finalization_keeps_exact_named_exports_bd_b12xs_6() {
             import_meta_object: None,
             exports: BTreeMap::new(),
             star_exports: BTreeMap::new(),
+            local_export_bindings: BTreeMap::new(),
+            local_binding_indices: BTreeMap::new(),
+            import_origins: BTreeMap::new(),
+            star_sources: BTreeSet::new(),
             flow_label_ceiling: None,
             resolved_source_hash: None,
             import_bindings: BTreeMap::new(),
@@ -9910,6 +10403,7 @@ fn commonjs_finalization_keeps_exact_named_exports_bd_b12xs_6() {
             cjs_module_object: Some(module_object),
             compiled_module: None,
             evaluation_promise: None,
+            evaluation_exception: None,
             async_execution: None,
         },
     );

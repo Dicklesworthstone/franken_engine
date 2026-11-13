@@ -4683,19 +4683,14 @@ impl InterpreterCore {
             .saturating_add(u64::try_from(std::mem::size_of::<ExecutionSeed>()).unwrap_or(u64::MAX))
             .saturating_add(Self::pending_execution_seed_entry_bytes());
         let requested_base_bytes = self.estimated_memory_bytes;
-        let requested_total_bytes = self
-            .total_memory_bytes_from_base(requested_base_bytes)
-            .saturating_add(reserved_bytes);
         if self.memory_request_exceeds_budget(
             requested_base_bytes.saturating_add(reserved_bytes),
             self.config.max_total_memory_bytes,
         ) {
-            return Err(InterpreterError::MemoryBudgetExceeded {
-                requested_bytes: requested_total_bytes,
-                max_bytes: self.config.max_total_memory_bytes,
-                requested_heap_objects: self.heap_object_count_u32(),
-                max_heap_objects: self.config.max_heap_objects,
-            });
+            return Err(self.memory_budget_error(
+                requested_base_bytes.saturating_add(reserved_bytes),
+                self.heap_object_count_u32(),
+            ));
         }
 
         let Some(next_reserved_bytes) = self
@@ -4954,17 +4949,13 @@ impl InterpreterCore {
                 .estimated_memory_bytes
                 .saturating_sub(previous_seed_surface_bytes)
                 .saturating_add(next_seed_surface_bytes);
-            let projected_total_bytes = self.total_memory_bytes_from_base(projected_base_bytes);
             if self.memory_request_exceeds_budget(
                 projected_base_bytes,
                 self.config.max_total_memory_bytes,
             ) {
-                return Err(InterpreterError::MemoryBudgetExceeded {
-                    requested_bytes: projected_total_bytes,
-                    max_bytes: self.config.max_total_memory_bytes,
-                    requested_heap_objects: self.heap_object_count_u32(),
-                    max_heap_objects: self.config.max_heap_objects,
-                });
+                return Err(
+                    self.memory_budget_error(projected_base_bytes, self.heap_object_count_u32())
+                );
             }
         }
 
@@ -5493,8 +5484,10 @@ impl InterpreterCore {
 
         let target_was_remembered = self.gc_remembered_set.contains(&array_id);
         let original_memory_ceiling = self.config.max_total_memory_bytes;
-        self.config.max_total_memory_bytes =
-            original_memory_ceiling.saturating_sub(transaction_temporary_bytes);
+        // Keep the rollback snapshot in the shared temporary ledger. Reducing
+        // only the original config ceiling would lose this reservation when a
+        // tighter live sandbox is applied before or during guest iteration.
+        self.json_reserve_temporary(transaction_temporary_bytes)?;
 
         let mutation_result = (|| {
             // Length, not the highest populated index, owns the insertion
@@ -5512,13 +5505,9 @@ impl InterpreterCore {
                 // (Map: `[key, value]` pairs, Set: values) in insertion order,
                 // unless @@iterator is overridden (a subclass's own generator).
                 Value::Object(iterable_id)
-                    if (self
-                        .collection_storage_id(iterable_id, "Map", "__entries")
-                        .is_some()
+                    if (self.collection_storage_id(iterable_id, "Map").is_some()
                         && self.collection_iterates_intrinsically(iterable_id, "Map"))
-                        || (self
-                            .collection_storage_id(iterable_id, "Set", "__values")
-                            .is_some()
+                        || (self.collection_storage_id(iterable_id, "Set").is_some()
                             && self.collection_iterates_intrinsically(iterable_id, "Set")) =>
                 {
                     let values = self
@@ -5670,7 +5659,7 @@ impl InterpreterCore {
             )
         })();
 
-        self.config.max_total_memory_bytes = original_memory_ceiling;
+        self.json_release_temporary(transaction_temporary_bytes);
         if let Err(error) = mutation_result {
             self.mutate_heap(|heap| {
                 if let Some(target) = heap.get_mut(heap_index) {
@@ -5684,20 +5673,7 @@ impl InterpreterCore {
             // state. Keep those observable effects and re-derive accounting
             // after restoring only the transaction-owned target object.
             self.estimated_memory_bytes = self.recompute_base_estimated_memory_bytes();
-            return Err(match error {
-                InterpreterError::MemoryBudgetExceeded {
-                    requested_bytes,
-                    requested_heap_objects,
-                    max_heap_objects,
-                    ..
-                } => InterpreterError::MemoryBudgetExceeded {
-                    requested_bytes: requested_bytes.saturating_add(transaction_temporary_bytes),
-                    max_bytes: original_memory_ceiling,
-                    requested_heap_objects,
-                    max_heap_objects,
-                },
-                other => other,
-            });
+            return Err(error);
         }
 
         let final_label_bytes = final_label
@@ -6383,6 +6359,9 @@ impl InterpreterCore {
     /// Record a new count/time label, charging its bytes to the console
     /// budget like output.
     pub(super) fn charge_console_label(&mut self, label: &str) -> Result<(), InterpreterError> {
+        self.check_sandbox_console_allocation(
+            (label.len() as u64).saturating_add(std::mem::size_of::<(String, u64)>() as u64),
+        )?;
         let entries = self
             .console_counts
             .len()
@@ -6766,6 +6745,10 @@ impl InterpreterCore {
             return Ok(());
         }
 
+        self.check_sandbox_console_allocation(
+            (message.len() as u64).saturating_add(std::mem::size_of::<ConsoleEntry>() as u64),
+        )?;
+
         let entries = self.console_output.len().saturating_add(1);
         let bytes = self.console_output_bytes.saturating_add(message.len());
         let max_bytes = self.config.max_console_bytes;
@@ -6806,6 +6789,16 @@ impl InterpreterCore {
         requested_hook_action: Option<HookAction>,
         trace_handoff: TraceHandoff,
     ) -> ExecutionResult {
+        self.flush_sandbox_witness();
+        let requested_hook_action = if self.active_sandbox.get().is_some()
+            && matches!(
+                requested_hook_action,
+                None | Some(HookAction::Allow | HookAction::Challenge(_))
+            ) {
+            Some(HookAction::Sandbox)
+        } else {
+            requested_hook_action
+        };
         self.seal_timer_callback_witness();
         self.seal_microtask_enqueue_witness();
         // Finalise the nondeterminism trace at the end-of-execution virtual
@@ -7031,7 +7024,8 @@ impl InterpreterCore {
     /// Snapshot registers (value + label) and live heap objects (with
     /// labels derived by joining, onto each object, the label of every
     /// register from whose value it is transitively reachable via property
-    /// values and prototype links). See [`CapturedHeapState`] for why this
+    /// values, private collection storage and prototype links). See
+    /// [`CapturedHeapState`] for why this
     /// is a projection of the register-granularity IFC state.
     pub(super) fn capture_label_projection_working_bytes(&self) -> u64 {
         u64::try_from(self.heap.len())
@@ -7081,6 +7075,13 @@ impl InterpreterCore {
                 let object = &self.heap[object_index];
                 for property_value in object.properties.all_data_values() {
                     Self::queue_object_id_from_value(property_value, &mut frontier, &mut queued);
+                }
+                if let Some(storage) = object.collection_storage.as_deref() {
+                    Self::queue_object_id_from_value(
+                        &Value::Object(*storage),
+                        &mut frontier,
+                        &mut queued,
+                    );
                 }
                 if let Some(prototype) = object.prototype {
                     Self::queue_object_id_from_value(
@@ -7259,6 +7260,20 @@ impl InterpreterCore {
         // equality cannot be resurrected by a wrapping counter (bd-bgq16).
         let repeat_execute =
             self.last_pre_run_seed.is_some() && self.last_post_run_epoch == Some(self.seed_epoch);
+        if let Some(mut sandbox) = self.active_sandbox.get() {
+            // A restriction survives into the new run, but its witness must
+            // refer to this module's entry, not an instruction in the previous
+            // module. Preserve the installed ceiling exactly, even when a
+            // smaller restored heap would otherwise create fresh headroom.
+            sandbox.instruction_index = 0;
+            sandbox.timestamp_tick = if repeat_execute {
+                0
+            } else {
+                self.instructions_executed
+            };
+            self.active_sandbox.set(Some(sandbox));
+            self.sandbox_witness_pending.set(true);
+        }
         let seed = if repeat_execute {
             self.last_pre_run_seed
                 .clone()
@@ -9892,6 +9907,10 @@ impl InterpreterCore {
                 import_meta_object: None,
                 exports: BTreeMap::new(),
                 star_exports: BTreeMap::new(),
+                local_export_bindings: BTreeMap::new(),
+                local_binding_indices: BTreeMap::new(),
+                import_origins: BTreeMap::new(),
+                star_sources: BTreeSet::new(),
                 flow_label_ceiling: None,
                 resolved_source_hash: None,
                 import_bindings: BTreeMap::new(),
@@ -9899,6 +9918,7 @@ impl InterpreterCore {
                 cjs_module_object: None,
                 compiled_module,
                 evaluation_promise: None,
+                evaluation_exception: None,
                 async_execution: None,
             },
         );
@@ -9906,6 +9926,9 @@ impl InterpreterCore {
             .module_state
             .retained_program_bytes
             .saturating_add(retained_program_bytes);
+        if retain_entry_program {
+            self.declare_module_export_bindings(specifier, module)?;
+        }
         // ES2020 26.3.1: a namespace's @@toStringTag is "Module", neither
         // writable, enumerable nor configurable (bd-9vouw.399).
         let tag = RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id());
@@ -10057,6 +10080,7 @@ impl InterpreterCore {
         if record.compiled_module.is_some() {
             return Ok(());
         }
+        self.declare_module_export_bindings(specifier, module)?;
         let retained_program_bytes = Self::retained_module_program_bytes(module, specifier);
         self.apply_memory_component_delta(0, retained_program_bytes)?;
         let record = self
@@ -10295,6 +10319,9 @@ impl InterpreterCore {
                 }
                 ModuleRuntimeStatus::Evaluating | ModuleRuntimeStatus::Evaluated => None,
                 ModuleRuntimeStatus::Failed(reason) => {
+                    if record.evaluation_exception.is_some() {
+                        return self.rethrow_cached_module_exception(resolved);
+                    }
                     // A module whose source was invalid fails every import
                     // with its SyntaxError again (bd-9vouw.389).
                     let reason = reason.clone();
@@ -10657,9 +10684,72 @@ impl InterpreterCore {
                 if let Some(record) = self.module_state.modules.get_mut(resolved) {
                     record.status = ModuleRuntimeStatus::Failed(err.to_string());
                 }
+                if !is_cjs && matches!(&err, InterpreterError::UncaughtException { .. }) {
+                    self.cache_pending_module_exception(resolved)?;
+                }
                 Err(err)
             }
         }
+    }
+
+    /// Retain an ESM evaluation's first guest throw without consuming the
+    /// pending slot needed by its current importer. Admit the retained payload
+    /// before cloning it; a resource refusal remains an engine failure.
+    pub(super) fn cache_pending_module_exception(
+        &mut self,
+        specifier: &str,
+    ) -> Result<(), InterpreterError> {
+        let record = self.module_state.modules.get(specifier).ok_or_else(|| {
+            InterpreterError::ModuleEvaluationFailed {
+                specifier: specifier.to_string(),
+                reason: "module exception has no module record".to_string(),
+            }
+        })?;
+        if record.evaluation_exception.is_some() {
+            return Ok(());
+        }
+        let Some(value) = self.pending_exception.as_ref() else {
+            return Ok(());
+        };
+        let retained_bytes = Self::estimate_value_bytes(value)
+            .saturating_add(Self::estimate_label_bytes(&self.pending_exception_label));
+        self.apply_memory_component_delta(0, retained_bytes)?;
+        let exception = self
+            .pending_exception
+            .as_ref()
+            .map(|value| (value.clone(), self.pending_exception_label.clone()));
+        self.module_state
+            .modules
+            .get_mut(specifier)
+            .expect("module record remains present during exception retention")
+            .evaluation_exception = exception;
+        Ok(())
+    }
+
+    /// Re-arm the recorded completion in the current importer. The module
+    /// record remains its owner and GC root after the pending slot is consumed.
+    pub(super) fn rethrow_cached_module_exception<T>(
+        &mut self,
+        specifier: &str,
+    ) -> Result<T, InterpreterError> {
+        let exception = self
+            .module_state
+            .modules
+            .get(specifier)
+            .and_then(|record| record.evaluation_exception.as_ref())
+            .ok_or_else(|| InterpreterError::ModuleEvaluationFailed {
+                specifier: specifier.to_string(),
+                reason: "module has no retained guest exception".to_string(),
+            })?;
+        self.check_temporary_memory_budget(Self::module_evaluation_exception_bytes(exception))?;
+        let exception = exception.clone();
+        self.rearm_nested_module_throw(Some(exception))?;
+        // Do not inspect a mutable thrown object again just to format a
+        // diagnostic. Its exact value is already in the pending slot; its
+        // message could now be arbitrarily large or carry newer provenance.
+        Err(InterpreterError::UncaughtException {
+            value: "module evaluation failed".to_string(),
+        })
     }
 
     #[cfg(test)]

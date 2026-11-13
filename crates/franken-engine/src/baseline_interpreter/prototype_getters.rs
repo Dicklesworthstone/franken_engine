@@ -342,14 +342,12 @@ impl InterpreterCore {
                 return Ok(Value::str(source));
             }
         }
-        // A Map's or Set's count is an internal slot (bd-9vouw.140); reading
-        // `size` through [[Get]] would come back to this getter.
+        // Only live entries in the private backing store contribute to the
+        // count. Guest properties (including `size` and `__size`) cannot
+        // change [[MapData]] / [[SetData]].
         if matches!(owner, "Map" | "Set") && key == "size" {
-            return Ok(self
-                .heap
-                .get(id.0 as usize)
-                .and_then(|object| object.properties.get(COLLECTION_SIZE_SLOT).cloned())
-                .unwrap_or(Value::Int(0)));
+            let size = self.collection_size(id, owner).ok_or_else(incompatible)?;
+            return Ok(Value::Int(i64::try_from(size).unwrap_or(i64::MAX)));
         }
         if let Some(value) = self.event_family_getter(owner, key, id) {
             return Ok(value);
@@ -459,8 +457,8 @@ impl InterpreterCore {
             return false;
         };
         match owner {
-            "Map" => self.collection_storage_id(id, "Map", "__entries").is_some(),
-            "Set" => self.collection_storage_id(id, "Set", "__values").is_some(),
+            "Map" => self.collection_storage_id(id, "Map").is_some(),
+            "Set" => self.collection_storage_id(id, "Set").is_some(),
             "ArrayBuffer" | "SharedArrayBuffer" => {
                 object.array_buffer.is_some()
                     && (object.brand() == Some("SharedArrayBuffer"))

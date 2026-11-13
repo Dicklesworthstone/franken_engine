@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -2068,15 +2068,6 @@ fn starts_with_keyword(source: &str, index: usize, keyword: &str) -> bool {
         && has_token_boundary_after(source, index + keyword.len())
 }
 
-fn strip_leading_keyword<'a>(source: &'a str, keyword: &str) -> Option<&'a str> {
-    if !starts_with_keyword(source, 0, keyword) {
-        return None;
-    }
-
-    let after = skip_ascii_whitespace(source, keyword.len());
-    Some(&source[after..])
-}
-
 fn skip_ascii_whitespace(source: &str, mut index: usize) -> usize {
     while index < source.len() {
         let ch = source[index..]
@@ -2208,64 +2199,8 @@ fn trim_trailing_inline_whitespace(output: &mut String) {
 }
 
 fn lower_simple_namespaces(source: &str) -> Result<String, TsNormalizationError> {
-    let mut namespace_order = Vec::<String>::new();
-    let mut namespace_assignments = BTreeMap::<String, Vec<String>>::new();
-    let mut rewritten = String::with_capacity(source.len());
-    let mut emit_cursor = 0usize;
-    let mut scan_cursor = 0usize;
-    let mut state = LexicalRewriteState::Code;
-
-    while let Some((index, _)) = next_code_scan_char(source, &mut scan_cursor, &mut state) {
-        if !starts_with_keyword(source, index, "namespace")
-            || !is_statement_start(source, index)
-            || !namespace_keyword_starts_declaration(source, index)
-        {
-            continue;
-        }
-
-        let (namespace_name, body_start, body_end, declaration_end) =
-            parse_simple_namespace_declaration(source, index)?;
-        rewritten.push_str(&source[emit_cursor..index]);
-
-        let body = source[body_start + 1..body_end].trim();
-        let parsed_assignments = parse_namespace_exports(body)?;
-        if !namespace_assignments.contains_key(&namespace_name) {
-            namespace_order.push(namespace_name.clone());
-            namespace_assignments.insert(namespace_name.clone(), Vec::new());
-            rewritten.push_str(&format!("/*__namespace:{namespace_name}__*/"));
-        }
-
-        if let Some(assignments) = namespace_assignments.get_mut(&namespace_name) {
-            assignments.extend(parsed_assignments);
-        }
-
-        emit_cursor = declaration_end;
-        scan_cursor = declaration_end;
-        state = LexicalRewriteState::Code;
-    }
-
-    if namespace_order.is_empty() {
-        return Ok(source.to_string());
-    }
-
-    rewritten.push_str(&source[emit_cursor..]);
-
-    let mut rendered = rewritten;
-    for namespace_name in namespace_order {
-        let placeholder = format!("/*__namespace:{namespace_name}__*/");
-        let namespace_block = render_namespace_block(
-            &namespace_name,
-            &namespace_assignments.remove(&namespace_name).ok_or(
-                TsNormalizationError::UnsupportedSyntax {
-                    feature: "namespace processing with missing assignment",
-                },
-            )?,
-        )
-        .join("\n");
-        rendered = rendered.replacen(&placeholder, &namespace_block, 1);
-    }
-
-    Ok(rendered)
+    frankenengine_core::ts_normalization::namespaces::lower(source, strip_type_annotations)
+        .map_err(|feature| TsNormalizationError::UnsupportedSyntax { feature })
 }
 
 /// Whether the `namespace` at `start` begins a TypeScript namespace
@@ -2294,246 +2229,6 @@ fn namespace_keyword_starts_declaration(source: &str, start: usize) -> bool {
     }
     next_code_token_index(source, name_end)
         .is_none_or(|index| source[index..].starts_with(['{', '.']))
-}
-
-fn parse_simple_namespace_declaration(
-    source: &str,
-    start: usize,
-) -> Result<(String, usize, usize, usize), TsNormalizationError> {
-    let mut cursor = skip_ascii_whitespace(source, start + "namespace".len());
-    let name_start = cursor;
-    let name_end =
-        skip_identifier(source, cursor).ok_or(TsNormalizationError::UnsupportedSyntax {
-            feature: "unsupported namespace declaration form",
-        })?;
-    let namespace_name = source[name_start..name_end].trim().to_string();
-    if namespace_name.is_empty() {
-        return Err(TsNormalizationError::UnsupportedSyntax {
-            feature: "unsupported namespace declaration form",
-        });
-    }
-
-    cursor =
-        next_code_token_index(source, name_end).ok_or(TsNormalizationError::UnsupportedSyntax {
-            feature: "unsupported namespace declaration form",
-        })?;
-    if !source[cursor..].starts_with('{') {
-        return Err(TsNormalizationError::UnsupportedSyntax {
-            feature: "unsupported namespace declaration form",
-        });
-    }
-    let body_start = cursor;
-    let body_end = find_matching_delimiter(source, body_start, '{', '}').ok_or(
-        TsNormalizationError::UnsupportedSyntax {
-            feature: "unsupported namespace declaration form",
-        },
-    )?;
-
-    let mut declaration_end = body_end + '}'.len_utf8();
-    if let Some(next_index) = next_code_token_index(source, declaration_end)
-        && source[next_index..].starts_with(';')
-    {
-        declaration_end = next_index + ';'.len_utf8();
-    }
-
-    Ok((namespace_name, body_start, body_end, declaration_end))
-}
-
-fn parse_namespace_exports(body: &str) -> Result<Vec<String>, TsNormalizationError> {
-    let mut assignments = Vec::<String>::new();
-    let mut cursor = 0usize;
-
-    while cursor < body.len() {
-        cursor = next_code_token_index(body, cursor).unwrap_or(body.len());
-        if cursor >= body.len() {
-            break;
-        }
-
-        let statement_end = if is_namespace_export_function(body, cursor) {
-            find_namespace_export_function_end(body, cursor)
-        } else {
-            find_top_level_statement_terminator(body, cursor)
-        }
-        .ok_or(TsNormalizationError::UnsupportedSyntax {
-            feature: "unsupported namespace export form",
-        })?;
-
-        let normalized = body[cursor..statement_end]
-            .trim()
-            .trim_end_matches(';')
-            .trim();
-        if normalized.is_empty() {
-            cursor = statement_end;
-            continue;
-        }
-
-        let Some(exported) = strip_leading_keyword(normalized, "export") else {
-            return Err(TsNormalizationError::UnsupportedSyntax {
-                feature: "unsupported namespace export form",
-            });
-        };
-
-        let (keyword, declaration) = if let Some(value) = strip_leading_keyword(exported, "const") {
-            ("const", value)
-        } else if let Some(value) = strip_leading_keyword(exported, "let") {
-            ("let", value)
-        } else if let Some(value) = strip_leading_keyword(exported, "var") {
-            ("var", value)
-        } else if is_exported_function_declaration(exported) {
-            assignments.extend(render_namespace_export_function(exported)?);
-            cursor = statement_end;
-            continue;
-        } else {
-            return Err(TsNormalizationError::UnsupportedSyntax {
-                feature: "unsupported namespace export form",
-            });
-        };
-
-        let Some((lhs, rhs)) = declaration.split_once('=') else {
-            return Err(TsNormalizationError::UnsupportedSyntax {
-                feature: "unsupported namespace export form",
-            });
-        };
-        let symbol = lhs.split(':').next().unwrap_or(lhs).trim();
-        if symbol.is_empty() {
-            return Err(TsNormalizationError::UnsupportedSyntax {
-                feature: "unsupported namespace export form",
-            });
-        }
-
-        // The member is also a local of the namespace body, so the body's
-        // functions and later initializers can name it (bd-9vouw.416); a
-        // later write to it inside the body does not reach the namespace
-        // object (TypeScript rewrites such names to the object's property).
-        assignments.push(format!(
-            "  ns.{symbol} = {}; {keyword} {symbol} = ns.{symbol};",
-            rhs.trim()
-        ));
-        cursor = statement_end;
-    }
-
-    Ok(assignments)
-}
-
-fn is_namespace_export_function(source: &str, start: usize) -> bool {
-    strip_leading_keyword(&source[start..], "export").is_some_and(is_exported_function_declaration)
-}
-
-fn is_exported_function_declaration(exported: &str) -> bool {
-    parse_exported_function_name_range(exported).is_some()
-}
-
-fn find_namespace_export_function_end(source: &str, start: usize) -> Option<usize> {
-    let source_from_start = &source[start..];
-    let exported = strip_leading_keyword(source_from_start, "export")?;
-    let exported_start = source_from_start.len() - exported.len();
-    let (_, name_end) = parse_exported_function_name_range(exported)?;
-    let params_start = find_top_level_char(exported, name_end, '(')?;
-    let params_end = find_matching_delimiter(exported, params_start, '(', ')')?;
-    let mut search_cursor = params_end + ')'.len_utf8();
-
-    while search_cursor < exported.len() {
-        let body_start = find_top_level_char(exported, search_cursor, '{')?;
-        let body_end = find_matching_delimiter(exported, body_start, '{', '}')?;
-        let mut next_statement_start = next_code_token_index(exported, body_end + '}'.len_utf8());
-        while let Some(index) = next_statement_start {
-            if !exported[index..].starts_with(';') {
-                break;
-            }
-            next_statement_start = next_code_token_index(exported, index + ';'.len_utf8());
-        }
-
-        if let Some(index) = next_statement_start {
-            if starts_with_keyword(exported, index, "export") {
-                return Some(start + exported_start + body_end + '}'.len_utf8());
-            }
-            search_cursor = index;
-            continue;
-        }
-
-        return Some(start + exported_start + body_end + '}'.len_utf8());
-    }
-
-    None
-}
-
-fn render_namespace_export_function(exported: &str) -> Result<Vec<String>, TsNormalizationError> {
-    let (name_start, name_end) = parse_exported_function_name_range(exported).ok_or(
-        TsNormalizationError::UnsupportedSyntax {
-            feature: "unsupported namespace export form",
-        },
-    )?;
-    let name = exported[name_start..name_end].trim();
-    if name.is_empty() {
-        return Err(TsNormalizationError::UnsupportedSyntax {
-            feature: "unsupported namespace export form",
-        });
-    }
-    if has_object_shaped_return_type(exported) {
-        return Err(TsNormalizationError::UnsupportedSyntax {
-            feature: "unsupported namespace export form",
-        });
-    }
-
-    let mut rendered = exported
-        .lines()
-        .map(|line| format!("  {}", line.trim_end()))
-        .collect::<Vec<_>>();
-    rendered.push(format!("  ns.{name} = {name};"));
-    Ok(rendered)
-}
-
-fn parse_exported_function_name_range(exported: &str) -> Option<(usize, usize)> {
-    let mut cursor = 0usize;
-    if let Some(async_rest) = strip_leading_keyword(exported, "async") {
-        cursor = exported.len() - async_rest.len();
-    }
-    if !starts_with_keyword(exported, cursor, "function") {
-        return None;
-    }
-    cursor = skip_ascii_whitespace(exported, cursor + "function".len());
-    if exported[cursor..].starts_with('*') {
-        cursor += 1;
-        cursor = skip_ascii_whitespace(exported, cursor);
-    }
-    let name_start = cursor;
-    let name_end = skip_identifier(exported, name_start)?;
-    Some((name_start, name_end))
-}
-
-fn has_object_shaped_return_type(exported: &str) -> bool {
-    let (_, name_end) = match parse_exported_function_name_range(exported) {
-        Some(range) => range,
-        None => return false,
-    };
-    let params_start = match find_top_level_char(exported, name_end, '(') {
-        Some(index) => index,
-        None => return false,
-    };
-    let params_end = match find_matching_delimiter(exported, params_start, '(', ')') {
-        Some(index) => index,
-        None => return false,
-    };
-    let Some(after_params) = next_code_token_index(exported, params_end + ')'.len_utf8()) else {
-        return false;
-    };
-    if !exported[after_params..].starts_with(':') {
-        return false;
-    }
-    let Some(type_start) = next_code_token_index(exported, after_params + ':'.len_utf8()) else {
-        return false;
-    };
-    exported[type_start..].starts_with('{')
-}
-
-fn render_namespace_block(namespace_name: &str, assignments: &[String]) -> Vec<String> {
-    let mut lines = Vec::<String>::new();
-    lines.push(format!("const {namespace_name} = (() => {{"));
-    lines.push("  const ns = {};".to_string());
-    lines.extend(assignments.iter().cloned());
-    lines.push("  return ns;".to_string());
-    lines.push("})();".to_string());
-    lines
 }
 
 fn lower_simple_class_decorators(source: &str) -> Result<String, TsNormalizationError> {
@@ -2965,178 +2660,9 @@ fn is_enum_member_reserved(name: &str) -> bool {
     )
 }
 
-/// TypeScript parameter properties (`constructor(private readonly x: T)`):
-/// the modifiers (`public`, `private`, `protected`, `readonly`,
-/// `override`, in any combination) are removed from the parameter and the
-/// constructor body assigns `this.x = x` first, or right after its
-/// top-level `super(...)` call, as TypeScript emits it (bd-9vouw.414). The
-/// parameter list and the body may span lines and the class may be written
-/// on one line; only the modifier words are removed, so the line count is
-/// kept. The earlier lowering read a `constructor(` that started a line
-/// with its whole parameter list on that line, closed a multi-line body
-/// early and assigned before `super()`.
+/// Use the same token-aware parameter-property lowering in both ingestion paths.
 fn lower_constructor_parameter_properties(source: &str) -> String {
-    rewrite_outside_strings_and_comments(source, |source, index, output| {
-        if !starts_with_keyword(source, index, "constructor") {
-            return None;
-        }
-        let after_keyword = index + "constructor".len();
-        let open = after_keyword
-            + (source[after_keyword..].len() - source[after_keyword..].trim_start().len());
-        if source.as_bytes().get(open) != Some(&b'(') {
-            return None;
-        }
-        let close = matching_close(source, open, b'(', b')')?;
-        let (parameters, names) = strip_parameter_property_modifiers(&source[open + 1..close]);
-        if names.is_empty() {
-            return None;
-        }
-        let after_close = close + 1;
-        let body_open =
-            after_close + (source[after_close..].len() - source[after_close..].trim_start().len());
-        if source.as_bytes().get(body_open) != Some(&b'{') {
-            // A constructor without a body (a signature) keeps the stripped
-            // parameter list and ends its member with `;`, as the line-based
-            // lowering this replaced did.
-            output.push_str(&source[index..=open]);
-            output.push_str(&parameters);
-            output.push(')');
-            if source.as_bytes().get(body_open) != Some(&b';') {
-                output.push(';');
-            }
-            return Some(after_close);
-        }
-        let body_close = matching_close(source, body_open, b'{', b'}')?;
-        let insert_at =
-            super_call_statement_end(source, body_open + 1, body_close).unwrap_or(body_open + 1);
-        output.push_str(&source[index..=open]);
-        output.push_str(&parameters);
-        output.push_str(&source[close..insert_at]);
-        for name in &names {
-            output.push_str(&format!(" this.{name} = {name};"));
-        }
-        output.push(' ');
-        Some(insert_at)
-    })
-}
-
-/// A constructor's parameter list with the parameter-property modifiers
-/// (and the `?` of an optional property) removed in place, and the names
-/// of the parameters that had them.
-fn strip_parameter_property_modifiers(parameters: &str) -> (String, Vec<String>) {
-    const MODIFIERS: [&str; 5] = ["public", "private", "protected", "readonly", "override"];
-    let mut out = String::with_capacity(parameters.len());
-    let mut names = Vec::new();
-    for (index, segment) in split_top_level_commas(parameters).into_iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        let leading = &segment[..segment.len() - segment.trim_start().len()];
-        let mut rest = segment.trim_start();
-        let mut modified = false;
-        while let Some(keyword) = MODIFIERS.iter().find(|keyword| {
-            rest.strip_prefix(**keyword)
-                .is_some_and(|after| after.starts_with(char::is_whitespace))
-        }) {
-            rest = rest[keyword.len()..].trim_start();
-            modified = true;
-        }
-        out.push_str(leading);
-        if !modified {
-            out.push_str(rest);
-            continue;
-        }
-        let name_len = rest
-            .find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '$'))
-            .unwrap_or(rest.len());
-        let name = &rest[..name_len];
-        if !name.is_empty() {
-            names.push(name.to_string());
-        }
-        out.push_str(name);
-        let after_name = &rest[name_len..];
-        out.push_str(after_name.strip_prefix('?').unwrap_or(after_name));
-    }
-    (out, names)
-}
-
-/// `text` split at commas outside brackets, quotes and template literals,
-/// each part with its surrounding white space.
-fn split_top_level_commas(text: &str) -> Vec<&str> {
-    let bytes = text.as_bytes();
-    let mut parts = Vec::new();
-    let mut depth = 0i32;
-    let mut start = 0;
-    let mut index = 0;
-    while index < bytes.len() {
-        match bytes[index] {
-            quote @ (b'\'' | b'"' | b'`') => {
-                index += 1;
-                while index < bytes.len() && bytes[index] != quote {
-                    if bytes[index] == b'\\' {
-                        index += 1;
-                    }
-                    index += 1;
-                }
-            }
-            b'(' | b'[' | b'{' => depth += 1,
-            b')' | b']' | b'}' => depth -= 1,
-            b',' if depth == 0 => {
-                parts.push(&text[start..index]);
-                start = index + 1;
-            }
-            _ => {}
-        }
-        index += 1;
-    }
-    parts.push(&text[start..]);
-    parts
-}
-
-/// The end of the first top-level `super(...)` call statement (with its
-/// `;`) between `start` and `end` of a constructor body, if any.
-fn super_call_statement_end(source: &str, start: usize, end: usize) -> Option<usize> {
-    let bytes = source.as_bytes();
-    let mut depth = 0i32;
-    let mut index = start;
-    while index < end {
-        match bytes[index] {
-            quote @ (b'\'' | b'"' | b'`') => {
-                index += 1;
-                while index < end && bytes[index] != quote {
-                    if bytes[index] == b'\\' {
-                        index += 1;
-                    }
-                    index += 1;
-                }
-            }
-            b'/' if bytes.get(index + 1) == Some(&b'/') => {
-                while index < end && bytes[index] != b'\n' {
-                    index += 1;
-                }
-            }
-            b'(' | b'[' | b'{' => depth += 1,
-            b')' | b']' | b'}' => depth -= 1,
-            b's' if depth == 0 && starts_with_keyword(source, index, "super") => {
-                let after = index + "super".len();
-                let open =
-                    after + (source[after..end].len() - source[after..end].trim_start().len());
-                if bytes.get(open) == Some(&b'(') {
-                    let close = matching_close(source, open, b'(', b')')?;
-                    let rest = &source[close + 1..end];
-                    let semicolon = rest.len() - rest.trim_start().len();
-                    return Some(if rest.trim_start().starts_with(';') {
-                        close + 1 + semicolon + 1
-                    } else {
-                        close + 1
-                    });
-                }
-            }
-            _ => {}
-        }
-        index += 1;
-    }
-    None
+    frankenengine_core::ts_normalization::parameter_properties::lower(source)
 }
 
 fn normalize_definite_assignment_assertions(source: &str) -> String {
@@ -3524,6 +3050,47 @@ const route = "/api/x";"#;
     }
 
     #[test]
+    fn namespace_hostcall_annotations_survive_until_capability_contract_lowering() {
+        let source = r#"namespace Sampling {
+  export function sample(path: string) {
+    const contents = hostcall<"fs.read">(path,);
+    const time = hostcall<"clock.now">();
+    return { contents, time };
+  }
+}"#;
+        let artifacts = ingest_typescript_to_pipeline_artifacts(
+            source,
+            &TsNormalizationConfig::default(),
+            "namespace_hostcalls.ts",
+            ParseGoal::Module,
+            &ParserOptions::default(),
+            TsIngestionProvenance::new("trace", "decision", "policy"),
+        )
+        .expect("namespace hostcalls must normalize, parse, and retain their lowered contracts");
+        let output = artifacts.normalization_output;
+        assert_eq!(
+            output.capability_intents,
+            vec![
+                CapabilityIntent {
+                    symbol: "hostcall".to_string(),
+                    capability: "clock.now".to_string(),
+                },
+                CapabilityIntent {
+                    symbol: "hostcall".to_string(),
+                    capability: "fs.read".to_string(),
+                },
+            ]
+        );
+        assert_eq!(
+            output.ordered_hostcall_capabilities,
+            ["fs.read", "clock.now"]
+        );
+        assert!(!output.normalized_source.contains("hostcall<"));
+        assert!(output.normalized_source.contains("hostcall(path,)"));
+        assert!(output.normalized_source.contains("hostcall()"));
+    }
+
+    #[test]
     fn lowers_simple_namespace_declaration() {
         let source = "namespace Demo { export const value = 1; }";
         let output = normalize_typescript_to_es2020(
@@ -3535,8 +3102,12 @@ const route = "/api/x";"#;
         )
         .expect("namespace normalization should pass");
 
-        assert!(output.normalized_source.contains("const Demo = (() => {"));
-        assert!(output.normalized_source.contains("ns.value = 1;"));
+        assert!(output.normalized_source.contains("var Demo;"));
+        assert!(
+            output
+                .normalized_source
+                .contains("__franken_namespace_0.value = 1;")
+        );
     }
 
     #[test]
@@ -3561,7 +3132,7 @@ const route = "/api/x";"#;
             "policy",
         )
         .expect("an identifier named namespace is not a declaration");
-        assert!(output.normalized_source.contains("const Demo = (() => {"));
+        assert!(output.normalized_source.contains("var Demo;"));
         assert!(
             output
                 .normalized_source
@@ -3586,7 +3157,11 @@ const route = "/api/x";"#;
                 .normalized_source
                 .contains("function run() { return 1; }")
         );
-        assert!(output.normalized_source.contains("ns.run = run;"));
+        assert!(
+            output
+                .normalized_source
+                .contains("__franken_namespace_0.run = run;")
+        );
     }
 
     #[test]
@@ -3611,39 +3186,42 @@ namespace Demo {
                 .normalized_source
                 .contains("function run() { return 1; }")
         );
-        assert!(output.normalized_source.contains("ns.run = run;"));
-        assert!(output.normalized_source.contains("ns.version = 1;"));
+        assert!(
+            output
+                .normalized_source
+                .contains("__franken_namespace_0.run = run;")
+        );
+        assert!(
+            output
+                .normalized_source
+                .contains("__franken_namespace_0.version = 1;")
+        );
     }
 
     #[test]
     fn parses_namespace_exports_with_comment_after_function() {
-        let body = r#"
-export function run() { return 1; } // preserve separation before the next export
-export const version = 1;
-"#
-        .trim();
-
-        assert_eq!(
-            find_namespace_export_function_end(body, 0),
-            body.find("} //").map(|index| index + '}'.len_utf8())
-        );
-        assert_eq!(
-            parse_namespace_exports(body).expect("namespace exports should parse"),
-            vec![
-                "  function run() { return 1; }".to_string(),
-                "  ns.run = run;".to_string(),
-                // The member is a local of the namespace body too
-                // (bd-9vouw.416).
-                "  ns.version = 1; const version = ns.version;".to_string(),
-            ]
-        );
+        let source = r#"
+namespace Demo {
+    export function run() { return 1; } // preserve separation before the next export
+    export const version = 1;
+}
+"#;
+        let output = lower_simple_namespaces(source).expect("namespace exports should parse");
+        let function = output
+            .find("function run() { return 1; }")
+            .expect("function body is retained");
+        let binding = output
+            .find("__franken_namespace_0.run = run;")
+            .expect("function is exported after its declaration");
+        let version = output
+            .find("__franken_namespace_0.version = 1;")
+            .expect("following variable is exported");
+        assert!(function < binding && binding < version);
+        assert!(output.contains("// preserve separation before the next export"));
     }
 
     #[test]
     fn lowers_namespace_export_function_with_return_type() {
-        // Uses a simple return type (not object-shaped) to avoid the known limitation
-        // where strip_type_annotations cannot distinguish object-literal colons
-        // (e.g. { key: value }) from type annotation colons.
         let source = "namespace Demo { export function make(): number { return 42; } }";
         let output = normalize_typescript_to_es2020(
             source,
@@ -3654,35 +3232,37 @@ export const version = 1;
         )
         .expect("namespace export function with return type should lower");
 
-        // After strip_type_annotations removes `: number`, the space before `{`
-        // is consumed, producing `make(){` instead of `make() {`. This is a
-        // known formatting artifact of the current type-stripping pass.
         assert!(output.normalized_source.contains("function make()"));
         assert!(output.normalized_source.contains("return 42;"));
-        assert!(output.normalized_source.contains("ns.make = make;"));
+        assert!(
+            output
+                .normalized_source
+                .contains("__franken_namespace_0.make = make;")
+        );
     }
 
     #[test]
-    fn rejects_namespace_export_function_with_object_shaped_return_type() {
-        // Object-shaped return types are currently rejected in namespace export
-        // functions because the type-stripping pass is not yet context-aware
-        // enough to preserve object-literal colons in the runtime body.
+    fn lowers_namespace_export_function_with_object_shaped_return_type() {
         let source =
             "namespace Demo { export function make(): { value: number } { return { value: 1 }; } }";
-        let error = normalize_typescript_to_es2020(
+        let output = normalize_typescript_to_es2020(
             source,
             &TsNormalizationConfig::default(),
             "trace",
             "decision",
             "policy",
         )
-        .expect_err("object-shaped return types remain unsupported");
-
-        assert_eq!(
-            error,
-            TsNormalizationError::UnsupportedSyntax {
-                feature: "unsupported namespace export form",
-            }
+        .expect("object return annotations should erase without changing runtime properties");
+        let compact: String = output
+            .normalized_source
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .collect();
+        assert!(compact.contains("functionmake(){return{value:1};}"));
+        assert!(
+            output
+                .normalized_source
+                .contains("__franken_namespace_0.make = make;")
         );
     }
 
@@ -4083,21 +3663,21 @@ abstract class Base { }"#;
     }
 
     #[test]
-    fn namespace_non_export_statement_fails() {
+    fn namespace_private_statements_are_retained() {
         let source = "namespace Demo { const hidden = 1; }";
-        let error = normalize_typescript_to_es2020(
+        let output = normalize_typescript_to_es2020(
             source,
             &TsNormalizationConfig::default(),
             "t",
             "d",
             "p",
         )
-        .unwrap_err();
-        assert_eq!(
-            error,
-            TsNormalizationError::UnsupportedSyntax {
-                feature: "unsupported namespace export form",
-            }
+        .expect("private namespace declarations remain local to their body");
+        assert!(output.normalized_source.contains("const hidden = 1;"));
+        assert!(
+            !output
+                .normalized_source
+                .contains("__franken_namespace_0.hidden")
         );
     }
 
@@ -4121,8 +3701,8 @@ abstract class Base { }"#;
     }
 
     #[test]
-    fn duplicate_namespace_declarations_merge() {
-        let source = "namespace Ns { export const a = 1; }\nnamespace Ns { export const b = 2; }";
+    fn duplicate_namespace_declarations_merge_at_their_source_positions() {
+        let source = "namespace Ns { export const a = 1; }\nobserve(Ns.a);\nnamespace Ns { export const b = 2; }";
         let output = normalize_typescript_to_es2020(
             source,
             &TsNormalizationConfig::default(),
@@ -4130,15 +3710,35 @@ abstract class Base { }"#;
             "d",
             "p",
         )
-        .expect("operation should succeed for valid inputs");
-        assert!(output.normalized_source.contains("ns.a = 1;"));
-        assert!(output.normalized_source.contains("ns.b = 2;"));
-        // Only one IIFE block for the merged namespace
-        let iife_count = output
+        .expect("namespace declarations should share one object");
+        let first = output
             .normalized_source
-            .matches("const Ns = (() => {")
-            .count();
-        assert_eq!(iife_count, 1);
+            .find("__franken_namespace_0.a = 1;")
+            .expect("first declaration exports a");
+        let between = output
+            .normalized_source
+            .find("observe(Ns.a);")
+            .expect("intervening statement is preserved");
+        let second = output
+            .normalized_source
+            .find("__franken_namespace_1.b = 2;")
+            .expect("second declaration exports b");
+        assert!(first < between && between < second);
+        assert_eq!(output.normalized_source.matches("var Ns;").count(), 1);
+        assert_eq!(
+            output
+                .normalized_source
+                .matches("(function (__franken_namespace_")
+                .count(),
+            2
+        );
+        assert_eq!(
+            output
+                .normalized_source
+                .matches("})(Ns || (Ns = {}));")
+                .count(),
+            2
+        );
     }
 
     // --- Enum edge cases ---
@@ -4611,13 +4211,13 @@ abstract class Base { }"#;
     // --- Render namespace block ---
 
     #[test]
-    fn render_namespace_block_structure() {
-        let block = render_namespace_block("Foo", &["  ns.x = 1;".to_string()]);
-        assert_eq!(block[0], "const Foo = (() => {");
-        assert_eq!(block[1], "  const ns = {};");
-        assert_eq!(block[2], "  ns.x = 1;");
-        assert_eq!(block[3], "  return ns;");
-        assert_eq!(block[4], "})();");
+    fn namespace_block_initializes_the_shared_object_before_its_body() {
+        let output = lower_simple_namespaces("namespace Foo { export const x = 1; }")
+            .expect("namespace should lower");
+        assert!(output.contains("var Foo;"));
+        assert!(output.contains("(function (__franken_namespace_0) {"));
+        assert!(output.contains("__franken_namespace_0.x = 1;"));
+        assert!(output.contains("})(Foo || (Foo = {}));"));
     }
 
     // --- Lower simple enums ---
@@ -4863,7 +4463,11 @@ abstract class Base { }"#;
             "p",
         )
         .expect("operation should succeed for valid inputs");
-        assert!(output.normalized_source.contains("ns.x = 1;"));
+        assert!(
+            output
+                .normalized_source
+                .contains("__franken_namespace_0.x = 1;")
+        );
     }
 
     #[test]
@@ -4877,7 +4481,11 @@ abstract class Base { }"#;
             "p",
         )
         .expect("operation should succeed for valid inputs");
-        assert!(output.normalized_source.contains("ns.x = 1;"));
+        assert!(
+            output
+                .normalized_source
+                .contains("__franken_namespace_0.x = 1;")
+        );
     }
 
     // --- Type annotation stripping with quotes ---

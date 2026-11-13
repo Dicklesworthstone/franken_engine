@@ -7352,6 +7352,7 @@ fn statement_kind_label_covers_all_variants() {
         statement_kind_label(&Statement::Expression(ExpressionStatement {
             expression: Expression::NullLiteral,
             span,
+            raw_directive: None,
         })),
         "expression"
     );
@@ -9016,6 +9017,88 @@ fn split_top_level_commas_nested() {
     let parts = split_top_level_commas("f(a, b), c");
     assert_eq!(parts.len(), 2);
     assert_eq!(parts[0], "f(a, b)");
+}
+
+#[test]
+fn sequence_operands_keep_generator_suspensions_in_the_caller() {
+    let tree = parse_script("function* items() { yield, 1; return yield 2, 3; }");
+    let Statement::FunctionDeclaration(function) = &tree.body[0] else {
+        panic!("expected a generator declaration");
+    };
+    let Statement::Expression(statement) = &function.body.body[0] else {
+        panic!("expected a bare sequence statement");
+    };
+    let Expression::Call { arguments, .. } = &statement.expression else {
+        panic!("expected a sequence carrying its operands as caller arguments");
+    };
+    assert!(matches!(
+        arguments.as_slice(),
+        [
+            Expression::Yield {
+                argument: None,
+                delegate: false
+            },
+            Expression::NumericLiteral(1)
+        ]
+    ));
+
+    let Statement::Return(statement) = &function.body.body[1] else {
+        panic!("expected a return sequence");
+    };
+    let Some(Expression::Call { arguments, .. }) = &statement.argument else {
+        panic!("expected return operands in the generator scope");
+    };
+    assert!(matches!(
+        arguments.as_slice(),
+        [Expression::Yield { argument: Some(argument), delegate: false }, Expression::NumericLiteral(3)]
+            if matches!(argument.as_ref(), Expression::NumericLiteral(2))
+    ));
+}
+
+#[test]
+fn sequence_scanning_keeps_async_regex_template_and_arrow_boundaries() {
+    let tree = parse_script(
+        r#"async function work() {
+            return await /[,]/.test(","), /* comma, trivia */ `x${1, 2}`,
+                async (first, second) => first + second;
+        }"#,
+    );
+    let Statement::FunctionDeclaration(function) = &tree.body[0] else {
+        panic!("expected an async function declaration");
+    };
+    let Statement::Return(statement) = &function.body.body[0] else {
+        panic!("expected a return statement");
+    };
+    let Some(Expression::Call { arguments, .. }) = &statement.argument else {
+        panic!("expected a three-operand sequence");
+    };
+    assert_eq!(arguments.len(), 3);
+    assert!(matches!(
+        &arguments[0],
+        Expression::Await(argument) if matches!(argument.as_ref(), Expression::Call { .. })
+    ));
+    assert!(matches!(
+        &arguments[1],
+        Expression::TemplateLiteral { expressions, .. }
+            if matches!(expressions.as_slice(), [Expression::Call { arguments, .. }]
+                if matches!(arguments.as_slice(), [Expression::NumericLiteral(1), Expression::NumericLiteral(2)]))
+    ));
+    assert!(matches!(
+        &arguments[2],
+        Expression::ArrowFunction { params, is_async: true, .. } if params.len() == 2
+    ));
+
+    let sloppy_tree = parse_script("var yield = 8; var await = 12; yield / 2, await / 3;");
+    let Statement::Expression(statement) = &sloppy_tree.body[2] else {
+        panic!("expected sloppy identifier divisions in a sequence");
+    };
+    assert!(matches!(
+        &statement.expression,
+        Expression::Call { arguments, .. }
+            if matches!(arguments.as_slice(),
+                [Expression::Binary { operator: BinaryOperator::Divide, .. },
+                 Expression::Binary { operator: BinaryOperator::Divide, .. }])
+    ));
 }
 
 // -----------------------------------------------------------------------

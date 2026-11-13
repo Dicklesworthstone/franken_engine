@@ -34,7 +34,8 @@ use crate::capability::RuntimeCapability;
 use crate::capability_witness::{CapabilityWitness, WitnessSchemaVersion};
 use crate::checkpoint::CancellationToken;
 use crate::containment_executor::{
-    ContainmentContext, ContainmentError, ContainmentExecutor, ContainmentReceipt, SandboxPolicy,
+    ContainmentContext, ContainmentError, ContainmentExecutor, ContainmentReceipt,
+    ContainmentState, SandboxPolicy,
 };
 use crate::control_plane::{Budget, Cx, KernelContext, NoCaps, TraceId};
 use crate::data_contract::DataContractIfcIngress;
@@ -96,7 +97,8 @@ use crate::signature_preimage::VerificationKey;
 #[cfg(feature = "sibling-persistence")]
 use crate::storage_adapter::DurableFrankensqliteStorageAdapter;
 use crate::storage_adapter::{
-    EventContext, InMemoryStorageAdapter, StorageAdapter, StorageError, StoreKind,
+    CompareAndSwapOutcome, EventContext, InMemoryStorageAdapter, StorageAdapter, StorageError,
+    StoreKind, StoreRecord,
 };
 use crate::tropical_semiring::{
     InstructionCostGraph, InstructionNode, ScheduleOptimizer, TropicalError, TropicalWeight,
@@ -675,6 +677,10 @@ pub struct OrchestratorConfig {
     pub loss_matrix_preset: LossMatrixPreset,
     /// Force a specific interpreter lane.
     pub force_lane: Option<LaneChoice>,
+    /// Authority and memory restrictions applied immediately when a live
+    /// guardplane hook requests Sandbox. The same policy is bound into the
+    /// signed decision and containment receipt.
+    pub sandbox_policy: SandboxPolicy,
     /// Optional shared, non-refundable instruction allowance supplied by the
     /// trusted host. Cloning this configuration shares the same balance.
     /// Every ordinary `execute` reserves the selected profile's full budget
@@ -723,6 +729,7 @@ impl Default for OrchestratorConfig {
         Self {
             loss_matrix_preset: LossMatrixPreset::Balanced,
             force_lane: None,
+            sandbox_policy: SandboxPolicy::default(),
             work_pool: None,
             drain_deadline_ticks: runtime_orchestrator.drain_deadline_ticks,
             cell_close_budget_ms: runtime_orchestrator.cell_close_budget_ms,
@@ -1328,6 +1335,11 @@ pub struct UncommittedEvidenceChainEvidence {
     pub evidence_verification_identity: EvidenceVerificationIdentity,
     pub containment_receipt: Option<ContainmentReceipt>,
     pub saga_id: Option<String>,
+    /// Unsigned lifecycle outcome: local quarantine succeeded, but persisting
+    /// its admission barrier failed before any saga was created. This does
+    /// not certify durable quarantine or change the signed evidence batch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quarantine_persistence_error: Option<String>,
 }
 
 impl UncommittedEvidenceChainEvidence {
@@ -1384,6 +1396,20 @@ impl UncommittedEvidenceChainEvidence {
                 reason: "saga id must not be empty".to_string(),
             });
         }
+        if let Some(error) = &self.quarantine_persistence_error {
+            let matching_local_quarantine =
+                self.containment_receipt.as_ref().is_some_and(|receipt| {
+                    receipt.action == ContainmentAction::Quarantine
+                        && receipt.new_state == ContainmentState::Quarantined
+                        && receipt.success
+                });
+            if error.trim().is_empty() || self.saga_id.is_some() || !matching_local_quarantine {
+                return Err(LedgerError::SchemaValidationFailed {
+                    reason: "quarantine persistence failure requires a successful local quarantine receipt, a nonempty error, and no saga"
+                        .to_string(),
+                });
+            }
+        }
         if let Some(receipt) = self.containment_receipt.as_ref() {
             if !receipt.success || !receipt.verify_integrity() {
                 return Err(LedgerError::SchemaValidationFailed {
@@ -1427,6 +1453,16 @@ impl UncommittedEvidenceChainEvidence {
                         .to_string(),
                 });
             }
+            if receipt.action == ContainmentAction::Sandbox
+                && (primary_entry.metadata.get("sandbox_policy_hash").is_none()
+                    || primary_entry.metadata.get("sandbox_policy_hash")
+                        != receipt.metadata.get("sandbox_policy_hash"))
+            {
+                return Err(LedgerError::SchemaValidationFailed {
+                    reason: "sandbox receipt policy does not match the signed primary entry"
+                        .to_string(),
+                });
+            }
             if primary_entry.epoch_id != receipt.epoch {
                 return Err(LedgerError::SchemaValidationFailed {
                     reason: "containment receipt epoch does not match the signed primary entry"
@@ -1440,7 +1476,10 @@ impl UncommittedEvidenceChainEvidence {
                     | ContainmentAction::Quarantine
             );
             let expected_saga_id = format!("{expected_run_id}:saga");
-            if requires_saga && self.saga_id.as_deref() != Some(expected_saga_id.as_str()) {
+            if requires_saga
+                && self.quarantine_persistence_error.is_none()
+                && self.saga_id.as_deref() != Some(expected_saga_id.as_str())
+            {
                 return Err(LedgerError::SchemaValidationFailed {
                     reason: "saga id does not match the signed evidence run".to_string(),
                 });
@@ -1568,6 +1607,68 @@ struct PreparedLoweringOutput {
     entry_flow_label_ceiling: Label,
 }
 
+/// A terminal admission barrier, not a replacement for the signed run evidence.
+/// The host-owned state database is the authority for this local quarantine;
+/// receipt integrity detects corruption, not a malicious database administrator.
+/// Recoverable challenge/sandbox/suspension state deliberately stays outside
+/// this record: persisting it would require its existing release/resume protocol
+/// to be persisted too. Quarantine has no release transition in the executor.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DurableQuarantine {
+    schema_version: u32,
+    trace_id: String,
+    policy_id: String,
+    receipt: ContainmentReceipt,
+}
+
+impl DurableQuarantine {
+    const SCHEMA_VERSION: u32 = 1;
+
+    fn key(extension_id: &str) -> String {
+        // Hash the exact identity so separators or traversal-shaped IDs cannot
+        // select another record, and key size is independent of manifest size.
+        format!(
+            "quarantine/v1/{}",
+            ContentHash::compute(extension_id.as_bytes()).to_hex()
+        )
+    }
+
+    fn validate_record(record: &StoreRecord, extension_id: &str) -> Result<(), ContainmentError> {
+        let invalid = |detail: &str| ContainmentError::Internal {
+            detail: format!("invalid durable quarantine record: {detail}"),
+        };
+        if record.store != StoreKind::PolicyCache || record.key != Self::key(extension_id) {
+            return Err(invalid("storage identity mismatch"));
+        }
+        let barrier: Self =
+            serde_json::from_slice(&record.value).map_err(|_| invalid("malformed payload"))?;
+        if barrier.schema_version != Self::SCHEMA_VERSION {
+            return Err(invalid("unsupported schema version"));
+        }
+        if barrier.receipt.target_extension_id != extension_id
+            || barrier.receipt.action != ContainmentAction::Quarantine
+            || barrier.receipt.new_state != ContainmentState::Quarantined
+            || !barrier.receipt.success
+            || !barrier.receipt.verify_integrity()
+        {
+            return Err(invalid("quarantine receipt identity or integrity mismatch"));
+        }
+        if barrier.trace_id.trim().is_empty()
+            || barrier.policy_id.trim().is_empty()
+            || !barrier.receipt.evidence_refs.contains(&barrier.trace_id)
+            || barrier
+                .receipt
+                .metadata
+                .get("decision_id")
+                .is_none_or(|id| id.trim().is_empty())
+        {
+            return Err(invalid("missing decision linkage"));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
 struct PendingPostCellFailure {
     primary_error: Box<OrchestratorError>,
@@ -1590,6 +1691,13 @@ impl From<OrchestratorError> for PendingPostCellFailure {
 #[derive(Debug)]
 enum ContainmentPhaseError {
     Pipeline(OrchestratorError),
+    /// Local containment completed, but its durable admission barrier failed.
+    /// Keep that receipt in the staged failure evidence without claiming a
+    /// successful durable commit or a saga that was never created.
+    QuarantinePersistence {
+        error: ContainmentError,
+        receipt: Box<ContainmentReceipt>,
+    },
     SagaCreation(Box<ContainmentSagaFailureEvidence>),
 }
 
@@ -1603,6 +1711,9 @@ impl From<ContainmentPhaseError> for PendingPostCellFailure {
     fn from(error: ContainmentPhaseError) -> Self {
         match error {
             ContainmentPhaseError::Pipeline(primary_error) => primary_error.into(),
+            ContainmentPhaseError::QuarantinePersistence { error, .. } => {
+                OrchestratorError::Containment(error).into()
+            }
             ContainmentPhaseError::SagaCreation(evidence) => Self {
                 primary_error: Box::new(OrchestratorError::Saga(evidence.saga_error.clone())),
                 additional_errors: Vec::new(),
@@ -2342,7 +2453,9 @@ impl ExecutionOrchestrator {
         self.capability_witness.as_ref()
     }
 
-    /// Install a custom [`StorageAdapter`] backing IFC provenance and replay-index records.
+    /// Install a custom [`StorageAdapter`] backing IFC provenance, replay-index
+    /// records, and terminal quarantine admission. Admission reads the active
+    /// adapter on every attempt; swapping it cannot reset in-memory containment.
     pub fn set_storage_adapter<A: StorageAdapter + Send + 'static>(&mut self, adapter: A) {
         self.storage_adapter = Box::new(adapter);
     }
@@ -2353,6 +2466,8 @@ impl ExecutionOrchestrator {
     }
 
     /// Bind a durable FrankenSQLite control-plane database (`frankenctl run --state-db`).
+    /// Quarantined extension identities remain refused when another orchestrator
+    /// opens this database, regardless of a later package's source or policy ID.
     pub fn open_state_db(&mut self, path: impl AsRef<std::path::Path>) -> Result<(), StorageError> {
         #[cfg(feature = "sibling-persistence")]
         {
@@ -2368,6 +2483,95 @@ impl ExecutionOrchestrator {
                 detail: "durable --state-db requires the `sibling-persistence` feature".to_string(),
             })
         }
+    }
+
+    fn quarantine_storage_error(operation: &str, error: impl fmt::Display) -> ContainmentError {
+        ContainmentError::Internal {
+            detail: format!("durable quarantine {operation} failed: {error}"),
+        }
+    }
+
+    /// Check before parsing, resolving, or installing any effect provider.
+    /// The read is intentionally not cached: another orchestrator sharing the
+    /// database may have quarantined the identity since our previous run.
+    fn ensure_containment_admission(
+        &mut self,
+        extension_id: &str,
+    ) -> Result<(), OrchestratorError> {
+        self.containment_executor
+            .ensure_execution_allowed(extension_id)?;
+        let context = EventContext::new(
+            "quarantine-admission",
+            "quarantine-admission",
+            self.config.policy_id.clone(),
+        )
+        .map_err(|error| Self::quarantine_storage_error("admission context", error))?;
+        let record = self
+            .storage_adapter
+            .get(
+                StoreKind::PolicyCache,
+                &DurableQuarantine::key(extension_id),
+                &context,
+            )
+            .map_err(|error| Self::quarantine_storage_error("read", error))?;
+        if let Some(record) = record {
+            DurableQuarantine::validate_record(&record, extension_id)?;
+            return Err(ContainmentError::AlreadyContained {
+                extension_id: extension_id.to_string(),
+                current_state: ContainmentState::Quarantined,
+            }
+            .into());
+        }
+        Ok(())
+    }
+
+    /// Publish the first terminal quarantine atomically, never replacing an
+    /// existing barrier. The in-memory transition already took effect, so a
+    /// rejected write also keeps this orchestrator closed to the identity.
+    /// Only a successful commit permits reporting successful durable quarantine.
+    fn persist_quarantine(
+        &mut self,
+        receipt: &ContainmentReceipt,
+        trace_id: &str,
+        decision_id: &str,
+    ) -> Result<(), ContainmentError> {
+        let context = EventContext::new(trace_id, decision_id, self.config.policy_id.clone())
+            .map_err(|error| Self::quarantine_storage_error("write context", error))?;
+        let barrier = DurableQuarantine {
+            schema_version: DurableQuarantine::SCHEMA_VERSION,
+            trace_id: trace_id.to_string(),
+            policy_id: self.config.policy_id.clone(),
+            receipt: receipt.clone(),
+        };
+        let value = serde_json::to_vec(&barrier)
+            .map_err(|error| Self::quarantine_storage_error("serialization", error))?;
+        let key = DurableQuarantine::key(&receipt.target_extension_id);
+        let record = match self
+            .storage_adapter
+            .compare_and_swap(
+                StoreKind::PolicyCache,
+                key,
+                None,
+                value,
+                BTreeMap::new(),
+                &context,
+            )
+            .map_err(|error| Self::quarantine_storage_error("commit", error))?
+        {
+            CompareAndSwapOutcome::Applied(record)
+            | CompareAndSwapOutcome::Conflict {
+                current: Some(record),
+            } => record,
+            CompareAndSwapOutcome::Conflict { current: None } => {
+                return Err(ContainmentError::Internal {
+                    detail: "durable quarantine commit conflicted without an existing barrier"
+                        .to_string(),
+                });
+            }
+        };
+        // A conflict is safe only if it is another valid quarantine for this
+        // exact identity. Corruption is never repaired by overwriting authority.
+        DurableQuarantine::validate_record(&record, &receipt.target_extension_id)
     }
 
     /// Flow edges recorded by the data-contract ingress guard during the most
@@ -2634,8 +2838,7 @@ impl ExecutionOrchestrator {
         package: &ExtensionPackage,
     ) -> Result<PreparedRuntimeFlowGuards, OrchestratorError> {
         Self::validate_package(package)?;
-        self.containment_executor
-            .ensure_execution_allowed(&package.extension_id)?;
+        self.ensure_containment_admission(&package.extension_id)?;
         let reserved = self.reserve_execution_context(package)?;
         let prepared = match self.prepare_lowering_output(
             package,
@@ -2683,8 +2886,7 @@ impl ExecutionOrchestrator {
         resolved: &ResolutionOutcome,
         process_spawn_attempt: Option<InstalledProcessSpawnAttempt>,
     ) -> Result<OrchestratorResult, OrchestratorError> {
-        self.containment_executor
-            .ensure_execution_allowed(&package.extension_id)?;
+        self.ensure_containment_admission(&package.extension_id)?;
         let record = &resolved.module.record;
         if record.id.is_empty()
             || resolved.module.canonical_specifier.is_empty()
@@ -2781,8 +2983,7 @@ impl ExecutionOrchestrator {
         resolver: ExecutionModuleResolver,
     ) -> Result<OrchestratorResult, OrchestratorError> {
         let process_spawn_attempt = self.begin_execution_attempt()?;
-        self.containment_executor
-            .ensure_execution_allowed(&package.extension_id)?;
+        self.ensure_containment_admission(&package.extension_id)?;
         if resolver.entry_referrer() != resolved.module.record.id {
             return Err(OrchestratorError::ResolvedEntryRejected {
                 detail: "runtime resolver entry identity does not match the resolved entry"
@@ -2858,8 +3059,7 @@ impl ExecutionOrchestrator {
         // its original grants. Check before lowering, attempt identifiers,
         // recorder setup, or any guest-triggered provider/resolver activity.
         // A normal completed execution remains Running and can be reused.
-        self.containment_executor
-            .ensure_execution_allowed(&package.extension_id)?;
+        self.ensure_containment_admission(&package.extension_id)?;
         // Commit attacker-controlled capability metadata before any execution
         // or host effect. The post-effect evidence phase consumes only this
         // fixed-size summary, so containment cannot be delayed by re-hashing an
@@ -3307,20 +3507,29 @@ impl ExecutionOrchestrator {
             ) {
                 Ok(outcome) => outcome,
                 Err(error) => {
-                    let (containment_receipt, saga_id) = match &error {
+                    let (containment_receipt, saga_id, quarantine_persistence_error) = match &error
+                    {
                         ContainmentPhaseError::SagaCreation(evidence) => (
                             Some(evidence.receipt.clone()),
                             Some(evidence.saga_id.clone()),
+                            None,
                         ),
-                        ContainmentPhaseError::Pipeline(_) => (None, None),
+                        ContainmentPhaseError::QuarantinePersistence { receipt, error } => (
+                            Some(receipt.as_ref().clone()),
+                            None,
+                            Some(error.to_string()),
+                        ),
+                        ContainmentPhaseError::Pipeline(_) => (None, None, None),
                     };
-                    let uncommitted_evidence_chain = self
+                    let mut uncommitted_evidence_chain = self
                         .build_uncommitted_evidence_chain_evidence(
                             evidence_entries.clone(),
                             evidence_chain_receipt.clone(),
                             containment_receipt,
                             saga_id,
                         );
+                    uncommitted_evidence_chain.quarantine_persistence_error =
+                        quarantine_persistence_error;
                     let mut failure = PendingPostCellFailure::from(error);
                     failure.uncommitted_evidence_chain = Some(Box::new(uncommitted_evidence_chain));
                     return Err(failure);
@@ -3756,6 +3965,7 @@ impl ExecutionOrchestrator {
             evidence_verification_identity: self.evidence_signing_authority.verification_identity(),
             containment_receipt,
             saga_id,
+            quarantine_persistence_error: None,
         }
     }
 
@@ -4094,6 +4304,7 @@ impl ExecutionOrchestrator {
             .max_total_memory_bytes
             .min(memory_budget_bytes);
         quickjs_config.granted_capabilities = granted_capabilities.clone();
+        quickjs_config.sandbox_policy = self.config.sandbox_policy.clone();
         quickjs_config.extension_id = Some(package.extension_id.clone());
         quickjs_config.cancellation_token = cancellation_token.cloned();
         quickjs_config.commonjs_entry = self.commonjs_entry();
@@ -4115,6 +4326,7 @@ impl ExecutionOrchestrator {
         v8_config.max_total_memory_bytes =
             v8_config.max_total_memory_bytes.min(memory_budget_bytes);
         v8_config.granted_capabilities = granted_capabilities;
+        v8_config.sandbox_policy = self.config.sandbox_policy.clone();
         v8_config.extension_id = Some(package.extension_id.clone());
         v8_config.cancellation_token = cancellation_token.cloned();
         v8_config.commonjs_entry = self.commonjs_entry();
@@ -5115,6 +5327,19 @@ impl ExecutionOrchestrator {
             builder = builder.meta(
                 "hook_requested_action".to_string(),
                 format_guardplane_hook_action(requested),
+            );
+        }
+        if effective_action == ContainmentAction::Sandbox
+            || guardplane_report.is_some_and(|report| {
+                report
+                    .decisions
+                    .iter()
+                    .any(|decision| decision.action == HookAction::Sandbox)
+            })
+        {
+            builder = builder.meta(
+                "sandbox_policy_hash".to_string(),
+                self.config.sandbox_policy.content_hash().to_string(),
             );
         }
 
@@ -6122,12 +6347,25 @@ impl ExecutionOrchestrator {
             evidence_refs: vec![trace_id.to_string()],
             grace_period_ns: 0,
             challenge_timeout_ns: 0,
-            sandbox_policy: SandboxPolicy::default(),
+            sandbox_policy: self.config.sandbox_policy.clone(),
         };
 
         let receipt = self
             .containment_executor
             .execute(action, &package.extension_id, &context)?;
+
+        if action == ContainmentAction::Quarantine {
+            // Persist before saga creation or publication of successful run
+            // evidence. A later cleanup/ledger failure must not erase the
+            // terminal admission decision, and a storage failure is returned
+            // while the local executor remains quarantined.
+            if let Err(error) = self.persist_quarantine(&receipt, trace_id, decision_id) {
+                return Err(ContainmentPhaseError::QuarantinePersistence {
+                    error,
+                    receipt: Box::new(receipt),
+                });
+            }
+        }
 
         // Create saga if applicable.
         let saga_id = if let Some(saga_type) = Self::action_to_saga_type(action) {

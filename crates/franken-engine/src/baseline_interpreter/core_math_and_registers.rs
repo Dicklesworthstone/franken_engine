@@ -93,18 +93,6 @@ impl InterpreterCore {
         }
     }
 
-    pub(super) fn increment_collection_size(&mut self, collection_id: ObjectId) {
-        let collection_index = collection_id.0 as usize;
-        self.mutate_heap(|heap| {
-            if let Some(collection_obj) = heap.get_mut(collection_index)
-                && let Some(Value::Int(size)) =
-                    collection_obj.properties.get_mut(COLLECTION_SIZE_SLOT)
-            {
-                *size = size.saturating_add(1);
-            }
-        });
-    }
-
     /// Where a collection constructor reads its seed values (ES2020
     /// 23.1.1.1, 23.2.1.1, 23.3.1.1, 23.4.1.1): `undefined` and `null` seed
     /// nothing, and anything else goes through the for-of iteration
@@ -287,7 +275,6 @@ impl InterpreterCore {
         &mut self,
         module: Option<&Ir3Module>,
         entries_id: ObjectId,
-        size_owner: Option<ObjectId>,
         iterable: Value,
     ) -> Result<(), InterpreterError> {
         let mut label = Label::Public;
@@ -305,15 +292,7 @@ impl InterpreterCore {
             // entries (and a duplicate key's replacement growth) out of the
             // running estimate, which only the full re-walk at every
             // microtask checkpoint used to repair.
-            let inserted = self
-                .heap
-                .get(entries_id.0 as usize)
-                .is_some_and(|entries| !entries.properties.contains_key(&key_str));
             self.set_object_property(entries_id, key_str, value)?;
-
-            if inserted && let Some(collection_id) = size_owner {
-                self.increment_collection_size(collection_id);
-            }
         }
 
         self.finish_collection_seed(label)
@@ -323,7 +302,6 @@ impl InterpreterCore {
         &mut self,
         module: Option<&Ir3Module>,
         values_id: ObjectId,
-        size_owner: Option<ObjectId>,
         iterable: Value,
         weak_values_only: bool,
     ) -> Result<(), InterpreterError> {
@@ -362,20 +340,13 @@ impl InterpreterCore {
                 let new_bytes = Self::estimate_property_entry_bytes(&value_str, &stored);
                 self.apply_memory_component_delta(0, new_bytes)?;
             }
-            let mut inserted = false;
-
             self.mutate_heap(|heap| {
                 if let Some(values_obj) = heap.get_mut(values_index) {
                     if !values_obj.properties.contains_key(&value_str) {
                         values_obj.properties.insert(value_str, stored);
-                        inserted = true;
                     }
                 }
             });
-
-            if inserted && let Some(collection_id) = size_owner {
-                self.increment_collection_size(collection_id);
-            }
         }
 
         self.finish_collection_seed(label)
@@ -2629,6 +2600,12 @@ impl InterpreterCore {
             )
             .saturating_add(
                 object
+                    .collection_storage
+                    .as_ref()
+                    .map_or(0, |_| std::mem::size_of::<ObjectId>() as u64),
+            )
+            .saturating_add(
+                object
                     .array_buffer
                     .as_ref()
                     .map(|backing| {
@@ -3557,6 +3534,59 @@ impl InterpreterCore {
         }))
     }
 
+    pub(super) fn module_local_export_entry_bytes(
+        name: &JsString,
+        local: &Option<JsString>,
+    ) -> u64 {
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(std::mem::size_of::<(JsString, ModuleLocalExport)>() as u64)
+            .saturating_add(Self::estimate_js_string_bytes(name))
+            .saturating_add(
+                local
+                    .as_ref()
+                    .map(Self::estimate_js_string_bytes)
+                    .unwrap_or(0),
+            )
+    }
+
+    pub(super) fn module_local_binding_index_bytes(local: &JsString) -> u64 {
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(std::mem::size_of::<(JsString, ModuleLocalBinding)>() as u64)
+            .saturating_add(Self::estimate_js_string_bytes(local))
+    }
+
+    pub(super) fn module_local_binding_export_bytes(name: &JsString) -> u64 {
+        (std::mem::size_of::<JsString>() as u64)
+            .saturating_add(Self::estimate_js_string_bytes(name))
+    }
+
+    pub(super) fn module_import_origin_entry_bytes(
+        local: &JsString,
+        origin: &ModuleImportOrigin,
+    ) -> u64 {
+        let payload = match origin {
+            ModuleImportOrigin::Binding { specifier, name } => {
+                Self::estimate_string_bytes(specifier)
+                    .saturating_add(Self::estimate_js_string_bytes(name))
+            }
+            ModuleImportOrigin::Namespace { specifier } => Self::estimate_string_bytes(specifier),
+        };
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(std::mem::size_of::<(JsString, ModuleImportOrigin)>() as u64)
+            .saturating_add(Self::estimate_js_string_bytes(local))
+            .saturating_add(payload)
+    }
+
+    pub(super) fn module_star_source_bytes(specifier: &str) -> u64 {
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(std::mem::size_of::<String>() as u64)
+            .saturating_add(Self::estimate_string_bytes(specifier))
+    }
+
+    pub(super) fn module_evaluation_exception_bytes((value, label): &(Value, Label)) -> u64 {
+        Self::estimate_value_bytes(value).saturating_add(Self::estimate_label_bytes(label))
+    }
+
     pub(super) fn module_exports_memory_bytes(&self) -> u64 {
         Self::saturating_sum(self.module_state.modules.values().map(|record| {
             let exports = Self::saturating_sum(
@@ -3567,13 +3597,53 @@ impl InterpreterCore {
             );
             // The export record also retains the ceiling used to authorize
             // later imports. Custom labels own names even on failed records.
-            exports.saturating_add(
+            let local_bindings =
+                Self::saturating_sum(record.local_export_bindings.iter().map(|(name, local)| {
+                    Self::module_local_export_entry_bytes(name, &local.local_name)
+                }));
+            let import_origins = Self::saturating_sum(
                 record
-                    .flow_label_ceiling
-                    .as_ref()
-                    .map(Self::estimate_label_bytes)
-                    .unwrap_or(0),
-            )
+                    .import_origins
+                    .iter()
+                    .map(|(local, origin)| Self::module_import_origin_entry_bytes(local, origin)),
+            );
+            let binding_indices = Self::saturating_sum(record.local_binding_indices.iter().map(
+                |(local, binding)| {
+                    Self::module_local_binding_index_bytes(local).saturating_add(
+                        Self::saturating_sum(
+                            binding
+                                .exports
+                                .iter()
+                                .map(Self::module_local_binding_export_bytes),
+                        ),
+                    )
+                },
+            ));
+            let star_sources = Self::saturating_sum(
+                record
+                    .star_sources
+                    .iter()
+                    .map(|source| Self::module_star_source_bytes(source)),
+            );
+            exports
+                .saturating_add(local_bindings)
+                .saturating_add(binding_indices)
+                .saturating_add(import_origins)
+                .saturating_add(star_sources)
+                .saturating_add(
+                    record
+                        .evaluation_exception
+                        .as_ref()
+                        .map(Self::module_evaluation_exception_bytes)
+                        .unwrap_or(0),
+                )
+                .saturating_add(
+                    record
+                        .flow_label_ceiling
+                        .as_ref()
+                        .map(Self::estimate_label_bytes)
+                        .unwrap_or(0),
+                )
         }))
     }
 
@@ -4186,6 +4256,12 @@ impl InterpreterCore {
                     .date_value
                     .as_ref()
                     .map_or(0, |_| std::mem::size_of::<Float64>() as u64),
+            )
+            .saturating_add(
+                object
+                    .collection_storage
+                    .as_ref()
+                    .map_or(0, |_| std::mem::size_of::<ObjectId>() as u64),
             )
             .saturating_add(array_buffer_bytes)
             .saturating_add(typed_array_bytes)
@@ -5186,7 +5262,90 @@ impl InterpreterCore {
         // accounting. Admitting it would make a later subtraction lossy
         // (`MAX - MAX == 0`) and allow the incremental total to drift from
         // eager recomputation, even when the configured ceiling is unlimited.
-        requested_bytes == u64::MAX || requested_bytes > max_bytes
+        requested_bytes == u64::MAX
+            || requested_bytes > max_bytes
+            || self.sandbox_memory_request_exceeds_budget(requested_bytes)
+            || self.sandbox_forbids_memory_growth(requested_base_bytes)
+    }
+
+    // Console retention has its own ordinary budget and is not part of the
+    // legacy live-memory accumulator. Include it in the sandbox ceiling so
+    // allowing Console cannot evade the narrowed allocation budget.
+    fn sandbox_console_memory_bytes(&self) -> u64 {
+        (self.console_output_bytes as u64)
+            .saturating_add(
+                (self.console_output.len() as u64)
+                    .saturating_mul(std::mem::size_of::<ConsoleEntry>() as u64),
+            )
+            .saturating_add(
+                (self
+                    .console_counts
+                    .len()
+                    .saturating_add(self.console_timers.len()) as u64)
+                    .saturating_mul(std::mem::size_of::<(String, u64)>() as u64),
+            )
+    }
+
+    pub(super) fn sandbox_memory_usage(&self) -> u64 {
+        self.estimated_memory_bytes()
+            .saturating_add(self.sandbox_console_memory_bytes())
+    }
+
+    fn sandbox_memory_request_exceeds_budget(&self, requested_bytes: u64) -> bool {
+        self.active_sandbox.get().is_some_and(|sandbox| {
+            requested_bytes.saturating_add(self.sandbox_console_memory_bytes())
+                > sandbox.memory_ceiling_bytes
+        })
+    }
+
+    pub(super) fn check_sandbox_console_allocation(
+        &self,
+        added_bytes: u64,
+    ) -> Result<(), InterpreterError> {
+        if let Some(sandbox) = self.active_sandbox.get()
+            && (self.config.sandbox_policy.max_memory_bytes == 0
+                || self.sandbox_memory_usage().saturating_add(added_bytes)
+                    > sandbox.memory_ceiling_bytes)
+        {
+            return Err(Self::sandbox_interruption());
+        }
+        Ok(())
+    }
+
+    pub(super) fn effective_memory_budget(&self, max_bytes: u64) -> u64 {
+        self.active_sandbox.get().map_or(max_bytes, |sandbox| {
+            max_bytes.min(sandbox.memory_ceiling_bytes)
+        })
+    }
+
+    fn sandbox_forbids_memory_growth(&self, requested_base_bytes: u64) -> bool {
+        self.active_sandbox.get().is_some()
+            && self.config.sandbox_policy.max_memory_bytes == 0
+            && requested_base_bytes > self.estimated_memory_bytes
+    }
+
+    /// Shared by every managed object allocator, including builtin buffer and
+    /// view constructors that bypass instruction-level allocation hooks.
+    pub(super) fn ensure_heap_allocation_allowed(&self) -> Result<(), InterpreterError> {
+        if !self
+            .config
+            .granted_capabilities
+            .contains(&RuntimeCapability::HeapAllocate)
+        {
+            return Err(InterpreterError::CapabilityDenied {
+                capability: "HeapAllocate".to_string(),
+            });
+        }
+        if self.active_sandbox.get().is_some()
+            && (self.config.sandbox_policy.max_memory_bytes == 0
+                || !self
+                    .config
+                    .sandbox_policy
+                    .allows_runtime_capability(RuntimeCapability::HeapAllocate))
+        {
+            return Err(Self::sandbox_interruption());
+        }
+        Ok(())
     }
 
     pub(super) fn memory_budget_error(
@@ -5194,9 +5353,17 @@ impl InterpreterCore {
         requested_base_bytes: u64,
         requested_heap_objects: u32,
     ) -> InterpreterError {
+        let requested_bytes = self.total_memory_bytes_from_base(requested_base_bytes);
+        if requested_heap_objects <= self.config.max_heap_objects
+            && requested_bytes <= self.config.max_total_memory_bytes
+            && (self.sandbox_memory_request_exceeds_budget(requested_bytes)
+                || self.sandbox_forbids_memory_growth(requested_base_bytes))
+        {
+            return Self::sandbox_interruption();
+        }
         InterpreterError::MemoryBudgetExceeded {
-            requested_bytes: self.total_memory_bytes_from_base(requested_base_bytes),
-            max_bytes: self.config.max_total_memory_bytes,
+            requested_bytes,
+            max_bytes: self.effective_memory_budget(self.config.max_total_memory_bytes),
             requested_heap_objects,
             max_heap_objects: self.config.max_heap_objects,
         }
@@ -5759,15 +5926,7 @@ impl InterpreterCore {
         } else {
             "ArrayBuffer"
         };
-        if !self
-            .config
-            .granted_capabilities
-            .contains(&RuntimeCapability::HeapAllocate)
-        {
-            return Err(InterpreterError::CapabilityDenied {
-                capability: "HeapAllocate".to_string(),
-            });
-        }
+        self.ensure_heap_allocation_allowed()?;
 
         let byte_length_u64 = u64::try_from(byte_length).map_err(|_| InterpreterError::RangeError {
             message: format!(
@@ -5899,15 +6058,7 @@ impl InterpreterCore {
         length: usize,
         is_buffer: bool,
     ) -> Result<ObjectId, InterpreterError> {
-        if !self
-            .config
-            .granted_capabilities
-            .contains(&RuntimeCapability::HeapAllocate)
-        {
-            return Err(InterpreterError::CapabilityDenied {
-                capability: "HeapAllocate".to_string(),
-            });
-        }
+        self.ensure_heap_allocation_allowed()?;
 
         let length_i64 = i64::try_from(length).map_err(|_| InterpreterError::RangeError {
             message: format!(
@@ -6034,15 +6185,7 @@ impl InterpreterCore {
                 message: "Buffer contents length does not match requested allocation".to_string(),
             });
         }
-        if !self
-            .config
-            .granted_capabilities
-            .contains(&RuntimeCapability::HeapAllocate)
-        {
-            return Err(InterpreterError::CapabilityDenied {
-                capability: "HeapAllocate".to_string(),
-            });
-        }
+        self.ensure_heap_allocation_allowed()?;
         // Materialized before the heap indices below are taken: the first
         // use allocates the prototype objects (bd-9vouw.104). A refusal below
         // takes them back with the pair.
@@ -6280,8 +6423,8 @@ impl InterpreterCore {
                 } else if is_array {
                     self.array_from_has_explicit_iterator(*id)?
                 } else {
-                    let map = self.collection_storage_id(*id, "Map", "__entries");
-                    let set = self.collection_storage_id(*id, "Set", "__values");
+                    let map = self.collection_storage_id(*id, "Map");
+                    let set = self.collection_storage_id(*id, "Set");
                     map.is_some()
                         || set.is_some()
                         || (self.array_from_has_explicit_iterator(*id)?
@@ -6391,15 +6534,7 @@ impl InterpreterCore {
         byte_offset: usize,
         byte_length: usize,
     ) -> Result<ObjectId, InterpreterError> {
-        if !self
-            .config
-            .granted_capabilities
-            .contains(&RuntimeCapability::HeapAllocate)
-        {
-            return Err(InterpreterError::CapabilityDenied {
-                capability: "HeapAllocate".to_string(),
-            });
-        }
+        self.ensure_heap_allocation_allowed()?;
 
         let byte_length_i64 =
             i64::try_from(byte_length).map_err(|_| InterpreterError::RangeError {
@@ -6562,16 +6697,7 @@ impl InterpreterCore {
         prototype: Option<ObjectId>,
         is_array: bool,
     ) -> Result<ObjectId, InterpreterError> {
-        // Check HeapAllocate capability before allocating objects
-        if !self
-            .config
-            .granted_capabilities
-            .contains(&RuntimeCapability::HeapAllocate)
-        {
-            return Err(InterpreterError::CapabilityDenied {
-                capability: "HeapAllocate".to_string(),
-            });
-        }
+        self.ensure_heap_allocation_allowed()?;
 
         let requested_heap_objects = self.heap_object_count_u32().saturating_add(1);
         if requested_heap_objects > self.config.max_heap_objects {
@@ -10101,26 +10227,13 @@ impl InterpreterCore {
             "Map" => {
                 let entries_id = self.alloc_object_with_prototype(None)?;
                 self.set_object_brand(object_id, "Map")?;
-                self.set_object_property(
-                    object_id,
-                    "__entries".to_string(),
-                    Value::Object(entries_id),
-                )?;
-                self.set_object_property(
-                    object_id,
-                    COLLECTION_SIZE_SLOT.to_string(),
-                    Value::Int(0),
-                )?;
-                self.hide_internal_slots(object_id, &["__entries", COLLECTION_SIZE_SLOT])?;
+                self.set_collection_storage(object_id, entries_id)?;
                 let iterable = self.arg_or_undefined(args, 0)?;
                 if !matches!(iterable, Value::Undefined | Value::Null) {
                     match self.collection_seed_adder(module, object_id, "Map")? {
-                        None => self.seed_map_entries_from_iterable(
-                            module,
-                            entries_id,
-                            Some(object_id),
-                            iterable,
-                        )?,
+                        None => {
+                            self.seed_map_entries_from_iterable(module, entries_id, iterable)?
+                        }
                         Some(adder) => self
                             .seed_collection_with_adder(module, object_id, adder, true, iterable)?,
                     }
@@ -10129,27 +10242,13 @@ impl InterpreterCore {
             "Set" => {
                 let values_id = self.alloc_object_with_prototype(None)?;
                 self.set_object_brand(object_id, "Set")?;
-                self.set_object_property(
-                    object_id,
-                    "__values".to_string(),
-                    Value::Object(values_id),
-                )?;
-                self.set_object_property(
-                    object_id,
-                    COLLECTION_SIZE_SLOT.to_string(),
-                    Value::Int(0),
-                )?;
-                self.hide_internal_slots(object_id, &["__values", COLLECTION_SIZE_SLOT])?;
+                self.set_collection_storage(object_id, values_id)?;
                 let iterable = self.arg_or_undefined(args, 0)?;
                 if !matches!(iterable, Value::Undefined | Value::Null) {
                     match self.collection_seed_adder(module, object_id, "Set")? {
-                        None => self.seed_set_values_from_iterable(
-                            module,
-                            values_id,
-                            Some(object_id),
-                            iterable,
-                            false,
-                        )?,
+                        None => {
+                            self.seed_set_values_from_iterable(module, values_id, iterable, false)?
+                        }
                         Some(adder) => self.seed_collection_with_adder(
                             module, object_id, adder, false, iterable,
                         )?,
@@ -13127,6 +13226,7 @@ impl InterpreterCore {
     }
 
     pub(super) fn emit_witness(&mut self, kind: WitnessEventKind, detail: Option<&str>) {
+        self.flush_sandbox_witness();
         let payload = detail.unwrap_or("").as_bytes();
         self.witness_events.push(WitnessEvent {
             seq: self.witness_seq,

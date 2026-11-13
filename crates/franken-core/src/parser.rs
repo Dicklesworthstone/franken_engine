@@ -4665,11 +4665,12 @@ fn trim_directive_trivia(mut source: &str) -> (&str, bool) {
     }
 }
 
-fn has_use_strict_directive(mut source: &str) -> bool {
+fn raw_directive_prologue(mut source: &str) -> Vec<&str> {
+    let mut directives = Vec::new();
     loop {
         (source, _) = trim_directive_trivia(source);
         let Some(delimiter) = source.chars().next().filter(|ch| matches!(ch, '\'' | '"')) else {
-            return false;
+            return directives;
         };
 
         let mut escaped = false;
@@ -4683,11 +4684,11 @@ fn has_use_strict_directive(mut source: &str) -> bool {
                 closing_index = Some(delimiter.len_utf8() + index);
                 break;
             } else if matches!(ch, '\n' | '\r') {
-                return false;
+                return directives;
             }
         }
         let Some(closing_index) = closing_index else {
-            return false;
+            return directives;
         };
         let directive = &source[delimiter.len_utf8()..closing_index];
         let after_literal = &source[closing_index + delimiter.len_utf8()..];
@@ -4696,19 +4697,32 @@ fn has_use_strict_directive(mut source: &str) -> bool {
             || after_trivia.starts_with(';')
             || (saw_line_terminator && !starts_directive_expression_continuation(after_trivia));
         if !terminated {
-            return false;
+            return directives;
         }
-        if directive == "use strict" {
-            return true;
-        }
+        directives.push(directive);
 
         source = if let Some(rest) = after_trivia.strip_prefix(';') {
             rest
         } else if saw_line_terminator {
             after_trivia
         } else {
-            return false;
+            return directives;
         };
+    }
+}
+
+fn has_use_strict_directive(source: &str) -> bool {
+    raw_directive_prologue(source).contains(&"use strict")
+}
+
+/// Empty statements are omitted from this AST, so source-level prologue
+/// membership must be retained before lowering loses that distinction.
+fn retain_directive_prologue(statements: &mut [Statement], source: &str) {
+    let directives = raw_directive_prologue(source);
+    for (index, statement) in statements.iter_mut().enumerate() {
+        if let Statement::Expression(statement) = statement {
+            statement.raw_directive = directives.get(index).map(|raw| (*raw).to_string());
+        }
     }
 }
 
@@ -4887,6 +4901,7 @@ fn parse_source_on_current_stack(
         }
     }
 
+    retain_directive_prologue(&mut statements, text);
     let source_len = to_u64(text.len(), source_label, None)?;
     let (end_line, end_column) =
         source_end_position(&source_line_starts, source_len, source_label)?;
@@ -6156,10 +6171,11 @@ fn parse_statement_inner(
     }
 
     let expression_source = statement.strip_suffix(';').unwrap_or(statement).trim();
-    let expression = parse_expression(expression_source, &span, context, 1)?;
+    let expression = parse_expression_allowing_sequence(expression_source, &span, context, 1)?;
     Ok(Statement::Expression(ExpressionStatement {
         expression,
         span,
+        raw_directive: None,
     }))
 }
 
@@ -6168,10 +6184,8 @@ fn parse_import(
     source_label: &str,
     span: SourceSpan,
 ) -> ParseResult<ImportDeclaration> {
-    let body = statement
-        .get("import ".len()..)
-        .map(str::trim)
-        .unwrap_or("");
+    let body =
+        clause_keyword_tail(statement, "import", ScanGrammarContext::SLOPPY_SCRIPT).unwrap_or("");
     if body.is_empty() {
         return Err(ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
@@ -6200,14 +6214,16 @@ fn parse_import(
     })?;
 
     let clause = parse_import_binding_clause(binding_raw.trim(), source_label, &span)?;
-    let source = parse_quoted_string(source_raw.trim()).ok_or_else(|| {
-        ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
-            "import source must be quoted",
-            source_label.to_string(),
-            Some(span.clone()),
-        )
-    })?;
+    let source = trim_binding_pattern_trivia(source_raw)
+        .and_then(parse_quoted_string)
+        .ok_or_else(|| {
+            ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "import source must be quoted",
+                source_label.to_string(),
+                Some(span.clone()),
+            )
+        })?;
 
     Ok(ImportDeclaration {
         binding: clause.primary_binding().map(str::to_string),
@@ -6339,6 +6355,25 @@ fn parse_namespace_import_binding(clause: &str) -> Option<String> {
     canonical_module_binding_identifier(rest)
 }
 
+/// Named module lists allow one trailing comma, but never a missing entry.
+/// Trim lexical trivia at each boundary without joining identifier tokens;
+/// commas and braces inside comments must not become list delimiters.
+fn named_module_specifier_entries(source: &str) -> Option<Vec<&str>> {
+    let source = trim_binding_pattern_trivia(source)?;
+    if source.is_empty() {
+        return Some(Vec::new());
+    }
+
+    let mut entries = split_top_level_commas(source);
+    if entries.len() > 1 && entries.last().is_some_and(|entry| entry.is_empty()) {
+        entries.pop();
+    }
+    entries
+        .into_iter()
+        .map(|entry| trim_binding_pattern_trivia(entry).filter(|entry| !entry.is_empty()))
+        .collect()
+}
+
 fn is_named_import_clause(clause: &str) -> bool {
     let clause = clause.trim();
     let Some(inner) = clause
@@ -6348,21 +6383,11 @@ fn is_named_import_clause(clause: &str) -> bool {
         return false;
     };
 
-    let inner = inner.trim();
-    if inner.is_empty() {
-        return true;
-    }
-
-    for specifier in split_top_level_commas(inner) {
-        if trim_binding_pattern_trivia(specifier).is_none_or(str::is_empty) {
-            return false;
-        }
-        if parse_named_import_specifier_parts(specifier).is_none() {
-            return false;
-        }
-    }
-
-    true
+    named_module_specifier_entries(inner).is_some_and(|entries| {
+        entries
+            .into_iter()
+            .all(|specifier| parse_named_import_specifier_parts(specifier).is_some())
+    })
 }
 
 fn parse_named_import_specifiers(
@@ -6383,24 +6408,19 @@ fn parse_named_import_specifiers(
         ));
     };
 
-    let inner = inner.trim();
-    if inner.is_empty() {
-        return Ok(Vec::new());
-    }
+    let entries = named_module_specifier_entries(inner).ok_or_else(|| {
+        ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "named import specifier list contains an empty entry or unterminated trivia",
+            source_label.to_string(),
+            Some(span.clone()),
+        )
+    })?;
 
-    let mut specifiers = Vec::new();
+    let mut specifiers = Vec::with_capacity(entries.len());
     let mut seen_local = BTreeSet::new();
 
-    for specifier in split_top_level_commas(inner) {
-        if trim_binding_pattern_trivia(specifier).is_none_or(str::is_empty) {
-            return Err(ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
-                "named import specifier list contains an empty entry",
-                source_label.to_string(),
-                Some(span.clone()),
-            ));
-        }
-
+    for specifier in entries {
         let Some((import_name, local_name)) = parse_named_import_specifier_parts(specifier) else {
             return Err(ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
@@ -6477,16 +6497,18 @@ fn parse_named_export_clause(
     span: &SourceSpan,
 ) -> ParseResult<NamedExportClause> {
     let clause = clause.trim();
-    let Some(inner_and_trailing) = clause.strip_prefix('{') else {
+    if !clause.starts_with('{') {
         return Err(ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
             "named export clause must start with `{`",
             source_label.to_string(),
             Some(span.clone()),
         ));
-    };
+    }
 
-    let Some(close_index) = inner_and_trailing.find('}') else {
+    let Some((specifiers, trailing)) =
+        extract_balanced_with_context(clause, '{', '}', ScanGrammarContext::SLOPPY_SCRIPT)
+    else {
         return Err(ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
             "named export clause is missing `}`",
@@ -6495,13 +6517,34 @@ fn parse_named_export_clause(
         ));
     };
 
-    let specifiers = &inner_and_trailing[..close_index];
-    validate_named_export_specifiers(specifiers, source_label, span)?;
-
-    let canonical_head = canonicalize_whitespace(&clause[..close_index + 2]);
-    let trailing = inner_and_trailing[close_index + 1..].trim();
+    let canonical_specifiers = parse_named_export_specifiers(specifiers, source_label, span)?;
+    // Keep historical wire spelling for already-supported lists. New trailing
+    // commas, comments, and escaped names are emitted as validated identifiers
+    // so consumers of canonical_head never need to re-lex source trivia.
+    let legacy_specifiers: Vec<_> = specifiers.split(',').collect();
+    let legacy_compatible = legacy_specifiers.len() == canonical_specifiers.len()
+        && legacy_specifiers
+            .iter()
+            .zip(&canonical_specifiers)
+            .all(|(source, canonical)| canonicalize_whitespace(source.trim()) == *canonical);
+    let canonical_head =
+        if legacy_compatible || (canonical_specifiers.is_empty() && specifiers.trim().is_empty()) {
+            canonicalize_whitespace(&clause[..clause.len() - trailing.len()])
+        } else if canonical_specifiers.is_empty() {
+            "{}".to_string()
+        } else {
+            format!("{{ {} }}", canonical_specifiers.join(", "))
+        };
+    let trailing = trim_binding_pattern_trivia(trailing).ok_or_else(|| {
+        ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "named export trailing clause has unterminated lexical trivia",
+            source_label.to_string(),
+            Some(span.clone()),
+        )
+    })?;
     let source = if !trailing.is_empty() {
-        let Some(source_raw) = trailing.strip_prefix("from").map(str::trim_start) else {
+        let Some(source_raw) = strip_contextual_keyword(trailing, "from") else {
             return Err(ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
                 "named export trailing clause must be `from <quoted-source>`",
@@ -6510,14 +6553,16 @@ fn parse_named_export_clause(
             ));
         };
 
-        let source = parse_quoted_string(source_raw).ok_or_else(|| {
-            ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
-                "export source must be quoted",
-                source_label.to_string(),
-                Some(span.clone()),
-            )
-        })?;
+        let source = trim_binding_pattern_trivia(source_raw)
+            .and_then(parse_quoted_string)
+            .ok_or_else(|| {
+                ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    "export source must be quoted",
+                    source_label.to_string(),
+                    Some(span.clone()),
+                )
+            })?;
         Some(source)
     } else {
         None
@@ -6526,50 +6571,47 @@ fn parse_named_export_clause(
     Ok(NamedExportClause::new(canonical_head, source))
 }
 
-fn validate_named_export_specifiers(
+fn parse_named_export_specifiers(
     specifiers: &str,
     source_label: &str,
     span: &SourceSpan,
-) -> ParseResult<()> {
-    let specifiers = specifiers.trim();
-    if specifiers.is_empty() {
-        return Ok(());
-    }
-
-    for specifier in specifiers.split(',') {
-        let specifier = specifier.trim();
-        if specifier.is_empty() {
-            return Err(ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
-                "named export specifier list contains an empty entry",
-                source_label.to_string(),
-                Some(span.clone()),
-            ));
-        }
-
-        let mut parts = specifier.split_whitespace();
-        let local = parts.next().unwrap();
-        let second = parts.next();
-        let third = parts.next();
-        let fourth = parts.next();
-
-        let valid = match (second, third, fourth) {
-            (None, None, None) => is_identifier(local),
-            (Some("as"), Some(exported), None) => is_identifier(local) && is_identifier(exported),
-            _ => false,
-        };
-
-        if !valid {
-            return Err(ParseError::new(
+) -> ParseResult<Vec<String>> {
+    let entries = named_module_specifier_entries(specifiers).ok_or_else(|| {
+        ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "named export specifier list contains an empty entry or unterminated trivia",
+            source_label.to_string(),
+            Some(span.clone()),
+        )
+    })?;
+    let mut canonical = Vec::with_capacity(entries.len());
+    for specifier in entries {
+        let (local, exported) = parse_named_export_specifier_parts(specifier).ok_or_else(|| {
+            ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
                 "unsupported named export specifier; expected `name` or `name as alias`",
                 source_label.to_string(),
                 Some(span.clone()),
-            ));
-        }
+            )
+        })?;
+        canonical.push(match exported {
+            Some(exported) => format!("{local} as {exported}"),
+            None => local,
+        });
     }
 
-    Ok(())
+    Ok(canonical)
+}
+
+fn parse_named_export_specifier_parts(specifier: &str) -> Option<(String, Option<String>)> {
+    let (local, local_end) = canonical_leading_source_identifier(specifier)?;
+    let trailing = trim_binding_pattern_leading_trivia(&specifier[local_end..])?;
+    if trailing.is_empty() {
+        return Some((local, None));
+    }
+    let exported_source = strip_contextual_keyword(trailing, "as")?;
+    let exported = canonical_source_identifier_name(trim_binding_pattern_trivia(exported_source)?)?;
+    Some((local, Some(exported)))
 }
 
 // ---------------------------------------------------------------------------
@@ -8858,6 +8900,9 @@ fn split_var_declarator_assignment(
     (segment, None)
 }
 
+/// Parse the AssignmentExpression grammar. Callers whose grammar admits the
+/// comma operator must use `parse_expression_allowing_sequence`; argument,
+/// initializer, and property lists keep their own comma separators.
 fn parse_expression(
     expression: &str,
     span: &SourceSpan,
@@ -8908,6 +8953,13 @@ fn parse_expression(
             Some(span.clone()),
         ));
     }
+    if split_top_level_commas_with_context(expression, scan_context).len() > 1 {
+        return Err(unsupported_expression_syntax_error(
+            "a comma expression requires parentheses in this grammar position",
+            span,
+            context,
+        ));
+    }
 
     // Arrow function: lowest precedence (lower than assignment).
     if let Some(result) = try_parse_arrow_function(expression, span, context, recursion_depth) {
@@ -8919,7 +8971,7 @@ fn parse_expression(
     if context.allow_yield_expression
         && let Some(rest) = strip_contextual_keyword(expression, "yield")
     {
-        return parse_yield_expression(expression, rest, span, context, recursion_depth);
+        return parse_yield_expression(rest, span, context, recursion_depth);
     }
 
     // Try assignment first (lowest precedence apart from comma).
@@ -8973,19 +9025,12 @@ fn strip_async_function_keyword(source: &str) -> Option<&str> {
 }
 
 fn parse_yield_expression(
-    expression: &str,
     rest: &str,
     span: &SourceSpan,
     context: &mut ParseExecutionContext<'_>,
     recursion_depth: u64,
 ) -> ParseResult<Expression> {
     let (rest, saw_line_terminator) = trim_directive_trivia(rest);
-    if rest.starts_with(',') {
-        // SequenceExpression does not yet have a dedicated AST carrier. Keep
-        // the legacy deterministic fallback without misattaching the sequence
-        // tail as YieldExpression's argument.
-        return Ok(Expression::Raw(canonicalize_whitespace(expression)));
-    }
     if saw_line_terminator
         && !rest.is_empty()
         && !rest.starts_with(';')
@@ -9181,7 +9226,7 @@ fn parse_primary_expression(
         )
         && rest.trim().is_empty()
     {
-        return parse_expression(inner.trim(), span, context, recursion_depth + 1);
+        return parse_expression_allowing_sequence(inner, span, context, recursion_depth + 1);
     }
 
     // Array literal: [a, b, c]
@@ -9886,7 +9931,12 @@ fn parse_template_literal(
             };
             i = start.saturating_add(relative_end);
             let expr_src = &inner[start..i];
-            let expr = parse_expression(expr_src.trim(), span, context, recursion_depth + 1)?;
+            let expr = parse_expression_allowing_sequence(
+                expr_src.trim(),
+                span,
+                context,
+                recursion_depth + 1,
+            )?;
             expressions.push(expr);
             i += 1; // skip closing `}`
             continue;
@@ -10895,7 +10945,12 @@ fn try_parse_postfix(
             Ok(e) => e,
             Err(e) => return Some(Err(e)),
         };
-        let property = match parse_expression(prop_src, span, context, recursion_depth + 1) {
+        let property = match parse_expression_allowing_sequence(
+            prop_src,
+            span,
+            context,
+            recursion_depth + 1,
+        ) {
             Ok(e) => e,
             Err(e) => return Some(Err(e)),
         };
@@ -11374,7 +11429,15 @@ fn parse_object_literal(
                     ScanGrammarContext::from_execution_context(context).expression(),
                 )
                 .ok_or_else(&invalid_computed_key)?;
-                if inner.trim().is_empty() || !rest.trim().is_empty() {
+                if inner.trim().is_empty()
+                    || !rest.trim().is_empty()
+                    || split_top_level_commas_with_context(
+                        inner,
+                        ScanGrammarContext::from_execution_context(context).expression(),
+                    )
+                    .len()
+                        > 1
+                {
                     return Err(invalid_computed_key());
                 }
                 let key = parse_expression(inner.trim(), span, context, recursion_depth + 1)?;
@@ -11688,6 +11751,76 @@ fn split_top_level_commas_with_context(s: &str, grammar_context: ScanGrammarCont
     });
     parts.push(&s[start..]);
     parts
+}
+
+/// Parse the full Expression grammar, including its lowest-precedence comma
+/// operator. Each operand is an AssignmentExpression; missing operands,
+/// trailing commas, and spread syntax are not valid sequence expressions.
+fn parse_expression_allowing_sequence(
+    expression: &str,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+    recursion_depth: u64,
+) -> ParseResult<Expression> {
+    let grammar_context = ScanGrammarContext::from_execution_context(context).expression();
+    let parts = split_top_level_commas_with_context(expression, grammar_context);
+    if parts.len() == 1 {
+        return parse_expression(expression, span, context, recursion_depth);
+    }
+
+    let mut operands = Vec::with_capacity(parts.len());
+    for part in parts {
+        let operand = parse_expression(part, span, context, recursion_depth)?;
+        if matches!(&operand, Expression::SpreadElement(_)) {
+            return Err(unsupported_expression_syntax_error(
+                "spread is not allowed in a sequence expression",
+                span,
+                context,
+            ));
+        }
+        operands.push(operand);
+    }
+    Ok(build_sequence_expression(operands, span))
+}
+
+/// Evaluate sequence operands as call arguments in their original scope, then
+/// return the last argument from an identity arrow. Its generated parameter
+/// names cannot shadow operands, which execute before entering that arrow.
+/// Chunks keep long sequences within the existing call-register budget.
+fn build_sequence_expression(operands: Vec<Expression>, span: &SourceSpan) -> Expression {
+    const SEQUENCE_CHUNK: usize = 64;
+
+    fn sequence_call(operands: Vec<Expression>, span: &SourceSpan) -> Expression {
+        let params = (0..operands.len())
+            .map(|index| FunctionParam {
+                pattern: BindingPattern::Identifier(format!("__seq_{index}")),
+                span: span.clone(),
+            })
+            .collect();
+        let last = format!("__seq_{}", operands.len() - 1);
+        Expression::Call {
+            callee: Box::new(Expression::ArrowFunction {
+                params,
+                body: ArrowBody::Expression(Box::new(Expression::Identifier(last))),
+                is_async: false,
+            }),
+            arguments: operands,
+        }
+    }
+
+    debug_assert!(operands.len() >= 2);
+    let mut operands = operands.into_iter();
+    let mut sequence = sequence_call(operands.by_ref().take(SEQUENCE_CHUNK).collect(), span);
+    loop {
+        let rest: Vec<_> = operands.by_ref().take(SEQUENCE_CHUNK - 1).collect();
+        if rest.is_empty() {
+            return sequence;
+        }
+        let mut next = Vec::with_capacity(rest.len() + 1);
+        next.push(sequence);
+        next.extend(rest);
+        sequence = sequence_call(next, span);
+    }
 }
 
 /// Parse a comma-separated list of expressions (for function call arguments).
@@ -13270,6 +13403,7 @@ fn parse_body_statements(
             }
         }
     }
+    retain_directive_prologue(&mut stmts, trimmed);
     Ok(stmts)
 }
 
@@ -13322,7 +13456,7 @@ fn parse_if_statement(
             Some(span.clone()),
         )
     })?;
-    let condition = parse_expression(condition_src.trim(), &span, context, 1)?;
+    let condition = parse_expression_allowing_sequence(condition_src.trim(), &span, context, 1)?;
 
     let rest = rest.trim();
     // Split consequent from optional else.
@@ -13591,12 +13725,16 @@ fn parse_for_statement(
     let condition = if cond_src.is_empty() {
         None
     } else {
-        Some(parse_expression(cond_src, &span, context, 1)?)
+        Some(parse_expression_allowing_sequence(
+            cond_src, &span, context, 1,
+        )?)
     };
     let update = if update_src.is_empty() {
         None
     } else {
-        Some(parse_expression(update_src, &span, context, 1)?)
+        Some(parse_expression_allowing_sequence(
+            update_src, &span, context, 1,
+        )?)
     };
 
     let body_src = rest.trim();
@@ -13731,7 +13869,7 @@ fn try_parse_for_in_of(
     let body = parse_statement(body_src, goal, span.clone(), context)?;
 
     if keyword == "in" {
-        let object = parse_expression(rhs, span, context, 1)?;
+        let object = parse_expression_allowing_sequence(rhs, span, context, 1)?;
         Ok(Some(Statement::ForIn(ForInStatement {
             binding,
             binding_kind,
@@ -13741,6 +13879,8 @@ fn try_parse_for_in_of(
             span: span.clone(),
         })))
     } else {
+        // ForIn accepts Expression, but ForOf requires AssignmentExpression:
+        // `of first, second` is invalid unless the sequence is parenthesized.
         let iterable = parse_expression(rhs, span, context, 1)?;
         Ok(Some(Statement::ForOf(ForOfStatement {
             binding,
@@ -13812,7 +13952,7 @@ fn parse_while_statement(
             Some(span.clone()),
         )
     })?;
-    let condition = parse_expression(condition_src.trim(), &span, context, 1)?;
+    let condition = parse_expression_allowing_sequence(condition_src.trim(), &span, context, 1)?;
     let body = parse_statement(rest.trim(), goal, span.clone(), context)?;
     Ok(Statement::While(WhileStatement {
         condition,
@@ -13885,7 +14025,7 @@ fn parse_do_while_statement(
             Some(span.clone()),
         )
     })?;
-    let condition = parse_expression(condition_src.trim(), &span, context, 1)?;
+    let condition = parse_expression_allowing_sequence(condition_src.trim(), &span, context, 1)?;
 
     Ok(Statement::DoWhile(DoWhileStatement {
         body: Box::new(body),
@@ -13904,7 +14044,7 @@ fn parse_return_statement(
     let argument = if body.is_empty() {
         None
     } else {
-        Some(parse_expression(body, &span, context, 1)?)
+        Some(parse_expression_allowing_sequence(body, &span, context, 1)?)
     };
     Ok(Statement::Return(ReturnStatement { argument, span }))
 }
@@ -13924,7 +14064,7 @@ fn parse_throw_statement(
             Some(span),
         ));
     }
-    let argument = parse_expression(body, &span, context, 1)?;
+    let argument = parse_expression_allowing_sequence(body, &span, context, 1)?;
     Ok(Statement::Throw(ThrowStatement { argument, span }))
 }
 
@@ -14127,7 +14267,7 @@ fn parse_switch_statement(
             Some(span.clone()),
         )
     })?;
-    let discriminant = parse_expression(disc_src.trim(), &span, context, 1)?;
+    let discriminant = parse_expression_allowing_sequence(disc_src.trim(), &span, context, 1)?;
 
     let rest = rest.trim();
     let (body_src, _) = extract_balanced_with_context(
@@ -14151,7 +14291,11 @@ fn parse_switch_statement(
     while !remaining.is_empty() {
         if remaining.starts_with("case ") {
             let after_case = remaining.strip_prefix("case ").unwrap_or(remaining);
-            let colon_idx = after_case.find(':').ok_or_else(|| {
+            let colon_idx = find_ternary_colon(
+                after_case,
+                ScanGrammarContext::from_execution_context(context).expression(),
+            )
+            .ok_or_else(|| {
                 ParseError::new(
                     ParseErrorCode::UnsupportedSyntax,
                     "switch case requires a colon after test expression",
@@ -14160,7 +14304,9 @@ fn parse_switch_statement(
                 )
             })?;
             let test_src = after_case[..colon_idx].trim();
-            let test = Some(parse_expression(test_src, &span, context, 1)?);
+            let test = Some(parse_expression_allowing_sequence(
+                test_src, &span, context, 1,
+            )?);
             let after_colon = after_case[colon_idx + 1..].trim();
             let (consequent_src, next) = split_at_next_case(after_colon);
             let consequent = parse_body_statements(consequent_src.trim(), goal, &span, context)?;
@@ -14613,22 +14759,19 @@ fn parse_class_body(
 
     // Split on top-level method boundaries.  Each method looks like:
     // [static] [async|get|set] name(...) { ... }
-    // We scan for `}` at brace_depth==0 to find method boundaries.
+    // A closing brace at the outer member depth ends a method. Semicolon
+    // segments are retained so unsupported native fields cannot disappear.
     let segments = split_class_members(body);
     for segment in segments {
-        let segment = segment.trim();
+        let segment = trim_directive_trivia(segment).0.trim_end();
         if segment.is_empty() || segment == ";" {
             continue;
         }
-        let is_static = segment.starts_with("static ");
-        let rest = if is_static {
-            segment
-                .strip_prefix("static ")
-                .unwrap_or(segment)
-                .trim_start()
-        } else {
-            segment
-        };
+        let static_prefix = strip_contextual_keyword(segment, "static")
+            .map(|after| trim_directive_trivia(after).0)
+            .filter(|after| !after.is_empty() && !after.starts_with('('));
+        let is_static = static_prefix.is_some();
+        let rest = static_prefix.unwrap_or(segment);
 
         let (is_async, rest) = if let Some(after_async) = strip_contextual_keyword(rest, "async") {
             let (after_trivia, saw_line_terminator) = trim_directive_trivia(after_async);
@@ -14660,28 +14803,92 @@ fn parse_class_body(
         let rest = if is_async {
             kind = MethodKind::AsyncMethod;
             rest
-        } else if starts_with_keyword(rest, "get") {
+        } else if let Some(after) = strip_contextual_keyword(rest, "get")
+            .map(|after| trim_directive_trivia(after).0)
+            .filter(|after| !after.starts_with('('))
+        {
             kind = MethodKind::Get;
-            rest.strip_prefix("get").unwrap_or(rest).trim_start()
-        } else if starts_with_keyword(rest, "set") {
+            after
+        } else if let Some(after) = strip_contextual_keyword(rest, "set")
+            .map(|after| trim_directive_trivia(after).0)
+            .filter(|after| !after.starts_with('('))
+        {
             kind = MethodKind::Set;
-            rest.strip_prefix("set").unwrap_or(rest).trim_start()
+            after
         } else {
             kind = MethodKind::Method;
             rest
         };
 
-        // Extract method name (up to `(`).
-        let paren_idx = rest.find('(').ok_or_else(|| {
+        // Core represents methods, not native fields/private elements. A
+        // parameter list must follow one complete property key: searching for
+        // any `(` accepted `field = function() {}` as a bogus method name.
+        // The lexical depth also skips calls and braces inside computed keys.
+        let error_source_label = context.source_label.to_string();
+        let unsupported_member = || {
             ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
-                format!("class method requires parameter list: {}", segment),
-                context.source_label.to_string(),
+                format!(
+                    "unsupported class member (native fields and private elements are not implemented): `{segment}`"
+                ),
+                error_source_label.clone(),
                 Some(span.clone()),
             )
-        })?;
-        let method_name = rest[..paren_idx].trim();
-        if is_async && !is_static && method_name == "constructor" {
+        };
+        let mut paren_idx = None;
+        scan_binding_pattern_source_until_with_context(
+            rest,
+            ScanGrammarContext::STRICT_SCRIPT.expression(),
+            |index, ch, depth, quoted| {
+                if !quoted && depth == 0 && ch == '(' {
+                    paren_idx = Some(index);
+                    false
+                } else {
+                    true
+                }
+            },
+        );
+        let paren_idx = paren_idx.ok_or_else(&unsupported_member)?;
+        // This slice is an IdentifierName/property key, not a strict-mode
+        // IdentifierReference: `yield()` and `return()` are valid names.
+        // Computed-key expressions are still parsed in strict mode below.
+        let method_name =
+            trim_binding_pattern_trivia(&rest[..paren_idx]).ok_or_else(&unsupported_member)?;
+        let (key, computed) = if method_name.starts_with('[') {
+            let (inner, trailing) = extract_balanced_with_context(
+                method_name,
+                '[',
+                ']',
+                ScanGrammarContext::STRICT_SCRIPT.expression(),
+            )
+            .ok_or_else(&unsupported_member)?;
+            if inner.trim().is_empty() || !trim_directive_trivia(trailing).0.is_empty() {
+                return Err(unsupported_member());
+            }
+            let key = with_grammar_context(context, true, false, false, false, false, |context| {
+                parse_expression(inner.trim(), span, context, 1)
+            })?;
+            if matches!(key, Expression::Raw(_) | Expression::SpreadElement(_)) {
+                return Err(unsupported_member());
+            }
+            (key, true)
+        } else {
+            (
+                with_grammar_context(context, true, false, false, false, false, |context| {
+                    parse_static_property_name(method_name, span, context, "class-method")
+                })
+                .map_err(|_| unsupported_member())?,
+                false,
+            )
+        };
+        let is_constructor = !is_static
+            && !computed
+            && match &key {
+                Expression::Identifier(name) => name == "constructor",
+                Expression::StringLiteral(name) => name.as_str() == Some("constructor"),
+                _ => false,
+            };
+        if is_async && is_constructor {
             return Err(ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
                 "class constructors cannot be async",
@@ -14689,30 +14896,10 @@ fn parse_class_body(
                 Some(span.clone()),
             ));
         }
-        let actual_kind = if method_name == "constructor" && !is_static {
+        let actual_kind = if is_constructor {
             MethodKind::Constructor
         } else {
             kind
-        };
-        let (key, computed) = if let Some(inner) = method_name
-            .strip_prefix('[')
-            .and_then(|name| name.strip_suffix(']'))
-        {
-            (
-                with_grammar_context(context, true, false, false, false, false, |context| {
-                    parse_expression(inner.trim(), span, context, 1)
-                })?,
-                true,
-            )
-        } else if matches!(method_name.as_bytes().first(), Some(b'\'' | b'"')) {
-            (
-                with_grammar_context(context, true, false, false, false, false, |context| {
-                    parse_static_property_name(method_name, span, context, "class-method")
-                })?,
-                false,
-            )
-        } else {
-            (Expression::Identifier(method_name.to_string()), false)
         };
         let rest = &rest[paren_idx..];
 
@@ -14732,7 +14919,7 @@ fn parse_class_body(
             )
         })?;
         // Parse method body.
-        let rest = rest.trim_start();
+        let rest = trim_directive_trivia(rest).0;
         let (body_src, _) = extract_balanced_with_context(
             rest,
             '{',
@@ -14781,34 +14968,27 @@ fn parse_class_body(
 fn split_class_members(body: &str) -> Vec<&str> {
     let mut segments = Vec::new();
     let mut start = 0;
-    let mut brace_depth = 0usize;
-    let mut paren_depth = 0usize;
 
     scan_binding_pattern_source_with_context_seeded(
         body,
         ScanGrammarContext::STRICT_SCRIPT,
         0,
-        |index, ch, _, quoted| {
+        |index, ch, depth, quoted| {
             if quoted {
                 return;
             }
             match ch {
-                '(' => paren_depth = paren_depth.saturating_add(1),
-                ')' => paren_depth = paren_depth.saturating_sub(1),
-                '{' => brace_depth = brace_depth.saturating_add(1),
-                '}' => {
-                    if brace_depth > 0 {
-                        brace_depth = brace_depth.saturating_sub(1);
-                    }
-                    if brace_depth == 0 && paren_depth == 0 {
-                        let end = index.saturating_add(ch.len_utf8());
-                        segments.push(&body[start..end]);
-                        start = end;
-                    }
+                '}' if depth == 1 => {
+                    let end = index.saturating_add(ch.len_utf8());
+                    segments.push(&body[start..end]);
+                    start = end;
                 }
-                ';' if brace_depth == 0 && paren_depth == 0 => {
-                    // Semicolons between methods — skip.
-                    start = index.saturating_add(ch.len_utf8());
+                ';' if depth == 0 => {
+                    // Preserve fields for the parser's UnsupportedSyntax path;
+                    // dropping their text silently removed initialization.
+                    let end = index.saturating_add(ch.len_utf8());
+                    segments.push(&body[start..end]);
+                    start = end;
                 }
                 _ => {}
             }

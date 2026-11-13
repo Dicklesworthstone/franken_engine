@@ -436,10 +436,6 @@ const PROXY_REVOKED_SLOT: &str = "__proxy_revoked";
 /// `PROXY_TARGET_SLOT` then holds the target's own-property storage, which
 /// the traps' fallbacks for [[Set]], [[Delete]], ... act on.
 const PROXY_CALL_TARGET_SLOT: &str = "__proxy_call_target";
-/// A Map's or Set's entry count (bd-9vouw.140): an internal slot, not an own
-/// `size` property, so %Map.prototype%.size / %Set.prototype%.size (and a
-/// subclass's `get size()`) answer `size` reads.
-const COLLECTION_SIZE_SLOT: &str = "__size";
 /// The TypeError Object.defineProperty raises for a definition the target
 /// rejects; Reflect.defineProperty answers false for exactly this one.
 const DEFINE_PROPERTY_REJECTED: &str = "definable property for Object.defineProperty";
@@ -2099,10 +2095,10 @@ fn check_hostcall_capability_gate(
     }
     // E9.T4 (bd-fqlfw.9.4): consult the capability-pruned dispatch table
     // first when one is installed; any miss falls through to the live
-    // classification (fail-closed per-call fallback). Only the allow/deny
-    // bit is precomputed — every witness and decision-record emission below
-    // is identical on both paths.
-    let capability_denied = (matches!(
+    // classification (fail-closed per-call fallback). A cached allow must
+    // still fit the current grant: generated-code entry can narrow it after
+    // the table was built. Witness and decision emission share both paths.
+    let base_capability_denied = (matches!(
         operation_tag,
         crate::capability::UTIL_PROCESS_ARGV_CAPABILITY
             | crate::capability::UTIL_PROCESS_EXEC_ARGV_CAPABILITY
@@ -2112,11 +2108,19 @@ fn check_hostcall_capability_gate(
             .as_ref()
             .and_then(|table| table.lookup(capability_tag))
         {
-            Some(allowed) => !allowed,
+            Some(allowed) => {
+                !allowed
+                    || !live_hostcall_decision(
+                        capability_tag,
+                        &interpreter.config.granted_capabilities,
+                    )
+            }
             None => {
                 !live_hostcall_decision(capability_tag, &interpreter.config.granted_capabilities)
             }
         };
+    let capability_denied =
+        base_capability_denied || !interpreter.sandbox_allows_hostcall(capability_tag);
 
     // bd-hxukn: cap the tag length at the recording sites so an attacker
     // who controls the `HostCall` capability string cannot inflate the
@@ -2144,7 +2148,14 @@ fn check_hostcall_capability_gate(
         )
     });
 
-    if capability_denied {
+    // Applying Sandbox changes the authority of the operation which triggered
+    // it, not just later operations. Do not trust a cached allow after the hook.
+    // An original capability denial remains the primary error.
+    if !base_capability_denied && let Some(action) = hook_action {
+        interpreter.enforce_hook_action(action)?;
+    }
+    let sandbox_denied = !interpreter.sandbox_allows_hostcall(capability_tag);
+    if base_capability_denied || sandbox_denied {
         interpreter
             .recorded_effect_free_grants
             .remove(recordable_tag.as_ref());
@@ -2169,13 +2180,13 @@ fn check_hostcall_capability_gate(
             CapabilityDenialReason::InsufficientAuthority,
             recordable_tag.as_ref(),
         );
-        return Err(InterpreterError::CapabilityDenied {
-            capability: recordable_tag.into_owned(),
+        return Err(if base_capability_denied {
+            InterpreterError::CapabilityDenied {
+                capability: recordable_tag.into_owned(),
+            }
+        } else {
+            InterpreterCore::sandbox_interruption()
         });
-    }
-
-    if let Some(action) = hook_action {
-        interpreter.enforce_hook_action(action)?;
     }
 
     // bd-9vouw.83: an effect-free hostcall in a loop (`JSON.stringify`,
@@ -9093,6 +9104,11 @@ pub struct HeapObject {
     /// levels (ES2020 20.4.5). A boxed Number keeps ordinary objects small
     /// and preserves NaN exactly in execution seeds and serialized heaps.
     date_value: Option<Box<Float64>>,
+    /// A Map's [[MapData]] or Set's [[SetData]] backing object. This edge is
+    /// private: reflection, guest properties and Object.freeze never expose
+    /// or alter the collection's contents. The backing map's length is the
+    /// authoritative entry count, so there is no separate mutable size slot.
+    collection_storage: Option<Box<ObjectId>>,
 }
 
 /// A RegExp's pattern, escaped as `source` reads it back (bd-9vouw.243),
@@ -9363,6 +9379,7 @@ impl Serialize for HeapObject {
                 + usize::from(self.blob.is_some())
                 + usize::from(self.regexp.is_some())
                 + usize::from(self.date_value.is_some())
+                + usize::from(self.collection_storage.is_some())
                 + if has_constructor_metadata { 4 } else { 0 },
         )?;
         object.serialize_field("properties", &self.properties)?;
@@ -9413,6 +9430,9 @@ impl Serialize for HeapObject {
         }
         if let Some(date_value) = &self.date_value {
             object.serialize_field("date_value", date_value)?;
+        }
+        if let Some(storage) = &self.collection_storage {
+            object.serialize_field("collection_storage", storage)?;
         }
         if !self.private_elements.is_empty() {
             let elements = self
@@ -9523,6 +9543,8 @@ impl<'de> Deserialize<'de> for HeapObject {
             regexp: Option<Box<RegExpSlots>>,
             #[serde(default)]
             date_value: Option<Box<Float64>>,
+            #[serde(default)]
+            collection_storage: Option<Box<ObjectId>>,
         }
 
         #[derive(Deserialize)]
@@ -9646,6 +9668,7 @@ impl<'de> Deserialize<'de> for HeapObject {
             blob: wire.blob,
             regexp: wire.regexp,
             date_value: wire.date_value,
+            collection_storage: wire.collection_storage,
         };
         for record in wire.symbol_properties {
             let symbol = SymbolId(record.symbol_id);
@@ -10167,8 +10190,46 @@ enum ModuleRuntimeStatus {
 enum StarExportOrigin {
     /// One star source provides the name.
     Provided,
-    /// Star sources provide different values: ES2020 ResolveExport finds the
+    /// Star sources resolve to different bindings: ResolveExport finds the
     /// name ambiguous, so the module does not export it.
+    Ambiguous,
+}
+
+/// A module-local import name denotes a source binding, rather than another
+/// binding that happens to contain the same value. Direct namespace re-exports
+/// denote the source module's distinguished namespace binding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ModuleImportOrigin {
+    Binding { specifier: String, name: JsString },
+    Namespace { specifier: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ModuleLocalExport {
+    local_name: Option<JsString>,
+    /// Aliases of the same local name share an index; synthetic exports get
+    /// their own. Zero is reserved for a module's namespace binding.
+    binding_index: std::num::NonZeroU32,
+}
+
+#[derive(Debug, Clone)]
+struct ModuleLocalBinding {
+    binding_index: std::num::NonZeroU32,
+    exports: Vec<JsString>,
+}
+
+/// A namespace ObjectId uniquely identifies its module record in this realm.
+/// Only the binding name participates in resolution; exported Values never do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ModuleExportIdentity {
+    namespace: ObjectId,
+    binding_index: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ModuleExportResolution {
+    Missing,
+    Resolved(ModuleExportIdentity),
     Ambiguous,
 }
 
@@ -10182,6 +10243,17 @@ struct ModuleRuntimeRecord {
     /// Export names that came from `export * from` rather than this module's
     /// own export declarations (which always win).
     star_exports: BTreeMap<JsString, StarExportOrigin>,
+    /// Explicit exports are declared before evaluation, including those whose
+    /// lexical values are not initialized yet. Aliases retain their local name.
+    /// A missing local name denotes a synthetic IR export.
+    local_export_bindings: BTreeMap<JsString, ModuleLocalExport>,
+    /// Intern local identities once, avoiding a quadratic scan for aliases.
+    local_binding_indices: BTreeMap<JsString, ModuleLocalBinding>,
+    /// Resolved source origins of this module's immutable import bindings.
+    import_origins: BTreeMap<JsString, ModuleImportOrigin>,
+    /// Forward star edges complement `star_reexporters`. Resolution walks this
+    /// graph so diamonds, cycles, and transitive ambiguity share one rule.
+    star_sources: BTreeSet<String>,
     /// The module's static flow label ceiling once it is lowered: every value
     /// it can produce is at most this label (bd-j8f7q import contracts).
     flow_label_ceiling: Option<Label>,
@@ -10204,6 +10276,9 @@ struct ModuleRuntimeRecord {
     compiled_module: Option<Arc<Ir3Module>>,
     /// Promise representing completion of this module's async evaluation.
     evaluation_promise: Option<crate::promise_model::PromiseHandle>,
+    /// The original guest throw completion. Failed ESM evaluation is sticky:
+    /// later imports must observe the same value, identity, and IFC label.
+    evaluation_exception: Option<(Value, Label)>,
     /// Owned activation parked while an imported module is asynchronously
     /// evaluating. Entry-module execution remains installed in the core.
     async_execution: Option<ModuleExecutionSnapshot>,
@@ -12702,7 +12777,8 @@ pub trait InterpreterHook: Send + Sync {
 
     /// Observe the live capability decision before any hostcall effect.
     /// `allowed` reports the existing capability membrane; returning Allow
-    /// never overrides a denial. Non-Allow stops an authorized dispatch.
+    /// never overrides a denial. Sandbox narrows the triggering operation and
+    /// later execution; the other non-Allow actions stop dispatch.
     fn pre_hostcall(&self, _ctx: &HookContext, _capability: &str, _allowed: bool) -> HookAction {
         HookAction::Allow
     }
@@ -13082,6 +13158,10 @@ pub struct InterpreterConfig {
     pub canonical_module_root: Option<PathBuf>,
     /// Set of capabilities granted to this execution context.
     pub granted_capabilities: BTreeSet<RuntimeCapability>,
+    /// Monotone authority and memory restriction installed by a live Sandbox
+    /// hook action. The policy never grants authority absent from the context.
+    #[serde(default)]
+    pub sandbox_policy: crate::containment_executor::SandboxPolicy,
     /// Optional extension ID for logging and diagnostics.
     pub extension_id: Option<String>,
     /// Optional cancellation token for checkpoint-based cancellation.
@@ -13143,6 +13223,7 @@ impl PartialEq for InterpreterConfig {
             && self.max_scope_depth == other.max_scope_depth
             && self.module_root == other.module_root
             && self.granted_capabilities == other.granted_capabilities
+            && self.sandbox_policy == other.sandbox_policy
             && self.extension_id == other.extension_id
             && self.checkpoint_density == other.checkpoint_density
             && self.module_parser_options == other.module_parser_options
@@ -13182,6 +13263,7 @@ impl InterpreterConfig {
             ifc_flow_policy: None,
             declassification_receipts: Vec::new(),
             granted_capabilities: BTreeSet::new(),
+            sandbox_policy: crate::containment_executor::SandboxPolicy::default(),
             extension_id: None,
             cancellation_token: None,
             checkpoint_density: 1000,
@@ -13211,6 +13293,7 @@ impl InterpreterConfig {
             ifc_flow_policy: None,
             declassification_receipts: Vec::new(),
             granted_capabilities: BTreeSet::new(),
+            sandbox_policy: crate::containment_executor::SandboxPolicy::default(),
             extension_id: None,
             cancellation_token: None,
             checkpoint_density: 1000,
@@ -13246,6 +13329,7 @@ impl InterpreterConfig {
             ifc_flow_policy: None,
             declassification_receipts: Vec::new(),
             granted_capabilities: BTreeSet::new(),
+            sandbox_policy: crate::containment_executor::SandboxPolicy::default(),
             extension_id: None,
             cancellation_token: None,
             checkpoint_density: 1000,
@@ -13281,6 +13365,7 @@ impl InterpreterConfig {
             ifc_flow_policy: None,
             declassification_receipts: Vec::new(),
             granted_capabilities: BTreeSet::new(),
+            sandbox_policy: crate::containment_executor::SandboxPolicy::default(),
             extension_id: None,
             cancellation_token: None,
             checkpoint_density: 1000,
@@ -13482,7 +13567,8 @@ pub struct ExecutionResult {
     /// Tier-I instructions that additionally took a guarded borrowed/scalar
     /// specialization rather than delegating to the rich Tier-R helper path.
     pub tier_i_specialized_instructions_executed: u64,
-    /// Optional containment action requested by an interpreter hook.
+    /// Strongest containment action requested by an interpreter hook. A
+    /// successfully applied Sandbox remains present after normal completion.
     pub requested_hook_action: Option<HookAction>,
     /// Witness events collected during execution.
     pub witness_events: Vec<WitnessEvent>,
@@ -16032,7 +16118,8 @@ pub struct CapturedRegisterState {
 /// tick (bd-fqlfw.3.5.5 / E3.T5d). The engine's IFC model tracks labels at
 /// REGISTER granularity, so a heap object's label here is the join of the
 /// labels of every register from whose value the object is transitively
-/// reachable (property values and prototype links), defaulting to `Public`
+/// reachable (property values, private collection storage and prototype
+/// links), defaulting to `Public`
 /// when unreachable from any register. This is a projection of the real
 /// register-label state, not an independent model.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -16122,6 +16209,15 @@ impl<'de> Deserialize<'de> for CapturedInterpreterState {
         }
         Ok(state)
     }
+}
+
+/// A live restriction belongs to the interpreter, not a saved guest frame or
+/// prepared execution seed. Restoring either must never restore authority.
+#[derive(Debug, Clone, Copy)]
+struct ActiveSandbox {
+    memory_ceiling_bytes: u64,
+    instruction_index: u32,
+    timestamp_tick: u64,
 }
 
 pub struct InterpreterCore {
@@ -16849,21 +16945,11 @@ pub struct InterpreterCore {
     /// bd-9vouw.286: pending `Atomics.waitAsync` waiters, in arrival order
     /// (the order `Atomics.notify` wakes them in).
     atomics_async_waiters: Vec<atomics::AtomicsAsyncWaiter>,
-    /// Containment state: whether execution is suspended due to guardplane action.
-    #[allow(dead_code)]
-    suspended: bool,
-    /// Containment state: whether execution is sandboxed (capabilities restricted).
-    #[allow(dead_code)]
-    sandboxed: bool,
-    /// Containment state: whether extension is marked for quarantine.
-    #[allow(dead_code)]
-    quarantined: bool,
-    /// Pending challenge tokens requiring resolution.
-    #[allow(dead_code)]
-    pending_challenges: Vec<ChallengeToken>,
-    /// Evidence records for containment actions taken.
-    #[allow(dead_code)]
-    containment_evidence: Vec<WitnessEvent>,
+    /// Monotone live sandbox overlay. Instruction hooks borrow the core
+    /// immutably, so activation is interior mutable; no guest restore clears it.
+    active_sandbox: Cell<Option<ActiveSandbox>>,
+    /// The activation witness is flushed before the next witness or result.
+    sandbox_witness_pending: Cell<bool>,
     /// Decision receipt log for signed evidence chain.
     decision_receipts: EvidenceLog,
     /// Nondeterminism trace for deterministic replay.

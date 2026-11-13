@@ -17,18 +17,32 @@ impl InterpreterCore {
             // so child order does not matter: no per-key lookup for creation
             // order (bd-9vouw.333).
             ReachableEdges::Data => heap_object
-                .properties
-                .values_unordered()
-                .filter_map(object_id)
+                .collection_storage
+                .as_deref()
+                .copied()
+                .into_iter()
+                .chain(
+                    heap_object
+                        .properties
+                        .values_unordered()
+                        .filter_map(object_id),
+                )
                 .collect(),
             ReachableEdges::Inspect => {
                 // Every property inspect can print: string-keyed data in both
                 // key forms and Symbol-keyed data (a separate sidecar that
                 // `values()` skips). Accessors print as [Getter]/[Setter].
                 let mut children: Vec<ObjectId> = heap_object
-                    .properties
-                    .all_data_values()
-                    .filter_map(object_id)
+                    .collection_storage
+                    .as_deref()
+                    .copied()
+                    .into_iter()
+                    .chain(
+                        heap_object
+                            .properties
+                            .all_data_values()
+                            .filter_map(object_id),
+                    )
                     .collect();
                 children.extend(
                     heap_object
@@ -41,7 +55,7 @@ impl InterpreterCore {
                 );
                 // Map keys are storage-key reprs, not values
                 // (`collection_key_repr`); inspect prints the key objects.
-                if let Some(storage_id) = self.collection_storage_id(object, "Map", "__entries")
+                if let Some(storage_id) = self.collection_storage_id(object, "Map")
                     && let Some(storage) = self.heap.get(storage_id.0 as usize)
                 {
                     children.extend(
@@ -150,6 +164,37 @@ fn chain(core: &mut InterpreterCore, length: usize) -> Vec<ObjectId> {
             .unwrap();
     }
     nodes
+}
+
+#[test]
+fn private_collection_contents_remain_visible_to_confidentiality_walks() {
+    for edges in [ReachableEdges::Data, ReachableEdges::Inspect] {
+        for is_map in [false, true] {
+            let mut core = core();
+            let child = core.alloc_object_with_prototype(None).unwrap();
+            core.join_direct_object_mutation_label(child, &Label::Secret)
+                .unwrap();
+            let collection = if is_map {
+                let (map, _) = core.alloc_empty_map().unwrap();
+                core.map_collection_set(map, Value::str("secret"), Value::Object(child))
+                    .unwrap();
+                map
+            } else {
+                let set = core.alloc_empty_set().unwrap();
+                core.set_collection_add(set, Value::Object(child)).unwrap();
+                set
+            };
+            assert!(core.heap[collection.0 as usize].properties.is_empty());
+            core.observe_reachable_value(&Value::Object(collection), edges)
+                .unwrap();
+            assert_eq!(
+                core.active_inline_callback_context_label,
+                Some(Label::Secret),
+                "edges={edges:?}, is_map={is_map}: private contents must retain Secret provenance"
+            );
+            assert_accounted(&core, 0);
+        }
+    }
 }
 
 #[test]

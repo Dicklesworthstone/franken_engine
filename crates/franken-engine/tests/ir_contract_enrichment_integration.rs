@@ -196,13 +196,13 @@ fn enrichment_verifier_emits_error_events_on_failure() {
 fn enrichment_schema_version_current() {
     let v = IrSchemaVersion::CURRENT;
     assert_eq!(v.major, 0);
-    assert_eq!(v.minor, 18);
+    assert_eq!(v.minor, 20);
     assert_eq!(v.patch, 0);
 }
 
 #[test]
 fn enrichment_schema_version_display() {
-    assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.18.0");
+    assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.20.0");
     let custom = IrSchemaVersion {
         major: 2,
         minor: 3,

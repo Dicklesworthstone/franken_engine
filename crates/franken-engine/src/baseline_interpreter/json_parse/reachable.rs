@@ -254,6 +254,12 @@ impl InterpreterCore {
         let Some(heap_object) = self.heap.get(object.0 as usize) else {
             return Ok(());
         };
+        // Moving Map/Set data out of guest properties must not hide its
+        // contents from either confidentiality walk. Follow the same heap
+        // edge explicitly, without invoking guest getters or Proxy traps.
+        if let Some(storage) = heap_object.collection_storage.as_deref() {
+            visit(*storage)?;
+        }
         match edges {
             ReachableEdges::Data => {
                 for value in heap_object.properties.values_unordered() {
@@ -274,7 +280,7 @@ impl InterpreterCore {
                     }
                 }
                 // Console inspection also prints object-valued Map keys.
-                if let Some(storage_id) = self.collection_storage_id(object, "Map", "__entries")
+                if let Some(storage_id) = self.collection_storage_id(object, "Map")
                     && let Some(storage) = self.heap.get(storage_id.0 as usize)
                 {
                     for repr in storage.properties.keys() {

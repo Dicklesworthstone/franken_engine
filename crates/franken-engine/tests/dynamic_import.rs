@@ -110,7 +110,7 @@ require('./lib/util.js').load().then(ns => console.log(ns.where));
 
 /// Failures reject the returned promise and never throw at the call site: a
 /// missing module (Node's `ERR_MODULE_NOT_FOUND`), the value a module's
-/// evaluation threw (and an Error on a later import of the failed module),
+/// evaluation threw (the same value on every later import of that module),
 /// and a specifier whose ToString throws. An object specifier converts
 /// through its `toString`.
 #[test]
@@ -130,8 +130,9 @@ try { missing = import('./nope.mjs'); } catch (e) { threw = true; }
 console.log(threw, missing instanceof Promise);
 async function main() {
   await missing.then(() => console.log('fulfilled'), e => console.log('missing', e instanceof Error, e.code));
-  await import('./boom.mjs').catch(e => console.log('boom', e.message, e.tag));
-  await import('./boom.mjs').catch(e => console.log('boom again', e instanceof Error));
+  let original;
+  await import('./boom.mjs').catch(e => { original = e; console.log('boom', e.message, e.tag); });
+  await import('./boom.mjs').catch(e => console.log('boom again', e === original, e.message, e.tag));
   await import({ toString() { return './m.mjs'; } }).then(ns => console.log('coerced', ns.ok));
   await import(Symbol('s')).catch(e => console.log('symbol', e instanceof TypeError));
 }
@@ -145,7 +146,7 @@ main();
             "false true",
             "missing true ERR_MODULE_NOT_FOUND",
             "boom boom from-module",
-            "boom again true",
+            "boom again true boom from-module",
             "coerced ok",
             "symbol true",
         ],
@@ -259,4 +260,321 @@ fn top_level_await_drives_the_deferred_import_task() {
         ParseGoal::Module,
         &["before", "dependency", "after 9"],
     );
+}
+
+#[test]
+fn concurrent_and_later_imports_share_the_original_throw_and_evaluate_once() {
+    assert_output(
+        &[
+            (
+                "failed.mjs",
+                "console.log('evaluate once'); throw { tag: 'original' };",
+            ),
+            (
+                "entry.mjs",
+                "async function main() {
+  let first;
+  let second;
+  await Promise.all([
+    import('./failed.mjs').catch(error => { first = error; }),
+    import('./failed.mjs').catch(error => { second = error; })
+  ]);
+  console.log(first === second, first.tag, second.tag);
+  await import('./failed.mjs').catch(error => console.log(error === first, error.tag));
+}
+main();",
+            ),
+        ],
+        "entry.mjs",
+        ParseGoal::Module,
+        &["evaluate once", "true original original", "true original"],
+    );
+}
+
+#[test]
+fn failed_static_dependencies_keep_the_same_throw_across_importers() {
+    assert_output(
+        &[
+            (
+                "failed.mjs",
+                "console.log('dependency once'); throw { tag: 'dependency' };",
+            ),
+            (
+                "left.mjs",
+                "import './failed.mjs'; console.log('left must not execute');",
+            ),
+            (
+                "right.mjs",
+                "import './failed.mjs'; console.log('right must not execute');",
+            ),
+            (
+                "entry.mjs",
+                "async function main() {
+  let first;
+  await import('./left.mjs').catch(error => { first = error; console.log(error.tag); });
+  await import('./right.mjs').catch(error => console.log(error === first, error.tag));
+  await import('./failed.mjs').catch(error => console.log(error === first, error.tag));
+  await import('./left.mjs').catch(error => console.log(error === first, error.tag));
+}
+main();",
+            ),
+        ],
+        "entry.mjs",
+        ParseGoal::Module,
+        &[
+            "dependency once",
+            "dependency",
+            "true dependency",
+            "true dependency",
+            "true dependency",
+        ],
+    );
+}
+
+#[test]
+fn cached_module_throws_preserve_primitives_including_undefined_and_negative_zero() {
+    for (expression, expected) in [
+        ("'failure'", "string true"),
+        ("23", "number true"),
+        ("null", "object true"),
+        ("undefined", "undefined true"),
+        ("-0", "number true"),
+        ("NaN", "number true"),
+    ] {
+        let failed = format!("console.log('once'); throw {expression};");
+        let entry = format!(
+            "async function main() {{
+  const expected = {expression};
+  await import('./failed.mjs').catch(error => console.log(typeof error, Object.is(error, expected)));
+  await import('./failed.mjs').catch(error => console.log(typeof error, Object.is(error, expected)));
+}}
+main();"
+        );
+        assert_output(
+            &[("failed.mjs", &failed), ("entry.mjs", &entry)],
+            "entry.mjs",
+            ParseGoal::Module,
+            &["once", expected, expected],
+        );
+    }
+}
+
+#[test]
+fn top_level_await_rejection_keeps_original_object_on_every_import() {
+    assert_output(
+        &[
+            (
+                "failed.mjs",
+                "console.log('evaluate once'); await Promise.resolve(); throw { tag: 'original' };",
+            ),
+            (
+                "entry.mjs",
+                "async function main() {
+  let first;
+  try { await import('./failed.mjs'); } catch (error) { first = error; console.log(error.tag); }
+  try { await import('./failed.mjs'); } catch (error) { console.log(error === first, error.tag); }
+}
+main();",
+            ),
+        ],
+        "entry.mjs",
+        ParseGoal::Module,
+        &["evaluate once", "original", "true original"],
+    );
+}
+
+#[test]
+fn async_dependency_rejection_reaches_importers_without_replacing_its_value() {
+    assert_output(
+        &[
+            (
+                "failed.mjs",
+                "console.log('dependency once'); await Promise.resolve(); throw { tag: 'dependency' };",
+            ),
+            (
+                "middle.mjs",
+                "import './failed.mjs'; console.log('middle must not execute'); export const value = 1;",
+            ),
+            (
+                "outer.mjs",
+                "import './middle.mjs'; console.log('outer must not execute'); export const value = 2;",
+            ),
+            (
+                "entry.mjs",
+                "async function main() {
+  let first;
+  try { await import('./outer.mjs'); } catch (error) { first = error; console.log(error.tag); }
+  try { await import('./failed.mjs'); } catch (error) { console.log(error === first, error.tag); }
+  try { await import('./middle.mjs'); } catch (error) { console.log(error === first, error.tag); }
+  try { await import('./outer.mjs'); } catch (error) { console.log(error === first, error.tag); }
+}
+main();",
+            ),
+        ],
+        "entry.mjs",
+        ParseGoal::Module,
+        &[
+            "dependency once",
+            "dependency",
+            "true dependency",
+            "true dependency",
+            "true dependency",
+        ],
+    );
+}
+
+#[test]
+fn rejected_await_preserves_undefined_instead_of_an_error_description() {
+    assert_output(
+        &[
+            (
+                "failed.mjs",
+                "console.log('undefined once'); await Promise.reject(undefined);",
+            ),
+            (
+                "entry.mjs",
+                "async function main() {
+  try { await import('./failed.mjs'); } catch (error) { console.log(error === undefined); }
+  try { await import('./failed.mjs'); } catch (error) { console.log(error === undefined); }
+}
+main();",
+            ),
+        ],
+        "entry.mjs",
+        ParseGoal::Module,
+        &["undefined once", "true", "true"],
+    );
+}
+
+#[test]
+fn top_level_await_preserves_callable_rejection_carriers() {
+    assert_output(
+        &[
+            ("failed.mjs", "await Promise.resolve(); throw () => 42;"),
+            (
+                "entry.mjs",
+                "async function main() {
+  let first;
+  try { await import('./failed.mjs'); } catch (error) { first = error; console.log(error()); }
+  try { await import('./failed.mjs'); } catch (error) { console.log(error === first, error()); }
+}
+main();",
+            ),
+        ],
+        "entry.mjs",
+        ParseGoal::Module,
+        &["42", "true 42"],
+    );
+}
+
+#[test]
+fn native_module_errors_keep_their_type_and_identity_across_imports() {
+    for prefix in ["", "await Promise.resolve(); "] {
+        for (fault, name) in [
+            ("null.field;", "TypeError"),
+            ("missingModuleBinding;", "ReferenceError"),
+        ] {
+            let failed = format!("console.log('native once'); {prefix}{fault}");
+            let repeated = format!("true {name} retained");
+            assert_output(
+                &[
+                    ("failed.mjs", &failed),
+                    (
+                        "entry.mjs",
+                        "async function main() {
+  let first;
+  try { await import('./failed.mjs'); } catch (error) {
+    first = error;
+    error.marker = 'retained';
+    console.log(error.name);
+  }
+  try { await import('./failed.mjs'); } catch (error) {
+    console.log(error === first, error.name, error.marker);
+  }
+}
+main();",
+                    ),
+                ],
+                "entry.mjs",
+                ParseGoal::Module,
+                &["native once", name, &repeated],
+            );
+        }
+    }
+}
+
+#[test]
+fn native_dependency_failure_is_shared_with_every_importer() {
+    for prefix in ["", "await Promise.resolve(); "] {
+        let failed = format!("console.log('native dependency once'); {prefix}null.field;");
+        assert_output(
+            &[
+                ("failed.mjs", &failed),
+                (
+                    "outer.mjs",
+                    "import './failed.mjs'; console.log('importer must not execute');",
+                ),
+                (
+                    "entry.mjs",
+                    "async function main() {
+  let first;
+  try { await import('./outer.mjs'); } catch (error) { first = error; console.log(error.name); }
+  try { await import('./failed.mjs'); } catch (error) { console.log(error === first, error.name); }
+  try { await import('./outer.mjs'); } catch (error) { console.log(error === first, error.name); }
+}
+main();",
+                ),
+            ],
+            "entry.mjs",
+            ParseGoal::Module,
+            &[
+                "native dependency once",
+                "TypeError",
+                "true TypeError",
+                "true TypeError",
+            ],
+        );
+    }
+}
+
+#[test]
+fn handled_promise_reactions_cannot_replace_the_module_failure() {
+    for (fault, expected) in [
+        ("throw { tag: 'original' };", "original"),
+        ("null.field;", "TypeError"),
+    ] {
+        let failed = format!(
+            "console.log('evaluate once');
+globalThis.nestedHandled = false;
+Promise.resolve().then(() => {{ throw {{ tag: 'other' }}; }}).catch(() => {{
+  globalThis.nestedHandled = true;
+}});
+{fault}"
+        );
+        let repeated = format!("true {expected}");
+        assert_output(
+            &[
+                ("failed.mjs", &failed),
+                (
+                    "entry.mjs",
+                    "async function main() {
+  let first;
+  try { await import('./failed.mjs'); } catch (error) {
+    first = error;
+    console.log(error.tag || error.name);
+  }
+  try { await import('./failed.mjs'); } catch (error) {
+    console.log(error === first, error.tag || error.name);
+  }
+  await Promise.resolve();
+  console.log(globalThis.nestedHandled);
+}
+main();",
+                ),
+            ],
+            "entry.mjs",
+            ParseGoal::Module,
+            &["evaluate once", expected, &repeated, "true"],
+        );
+    }
 }

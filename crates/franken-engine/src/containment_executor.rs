@@ -157,7 +157,8 @@ impl fmt::Display for ContainmentState {
 /// Policy defining which capabilities remain available in sandbox mode.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SandboxPolicy {
-    /// Allowed capability names.
+    /// Allowed capability names. Hyphens and underscores are equivalent;
+    /// runtime callers resolve hostcall tags to canonical capability names.
     pub allowed_capabilities: Vec<String>,
     /// Whether network access is allowed.
     pub allow_network: bool,
@@ -182,20 +183,38 @@ impl Default for SandboxPolicy {
 }
 
 impl SandboxPolicy {
-    /// Check if a capability is allowed under this sandbox policy.
+    /// Check the complete sandbox restriction for a capability name.
+    /// Permission requires membership and, for sensitive effects, the
+    /// corresponding flag. Flags never grant an unlisted capability.
+    /// This is an overlay: callers must still enforce the original grant.
     pub fn is_allowed(&self, capability: &str) -> bool {
-        self.allowed_capabilities.iter().any(|c| c == capability)
+        let canonical = capability.replace('-', "_");
+        let effect_allowed = match canonical.as_str() {
+            "network_egress" => self.allow_network,
+            "fs_write" => self.allow_fs_write,
+            "process_spawn" => self.allow_process_spawn,
+            _ => true,
+        };
+        effect_allowed
+            && self
+                .allowed_capabilities
+                .iter()
+                .any(|allowed| allowed.replace('-', "_") == canonical)
     }
 
     /// Semantic content identity of the enforced sandbox policy.
-    /// Capability order and duplicates do not affect `is_allowed`, so the
-    /// preimage sorts and deduplicates them before hashing.
+    /// Capability aliases, order and duplicates do not affect `is_allowed`,
+    /// so the preimage canonicalizes, sorts and deduplicates them.
     pub fn content_hash(&self) -> ContentHash {
-        let mut capabilities = self.allowed_capabilities.clone();
+        let mut capabilities: Vec<_> = self
+            .allowed_capabilities
+            .iter()
+            .map(|capability| capability.replace('-', "_"))
+            .collect();
         capabilities.sort_unstable();
         capabilities.dedup();
 
-        let mut preimage = b"franken-engine.sandbox-policy.v1\0".to_vec();
+        let mut preimage = b"franken-engine.sandbox-policy.v2\0".to_vec();
         push_count(&mut preimage, capabilities.len());
         for capability in capabilities {
             push_len_prefixed(&mut preimage, capability.as_bytes());
@@ -503,7 +522,7 @@ impl ContainmentExecutor {
         // Apply action-specific effects.
         match action {
             ContainmentAction::Sandbox => {
-                if !context.sandbox_policy.allow_network
+                if !context.sandbox_policy.is_allowed("network_egress")
                     && let Some(revocation) = self.network_revocations.get(extension_id)
                 {
                     revocation.revoke();
@@ -1023,7 +1042,10 @@ mod tests {
                 current_state: ContainmentState::Sandboxed,
             })
         );
-        assert_eq!(executor.sandbox_policy("ext-001"), Some(&context.sandbox_policy));
+        assert_eq!(
+            executor.sandbox_policy("ext-001"),
+            Some(&context.sandbox_policy)
+        );
     }
 
     // -----------------------------------------------------------------------

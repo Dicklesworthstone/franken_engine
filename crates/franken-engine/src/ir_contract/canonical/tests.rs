@@ -234,6 +234,26 @@ fn opcode_corpus(seed: u32) -> Vec<Ir3Instruction> {
         ExportBinding {
             name_pool_index: a,
             src: b,
+            local_name_pool_index: None,
+            namespace_reexport: false,
+        },
+        ExportBinding {
+            name_pool_index: a,
+            src: b,
+            local_name_pool_index: Some(c),
+            namespace_reexport: false,
+        },
+        ExportBinding {
+            name_pool_index: a,
+            src: b,
+            local_name_pool_index: Some(c),
+            namespace_reexport: true,
+        },
+        ExportBinding {
+            name_pool_index: a,
+            src: b,
+            local_name_pool_index: None,
+            namespace_reexport: true,
         },
         CreateGenerator {
             dst: a,

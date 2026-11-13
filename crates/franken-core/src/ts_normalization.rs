@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -10,6 +10,10 @@ use crate::ast::ParseGoal;
 use crate::ir_contract::{EffectBoundary, Ir0Module};
 use crate::lowering_pipeline::{LoweringContext, LoweringPipelineOutput, lower_ir0_to_ir3};
 use crate::parser::{CanonicalEs2020Parser, ParseEventIr, ParserOptions};
+
+pub mod namespaces;
+pub mod parameter_properties;
+pub mod type_erasure;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TsCompilerOptions {
@@ -1706,15 +1710,6 @@ fn starts_with_keyword(source: &str, index: usize, keyword: &str) -> bool {
         && has_token_boundary_after(source, index + keyword.len())
 }
 
-fn strip_leading_keyword<'a>(source: &'a str, keyword: &str) -> Option<&'a str> {
-    if !starts_with_keyword(source, 0, keyword) {
-        return None;
-    }
-
-    let after = skip_ascii_whitespace(source, keyword.len());
-    Some(&source[after..])
-}
-
 fn skip_ascii_whitespace(source: &str, mut index: usize) -> usize {
     while index < source.len() {
         let ch = source[index..]
@@ -1832,290 +1827,8 @@ fn trim_trailing_inline_whitespace(output: &mut String) {
 }
 
 fn lower_simple_namespaces(source: &str) -> Result<String, TsNormalizationError> {
-    let mut namespace_order = Vec::<String>::new();
-    let mut namespace_assignments = BTreeMap::<String, Vec<String>>::new();
-    let mut rewritten = String::with_capacity(source.len());
-    let mut emit_cursor = 0usize;
-    let mut scan_cursor = 0usize;
-    let mut state = LexicalRewriteState::Code;
-
-    while let Some((index, _)) = next_code_scan_char(source, &mut scan_cursor, &mut state) {
-        if !is_statement_start(source, index) || !starts_with_keyword(source, index, "namespace") {
-            continue;
-        }
-
-        let (namespace_name, body_start, body_end, declaration_end) =
-            parse_simple_namespace_declaration(source, index)?;
-        rewritten.push_str(&source[emit_cursor..index]);
-
-        let body = source[body_start + 1..body_end].trim();
-        let parsed_assignments = parse_namespace_exports(body)?;
-        if !namespace_assignments.contains_key(&namespace_name) {
-            namespace_order.push(namespace_name.clone());
-            namespace_assignments.insert(namespace_name.clone(), Vec::new());
-            rewritten.push_str(&format!("/*__namespace:{namespace_name}__*/"));
-        }
-
-        if let Some(assignments) = namespace_assignments.get_mut(&namespace_name) {
-            assignments.extend(parsed_assignments);
-        }
-
-        emit_cursor = declaration_end;
-        scan_cursor = declaration_end;
-        state = LexicalRewriteState::Code;
-    }
-
-    if namespace_order.is_empty() {
-        return Ok(source.to_string());
-    }
-
-    rewritten.push_str(&source[emit_cursor..]);
-
-    let mut rendered = rewritten;
-    for namespace_name in namespace_order {
-        let placeholder = format!("/*__namespace:{namespace_name}__*/");
-        let namespace_block = render_namespace_block(
-            &namespace_name,
-            &namespace_assignments.remove(&namespace_name).unwrap(),
-        )
-        .join("\n");
-        rendered = rendered.replacen(&placeholder, &namespace_block, 1);
-    }
-
-    Ok(rendered)
-}
-
-fn parse_simple_namespace_declaration(
-    source: &str,
-    start: usize,
-) -> Result<(String, usize, usize, usize), TsNormalizationError> {
-    let mut cursor = skip_ascii_whitespace(source, start + "namespace".len());
-    let name_start = cursor;
-    let name_end =
-        skip_identifier(source, cursor).ok_or(TsNormalizationError::UnsupportedSyntax {
-            feature: "unsupported namespace declaration form",
-        })?;
-    let namespace_name = source[name_start..name_end].trim().to_string();
-    if namespace_name.is_empty() {
-        return Err(TsNormalizationError::UnsupportedSyntax {
-            feature: "unsupported namespace declaration form",
-        });
-    }
-
-    cursor =
-        next_code_token_index(source, name_end).ok_or(TsNormalizationError::UnsupportedSyntax {
-            feature: "unsupported namespace declaration form",
-        })?;
-    if !source[cursor..].starts_with('{') {
-        return Err(TsNormalizationError::UnsupportedSyntax {
-            feature: "unsupported namespace declaration form",
-        });
-    }
-    let body_start = cursor;
-    let body_end = find_matching_delimiter(source, body_start, '{', '}').ok_or(
-        TsNormalizationError::UnsupportedSyntax {
-            feature: "unsupported namespace declaration form",
-        },
-    )?;
-
-    let mut declaration_end = body_end + '}'.len_utf8();
-    if let Some(next_index) = next_code_token_index(source, declaration_end)
-        && source[next_index..].starts_with(';')
-    {
-        declaration_end = next_index + ';'.len_utf8();
-    }
-
-    Ok((namespace_name, body_start, body_end, declaration_end))
-}
-
-fn parse_namespace_exports(body: &str) -> Result<Vec<String>, TsNormalizationError> {
-    let mut assignments = Vec::<String>::new();
-    let mut cursor = 0usize;
-
-    while cursor < body.len() {
-        cursor = next_code_token_index(body, cursor).unwrap_or(body.len());
-        if cursor >= body.len() {
-            break;
-        }
-
-        let statement_end = if is_namespace_export_function(body, cursor) {
-            find_namespace_export_function_end(body, cursor)
-        } else {
-            find_top_level_statement_terminator(body, cursor)
-        }
-        .ok_or(TsNormalizationError::UnsupportedSyntax {
-            feature: "unsupported namespace export form",
-        })?;
-
-        let normalized = body[cursor..statement_end]
-            .trim()
-            .trim_end_matches(';')
-            .trim();
-        if normalized.is_empty() {
-            cursor = statement_end;
-            continue;
-        }
-
-        let Some(exported) = strip_leading_keyword(normalized, "export") else {
-            return Err(TsNormalizationError::UnsupportedSyntax {
-                feature: "unsupported namespace export form",
-            });
-        };
-
-        let declaration = if let Some(value) = strip_leading_keyword(exported, "const") {
-            value
-        } else if let Some(value) = strip_leading_keyword(exported, "let") {
-            value
-        } else if let Some(value) = strip_leading_keyword(exported, "var") {
-            value
-        } else if is_exported_function_declaration(exported) {
-            assignments.extend(render_namespace_export_function(exported)?);
-            cursor = statement_end;
-            continue;
-        } else {
-            return Err(TsNormalizationError::UnsupportedSyntax {
-                feature: "unsupported namespace export form",
-            });
-        };
-
-        let Some((lhs, rhs)) = declaration.split_once('=') else {
-            return Err(TsNormalizationError::UnsupportedSyntax {
-                feature: "unsupported namespace export form",
-            });
-        };
-        let symbol = lhs.split(':').next().unwrap_or(lhs).trim();
-        if symbol.is_empty() {
-            return Err(TsNormalizationError::UnsupportedSyntax {
-                feature: "unsupported namespace export form",
-            });
-        }
-
-        assignments.push(format!("  ns.{symbol} = {};", rhs.trim()));
-        cursor = statement_end;
-    }
-
-    Ok(assignments)
-}
-
-fn is_namespace_export_function(source: &str, start: usize) -> bool {
-    strip_leading_keyword(&source[start..], "export").is_some_and(is_exported_function_declaration)
-}
-
-fn is_exported_function_declaration(exported: &str) -> bool {
-    parse_exported_function_name_range(exported).is_some()
-}
-
-fn find_namespace_export_function_end(source: &str, start: usize) -> Option<usize> {
-    let source_from_start = &source[start..];
-    let exported = strip_leading_keyword(source_from_start, "export")?;
-    let exported_start = source_from_start.len() - exported.len();
-    let (_, name_end) = parse_exported_function_name_range(exported)?;
-    let params_start = find_top_level_char(exported, name_end, '(')?;
-    let params_end = find_matching_delimiter(exported, params_start, '(', ')')?;
-    let mut search_cursor = params_end + ')'.len_utf8();
-
-    while search_cursor < exported.len() {
-        let body_start = find_top_level_char(exported, search_cursor, '{')?;
-        let body_end = find_matching_delimiter(exported, body_start, '{', '}')?;
-        let mut next_statement_start = next_code_token_index(exported, body_end + '}'.len_utf8());
-        while let Some(index) = next_statement_start {
-            if !exported[index..].starts_with(';') {
-                break;
-            }
-            next_statement_start = next_code_token_index(exported, index + ';'.len_utf8());
-        }
-
-        if let Some(index) = next_statement_start {
-            if starts_with_keyword(exported, index, "export") {
-                return Some(start + exported_start + body_end + '}'.len_utf8());
-            }
-            search_cursor = index;
-            continue;
-        }
-
-        return Some(start + exported_start + body_end + '}'.len_utf8());
-    }
-
-    None
-}
-
-fn render_namespace_export_function(exported: &str) -> Result<Vec<String>, TsNormalizationError> {
-    let (name_start, name_end) = parse_exported_function_name_range(exported).ok_or(
-        TsNormalizationError::UnsupportedSyntax {
-            feature: "unsupported namespace export form",
-        },
-    )?;
-    let name = exported[name_start..name_end].trim();
-    if name.is_empty() {
-        return Err(TsNormalizationError::UnsupportedSyntax {
-            feature: "unsupported namespace export form",
-        });
-    }
-    if has_object_shaped_return_type(exported) {
-        return Err(TsNormalizationError::UnsupportedSyntax {
-            feature: "unsupported namespace export form",
-        });
-    }
-
-    let mut rendered = exported
-        .lines()
-        .map(|line| format!("  {}", line.trim_end()))
-        .collect::<Vec<_>>();
-    rendered.push(format!("  ns.{name} = {name};"));
-    Ok(rendered)
-}
-
-fn parse_exported_function_name_range(exported: &str) -> Option<(usize, usize)> {
-    let mut cursor = 0usize;
-    if let Some(async_rest) = strip_leading_keyword(exported, "async") {
-        cursor = exported.len() - async_rest.len();
-    }
-    if !starts_with_keyword(exported, cursor, "function") {
-        return None;
-    }
-    cursor = skip_ascii_whitespace(exported, cursor + "function".len());
-    if exported[cursor..].starts_with('*') {
-        cursor += 1;
-        cursor = skip_ascii_whitespace(exported, cursor);
-    }
-    let name_start = cursor;
-    let name_end = skip_identifier(exported, name_start)?;
-    Some((name_start, name_end))
-}
-
-fn has_object_shaped_return_type(exported: &str) -> bool {
-    let (_, name_end) = match parse_exported_function_name_range(exported) {
-        Some(range) => range,
-        None => return false,
-    };
-    let params_start = match find_top_level_char(exported, name_end, '(') {
-        Some(index) => index,
-        None => return false,
-    };
-    let params_end = match find_matching_delimiter(exported, params_start, '(', ')') {
-        Some(index) => index,
-        None => return false,
-    };
-    let Some(after_params) = next_code_token_index(exported, params_end + ')'.len_utf8()) else {
-        return false;
-    };
-    if !exported[after_params..].starts_with(':') {
-        return false;
-    }
-    let Some(type_start) = next_code_token_index(exported, after_params + ':'.len_utf8()) else {
-        return false;
-    };
-    exported[type_start..].starts_with('{')
-}
-
-fn render_namespace_block(namespace_name: &str, assignments: &[String]) -> Vec<String> {
-    let mut lines = Vec::<String>::new();
-    lines.push(format!("const {namespace_name} = (() => {{"));
-    lines.push("  const ns = {};".to_string());
-    lines.extend(assignments.iter().cloned());
-    lines.push("  return ns;".to_string());
-    lines.push("})();".to_string());
-    lines
+    namespaces::lower(source, strip_type_annotations)
+        .map_err(|feature| TsNormalizationError::UnsupportedSyntax { feature })
 }
 
 fn lower_simple_class_decorators(source: &str) -> Result<String, TsNormalizationError> {
@@ -2279,85 +1992,7 @@ fn lower_simple_enums(source: &str) -> String {
 }
 
 fn lower_constructor_parameter_properties(source: &str) -> String {
-    let mut out = Vec::<String>::new();
-
-    for line in source.lines() {
-        let trimmed = line.trim();
-        if !trimmed.starts_with("constructor(") {
-            out.push(line.to_string());
-            continue;
-        }
-
-        let Some(args_start) = trimmed.find('(') else {
-            out.push(line.to_string());
-            continue;
-        };
-        let Some(args_end) = trimmed.find(')') else {
-            out.push(line.to_string());
-            continue;
-        };
-
-        let args_text = &trimmed[args_start + 1..args_end];
-        let mut normalized_args = Vec::<String>::new();
-        let mut injected_assignments = Vec::<String>::new();
-
-        for argument in args_text.split(',') {
-            let raw_arg = argument.trim();
-            if raw_arg.is_empty() {
-                continue;
-            }
-
-            let (visibility, remaining) = if let Some(rest) = raw_arg.strip_prefix("private ") {
-                (Some("private"), rest)
-            } else if let Some(rest) = raw_arg.strip_prefix("public ") {
-                (Some("public"), rest)
-            } else if let Some(rest) = raw_arg.strip_prefix("protected ") {
-                (Some("protected"), rest)
-            } else {
-                (None, raw_arg)
-            };
-
-            let no_readonly = remaining
-                .strip_prefix("readonly ")
-                .unwrap_or(remaining)
-                .trim();
-
-            let param_name = no_readonly.split(':').next().unwrap_or(no_readonly).trim();
-
-            normalized_args.push(no_readonly.to_string());
-
-            if visibility.is_some() && !param_name.is_empty() {
-                injected_assignments.push(format!("this.{param_name} = {param_name};"));
-            }
-        }
-
-        let mut rebuilt = String::new();
-        rebuilt.push_str("constructor(");
-        rebuilt.push_str(&normalized_args.join(", "));
-        rebuilt.push(')');
-
-        if let Some(brace_open) = trimmed.find('{') {
-            let body_start = brace_open + 1;
-            let body_end = trimmed.rfind('}').unwrap_or(trimmed.len());
-            let existing_body = trimmed[body_start..body_end].trim();
-            rebuilt.push_str(" {");
-            if !injected_assignments.is_empty() {
-                rebuilt.push(' ');
-                rebuilt.push_str(&injected_assignments.join(" "));
-            }
-            if !existing_body.is_empty() {
-                rebuilt.push(' ');
-                rebuilt.push_str(existing_body);
-            }
-            rebuilt.push_str(" }");
-        } else {
-            rebuilt.push(';');
-        }
-
-        out.push(rebuilt);
-    }
-
-    out.join("\n")
+    parameter_properties::lower(source)
 }
 
 fn normalize_definite_assignment_assertions(source: &str) -> String {
@@ -2463,179 +2098,7 @@ fn class_header_precedes_implements(source: &str, index: usize) -> bool {
 }
 
 fn strip_type_annotations(source: &str) -> String {
-    let mut output = String::new();
-    let bytes = source.as_bytes();
-    let len = bytes.len();
-    let mut i = 0;
-
-    // Track string/comment/template-literal state to avoid stripping colons
-    // inside literal contexts.
-    #[derive(PartialEq)]
-    enum Ctx {
-        Code,
-        SingleQuote,
-        DoubleQuote,
-        TemplateLiteral,
-        LineComment,
-        BlockComment,
-    }
-
-    // Helper: advance index past one full UTF-8 codepoint starting at `start`
-    // and return the end index. All context-switching characters are ASCII, so
-    // multi-byte codepoints are always opaque content.
-    #[inline]
-    fn utf8_advance(bytes: &[u8], start: usize) -> usize {
-        if start >= bytes.len() {
-            return start;
-        }
-        let b = bytes[start];
-        if b < 0x80 {
-            start + 1
-        } else if b & 0xE0 == 0xC0 {
-            start + 2
-        } else if b & 0xF0 == 0xE0 {
-            start + 3
-        } else {
-            start + 4
-        }
-        .min(bytes.len())
-    }
-
-    let mut ctx = Ctx::Code;
-
-    while i < len {
-        let ch = bytes[i];
-
-        match ctx {
-            Ctx::LineComment => {
-                if ch == b'\n' {
-                    output.push('\n');
-                    i += 1;
-                    ctx = Ctx::Code;
-                } else {
-                    let end = utf8_advance(bytes, i);
-                    output.push_str(&source[i..end]);
-                    i = end;
-                }
-                continue;
-            }
-            Ctx::BlockComment => {
-                if ch == b'*' && i + 1 < len && bytes[i + 1] == b'/' {
-                    output.push_str("*/");
-                    i += 2;
-                    ctx = Ctx::Code;
-                } else {
-                    let end = utf8_advance(bytes, i);
-                    output.push_str(&source[i..end]);
-                    i = end;
-                }
-                continue;
-            }
-            Ctx::SingleQuote => {
-                if ch == b'\\' && i + 1 < len {
-                    // Escaped character: copy backslash + full next codepoint.
-                    let esc_end = utf8_advance(bytes, i + 1);
-                    output.push_str(&source[i..esc_end]);
-                    i = esc_end;
-                } else if ch == b'\'' {
-                    output.push('\'');
-                    ctx = Ctx::Code;
-                    i += 1;
-                } else {
-                    let end = utf8_advance(bytes, i);
-                    output.push_str(&source[i..end]);
-                    i = end;
-                }
-                continue;
-            }
-            Ctx::DoubleQuote => {
-                if ch == b'\\' && i + 1 < len {
-                    let esc_end = utf8_advance(bytes, i + 1);
-                    output.push_str(&source[i..esc_end]);
-                    i = esc_end;
-                } else if ch == b'"' {
-                    output.push('"');
-                    ctx = Ctx::Code;
-                    i += 1;
-                } else {
-                    let end = utf8_advance(bytes, i);
-                    output.push_str(&source[i..end]);
-                    i = end;
-                }
-                continue;
-            }
-            Ctx::TemplateLiteral => {
-                if ch == b'\\' && i + 1 < len {
-                    let esc_end = utf8_advance(bytes, i + 1);
-                    output.push_str(&source[i..esc_end]);
-                    i = esc_end;
-                } else if ch == b'`' {
-                    output.push('`');
-                    ctx = Ctx::Code;
-                    i += 1;
-                } else {
-                    let end = utf8_advance(bytes, i);
-                    output.push_str(&source[i..end]);
-                    i = end;
-                }
-                continue;
-            }
-            Ctx::Code => {}
-        }
-
-        // In code context: detect string/comment openings.
-        if ch == b'\'' {
-            ctx = Ctx::SingleQuote;
-            output.push('\'');
-            i += 1;
-            continue;
-        }
-        if ch == b'"' {
-            ctx = Ctx::DoubleQuote;
-            output.push('"');
-            i += 1;
-            continue;
-        }
-        if ch == b'`' {
-            ctx = Ctx::TemplateLiteral;
-            output.push('`');
-            i += 1;
-            continue;
-        }
-        if ch == b'/' && i + 1 < len {
-            if bytes[i + 1] == b'/' {
-                ctx = Ctx::LineComment;
-                output.push_str("//");
-                i += 2;
-                continue;
-            }
-            if bytes[i + 1] == b'*' {
-                ctx = Ctx::BlockComment;
-                output.push_str("/*");
-                i += 2;
-                continue;
-            }
-        }
-
-        // Strip type annotations: skip from colon until the next delimiter.
-        if ch == b':' {
-            i += 1;
-            while i < len {
-                if matches!(bytes[i], b',' | b')' | b'=' | b';' | b'{' | b'}' | b'\n') {
-                    break;
-                }
-                i += 1;
-            }
-            continue;
-        }
-
-        // Default: copy the full UTF-8 codepoint.
-        let end = utf8_advance(bytes, i);
-        output.push_str(&source[i..end]);
-        i = end;
-    }
-
-    output
+    type_erasure::erase(source)
 }
 
 fn lower_simple_jsx(source: &str) -> String {
@@ -2742,6 +2205,41 @@ fn sha256_hex(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::baseline_interpreter::{InterpreterConfig, InterpreterCore};
+    use crate::capability::RuntimeCapability;
+
+    fn assert_normalized_output(source: &str, expected: &[&str]) -> TsNormalizationOutput {
+        let artifacts = ingest_typescript_to_pipeline_artifacts_default(
+            source,
+            &TsNormalizationConfig::default(),
+            "core-type-erasure.ts",
+            "type-erasure-trace",
+            "type-erasure-decision",
+            "type-erasure-policy",
+        )
+        .expect("core TypeScript ingestion must normalize, parse, and lower");
+        for mut config in [
+            InterpreterConfig::quickjs_defaults(),
+            InterpreterConfig::v8_defaults(),
+        ] {
+            config.granted_capabilities = [
+                RuntimeCapability::VmDispatch,
+                RuntimeCapability::HeapAllocate,
+            ]
+            .into_iter()
+            .collect();
+            let result = InterpreterCore::new(config, "core-type-erasure")
+                .execute(&artifacts.lowering_output.ir3)
+                .expect("normalized TypeScript must execute in both lanes");
+            let actual: Vec<&str> = result
+                .console_output
+                .iter()
+                .map(|entry| entry.message.as_str())
+                .collect();
+            assert_eq!(actual, expected);
+        }
+        artifacts.normalization_output
+    }
 
     #[test]
     fn strips_type_only_imports() {
@@ -2914,8 +2412,12 @@ const route = "/api/x";"#;
         )
         .expect("namespace normalization should pass");
 
-        assert!(output.normalized_source.contains("const Demo = (() => {"));
-        assert!(output.normalized_source.contains("ns.value = 1;"));
+        assert!(output.normalized_source.contains("var Demo;"));
+        assert!(
+            output
+                .normalized_source
+                .contains("__franken_namespace_0.value = 1;")
+        );
     }
 
     #[test]
@@ -2935,7 +2437,11 @@ const route = "/api/x";"#;
                 .normalized_source
                 .contains("function run() { return 1; }")
         );
-        assert!(output.normalized_source.contains("ns.run = run;"));
+        assert!(
+            output
+                .normalized_source
+                .contains("__franken_namespace_0.run = run;")
+        );
     }
 
     #[test]
@@ -2960,37 +2466,42 @@ namespace Demo {
                 .normalized_source
                 .contains("function run() { return 1; }")
         );
-        assert!(output.normalized_source.contains("ns.run = run;"));
-        assert!(output.normalized_source.contains("ns.version = 1;"));
+        assert!(
+            output
+                .normalized_source
+                .contains("__franken_namespace_0.run = run;")
+        );
+        assert!(
+            output
+                .normalized_source
+                .contains("__franken_namespace_0.version = 1;")
+        );
     }
 
     #[test]
     fn parses_namespace_exports_with_comment_after_function() {
-        let body = r#"
-export function run() { return 1; } // preserve separation before the next export
-export const version = 1;
-"#
-        .trim();
-
-        assert_eq!(
-            find_namespace_export_function_end(body, 0),
-            body.find("} //").map(|index| index + '}'.len_utf8())
-        );
-        assert_eq!(
-            parse_namespace_exports(body).expect("namespace exports should parse"),
-            vec![
-                "  function run() { return 1; }".to_string(),
-                "  ns.run = run;".to_string(),
-                "  ns.version = 1;".to_string(),
-            ]
-        );
+        let source = r#"
+namespace Demo {
+    export function run() { return 1; } // preserve separation before the next export
+    export const version = 1;
+}
+"#;
+        let output = lower_simple_namespaces(source).expect("namespace exports should parse");
+        let function = output
+            .find("function run() { return 1; }")
+            .expect("function body is retained");
+        let binding = output
+            .find("__franken_namespace_0.run = run;")
+            .expect("function is exported after its declaration");
+        let version = output
+            .find("__franken_namespace_0.version = 1;")
+            .expect("following variable is exported");
+        assert!(function < binding && binding < version);
+        assert!(output.contains("// preserve separation before the next export"));
     }
 
     #[test]
     fn lowers_namespace_export_function_with_return_type() {
-        // Uses a simple return type (not object-shaped) to avoid the known limitation
-        // where strip_type_annotations cannot distinguish object-literal colons
-        // (e.g. { key: value }) from type annotation colons.
         let source = "namespace Demo { export function make(): number { return 42; } }";
         let output = normalize_typescript_to_es2020(
             source,
@@ -3001,35 +2512,133 @@ export const version = 1;
         )
         .expect("namespace export function with return type should lower");
 
-        // After strip_type_annotations removes `: number`, the space before `{`
-        // is consumed, producing `make(){` instead of `make() {`. This is a
-        // known formatting artifact of the current type-stripping pass.
         assert!(output.normalized_source.contains("function make()"));
         assert!(output.normalized_source.contains("return 42;"));
-        assert!(output.normalized_source.contains("ns.make = make;"));
+        assert!(
+            output
+                .normalized_source
+                .contains("__franken_namespace_0.make = make;")
+        );
     }
 
     #[test]
-    fn rejects_namespace_export_function_with_object_shaped_return_type() {
-        // Object-shaped return types are currently rejected in namespace export
-        // functions because the type-stripping pass is not yet context-aware
-        // enough to preserve object-literal colons in the runtime body.
-        let source =
-            "namespace Demo { export function make(): { value: number } { return { value: 1 }; } }";
-        let error = normalize_typescript_to_es2020(
-            source,
-            &TsNormalizationConfig::default(),
-            "trace",
-            "decision",
-            "policy",
-        )
-        .expect_err("object-shaped return types remain unsupported");
+    fn namespace_object_return_values_survive_both_annotation_passes() {
+        let source = "namespace Demo { export function make(): { value: number } { return { value: 1 }; } }\nconsole.log(Demo.make().value);";
+        let output = assert_normalized_output(source, &["1"]);
+        let compact: String = output
+            .normalized_source
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .collect();
+        assert!(compact.contains("functionmake(){return{value:1};}"));
+        assert!(
+            output
+                .normalized_source
+                .contains("__franken_namespace_0.make = make;")
+        );
+    }
 
-        assert_eq!(
-            error,
-            TsNormalizationError::UnsupportedSyntax {
-                feature: "unsupported namespace export form",
+    #[test]
+    fn annotation_erasure_preserves_runtime_colons_and_conditional_branches() {
+        assert_normalized_output(
+            r#"
+            const state: {left: number; right: number} = {left: 3, right: 4};
+            const {left: renamed}: {left: number} = state;
+            function choose(flag: boolean, candidate: number): {value: number} {
+                return {value: flag ? candidate : state.right};
             }
+            let walked = 0;
+            outer: for (let index: number = 0; index < 3; index++) {
+                walked++;
+                if (index === 1) { break outer; }
+            }
+            console.log(renamed, choose(true, 7).value, choose(false, 7).value, walked);
+            switch (state.left) {
+                case 3: console.log('three'); break;
+                default: console.log('wrong');
+            }
+            "#,
+            &["3 7 4 2", "three"],
+        );
+    }
+
+    #[test]
+    fn annotation_erasure_keeps_overload_implementations_and_parameter_effects() {
+        assert_normalized_output(
+            r#"
+            console.log(select(2), select('ok'));
+            function select(value: number): number;
+            function select(value: string): string;
+            function select(value: number | string) {
+                return typeof value === 'number' ? value + 1 : value + '!';
+            }
+            let defaults = 0;
+            function defaulted(value?: number): number;
+            function defaulted(value: number = (++defaults, 4)): number { return value + 1; }
+            console.log(defaults);
+            console.log(defaulted(), defaults);
+            console.log(defaulted(8), defaults);
+            "#,
+            &["3 ok!", "0", "5 1", "9 1"],
+        );
+    }
+
+    #[test]
+    fn annotation_erasure_retains_constructor_parameter_properties_for_lowering() {
+        assert_normalized_output(
+            r#"
+            class Pair {
+                constructor(public left: number, private right: number) {}
+                sum(): number { return this.left + this.right; }
+            }
+            const pair = new Pair(3, 4);
+            console.log(pair.left, pair.sum());
+            "#,
+            &["3 7"],
+        );
+    }
+
+    #[test]
+    fn parameter_properties_lower_inline_defaults_and_contextual_names() {
+        assert_normalized_output(
+            r#"
+            let calls = 0;
+            class Inline { constructor(public value: number = (++calls, 3)) {} }
+            class Contextual { constructor(readonly: number = 4, public value: number = readonly) {} }
+            class Properties { constructor(public readonly: number = 6, public override: number = 7) {} }
+            const first = new Inline();
+            const explicit = new Inline(9);
+            const contextual = new Contextual();
+            const properties = new Properties();
+            console.log(first.value, explicit.value, calls, contextual.value,
+                'readonly' in contextual,
+                properties.readonly, properties.override);
+            "#,
+            &["3 9 1 4 false 6 7"],
+        );
+    }
+
+    #[test]
+    fn parameter_properties_follow_real_super_and_preserve_early_returns() {
+        assert_normalized_output(
+            r#"
+            let order = '';
+            class Base { constructor() { order += 'B'; } }
+            class Derived extends Base {
+                constructor(public value: number = 3, skip: boolean = false) {
+                    /* super(0); */
+                    order += 'P';
+                    if (skip) { order += 'R'; return {value: 99}; }
+                    (super()) // assignment belongs after this call
+                    order += 'D' + this.value;
+                }
+            }
+            const early = new Derived(undefined, true);
+            console.log(early.value, order);
+            const normal = new Derived();
+            console.log(normal.value, order);
+            "#,
+            &["99 PR", "3 PRPBD3"],
         );
     }
 
@@ -3280,10 +2889,13 @@ abstract class Base { }"#;
         .unwrap();
 
         assert!(!output.normalized_source.contains("implements Disposable"));
-        assert!(
+        assert_eq!(
             output
                 .normalized_source
-                .contains("class Service { run() { return 1; } }")
+                .chars()
+                .filter(|ch| !ch.is_whitespace())
+                .collect::<String>(),
+            "classService{run(){return1;}}"
         );
     }
 
@@ -3423,21 +3035,21 @@ abstract class Base { }"#;
     }
 
     #[test]
-    fn namespace_non_export_statement_fails() {
+    fn namespace_private_statements_are_retained() {
         let source = "namespace Demo { const hidden = 1; }";
-        let error = normalize_typescript_to_es2020(
+        let output = normalize_typescript_to_es2020(
             source,
             &TsNormalizationConfig::default(),
             "t",
             "d",
             "p",
         )
-        .unwrap_err();
-        assert_eq!(
-            error,
-            TsNormalizationError::UnsupportedSyntax {
-                feature: "unsupported namespace export form",
-            }
+        .expect("private namespace declarations remain local to their body");
+        assert!(output.normalized_source.contains("const hidden = 1;"));
+        assert!(
+            !output
+                .normalized_source
+                .contains("__franken_namespace_0.hidden")
         );
     }
 
@@ -3461,8 +3073,8 @@ abstract class Base { }"#;
     }
 
     #[test]
-    fn duplicate_namespace_declarations_merge() {
-        let source = "namespace Ns { export const a = 1; }\nnamespace Ns { export const b = 2; }";
+    fn duplicate_namespace_declarations_merge_at_their_source_positions() {
+        let source = "namespace Ns { export const a = 1; }\nobserve(Ns.a);\nnamespace Ns { export const b = 2; }";
         let output = normalize_typescript_to_es2020(
             source,
             &TsNormalizationConfig::default(),
@@ -3470,15 +3082,35 @@ abstract class Base { }"#;
             "d",
             "p",
         )
-        .unwrap();
-        assert!(output.normalized_source.contains("ns.a = 1;"));
-        assert!(output.normalized_source.contains("ns.b = 2;"));
-        // Only one IIFE block for the merged namespace
-        let iife_count = output
+        .expect("namespace declarations should share one object");
+        let first = output
             .normalized_source
-            .matches("const Ns = (() => {")
-            .count();
-        assert_eq!(iife_count, 1);
+            .find("__franken_namespace_0.a = 1;")
+            .expect("first declaration exports a");
+        let between = output
+            .normalized_source
+            .find("observe(Ns.a);")
+            .expect("intervening statement is preserved");
+        let second = output
+            .normalized_source
+            .find("__franken_namespace_1.b = 2;")
+            .expect("second declaration exports b");
+        assert!(first < between && between < second);
+        assert_eq!(output.normalized_source.matches("var Ns;").count(), 1);
+        assert_eq!(
+            output
+                .normalized_source
+                .matches("(function (__franken_namespace_")
+                .count(),
+            2
+        );
+        assert_eq!(
+            output
+                .normalized_source
+                .matches("})(Ns || (Ns = {}));")
+                .count(),
+            2
+        );
     }
 
     // --- Enum edge cases ---
@@ -3767,7 +3399,7 @@ abstract class Base { }"#;
     #[test]
     fn strip_type_annotations_basic() {
         let result = strip_type_annotations("let x: number = 5;");
-        // The colon and everything until the next delimiter is stripped
+        // Only the binding's annotation is erased; its initializer remains.
         assert!(result.contains("let x"));
         assert!(result.contains("= 5;"));
         assert!(!result.contains("number"));
@@ -3871,13 +3503,13 @@ abstract class Base { }"#;
     // --- Render namespace block ---
 
     #[test]
-    fn render_namespace_block_structure() {
-        let block = render_namespace_block("Foo", &["  ns.x = 1;".to_string()]);
-        assert_eq!(block[0], "const Foo = (() => {");
-        assert_eq!(block[1], "  const ns = {};");
-        assert_eq!(block[2], "  ns.x = 1;");
-        assert_eq!(block[3], "  return ns;");
-        assert_eq!(block[4], "})();");
+    fn namespace_block_initializes_the_shared_object_before_its_body() {
+        let output = lower_simple_namespaces("namespace Foo { export const x = 1; }")
+            .expect("namespace should lower");
+        assert!(output.contains("var Foo;"));
+        assert!(output.contains("(function (__franken_namespace_0) {"));
+        assert!(output.contains("__franken_namespace_0.x = 1;"));
+        assert!(output.contains("})(Foo || (Foo = {}));"));
     }
 
     // --- Lower simple enums ---
@@ -4099,7 +3731,11 @@ abstract class Base { }"#;
             "p",
         )
         .unwrap();
-        assert!(output.normalized_source.contains("ns.x = 1;"));
+        assert!(
+            output
+                .normalized_source
+                .contains("__franken_namespace_0.x = 1;")
+        );
     }
 
     #[test]
@@ -4113,7 +3749,11 @@ abstract class Base { }"#;
             "p",
         )
         .unwrap();
-        assert!(output.normalized_source.contains("ns.x = 1;"));
+        assert!(
+            output
+                .normalized_source
+                .contains("__franken_namespace_0.x = 1;")
+        );
     }
 
     // --- Type annotation stripping with quotes ---

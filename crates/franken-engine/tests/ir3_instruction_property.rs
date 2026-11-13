@@ -259,10 +259,16 @@ fn scope_instruction() -> BoxedStrategy<Ir3Instruction> {
             dst,
             import_attributes: Default::default(),
         }),
-        (0u32..128, reg()).prop_map(|(name_pool_index, src)| Ir3Instruction::ExportBinding {
-            name_pool_index,
-            src,
-        }),
+        (0u32..128, reg(), prop::option::of(0u32..128), any::<bool>()).prop_map(
+            |(name_pool_index, src, local_name_pool_index, namespace_reexport)| {
+                Ir3Instruction::ExportBinding {
+                    name_pool_index,
+                    src,
+                    local_name_pool_index,
+                    namespace_reexport,
+                }
+            }
+        ),
     ]
     .boxed()
 }

@@ -274,8 +274,8 @@ impl InterpreterCore {
             // (bd-9vouw.33); it does not claim complete Map/Set conformance.
             let collection = match &source {
                 Value::Object(object) if !explicit_iterator => self
-                    .collection_storage_id(*object, "Set", "__values")
-                    .or_else(|| self.collection_storage_id(*object, "Map", "__entries"))
+                    .collection_storage_id(*object, "Set")
+                    .or_else(|| self.collection_storage_id(*object, "Map"))
                     .map(|_| *object),
                 _ => None,
             };
@@ -426,8 +426,8 @@ impl InterpreterCore {
         object: ObjectId,
     ) -> Result<Option<Value>, InterpreterError> {
         let storage = self
-            .collection_storage_id(object, "Set", "__values")
-            .or_else(|| self.collection_storage_id(object, "Map", "__entries"));
+            .collection_storage_id(object, "Set")
+            .or_else(|| self.collection_storage_id(object, "Map"));
         let Some(storage) = storage else {
             return Ok(None);
         };

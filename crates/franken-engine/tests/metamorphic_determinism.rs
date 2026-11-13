@@ -65,6 +65,7 @@ fn create_deterministic_config() -> OrchestratorConfig {
     OrchestratorConfig {
         loss_matrix_preset: LossMatrixPreset::Balanced,
         force_lane: None,
+        sandbox_policy: Default::default(),
         drain_deadline_ticks: 100,
         work_pool: None,
         cell_close_budget_ms: 5000,

@@ -10,6 +10,25 @@ struct ModuleExportCascade {
     temporary_bytes: u64,
 }
 
+#[derive(Default)]
+struct ModuleExportWalk {
+    pending: BTreeSet<(String, JsString)>,
+    seen: BTreeSet<(String, JsString)>,
+    temporary_bytes: u64,
+}
+
+enum ModuleExportResolutionStep {
+    Resolved(ModuleExportIdentity),
+    Forward(Vec<(String, JsString)>),
+    Missing,
+}
+
+struct ModuleExportDependents {
+    cells: Vec<Rc<RefCell<ScopeBindingState>>>,
+    successors: Vec<(String, JsString)>,
+    temporary_bytes: u64,
+}
+
 impl InterpreterCore {
     #[inline(never)]
     pub(super) fn dispatch_builtin_function_inner(
@@ -2726,70 +2745,68 @@ impl InterpreterCore {
             // normal property walk, so it is not a method here.
             BuiltinFunctionKind::MapSet => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let map_id = self.collection_receiver(&receiver, "Map", "__entries", "set")?;
+                let map_id = self.collection_receiver(&receiver, "Map", "set")?;
                 let key = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 let value = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
                 self.map_collection_set(map_id, key, value)
             }
             BuiltinFunctionKind::MapGet => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let map_id = self.collection_receiver(&receiver, "Map", "__entries", "get")?;
+                let map_id = self.collection_receiver(&receiver, "Map", "get")?;
                 let key = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-                Ok(self.collection_get(map_id, "Map", "__entries", &key))
+                Ok(self.collection_get(map_id, "Map", &key))
             }
             BuiltinFunctionKind::MapHas => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let map_id = self.collection_receiver(&receiver, "Map", "__entries", "has")?;
+                let map_id = self.collection_receiver(&receiver, "Map", "has")?;
                 let key = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 Ok(Value::Bool(self.collection_has(
                     map_id,
                     "Map",
-                    "__entries",
                     &key,
                 )))
             }
             BuiltinFunctionKind::MapDelete => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let map_id = self.collection_receiver(&receiver, "Map", "__entries", "delete")?;
+                let map_id = self.collection_receiver(&receiver, "Map", "delete")?;
                 let key = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 Ok(Value::Bool(self.collection_delete(
                     map_id,
                     "Map",
-                    "__entries",
                     &key,
                 )?))
             }
             BuiltinFunctionKind::SetAdd => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let set_id = self.collection_receiver(&receiver, "Set", "__values", "add")?;
+                let set_id = self.collection_receiver(&receiver, "Set", "add")?;
                 let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 self.set_collection_add(set_id, value)
             }
             BuiltinFunctionKind::SetHas => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let set_id = self.collection_receiver(&receiver, "Set", "__values", "has")?;
+                let set_id = self.collection_receiver(&receiver, "Set", "has")?;
                 let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 Ok(Value::Bool(
-                    self.collection_has(set_id, "Set", "__values", &value),
+                    self.collection_has(set_id, "Set", &value),
                 ))
             }
             BuiltinFunctionKind::SetDelete => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let set_id = self.collection_receiver(&receiver, "Set", "__values", "delete")?;
+                let set_id = self.collection_receiver(&receiver, "Set", "delete")?;
                 let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 Ok(Value::Bool(self.collection_delete(
-                    set_id, "Set", "__values", &value,
+                    set_id, "Set", &value,
                 )?))
             }
             BuiltinFunctionKind::MapClear => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let map_id = self.collection_receiver(&receiver, "Map", "__entries", "clear")?;
-                self.collection_clear(map_id, "Map", "__entries")
+                let map_id = self.collection_receiver(&receiver, "Map", "clear")?;
+                self.collection_clear(map_id, "Map")
             }
             BuiltinFunctionKind::SetClear => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let set_id = self.collection_receiver(&receiver, "Set", "__values", "clear")?;
-                self.collection_clear(set_id, "Set", "__values")
+                let set_id = self.collection_receiver(&receiver, "Set", "clear")?;
+                self.collection_clear(set_id, "Set")
             }
             BuiltinFunctionKind::PromiseThenFinally | BuiltinFunctionKind::PromiseCatchFinally => {
                 self.promise_finally_step(module, builtin, args)
@@ -4901,7 +4918,7 @@ impl InterpreterCore {
             self.restore_module_execution(snapshot, false);
             return Err(err);
         }
-        let result = self.run_nested_module_execution(module);
+        let result = self.run_nested_module_execution(module, true);
         let suspended = result.is_ok()
             && self
                 .top_level_await_resumption_contexts
@@ -4933,6 +4950,14 @@ impl InterpreterCore {
         self.rearm_nested_module_throw(thrown)?;
         result?;
         if let Some(reason) = async_settlement_failure {
+            if self
+                .module_state
+                .modules
+                .get(specifier)
+                .is_some_and(|record| record.evaluation_exception.is_some())
+            {
+                return self.rethrow_cached_module_exception(specifier);
+            }
             return Err(InterpreterError::ModuleEvaluationFailed {
                 specifier: specifier.to_string(),
                 reason,
@@ -4980,7 +5005,7 @@ impl InterpreterCore {
         }
         self.active_cjs_context = Some(cjs_context.clone());
         let gc_armed = self.gc_arm_cjs_entry(&snapshot);
-        let eval_outcome = self.run_nested_module_execution(module);
+        let eval_outcome = self.run_nested_module_execution(module, false);
         if let Some(previous) = gc_armed {
             self.gc_restore_safe_depth(previous);
         }
@@ -5079,15 +5104,55 @@ impl InterpreterCore {
         }
     }
 
+    /// Native guest faults need one stable JavaScript Error object before an
+    /// ESM evaluation is cached. Keep resource and policy errors as host
+    /// failures, and capture provenance while the failing module is active.
+    pub(super) fn materialize_module_guest_exception<T>(
+        &mut self,
+        outcome: Result<T, InterpreterError>,
+    ) -> Result<T, InterpreterError> {
+        let error = match outcome {
+            Err(error) if Self::js_catchable_error_name(&error).is_some() => error,
+            other => return other,
+        };
+        let thrown = self.native_error_to_thrown_value(&error)?;
+        let mut label = self
+            .take_pending_hostcall_result_label()
+            .unwrap_or(Label::Public);
+        if let Some(context) = self.active_execution_context_label() {
+            label = self.join_owned_label_with_temporary_budget(label, context)?;
+        }
+        self.pending_finally_entry = None;
+        self.rearm_nested_module_throw(Some((thrown, label)))?;
+        // The guest receives the Error object above, including its original
+        // message. Do not allocate another unbounded diagnostic copy.
+        Err(InterpreterError::UncaughtException {
+            value: "module evaluation raised a native JavaScript error".to_string(),
+        })
+    }
+
     pub(super) fn run_nested_module_execution(
         &mut self,
         module: &Ir3Module,
+        materialize_guest_errors: bool,
     ) -> Result<(), InterpreterError> {
-        let result = match self.run_loop(module) {
+        let result = self.run_loop(module);
+        let result = if materialize_guest_errors {
+            self.materialize_module_guest_exception(result)
+        } else {
+            result
+        };
+        let result = match result {
             // Imported code shares the execution's jobs and authority. A
             // terminal failure must not run that shared queue before the
             // loader restores the caller and propagates the original error.
             Err(error) if Self::stops_guest_execution(&error) => return Err(error),
+            // Publish an ESM failure before the outer checkpoint runs jobs.
+            // A handled reaction can replace and consume the pending throw;
+            // a queued re-import must already see this module as failed.
+            Err(error @ InterpreterError::UncaughtException { .. }) if materialize_guest_errors => {
+                return Err(error);
+            }
             result => result,
         };
         self.drain_runtime_checkpoint(Some(module))?;
@@ -5111,6 +5176,331 @@ impl InterpreterCore {
         value: Value,
     ) -> Result<(), InterpreterError> {
         self.register_module_export_exact_labeled(name, value, Label::Public)
+    }
+
+    fn module_export_local_name(
+        module: &Ir3Module,
+        local_name_pool_index: Option<u32>,
+    ) -> Result<Option<JsString>, InterpreterError> {
+        local_name_pool_index
+            .map(|local| {
+                module
+                    .constant_pool
+                    .get(local as usize)
+                    .cloned()
+                    .ok_or_else(|| InterpreterError::InternalError {
+                        details: "module export has an invalid local binding name".to_string(),
+                    })
+            })
+            .transpose()
+    }
+
+    pub(super) fn declare_module_export_binding(
+        &mut self,
+        specifier: &str,
+        name: &JsString,
+        local_name: Option<JsString>,
+    ) -> Result<bool, InterpreterError> {
+        let record = self.module_state.modules.get(specifier).ok_or_else(|| {
+            InterpreterError::ExportOutsideModule {
+                name: name.to_string(),
+            }
+        })?;
+        if record.local_export_bindings.contains_key(name) {
+            return Ok(false);
+        }
+        let existing_index = local_name
+            .as_ref()
+            .and_then(|local| record.local_binding_indices.get(local))
+            .map(|binding| binding.binding_index);
+        let binding_index = existing_index
+            .or_else(|| {
+                u32::try_from(record.local_export_bindings.len())
+                    .ok()?
+                    .checked_add(1)
+                    .and_then(std::num::NonZeroU32::new)
+            })
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: "too many module export bindings".to_string(),
+            })?;
+        let index_bytes = if existing_index.is_none() {
+            local_name
+                .as_ref()
+                .map(Self::module_local_binding_index_bytes)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let alias_bytes = if local_name.is_some() {
+            Self::module_local_binding_export_bytes(name)
+        } else {
+            0
+        };
+        let bytes = Self::module_local_export_entry_bytes(name, &local_name)
+            .saturating_add(index_bytes)
+            .saturating_add(alias_bytes);
+        self.apply_memory_component_delta(0, bytes)?;
+        let record = self
+            .module_state
+            .modules
+            .get_mut(specifier)
+            .expect("module record was validated before binding declaration");
+        if let Some(local) = &local_name {
+            record
+                .local_binding_indices
+                .entry(local.clone())
+                .or_insert_with(|| ModuleLocalBinding {
+                    binding_index,
+                    exports: Vec::new(),
+                })
+                .exports
+                .push(name.clone());
+        }
+        record.local_export_bindings.insert(
+            name.clone(),
+            ModuleLocalExport {
+                local_name,
+                binding_index,
+            },
+        );
+        Ok(true)
+    }
+
+    /// Explicit export declarations shadow star exports even before the
+    /// declaration's value is initialized. IR identifies the local binding
+    /// explicitly, including aliases and synthetic defaults.
+    pub(super) fn declare_module_export_bindings(
+        &mut self,
+        specifier: &str,
+        module: &Ir3Module,
+    ) -> Result<(), InterpreterError> {
+        for instruction in &module.instructions {
+            if let Ir3Instruction::ExportBinding {
+                name_pool_index,
+                local_name_pool_index,
+                ..
+            } = instruction
+            {
+                self.json_charge_work()?;
+                let name = module
+                    .constant_pool
+                    .get(*name_pool_index as usize)
+                    .cloned()
+                    .unwrap_or_else(|| JsString::from(format!("__export_{name_pool_index}")));
+                let local = Self::module_export_local_name(module, *local_name_pool_index)?;
+                self.declare_module_export_binding(specifier, &name, local)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn record_module_import_origin(
+        &mut self,
+        specifier: &str,
+        local: JsString,
+        origin: ModuleImportOrigin,
+    ) -> Result<(), InterpreterError> {
+        let Some(record) = self.module_state.modules.get(specifier) else {
+            return Ok(());
+        };
+        let previous = record.import_origins.get(&local);
+        if previous == Some(&origin) {
+            return Ok(());
+        }
+        let previous_bytes = previous
+            .map(|origin| Self::module_import_origin_entry_bytes(&local, origin))
+            .unwrap_or(0);
+        let next_bytes = Self::module_import_origin_entry_bytes(&local, &origin);
+        self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+        self.module_state
+            .modules
+            .get_mut(specifier)
+            .expect("importing module still exists")
+            .import_origins
+            .insert(local, origin);
+        Ok(())
+    }
+
+    /// Link a cell to all its declared aliases before its initialization is
+    /// published, even when the export clause occurs later in the source.
+    fn link_module_binding_exports(
+        &mut self,
+        specifier: &str,
+        local: &JsString,
+        cell: &Rc<RefCell<ScopeBindingState>>,
+    ) -> Result<(), InterpreterError> {
+        let Some(record) = self.module_state.modules.get(specifier) else {
+            return Ok(());
+        };
+        let Some(binding) = record.local_binding_indices.get(local) else {
+            return Ok(());
+        };
+        let names_bytes = binding.exports.iter().fold(0u64, |total, name| {
+            total.saturating_add(Self::module_export_key_bytes(specifier, name))
+        });
+        if names_bytes == 0 {
+            return Ok(());
+        }
+        let bytes = names_bytes;
+        self.json_reserve_temporary(bytes)?;
+        let outcome = (|| {
+            let names = self.module_state.modules[specifier].local_binding_indices[local]
+                .exports
+                .clone();
+            for name in names {
+                self.json_charge_work()?;
+                self.track_live_export(cell, specifier.to_string(), name.clone())?;
+            }
+            Ok(())
+        })();
+        self.json_release_temporary(bytes);
+        outcome
+    }
+
+    fn queue_module_export_walk(
+        &mut self,
+        walk: &mut ModuleExportWalk,
+        specifier: &str,
+        name: &JsString,
+    ) -> Result<(), InterpreterError> {
+        self.json_charge_work()?;
+        let bytes = Self::module_export_key_bytes(specifier, name);
+        // The lookup key is temporary even when the edge was already visited.
+        self.json_reserve_temporary(bytes)?;
+        let key = (specifier.to_string(), name.clone());
+        let outcome = (|| {
+            if walk.seen.contains(&key) {
+                return Ok(());
+            }
+            self.json_reserve_temporary(bytes.saturating_mul(2))?;
+            walk.seen.insert(key.clone());
+            walk.pending.insert(key.clone());
+            walk.temporary_bytes = walk.temporary_bytes.saturating_add(bytes.saturating_mul(2));
+            Ok(())
+        })();
+        drop(key);
+        self.json_release_temporary(bytes);
+        outcome
+    }
+
+    fn module_export_resolution_step(
+        &self,
+        specifier: &str,
+        name: &JsString,
+    ) -> Result<(ModuleExportResolutionStep, u64), InterpreterError> {
+        let Some(record) = self.module_state.modules.get(specifier) else {
+            return Ok((ModuleExportResolutionStep::Missing, 0));
+        };
+        if let Some(binding) = record.local_export_bindings.get(name) {
+            if let Some(origin) = binding
+                .local_name
+                .as_ref()
+                .and_then(|local| record.import_origins.get(local))
+            {
+                return match origin {
+                    ModuleImportOrigin::Binding { specifier, name } => {
+                        let bytes = Self::module_export_key_bytes(specifier, name);
+                        self.check_temporary_memory_budget(bytes)?;
+                        Ok((
+                            ModuleExportResolutionStep::Forward(vec![(
+                                specifier.clone(),
+                                name.clone(),
+                            )]),
+                            bytes,
+                        ))
+                    }
+                    ModuleImportOrigin::Namespace { specifier } => Ok((
+                        self.module_state.modules.get(specifier).map_or(
+                            ModuleExportResolutionStep::Missing,
+                            |source| {
+                                ModuleExportResolutionStep::Resolved(ModuleExportIdentity {
+                                    namespace: source.namespace_object,
+                                    binding_index: 0,
+                                })
+                            },
+                        ),
+                        0,
+                    )),
+                };
+            }
+            return Ok((
+                ModuleExportResolutionStep::Resolved(ModuleExportIdentity {
+                    namespace: record.namespace_object,
+                    binding_index: binding.binding_index.get(),
+                }),
+                0,
+            ));
+        }
+        if name.as_str() == Some("default") {
+            return Ok((ModuleExportResolutionStep::Missing, 0));
+        }
+        let bytes = record.star_sources.iter().fold(0u64, |total, source| {
+            total.saturating_add(Self::module_export_key_bytes(source, name))
+        });
+        self.check_temporary_memory_budget(bytes)?;
+        let sources = record
+            .star_sources
+            .iter()
+            .map(|source| (source.clone(), name.clone()))
+            .collect();
+        Ok((ModuleExportResolutionStep::Forward(sources), bytes))
+    }
+
+    /// Resolve the defining binding through explicit imports and star edges.
+    /// This iterative walk is equivalent to collecting ResolveExport's
+    /// non-null resolutions: a repeated (module, name) contributes nothing,
+    /// while two distinct terminal bindings make the name ambiguous.
+    fn resolve_module_export(
+        &mut self,
+        specifier: &str,
+        name: &JsString,
+    ) -> Result<ModuleExportResolution, InterpreterError> {
+        let mut walk = ModuleExportWalk::default();
+        let outcome = (|| {
+            self.queue_module_export_walk(&mut walk, specifier, name)?;
+            let mut resolved = None;
+            while let Some(key) = walk.pending.pop_first() {
+                let key_bytes = Self::module_export_key_bytes(&key.0, &key.1);
+                let step_result = (|| {
+                    let (step, bytes) = self.module_export_resolution_step(&key.0, &key.1)?;
+                    self.json_reserve_temporary(bytes)?;
+                    let result = match step {
+                        ModuleExportResolutionStep::Resolved(identity) => {
+                            if resolved.is_some_and(|previous| previous != identity) {
+                                Ok(true)
+                            } else {
+                                resolved = Some(identity);
+                                Ok(false)
+                            }
+                        }
+                        ModuleExportResolutionStep::Forward(sources) => {
+                            let result = sources.iter().try_for_each(|(source, name)| {
+                                self.queue_module_export_walk(&mut walk, source, name)
+                            });
+                            drop(sources);
+                            result.map(|_| false)
+                        }
+                        ModuleExportResolutionStep::Missing => Ok(false),
+                    };
+                    self.json_release_temporary(bytes);
+                    result
+                })();
+                drop(key);
+                walk.temporary_bytes = walk.temporary_bytes.saturating_sub(key_bytes);
+                self.json_release_temporary(key_bytes);
+                if step_result? {
+                    return Ok(ModuleExportResolution::Ambiguous);
+                }
+            }
+            Ok(resolved.map_or(
+                ModuleExportResolution::Missing,
+                ModuleExportResolution::Resolved,
+            ))
+        })();
+        let temporary_bytes = walk.temporary_bytes;
+        drop(walk);
+        self.json_release_temporary(temporary_bytes);
+        outcome
     }
 
     pub(super) fn register_module_export_exact_labeled(
@@ -5141,6 +5531,8 @@ impl InterpreterCore {
         label: Label,
         publication: ExportPublication,
     ) -> Result<(), InterpreterError> {
+        let inserted_binding = publication == ExportPublication::Own
+            && self.declare_module_export_binding(specifier, &name, None)?;
         let mut cascade = ModuleExportCascade::default();
         let outcome = (|| {
             self.queue_module_export(&mut cascade, specifier, &name, &label, publication)?;
@@ -5149,6 +5541,19 @@ impl InterpreterCore {
         let temporary_bytes = cascade.temporary_bytes;
         drop(cascade);
         self.json_release_temporary(temporary_bytes);
+        if outcome.is_err() && inserted_binding {
+            let record = self
+                .module_state
+                .modules
+                .get_mut(specifier)
+                .expect("export's module still exists");
+            if !record.exports.contains_key(&name)
+                && let Some(binding) = record.local_export_bindings.remove(&name)
+            {
+                let bytes = Self::module_local_export_entry_bytes(&name, &binding.local_name);
+                self.apply_memory_component_delta(bytes, 0)?;
+            }
+        }
         outcome
     }
 
@@ -5399,24 +5804,43 @@ impl InterpreterCore {
                         self.queue_live_export(cascade, cell, live_export)?;
                     }
                 }
-                // A module that still provides this name through
-                // `export * from` this one republishes it.
-                for reexporter in star_reexporters {
-                    let provided =
-                        self.module_state
+                // A source may publish a lexical export only after a cyclic
+                // importer has already registered its star edge. Resolve at
+                // every publication, not only when `export *` first executes.
+                if name.as_str() != Some("default") && !star_reexporters.is_empty() {
+                    let source = self.resolve_module_export(specifier, &name)?;
+                    for reexporter in star_reexporters {
+                        if self
+                            .module_state
                             .modules
                             .get(&reexporter)
-                            .is_some_and(|record| {
-                                record.star_exports.get(&name) == Some(&StarExportOrigin::Provided)
-                            });
-                    if provided {
-                        self.queue_module_export(
-                            cascade,
-                            &reexporter,
-                            &name,
-                            &label,
-                            ExportPublication::Star,
-                        )?;
+                            .is_some_and(|record| record.local_export_bindings.contains_key(&name))
+                        {
+                            continue;
+                        }
+                        match self.resolve_module_export(&reexporter, &name)? {
+                            ModuleExportResolution::Resolved(identity)
+                                if source == ModuleExportResolution::Resolved(identity) =>
+                            {
+                                self.module_state
+                                    .modules
+                                    .get_mut(&reexporter)
+                                    .expect("star reexporter still exists")
+                                    .star_exports
+                                    .insert(name.clone(), StarExportOrigin::Provided);
+                                self.queue_module_export(
+                                    cascade,
+                                    &reexporter,
+                                    &name,
+                                    &label,
+                                    ExportPublication::Star,
+                                )?;
+                            }
+                            ModuleExportResolution::Missing | ModuleExportResolution::Ambiguous => {
+                                self.withdraw_unresolved_module_export(&reexporter, &name)?;
+                            }
+                            ModuleExportResolution::Resolved(_) => {}
+                        }
                     }
                 }
                 Ok(())
@@ -5581,8 +6005,10 @@ impl InterpreterCore {
         else {
             return Ok(());
         };
-        if matches!(record.status, ModuleRuntimeStatus::Evaluating)
-            && !record.exports.contains_key(&export_name)
+        if !record.exports.contains_key(&export_name)
+            && (matches!(record.status, ModuleRuntimeStatus::Evaluating)
+                || record.local_export_bindings.contains_key(&export_name)
+                || record.star_exports.get(&export_name) == Some(&StarExportOrigin::Provided))
         {
             cell.try_borrow_mut()
                 .map_err(|_| InterpreterError::InternalError {
@@ -5656,6 +6082,9 @@ impl InterpreterCore {
                 .map_err(|_| InterpreterError::InternalError {
                     details: "exported module binding is already mutably borrowed".to_string(),
                 })?;
+            if !state.initialized {
+                return Ok(());
+            }
             Self::estimate_label_bytes(&state.label)
         };
         let temporary_bytes = export_bytes.saturating_add(label_bytes);
@@ -5680,13 +6109,9 @@ impl InterpreterCore {
         outcome
     }
 
-    /// `export * from m` (bd-332pq): every export of `m` except `default`
-    /// becomes an export of the current module unless the module exports
-    /// that name itself. When two star sources provide one name with
-    /// different values the name is ambiguous (ES2020 ResolveExport) and the
-    /// module does not export it; the same value through two paths (a
-    /// diamond) is not ambiguous. Values are copied when the statement runs,
-    /// as named re-exports are.
+    /// Register the source edge and resolve each available export by binding
+    /// identity. Late values and new ambiguities traverse the same edges, so
+    /// a cycle or a diamond never depends on the current exported Values.
     pub(super) fn module_export_star(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
         if args.count != 1 {
             return Err(InterpreterError::TypeError {
@@ -5707,81 +6132,268 @@ impl InterpreterCore {
                 name: "*".to_string(),
             });
         };
-        let source = self
+        let source_specifier = self
             .module_state
             .modules
-            .values_mut()
-            .find(|record| record.namespace_object == namespace_object)
+            .iter()
+            .find(|(_, record)| record.namespace_object == namespace_object)
+            .map(|(specifier, _)| specifier.clone())
             .ok_or_else(|| InterpreterError::TypeError {
                 expected: "export * source with a module record".to_string(),
                 got: "a namespace without module exports".to_string(),
             })?;
-        // bd-1lsy.4.10.1: the source's later publications reach this module.
-        source.star_reexporters.insert(specifier.clone());
-        let source_exports: Vec<(JsString, Value)> = source
-            .exports
-            .iter()
-            .filter(|(name, _)| name.as_str() != Some("default"))
-            .map(|(name, value)| (name.clone(), value.clone()))
-            .collect();
-        for (name, value) in source_exports {
-            // Decide under a shared borrow of the module record, then act.
-            let (withdraw, register) = {
-                let record = self.module_state.modules.get(&specifier).ok_or_else(|| {
-                    InterpreterError::ExportOutsideModule {
-                        name: name.to_string(),
-                    }
-                })?;
-                match (record.star_exports.get(&name), record.exports.get(&name)) {
-                    (Some(StarExportOrigin::Ambiguous), _) => (false, false),
-                    (Some(StarExportOrigin::Provided), Some(existing)) => {
-                        (!Self::same_value(existing, &value), false)
-                    }
-                    // The module's own export of this name wins.
-                    (None, Some(_)) => (false, false),
-                    (_, None) => (false, true),
-                }
-            };
-            if withdraw {
-                self.withdraw_ambiguous_star_export(&specifier, &name)?;
+        let record = self.module_state.modules.get(&specifier).ok_or_else(|| {
+            InterpreterError::ExportOutsideModule {
+                name: "*".to_string(),
             }
-            if register {
-                self.register_module_export_exact_labeled(name.clone(), value, label.clone())?;
-                if let Some(record) = self.module_state.modules.get_mut(&specifier) {
-                    record.star_exports.insert(name, StarExportOrigin::Provided);
+        })?;
+        if !record.star_sources.contains(&source_specifier) {
+            self.apply_memory_component_delta(
+                0,
+                Self::module_star_source_bytes(&source_specifier),
+            )?;
+            self.module_state
+                .modules
+                .get_mut(&specifier)
+                .expect("current module exists")
+                .star_sources
+                .insert(source_specifier.clone());
+        }
+        self.module_state
+            .modules
+            .get_mut(&source_specifier)
+            .expect("source module exists")
+            .star_reexporters
+            .insert(specifier.clone());
+        let source = &self.module_state.modules[&source_specifier];
+        let names_bytes = source
+            .exports
+            .keys()
+            .chain(source.local_export_bindings.keys())
+            .chain(source.star_exports.keys())
+            .fold(0u64, |total, name| {
+                total.saturating_add(Self::module_export_key_bytes("", name))
+            });
+        self.json_reserve_temporary(names_bytes)?;
+        let source = &self.module_state.modules[&source_specifier];
+        let names: BTreeSet<JsString> = source
+            .exports
+            .keys()
+            .chain(source.local_export_bindings.keys())
+            .chain(source.star_exports.keys())
+            .filter(|name| name.as_str() != Some("default"))
+            .cloned()
+            .collect();
+        let outcome = (|| {
+            for name in &names {
+                if self.module_state.modules[&specifier]
+                    .local_export_bindings
+                    .contains_key(name)
+                {
+                    continue;
+                }
+                match self.resolve_module_export(&specifier, name)? {
+                    ModuleExportResolution::Resolved(identity) => {
+                        self.module_state
+                            .modules
+                            .get_mut(&specifier)
+                            .expect("current module exists")
+                            .star_exports
+                            .insert(name.clone(), StarExportOrigin::Provided);
+                        if self.resolve_module_export(&source_specifier, name)?
+                            == ModuleExportResolution::Resolved(identity)
+                        {
+                            let value = self.module_state.modules[&source_specifier]
+                                .exports
+                                .get(name);
+                            let bytes = value.map(Self::estimate_value_bytes).unwrap_or(0);
+                            self.json_reserve_temporary(bytes)?;
+                            let value = self.module_state.modules[&source_specifier]
+                                .exports
+                                .get(name)
+                                .cloned();
+                            let result = if let Some(value) = value {
+                                self.publish_module_export(
+                                    &specifier,
+                                    name.clone(),
+                                    value,
+                                    label.clone(),
+                                    ExportPublication::Star,
+                                )
+                            } else {
+                                Ok(())
+                            };
+                            self.json_release_temporary(bytes);
+                            result?;
+                        }
+                    }
+                    ModuleExportResolution::Missing | ModuleExportResolution::Ambiguous => {
+                        self.withdraw_unresolved_module_export(&specifier, name)?;
+                    }
+                }
+            }
+            Ok(Value::Undefined)
+        })();
+        drop(names);
+        self.json_release_temporary(names_bytes);
+        outcome
+    }
+
+    fn module_export_dependents(
+        &self,
+        specifier: &str,
+        name: &JsString,
+    ) -> Result<ModuleExportDependents, InterpreterError> {
+        let record = &self.module_state.modules[specifier];
+        let watchers = record
+            .import_bindings
+            .get(name)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let mut bytes = (watchers.len() as u64)
+            .saturating_mul(std::mem::size_of::<Rc<RefCell<ScopeBindingState>>>() as u64)
+            .saturating_mul(3);
+        if name.as_str() != Some("default") {
+            for target in &record.star_reexporters {
+                bytes = bytes.saturating_add(Self::module_export_key_bytes(target, name));
+            }
+        }
+        for cell in watchers.iter().filter_map(Weak::upgrade) {
+            let state = cell
+                .try_borrow()
+                .map_err(|_| InterpreterError::InternalError {
+                    details: "module import binding is already mutably borrowed".to_string(),
+                })?;
+            if let Some(index) = state.live_export
+                && let Some(entry) = self.module_state.live_exports.get(index.get() as usize - 1)
+                && Rc::ptr_eq(&entry.cell, &cell)
+            {
+                for (target, name) in &entry.exports {
+                    bytes = bytes.saturating_add(Self::module_export_key_bytes(target, name));
                 }
             }
         }
-        Ok(Value::Undefined)
+        self.check_temporary_memory_budget(bytes)?;
+        let cells: Vec<_> = watchers.iter().filter_map(Weak::upgrade).collect();
+        let mut successors = Vec::new();
+        if name.as_str() != Some("default") {
+            successors.extend(
+                record
+                    .star_reexporters
+                    .iter()
+                    .map(|target| (target.clone(), name.clone())),
+            );
+        }
+        for cell in &cells {
+            let state = cell
+                .try_borrow()
+                .map_err(|_| InterpreterError::InternalError {
+                    details: "module import binding is already mutably borrowed".to_string(),
+                })?;
+            if let Some(index) = state.live_export
+                && let Some(entry) = self.module_state.live_exports.get(index.get() as usize - 1)
+                && Rc::ptr_eq(&entry.cell, cell)
+            {
+                successors.extend(entry.exports.iter().cloned());
+            }
+        }
+        Ok(ModuleExportDependents {
+            cells,
+            successors,
+            temporary_bytes: bytes,
+        })
     }
 
-    /// Remove a star-provided export that a second star source contradicts.
-    pub(super) fn withdraw_ambiguous_star_export(
+    /// An ambiguity can be discovered after a cyclic dependent copied a
+    /// provisional export. Withdraw namespace properties and invalidate its
+    /// import cells all the way through star and named re-export paths.
+    fn withdraw_unresolved_module_export(
         &mut self,
         specifier: &str,
         name: &JsString,
     ) -> Result<(), InterpreterError> {
-        let record = self
-            .module_state
-            .modules
-            .get_mut(specifier)
-            .ok_or_else(|| InterpreterError::ExportOutsideModule {
-                name: name.to_string(),
-            })?;
-        record
-            .star_exports
-            .insert(name.clone(), StarExportOrigin::Ambiguous);
-        let namespace_object = record.namespace_object;
-        let Some(previous) = record.exports.remove(name) else {
-            return Ok(());
-        };
-        let previous_bytes = Self::estimate_js_string_map_entry_bytes(name, &previous);
-        self.remove_object_runtime_property(
-            namespace_object,
-            &RuntimePropertyKey::String(name.clone()),
-        )?;
-        self.apply_memory_component_delta(previous_bytes, 0)
-            .map(|_| ())
+        let mut walk = ModuleExportWalk::default();
+        let outcome = (|| {
+            self.queue_module_export_walk(&mut walk, specifier, name)?;
+            while let Some(key) = walk.pending.pop_first() {
+                let key_bytes = Self::module_export_key_bytes(&key.0, &key.1);
+                let result = (|| {
+                    let resolution = self.resolve_module_export(&key.0, &key.1)?;
+                    if matches!(resolution, ModuleExportResolution::Resolved(_)) {
+                        return Ok(());
+                    }
+                    let ModuleExportDependents {
+                        cells,
+                        successors,
+                        temporary_bytes: bytes,
+                    } = self.module_export_dependents(&key.0, &key.1)?;
+                    self.json_reserve_temporary(bytes)?;
+                    let result = (|| {
+                        let mut states = cells
+                            .iter()
+                            .map(|cell| {
+                                cell.try_borrow_mut()
+                                    .map_err(|_| InterpreterError::InternalError {
+                                        details: "module import binding is already borrowed"
+                                            .to_string(),
+                                    })
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
+                        let record = &self.module_state.modules[&key.0];
+                        let namespace = record.namespace_object;
+                        let previous_bytes = record
+                            .exports
+                            .get(&key.1)
+                            .map(|value| Self::estimate_js_string_map_entry_bytes(&key.1, value))
+                            .unwrap_or(0);
+                        self.remove_object_runtime_property(
+                            namespace,
+                            &RuntimePropertyKey::String(key.1.clone()),
+                        )?;
+                        self.apply_memory_component_delta(previous_bytes, 0)?;
+                        let record = self
+                            .module_state
+                            .modules
+                            .get_mut(&key.0)
+                            .expect("module still exists");
+                        record.exports.remove(&key.1);
+                        if !record.local_export_bindings.contains_key(&key.1) {
+                            if resolution == ModuleExportResolution::Ambiguous {
+                                record
+                                    .star_exports
+                                    .insert(key.1.clone(), StarExportOrigin::Ambiguous);
+                            } else {
+                                record.star_exports.remove(&key.1);
+                            }
+                        }
+                        for state in &mut states {
+                            state.initialized = false;
+                        }
+                        drop(states);
+                        for cell in &cells {
+                            self.closures.refresh_cell(cell);
+                        }
+                        for (target, name) in &successors {
+                            self.queue_module_export_walk(&mut walk, target, name)?;
+                        }
+                        Ok(())
+                    })();
+                    drop(cells);
+                    drop(successors);
+                    self.json_release_temporary(bytes);
+                    result
+                })();
+                drop(key);
+                walk.temporary_bytes = walk.temporary_bytes.saturating_sub(key_bytes);
+                self.json_release_temporary(key_bytes);
+                result?;
+            }
+            Ok(())
+        })();
+        let temporary_bytes = walk.temporary_bytes;
+        drop(walk);
+        self.json_release_temporary(temporary_bytes);
+        outcome
     }
 
     pub(super) fn complete_return(
@@ -6795,12 +7407,12 @@ impl InterpreterCore {
                 self.resume_top_level_after_await(resumption_context, settled, label.clone())
             {
                 if self.entry_module_specifier.as_deref() == Some(specifier.as_str()) {
-                    self.replace_top_level_await_outcome(Err(error));
+                    self.record_resumed_entry_outcome(Err(error))?;
                 } else {
                     self.settle_imported_module_evaluation(&specifier, Err(error), label)?;
                 }
             } else {
-                self.continue_resumed_top_level(module, &specifier, label);
+                self.continue_resumed_top_level(module, &specifier, label)?;
             }
             return Ok(());
         }
@@ -6829,36 +7441,57 @@ impl InterpreterCore {
             (owner_module, suspended_execution)
         };
 
-        let caller_execution = self.snapshot_module_execution()?;
-        self.restore_module_execution(suspended_execution, true);
-        let resume_result =
-            self.resume_top_level_after_await(resumption_context, settled, label.clone());
-        if let Err(error) = resume_result {
-            self.settle_imported_module_evaluation(&specifier, Err(error), label.clone())?;
-        } else {
-            self.continue_resumed_top_level(Some(owner_module.as_ref()), &specifier, label.clone());
-        }
-
-        let still_suspended = self
-            .top_level_await_resumption_contexts
-            .values()
-            .any(|context| context.module_specifier == specifier);
-        let parked_execution = if still_suspended {
-            Some(self.snapshot_module_execution()?)
-        } else {
-            None
+        let caller_execution = match self.snapshot_module_execution() {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                // Admission ran no guest code. Put the owned activation back
+                // so its roots and snapshot charge retain the same owner.
+                self.module_state
+                    .modules
+                    .get_mut(&specifier)
+                    .expect("validated parked module remains present during snapshot admission")
+                    .async_execution = Some(suspended_execution);
+                return Err(error);
+            }
         };
+        self.restore_module_execution(suspended_execution, true);
+        // No fallible continuation work may return before restoring the
+        // caller. This includes retaining/rejecting an exception and parking
+        // an activation that suspended again.
+        let resumed = (|| -> Result<Option<ModuleExecutionSnapshot>, InterpreterError> {
+            match self.resume_top_level_after_await(resumption_context, settled, label.clone()) {
+                Err(error) => {
+                    self.settle_imported_module_evaluation(&specifier, Err(error), label.clone())?;
+                }
+                Ok(()) => {
+                    self.continue_resumed_top_level(
+                        Some(owner_module.as_ref()),
+                        &specifier,
+                        label.clone(),
+                    )?;
+                }
+            }
+            if self
+                .top_level_await_resumption_contexts
+                .values()
+                .any(|context| context.module_specifier == specifier)
+            {
+                self.snapshot_module_execution().map(Some)
+            } else {
+                Ok(None)
+            }
+        })();
         self.restore_module_execution(caller_execution, true);
+        let parked_execution = resumed?;
         if let Some(execution) = parked_execution {
-            let record = self
-                .module_state
-                .modules
-                .get_mut(&specifier)
-                .ok_or_else(|| InterpreterError::ModuleEvaluationFailed {
+            let Some(record) = self.module_state.modules.get_mut(&specifier) else {
+                self.discard_module_execution_snapshot(execution);
+                return Err(InterpreterError::ModuleEvaluationFailed {
                     specifier: specifier.clone(),
                     reason: "async module record disappeared while re-parking continuation"
                         .to_string(),
-                })?;
+                });
+            };
             record.status = ModuleRuntimeStatus::AsyncEvaluating;
             record.async_execution = Some(execution);
         }
@@ -6885,12 +7518,40 @@ impl InterpreterCore {
                 let _ = self.raise_await_rejection_with_label(error_value, label)?;
             }
             (ModuleAwaitContinuation::Dependency { .. }, Ok(_)) => {}
-            (ModuleAwaitContinuation::Dependency { specifier }, Err(reason)) => {
-                return Err(InterpreterError::ModuleEvaluationFailed {
-                    specifier,
-                    reason: format!("async dependency rejected: {reason:?}"),
+            (ModuleAwaitContinuation::Dependency { .. }, Err(reason)) => {
+                // Static dependency failures abort the importing module; they
+                // do not enter its guest catch handlers or replace the value
+                // with a description of the rejected Promise.
+                let value = self.js_value_to_value(&reason);
+                self.rearm_nested_module_throw(Some((value, label)))?;
+                return Err(InterpreterError::UncaughtException {
+                    value: "async module dependency rejected".to_string(),
                 });
             }
+        }
+        Ok(())
+    }
+
+    /// Store an entry module's guest completion, but stop the current
+    /// checkpoint immediately for resource, cancellation, or policy failures.
+    pub(super) fn record_resumed_entry_outcome(
+        &mut self,
+        outcome: Result<LabeledReturn, InterpreterError>,
+    ) -> Result<(), InterpreterError> {
+        if outcome.as_ref().is_err_and(Self::stops_guest_execution) {
+            return outcome.map(|_| ());
+        }
+        self.replace_top_level_await_outcome(outcome);
+        // Retaining the completion can itself exceed the memory budget.
+        if self
+            .top_level_await_outcome
+            .as_ref()
+            .is_some_and(|outcome| outcome.as_ref().is_err_and(Self::stops_guest_execution))
+        {
+            return self
+                .take_top_level_await_outcome()
+                .expect("terminal top-level outcome was just observed")
+                .map(|_| ());
         }
         Ok(())
     }
@@ -6900,7 +7561,7 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
         module_specifier: &str,
         settlement_label: Label,
-    ) {
+    ) -> Result<(), InterpreterError> {
         let outcome = match module {
             Some(module) => self.run_loop_labeled(module),
             None => Err(InterpreterError::TypeError {
@@ -6913,31 +7574,24 @@ impl InterpreterCore {
             .top_level_await_resumption_contexts
             .values()
             .any(|context| context.module_specifier == module_specifier);
-        if !module_still_suspended {
-            let outcome = match outcome {
+        if module_still_suspended && outcome.is_ok() {
+            return Ok(());
+        }
+        let outcome = if module_still_suspended {
+            outcome
+        } else {
+            match outcome {
                 Err(InterpreterError::Halted) => self.read_reg(0).map(|value| {
                     let label = self.get_register_label(0).cloned().unwrap_or(Label::Public);
                     LabeledReturn { value, label }
                 }),
                 other => other,
-            };
-            if self.entry_module_specifier.as_deref() == Some(module_specifier) {
-                self.replace_top_level_await_outcome(outcome);
-            } else if let Err(error) =
-                self.settle_imported_module_evaluation(module_specifier, outcome, settlement_label)
-            {
-                self.replace_top_level_await_outcome(Err(error));
             }
-        } else if let Err(error) = outcome {
-            if self.entry_module_specifier.as_deref() == Some(module_specifier) {
-                self.replace_top_level_await_outcome(Err(error));
-            } else if let Err(settlement_error) = self.settle_imported_module_evaluation(
-                module_specifier,
-                Err(error),
-                settlement_label,
-            ) {
-                self.replace_top_level_await_outcome(Err(settlement_error));
-            }
+        };
+        if self.entry_module_specifier.as_deref() == Some(module_specifier) {
+            self.record_resumed_entry_outcome(outcome)
+        } else {
+            self.settle_imported_module_evaluation(module_specifier, outcome, settlement_label)
         }
     }
 
@@ -6956,6 +7610,7 @@ impl InterpreterCore {
                 specifier: specifier.to_string(),
                 reason: "async module completion has no evaluation Promise".to_string(),
             })?;
+        let outcome = self.materialize_module_guest_exception(outcome);
         match outcome {
             Ok(_) => {
                 // Static importers ignore the fulfillment value; an `import()`
@@ -6970,12 +7625,20 @@ impl InterpreterCore {
                 self.fulfill_promise(evaluation_promise, namespace, label)
             }
             Err(error) => {
-                let reason = Self::promise_rejection_from_error(&error);
                 if let Some(record) = self.module_state.modules.get_mut(specifier) {
                     record.status = ModuleRuntimeStatus::Failed(error.to_string());
                     record.async_execution = None;
                 }
-                self.reject_promise(evaluation_promise, reason, label)
+                if matches!(&error, InterpreterError::UncaughtException { .. })
+                    && self.pending_exception.is_some()
+                {
+                    // Cache the same effective provenance as the first
+                    // rejection, including its async settlement context.
+                    self.join_pending_exception_label(&label)?;
+                    self.cache_pending_module_exception(specifier)?;
+                }
+                let (reason, rejection_label) = self.dynamic_import_rejection(error, &label)?;
+                self.reject_promise(evaluation_promise, reason, rejection_label)
             }
         }
     }
@@ -8014,10 +8677,36 @@ impl InterpreterCore {
                 action: "challenge".to_string(),
                 reason: Some(token.token),
             }),
-            HookAction::Sandbox => Err(InterpreterError::ContainmentActionRequested {
-                action: "sandbox".to_string(),
-                reason: None,
-            }),
+            HookAction::Sandbox => {
+                if self.active_sandbox.get().is_none() {
+                    let configured_ceiling = self.config.sandbox_policy.max_memory_bytes;
+                    let memory_ceiling_bytes = if configured_ceiling == 0 {
+                        self.sandbox_memory_usage()
+                    } else {
+                        configured_ceiling
+                    }
+                    .min(self.config.max_total_memory_bytes);
+                    self.active_sandbox.set(Some(ActiveSandbox {
+                        memory_ceiling_bytes,
+                        instruction_index: self.ip as u32,
+                        timestamp_tick: self.instructions_executed,
+                    }));
+                    self.sandbox_witness_pending.set(true);
+                }
+                // A tighter policy may already be below the live footprint.
+                // Install it first, then stop before the triggering operation;
+                // subsequent Allow decisions must not undo the restriction.
+                if self.sandbox_memory_usage()
+                    > self
+                        .active_sandbox
+                        .get()
+                        .expect("sandbox activated")
+                        .memory_ceiling_bytes
+                {
+                    return Err(Self::sandbox_interruption());
+                }
+                Ok(())
+            }
             HookAction::Suspend => Err(InterpreterError::ContainmentActionRequested {
                 action: "suspend".to_string(),
                 reason: None,
@@ -8033,132 +8722,48 @@ impl InterpreterCore {
         }
     }
 
-    /// Handle containment action enforcement with proper state management and evidence emission.
-    /// This replaces the simple error-throwing approach of enforce_hook_action with actual
-    /// containment behaviors as required by RC-4.3.
-    #[allow(dead_code)]
-    pub(super) fn handle_containment_action(
-        &mut self,
-        action: HookAction,
-    ) -> Result<(), InterpreterError> {
-        match action {
-            HookAction::Allow => Ok(()),
-            HookAction::Challenge(ref token) => {
-                // Pause execution, emit challenge token, require resolution before continuing
-                self.pending_challenges.push(token.clone());
-                self.emit_containment_evidence(&action);
-                Err(InterpreterError::ContainmentActionRequested {
-                    action: "challenge".to_string(),
-                    reason: Some(token.token.clone()),
-                })
-            }
-            HookAction::Sandbox => {
-                // Restrict extension's capability set (no more network/fs access)
-                self.sandboxed = true;
-                self.emit_containment_evidence(&action);
-                // Sandbox doesn't stop execution, just restricts future capabilities
-                Ok(())
-            }
-            HookAction::Suspend => {
-                // Pause extension execution, preserve state, can be resumed by operator
-                self.suspended = true;
-                self.emit_containment_evidence(&action);
-                Ok(())
-            }
-            HookAction::Terminate(ref reason) => {
-                // Abort extension execution, clean up resources, emit termination receipt
-                self.emit_containment_evidence(&action);
-                Err(InterpreterError::Terminated {
-                    reason: reason.clone(),
-                })
-            }
-            HookAction::Quarantine(ref reason) => {
-                // Terminate + mark extension for fleet-wide quarantine propagation
-                self.quarantined = true;
-                self.emit_containment_evidence(&action);
-                Err(InterpreterError::Terminated {
-                    reason: reason.clone(),
-                })
-            }
+    pub(super) fn sandbox_interruption() -> InterpreterError {
+        InterpreterError::ContainmentActionRequested {
+            action: "sandbox".to_string(),
+            reason: None,
         }
     }
 
-    /// Emit evidence record for containment actions taken.
-    /// Creates a signed evidence record and decision receipt that can be verified later.
-    #[allow(dead_code)]
-    pub(super) fn emit_containment_evidence(&mut self, action: &HookAction) {
-        // Create decision receipt for signed evidence chain
-        let (operation_type, action_taken, risk_score) = match action {
-            HookAction::Allow => ("allow".to_string(), "allow".to_string(), 0),
-            HookAction::Challenge(token) => (
-                "challenge".to_string(),
-                format!("challenge:{}", token.token),
-                150_000,
-            ),
-            HookAction::Sandbox => ("sandbox".to_string(), "sandbox".to_string(), 300_000),
-            HookAction::Suspend => ("suspend".to_string(), "suspend".to_string(), 600_000),
-            HookAction::Terminate(reason) => (
-                "terminate".to_string(),
-                format!("terminate:{}", reason),
-                900_000,
-            ),
-            HookAction::Quarantine(reason) => (
-                "quarantine".to_string(),
-                format!("quarantine:{}", reason),
-                950_000,
-            ),
-        };
+    /// Cached/pruned grants and generated-code grant restoration only describe
+    /// the original authority. A live sandbox is an independent intersection.
+    pub(super) fn sandbox_allows_hostcall(&self, tag: &str) -> bool {
+        self.active_sandbox.get().is_none()
+            || match classify_hostcall_capability(tag) {
+                HostcallCapabilityClass::InternalAllowed => true,
+                HostcallCapabilityClass::Runtime(capability) => self
+                    .config
+                    .sandbox_policy
+                    .allows_runtime_capability(capability),
+                HostcallCapabilityClass::Unknown => false,
+            }
+    }
 
-        // Add decision receipt to the evidence chain. The timestamp is the
-        // interpreter's deterministic instruction counter (bd-jn3uv.1) so
-        // the receipt-chain HMAC preimage round-trips across replays.
-        self.decision_receipts.add_receipt(
-            self.config
-                .extension_id
-                .clone()
-                .unwrap_or_else(|| "extension:current".to_string()),
-            operation_type,
-            risk_score,
-            action_taken,
-            self.ip,
-            &self.registers,
-            self.instructions_executed,
+    /// Instruction hooks use an immutable core borrow. Flush their activation
+    /// before the next recorded event, preserving the original logical tick.
+    /// Actual risk and signatures belong to the live guardplane report; this
+    /// witness commits only to the policy that the interpreter applied.
+    pub(super) fn flush_sandbox_witness(&mut self) {
+        if !self.sandbox_witness_pending.replace(false) {
+            return;
+        }
+        let sandbox = self.active_sandbox.get().expect("pending active sandbox");
+        let payload = format!(
+            "sandbox_v1:{}:{}",
+            self.config.sandbox_policy.content_hash().to_hex(),
+            sandbox.memory_ceiling_bytes,
         );
-
-        // Create witness event with current structure
-        let payload_data = serde_json::json!({
-            "action": match action {
-                HookAction::Allow => "allow",
-                HookAction::Challenge(_) => "challenge",
-                HookAction::Sandbox => "sandbox",
-                HookAction::Suspend => "suspend",
-                HookAction::Terminate(_) => "terminate",
-                HookAction::Quarantine(_) => "quarantine",
-            },
-            "reason": match action {
-                HookAction::Challenge(token) => Some(token.token.clone()),
-                HookAction::Terminate(reason) => Some(reason.clone()),
-                HookAction::Quarantine(reason) => Some(reason.clone()),
-                _ => None,
-            },
-            "suspended": self.suspended,
-            "sandboxed": self.sandboxed,
-            "quarantined": self.quarantined,
-        });
-        let payload_bytes = serde_json::to_vec(&payload_data).unwrap_or_default();
-        let evidence = WitnessEvent {
+        self.witness_events.push(WitnessEvent {
             seq: self.witness_seq,
             kind: WitnessEventKind::ContainmentAction,
-            instruction_index: self.ip as u32,
-            payload_hash: ContentHash::compute(&payload_bytes),
-            // Logical tick, NOT wall-clock: timestamp_tick participates in the
-            // canonical IR4 witness encoding, so wall-clock here breaks replay
-            // identity for any execution that records a containment action.
-            timestamp_tick: self.instructions_executed,
-        };
-
-        self.containment_evidence.push(evidence.clone());
-        self.witness_events.push(evidence);
+            instruction_index: sandbox.instruction_index,
+            payload_hash: ContentHash::compute(payload.as_bytes()),
+            timestamp_tick: sandbox.timestamp_tick,
+        });
         self.witness_seq = self.witness_seq.saturating_add(1);
     }
 
@@ -8666,23 +9271,23 @@ impl InterpreterCore {
         kind: AllocKind,
         size_hint: usize,
     ) -> Result<(), InterpreterError> {
-        // Engine-internal prepare-phase allocations are exempt: no extension
+        // Engine-internal prepare-phase allocations are exempt from hooks: no extension
         // instruction has executed yet, so there is nothing for a containment
         // policy to attribute (bd-gug3l). Mid-execution module allocations
         // (dynamic import / require) still run the hook — this flag is only
         // set inside prepare_execution.
-        if self.preparing_execution {
-            return Ok(());
+        // A sandbox carried across a seed/repeat reset still applies during
+        // preparation; the exemption cannot revive allocation authority.
+        if !self.preparing_execution
+            && let Some(hook) = self
+                .hook
+                .as_ref()
+                .filter(|hook| hook.instruction_hooks_enabled())
+        {
+            let ctx = self.hook_context(module);
+            self.enforce_hook_action(hook.pre_allocation(&ctx, kind, size_hint))?;
         }
-        let Some(hook) = self
-            .hook
-            .as_ref()
-            .filter(|hook| hook.instruction_hooks_enabled())
-        else {
-            return Ok(());
-        };
-        let ctx = self.hook_context(module);
-        self.enforce_hook_action(hook.pre_allocation(&ctx, kind, size_hint))
+        self.ensure_heap_allocation_allowed()
     }
 
     pub(super) fn run_pre_import_hook(
@@ -8690,15 +9295,20 @@ impl InterpreterCore {
         module: &Ir3Module,
         specifier: &str,
     ) -> Result<(), InterpreterError> {
-        let Some(hook) = self
+        if let Some(hook) = self
             .hook
             .as_ref()
             .filter(|hook| hook.instruction_hooks_enabled())
-        else {
-            return Ok(());
-        };
-        let ctx = self.hook_context(module);
-        self.enforce_hook_action(hook.pre_import(&ctx, specifier))
+        {
+            let ctx = self.hook_context(module);
+            self.enforce_hook_action(hook.pre_import(&ctx, specifier))?;
+        }
+        // The import hook runs after the outer HostCall gate. Recheck the
+        // narrowed authority before resolver/provider work or cache access.
+        if !self.sandbox_allows_hostcall("module:import") {
+            return Err(Self::sandbox_interruption());
+        }
+        Ok(())
     }
 
     pub(super) fn generator_result_object(
@@ -13256,46 +13866,88 @@ impl InterpreterCore {
                 Ir3Instruction::ExportBinding {
                     name_pool_index,
                     src,
+                    local_name_pool_index,
+                    namespace_reexport,
                 } => {
-                    let name = module
+                    let export_name = module
                         .constant_pool
                         .get(name_pool_index as usize)
-                        .map(ToString::to_string)
-                        .unwrap_or_else(|| format!("__export_{name_pool_index}"));
-                    let value = self.read_reg(src)?;
-                    let label = self.get_register_label(src)?.clone();
-                    let export_name = JsString::from(name);
-                    self.register_module_export_exact_labeled(export_name.clone(), value, label)?;
-                    // bd-1lsy.4.10.1: the export of a scope-resident module
-                    // binding (read, or initialized, just before) stays live:
-                    // later writes to that binding republish it.
-                    let local = match self
-                        .ip
-                        .checked_sub(1)
-                        .and_then(|read| module.instructions.get(read))
-                    {
-                        Some(Ir3Instruction::LoadScoped {
-                            dst,
-                            name_pool_index,
-                        }) if *dst == src => Some(*name_pool_index),
-                        Some(Ir3Instruction::InitBinding {
-                            name_pool_index,
-                            src: initialized,
-                        }) if *initialized == src => Some(*name_pool_index),
-                        _ => None,
-                    };
-                    if let Some(local) = local
-                        && let Some(specifier) = self.current_module_specifier.clone()
-                    {
-                        let local = Self::scoped_constant_name(module, local);
-                        let cell = self
-                            .scope_chain
-                            .resolve(local.as_ref())
-                            .map(|(_, binding)| Rc::clone(&binding.state));
-                        if let Some(cell) = cell {
-                            self.track_live_export(&cell, specifier, export_name)?;
+                        .cloned()
+                        .unwrap_or_else(|| JsString::from(format!("__export_{name_pool_index}")));
+                    let mut value = self.read_reg(src)?;
+                    let mut label = self.get_register_label(src)?.clone();
+                    let local = Self::module_export_local_name(module, local_name_pool_index)?;
+                    let binding = local
+                        .as_ref()
+                        .map(|local| {
+                            self.scope_chain
+                                .resolve(&local.to_string())
+                                .map(|(_, binding)| binding.clone())
+                                .ok_or_else(|| InterpreterError::InternalError {
+                                    details: "module export's linked local binding is missing"
+                                        .to_string(),
+                                })
+                        })
+                        .transpose()?;
+                    if let Some(binding) = &binding {
+                        let state = binding.snapshot_state()?;
+                        if state.initialized {
+                            value = state.value;
+                            label =
+                                self.join_owned_label_with_temporary_budget(label, &state.label)?;
                         }
                     }
+                    if let Some(specifier) = self.current_module_specifier.clone() {
+                        self.declare_module_export_binding(
+                            &specifier,
+                            &export_name,
+                            local.clone(),
+                        )?;
+                        if let Some(binding) = &binding {
+                            self.track_live_export(
+                                &binding.state,
+                                specifier.clone(),
+                                export_name.clone(),
+                            )?;
+                            if !binding.state()?.initialized {
+                                // An export clause names its still-uninitialized
+                                // binding without reading it; it does not
+                                // publish a synthetic undefined value.
+                                self.ip += 1;
+                                continue;
+                            }
+                        }
+                        if namespace_reexport {
+                            let local =
+                                local
+                                    .clone()
+                                    .ok_or_else(|| InterpreterError::InternalError {
+                                        details: "namespace reexport has no local binding linkage"
+                                            .to_string(),
+                                    })?;
+                            let source = match &value {
+                                Value::Object(namespace) => self
+                                    .module_state
+                                    .modules
+                                    .iter()
+                                    .find(|(_, record)| record.namespace_object == *namespace)
+                                    .map(|(source, _)| source.clone()),
+                                _ => None,
+                            }
+                            .ok_or_else(|| {
+                                InterpreterError::TypeError {
+                                    expected: "module namespace for namespace reexport".to_string(),
+                                    got: value.type_name().to_string(),
+                                }
+                            })?;
+                            self.record_module_import_origin(
+                                &specifier,
+                                local,
+                                ModuleImportOrigin::Namespace { specifier: source },
+                            )?;
+                        }
+                    }
+                    self.register_module_export_exact_labeled(export_name.clone(), value, label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::GetProperty { obj, key, dst } => {
@@ -17111,16 +17763,6 @@ impl InterpreterCore {
                             return Err(err);
                         }
                     }
-                    // bd-1lsy.4.10.1: a module binding that backs exports is
-                    // initialized by its declaration (`export var v = 2` after
-                    // the export was published undefined): republish it.
-                    if let Some((binding, _, _)) = previous.as_ref() {
-                        let live_export = binding.state()?.live_export;
-                        if let Some(live_export) = live_export {
-                            let cell = Rc::clone(&binding.state);
-                            self.publish_live_export(&cell, live_export)?;
-                        }
-                    }
                     // bd-1lsy.4.10.1: an import binding initialized from its
                     // namespace read (the instruction just before) watches that
                     // export, so every later publication writes it: the import
@@ -17129,16 +17771,62 @@ impl InterpreterCore {
                     // publication initializes the binding then.
                     if let Some((binding, _, _)) = previous.as_ref()
                         && binding.kind == BindingKind::Import
-                        && let Some(Ir3Instruction::GetProperty { obj, key, dst }) = self
+                    {
+                        let imported = match self
                             .ip
                             .checked_sub(1)
                             .and_then(|read| module.instructions.get(read))
-                        && *dst == src
-                        && let Value::Object(namespace_object) = self.read_reg(*obj)?
-                        && let Value::Str(export_name) = self.read_reg(*key)?
-                    {
-                        let cell = Rc::clone(&binding.state);
-                        self.watch_module_export(namespace_object, export_name, &cell)?;
+                        {
+                            Some(Ir3Instruction::GetProperty { obj, key, dst }) if *dst == src => {
+                                match (self.read_reg(*obj)?, self.read_reg(*key)?) {
+                                    (Value::Object(namespace), Value::Str(export_name)) => {
+                                        Some((namespace, export_name))
+                                    }
+                                    _ => None,
+                                }
+                            }
+                            _ => None,
+                        };
+                        if let Some((namespace, export_name)) = imported {
+                            let source = self
+                                .module_state
+                                .modules
+                                .iter()
+                                .find(|(_, record)| record.namespace_object == namespace)
+                                .map(|(specifier, _)| specifier.clone());
+                            if let Some(source) = source
+                                && let Some(importer) = self.current_module_specifier.clone()
+                            {
+                                let origin = ModuleImportOrigin::Binding {
+                                    specifier: source,
+                                    name: export_name.clone(),
+                                };
+                                self.record_module_import_origin(
+                                    &importer,
+                                    JsString::from(name.as_ref()),
+                                    origin,
+                                )?;
+                            }
+                            let cell = Rc::clone(&binding.state);
+                            self.watch_module_export(namespace, export_name, &cell)?;
+                        }
+                    }
+                    // Register the origin before republishing an initialized
+                    // imported binding: aliases must already resolve to their
+                    // source when a cyclic star dependent observes the write.
+                    if let Some((binding, _, _)) = previous.as_ref() {
+                        if let Some(specifier) = self.current_module_specifier.clone() {
+                            self.link_module_binding_exports(
+                                &specifier,
+                                &JsString::from(name.as_ref()),
+                                &binding.state,
+                            )?;
+                        }
+                        let live_export = binding.state()?.live_export;
+                        if let Some(live_export) = live_export {
+                            let cell = Rc::clone(&binding.state);
+                            self.publish_live_export(&cell, live_export)?;
+                        }
                     }
                     self.ip += 1;
                 }

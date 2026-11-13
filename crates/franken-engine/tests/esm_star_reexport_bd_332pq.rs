@@ -2,7 +2,8 @@
 
 //! `export * from m` and `export * as ns from m` (bd-332pq) through the
 //! shipped module pipeline: real files under a module root, executed on both
-//! lanes. Expected lines are Node v22.2.0's output for the same file trees.
+//! lanes. Original fixtures use Node v22.2.0; binding-identity regressions use
+//! Node v24.22.1, except the explicitly documented direct namespace diamond.
 
 use std::path::Path;
 
@@ -171,6 +172,425 @@ fn diamond_is_not_ambiguous() {
             ),
         ],
         &["1"],
+    );
+}
+
+/// Distinct bindings are ambiguous even when their initial values compare
+/// equal, including NaN and two locals holding the same object reference.
+#[test]
+fn equal_values_do_not_merge_distinct_star_bindings() {
+    assert_output(
+        &[
+            ("lib/shared.mjs", "export const token = {};"),
+            (
+                "lib/left.mjs",
+                "import { token } from './shared.mjs'; export let same = 1; export const nan = NaN; export const zero = 0; export const object = token; export function left() { same = 2; }",
+            ),
+            (
+                "lib/right.mjs",
+                "import { token } from './shared.mjs'; export let same = 1; export const nan = NaN; export const zero = 0; export const object = token; export function right() { same = 3; }",
+            ),
+            (
+                "lib/index.mjs",
+                "export * from './left.mjs'; export * from './right.mjs';",
+            ),
+            (
+                "app.mjs",
+                "import * as ns from './lib/index.mjs'; console.log('same' in ns, 'nan' in ns, 'zero' in ns, 'object' in ns); ns.left(); ns.right(); console.log('same' in ns, Object.keys(ns).sort().join(','));",
+            ),
+        ],
+        &["false false false false", "false left,right"],
+    );
+}
+
+/// Both renamed exports ultimately denote the same local cell. A named
+/// re-export and an imported-then-exported alias preserve that identity.
+#[test]
+fn renamed_diamond_preserves_one_binding_and_live_updates() {
+    assert_output(
+        &[
+            (
+                "lib/source.mjs",
+                "let count = 1; export { count as first, count as second }; export function bump() { count++; }",
+            ),
+            (
+                "lib/left.mjs",
+                "export { first as shared, bump } from './source.mjs';",
+            ),
+            (
+                "lib/right.mjs",
+                "import { second } from './source.mjs'; export { second as shared }; export { bump } from './source.mjs';",
+            ),
+            (
+                "lib/index.mjs",
+                "export * from './left.mjs'; export * from './right.mjs';",
+            ),
+            (
+                "app.mjs",
+                "import { shared, bump } from './lib/index.mjs'; import * as ns from './lib/index.mjs'; console.log(shared, ns.shared, Object.keys(ns).sort().join(',')); bump(); console.log(shared, ns.shared);",
+            ),
+        ],
+        &["1 1 bump,shared", "2 2"],
+    );
+}
+
+#[test]
+fn named_default_function_and_class_aliases_share_binding_identity() {
+    assert_output(
+        &[
+            (
+                "lib/function.mjs",
+                "export default function current() { return 1; } export { current as alias }; export function replace() { current = () => 2; }",
+            ),
+            (
+                "lib/class.mjs",
+                "export default class Item { value() { return 4; } } export { Item as alias };",
+            ),
+            (
+                "lib/left.mjs",
+                "export { default as callable, replace } from './function.mjs'; export { default as Type } from './class.mjs';",
+            ),
+            (
+                "lib/right.mjs",
+                "export { alias as callable, replace } from './function.mjs'; export { alias as Type } from './class.mjs';",
+            ),
+            (
+                "lib/index.mjs",
+                "export * from './left.mjs'; export * from './right.mjs';",
+            ),
+            (
+                "app.mjs",
+                "import { callable, replace, Type } from './lib/index.mjs'; console.log(callable(), new Type().value()); replace(); console.log(callable());",
+            ),
+        ],
+        &["1 4", "2"],
+    );
+}
+
+#[test]
+fn default_expression_and_local_export_are_distinct_bindings() {
+    assert_output(
+        &[
+            (
+                "lib/source.mjs",
+                "export let value = 1; export default value; export function bump() { value++; }",
+            ),
+            (
+                "lib/left.mjs",
+                "export { default as shared } from './source.mjs';",
+            ),
+            (
+                "lib/right.mjs",
+                "export { value as shared } from './source.mjs';",
+            ),
+            (
+                "lib/index.mjs",
+                "export * from './left.mjs'; export * from './right.mjs';",
+            ),
+            (
+                "app.mjs",
+                "import * as ns from './lib/index.mjs'; import { bump } from './lib/source.mjs'; console.log('shared' in ns); bump(); console.log('shared' in ns);",
+            ),
+        ],
+        &["false", "false"],
+    );
+}
+
+#[test]
+fn imported_alias_is_visible_before_its_later_export_clause() {
+    assert_output(
+        &[
+            (
+                "lib/source.mjs",
+                "export let value = 1; export function bump() { value++; }",
+            ),
+            (
+                "lib/bridge.mjs",
+                "import { value, bump } from './source.mjs'; import * as loop from './loop.mjs'; console.log('bridge', loop.alias); export { value as alias, bump };",
+            ),
+            ("lib/loop.mjs", "export * from './bridge.mjs';"),
+            (
+                "app.mjs",
+                "import { alias, bump } from './lib/bridge.mjs'; import * as loop from './lib/loop.mjs'; console.log(alias, loop.alias); bump(); console.log(alias, loop.alias);",
+            ),
+        ],
+        &["bridge 1", "1 1", "2 2"],
+    );
+}
+
+#[test]
+fn initialized_lexical_is_visible_before_its_later_export_clause() {
+    assert_output(
+        &[
+            (
+                "lib/source.mjs",
+                "import * as loop from './loop.mjs'; let value = 1; console.log(loop.alias); export { value as alias };",
+            ),
+            ("lib/loop.mjs", "export * from './source.mjs';"),
+            (
+                "app.mjs",
+                "import { alias } from './lib/source.mjs'; console.log(alias);",
+            ),
+        ],
+        &["1", "1"],
+    );
+}
+
+#[test]
+fn cyclic_named_alias_stays_uninitialized_until_source_initializes() {
+    assert_output(
+        &[
+            (
+                "lib/source.mjs",
+                "import { alias, read } from './bridge.mjs'; try { console.log(alias); } catch (error) { console.log(error.name); } export let value = 1; console.log(alias, read());",
+            ),
+            (
+                "lib/bridge.mjs",
+                "import { value } from './source.mjs'; export { value as alias }; export function read() { return value; }",
+            ),
+            (
+                "app.mjs",
+                "import { value } from './lib/source.mjs'; console.log(value);",
+            ),
+        ],
+        &["ReferenceError", "1 1", "1"],
+    );
+}
+
+#[test]
+fn export_ir_linkage_is_versioned_validated_and_hash_bound() {
+    use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore};
+    use frankenengine_engine::capability::RuntimeCapability;
+    use frankenengine_engine::hash_tiers::ContentHash;
+    use frankenengine_engine::ir_contract::{
+        CapabilityTag, Ir3Instruction, Ir3Module, IrErrorCode, IrSchemaVersion, RegRange,
+        verify_ir3_specialization,
+    };
+
+    let mut module = Ir3Module::new(ContentHash::compute(b"export-linkage"), "linkage.mjs");
+    module.constant_pool = vec!["exported".into(), "local".into()];
+    module.instructions = vec![
+        Ir3Instruction::LoadInt { dst: 0, value: 7 },
+        Ir3Instruction::ExportBinding {
+            name_pool_index: 0,
+            src: 0,
+            local_name_pool_index: None,
+            namespace_reexport: false,
+        },
+        Ir3Instruction::Halt,
+    ];
+    verify_ir3_specialization(&module).expect("current synthetic exports remain valid");
+    let synthetic_hash = module.content_hash();
+    if let Ir3Instruction::ExportBinding {
+        local_name_pool_index,
+        ..
+    } = &mut module.instructions[1]
+    {
+        *local_name_pool_index = Some(1);
+    }
+    let local_hash = module.content_hash();
+    assert_ne!(synthetic_hash, local_hash);
+    if let Ir3Instruction::ExportBinding {
+        namespace_reexport, ..
+    } = &mut module.instructions[1]
+    {
+        *namespace_reexport = true;
+    }
+    assert_ne!(local_hash, module.content_hash());
+    if let Ir3Instruction::ExportBinding {
+        local_name_pool_index,
+        ..
+    } = &mut module.instructions[1]
+    {
+        *local_name_pool_index = Some(99);
+    }
+    assert_eq!(
+        verify_ir3_specialization(&module).unwrap_err().code,
+        IrErrorCode::InvalidSpecializationLinkage
+    );
+
+    module.instructions[1] = Ir3Instruction::ExportBinding {
+        name_pool_index: 0,
+        src: 0,
+        local_name_pool_index: None,
+        namespace_reexport: false,
+    };
+    module.instructions.insert(
+        1,
+        Ir3Instruction::HostCall {
+            capability: CapabilityTag("console:log".to_string()),
+            args: RegRange { start: 0, count: 1 },
+            dst: 1,
+        },
+    );
+    let current_module = module.clone();
+    module.header.schema_version = IrSchemaVersion {
+        major: 0,
+        minor: 18,
+        patch: 0,
+    };
+    let error =
+        verify_ir3_specialization(&module).expect_err("old exports require regenerated linkage");
+    assert_eq!(error.code, IrErrorCode::SchemaVersionMismatch);
+    assert!(error.message.contains("regenerate or re-lower"));
+    for mut config in [
+        InterpreterConfig::quickjs_defaults(),
+        InterpreterConfig::v8_defaults(),
+    ] {
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+            RuntimeCapability::Console,
+        ]
+        .into_iter()
+        .collect();
+        let mut current = InterpreterCore::new(config.clone(), "current-export");
+        let result = current
+            .execute(&current_module)
+            .expect("current synthetic artifact actually executes");
+        assert_eq!(result.console_output.len(), 1);
+        assert_eq!(result.console_output[0].message, "7");
+        let mut core = InterpreterCore::new(config, "old-export");
+        let error = core
+            .execute(&module)
+            .expect_err("direct execution also rejects old exports");
+        assert!(error.to_string().contains("regenerate or re-lower"));
+        assert!(core.console_output().is_empty());
+    }
+    module.instructions = vec![Ir3Instruction::Halt];
+    verify_ir3_specialization(&module).expect("old non-export IR remains accepted");
+}
+
+/// Two direct namespace re-exports denote the same distinguished source
+/// namespace binding, even though each has a separate lowering temporary.
+/// This expectation follows ES2020 ResolveExport step 7.a.ii.2, which returns
+/// (importedModule, "*namespace*") for both paths:
+/// https://tc39.es/ecma262/2020/#sec-resolveexport
+/// Node v24.22.1 rejects this graph as ambiguous, so it is not this test's oracle.
+#[test]
+fn namespace_reexport_diamond_uses_source_namespace_identity() {
+    assert_output(
+        &[
+            (
+                "lib/source.mjs",
+                "export let value = 1; export function bump() { value++; }",
+            ),
+            ("lib/left.mjs", "export * as shared from './source.mjs';"),
+            ("lib/right.mjs", "export * as shared from './source.mjs';"),
+            (
+                "lib/index.mjs",
+                "export * from './left.mjs'; export * from './right.mjs';",
+            ),
+            (
+                "app.mjs",
+                "import { shared } from './lib/index.mjs'; import * as source from './lib/source.mjs'; console.log(shared === source, shared.value); source.bump(); console.log(shared.value);",
+            ),
+        ],
+        &["true 1", "2"],
+    );
+}
+
+/// Under the ES2020 module contract, an imported namespace re-export is a
+/// local binding. Its value equals a direct namespace re-export's value,
+/// but the two bindings must still conflict. (ES2026 changes this rule.)
+#[test]
+fn namespace_import_reexport_retains_local_binding_identity() {
+    assert_output(
+        &[
+            ("lib/source.mjs", "export const value = 1;"),
+            ("lib/left.mjs", "export * as shared from './source.mjs';"),
+            (
+                "lib/right.mjs",
+                "import * as namespace from './source.mjs'; export { namespace as shared };",
+            ),
+            (
+                "lib/index.mjs",
+                "export * from './left.mjs'; export * from './right.mjs';",
+            ),
+            (
+                "app.mjs",
+                "import * as index from './lib/index.mjs'; import { shared as left } from './lib/left.mjs'; import { shared as right } from './lib/right.mjs'; console.log(left === right, 'shared' in index);",
+            ),
+        ],
+        &["true false"],
+    );
+}
+
+/// An explicit indirect export wins over both star sources, independent of
+/// the declaration's source order and the sources' equal current values.
+#[test]
+fn explicit_named_reexport_shadows_ambiguous_star_sources() {
+    assert_output(
+        &[
+            ("lib/left.mjs", "export let value = 1;"),
+            ("lib/right.mjs", "export let value = 1;"),
+            (
+                "lib/owner.mjs",
+                "export let own = 7; export function bump() { own++; }",
+            ),
+            (
+                "lib/index.mjs",
+                "export * from './left.mjs'; export * from './right.mjs'; export { own as value, bump } from './owner.mjs';",
+            ),
+            (
+                "app.mjs",
+                "import { value, bump } from './lib/index.mjs'; console.log(value); bump(); console.log(value);",
+            ),
+        ],
+        &["7", "8"],
+    );
+}
+
+/// The cycle installs its star edge before the source lexical declaration
+/// runs. Initial publication and later mutation must both reach that edge.
+#[test]
+fn cyclic_star_reexport_discovers_late_lexical_binding() {
+    assert_output(
+        &[
+            (
+                "lib/source.mjs",
+                "import * as loop from './loop.mjs'; export let value = 1; export function bump() { value++; } export function readLoop() { return loop.value; }",
+            ),
+            ("lib/loop.mjs", "export * from './source.mjs';"),
+            (
+                "app.mjs",
+                "import { value, bump, readLoop } from './lib/source.mjs'; import * as loop from './lib/loop.mjs'; console.log(value, loop.value, readLoop()); bump(); console.log(value, loop.value, readLoop());",
+            ),
+        ],
+        &["1 1 1", "2 2 2"],
+    );
+}
+
+/// A later source makes a provisional name ambiguous. All downstream
+/// namespaces in a star cycle must withdraw it, including a second hop.
+#[test]
+fn star_ambiguity_withdraws_transitively_through_cycles() {
+    assert_output(
+        &[
+            (
+                "lib/left.mjs",
+                "export const duplicate = 1; export const left = 'left';",
+            ),
+            (
+                "lib/right.mjs",
+                "export const duplicate = 1; export const right = 'right';",
+            ),
+            (
+                "lib/index.mjs",
+                "export * from './left.mjs'; export * from './loop.mjs'; export * from './right.mjs';",
+            ),
+            (
+                "lib/loop.mjs",
+                "export * from './index.mjs'; export * from './tail.mjs';",
+            ),
+            ("lib/tail.mjs", "export * from './loop.mjs';"),
+            (
+                "app.mjs",
+                "import * as index from './lib/index.mjs'; import * as loop from './lib/loop.mjs'; import * as tail from './lib/tail.mjs'; console.log('duplicate' in index, 'duplicate' in loop, 'duplicate' in tail); console.log(Object.keys(index).sort().join(','), Object.keys(loop).sort().join(','), Object.keys(tail).sort().join(','));",
+            ),
+        ],
+        &["false false false", "left,right left,right left,right"],
     );
 }
 

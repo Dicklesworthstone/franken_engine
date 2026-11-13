@@ -11257,6 +11257,10 @@ fn weakmap_and_module_export_duplicates_are_atomic_and_exact_bd_zpn45() {
                 import_meta_object: None,
                 exports: BTreeMap::new(),
                 star_exports: BTreeMap::new(),
+                local_export_bindings: BTreeMap::new(),
+                local_binding_indices: BTreeMap::new(),
+                import_origins: BTreeMap::new(),
+                star_sources: BTreeSet::new(),
                 flow_label_ceiling: None,
                 resolved_source_hash: None,
                 import_bindings: BTreeMap::new(),
@@ -11264,6 +11268,7 @@ fn weakmap_and_module_export_duplicates_are_atomic_and_exact_bd_zpn45() {
                 cjs_module_object: None,
                 compiled_module: None,
                 evaluation_promise: None,
+                evaluation_exception: None,
                 async_execution: None,
             },
         );
@@ -13236,3 +13241,475 @@ fn spread_into_itself_uses_finite_pre_transaction_view_bd_kvq09() {
 
 #[path = "tests_async_runtime_part2.rs"]
 mod part2;
+
+#[test]
+fn cached_module_exception_preserves_value_label_and_memory_budget() {
+    let value = Value::str("cached module failure ".repeat(64));
+    let label = Label::Custom {
+        name: "module failure provenance ".repeat(16),
+        level: 3,
+    };
+    let fixture = || {
+        let mut core = test_interpreter();
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        core.ensure_module_record(&module, "failed.mjs")
+            .expect("module record");
+        core.replace_pending_abrupt_slots(Some((value.clone(), label.clone())), None)
+            .expect("original guest exception");
+        core.sync_estimated_memory_bytes().expect("fixture memory");
+        core
+    };
+    let mut probe = fixture();
+    let before = probe.estimated_memory_bytes();
+    probe
+        .cache_pending_module_exception("failed.mjs")
+        .expect("retain failure");
+    let growth = probe.estimated_memory_bytes() - before;
+    assert!(growth > 0);
+    assert_eq!(
+        probe.estimated_memory_bytes(),
+        probe.recompute_estimated_memory_bytes()
+    );
+
+    let mut limited = fixture();
+    limited.config.max_total_memory_bytes = before + growth - 1;
+    assert!(matches!(
+        limited.cache_pending_module_exception("failed.mjs"),
+        Err(InterpreterError::MemoryBudgetExceeded { .. })
+    ));
+    assert!(
+        limited.module_state.modules["failed.mjs"]
+            .evaluation_exception
+            .is_none()
+    );
+    assert_eq!(limited.pending_exception.as_ref(), Some(&value));
+    assert_eq!(limited.pending_exception_label, label);
+    assert_eq!(limited.estimated_memory_bytes(), before);
+    assert_eq!(
+        limited.estimated_memory_bytes(),
+        limited.recompute_estimated_memory_bytes()
+    );
+
+    limited.config.max_total_memory_bytes = before + growth;
+    limited
+        .cache_pending_module_exception("failed.mjs")
+        .expect("exact limit admits retained failure");
+    limited.clear_pending_exception_slot();
+    assert!(matches!(
+        limited.rethrow_cached_module_exception::<()>("failed.mjs"),
+        Err(InterpreterError::UncaughtException { .. })
+    ));
+    assert_eq!(limited.pending_exception.as_ref(), Some(&value));
+    assert_eq!(limited.pending_exception_label, label);
+    assert_eq!(limited.estimated_memory_bytes(), before + growth);
+    assert_eq!(
+        limited.estimated_memory_bytes(),
+        limited.recompute_estimated_memory_bytes()
+    );
+
+    let retained = limited.module_state.modules["failed.mjs"]
+        .evaluation_exception
+        .clone();
+    limited
+        .replace_pending_abrupt_slots(Some((Value::Int(99), Label::Public)), None)
+        .expect("unrelated later exception");
+    let unchanged = limited.estimated_memory_bytes();
+    limited
+        .cache_pending_module_exception("failed.mjs")
+        .expect("first module failure stays authoritative");
+    assert_eq!(
+        limited.module_state.modules["failed.mjs"].evaluation_exception,
+        retained
+    );
+    assert_eq!(limited.estimated_memory_bytes(), unchanged);
+    assert_eq!(
+        limited.estimated_memory_bytes(),
+        limited.recompute_estimated_memory_bytes()
+    );
+}
+
+#[test]
+fn absent_pending_exception_does_not_fabricate_a_cached_throw() {
+    let mut core = test_interpreter();
+    let module = test_module_with_functions(Vec::new(), Vec::new());
+    core.ensure_module_record(&module, "failed.mjs")
+        .expect("module record");
+    let before = core.estimated_memory_bytes();
+    core.cache_pending_module_exception("failed.mjs")
+        .expect("no guest throw");
+    assert!(
+        core.module_state.modules["failed.mjs"]
+            .evaluation_exception
+            .is_none()
+    );
+    assert_eq!(core.estimated_memory_bytes(), before);
+}
+
+#[test]
+fn async_module_failure_caches_the_joined_rejection_label() {
+    let mut core = test_interpreter();
+    let module = test_module_with_functions(Vec::new(), Vec::new());
+    core.ensure_module_record(&module, "failed.mjs")
+        .expect("module record");
+    let promise = core.create_promise().expect("evaluation promise");
+    core.module_state
+        .modules
+        .get_mut("failed.mjs")
+        .expect("module record")
+        .evaluation_promise = Some(promise);
+    let thrown = core
+        .alloc_object_with_prototype(None)
+        .expect("thrown object");
+    let value = Value::Object(thrown);
+    let settlement_label = Label::Custom {
+        name: "async settlement provenance".to_string(),
+        level: 3,
+    };
+    let expected_label = Label::Internal.join(&settlement_label);
+    core.replace_pending_abrupt_slots(Some((value.clone(), Label::Internal)), None)
+        .expect("original throw");
+    core.settle_imported_module_evaluation(
+        "failed.mjs",
+        Err(InterpreterError::UncaughtException {
+            value: "original".to_string(),
+        }),
+        settlement_label,
+    )
+    .expect("reject async module");
+
+    let record = core.promise_store.get(promise).expect("rejected promise");
+    let crate::promise_model::PromiseState::Rejected(reason) = &record.state else {
+        panic!("module promise was not rejected");
+    };
+    assert_eq!(core.js_value_to_value(reason), value);
+    assert_eq!(record.label, expected_label);
+    assert_eq!(
+        core.module_state.modules["failed.mjs"].evaluation_exception,
+        Some((value.clone(), expected_label.clone()))
+    );
+    assert!(core.pending_exception.is_none());
+    assert!(matches!(
+        core.rethrow_cached_module_exception::<()>("failed.mjs"),
+        Err(InterpreterError::UncaughtException { .. })
+    ));
+    assert_eq!(core.pending_exception, Some(value));
+    assert_eq!(core.pending_exception_label, expected_label);
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+}
+
+#[test]
+fn async_module_terminal_failures_are_not_guest_promise_rejections() {
+    for error in [
+        InterpreterError::Cancelled,
+        InterpreterError::BudgetExhausted {
+            executed: 11,
+            budget: 10,
+        },
+        InterpreterError::CapabilityDenied {
+            capability: "module_load".to_string(),
+        },
+    ] {
+        let mut core = test_interpreter();
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        core.ensure_module_record(&module, "failed.mjs")
+            .expect("module record");
+        let promise = core.create_promise().expect("evaluation promise");
+        core.module_state
+            .modules
+            .get_mut("failed.mjs")
+            .expect("module record")
+            .evaluation_promise = Some(promise);
+        assert_eq!(
+            core.settle_imported_module_evaluation(
+                "failed.mjs",
+                Err(error.clone()),
+                Label::Public,
+            ),
+            Err(error)
+        );
+        assert!(matches!(
+            core.promise_store.get(promise).expect("promise").state,
+            crate::promise_model::PromiseState::Pending
+        ));
+        assert!(
+            core.module_state.modules["failed.mjs"]
+                .evaluation_exception
+                .is_none()
+        );
+        assert!(core.event_loop.microtasks.is_empty());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+}
+
+#[test]
+fn resumed_entry_outcome_admission_failure_propagates_immediately() {
+    let mut core = test_interpreter();
+    let before = core.sync_estimated_memory_bytes().expect("baseline memory");
+    core.config.max_total_memory_bytes = before;
+    assert!(matches!(
+        core.record_resumed_entry_outcome(Ok(LabeledReturn {
+            value: Value::str("large resumed completion".repeat(128)),
+            label: Label::Public,
+        })),
+        Err(InterpreterError::MemoryBudgetExceeded { .. })
+    ));
+    assert!(core.top_level_await_outcome.is_none());
+    assert_eq!(core.estimated_memory_bytes(), before);
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+}
+
+#[test]
+fn parked_module_survives_caller_snapshot_admission_failure() {
+    let mut core = test_interpreter();
+    let mut module = test_module_with_functions(Vec::new(), Vec::new());
+    module.header.source_label = "parked.mjs".to_string();
+    core.ensure_module_record(&module, "parked.mjs")
+        .expect("retained module");
+    core.current_module_specifier = Some("parked.mjs".to_string());
+    core.sync_estimated_memory_bytes().expect("module baseline");
+    let parked = core.snapshot_module_execution().expect("parked activation");
+    let record = core
+        .module_state
+        .modules
+        .get_mut("parked.mjs")
+        .expect("module record");
+    record.status = ModuleRuntimeStatus::AsyncEvaluating;
+    record.async_execution = Some(parked);
+
+    core.current_module_specifier = Some("caller.mjs".to_string());
+    let caller_value = Value::str("caller register".repeat(64));
+    core.write_reg(3, caller_value.clone())
+        .expect("caller value");
+    core.set_register_label(3, Label::Secret)
+        .expect("caller label");
+    let before = core.sync_estimated_memory_bytes().expect("caller baseline");
+    let snapshot_bytes = core.module_snapshot_in_flight_bytes;
+    core.config.max_total_memory_bytes = before;
+    let context = TopLevelAwaitResumptionContext {
+        module_specifier: "parked.mjs".to_string(),
+        continuation: ModuleAwaitContinuation::AwaitValue { result_register: 0 },
+    };
+    assert!(matches!(
+        core.resume_module_evaluation_task(
+            context,
+            Ok(crate::object_model::JsValue::Int(42)),
+            Label::Public,
+            None,
+        ),
+        Err(InterpreterError::MemoryBudgetExceeded { .. })
+    ));
+    assert!(
+        core.module_state.modules["parked.mjs"]
+            .async_execution
+            .is_some()
+    );
+    assert_eq!(core.current_module_specifier.as_deref(), Some("caller.mjs"));
+    assert_eq!(core.read_reg(3).expect("caller register"), caller_value);
+    assert_eq!(core.get_register_label(3), Ok(&Label::Secret));
+    assert_eq!(core.module_snapshot_in_flight_bytes, snapshot_bytes);
+    assert_eq!(core.estimated_memory_bytes(), before);
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+}
+
+#[test]
+fn resumed_module_termination_stops_later_jobs_for_entry_and_imported_modules() {
+    struct TerminateBlockedProperty;
+
+    impl InterpreterHook for TerminateBlockedProperty {
+        fn pre_property_access(
+            &self,
+            _ctx: &HookContext,
+            _target: &ObjectRef,
+            key: &PropertyKey,
+        ) -> HookAction {
+            if key == "blocked" {
+                HookAction::Terminate("TLA stop boundary".to_string())
+            } else {
+                HookAction::Allow
+            }
+        }
+
+        fn pre_call(
+            &self,
+            _ctx: &HookContext,
+            _callee: &FunctionRef,
+            _args: &[Value],
+        ) -> HookAction {
+            HookAction::Allow
+        }
+
+        fn pre_allocation(
+            &self,
+            _ctx: &HookContext,
+            _kind: AllocKind,
+            _size_hint: usize,
+        ) -> HookAction {
+            HookAction::Allow
+        }
+
+        fn pre_import(&self, _ctx: &HookContext, _specifier: &str) -> HookAction {
+            HookAction::Allow
+        }
+    }
+
+    for suspension in [
+        "Promise.resolve()",
+        "new Promise(resolve => setTimeout(resolve, 0))",
+    ] {
+        for imported in [false, true] {
+            let root = tempfile::tempdir().expect("TLA termination root");
+            let entry = root.path().join("entry.mjs");
+            let failing = format!(
+                "await {suspension};
+console.log('resumed');
+Promise.resolve().then(() => console.log('after fatal'));
+const object = {{ blocked: 1 }};
+object.blocked;"
+            );
+            let source = if imported {
+                std::fs::write(root.path().join("failed.mjs"), &failing).expect("imported module");
+                "console.log('entry'); import('./failed.mjs').catch(() => console.log('caught fatal'));"
+                    .to_string()
+            } else {
+                failing
+            };
+            std::fs::write(&entry, &source).expect("entry module");
+            let module = lower_module_graph_entry_bd_yn3lv(&entry, &source);
+            let mut core = async_module_graph_core_bd_yn3lv(root.path());
+            core.config
+                .granted_capabilities
+                .insert(RuntimeCapability::Timer);
+            core.set_hook(Arc::new(TerminateBlockedProperty));
+
+            assert!(matches!(
+                core.execute(&module),
+                Err(InterpreterError::ContainmentActionRequested { action, reason })
+                    if action == "terminate"
+                        && reason.as_deref() == Some("TLA stop boundary")
+            ));
+            let output: Vec<_> = core
+                .console_output()
+                .iter()
+                .map(|line| line.message.as_str())
+                .collect();
+            let expected = if imported {
+                vec!["entry", "resumed"]
+            } else {
+                vec!["resumed"]
+            };
+            assert_eq!(output, expected, "{suspension}, imported={imported}");
+            assert_eq!(core.module_snapshot_in_flight_bytes, 0);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+}
+
+#[test]
+fn native_module_error_preserves_execution_and_hostcall_provenance() {
+    for context_is_higher in [false, true] {
+        let lower = Label::Custom {
+            name: "native failure source".to_string(),
+            level: 3,
+        };
+        let higher = Label::Custom {
+            name: "native failure context".to_string(),
+            level: 8,
+        };
+        let (context, hostcall) = if context_is_higher {
+            (higher.clone(), lower)
+        } else {
+            (lower, higher.clone())
+        };
+        let mut core = test_interpreter();
+        core.active_inline_callback_context_label = Some(context.clone());
+        core.pending_hostcall_result_label = Some(hostcall);
+        core.sync_estimated_memory_bytes()
+            .expect("native failure provenance accounting");
+
+        assert!(matches!(
+            core.materialize_module_guest_exception::<()>(Err(InterpreterError::TypeError {
+                expected: "object".to_string(),
+                got: "null (reading 'field')".to_string(),
+            })),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        let Some(Value::Object(error)) = core.pending_exception.as_ref() else {
+            panic!("native failure must retain its JavaScript Error object");
+        };
+        assert_eq!(
+            core.chain_data_property(*error, "name"),
+            Some(&Value::str("TypeError"))
+        );
+        assert_eq!(core.pending_exception_label, higher);
+        assert_eq!(core.active_inline_callback_context_label, Some(context));
+        assert!(core.pending_hostcall_result_label.is_none());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+}
+
+#[test]
+fn native_module_error_allocation_refusal_stops_without_rejecting_its_promise() {
+    let mut core = test_interpreter();
+    let module = test_module_with_functions(Vec::new(), Vec::new());
+    core.ensure_module_record(&module, "failed.mjs")
+        .expect("module record");
+    let promise = core.create_promise().expect("evaluation promise");
+    core.module_state
+        .modules
+        .get_mut("failed.mjs")
+        .expect("module record")
+        .evaluation_promise = Some(promise);
+    let hostcall_label = Label::Custom {
+        name: "native allocation provenance".to_string(),
+        level: 4,
+    };
+    core.pending_hostcall_result_label = Some(hostcall_label.clone());
+    let before = core.sync_estimated_memory_bytes().expect("baseline memory");
+    core.config.max_total_memory_bytes = before;
+
+    assert!(matches!(
+        core.settle_imported_module_evaluation(
+            "failed.mjs",
+            Err(InterpreterError::TypeError {
+                expected: "object".to_string(),
+                got: "null (reading 'field')".to_string(),
+            }),
+            Label::Public,
+        ),
+        Err(InterpreterError::MemoryBudgetExceeded { .. })
+    ));
+    assert!(matches!(
+        core.promise_store.get(promise).expect("promise").state,
+        crate::promise_model::PromiseState::Pending
+    ));
+    assert!(
+        core.module_state.modules["failed.mjs"]
+            .evaluation_exception
+            .is_none()
+    );
+    assert!(core.pending_exception.is_none());
+    assert_eq!(core.pending_hostcall_result_label, Some(hostcall_label));
+    assert!(core.event_loop.microtasks.is_empty());
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+}

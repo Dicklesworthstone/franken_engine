@@ -2133,15 +2133,7 @@ impl InterpreterCore {
         timer_id: u32,
         marker: &str,
     ) -> Result<Value, InterpreterError> {
-        if !self
-            .config
-            .granted_capabilities
-            .contains(&RuntimeCapability::HeapAllocate)
-        {
-            return Err(InterpreterError::CapabilityDenied {
-                capability: "HeapAllocate".to_string(),
-            });
-        }
+        self.ensure_heap_allocation_allowed()?;
         let requested_heap_objects = self.heap_object_count_u32().saturating_add(1);
         if requested_heap_objects > self.config.max_heap_objects {
             return Err(
@@ -9426,13 +9418,9 @@ impl InterpreterCore {
         receiver: Value,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        let (tag, storage) = if is_map {
-            ("Map", "__entries")
-        } else {
-            ("Set", "__values")
-        };
+        let tag = if is_map { "Map" } else { "Set" };
         let (collection_id, storage_id) = match &receiver {
-            Value::Object(id) => match self.collection_storage_id(*id, tag, storage) {
+            Value::Object(id) => match self.collection_storage_id(*id, tag) {
                 Some(storage_id) => (*id, storage_id),
                 None => {
                     return Err(InterpreterError::TypeError {
@@ -9610,13 +9598,9 @@ impl InterpreterCore {
                 | BuiltinFunctionKind::MapValues
                 | BuiltinFunctionKind::MapEntries
         );
-        let (tag, storage) = if is_map {
-            ("Map", "__entries")
-        } else {
-            ("Set", "__values")
-        };
+        let tag = if is_map { "Map" } else { "Set" };
         let (collection_id, storage_id) = match &receiver {
-            Value::Object(id) => match self.collection_storage_id(*id, tag, storage) {
+            Value::Object(id) => match self.collection_storage_id(*id, tag) {
                 Some(storage_id) => (*id, storage_id),
                 None => {
                     return Err(InterpreterError::TypeError {
@@ -11592,7 +11576,7 @@ impl InterpreterCore {
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         let values_id = match &receiver {
-            Value::Object(set_id) => self.collection_storage_id(*set_id, "WeakSet", "__values"),
+            Value::Object(set_id) => self.collection_storage_id(*set_id, "WeakSet"),
             _ => None,
         }
         .ok_or_else(|| InterpreterError::TypeError {
@@ -11735,7 +11719,7 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let tokens = match &receiver {
             Value::Object(registry) => {
-                self.collection_storage_id(*registry, "FinalizationRegistry", "__tokens")
+                self.collection_storage_id(*registry, "FinalizationRegistry")
             }
             _ => None,
         }

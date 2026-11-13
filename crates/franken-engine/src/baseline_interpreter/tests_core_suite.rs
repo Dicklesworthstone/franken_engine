@@ -5534,12 +5534,7 @@ fn map_and_set_constructors_seed_iterable_input() {
         panic!("Map constructor should return object");
     };
 
-    assert_eq!(
-        core.heap[map_id.0 as usize]
-            .properties
-            .get(COLLECTION_SIZE_SLOT),
-        Some(&Value::Int(2))
-    );
+    assert_eq!(core.collection_size(map_id, "Map"), Some(2));
     core.set_reg(0, Value::Object(map_id));
     core.set_reg(1, Value::str("alpha"));
     assert_eq!(
@@ -5564,12 +5559,7 @@ fn map_and_set_constructors_seed_iterable_input() {
         panic!("Set constructor should return object");
     };
 
-    assert_eq!(
-        core.heap[set_id.0 as usize]
-            .properties
-            .get(COLLECTION_SIZE_SLOT),
-        Some(&Value::Int(2))
-    );
+    assert_eq!(core.collection_size(set_id, "Set"), Some(2));
     core.set_reg(0, Value::Object(set_id));
     core.set_reg(1, Value::Int(7));
     assert_eq!(
@@ -7633,6 +7623,8 @@ fn repeat_execute_reallocates_module_namespace_without_argv_aliasing_bd_bgq16() 
             Ir3Instruction::ExportBinding {
                 name_pool_index: 0,
                 src: 1,
+                local_name_pool_index: None,
+                namespace_reexport: false,
             },
             Ir3Instruction::Halt,
         ],

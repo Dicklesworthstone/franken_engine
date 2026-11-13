@@ -3094,7 +3094,7 @@ fn exact_keys_respect_legacy_string_callback_boundary_bd_b12xs_4() {
     let mut unhooked = quickjs_test_core();
     let unhooked_object = unhooked.alloc_object_with_prototype(None).unwrap();
     unhooked
-        .set_object_property_or_call_accessor(
+        .set_runtime_property_with_receiver(
             &module,
             Value::Object(unhooked_object),
             unhooked_object,
@@ -3121,7 +3121,7 @@ fn exact_keys_respect_legacy_string_callback_boundary_bd_b12xs_4() {
     let memory_before = core.estimated_memory_bytes();
 
     let error = core
-        .set_object_property_or_call_accessor(
+        .set_runtime_property_with_receiver(
             &module,
             Value::Object(object),
             object,
@@ -3160,12 +3160,13 @@ fn exact_keys_respect_legacy_string_callback_boundary_bd_b12xs_4() {
 
     let function_objects_before = core.function_objects.clone();
     assert!(matches!(
-        core.set_function_like_property_or_call_accessor(
+        core.set_property_for_instruction(
             &module,
+            &Value::Function(0),
             Value::Function(0),
-            &RuntimePropertyKey::String(d800),
+            RuntimePropertyKey::String(d800),
             Value::Int(9),
-            crate::ifc_artifacts::Label::Public,
+            &mut crate::ifc_artifacts::Label::Public,
         ),
         Err(InterpreterError::TypeError { .. })
     ));
@@ -3174,7 +3175,7 @@ fn exact_keys_respect_legacy_string_callback_boundary_bd_b12xs_4() {
     assert_eq!(serde_json::to_string(&core.heap).unwrap(), heap_before);
     assert_eq!(core.estimated_memory_bytes(), memory_before);
 
-    core.set_object_property_or_call_accessor(
+    core.set_runtime_property_with_receiver(
         &module,
         Value::Object(object),
         object,
@@ -7880,12 +7881,12 @@ fn array_slice_instruction_returns_remaining_elements() {
 }
 
 #[test]
-fn array_push_does_not_overflow_on_u32_max_index_key() {
+fn array_push_does_not_treat_u32_max_property_as_an_array_index() {
     // Regression (bd-qsz8t): a property key that parses to `u32::MAX`
     // ("4294967295") fed the `ArrayPush` sparse-length fold a `n + 1`,
     // overflowing u32 — a debug-build panic / release-build wrap. The fold
-    // now saturates (matching `array_like_length`), so the op completes
-    // instead of crashing on this adversarial key.
+    // ArrayPush now follows the explicit array length. The maximum u32 key
+    // is an ordinary property, not an array index, and must remain untouched.
     let module = test_module_with_pool(
         vec![
             Ir3Instruction::NewArray { dst: 1 },
@@ -7910,18 +7911,22 @@ fn array_push_does_not_overflow_on_u32_max_index_key() {
         vec!["4294967295".to_string()],
     );
     let mut core = quickjs_test_core();
-    // The load-bearing assertion: this must not panic on the u32::MAX
-    // sparse-fold (it did before the fix in debug builds).
     let result = core
         .execute(&module)
         .expect("array push must not overflow on a u32::MAX index key");
     let arr_id = object_id_from_value(&result.value, "array push result");
-    // Saturating fold yields next_idx == u32::MAX, so the push writes at
-    // that index, overwriting the pathological key with the pushed value.
     assert_eq!(
         core.heap[arr_id.0 as usize].properties.get("4294967295"),
+        Some(&Value::Int(1)),
+        "the non-index property must remain unchanged"
+    );
+    assert_eq!(
+        core.heap[arr_id.0 as usize].properties.get("0"),
         Some(&Value::Int(42)),
-        "push must have completed and written the element"
+    );
+    assert_eq!(
+        core.heap[arr_id.0 as usize].properties.get("length"),
+        Some(&Value::Int(1)),
     );
 }
 
@@ -12503,12 +12508,15 @@ fn static_method_on_constructor() {
     );
     let output = lower_ir0_to_ir3(&ir0, &ctx).expect("static class method should lower");
     assert!(
-        output
-            .ir3
-            .instructions
-            .iter()
-            .any(|instruction| matches!(instruction, Ir3Instruction::SetProperty { .. })),
-        "static method lowering should attach the method to the constructor value"
+        output.ir3.instructions.iter().any(|instruction| matches!(
+            instruction,
+            Ir3Instruction::DefineOwnProperty {
+                enumerable: false,
+                accessor_kind: None,
+                ..
+            }
+        )),
+        "static methods must be non-enumerable own data properties"
     );
 
     let mut core = quickjs_test_core();
@@ -12583,20 +12591,26 @@ fn getter_setter() {
     );
     let output = lower_ir0_to_ir3(&ir0, &ctx).expect("class accessors should lower");
     assert!(
-        output
-            .ir3
-            .constant_pool
-            .iter()
-            .any(|key| key.starts_with(IR_ACCESSOR_GET_PREFIX)),
-        "getter lowering should define an accessor descriptor"
+        output.ir3.instructions.iter().any(|instruction| matches!(
+            instruction,
+            Ir3Instruction::DefineOwnProperty {
+                enumerable: false,
+                accessor_kind: Some(AccessorKind::Get),
+                ..
+            }
+        )),
+        "class getters must use typed non-enumerable accessor definitions"
     );
     assert!(
-        output
-            .ir3
-            .constant_pool
-            .iter()
-            .any(|key| key.starts_with(IR_ACCESSOR_SET_PREFIX)),
-        "setter lowering should define an accessor descriptor"
+        output.ir3.instructions.iter().any(|instruction| matches!(
+            instruction,
+            Ir3Instruction::DefineOwnProperty {
+                enumerable: false,
+                accessor_kind: Some(AccessorKind::Set),
+                ..
+            }
+        )),
+        "class setters must use typed non-enumerable accessor definitions"
     );
 
     let mut core = quickjs_test_core();
@@ -13100,6 +13114,7 @@ fn copy_data_properties_state_is_budgeted_and_cleaned_on_failure_bd_f1ixz() {
         call_depth: 0,
         target_id: target,
         source: Value::Object(source),
+        source_label: crate::ifc_artifacts::Label::Public,
         string_units: None,
         keys: core
             .copy_data_properties_keys(&Value::Object(source))

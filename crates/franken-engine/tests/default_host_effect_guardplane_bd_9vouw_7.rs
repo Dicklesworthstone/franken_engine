@@ -11,10 +11,14 @@ use frankenengine_engine::baseline_interpreter::{
     HookAction, InterpreterConfig, InterpreterError, LaneChoice, LaneRouter, Value,
 };
 use frankenengine_engine::capability::RuntimeCapability;
-use frankenengine_engine::execution_orchestrator::{
-    ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig,
+use frankenengine_engine::containment_executor::{
+    ContainmentContext, ContainmentError, ContainmentExecutor, ContainmentState, SandboxPolicy,
 };
-use frankenengine_engine::expected_loss_selector::LossMatrix;
+use frankenengine_engine::execution_orchestrator::{
+    ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig, OrchestratorError,
+    OrchestratorResult,
+};
+use frankenengine_engine::expected_loss_selector::{ContainmentAction, LossMatrix};
 use frankenengine_engine::guardplane_adapter::{
     GuardplaneAdapter, GuardplaneExtensionContext, GuardplaneOperation,
 };
@@ -23,6 +27,10 @@ use frankenengine_engine::ifc_artifacts::Label;
 use frankenengine_engine::ir_contract::{CapabilityTag, Ir3Instruction, Ir3Module, RegRange};
 use frankenengine_engine::runtime_config::RuntimeConfig;
 use frankenengine_engine::security_epoch::SecurityEpoch;
+use frankenengine_engine::storage_adapter::{
+    BatchPutEntry, CompareAndSwapOutcome, EventContext, InMemoryStorageAdapter, MigrationReceipt,
+    StorageAdapter, StorageError, StorageEvent, StoreKind, StoreQuery, StoreRecord,
+};
 use frankenengine_extension_host::host_io::{
     EnvironmentSnapshotHostIo, HostIoRecorder, InMemoryHostIoTranscript,
 };
@@ -353,5 +361,723 @@ fn explicit_instruction_policy_retains_its_scope_and_containment() {
                 .map(String::as_str),
             Some("instructions_and_host_effects")
         );
+    }
+}
+
+fn sandbox_runtime_config() -> RuntimeConfig {
+    // The real neutral-hostcall threshold policy selects Sandbox at this
+    // anomalous prior. No action override or fabricated risk observation.
+    let mut runtime = RuntimeConfig::default();
+    runtime.guardplane.priors.benign_millionths = 399_800;
+    runtime.guardplane.priors.anomalous_millionths = 600_000;
+    runtime.guardplane.priors.malicious_millionths = 100;
+    runtime.guardplane.priors.unknown_millionths = 100;
+    runtime.validate().expect("valid sandbox prior");
+    runtime
+}
+
+fn computation_sandbox_policy() -> SandboxPolicy {
+    SandboxPolicy {
+        allowed_capabilities: vec!["console".into(), "heap-allocate".into(), "builtin".into()],
+        max_memory_bytes: 32 * 1024 * 1024,
+        ..SandboxPolicy::default()
+    }
+}
+
+fn assert_signed_sandbox_policy(
+    orchestrator: &ExecutionOrchestrator,
+    result: &OrchestratorResult,
+    policy: &SandboxPolicy,
+) {
+    assert!(result.containment_action.severity() >= ContainmentAction::Sandbox.severity());
+    let receipt = result
+        .containment_receipt
+        .as_ref()
+        .expect("containment receipt");
+    assert_eq!(receipt.action, result.containment_action);
+    assert!(receipt.success && receipt.verify_integrity());
+    let hash = policy.content_hash().to_string();
+    if receipt.action == ContainmentAction::Sandbox {
+        assert_eq!(receipt.new_state, ContainmentState::Sandboxed);
+        assert_eq!(receipt.metadata.get("sandbox_policy_hash"), Some(&hash));
+    }
+    let primary = &result.evidence_entries[0];
+    assert_eq!(primary.metadata.get("sandbox_policy_hash"), Some(&hash));
+    let hook_action = primary
+        .metadata
+        .get("hook_requested_action")
+        .expect("live action");
+    let requested = match hook_action.split(':').next().unwrap() {
+        "sandbox" => ContainmentAction::Sandbox,
+        "suspend" => ContainmentAction::Suspend,
+        "terminate" => ContainmentAction::Terminate,
+        "quarantine" => ContainmentAction::Quarantine,
+        other => panic!("applied sandbox was lost: {other}"),
+    };
+    assert!(result.containment_action.severity() >= requested.severity());
+    assert!(result.evidence_entries.iter().any(|entry| {
+        entry.metadata.get("guardplane_action").map(String::as_str) == Some("sandbox")
+    }));
+    let identity = orchestrator.evidence_verification_identity();
+    result
+        .evidence_chain_receipt
+        .verify_exact_batch(
+            &result.evidence_entries,
+            &identity,
+            orchestrator.evidence_ledger_id(),
+            &result.trace_id,
+            0,
+            None,
+        )
+        .expect("the applied sandbox policy is authenticated in the exact run batch");
+}
+
+#[test]
+fn live_sandbox_continues_computation_with_the_signed_policy_in_both_lanes() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let policy = computation_sandbox_policy();
+        let mut orchestrator = ExecutionOrchestrator::new_lab_with_runtime_config(
+            OrchestratorConfig {
+                force_lane: Some(lane),
+                sandbox_policy: policy.clone(),
+                ..OrchestratorConfig::default()
+            },
+            sandbox_runtime_config(),
+        );
+        let result = orchestrator.execute(&package(
+            "console.log('admitted'); let total = 0; for (let i = 0; i < 5; i++) { total += i; } const values = [total, 32]; console.log(values[0] + values[1]); 42;",
+            &[],
+        )).expect("sandbox permits bounded computation after the triggering effect");
+        assert_eq!(result.containment_action, ContainmentAction::Sandbox);
+        assert_eq!(result.execution_value, "42", "{lane:?}");
+        assert_eq!(
+            result
+                .console_output
+                .iter()
+                .map(|record| record.message.as_str())
+                .collect::<Vec<_>>(),
+            ["admitted", "42"],
+            "{lane:?}"
+        );
+        assert_signed_sandbox_policy(&orchestrator, &result, &policy);
+    }
+}
+
+#[test]
+fn live_sandbox_rechecks_the_effect_that_triggered_it_in_both_lanes() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let policy = SandboxPolicy {
+            allowed_capabilities: vec!["heap_allocate".into(), "builtin".into()],
+            ..computation_sandbox_policy()
+        };
+        let mut orchestrator = ExecutionOrchestrator::new_lab_with_runtime_config(
+            OrchestratorConfig {
+                force_lane: Some(lane),
+                sandbox_policy: policy.clone(),
+                ..OrchestratorConfig::default()
+            },
+            sandbox_runtime_config(),
+        );
+        let result = orchestrator
+            .execute(&package("console.log('forbidden'); 42;", &[]))
+            .expect("sandbox refusal remains a structured containment outcome");
+        assert_eq!(result.containment_action, ContainmentAction::Sandbox);
+        assert!(result.console_output.is_empty(), "{lane:?}");
+        assert!(result.host_effect_transcript.is_empty());
+        assert!(result.host_effect_journal.is_empty());
+        assert_signed_sandbox_policy(&orchestrator, &result, &policy);
+    }
+}
+
+#[test]
+fn live_sandbox_preserves_completed_effects_but_refuses_later_authority() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let policy = computation_sandbox_policy();
+        let mut orchestrator = ExecutionOrchestrator::new_lab_with_runtime_config(
+            OrchestratorConfig {
+                force_lane: Some(lane),
+                sandbox_policy: policy.clone(),
+                ..OrchestratorConfig::default()
+            },
+            sandbox_runtime_config(),
+        );
+        let transcript = Arc::new(InMemoryHostIoTranscript::recording());
+        let provider =
+            EnvironmentSnapshotHostIo::new(BTreeMap::from([("KEY".into(), "secret".into())]))
+                .expect("explicit host snapshot");
+        orchestrator.set_host_io(Arc::new(provider), Some(transcript.clone()));
+        let mut input = package(
+            "console.log('admitted'); process.env.KEY; console.log('unreachable');",
+            &[],
+        );
+        input.capabilities.push("env_read".into());
+        let result = orchestrator.execute(&input).expect("later sandbox refusal");
+        assert_eq!(result.console_output.len(), 1, "{lane:?}");
+        assert_eq!(result.console_output[0].message, "admitted");
+        assert!(
+            transcript.entries().is_empty(),
+            "no environment provider call after sandboxing"
+        );
+        assert!(result.host_effect_transcript.is_empty());
+        assert!(result.host_effect_journal.is_empty());
+        assert_signed_sandbox_policy(&orchestrator, &result, &policy);
+    }
+}
+
+#[test]
+fn failed_close_cannot_substitute_a_different_sandbox_policy_receipt() {
+    let policy = computation_sandbox_policy();
+    let mut orchestrator = ExecutionOrchestrator::new_lab_with_runtime_config(
+        OrchestratorConfig {
+            force_lane: Some(LaneChoice::QuickJs),
+            sandbox_policy: policy.clone(),
+            cell_close_budget_ms: 1,
+            ..OrchestratorConfig::default()
+        },
+        sandbox_runtime_config(),
+    );
+    let error = orchestrator
+        .execute(&package("console.log('admitted'); 42;", &[]))
+        .expect_err("insufficient close budget retains the signed batch");
+    let staged = error.uncommitted_evidence_chain().expect("staged evidence");
+    let run_id = &staged.artifact.entries[0].trace_id;
+    let verify = |artifact: &frankenengine_engine::execution_orchestrator::UncommittedEvidenceChainEvidence| {
+        artifact.verify_with_context(
+            &orchestrator.evidence_verification_identity(),
+            orchestrator.evidence_chain_instance_id(),
+            orchestrator.evidence_ledger_id(),
+            run_id,
+            0,
+            None,
+        )
+    };
+    verify(staged).expect("the actual applied policy remains verifiable");
+    let original_receipt = staged
+        .containment_receipt
+        .as_ref()
+        .expect("sandbox applied");
+    assert_eq!(original_receipt.action, ContainmentAction::Sandbox);
+    let primary = &staged.artifact.entries[0];
+    let mut alternative_executor = ContainmentExecutor::new();
+    alternative_executor.register(&original_receipt.target_extension_id);
+    let alternative = alternative_executor
+        .execute(
+            ContainmentAction::Sandbox,
+            &original_receipt.target_extension_id,
+            &ContainmentContext {
+                decision_id: primary.decision_id.clone(),
+                epoch: primary.epoch_id,
+                evidence_refs: vec![run_id.clone()],
+                sandbox_policy: SandboxPolicy {
+                    max_memory_bytes: policy.max_memory_bytes + 1,
+                    ..policy
+                },
+                ..ContainmentContext::default()
+            },
+        )
+        .expect("a self-consistent receipt for a different policy");
+    assert!(alternative.verify_integrity());
+    let mut spliced = staged.clone();
+    spliced.containment_receipt = Some(alternative);
+    assert!(
+        verify(&spliced).is_err(),
+        "a different enforced policy cannot replace the signed policy"
+    );
+}
+
+fn quarantine_orchestrator(lane: LaneChoice) -> ExecutionOrchestrator {
+    // A configured high-risk prior exercises the real default host-effect
+    // decision path, without test-only action overrides or instruction hooks.
+    let mut runtime = RuntimeConfig::default();
+    runtime.guardplane.priors.benign_millionths = 100;
+    runtime.guardplane.priors.anomalous_millionths = 100;
+    runtime.guardplane.priors.malicious_millionths = 999_700;
+    runtime.guardplane.priors.unknown_millionths = 100;
+    runtime.validate().expect("valid high-risk prior");
+    ExecutionOrchestrator::new_lab_with_runtime_config(
+        OrchestratorConfig {
+            force_lane: Some(lane),
+            ..OrchestratorConfig::default()
+        },
+        runtime,
+    )
+}
+
+fn storage_context() -> EventContext {
+    EventContext::new(
+        "quarantine-test",
+        "quarantine-decision",
+        "quarantine-policy",
+    )
+    .unwrap()
+}
+
+fn stored_quarantine(orchestrator: &mut ExecutionOrchestrator) -> StoreRecord {
+    let mut records = orchestrator
+        .storage_adapter_mut()
+        .query(
+            StoreKind::PolicyCache,
+            &StoreQuery {
+                key_prefix: Some("quarantine/v1/".to_string()),
+                ..StoreQuery::default()
+            },
+            &storage_context(),
+        )
+        .expect("read quarantine authority");
+    assert_eq!(records.len(), 1, "exactly one identity was quarantined");
+    records.pop().unwrap()
+}
+
+fn contain_at_host_effect(orchestrator: &mut ExecutionOrchestrator) -> StoreRecord {
+    let result = orchestrator
+        .execute(&package("console.log('must-not-run');", &[]))
+        .expect("quarantine completes only after committing its admission barrier");
+    assert_eq!(result.containment_action, ContainmentAction::Quarantine);
+    let receipt = result
+        .containment_receipt
+        .as_ref()
+        .expect("quarantine receipt");
+    assert_eq!(receipt.new_state, ContainmentState::Quarantined);
+    assert!(receipt.success && receipt.verify_integrity());
+    assert!(
+        result.console_output.is_empty(),
+        "contain before the host effect"
+    );
+    assert!(result.host_effect_transcript.is_empty());
+    assert!(result.host_effect_journal.is_empty());
+    let record = stored_quarantine(orchestrator);
+    let payload: serde_json::Value = serde_json::from_slice(&record.value).unwrap();
+    assert_eq!(payload["schema_version"], 1);
+    assert_eq!(payload["trace_id"], result.trace_id);
+    assert_eq!(payload["receipt"], serde_json::to_value(receipt).unwrap());
+    record
+}
+
+fn assert_quarantined_before_execution(
+    orchestrator: &mut ExecutionOrchestrator,
+    input: &ExtensionPackage,
+) {
+    let attempts_before = orchestrator.execution_count();
+    let error = orchestrator
+        .execute(input)
+        .expect_err("quarantine must survive admission");
+    assert!(
+        matches!(
+            error.primary_error(),
+            OrchestratorError::Containment(ContainmentError::AlreadyContained {
+                extension_id,
+                current_state: ContainmentState::Quarantined,
+            }) if extension_id == &input.extension_id
+        ),
+        "{error}"
+    );
+    assert_eq!(orchestrator.execution_count(), attempts_before);
+    assert!(orchestrator.last_failed_trace_id().is_none());
+    assert!(orchestrator.last_failed_console_output().is_empty());
+    assert!(orchestrator.last_failed_host_effect_journal().is_empty());
+}
+
+fn storage_with_record(record: &StoreRecord) -> InMemoryStorageAdapter {
+    let mut storage = InMemoryStorageAdapter::new();
+    storage
+        .put(
+            record.store,
+            record.key.clone(),
+            record.value.clone(),
+            record.metadata.clone(),
+            &storage_context(),
+        )
+        .unwrap();
+    storage
+}
+
+fn assert_failed_persistence_retains_local_quarantine_receipt(
+    orchestrator: &ExecutionOrchestrator,
+    error: &OrchestratorError,
+) {
+    let trace_id = orchestrator
+        .last_failed_trace_id()
+        .expect("failed run trace");
+    let staged = error
+        .uncommitted_evidence_chain()
+        .expect("the signed run evidence must survive a later persistence failure");
+    let receipt = staged
+        .containment_receipt
+        .as_ref()
+        .expect("the completed local containment transition must retain its receipt");
+    assert_eq!(receipt.action, ContainmentAction::Quarantine);
+    assert_eq!(receipt.target_extension_id, "default-host-guard");
+    assert_eq!(receipt.new_state, ContainmentState::Quarantined);
+    assert!(receipt.success && receipt.verify_integrity());
+    assert_eq!(receipt.evidence_refs, [trace_id.to_string()]);
+    assert!(
+        staged.saga_id.is_none(),
+        "persistence failed before saga creation"
+    );
+    assert!(
+        staged
+            .quarantine_persistence_error
+            .as_ref()
+            .is_some_and(|error| !error.is_empty())
+    );
+    staged
+        .verify_with_context(
+            &orchestrator.evidence_verification_identity(),
+            orchestrator.evidence_chain_instance_id(),
+            orchestrator.evidence_ledger_id(),
+            trace_id,
+            0,
+            None,
+        )
+        .expect("failure evidence and the local receipt retain their exact signed linkage");
+
+    let mut missing_failure = staged.clone();
+    missing_failure.quarantine_persistence_error = None;
+    let mut blank_failure = staged.clone();
+    blank_failure.quarantine_persistence_error = Some(" ".to_string());
+    let mut missing_receipt = staged.clone();
+    missing_receipt.containment_receipt = None;
+    let mut invented_saga = staged.clone();
+    invented_saga.saga_id = Some(format!("{trace_id}:saga"));
+    for malformed in [
+        missing_failure,
+        blank_failure,
+        missing_receipt,
+        invented_saga,
+    ] {
+        assert!(
+            malformed
+                .verify_with_context(
+                    &orchestrator.evidence_verification_identity(),
+                    orchestrator.evidence_chain_instance_id(),
+                    orchestrator.evidence_ledger_id(),
+                    trace_id,
+                    0,
+                    None,
+                )
+                .is_err(),
+            "a partial lifecycle must not be accepted as successful durability or saga creation"
+        );
+    }
+}
+
+#[test]
+fn quarantine_admission_survives_a_new_orchestrator_and_unrelated_allowed_execution() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let mut original = quarantine_orchestrator(lane);
+        let record = contain_at_host_effect(&mut original);
+        assert_quarantined_before_execution(&mut original, &package("42;", &[]));
+
+        // Reconstruct the adapter from its committed record. The on-disk
+        // reopen test below exercises the durable backend under its feature.
+        let mut restarted = ExecutionOrchestrator::new_lab(OrchestratorConfig {
+            force_lane: Some(lane),
+            policy_id: "a-later-policy".to_string(),
+            ..OrchestratorConfig::default()
+        });
+        restarted.set_storage_adapter(storage_with_record(&record));
+        let changed_source = package("console.log('resurrected');", &[]);
+        assert_quarantined_before_execution(&mut restarted, &changed_source);
+        // Admission precedes source ingestion, not just external dispatch.
+        assert_quarantined_before_execution(&mut restarted, &package("const = ;", &[]));
+
+        let mut unrelated = changed_source.clone();
+        unrelated.extension_id = "another-extension".to_string();
+        let result = restarted
+            .execute(&unrelated)
+            .expect("unrelated identity remains usable");
+        assert_eq!(result.console_output[0].message, "resurrected");
+        assert_eq!(stored_quarantine(&mut restarted), record);
+        assert_quarantined_before_execution(&mut restarted, &changed_source);
+    }
+}
+
+#[cfg(feature = "sibling-persistence")]
+#[test]
+fn quarantine_survives_state_db_reopen_and_is_seen_by_an_already_open_orchestrator() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let directory = tempfile::tempdir().expect("quarantine database directory");
+        let path = directory.path().join("containment.db");
+        let record;
+        {
+            let mut original = quarantine_orchestrator(lane);
+            original
+                .open_state_db(&path)
+                .expect("open durable authority");
+            let mut already_open = ExecutionOrchestrator::new_lab(OrchestratorConfig {
+                force_lane: Some(lane),
+                ..OrchestratorConfig::default()
+            });
+            already_open
+                .open_state_db(&path)
+                .expect("open second reader");
+            // Establish a successful admission before the other instance
+            // commits quarantine, so a cached 'not contained' would fail.
+            already_open.execute(&package("1 + 1;", &[])).unwrap();
+            record = contain_at_host_effect(&mut original);
+            assert_quarantined_before_execution(
+                &mut already_open,
+                &package("console.log('must-stay-blocked');", &[]),
+            );
+        }
+        let mut reopened = ExecutionOrchestrator::new_lab(OrchestratorConfig {
+            force_lane: Some(lane),
+            policy_id: "policy-after-restart".to_string(),
+            ..OrchestratorConfig::default()
+        });
+        reopened
+            .open_state_db(&path)
+            .expect("reopen durable authority");
+        assert_quarantined_before_execution(
+            &mut reopened,
+            &package("console.log('must-stay-blocked');", &[]),
+        );
+        assert_eq!(stored_quarantine(&mut reopened), record);
+    }
+}
+
+#[test]
+fn corrupt_or_incompatible_quarantine_records_fail_closed_before_source_ingestion() {
+    let mut original = quarantine_orchestrator(LaneChoice::QuickJs);
+    let record = contain_at_host_effect(&mut original);
+    let payload: serde_json::Value = serde_json::from_slice(&record.value).unwrap();
+    let mut invalid_records = vec![b"not JSON".to_vec()];
+    for field in ["schema_version", "trace_id", "policy_id", "receipt"] {
+        let mut invalid = payload.clone();
+        invalid.as_object_mut().unwrap().remove(field);
+        invalid_records.push(serde_json::to_vec(&invalid).unwrap());
+    }
+    let mut future_version = payload.clone();
+    future_version["schema_version"] = 2.into();
+    invalid_records.push(serde_json::to_vec(&future_version).unwrap());
+    let mut forged_identity = payload.clone();
+    forged_identity["receipt"]["target_extension_id"] = "somebody-else".into();
+    invalid_records.push(serde_json::to_vec(&forged_identity).unwrap());
+    let mut altered_receipt = payload.clone();
+    altered_receipt["receipt"]["timestamp_ns"] = 999.into();
+    invalid_records.push(serde_json::to_vec(&altered_receipt).unwrap());
+    let mut missing_linkage = payload;
+    missing_linkage["trace_id"] = "unrelated-trace".into();
+    invalid_records.push(serde_json::to_vec(&missing_linkage).unwrap());
+
+    for value in invalid_records {
+        let mut invalid = record.clone();
+        invalid.value = value;
+        let mut orchestrator = ExecutionOrchestrator::new_lab(OrchestratorConfig::default());
+        orchestrator.set_storage_adapter(storage_with_record(&invalid));
+        let error = orchestrator
+            .execute(&package("const = ;", &[]))
+            .unwrap_err();
+        assert!(
+            matches!(
+                error.primary_error(),
+                OrchestratorError::Containment(ContainmentError::Internal { detail })
+                    if detail.starts_with("invalid durable quarantine record:")
+            ),
+            "{error}"
+        );
+        assert_eq!(orchestrator.execution_count(), 0);
+        assert!(orchestrator.last_failed_trace_id().is_none());
+        assert!(orchestrator.last_failed_console_output().is_empty());
+        assert_eq!(stored_quarantine(&mut orchestrator), invalid);
+    }
+}
+
+#[test]
+fn a_rejected_quarantine_commit_returns_failure_and_keeps_the_local_identity_blocked() {
+    let mut orchestrator = quarantine_orchestrator(LaneChoice::QuickJs);
+    orchestrator.set_storage_adapter(InMemoryStorageAdapter::new().with_fail_writes(true));
+    let error = orchestrator
+        .execute(&package("console.log('must-not-run');", &[]))
+        .expect_err("a rejected durable commit cannot report successful quarantine");
+    assert!(
+        matches!(
+            error.primary_error(),
+            OrchestratorError::Containment(ContainmentError::Internal { detail })
+                if detail.starts_with("durable quarantine commit failed:")
+        ),
+        "{error}"
+    );
+    assert_failed_persistence_retains_local_quarantine_receipt(&orchestrator, &error);
+    assert!(orchestrator.last_failed_console_output().is_empty());
+    assert!(orchestrator.last_failed_host_effect_journal().is_empty());
+    // Recovering the backend cannot resurrect the locally contained identity.
+    orchestrator.set_storage_adapter(InMemoryStorageAdapter::new());
+    assert_quarantined_before_execution(&mut orchestrator, &package("42;", &[]));
+}
+
+/// Faults only the storage boundary; execution, guardplane decisions, receipt
+/// generation, and containment still use the production pipeline.
+#[derive(Default)]
+struct QuarantineStorageFaults {
+    inner: InMemoryStorageAdapter,
+    reject_reads: bool,
+    // Publish another writer's barrier between admission and our atomic insert.
+    concurrent_quarantine: Option<StoreRecord>,
+}
+
+impl StorageAdapter for QuarantineStorageFaults {
+    fn backend_name(&self) -> &'static str {
+        self.inner.backend_name()
+    }
+
+    fn current_schema_version(&self) -> u32 {
+        self.inner.current_schema_version()
+    }
+
+    fn ensure_schema_version(&self, expected: u32) -> Result<(), StorageError> {
+        self.inner.ensure_schema_version(expected)
+    }
+
+    fn migrate_to(&mut self, target: u32) -> Result<MigrationReceipt, StorageError> {
+        self.inner.migrate_to(target)
+    }
+
+    fn put(
+        &mut self,
+        store: StoreKind,
+        key: String,
+        value: Vec<u8>,
+        metadata: BTreeMap<String, String>,
+        context: &EventContext,
+    ) -> Result<StoreRecord, StorageError> {
+        self.inner.put(store, key, value, metadata, context)
+    }
+
+    fn compare_and_swap(
+        &mut self,
+        store: StoreKind,
+        key: String,
+        expected_revision: Option<u64>,
+        value: Vec<u8>,
+        metadata: BTreeMap<String, String>,
+        context: &EventContext,
+    ) -> Result<CompareAndSwapOutcome, StorageError> {
+        if store == StoreKind::PolicyCache && key.starts_with("quarantine/v1/") {
+            assert_eq!(
+                expected_revision, None,
+                "quarantine must never replace an authority row"
+            );
+            if let Some(existing) = self.concurrent_quarantine.take() {
+                assert_eq!(existing.store, store);
+                assert_eq!(existing.key, key);
+                self.inner.put(
+                    store,
+                    existing.key,
+                    existing.value,
+                    existing.metadata,
+                    context,
+                )?;
+            }
+        }
+        self.inner
+            .compare_and_swap(store, key, expected_revision, value, metadata, context)
+    }
+
+    fn get(
+        &mut self,
+        store: StoreKind,
+        key: &str,
+        context: &EventContext,
+    ) -> Result<Option<StoreRecord>, StorageError> {
+        if self.reject_reads && store == StoreKind::PolicyCache {
+            return Err(StorageError::BackendUnavailable {
+                backend: "quarantine-test".to_string(),
+                detail: "admission authority is temporarily unreadable".to_string(),
+            });
+        }
+        self.inner.get(store, key, context)
+    }
+
+    fn query(
+        &mut self,
+        store: StoreKind,
+        query: &StoreQuery,
+        context: &EventContext,
+    ) -> Result<Vec<StoreRecord>, StorageError> {
+        self.inner.query(store, query, context)
+    }
+
+    fn delete(
+        &mut self,
+        store: StoreKind,
+        key: &str,
+        context: &EventContext,
+    ) -> Result<bool, StorageError> {
+        self.inner.delete(store, key, context)
+    }
+
+    fn put_batch(
+        &mut self,
+        store: StoreKind,
+        entries: Vec<BatchPutEntry>,
+        context: &EventContext,
+    ) -> Result<Vec<StoreRecord>, StorageError> {
+        self.inner.put_batch(store, entries, context)
+    }
+
+    fn events(&self) -> &[StorageEvent] {
+        self.inner.events()
+    }
+}
+
+#[test]
+fn unreadable_quarantine_authority_blocks_admission_before_source_ingestion() {
+    let mut orchestrator = ExecutionOrchestrator::new_lab(OrchestratorConfig::default());
+    orchestrator.set_storage_adapter(QuarantineStorageFaults {
+        reject_reads: true,
+        ..QuarantineStorageFaults::default()
+    });
+    let error = orchestrator
+        .execute(&package("const = ;", &[]))
+        .unwrap_err();
+    assert!(
+        matches!(
+            error.primary_error(),
+            OrchestratorError::Containment(ContainmentError::Internal { detail })
+                if detail.starts_with("durable quarantine read failed:")
+        ),
+        "{error}"
+    );
+    assert_eq!(orchestrator.execution_count(), 0);
+    assert!(orchestrator.last_failed_trace_id().is_none());
+    assert!(orchestrator.last_failed_console_output().is_empty());
+    assert!(orchestrator.last_failed_host_effect_journal().is_empty());
+}
+
+#[test]
+fn racing_quarantine_commit_preserves_the_first_barrier_and_rejects_corruption() {
+    let mut original = quarantine_orchestrator(LaneChoice::QuickJs);
+    let record = contain_at_host_effect(&mut original);
+    for corrupt in [false, true] {
+        let mut competing_record = record.clone();
+        if corrupt {
+            competing_record.value = b"corrupt authority".to_vec();
+        }
+        let mut orchestrator = quarantine_orchestrator(LaneChoice::V8);
+        orchestrator.set_storage_adapter(QuarantineStorageFaults {
+            concurrent_quarantine: Some(competing_record.clone()),
+            ..QuarantineStorageFaults::default()
+        });
+        let outcome = orchestrator.execute(&package("console.log('later-attempt');", &[]));
+        if corrupt {
+            let error = outcome.expect_err("a racing corrupt barrier must not be replaced");
+            assert!(
+                matches!(
+                    error.primary_error(),
+                    OrchestratorError::Containment(ContainmentError::Internal { detail })
+                        if detail.starts_with("invalid durable quarantine record:")
+                ),
+                "{error}"
+            );
+            assert_failed_persistence_retains_local_quarantine_receipt(&orchestrator, &error);
+        } else {
+            let result = outcome.expect("an existing valid quarantine is already durable");
+            assert_eq!(result.containment_action, ContainmentAction::Quarantine);
+            assert!(result.console_output.is_empty());
+        }
+        assert_eq!(stored_quarantine(&mut orchestrator), competing_record);
+        assert!(orchestrator.last_failed_console_output().is_empty());
+        assert_quarantined_before_execution(&mut orchestrator, &package("42;", &[]));
     }
 }

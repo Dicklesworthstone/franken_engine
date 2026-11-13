@@ -2821,12 +2821,20 @@ impl ExecutionOrchestrator {
                 "get_property_with_receiver"
             }
             crate::ir_contract::Ir3Instruction::SetProperty { .. } => "set_property",
+            crate::ir_contract::Ir3Instruction::SetPropertyStrict { .. } => "set_property_strict",
             crate::ir_contract::Ir3Instruction::SetPropertyWithReceiver { .. } => {
                 "set_property_with_receiver"
             }
+            crate::ir_contract::Ir3Instruction::SetPropertyWithReceiverStrict { .. } => {
+                "set_property_with_receiver_strict"
+            }
+            crate::ir_contract::Ir3Instruction::DefineOwnProperty { .. } => "define_own_property",
             crate::ir_contract::Ir3Instruction::DefineMethod { .. } => "define_method",
             crate::ir_contract::Ir3Instruction::DefineAccessor { .. } => "define_accessor",
             crate::ir_contract::Ir3Instruction::DeleteProperty { .. } => "delete_property",
+            crate::ir_contract::Ir3Instruction::DeletePropertyStrict { .. } => {
+                "delete_property_strict"
+            }
             crate::ir_contract::Ir3Instruction::NewObject { .. } => "new_object",
             crate::ir_contract::Ir3Instruction::NewArray { .. } => "new_array",
             crate::ir_contract::Ir3Instruction::ArrayPush { .. } => "array_push",

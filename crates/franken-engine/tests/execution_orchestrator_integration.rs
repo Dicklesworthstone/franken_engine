@@ -1029,6 +1029,7 @@ fn config_clone_preserves_all_fields() {
     let cfg = OrchestratorConfig {
         loss_matrix_preset: LossMatrixPreset::Conservative,
         force_lane: Some(LaneChoice::V8),
+        sandbox_policy: Default::default(),
         drain_deadline_ticks: 99_999,
         work_pool: None,
         cell_close_budget_ms: 77,
@@ -1045,6 +1046,7 @@ fn config_clone_preserves_all_fields() {
     let cloned = cfg.clone();
     assert_eq!(cloned.loss_matrix_preset, LossMatrixPreset::Conservative);
     assert_eq!(cloned.force_lane, Some(LaneChoice::V8));
+    assert_eq!(cloned.sandbox_policy, cfg.sandbox_policy);
     assert_eq!(cloned.drain_deadline_ticks, 99_999);
     assert_eq!(cloned.cell_close_budget_ms, 77);
     assert_eq!(cloned.max_concurrent_sagas, 16);

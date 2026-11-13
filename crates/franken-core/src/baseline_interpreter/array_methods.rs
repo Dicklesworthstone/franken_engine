@@ -147,7 +147,9 @@ impl InterpreterCore {
                         let object = self.array_method_write_object(&receiver)?;
                         let key = RuntimePropertyKey::String(JsString::from(key));
                         self.run_pre_runtime_property_access_hook(module, object, &key)?;
-                        self.remove_object_runtime_property(object, &key)?;
+                        if !self.delete_own_runtime_property(object, &key)? {
+                            return Err(Self::property_definition_error());
+                        }
                         if let RuntimePropertyKey::String(key) = &key {
                             self.mark_deleted_for_in_iterators(object, key);
                         }
@@ -472,14 +474,8 @@ impl InterpreterCore {
         let object = self.array_method_write_object(receiver)?;
         let key = RuntimePropertyKey::String(key.into());
         self.run_pre_runtime_property_access_hook(module, object, &key)?;
-        let previous_label = self.own_stored_runtime_property_label(object, &key);
-        self.set_own_runtime_property_label(object, &key, label)?;
         // map/filter use CreateDataPropertyOrThrow, never an inherited setter.
-        if let Err(error) = self.set_plain_data_runtime_property(object, key.clone(), value) {
-            self.set_own_runtime_property_label(object, &key, &previous_label)?;
-            return Err(error);
-        }
-        self.grow_array_length_after_own_index_write(object, &key, label)
+        self.create_data_property_or_throw(object, key, value, label)
     }
 
     fn array_callback_species_create(
@@ -626,44 +622,22 @@ impl InterpreterCore {
         receiver: &Value,
         key: &str,
         value: Value,
-        mut label: Label,
+        label: Label,
     ) -> Result<(), InterpreterError> {
         let object = self.array_method_write_object(receiver)?;
         let property_key = RuntimePropertyKey::String(JsString::from(key));
-        self.run_pre_runtime_property_access_hook(module, object, &property_key)?;
-        if let Some(RuntimeProperty::Accessor(accessor)) =
-            self.prototype_chain_lookup_runtime_property(object, &property_key)?
-        {
-            let setter = accessor.set.ok_or_else(|| InterpreterError::TypeError {
-                expected: "writable array method property".into(),
-                got: format!("getter-only property {key}"),
-            })?;
-            label = label.join(&self.runtime_property_label(object, &property_key));
-            let (completion, _) = self.invoke_inline_method_call_with_receiver_label(
-                module,
-                setter,
-                receiver.clone(),
-                label.clone(),
-                &[(value, label)],
-            )?;
-            self.complete_inline_call(completion)?;
-            return Ok(());
+        if self.set_runtime_property_with_receiver(
+            module,
+            receiver.clone(),
+            object,
+            property_key,
+            value,
+            label,
+        )? {
+            Ok(())
+        } else {
+            Err(Self::property_definition_error())
         }
-        if self.heap[object.0 as usize].is_array
-            && key == "length"
-            && matches!(value, Value::Int(length) if length > i64::from(u32::MAX))
-        {
-            return Err(InterpreterError::RangeError {
-                message: "Invalid array length".into(),
-            });
-        }
-        let previous_label = self.own_stored_runtime_property_label(object, &property_key);
-        self.set_own_runtime_property_label(object, &property_key, &label)?;
-        if let Err(error) = self.set_object_runtime_property(object, property_key.clone(), value) {
-            self.set_own_runtime_property_label(object, &property_key, &previous_label)?;
-            return Err(error);
-        }
-        self.grow_array_length_after_own_index_write(object, &property_key, &label)
     }
 
     pub(super) fn grow_array_length_after_own_index_write(

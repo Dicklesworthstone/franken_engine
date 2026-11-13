@@ -1322,7 +1322,12 @@ fn prepare_source_entry_js_namespace_syntax_routes_through_normalization() {
         SourceLanguage::TypeScript
     );
     assert!(prepared.source_ingestion.normalization_applied);
-    assert!(prepared.prepared_source.contains("const Demo = (() => {"));
+    assert!(prepared.prepared_source.contains("var Demo;"));
+    assert!(
+        prepared
+            .prepared_source
+            .contains("})(Demo || (Demo = {}));")
+    );
     assert!(!prepared.prepared_source.contains("namespace Demo"));
 }
 
@@ -1804,9 +1809,17 @@ fn normalize_hostcall_type_param_stripped() {
 fn normalize_namespace_lowering_produces_iife() {
     let source = "namespace Utils { export const pi = 3; }";
     let output = normalize(source).unwrap();
-    assert!(output.normalized_source.contains("const Utils = (() => {"));
-    assert!(output.normalized_source.contains("ns.pi = 3;"));
-    assert!(output.normalized_source.contains("return ns;"));
+    assert!(output.normalized_source.contains("var Utils;"));
+    assert!(
+        output
+            .normalized_source
+            .contains("__franken_namespace_0.pi = 3;")
+    );
+    assert!(
+        output
+            .normalized_source
+            .contains("})(Utils || (Utils = {}));")
+    );
 }
 
 #[test]
@@ -1814,12 +1827,20 @@ fn normalize_namespace_export_function_lowering_produces_function_and_binding() 
     let source =
         "namespace Utils { export function add(a: number, b: number): number { return a + b; } }";
     let output = normalize(source).unwrap();
-    assert!(output.normalized_source.contains("const Utils = (() => {"));
+    assert!(output.normalized_source.contains("var Utils;"));
     // Erased annotations become spaces (offset-preserving), so compare the
     // function without whitespace.
     assert!(without_whitespace(&output.normalized_source).contains("functionadd(a,b){returna+b;}"));
-    assert!(output.normalized_source.contains("ns.add = add;"));
-    assert!(output.normalized_source.contains("return ns;"));
+    assert!(
+        output
+            .normalized_source
+            .contains("__franken_namespace_0.add = add;")
+    );
+    assert!(
+        output
+            .normalized_source
+            .contains("})(Utils || (Utils = {}));")
+    );
 }
 
 #[test]
@@ -1834,22 +1855,36 @@ namespace Utils {
     // Erased annotations become spaces (offset-preserving), so compare the
     // function without whitespace.
     assert!(without_whitespace(&output.normalized_source).contains("functionadd(a,b){returna+b;}"));
-    assert!(output.normalized_source.contains("ns.add = add;"));
-    assert!(output.normalized_source.contains("ns.version = 1;"));
-    assert!(output.normalized_source.contains("return ns;"));
+    assert!(
+        output
+            .normalized_source
+            .contains("__franken_namespace_0.add = add;")
+    );
+    assert!(
+        output
+            .normalized_source
+            .contains("__franken_namespace_0.version = 1;")
+    );
+    assert!(
+        output
+            .normalized_source
+            .contains("})(Utils || (Utils = {}));")
+    );
 }
 
 #[test]
-fn normalize_namespace_export_function_with_object_return_type_fails_closed() {
+fn normalize_namespace_export_function_preserves_object_return_values() {
     let source =
         "namespace Utils { export function make(): { value: number } { return { value: 1 }; } }";
-    let error = normalize(source)
-        .expect_err("object-shaped return types are still unsupported and must fail closed");
-    assert_eq!(
-        error,
-        TsNormalizationError::UnsupportedSyntax {
-            feature: "unsupported namespace export form",
-        }
+    let output = normalize(source)
+        .expect("object return annotations should erase without changing runtime properties");
+    assert!(
+        without_whitespace(&output.normalized_source).contains("functionmake(){return{value:1};}")
+    );
+    assert!(
+        output
+            .normalized_source
+            .contains("__franken_namespace_0.make = make;")
     );
 }
 
@@ -2588,10 +2623,22 @@ fn enrichment_parameter_property_multiple() {
 fn enrichment_namespace_with_multiple_exports() {
     let source = "namespace Math { export const PI = 3; export const E = 2; }";
     let output = normalize(source).unwrap();
-    assert!(output.normalized_source.contains("const Math = (() => {"));
-    assert!(output.normalized_source.contains("ns.PI = 3;"));
-    assert!(output.normalized_source.contains("ns.E = 2;"));
-    assert!(output.normalized_source.contains("return ns;"));
+    assert!(output.normalized_source.contains("var Math;"));
+    assert!(
+        output
+            .normalized_source
+            .contains("__franken_namespace_0.PI = 3;")
+    );
+    assert!(
+        output
+            .normalized_source
+            .contains("__franken_namespace_0.E = 2;")
+    );
+    assert!(
+        output
+            .normalized_source
+            .contains("})(Math || (Math = {}));")
+    );
 }
 
 #[test]

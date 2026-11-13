@@ -10,10 +10,11 @@
 //! built-ins. Expected strings are Node v22.2.0's output for the same
 //! programs.
 //!
-//! No-claim: the other internal slots (`__entries`, `__values`, `__size`,
-//! `__target`, ...) are still non-enumerable own properties of
-//! the real objects; reflection lists them and guest writes reach them.
-//! Date and RegExp store their state in private heap slots.
+//! Map, Set, Date and RegExp also store their state in private heap slots.
+//! The collection regressions cover reflection, guest properties with the
+//! former storage names, integrity levels, constructors, cloning and GC.
+//! Other built-ins' internal slots (for example WeakRef's `__target`) are
+//! outside this coverage.
 
 use frankenengine_engine::{
     HybridRouter, JsEngine, QuickJsInspiredNativeEngine, V8InspiredNativeEngine,
@@ -26,7 +27,7 @@ fn eval(source: &str) -> String {
         .value
 }
 
-fn assert_date_value(source: &str, expected: &str) {
+fn assert_profile_value(source: &str, expected: &str) {
     for (profile, result) in [
         ("baseline", QuickJsInspiredNativeEngine.eval(source)),
         ("throughput", V8InspiredNativeEngine.eval(source)),
@@ -36,12 +37,194 @@ fn assert_date_value(source: &str, expected: &str) {
     }
 }
 
+/// The former backing keys are ordinary guest property names. Neither data
+/// properties nor accessors with those names may replace [[MapData]] or
+/// [[SetData]]. Expected outputs are checked against Node v24.22.1.
+#[test]
+fn collection_storage_is_private_across_guest_property_operations() {
+    assert_profile_value(
+        r#"var m = new Map([['a', 1]]), s = new Set(['x']);
+var out = [Reflect.ownKeys(m).length, Object.getOwnPropertyNames(s).length,
+           '__entries' in m, '__values' in s, '__size' in m,
+           String(m.__entries), String(s.__values), String(m.__size)];
+m.__entries = {a: 'tampered'}; m.__size = 700;
+s.__values = {}; s.__size = 800;
+out.push(m.get('a'), m.size, s.has('x'), s.size, m.__entries.a, m.__size, s.__size,
+         Reflect.ownKeys(m).join(','), Reflect.ownKeys(s).join(','));
+for (var pair of [[m, '__entries'], [m, '__size'], [s, '__values'], [s, '__size']]) {
+    Object.defineProperty(pair[0], pair[1], {
+        get() { throw 'guest storage read'; },
+        set(v) { throw 'guest storage write'; }, configurable: true
+    });
+}
+out.push(m.set('b', 2) === m, s.add('y') === s, m.size, s.size,
+         m.get('b'), s.has('y'), m.delete('a'), s.delete('x'));
+out.push(Array.from(m).join(':'), Array.from(s).join(':'), m.size, s.size);
+m.clear(); s.clear();
+out.push(m.size, s.size, delete m.__entries, delete m.__size,
+         delete s.__values, delete s.__size,
+         Reflect.ownKeys(m).length, Reflect.ownKeys(s).length);
+out.join('|');"#,
+        "0|0|false|false|false|undefined|undefined|undefined|1|1|true|1|tampered|700|800|__entries,__size|__values,__size|true|true|2|2|2|true|true|true|b,2|y|1|1|0|0|true|true|true|true|0|0",
+    );
+}
+
+#[test]
+fn collection_contents_remain_mutable_under_object_integrity_levels() {
+    assert_profile_value(
+        r#"var out = [];
+for (var transform of [Object.freeze, Object.seal, Object.preventExtensions]) {
+    var m = transform(new Map([['a', 1]])), s = transform(new Set([1]));
+    out.push(m.set('b', 2) === m, m.get('b'), m.size,
+             s.add(2) === s, s.has(2), s.size,
+             m.delete('a'), s.delete(1), m.size, s.size);
+    m.clear(); s.clear();
+    out.push(m.size, s.size, Reflect.ownKeys(m).length, Reflect.ownKeys(s).length);
+}
+out.join('|');"#,
+        "true|2|2|true|true|2|true|true|1|1|0|0|0|0|true|2|2|true|true|2|true|true|1|1|0|0|0|0|true|2|2|true|true|2|true|true|1|1|0|0|0|0",
+    );
+}
+
+#[test]
+fn subclass_and_reflect_construction_install_private_collection_storage() {
+    assert_profile_value(
+        r#"class M extends Map { get count() { return this.size; } }
+class S extends Set { get count() { return this.size; } }
+Object.defineProperty(M.prototype, '__entries', {
+    get() { throw 'prototype entries read'; }, set(v) { throw 'prototype entries write'; }
+});
+Object.defineProperty(S.prototype, '__values', {
+    get() { throw 'prototype values read'; }, set(v) { throw 'prototype values write'; }
+});
+var m = new M([['a', 1]]), s = new S([2]);
+var rm = Reflect.construct(Map, [[['b', 3]]], M);
+var rs = Reflect.construct(Set, [[4]], S);
+function attempt(f) { try { return f(); } catch (e) { return e.name; } }
+[m instanceof M, s instanceof S, rm instanceof M, rs instanceof S,
+ m.count, s.count, rm.get('b'), rs.has(4),
+ Reflect.ownKeys(m).length, Reflect.ownKeys(s).length,
+ Reflect.ownKeys(rm).length, Reflect.ownKeys(rs).length,
+ attempt(() => Map.prototype.get.call(Object.create(m), 'a')),
+ attempt(() => Set.prototype.has.call(new Proxy(s, {}), 2))].join('|');"#,
+        "true|true|true|true|1|1|3|true|0|0|0|0|TypeError|TypeError",
+    );
+}
+
+#[test]
+fn structured_clone_copies_private_collection_graphs_without_guest_slot_reads() {
+    assert_profile_value(
+        r#"var key = {id: 7}, value = {n: 11};
+var m = new Map([[key, value]]), s = new Set([key, m]);
+m.set('self', m);
+for (var pair of [[m, '__entries'], [m, '__size'], [s, '__values'], [s, '__size']]) {
+    Object.defineProperty(pair[0], pair[1], {
+        get() { throw 'clone read guest slot'; }, enumerable: true
+    });
+}
+var copy = structuredClone({key, value, m, s});
+var iter = copy.m.keys();
+[copy.key !== key, copy.value !== value, copy.m !== m, copy.s !== s,
+ copy.m.get(copy.key) === copy.value, copy.m.get('self') === copy.m,
+ copy.s.has(copy.key), copy.s.has(copy.m), iter.next().value === copy.key,
+ iter.next().value, iter.next().done, copy.m.size, copy.s.size,
+ Reflect.ownKeys(copy.m).length, Reflect.ownKeys(copy.s).length].join('|');"#,
+        "true|true|true|true|true|true|true|true|true|self|true|2|2|0|0",
+    );
+}
+
+#[test]
+fn collection_iterators_keep_live_storage_after_guest_slots_are_replaced() {
+    assert_profile_value(
+        r#"var m = new Map([['a', 1], ['b', 2]]), s = new Set([1, 2]);
+var mi = m.entries(), si = s.values();
+var out = [mi.next().value.join(':'), si.next().value];
+m.__entries = {}; s.__values = {}; m.__size = 50; s.__size = 60;
+m.delete('b'); s.delete(2); m.set('c', 3); s.add(3);
+out.push(mi.next().value.join(':'), si.next().value);
+var seen = [];
+m.forEach((value, key) => { seen.push(key + value); if (key === 'a') m.set('d', 4); });
+s.forEach(value => { seen.push(value); if (value === 1) s.add(4); });
+out.push(seen.join(','), mi.next().value.join(':'), si.next().value,
+         mi.next().done, si.next().done, m.size, s.size);
+out.join('|');"#,
+        "a:1|1|c:3|3|a1,c3,d4,1,3,4|d:4|4|true|true|3|3",
+    );
+}
+
+/// Keys, values and closures are reachable only through the private storage
+/// edge after build() returns. Collecting at every safe point must retain
+/// those edges without retaining short-lived garbage or drifting accounting.
+#[test]
+fn private_collection_storage_is_traced_and_accounted_under_gc_stress() {
+    use frankenengine_engine::ast::ParseGoal;
+    use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore, Value};
+    use frankenengine_engine::capability::RuntimeCapability;
+    use frankenengine_engine::ir_contract::Ir0Module;
+    use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+    use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
+
+    let source = r#"function build() {
+    const key = {id: 7}, value = {n: 11}, captured = {n: 13};
+    const m = new Map([[key, value]]), s = new Set([key, value]);
+    m.set('closure', () => captured.n);
+    m.set('self', m);
+    return [m, s];
+}
+var pair = build(), m = pair[0], s = pair[1];
+m.__entries = {}; s.__values = {};
+for (let i = 0; i < 40; i++) { const garbage = {i}; }
+var first = m.entries().next().value;
+[first[0].id, first[1].n, m.get('closure')(), m.get('self') === m,
+ s.has(first[0]), s.has(first[1]), m.size, s.size].join('|');"#;
+    let tree = CanonicalEs2020Parser
+        .parse_with_options(
+            ParserSource {
+                label: "private-collection-gc.js".into(),
+                text: source.into(),
+            },
+            ParseGoal::Script,
+            &ParserOptions::default(),
+        )
+        .expect("collection program parses");
+    let module = lower_ir0_to_ir3(
+        &Ir0Module::from_syntax_tree(tree, "private-collection-gc.js"),
+        &LoweringContext::new("collection-gc", "collection-decision", "collection-policy"),
+    )
+    .expect("collection program lowers")
+    .ir3;
+    for mut config in [
+        InterpreterConfig::quickjs_defaults(),
+        InterpreterConfig::v8_defaults(),
+    ] {
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]
+        .into_iter()
+        .collect();
+        let mut core = InterpreterCore::new(config, "collection-gc");
+        core.set_gc_stress_interval(Some(1));
+        let result = core.execute(&module).expect("private storage survives GC");
+        assert_eq!(result.value, Value::str("7|11|13|true|true|true|3|2"));
+        let stats = core.gc_stats();
+        assert!(stats.collections > 0, "forced collection must actually run");
+        assert!(stats.reclaimed_objects > 0, "garbage must be reclaimable");
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "private storage must have exact incremental memory accounting"
+        );
+    }
+}
+
 /// [[DateValue]] is absent from reflection and cannot be intercepted or
 /// corrupted by an ordinary property with the former storage key. Expected
 /// outputs of these Date tests were captured from Node v24.22.1.
 #[test]
 fn date_value_is_private_across_guest_property_operations() {
-    assert_date_value(
+    assert_profile_value(
         r#"var d = new Date(5);
 var out = [Reflect.ownKeys(d).length, Object.getOwnPropertyNames(d).length,
            d.hasOwnProperty('__timestamp'), '__timestamp' in d, String(d.__timestamp)];
@@ -59,7 +242,7 @@ out.join('|');"#,
 
 #[test]
 fn date_constructor_and_structured_clone_copy_private_value() {
-    assert_date_value(
+    assert_profile_value(
         r#"var d = new Date(86400007);
 Object.defineProperty(d, '__timestamp', {
     get() { throw 'private slot read'; }, set(v) { throw 'private slot write'; }
@@ -81,7 +264,7 @@ var invalid = structuredClone(new Date(NaN));
 
 #[test]
 fn date_private_value_remains_mutable_under_object_integrity_levels() {
-    assert_date_value(
+    assert_profile_value(
         r#"var out = [];
 for (var transform of [Object.freeze, Object.seal, Object.preventExtensions]) {
     var d = new Date(0);
@@ -98,7 +281,7 @@ out.join('|');"#,
 
 #[test]
 fn intl_date_format_converts_objects_instead_of_reading_guest_storage_keys() {
-    assert_date_value(
+    assert_profile_value(
         r#"var calls = [];
 var format = new Intl.DateTimeFormat('en-US', {
     timeZone: 'UTC', year: 'numeric', month: '2-digit', day: '2-digit'
@@ -120,7 +303,7 @@ var third = format.format(date);
 
 #[test]
 fn date_inspection_and_conversion_use_the_private_value_and_exact_receiver() {
-    assert_date_value(
+    assert_profile_value(
         r#"var util = require('util');
 function attempt(f) { try { return f(); } catch (e) { return e.name; } }
 var d = new Date(5);

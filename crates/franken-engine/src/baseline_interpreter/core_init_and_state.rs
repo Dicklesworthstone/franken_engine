@@ -1074,11 +1074,8 @@ impl InterpreterCore {
             pending_timer_tasks: BTreeMap::new(),
             unref_timer_ids: BTreeSet::new(),
             atomics_async_waiters: Vec::new(),
-            suspended: false,
-            sandboxed: false,
-            quarantined: false,
-            pending_challenges: Vec::new(),
-            containment_evidence: Vec::new(),
+            active_sandbox: Cell::new(None),
+            sandbox_witness_pending: Cell::new(false),
             decision_receipts: EvidenceLog::new(),
             nondeterminism_trace,
             register_labels: vec![Label::Public; max_regs],
@@ -2896,8 +2893,8 @@ impl InterpreterCore {
         Ok(Value::Object(date_id))
     }
 
-    /// Engine-internal slots still stored as own properties (collection
-    /// storage, a Map/Set's cached size) stay out of
+    /// Engine-internal slots still stored as own properties (WeakSet
+    /// storage, WeakRef targets and FinalizationRegistry tokens) stay out of
     /// Object.keys, for-in, JSON.stringify, spread and Object.assign, like the
     /// internal slots they stand in for.
     pub(super) fn hide_internal_slots(

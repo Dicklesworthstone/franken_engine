@@ -10190,8 +10190,46 @@ enum ModuleRuntimeStatus {
 enum StarExportOrigin {
     /// One star source provides the name.
     Provided,
-    /// Star sources provide different values: ES2020 ResolveExport finds the
+    /// Star sources resolve to different bindings: ResolveExport finds the
     /// name ambiguous, so the module does not export it.
+    Ambiguous,
+}
+
+/// A module-local import name denotes a source binding, rather than another
+/// binding that happens to contain the same value. Direct namespace re-exports
+/// denote the source module's distinguished namespace binding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ModuleImportOrigin {
+    Binding { specifier: String, name: JsString },
+    Namespace { specifier: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ModuleLocalExport {
+    local_name: Option<JsString>,
+    /// Aliases of the same local name share an index; synthetic exports get
+    /// their own. Zero is reserved for a module's namespace binding.
+    binding_index: std::num::NonZeroU32,
+}
+
+#[derive(Debug, Clone)]
+struct ModuleLocalBinding {
+    binding_index: std::num::NonZeroU32,
+    exports: Vec<JsString>,
+}
+
+/// A namespace ObjectId uniquely identifies its module record in this realm.
+/// Only the binding name participates in resolution; exported Values never do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ModuleExportIdentity {
+    namespace: ObjectId,
+    binding_index: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ModuleExportResolution {
+    Missing,
+    Resolved(ModuleExportIdentity),
     Ambiguous,
 }
 
@@ -10205,6 +10243,17 @@ struct ModuleRuntimeRecord {
     /// Export names that came from `export * from` rather than this module's
     /// own export declarations (which always win).
     star_exports: BTreeMap<JsString, StarExportOrigin>,
+    /// Explicit exports are declared before evaluation, including those whose
+    /// lexical values are not initialized yet. Aliases retain their local name.
+    /// A missing local name denotes a synthetic IR export.
+    local_export_bindings: BTreeMap<JsString, ModuleLocalExport>,
+    /// Intern local identities once, avoiding a quadratic scan for aliases.
+    local_binding_indices: BTreeMap<JsString, ModuleLocalBinding>,
+    /// Resolved source origins of this module's immutable import bindings.
+    import_origins: BTreeMap<JsString, ModuleImportOrigin>,
+    /// Forward star edges complement `star_reexporters`. Resolution walks this
+    /// graph so diamonds, cycles, and transitive ambiguity share one rule.
+    star_sources: BTreeSet<String>,
     /// The module's static flow label ceiling once it is lowered: every value
     /// it can produce is at most this label (bd-j8f7q import contracts).
     flow_label_ceiling: Option<Label>,

@@ -10333,10 +10333,19 @@ fn lower_ir2_to_ir3_with_input_hash(
                         runtime_scope_binding_name(*binding_id, &runtime_scope_binding_names_by_id);
                     let dst = alloc_register(&mut register_cursor);
                     let pool_index = push_constant_optimized(&mut constant_pool, &name);
-                    ir3.instructions.push(Ir3Instruction::LoadScoped {
-                        dst,
-                        name_pool_index: pool_index,
-                    });
+                    if matches!(ir2.ops.get(op_index + 1).map(|next| &next.inner),
+                        Some(Ir1Op::ExportBinding { binding_id: exported, .. }) if exported == binding_id)
+                    {
+                        // Export declarations link a binding without reading
+                        // it, including before lexical initialization. IR3's
+                        // explicit linkage supplies the eventual value.
+                        ir3.instructions.push(Ir3Instruction::LoadUndefined { dst });
+                    } else {
+                        ir3.instructions.push(Ir3Instruction::LoadScoped {
+                            dst,
+                            name_pool_index: pool_index,
+                        });
+                    }
                     value_stack.push(dst);
                 } else {
                     let source_reg = function_local_register(
@@ -10730,12 +10739,27 @@ fn lower_ir2_to_ir3_with_input_hash(
                 });
                 value_stack.push(dst);
             }
-            Ir1Op::ExportBinding { name, .. } => {
+            Ir1Op::ExportBinding { name, binding_id } => {
                 let src = pop_lowering_value(&mut value_stack)?;
                 let pool_index = push_constant_optimized(&mut constant_pool, name);
+                let local_name_pool_index =
+                    scoped_runtime_binding_ids.contains(binding_id).then(|| {
+                        let local = runtime_scope_binding_name(
+                            *binding_id,
+                            &runtime_scope_binding_names_by_id,
+                        );
+                        push_constant_optimized(&mut constant_pool, local)
+                    });
+                // Only the direct namespace-export lowering creates an
+                // exported binding with this internal (non-Identifier) name.
+                let namespace_reexport = binding_id_to_name.get(binding_id).is_some_and(|local| {
+                    local.starts_with("@@franken_internal_reexport_namespace_")
+                });
                 ir3.instructions.push(Ir3Instruction::ExportBinding {
                     name_pool_index: pool_index,
                     src,
+                    local_name_pool_index,
+                    namespace_reexport,
                 });
                 value_stack.push(src);
             }

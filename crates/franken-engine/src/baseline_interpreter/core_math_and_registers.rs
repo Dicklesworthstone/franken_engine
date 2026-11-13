@@ -3534,6 +3534,55 @@ impl InterpreterCore {
         }))
     }
 
+    pub(super) fn module_local_export_entry_bytes(
+        name: &JsString,
+        local: &Option<JsString>,
+    ) -> u64 {
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(std::mem::size_of::<(JsString, ModuleLocalExport)>() as u64)
+            .saturating_add(Self::estimate_js_string_bytes(name))
+            .saturating_add(
+                local
+                    .as_ref()
+                    .map(Self::estimate_js_string_bytes)
+                    .unwrap_or(0),
+            )
+    }
+
+    pub(super) fn module_local_binding_index_bytes(local: &JsString) -> u64 {
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(std::mem::size_of::<(JsString, ModuleLocalBinding)>() as u64)
+            .saturating_add(Self::estimate_js_string_bytes(local))
+    }
+
+    pub(super) fn module_local_binding_export_bytes(name: &JsString) -> u64 {
+        (std::mem::size_of::<JsString>() as u64)
+            .saturating_add(Self::estimate_js_string_bytes(name))
+    }
+
+    pub(super) fn module_import_origin_entry_bytes(
+        local: &JsString,
+        origin: &ModuleImportOrigin,
+    ) -> u64 {
+        let payload = match origin {
+            ModuleImportOrigin::Binding { specifier, name } => {
+                Self::estimate_string_bytes(specifier)
+                    .saturating_add(Self::estimate_js_string_bytes(name))
+            }
+            ModuleImportOrigin::Namespace { specifier } => Self::estimate_string_bytes(specifier),
+        };
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(std::mem::size_of::<(JsString, ModuleImportOrigin)>() as u64)
+            .saturating_add(Self::estimate_js_string_bytes(local))
+            .saturating_add(payload)
+    }
+
+    pub(super) fn module_star_source_bytes(specifier: &str) -> u64 {
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(std::mem::size_of::<String>() as u64)
+            .saturating_add(Self::estimate_string_bytes(specifier))
+    }
+
     pub(super) fn module_exports_memory_bytes(&self) -> u64 {
         Self::saturating_sum(self.module_state.modules.values().map(|record| {
             let exports = Self::saturating_sum(
@@ -3544,13 +3593,46 @@ impl InterpreterCore {
             );
             // The export record also retains the ceiling used to authorize
             // later imports. Custom labels own names even on failed records.
-            exports.saturating_add(
+            let local_bindings =
+                Self::saturating_sum(record.local_export_bindings.iter().map(|(name, local)| {
+                    Self::module_local_export_entry_bytes(name, &local.local_name)
+                }));
+            let import_origins = Self::saturating_sum(
                 record
-                    .flow_label_ceiling
-                    .as_ref()
-                    .map(Self::estimate_label_bytes)
-                    .unwrap_or(0),
-            )
+                    .import_origins
+                    .iter()
+                    .map(|(local, origin)| Self::module_import_origin_entry_bytes(local, origin)),
+            );
+            let binding_indices = Self::saturating_sum(record.local_binding_indices.iter().map(
+                |(local, binding)| {
+                    Self::module_local_binding_index_bytes(local).saturating_add(
+                        Self::saturating_sum(
+                            binding
+                                .exports
+                                .iter()
+                                .map(Self::module_local_binding_export_bytes),
+                        ),
+                    )
+                },
+            ));
+            let star_sources = Self::saturating_sum(
+                record
+                    .star_sources
+                    .iter()
+                    .map(|source| Self::module_star_source_bytes(source)),
+            );
+            exports
+                .saturating_add(local_bindings)
+                .saturating_add(binding_indices)
+                .saturating_add(import_origins)
+                .saturating_add(star_sources)
+                .saturating_add(
+                    record
+                        .flow_label_ceiling
+                        .as_ref()
+                        .map(Self::estimate_label_bytes)
+                        .unwrap_or(0),
+                )
         }))
     }
 

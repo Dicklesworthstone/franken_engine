@@ -34,6 +34,10 @@ pub struct IrSchemaVersion {
 }
 
 impl IrSchemaVersion {
+    /// `0.20.0` binds module exports to explicit local/namespace identities.
+    /// Older IR3 containing exports must be regenerated; its missing linkage
+    /// cannot safely acquire new semantics under an old artifact hash. Engine
+    /// minor `0.19.0` is skipped because it identifies the native core wire.
     /// `0.18.0` retains static import attributes in IR0, IR1, IR2 and IR3.
     /// Verified IR boundaries reject newer versions rather than erase assertions.
     /// `0.17.0` adds optional Script strictness to IR0, strict global scopes
@@ -60,7 +64,7 @@ impl IrSchemaVersion {
     /// lone-surrogate values use `$wtf16`.
     pub const CURRENT: Self = Self {
         major: 0,
-        minor: 18,
+        minor: 20,
         patch: 0,
     };
 
@@ -1881,7 +1885,18 @@ pub enum Ir3Instruction {
         import_attributes: ImportAttributes,
     },
     /// Register an export binding for the current module.
-    ExportBinding { name_pool_index: u32, src: Reg },
+    ExportBinding {
+        name_pool_index: u32,
+        src: Reg,
+        /// The scope binding that owns this export. Keeping it explicit
+        /// preserves alias identity when instruction scheduling changes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        local_name_pool_index: Option<u32>,
+        /// `export * as name from source` denotes the source namespace
+        /// binding, unlike an ES2020 local namespace-import binding.
+        #[serde(default, skip_serializing_if = "is_false")]
+        namespace_reexport: bool,
+    },
 
     // ── Generator instructions ───────────────────────────────────────
     /// Create a generator object from the current function frame.
@@ -2604,14 +2619,28 @@ impl Ir3Instruction {
             Self::ExportBinding {
                 name_pool_index,
                 src,
-            } => CanonicalValue::map_from_entries([
-                ("op", CanonicalValue::str("export_binding")),
-                (
-                    "name_pool_index",
-                    CanonicalValue::U64(u64::from(*name_pool_index)),
-                ),
-                ("src", CanonicalValue::U64(u64::from(*src))),
-            ]),
+                local_name_pool_index,
+                namespace_reexport,
+            } => {
+                let mut entries = vec![
+                    ("op", CanonicalValue::str("export_binding")),
+                    (
+                        "name_pool_index",
+                        CanonicalValue::U64(u64::from(*name_pool_index)),
+                    ),
+                    ("src", CanonicalValue::U64(u64::from(*src))),
+                ];
+                if let Some(local) = local_name_pool_index {
+                    entries.push((
+                        "local_name_pool_index",
+                        CanonicalValue::U64(u64::from(*local)),
+                    ));
+                }
+                if *namespace_reexport {
+                    entries.push(("namespace_reexport", CanonicalValue::Bool(true)));
+                }
+                CanonicalValue::map_from_entries(entries)
+            }
             Self::CreateGenerator {
                 dst,
                 function_index,
@@ -3308,6 +3337,7 @@ pub fn verify_ir3_specialization(module: &Ir3Module) -> Result<(), IrError> {
     verify_ir3_derived_constructor_schema(module)?;
     verify_ir3_object_method_schema(module)?;
     verify_ir3_import_attributes_schema(module)?;
+    verify_ir3_export_binding_schema(module)?;
     let mut global_prelude = true;
     let mut global_names = std::collections::BTreeSet::new();
     for instruction in &module.instructions {
@@ -3444,11 +3474,11 @@ pub fn verify_schema_version(header: &IrHeader) -> Result<(), IrError> {
         ));
     }
 
-    // Engine 0.5.0, 0.8.0 through 0.11.0, 0.13.0, and 0.15.0 never existed: those numeric
+    // Engine 0.5.0, 0.8.0 through 0.11.0, 0.13.0, 0.15.0, and 0.19.0 never existed: those numeric
     // versions belong to incompatible native franken-core IR shapes. Accepting
     // one here would let a peer artifact pass the version gate whenever it
     // happened to use only overlapping enum variants.
-    if provided.major == 0 && matches!(provided.minor, 5 | 8 | 9 | 10 | 11 | 13 | 15) {
+    if provided.major == 0 && matches!(provided.minor, 5 | 8 | 9 | 10 | 11 | 13 | 15 | 19) {
         return Err(IrError::new(
             IrErrorCode::SchemaVersionMismatch,
             format!(
@@ -3471,6 +3501,45 @@ pub fn verify_schema_version(header: &IrHeader) -> Result<(), IrError> {
         ));
     }
 
+    Ok(())
+}
+
+const EXPORT_BINDING_SCHEMA_VERSION: IrSchemaVersion = IrSchemaVersion {
+    major: 0,
+    minor: 20,
+    patch: 0,
+};
+
+fn verify_ir3_export_binding_schema(module: &Ir3Module) -> Result<(), IrError> {
+    for instruction in &module.instructions {
+        if let Ir3Instruction::ExportBinding {
+            local_name_pool_index,
+            namespace_reexport,
+            ..
+        } = instruction
+        {
+            if module.header.schema_version < EXPORT_BINDING_SCHEMA_VERSION {
+                return Err(IrError::new(
+                    IrErrorCode::SchemaVersionMismatch,
+                    format!(
+                        "module export linkage requires schema {}; regenerate or re-lower the legacy IR3 artifact (provided {})",
+                        EXPORT_BINDING_SCHEMA_VERSION, module.header.schema_version
+                    ),
+                    IrLevel::Ir3,
+                ));
+            }
+            if local_name_pool_index
+                .is_some_and(|index| module.constant_pool.get(index as usize).is_none())
+                || (*namespace_reexport && local_name_pool_index.is_none())
+            {
+                return Err(IrError::new(
+                    IrErrorCode::InvalidSpecializationLinkage,
+                    "module export linkage requires a valid local binding constant; namespace reexports require explicit linkage",
+                    IrLevel::Ir3,
+                ));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -3993,7 +4062,7 @@ mod tests {
 
     #[test]
     fn schema_version_display() {
-        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.18.0");
+        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.20.0");
     }
 
     #[test]
@@ -4772,6 +4841,8 @@ mod tests {
             Ir3Instruction::ExportBinding {
                 name_pool_index: 0,
                 src: 1,
+                local_name_pool_index: None,
+                namespace_reexport: false,
             },
             Ir3Instruction::Halt,
             Ir3Instruction::BeginTry {
@@ -6390,7 +6461,7 @@ mod tests {
     fn schema_version_current_value() {
         let v = IrSchemaVersion::CURRENT;
         assert_eq!(v.major, 0);
-        assert_eq!(v.minor, 18);
+        assert_eq!(v.minor, 20);
         assert_eq!(v.patch, 0);
     }
 
@@ -7239,7 +7310,7 @@ mod tests {
 
     #[test]
     fn verify_schema_version_accepts_historical_minor_versions_bd_lfq44() {
-        for minor in [1, 2, 3, 4, 6, 7, 12, 14] {
+        for minor in [1, 2, 3, 4, 6, 7, 12, 14, 16, 17, 18] {
             let header = IrHeader {
                 schema_version: IrSchemaVersion {
                     major: IrSchemaVersion::CURRENT.major,
@@ -7253,14 +7324,14 @@ mod tests {
 
             assert!(
                 verify_schema_version(&header).is_ok(),
-                "engine 0.16 readers retain compatibility with 0.{minor} artifacts"
+                "engine readers retain compatibility with 0.{minor} headers"
             );
         }
     }
 
     #[test]
     fn verify_schema_version_rejects_skipped_core_owned_minors_bd_0k19b() {
-        for minor in [5, 8, 9, 10, 11, 13, 15] {
+        for minor in [5, 8, 9, 10, 11, 13, 15, 19] {
             let header = IrHeader {
                 schema_version: IrSchemaVersion {
                     major: 0,
@@ -7343,7 +7414,7 @@ mod tests {
 
         // Verify error message contains specific version numbers
         assert!(err.message.contains("99.88.77"));
-        assert!(err.message.contains("0.18.0")); // current version
+        assert!(err.message.contains("0.20.0")); // current version
 
         // Verify error can be displayed and contains IR level
         let display = err.to_string();

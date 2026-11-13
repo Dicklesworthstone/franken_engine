@@ -366,7 +366,25 @@ fn instruction(writer: &mut CanonicalWriter, instruction: &Ir3Instruction) {
         ExportBinding {
             name_pool_index,
             src,
-        } => copied!("export_binding", name_pool_index, src),
+            local_name_pool_index,
+            namespace_reexport,
+        } => match (local_name_pool_index, namespace_reexport) {
+            (None, false) => copied!("export_binding", name_pool_index, src),
+            (Some(local), false) => emit!(
+                "export_binding",
+                name_pool_index = *name_pool_index,
+                src = *src,
+                local_name_pool_index = *local
+            ),
+            (None, true) => copied!("export_binding", name_pool_index, src, namespace_reexport),
+            (Some(local), true) => emit!(
+                "export_binding",
+                name_pool_index = *name_pool_index,
+                src = *src,
+                local_name_pool_index = *local,
+                namespace_reexport = true
+            ),
+        },
         CreateGenerator {
             dst,
             function_index,

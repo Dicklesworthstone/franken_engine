@@ -5149,15 +5149,15 @@ mod function_prototype_call_apply_tests_current {
         for specifier in ["a-source", "b-first", "c-join", "d-tail", "z-late"] {
             let namespace = core.ensure_module_record(&module, specifier).unwrap();
             namespaces.insert(specifier, namespace);
-            core.publish_module_export(
-                specifier,
-                name.clone(),
-                Value::Int(0),
-                Label::Public,
-                ExportPublication::Own,
-            )
-            .unwrap();
         }
+        core.publish_module_export(
+            "a-source",
+            name.clone(),
+            Value::Int(0),
+            Label::Public,
+            ExportPublication::Own,
+        )
+        .unwrap();
         for (source, target) in [
             ("a-source", "b-first"),
             ("b-first", "c-join"),
@@ -5176,6 +5176,12 @@ mod function_prototype_call_apply_tests_current {
                 .unwrap()
                 .star_exports
                 .insert(name.clone(), StarExportOrigin::Provided);
+            core.module_state
+                .modules
+                .get_mut(target)
+                .unwrap()
+                .star_sources
+                .insert(source.to_string());
         }
         // This re-exporting import retains a historical Secret label even
         // after its source writes a new Public value. Its lexical path sorts
@@ -5188,6 +5194,17 @@ mod function_prototype_call_apply_tests_current {
         );
         core.watch_module_export(namespaces["a-source"], name.clone(), &imported.state)
             .unwrap();
+        core.declare_module_export_binding("z-late", &name, Some(JsString::from("imported-count")))
+            .unwrap();
+        core.record_module_import_origin(
+            "z-late",
+            JsString::from("imported-count"),
+            ModuleImportOrigin::Binding {
+                specifier: "a-source".to_string(),
+                name: name.clone(),
+            },
+        )
+        .unwrap();
         core.track_live_export(&imported.state, "z-late".to_string(), name.clone())
             .unwrap();
         core.sync_estimated_memory_bytes().unwrap();
@@ -5203,10 +5220,17 @@ mod function_prototype_call_apply_tests_current {
         let key = RuntimePropertyKey::String(name);
         for specifier in ["z-late", "c-join", "d-tail"] {
             let namespace = namespaces[specifier];
-            assert_eq!(core.prototype_chain_get(namespace, "count"), Ok(Value::Int(9)));
+            assert_eq!(
+                core.prototype_chain_get(namespace, "count"),
+                Ok(Value::Int(9))
+            );
             assert_eq!(core.runtime_property_label(namespace, &key), Label::Secret);
         }
         assert_eq!(core.json_parse_temporary_bytes, temporary_before);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]
@@ -5215,34 +5239,47 @@ mod function_prototype_call_apply_tests_current {
             let module = test_module_with_functions(Vec::new(), Vec::new());
             let mut core = test_interpreter();
             let name = JsString::from("count");
+            core.ensure_module_record(&module, "source").unwrap();
             let left = core.ensure_module_record(&module, "left").unwrap();
             let right = core.ensure_module_record(&module, "right").unwrap();
-            for (source, target) in [("left", "right"), ("right", "left")] {
-                core.publish_module_export(
-                    source,
-                    name.clone(),
-                    Value::Int(0),
-                    Label::Public,
-                    ExportPublication::Own,
-                )
-                .unwrap();
-                let record = core.module_state.modules.get_mut(source).unwrap();
+            core.publish_module_export(
+                "source",
+                name.clone(),
+                Value::Int(0),
+                Label::Public,
+                ExportPublication::Own,
+            )
+            .unwrap();
+            for (source, target) in [("source", "left"), ("left", "right"), ("right", "left")] {
+                let record = core.module_state.modules.get_mut(target).unwrap();
                 record
                     .star_exports
                     .insert(name.clone(), StarExportOrigin::Provided);
-                record.star_reexporters.insert(target.to_string());
+                record.star_sources.insert(source.to_string());
+                core.module_state
+                    .modules
+                    .get_mut(source)
+                    .unwrap()
+                    .star_reexporters
+                    .insert(target.to_string());
             }
+            core.sync_estimated_memory_bytes().unwrap();
             let before = core.instructions_executed;
-            core.config.instruction_budget = before + if exhausted { 1 } else { 8 };
+            // Resolution now meters every visited binding edge as well as
+            // publication. This rooted three-module cycle remains bounded.
+            core.config.instruction_budget = before + if exhausted { 1 } else { 128 };
             let result = core.publish_module_export(
-                "left",
+                "source",
                 name,
                 Value::Int(17),
                 Label::Public,
-                ExportPublication::Star,
+                ExportPublication::Own,
             );
             if exhausted {
-                assert!(matches!(result, Err(InterpreterError::BudgetExhausted { .. })));
+                assert!(matches!(
+                    result,
+                    Err(InterpreterError::BudgetExhausted { .. })
+                ));
             } else {
                 result.unwrap();
                 assert_eq!(core.prototype_chain_get(left, "count"), Ok(Value::Int(17)));
@@ -5250,7 +5287,55 @@ mod function_prototype_call_apply_tests_current {
                 assert!(core.instructions_executed > before);
             }
             assert_eq!(core.json_parse_temporary_bytes, 0);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
         }
+    }
+
+    #[test]
+    fn module_binding_identity_metadata_refuses_over_budget_growth_atomically() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        core.ensure_module_record(&module, "identity-owner")
+            .unwrap();
+        core.sync_estimated_memory_bytes().unwrap();
+        let baseline = core.estimated_memory_bytes();
+        let limit = core.config.max_total_memory_bytes;
+        core.config.max_total_memory_bytes = baseline;
+        let local = JsString::from("local");
+        assert!(
+            core.declare_module_export_binding(
+                "identity-owner",
+                &JsString::from("first"),
+                Some(local.clone())
+            )
+            .is_err()
+        );
+        let record = &core.module_state.modules["identity-owner"];
+        assert!(record.local_export_bindings.is_empty());
+        assert!(record.local_binding_indices.is_empty());
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+        core.config.max_total_memory_bytes = limit;
+        for name in ["first", "second"] {
+            core.declare_module_export_binding(
+                "identity-owner",
+                &JsString::from(name),
+                Some(local.clone()),
+            )
+            .unwrap();
+        }
+        let record = &core.module_state.modules["identity-owner"];
+        assert_eq!(
+            record.local_export_bindings[&JsString::from("first")].binding_index,
+            record.local_export_bindings[&JsString::from("second")].binding_index
+        );
+        assert_eq!(record.local_binding_indices[&local].exports.len(), 2);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]

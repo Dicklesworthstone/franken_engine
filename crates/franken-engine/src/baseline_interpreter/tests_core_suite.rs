@@ -7623,6 +7623,8 @@ fn repeat_execute_reallocates_module_namespace_without_argv_aliasing_bd_bgq16() 
             Ir3Instruction::ExportBinding {
                 name_pool_index: 0,
                 src: 1,
+                local_name_pool_index: None,
+                namespace_reexport: false,
             },
             Ir3Instruction::Halt,
         ],

@@ -9900,6 +9900,10 @@ impl InterpreterCore {
                 import_meta_object: None,
                 exports: BTreeMap::new(),
                 star_exports: BTreeMap::new(),
+                local_export_bindings: BTreeMap::new(),
+                local_binding_indices: BTreeMap::new(),
+                import_origins: BTreeMap::new(),
+                star_sources: BTreeSet::new(),
                 flow_label_ceiling: None,
                 resolved_source_hash: None,
                 import_bindings: BTreeMap::new(),
@@ -9914,6 +9918,9 @@ impl InterpreterCore {
             .module_state
             .retained_program_bytes
             .saturating_add(retained_program_bytes);
+        if retain_entry_program {
+            self.declare_module_export_bindings(specifier, module)?;
+        }
         // ES2020 26.3.1: a namespace's @@toStringTag is "Module", neither
         // writable, enumerable nor configurable (bd-9vouw.399).
         let tag = RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id());
@@ -10065,6 +10072,7 @@ impl InterpreterCore {
         if record.compiled_module.is_some() {
             return Ok(());
         }
+        self.declare_module_export_bindings(specifier, module)?;
         let retained_program_bytes = Self::retained_module_program_bytes(module, specifier);
         self.apply_memory_component_delta(0, retained_program_bytes)?;
         let record = self

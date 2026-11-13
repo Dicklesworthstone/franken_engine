@@ -10276,6 +10276,9 @@ struct ModuleRuntimeRecord {
     compiled_module: Option<Arc<Ir3Module>>,
     /// Promise representing completion of this module's async evaluation.
     evaluation_promise: Option<crate::promise_model::PromiseHandle>,
+    /// The original guest throw completion. Failed ESM evaluation is sticky:
+    /// later imports must observe the same value, identity, and IFC label.
+    evaluation_exception: Option<(Value, Label)>,
     /// Owned activation parked while an imported module is asynchronously
     /// evaluating. Entry-module execution remains installed in the core.
     async_execution: Option<ModuleExecutionSnapshot>,

@@ -10403,6 +10403,7 @@ fn commonjs_finalization_keeps_exact_named_exports_bd_b12xs_6() {
             cjs_module_object: Some(module_object),
             compiled_module: None,
             evaluation_promise: None,
+            evaluation_exception: None,
             async_execution: None,
         },
     );

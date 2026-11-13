@@ -3583,6 +3583,10 @@ impl InterpreterCore {
             .saturating_add(Self::estimate_string_bytes(specifier))
     }
 
+    pub(super) fn module_evaluation_exception_bytes((value, label): &(Value, Label)) -> u64 {
+        Self::estimate_value_bytes(value).saturating_add(Self::estimate_label_bytes(label))
+    }
+
     pub(super) fn module_exports_memory_bytes(&self) -> u64 {
         Self::saturating_sum(self.module_state.modules.values().map(|record| {
             let exports = Self::saturating_sum(
@@ -3626,6 +3630,13 @@ impl InterpreterCore {
                 .saturating_add(binding_indices)
                 .saturating_add(import_origins)
                 .saturating_add(star_sources)
+                .saturating_add(
+                    record
+                        .evaluation_exception
+                        .as_ref()
+                        .map(Self::module_evaluation_exception_bytes)
+                        .unwrap_or(0),
+                )
                 .saturating_add(
                     record
                         .flow_label_ceiling

@@ -11268,6 +11268,7 @@ fn weakmap_and_module_export_duplicates_are_atomic_and_exact_bd_zpn45() {
                 cjs_module_object: None,
                 compiled_module: None,
                 evaluation_promise: None,
+                evaluation_exception: None,
                 async_execution: None,
             },
         );
@@ -13240,3 +13241,106 @@ fn spread_into_itself_uses_finite_pre_transaction_view_bd_kvq09() {
 
 #[path = "tests_async_runtime_part2.rs"]
 mod part2;
+
+#[test]
+fn cached_module_exception_preserves_value_label_and_memory_budget() {
+    let value = Value::str("cached module failure ".repeat(64));
+    let label = Label::Custom {
+        name: "module failure provenance ".repeat(16),
+        level: 3,
+    };
+    let fixture = || {
+        let mut core = test_interpreter();
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        core.ensure_module_record(&module, "failed.mjs")
+            .expect("module record");
+        core.replace_pending_abrupt_slots(Some((value.clone(), label.clone())), None)
+            .expect("original guest exception");
+        core.sync_estimated_memory_bytes().expect("fixture memory");
+        core
+    };
+    let mut probe = fixture();
+    let before = probe.estimated_memory_bytes();
+    probe
+        .cache_pending_module_exception("failed.mjs")
+        .expect("retain failure");
+    let growth = probe.estimated_memory_bytes() - before;
+    assert!(growth > 0);
+    assert_eq!(
+        probe.estimated_memory_bytes(),
+        probe.recompute_estimated_memory_bytes()
+    );
+
+    let mut limited = fixture();
+    limited.config.max_total_memory_bytes = before + growth - 1;
+    assert!(matches!(
+        limited.cache_pending_module_exception("failed.mjs"),
+        Err(InterpreterError::MemoryBudgetExceeded { .. })
+    ));
+    assert!(
+        limited.module_state.modules["failed.mjs"]
+            .evaluation_exception
+            .is_none()
+    );
+    assert_eq!(limited.pending_exception.as_ref(), Some(&value));
+    assert_eq!(limited.pending_exception_label, label);
+    assert_eq!(limited.estimated_memory_bytes(), before);
+    assert_eq!(
+        limited.estimated_memory_bytes(),
+        limited.recompute_estimated_memory_bytes()
+    );
+
+    limited.config.max_total_memory_bytes = before + growth;
+    limited
+        .cache_pending_module_exception("failed.mjs")
+        .expect("exact limit admits retained failure");
+    limited.clear_pending_exception_slot();
+    assert!(matches!(
+        limited.rethrow_cached_module_exception::<()>("failed.mjs"),
+        Err(InterpreterError::UncaughtException { .. })
+    ));
+    assert_eq!(limited.pending_exception.as_ref(), Some(&value));
+    assert_eq!(limited.pending_exception_label, label);
+    assert_eq!(limited.estimated_memory_bytes(), before + growth);
+    assert_eq!(
+        limited.estimated_memory_bytes(),
+        limited.recompute_estimated_memory_bytes()
+    );
+
+    let retained = limited.module_state.modules["failed.mjs"]
+        .evaluation_exception
+        .clone();
+    limited
+        .replace_pending_abrupt_slots(Some((Value::Int(99), Label::Public)), None)
+        .expect("unrelated later exception");
+    let unchanged = limited.estimated_memory_bytes();
+    limited
+        .cache_pending_module_exception("failed.mjs")
+        .expect("first module failure stays authoritative");
+    assert_eq!(
+        limited.module_state.modules["failed.mjs"].evaluation_exception,
+        retained
+    );
+    assert_eq!(limited.estimated_memory_bytes(), unchanged);
+    assert_eq!(
+        limited.estimated_memory_bytes(),
+        limited.recompute_estimated_memory_bytes()
+    );
+}
+
+#[test]
+fn absent_pending_exception_does_not_fabricate_a_cached_throw() {
+    let mut core = test_interpreter();
+    let module = test_module_with_functions(Vec::new(), Vec::new());
+    core.ensure_module_record(&module, "failed.mjs")
+        .expect("module record");
+    let before = core.estimated_memory_bytes();
+    core.cache_pending_module_exception("failed.mjs")
+        .expect("no guest throw");
+    assert!(
+        core.module_state.modules["failed.mjs"]
+            .evaluation_exception
+            .is_none()
+    );
+    assert_eq!(core.estimated_memory_bytes(), before);
+}

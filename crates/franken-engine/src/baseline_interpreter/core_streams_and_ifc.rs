@@ -9911,6 +9911,7 @@ impl InterpreterCore {
                 cjs_module_object: None,
                 compiled_module,
                 evaluation_promise: None,
+                evaluation_exception: None,
                 async_execution: None,
             },
         );
@@ -10311,6 +10312,9 @@ impl InterpreterCore {
                 }
                 ModuleRuntimeStatus::Evaluating | ModuleRuntimeStatus::Evaluated => None,
                 ModuleRuntimeStatus::Failed(reason) => {
+                    if record.evaluation_exception.is_some() {
+                        return self.rethrow_cached_module_exception(resolved);
+                    }
                     // A module whose source was invalid fails every import
                     // with its SyntaxError again (bd-9vouw.389).
                     let reason = reason.clone();
@@ -10673,9 +10677,72 @@ impl InterpreterCore {
                 if let Some(record) = self.module_state.modules.get_mut(resolved) {
                     record.status = ModuleRuntimeStatus::Failed(err.to_string());
                 }
+                if !is_cjs && matches!(&err, InterpreterError::UncaughtException { .. }) {
+                    self.cache_pending_module_exception(resolved)?;
+                }
                 Err(err)
             }
         }
+    }
+
+    /// Retain an ESM evaluation's first guest throw without consuming the
+    /// pending slot needed by its current importer. Admit the retained payload
+    /// before cloning it; a resource refusal remains an engine failure.
+    pub(super) fn cache_pending_module_exception(
+        &mut self,
+        specifier: &str,
+    ) -> Result<(), InterpreterError> {
+        let record = self.module_state.modules.get(specifier).ok_or_else(|| {
+            InterpreterError::ModuleEvaluationFailed {
+                specifier: specifier.to_string(),
+                reason: "module exception has no module record".to_string(),
+            }
+        })?;
+        if record.evaluation_exception.is_some() {
+            return Ok(());
+        }
+        let Some(value) = self.pending_exception.as_ref() else {
+            return Ok(());
+        };
+        let retained_bytes = Self::estimate_value_bytes(value)
+            .saturating_add(Self::estimate_label_bytes(&self.pending_exception_label));
+        self.apply_memory_component_delta(0, retained_bytes)?;
+        let exception = self
+            .pending_exception
+            .as_ref()
+            .map(|value| (value.clone(), self.pending_exception_label.clone()));
+        self.module_state
+            .modules
+            .get_mut(specifier)
+            .expect("module record remains present during exception retention")
+            .evaluation_exception = exception;
+        Ok(())
+    }
+
+    /// Re-arm the recorded completion in the current importer. The module
+    /// record remains its owner and GC root after the pending slot is consumed.
+    pub(super) fn rethrow_cached_module_exception<T>(
+        &mut self,
+        specifier: &str,
+    ) -> Result<T, InterpreterError> {
+        let exception = self
+            .module_state
+            .modules
+            .get(specifier)
+            .and_then(|record| record.evaluation_exception.as_ref())
+            .ok_or_else(|| InterpreterError::ModuleEvaluationFailed {
+                specifier: specifier.to_string(),
+                reason: "module has no retained guest exception".to_string(),
+            })?;
+        self.check_temporary_memory_budget(Self::module_evaluation_exception_bytes(exception))?;
+        let exception = exception.clone();
+        self.rearm_nested_module_throw(Some(exception))?;
+        // Do not inspect a mutable thrown object again just to format a
+        // diagnostic. Its exact value is already in the pending slot; its
+        // message could now be arbitrarily large or carry newer provenance.
+        Err(InterpreterError::UncaughtException {
+            value: "module evaluation failed".to_string(),
+        })
     }
 
     #[cfg(test)]

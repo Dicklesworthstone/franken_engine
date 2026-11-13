@@ -2307,6 +2307,9 @@ impl InterpreterCore {
             if let Some(handle) = record.evaluation_promise {
                 m.promise(handle.0);
             }
+            if let Some((value, _)) = &record.evaluation_exception {
+                m.value(value);
+            }
         }
         for entry in &module_state.live_exports {
             m.cell(&entry.cell);
@@ -2325,6 +2328,72 @@ mod tests {
     use crate::ir_contract::Ir0Module;
     use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
     use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
+
+
+    #[test]
+    fn cached_module_exception_is_a_gc_root_after_pending_throw_is_consumed() {
+        let tree = CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource {
+                    label: "gc-entry.mjs".into(),
+                    text: "0;".into(),
+                },
+                ParseGoal::Module,
+                &ParserOptions::default(),
+            )
+            .expect("parse fixture");
+        let module = lower_ir0_to_ir3(
+            &Ir0Module::from_syntax_tree(tree, "gc-entry.mjs"),
+            &LoweringContext::new("gc-failure", "gc-decision", "gc-policy"),
+        )
+        .expect("lower fixture")
+        .ir3;
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+        ]
+        .into_iter()
+        .collect();
+        let mut core = InterpreterCore::new(config, "gc-cached-module-exception");
+        core.ensure_module_record(&module, "failed.mjs")
+            .expect("failed module record");
+        let thrown = core
+            .alloc_object_with_prototype(None)
+            .expect("thrown object");
+        let child = core
+            .alloc_object_with_prototype(None)
+            .expect("nested thrown payload");
+        core.set_object_property(thrown, "payload".into(), Value::Object(child))
+            .expect("nested payload");
+        let garbage = core
+            .alloc_object_with_prototype(None)
+            .expect("unrooted object");
+        core.replace_pending_abrupt_slots(Some((Value::Object(thrown), Label::Secret)), None)
+            .expect("original throw");
+        core.cache_pending_module_exception("failed.mjs")
+            .expect("retain throw");
+        core.clear_pending_exception_slot();
+
+        core.collect_garbage();
+        assert!(core.heap.get(thrown.0 as usize).is_some());
+        assert!(core.heap.get(child.0 as usize).is_some());
+        assert!(core.heap.is_reclaimed(garbage.0 as usize));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+        assert!(matches!(
+            core.rethrow_cached_module_exception::<()>("failed.mjs"),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        assert_eq!(core.pending_exception, Some(Value::Object(thrown)));
+        assert_eq!(core.pending_exception_label, Label::Secret);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
 
     fn execute(source: &str, drop_execution_roots: bool) -> String {
         let tree = CanonicalEs2020Parser

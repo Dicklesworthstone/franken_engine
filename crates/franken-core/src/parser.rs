@@ -6168,10 +6168,8 @@ fn parse_import(
     source_label: &str,
     span: SourceSpan,
 ) -> ParseResult<ImportDeclaration> {
-    let body = statement
-        .get("import ".len()..)
-        .map(str::trim)
-        .unwrap_or("");
+    let body =
+        clause_keyword_tail(statement, "import", ScanGrammarContext::SLOPPY_SCRIPT).unwrap_or("");
     if body.is_empty() {
         return Err(ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
@@ -6200,14 +6198,16 @@ fn parse_import(
     })?;
 
     let clause = parse_import_binding_clause(binding_raw.trim(), source_label, &span)?;
-    let source = parse_quoted_string(source_raw.trim()).ok_or_else(|| {
-        ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
-            "import source must be quoted",
-            source_label.to_string(),
-            Some(span.clone()),
-        )
-    })?;
+    let source = trim_binding_pattern_trivia(source_raw)
+        .and_then(parse_quoted_string)
+        .ok_or_else(|| {
+            ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "import source must be quoted",
+                source_label.to_string(),
+                Some(span.clone()),
+            )
+        })?;
 
     Ok(ImportDeclaration {
         binding: clause.primary_binding().map(str::to_string),
@@ -6339,6 +6339,25 @@ fn parse_namespace_import_binding(clause: &str) -> Option<String> {
     canonical_module_binding_identifier(rest)
 }
 
+/// Named module lists allow one trailing comma, but never a missing entry.
+/// Trim lexical trivia at each boundary without joining identifier tokens;
+/// commas and braces inside comments must not become list delimiters.
+fn named_module_specifier_entries(source: &str) -> Option<Vec<&str>> {
+    let source = trim_binding_pattern_trivia(source)?;
+    if source.is_empty() {
+        return Some(Vec::new());
+    }
+
+    let mut entries = split_top_level_commas(source);
+    if entries.len() > 1 && entries.last().is_some_and(|entry| entry.is_empty()) {
+        entries.pop();
+    }
+    entries
+        .into_iter()
+        .map(|entry| trim_binding_pattern_trivia(entry).filter(|entry| !entry.is_empty()))
+        .collect()
+}
+
 fn is_named_import_clause(clause: &str) -> bool {
     let clause = clause.trim();
     let Some(inner) = clause
@@ -6348,21 +6367,11 @@ fn is_named_import_clause(clause: &str) -> bool {
         return false;
     };
 
-    let inner = inner.trim();
-    if inner.is_empty() {
-        return true;
-    }
-
-    for specifier in split_top_level_commas(inner) {
-        if trim_binding_pattern_trivia(specifier).is_none_or(str::is_empty) {
-            return false;
-        }
-        if parse_named_import_specifier_parts(specifier).is_none() {
-            return false;
-        }
-    }
-
-    true
+    named_module_specifier_entries(inner).is_some_and(|entries| {
+        entries
+            .into_iter()
+            .all(|specifier| parse_named_import_specifier_parts(specifier).is_some())
+    })
 }
 
 fn parse_named_import_specifiers(
@@ -6383,24 +6392,19 @@ fn parse_named_import_specifiers(
         ));
     };
 
-    let inner = inner.trim();
-    if inner.is_empty() {
-        return Ok(Vec::new());
-    }
+    let entries = named_module_specifier_entries(inner).ok_or_else(|| {
+        ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "named import specifier list contains an empty entry or unterminated trivia",
+            source_label.to_string(),
+            Some(span.clone()),
+        )
+    })?;
 
-    let mut specifiers = Vec::new();
+    let mut specifiers = Vec::with_capacity(entries.len());
     let mut seen_local = BTreeSet::new();
 
-    for specifier in split_top_level_commas(inner) {
-        if trim_binding_pattern_trivia(specifier).is_none_or(str::is_empty) {
-            return Err(ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
-                "named import specifier list contains an empty entry",
-                source_label.to_string(),
-                Some(span.clone()),
-            ));
-        }
-
+    for specifier in entries {
         let Some((import_name, local_name)) = parse_named_import_specifier_parts(specifier) else {
             return Err(ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
@@ -6477,16 +6481,18 @@ fn parse_named_export_clause(
     span: &SourceSpan,
 ) -> ParseResult<NamedExportClause> {
     let clause = clause.trim();
-    let Some(inner_and_trailing) = clause.strip_prefix('{') else {
+    if !clause.starts_with('{') {
         return Err(ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
             "named export clause must start with `{`",
             source_label.to_string(),
             Some(span.clone()),
         ));
-    };
+    }
 
-    let Some(close_index) = inner_and_trailing.find('}') else {
+    let Some((specifiers, trailing)) =
+        extract_balanced_with_context(clause, '{', '}', ScanGrammarContext::SLOPPY_SCRIPT)
+    else {
         return Err(ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
             "named export clause is missing `}`",
@@ -6495,13 +6501,34 @@ fn parse_named_export_clause(
         ));
     };
 
-    let specifiers = &inner_and_trailing[..close_index];
-    validate_named_export_specifiers(specifiers, source_label, span)?;
-
-    let canonical_head = canonicalize_whitespace(&clause[..close_index + 2]);
-    let trailing = inner_and_trailing[close_index + 1..].trim();
+    let canonical_specifiers = parse_named_export_specifiers(specifiers, source_label, span)?;
+    // Keep historical wire spelling for already-supported lists. New trailing
+    // commas, comments, and escaped names are emitted as validated identifiers
+    // so consumers of canonical_head never need to re-lex source trivia.
+    let legacy_specifiers: Vec<_> = specifiers.split(',').collect();
+    let legacy_compatible = legacy_specifiers.len() == canonical_specifiers.len()
+        && legacy_specifiers
+            .iter()
+            .zip(&canonical_specifiers)
+            .all(|(source, canonical)| canonicalize_whitespace(source.trim()) == *canonical);
+    let canonical_head =
+        if legacy_compatible || (canonical_specifiers.is_empty() && specifiers.trim().is_empty()) {
+            canonicalize_whitespace(&clause[..clause.len() - trailing.len()])
+        } else if canonical_specifiers.is_empty() {
+            "{}".to_string()
+        } else {
+            format!("{{ {} }}", canonical_specifiers.join(", "))
+        };
+    let trailing = trim_binding_pattern_trivia(trailing).ok_or_else(|| {
+        ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "named export trailing clause has unterminated lexical trivia",
+            source_label.to_string(),
+            Some(span.clone()),
+        )
+    })?;
     let source = if !trailing.is_empty() {
-        let Some(source_raw) = trailing.strip_prefix("from").map(str::trim_start) else {
+        let Some(source_raw) = strip_contextual_keyword(trailing, "from") else {
             return Err(ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
                 "named export trailing clause must be `from <quoted-source>`",
@@ -6510,14 +6537,16 @@ fn parse_named_export_clause(
             ));
         };
 
-        let source = parse_quoted_string(source_raw).ok_or_else(|| {
-            ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
-                "export source must be quoted",
-                source_label.to_string(),
-                Some(span.clone()),
-            )
-        })?;
+        let source = trim_binding_pattern_trivia(source_raw)
+            .and_then(parse_quoted_string)
+            .ok_or_else(|| {
+                ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    "export source must be quoted",
+                    source_label.to_string(),
+                    Some(span.clone()),
+                )
+            })?;
         Some(source)
     } else {
         None
@@ -6526,50 +6555,47 @@ fn parse_named_export_clause(
     Ok(NamedExportClause::new(canonical_head, source))
 }
 
-fn validate_named_export_specifiers(
+fn parse_named_export_specifiers(
     specifiers: &str,
     source_label: &str,
     span: &SourceSpan,
-) -> ParseResult<()> {
-    let specifiers = specifiers.trim();
-    if specifiers.is_empty() {
-        return Ok(());
-    }
-
-    for specifier in specifiers.split(',') {
-        let specifier = specifier.trim();
-        if specifier.is_empty() {
-            return Err(ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
-                "named export specifier list contains an empty entry",
-                source_label.to_string(),
-                Some(span.clone()),
-            ));
-        }
-
-        let mut parts = specifier.split_whitespace();
-        let local = parts.next().unwrap();
-        let second = parts.next();
-        let third = parts.next();
-        let fourth = parts.next();
-
-        let valid = match (second, third, fourth) {
-            (None, None, None) => is_identifier(local),
-            (Some("as"), Some(exported), None) => is_identifier(local) && is_identifier(exported),
-            _ => false,
-        };
-
-        if !valid {
-            return Err(ParseError::new(
+) -> ParseResult<Vec<String>> {
+    let entries = named_module_specifier_entries(specifiers).ok_or_else(|| {
+        ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "named export specifier list contains an empty entry or unterminated trivia",
+            source_label.to_string(),
+            Some(span.clone()),
+        )
+    })?;
+    let mut canonical = Vec::with_capacity(entries.len());
+    for specifier in entries {
+        let (local, exported) = parse_named_export_specifier_parts(specifier).ok_or_else(|| {
+            ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
                 "unsupported named export specifier; expected `name` or `name as alias`",
                 source_label.to_string(),
                 Some(span.clone()),
-            ));
-        }
+            )
+        })?;
+        canonical.push(match exported {
+            Some(exported) => format!("{local} as {exported}"),
+            None => local,
+        });
     }
 
-    Ok(())
+    Ok(canonical)
+}
+
+fn parse_named_export_specifier_parts(specifier: &str) -> Option<(String, Option<String>)> {
+    let (local, local_end) = canonical_leading_source_identifier(specifier)?;
+    let trailing = trim_binding_pattern_leading_trivia(&specifier[local_end..])?;
+    if trailing.is_empty() {
+        return Some((local, None));
+    }
+    let exported_source = strip_contextual_keyword(trailing, "as")?;
+    let exported = canonical_source_identifier_name(trim_binding_pattern_trivia(exported_source)?)?;
+    Some((local, Some(exported)))
 }
 
 // ---------------------------------------------------------------------------

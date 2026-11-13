@@ -9181,7 +9181,28 @@ fn parse_primary_expression(
         )
         && rest.trim().is_empty()
     {
-        return parse_expression(inner.trim(), span, context, recursion_depth + 1);
+        let inner = inner.trim();
+        let grammar_context = ScanGrammarContext::from_execution_context(context).expression();
+        let parts = split_top_level_commas_with_context(inner, grammar_context);
+        if parts.len() > 1 {
+            // A sequence has no missing operands or trailing comma. Parsing
+            // each operand directly also keeps call-list spread syntax out of
+            // the synthetic call used to carry its result.
+            let mut operands = Vec::with_capacity(parts.len());
+            for part in parts {
+                let operand = parse_expression(part, span, context, recursion_depth + 1)?;
+                if matches!(&operand, Expression::SpreadElement(_)) {
+                    return Err(unsupported_expression_syntax_error(
+                        "spread is not allowed in a parenthesized sequence",
+                        span,
+                        context,
+                    ));
+                }
+                operands.push(operand);
+            }
+            return Ok(build_parenthesized_sequence(operands, span));
+        }
+        return parse_expression(inner, span, context, recursion_depth + 1);
     }
 
     // Array literal: [a, b, c]
@@ -11688,6 +11709,46 @@ fn split_top_level_commas_with_context(s: &str, grammar_context: ScanGrammarCont
     });
     parts.push(&s[start..]);
     parts
+}
+
+/// Evaluate sequence operands as call arguments in their original scope, then
+/// return the last argument from an identity arrow. Its generated parameter
+/// names cannot shadow operands, which execute before entering that arrow.
+/// Chunks keep long sequences within the existing call-register budget.
+fn build_parenthesized_sequence(operands: Vec<Expression>, span: &SourceSpan) -> Expression {
+    const SEQUENCE_CHUNK: usize = 64;
+
+    fn sequence_call(operands: Vec<Expression>, span: &SourceSpan) -> Expression {
+        let params = (0..operands.len())
+            .map(|index| FunctionParam {
+                pattern: BindingPattern::Identifier(format!("__seq_{index}")),
+                span: span.clone(),
+            })
+            .collect();
+        let last = format!("__seq_{}", operands.len() - 1);
+        Expression::Call {
+            callee: Box::new(Expression::ArrowFunction {
+                params,
+                body: ArrowBody::Expression(Box::new(Expression::Identifier(last))),
+                is_async: false,
+            }),
+            arguments: operands,
+        }
+    }
+
+    debug_assert!(operands.len() >= 2);
+    let mut operands = operands.into_iter();
+    let mut sequence = sequence_call(operands.by_ref().take(SEQUENCE_CHUNK).collect(), span);
+    loop {
+        let rest: Vec<_> = operands.by_ref().take(SEQUENCE_CHUNK - 1).collect();
+        if rest.is_empty() {
+            return sequence;
+        }
+        let mut next = Vec::with_capacity(rest.len() + 1);
+        next.push(sequence);
+        next.extend(rest);
+        sequence = sequence_call(next, span);
+    }
 }
 
 /// Parse a comma-separated list of expressions (for function call arguments).

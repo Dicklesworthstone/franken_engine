@@ -12,6 +12,7 @@ use crate::lowering_pipeline::{LoweringContext, LoweringPipelineOutput, lower_ir
 use crate::parser::{CanonicalEs2020Parser, ParseEventIr, ParserOptions};
 
 pub mod namespaces;
+pub mod parameter_properties;
 pub mod type_erasure;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1991,85 +1992,7 @@ fn lower_simple_enums(source: &str) -> String {
 }
 
 fn lower_constructor_parameter_properties(source: &str) -> String {
-    let mut out = Vec::<String>::new();
-
-    for line in source.lines() {
-        let trimmed = line.trim();
-        if !trimmed.starts_with("constructor(") {
-            out.push(line.to_string());
-            continue;
-        }
-
-        let Some(args_start) = trimmed.find('(') else {
-            out.push(line.to_string());
-            continue;
-        };
-        let Some(args_end) = trimmed.find(')') else {
-            out.push(line.to_string());
-            continue;
-        };
-
-        let args_text = &trimmed[args_start + 1..args_end];
-        let mut normalized_args = Vec::<String>::new();
-        let mut injected_assignments = Vec::<String>::new();
-
-        for argument in args_text.split(',') {
-            let raw_arg = argument.trim();
-            if raw_arg.is_empty() {
-                continue;
-            }
-
-            let (visibility, remaining) = if let Some(rest) = raw_arg.strip_prefix("private ") {
-                (Some("private"), rest)
-            } else if let Some(rest) = raw_arg.strip_prefix("public ") {
-                (Some("public"), rest)
-            } else if let Some(rest) = raw_arg.strip_prefix("protected ") {
-                (Some("protected"), rest)
-            } else {
-                (None, raw_arg)
-            };
-
-            let no_readonly = remaining
-                .strip_prefix("readonly ")
-                .unwrap_or(remaining)
-                .trim();
-
-            let param_name = no_readonly.split(':').next().unwrap_or(no_readonly).trim();
-
-            normalized_args.push(no_readonly.to_string());
-
-            if visibility.is_some() && !param_name.is_empty() {
-                injected_assignments.push(format!("this.{param_name} = {param_name};"));
-            }
-        }
-
-        let mut rebuilt = String::new();
-        rebuilt.push_str("constructor(");
-        rebuilt.push_str(&normalized_args.join(", "));
-        rebuilt.push(')');
-
-        if let Some(brace_open) = trimmed.find('{') {
-            let body_start = brace_open + 1;
-            let body_end = trimmed.rfind('}').unwrap_or(trimmed.len());
-            let existing_body = trimmed[body_start..body_end].trim();
-            rebuilt.push_str(" {");
-            if !injected_assignments.is_empty() {
-                rebuilt.push(' ');
-                rebuilt.push_str(&injected_assignments.join(" "));
-            }
-            if !existing_body.is_empty() {
-                rebuilt.push(' ');
-                rebuilt.push_str(existing_body);
-            }
-            rebuilt.push_str(" }");
-        } else {
-            rebuilt.push(';');
-        }
-
-        out.push(rebuilt);
-    }
-
-    out.join("\n")
+    parameter_properties::lower(source)
 }
 
 fn normalize_definite_assignment_assertions(source: &str) -> String {
@@ -2676,6 +2599,50 @@ namespace Demo {
     }
 
     #[test]
+    fn parameter_properties_lower_inline_defaults_and_contextual_names() {
+        assert_normalized_output(
+            r#"
+            let calls = 0;
+            class Inline { constructor(public value: number = (++calls, 3)) {} }
+            class Contextual { constructor(readonly: number = 4, public value: number = readonly) {} }
+            class Properties { constructor(public readonly: number = 6, public override: number = 7) {} }
+            const first = new Inline();
+            const explicit = new Inline(9);
+            const contextual = new Contextual();
+            const properties = new Properties();
+            console.log(first.value, explicit.value, calls, contextual.value,
+                'readonly' in contextual,
+                properties.readonly, properties.override);
+            "#,
+            &["3 9 1 4 false 6 7"],
+        );
+    }
+
+    #[test]
+    fn parameter_properties_follow_real_super_and_preserve_early_returns() {
+        assert_normalized_output(
+            r#"
+            let order = '';
+            class Base { constructor() { order += 'B'; } }
+            class Derived extends Base {
+                constructor(public value: number = 3, skip: boolean = false) {
+                    /* super(0); */
+                    order += 'P';
+                    if (skip) { order += 'R'; return {value: 99}; }
+                    (super()) // assignment belongs after this call
+                    order += 'D' + this.value;
+                }
+            }
+            const early = new Derived(undefined, true);
+            console.log(early.value, order);
+            const normal = new Derived();
+            console.log(normal.value, order);
+            "#,
+            &["99 PR", "3 PRPBD3"],
+        );
+    }
+
+    #[test]
     fn rejects_unsupported_namespace_export_class_forms() {
         let source = "namespace Demo { export class Worker {} }";
         let error = normalize_typescript_to_es2020(
@@ -2922,10 +2889,13 @@ abstract class Base { }"#;
         .unwrap();
 
         assert!(!output.normalized_source.contains("implements Disposable"));
-        assert!(
+        assert_eq!(
             output
                 .normalized_source
-                .contains("class Service { run() { return 1; } }")
+                .chars()
+                .filter(|ch| !ch.is_whitespace())
+                .collect::<String>(),
+            "classService{run(){return1;}}"
         );
     }
 

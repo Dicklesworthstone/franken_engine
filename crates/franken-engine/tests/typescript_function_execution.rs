@@ -590,3 +590,109 @@ fn namespace_local_classes_preserve_parameter_properties_and_live_defaults() {
         &["3 7 2 10 14 7"],
     );
 }
+
+#[test]
+fn constructor_parameter_properties_preserve_regex_defaults_and_modifier_comments() {
+    assert_output(
+        r#"
+        class Pattern { constructor(public matches: boolean = /[)]/.test(")")) {} }
+        class Commented { constructor(public /* property */ value: number = 3) {} }
+        const pattern = new Pattern();
+        const explicit = new Pattern(false);
+        const commented = new Commented();
+        console.log(pattern.matches, explicit.matches, commented.value);
+        "#,
+        &["true false 3"],
+    );
+}
+
+#[test]
+fn constructor_parameter_properties_distinguish_modifier_words_from_names() {
+    assert_output(
+        r#"
+        class Ordinary {
+            constructor(readonly: number = 4, public value: number = readonly) {}
+        }
+        class Properties {
+            constructor(public readonly: number = 6, public override: number = 7) {}
+        }
+        const first = new Ordinary();
+        const second = new Ordinary(9);
+        const properties = new Properties();
+        console.log(first.value, second.value, 'readonly' in first,
+            properties.readonly, properties.override);
+        "#,
+        &["4 9 false 6 7"],
+    );
+}
+
+#[test]
+fn constructor_parameter_properties_follow_real_super_and_preserve_early_returns() {
+    assert_output(
+        r#"
+        let trace = '';
+        class Base { constructor() { trace += 'B'; } }
+        class Derived extends Base {
+            constructor(skip: boolean, public value: number = 3) {
+                /* super(0); */
+                trace += 'P';
+                if (skip) { trace += 'R'; return {value: 99}; }
+                const text = 'super(0);';
+                super();
+                trace += 'D' + this.value;
+            }
+        }
+        const skipped = new Derived(true);
+        console.log(skipped.value, trace);
+        const normal = new Derived(false);
+        console.log(normal.value, trace);
+        "#,
+        &["99 PR", "3 PRPBD3"],
+    );
+}
+
+#[test]
+fn constructor_parameter_properties_keep_directives_and_parenthesized_super_asi() {
+    assert_output(
+        r#"
+        class Base {
+            constructor(public base: number) {
+                'use strict';
+                console.log('base', this.base);
+            }
+        }
+        class Derived extends Base {
+            constructor(public value: number) {
+                /* super(1000); */
+                (super(5)) // the real call ends before this comment
+                /* retain this comment too */
+                console.log('derived', this.base, this.value);
+            }
+        }
+        new Derived(7);
+        "#,
+        &["base 5", "derived 5 7"],
+    );
+}
+
+#[test]
+fn constructor_parameter_properties_keep_supported_jsx_before_super() {
+    assert_output(
+        r#"
+        let trace = '';
+        function createElement(...args: any[]) { trace += 'J'; return null; }
+        function Widget() { return null; }
+        class Base { constructor() { trace += 'B'; } }
+        class Derived extends Base {
+            constructor(public value: number = 3) {
+                <Widget />
+                super();
+                trace += 'D' + this.value;
+            }
+        }
+        const instance = new Derived();
+        console.log(instance.value, trace);
+        "#,
+        &["3 JBD3"],
+    );
+}

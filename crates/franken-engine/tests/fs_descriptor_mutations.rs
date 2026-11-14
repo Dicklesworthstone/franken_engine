@@ -244,3 +244,74 @@ fs.promises.open('owned.txt', 'w+').then(function (value) {
         );
     }
 }
+
+#[test]
+fn exclusive_and_synchronous_opens_reach_the_owned_host_descriptor() {
+    let source = r#"
+const fs = require('node:fs');
+const fd = fs.openSync('owned.txt', 'wx+');
+fs.writeSync(fd, 'original');
+fs.closeSync(fd);
+const plain = fs.openSync('owned.txt');
+const prefix = Buffer.alloc(3);
+fs.readSync(plain, prefix, 0, 3, null);
+fs.closeSync(plain);
+console.log('DEFAULT', prefix.toString());
+try { fs.openSync('owned.txt', 'xw'); }
+catch (error) { console.log('EXCLUSIVE', error.code); }
+fs.promises.writeFile('owned.txt', 'must not overwrite', { flag: 'wx' }).catch(function (error) {
+  console.log('WRITEFILE', error.code);
+  return fs.promises.appendFile('owned.txt', 'must not append', { flag: 'ax' });
+}).catch(function (error) {
+  console.log('APPEND', error.code);
+  return fs.promises.open('owned.txt', 'sa+');
+}).then(function (handle) {
+  return handle.write('!', 0).then(function () { return handle.close(); });
+}).then(function () {
+  return fs.promises.open('owned.txt', 'sr');
+}).then(function (handle) {
+  return handle.readFile('utf8').then(function (value) {
+    console.log('PRESERVED', value);
+    return handle.close();
+  });
+});
+"#;
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let root = tempfile::tempdir().expect("sandbox");
+        let (output, entries) = run(source, root.path(), lane);
+        assert_eq!(
+            output,
+            [
+                "DEFAULT ori",
+                "EXCLUSIVE EEXIST",
+                "WRITEFILE EEXIST",
+                "APPEND EEXIST",
+                "PRESERVED original!"
+            ]
+        );
+        let opens: Vec<_> = entries
+            .iter()
+            .filter_map(|(request, outcome)| match request {
+                HostIoRequest::FsMeta {
+                    operation: FsOperation::Open,
+                    arguments,
+                    ..
+                } => Some((arguments, outcome)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(opens.len(), 7);
+        for (entry, flags) in opens.iter().zip(["wx+", "r", "xw", "wx", "ax", "sa+", "sr"]) {
+            assert_eq!(entry.0, &[format!("flags={flags}")]);
+        }
+        for (_, outcome) in &opens[2..5] {
+            assert!(
+                matches!(outcome, Err(frankenengine_extension_host::host_io::HostIoError::Fs { code, .. }) if code == "EEXIST")
+            );
+        }
+        assert_eq!(
+            std::fs::read(root.path().join("owned.txt")).unwrap(),
+            b"original!"
+        );
+    }
+}

@@ -1772,8 +1772,10 @@ impl SandboxedHostIo {
     /// Node `fs.openSync(path, flags)` substrate (bd-zco6t): resolve `raw`
     /// through the same descriptor-relative containment walk as every other
     /// sandboxed operation, open it under the requested Node flag string, and
-    /// hand back a monotonic numeric fd. Supported flags: `r`, `r+`, `w`,
-    /// `w+`, `a`, `a+`. Unknown flags fail with `ERR_INVALID_ARG_VALUE`
+    /// hand back a monotonic numeric fd. Node's string flags include ordinary
+    /// read/write/append, exclusive creation (`wx`/`ax`), synchronous I/O
+    /// (`rs`/`as`), their `+` forms and Node's equivalent reversed spellings.
+    /// Unknown flags fail with `ERR_INVALID_ARG_VALUE`
     /// before any filesystem effect. Retained-handle capacity and sequence
     /// exhaustion return `EMFILE` before opening, creating or truncating. The
     /// table lock keeps admission atomic across clones. Nonblocking opens
@@ -1790,30 +1792,30 @@ impl SandboxedHostIo {
         #[cfg(unix)]
         {
             let (readable, writable, base_flags) = match flags {
-                "r" => (true, false, rustix::fs::OFlags::RDONLY),
-                "r+" => (true, true, rustix::fs::OFlags::RDWR),
-                "w" => (
+                "r" | "rs" | "sr" => (true, false, rustix::fs::OFlags::RDONLY),
+                "r+" | "rs+" | "sr+" => (true, true, rustix::fs::OFlags::RDWR),
+                "w" | "wx" | "xw" => (
                     false,
                     true,
                     rustix::fs::OFlags::WRONLY
                         | rustix::fs::OFlags::CREATE
                         | rustix::fs::OFlags::TRUNC,
                 ),
-                "w+" => (
+                "w+" | "wx+" | "xw+" => (
                     true,
                     true,
                     rustix::fs::OFlags::RDWR
                         | rustix::fs::OFlags::CREATE
                         | rustix::fs::OFlags::TRUNC,
                 ),
-                "a" => (
+                "a" | "ax" | "xa" | "as" | "sa" => (
                     false,
                     true,
                     rustix::fs::OFlags::WRONLY
                         | rustix::fs::OFlags::CREATE
                         | rustix::fs::OFlags::APPEND,
                 ),
-                "a+" => (
+                "a+" | "ax+" | "xa+" | "as+" | "sa+" => (
                     true,
                     true,
                     rustix::fs::OFlags::RDWR
@@ -1826,6 +1828,19 @@ impl SandboxedHostIo {
                         detail: format!("unsupported fs open flags: {other}"),
                     });
                 }
+            };
+            // The kernel makes exclusive creation atomic against all other
+            // openers, including providers with independent descriptor tables.
+            // Never emulate this with an existence check followed by open.
+            let base_flags = if flags.contains('x') {
+                base_flags | rustix::fs::OFlags::EXCL
+            } else {
+                base_flags
+            };
+            let base_flags = if flags.contains('s') {
+                base_flags | rustix::fs::OFlags::SYNC
+            } else {
+                base_flags
             };
             // Admission must precede even O_TRUNC/O_CREAT. Holding the table
             // through insertion prevents concurrent clones from spending the

@@ -638,3 +638,182 @@ fn descriptor_truncate_enforces_the_host_byte_cap_before_changing_length() {
         b"abcdef\0\0"
     );
 }
+
+#[test]
+fn node_string_open_aliases_preserve_read_write_truncate_and_append_behavior() {
+    let (root, provider) = sandbox();
+    for (index, flags) in [
+        "r", "r+", "rs", "sr", "rs+", "sr+", "w", "wx", "xw", "w+", "wx+", "xw+", "a", "ax",
+        "xa", "a+", "ax+", "xa+", "as", "sa", "as+", "sa+",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let name = format!("flag-{index}");
+        let path = root.join(&name);
+        if !flags.contains('x') {
+            std::fs::write(&path, b"seed").unwrap();
+        }
+        let fd = provider.open_fd(&name, flags).unwrap();
+        let readable = flags.contains('r') || flags.contains('+');
+        let writable = !flags.contains('r') || flags.contains('+');
+        let initial = if flags.contains('w') || flags.contains('x') {
+            b"".as_slice()
+        } else {
+            b"seed".as_slice()
+        };
+        assert_eq!(
+            provider.stat_fd(fd).unwrap().size,
+            initial.len() as u64,
+            "{flags}"
+        );
+        if readable {
+            assert_eq!(provider.read_fd(fd, 8, Some(0)).unwrap(), initial, "{flags}");
+        } else {
+            assert!(
+                matches!(provider.read_fd(fd, 1, None), Err(HostIoError::Fs { code, .. }) if code == "EBADF")
+            );
+        }
+        if writable {
+            provider.write_fd(fd, b"+").unwrap();
+            let expected = if flags.contains('a') {
+                [initial, b"+"].concat()
+            } else if initial.is_empty() {
+                b"+".to_vec()
+            } else {
+                b"+eed".to_vec()
+            };
+            assert_eq!(std::fs::read(&path).unwrap(), expected, "{flags}");
+            if readable {
+                assert_eq!(provider.read_fd(fd, 8, Some(0)).unwrap(), expected, "{flags}");
+            }
+        } else {
+            assert!(
+                matches!(provider.write_fd(fd, b"+"), Err(HostIoError::Fs { code, .. }) if code == "EBADF")
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), b"seed");
+        }
+        provider.close_fd(fd).unwrap();
+    }
+}
+
+#[test]
+fn exclusive_creation_is_atomic_across_independent_provider_tables() {
+    use std::sync::{Arc, Barrier};
+
+    let (root, _provider) = sandbox();
+    let flags = ["wx", "xw", "wx+", "xw+", "ax", "xa", "ax+", "xa+"];
+    let barrier = Arc::new(Barrier::new(flags.len() + 1));
+    let workers: Vec<_> = flags
+        .into_iter()
+        .map(|flags| {
+            // These are deliberately independent providers: a shared guest
+            // fd-table mutex cannot provide the required O_EXCL atomicity.
+            let host = SandboxedHostIo::with_root(&root).unwrap();
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                let result = host.open_fd("contested.txt", flags);
+                if let Ok(fd) = &result {
+                    host.write_fd(*fd, format!("{flags}:winner").as_bytes())
+                        .unwrap();
+                    host.close_fd(*fd).unwrap();
+                }
+                (flags, result)
+            })
+        })
+        .collect();
+    barrier.wait();
+    let results: Vec<_> = workers
+        .into_iter()
+        .map(|worker| worker.join().unwrap())
+        .collect();
+    assert_eq!(
+        results.iter().filter(|(_, result)| result.is_ok()).count(),
+        1
+    );
+    let mut winner = None;
+    for (flags, result) in results {
+        match result {
+            Ok(_) => winner = Some(format!("{flags}:winner")),
+            Err(error) => {
+                assert!(matches!(error, HostIoError::Fs { code, .. } if code == "EEXIST"))
+            }
+        }
+    }
+    assert_eq!(
+        std::fs::read_to_string(root.join("contested.txt")).unwrap(),
+        winner.unwrap(),
+        "losing exclusive opens must never truncate or append to the winner"
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn every_append_alias_keeps_linux_positional_append_and_cursor_semantics() {
+    let (root, provider) = sandbox();
+    for (index, flags) in [
+        "a", "a+", "ax", "xa", "ax+", "xa+", "as", "sa", "as+", "sa+",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let name = format!("append-{index}");
+        let fd = provider.open_fd(&name, flags).unwrap();
+        provider.write_fd(fd, b"seed").unwrap();
+        provider.write_fd_at(fd, b"!", Some(0)).unwrap();
+        assert_eq!(std::fs::read(root.join(&name)).unwrap(), b"seed!", "{flags}");
+        if flags.contains('+') {
+            assert_eq!(
+                provider.read_fd(fd, 1, None).unwrap(),
+                b"!",
+                "positional append must not move the cursor from offset 4 for {flags}"
+            );
+        }
+        provider.write_fd(fd, b"?").unwrap();
+        provider.close_fd(fd).unwrap();
+        assert_eq!(
+            std::fs::read(root.join(&name)).unwrap(),
+            b"seed!?",
+            "{flags}"
+        );
+    }
+}
+
+#[test]
+fn exclusive_and_sync_opens_preserve_symlink_containment() {
+    use std::os::unix::fs::symlink;
+
+    let (root, provider) = sandbox();
+    let (outside, _outside_provider) = sandbox();
+    let protected = outside.join("protected.txt");
+    std::fs::write(&protected, b"must survive").unwrap();
+    symlink(&protected, root.join("external-file")).unwrap();
+    symlink(&outside, root.join("external-directory")).unwrap();
+    symlink("missing-target", root.join("dangling")).unwrap();
+    for flags in [
+        "rs", "sr", "rs+", "sr+", "wx", "xw", "wx+", "xw+", "ax", "xa", "ax+", "xa+", "as",
+        "sa", "as+", "sa+",
+    ] {
+        for path in ["external-file", "dangling"] {
+            let result = provider.open_fd(path, flags);
+            assert!(result.is_err(), "{flags} unexpectedly followed {path}");
+            if flags.contains('x') {
+                assert!(
+                    matches!(result, Err(HostIoError::Fs { code, .. }) if code == "EEXIST")
+                );
+            }
+        }
+        assert!(
+            provider
+                .open_fd("external-directory/not-created", flags)
+                .is_err()
+        );
+        assert_eq!(std::fs::read(&protected).unwrap(), b"must survive");
+        assert!(!outside.join("not-created").exists());
+        assert!(!root.join("missing-target").exists());
+    }
+    let fd = provider.open_fd("admitted.txt", "wx+").unwrap();
+    assert_eq!(fd, 3, "refused opens must not consume descriptor ownership");
+    provider.close_fd(fd).unwrap();
+}

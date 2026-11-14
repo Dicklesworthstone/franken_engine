@@ -3,6 +3,11 @@
 use super::*;
 use std::sync::{Arc, Barrier, mpsc};
 
+const NODE_OPEN_FLAGS: [&str; 22] = [
+    "r", "r+", "rs", "sr", "rs+", "sr+", "w", "wx", "xw", "w+", "wx+", "xw+", "a", "ax",
+    "xa", "a+", "ax+", "xa+", "as", "sa", "as+", "sa+",
+];
+
 fn provider(limit: usize) -> (tempfile::TempDir, SandboxedHostIo) {
     let root = tempfile::tempdir().unwrap();
     let host = SandboxedHostIo::with_root_and_limits(root.path(), 4096, limit).unwrap();
@@ -21,7 +26,7 @@ fn capacity_refusal_precedes_creation_and_truncation_for_every_open_mode() {
     let (root, host) = provider(1);
     std::fs::write(root.path().join("existing"), b"must survive").unwrap();
     let held = host.open_fd("existing", "r").unwrap();
-    for flags in ["r", "r+", "w", "w+", "a", "a+"] {
+    for flags in NODE_OPEN_FLAGS {
         assert_fs_code(host.open_fd("existing", flags), "EMFILE");
         assert_fs_code(host.open_fd("not-created", flags), "EMFILE");
         assert_eq!(
@@ -133,8 +138,12 @@ fn failed_opens_do_not_consume_capacity_or_sequence_numbers() {
     std::fs::create_dir(root.path().join("directory")).unwrap();
     for (path, flags) in [
         ("missing", "r"),
+        ("missing", "rs"),
+        ("missing", "sr+"),
         ("directory", "r"),
+        ("directory", "wx"),
         ("../escape", "w"),
+        ("../escape", "ax+"),
         ("invalid", "bad-flags"),
     ] {
         assert!(host.open_fd(path, flags).is_err());
@@ -159,8 +168,10 @@ fn sequence_exhaustion_fails_before_mutation_and_never_overwrites_a_live_handle(
     let last = host.open_fd("last", "w+").unwrap();
     assert_eq!(last, u64::MAX - 1);
     host.write_fd(last, b"last").unwrap();
-    assert_fs_code(host.open_fd("original", "w"), "EMFILE");
-    assert_fs_code(host.open_fd("never", "w"), "EMFILE");
+    for flags in NODE_OPEN_FLAGS {
+        assert_fs_code(host.open_fd("original", flags), "EMFILE");
+        assert_fs_code(host.open_fd("never", flags), "EMFILE");
+    }
     assert_eq!(
         std::fs::read(root.path().join("original")).unwrap(),
         b"keep"
@@ -176,18 +187,20 @@ fn sequence_exhaustion_fails_before_mutation_and_never_overwrites_a_live_handle(
 #[test]
 fn guest_capability_refusal_does_not_spend_quota_or_touch_the_path() {
     let (root, host) = provider(1);
-    let request = HostIoRequest::FsMeta {
-        operation: FsOperation::Open,
-        path: "not-created".into(),
-        arguments: vec!["w".into()],
-        data: Vec::new(),
-    };
-    assert_eq!(
-        host.perform(&request, &[HostIoCapability::FsRead]),
-        Err(HostIoError::CapabilityMissing {
-            capability: HostIoCapability::FsWrite
-        })
-    );
+    for flags in NODE_OPEN_FLAGS {
+        let request = HostIoRequest::FsMeta {
+            operation: FsOperation::Open,
+            path: "not-created".into(),
+            arguments: vec![format!("flags={flags}")],
+            data: Vec::new(),
+        };
+        assert_eq!(
+            host.perform(&request, &[HostIoCapability::FsRead]),
+            Err(HostIoError::CapabilityMissing {
+                capability: HostIoCapability::FsWrite
+            })
+        );
+    }
     assert!(!root.path().join("not-created").exists());
     let table = host.fd_table.lock().unwrap();
     assert!(table.entries.is_empty());
@@ -198,7 +211,7 @@ fn guest_capability_refusal_does_not_spend_quota_or_touch_the_path() {
 fn fifo_open_is_rejected_without_waiting_for_a_peer_or_leaking_capacity() {
     // Rescue an old blocking implementation so a regression fails rather than
     // hanging the suite forever. No peer exists until after the guarded wait.
-    for flags in ["r", "r+", "w", "w+", "a", "a+"] {
+    for flags in NODE_OPEN_FLAGS {
         let (root, host) = provider(1);
         let fifo = root.path().join("fifo");
         rustix::fs::mkfifoat(
@@ -242,4 +255,78 @@ fn fifo_open_is_rejected_without_waiting_for_a_peer_or_leaking_capacity() {
         assert_eq!(fd, 3);
         host.close_fd(fd).unwrap();
     }
+}
+
+#[test]
+fn node_open_aliases_install_real_os_sync_append_and_access_flags() {
+    let (root, host) = provider(1);
+    for (index, flags) in NODE_OPEN_FLAGS.into_iter().enumerate() {
+        let path = format!("os-flags-{index}");
+        if flags.contains('r') {
+            std::fs::write(root.path().join(&path), b"seed").unwrap();
+        }
+        let fd = host.open_fd(&path, flags).unwrap();
+        {
+            let table = host.fd_table.lock().unwrap();
+            let actual = rustix::fs::fcntl_getfl(&table.entries.get(&fd).unwrap().file).unwrap();
+            assert_eq!(
+                actual.contains(rustix::fs::OFlags::SYNC),
+                flags.contains('s'),
+                "O_SYNC must reach the actual held file for {flags}"
+            );
+            assert_eq!(
+                actual.contains(rustix::fs::OFlags::APPEND),
+                flags.contains('a')
+            );
+            let access = if flags.contains('+') {
+                rustix::fs::OFlags::RDWR
+            } else if flags.contains('r') {
+                rustix::fs::OFlags::RDONLY
+            } else {
+                rustix::fs::OFlags::WRONLY
+            };
+            assert_eq!(actual & rustix::fs::OFlags::ACCMODE, access, "{flags}");
+            assert!(actual.contains(rustix::fs::OFlags::NONBLOCK));
+        }
+        host.close_fd(fd).unwrap();
+    }
+}
+
+#[test]
+fn exclusive_collisions_do_not_spend_a_handle_or_sequence_number() {
+    let (root, host) = provider(1);
+    std::fs::write(root.path().join("owned"), b"must survive").unwrap();
+    for flags in ["wx", "xw", "wx+", "xw+", "ax", "xa", "ax+", "xa+"] {
+        assert_fs_code(host.open_fd("owned", flags), "EEXIST");
+        let table = host.fd_table.lock().unwrap();
+        assert!(table.entries.is_empty());
+        assert_eq!(table.next_fd, 3);
+    }
+    assert_eq!(
+        std::fs::read(root.path().join("owned")).unwrap(),
+        b"must survive"
+    );
+    let fd = host.open_fd("new", "wx+").unwrap();
+    assert_eq!(fd, 3);
+    host.close_fd(fd).unwrap();
+}
+
+#[test]
+fn unknown_flag_spellings_fail_before_admission_or_filesystem_effects() {
+    let (root, host) = provider(0);
+    std::fs::write(root.path().join("existing"), b"must survive").unwrap();
+    for flags in [
+        "", "ws", "sw", "xs", "sx", "r+s", "a+s", "rsx", "xw+s", "WRONLY", "64",
+    ] {
+        assert_fs_code(host.open_fd("existing", flags), "ERR_INVALID_ARG_VALUE");
+        assert_fs_code(host.open_fd("not-created", flags), "ERR_INVALID_ARG_VALUE");
+    }
+    assert_eq!(
+        std::fs::read(root.path().join("existing")).unwrap(),
+        b"must survive"
+    );
+    assert!(!root.path().join("not-created").exists());
+    let table = host.fd_table.lock().unwrap();
+    assert!(table.entries.is_empty());
+    assert_eq!(table.next_fd, 3);
 }

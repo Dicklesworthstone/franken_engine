@@ -2838,8 +2838,10 @@ impl InterpreterCore {
             // the `fd=` argument, never a path.
             FsOperation::Open => vec![format!(
                 "flags={}",
-                args.get(1)
-                    .map_or_else(|| "r".to_string(), |value| self.fs_value_argument(value))
+                match args.get(1) {
+                    None | Some(Value::Undefined) => "r".to_string(),
+                    Some(value) => self.fs_value_argument(value),
+                }
             )],
             FsOperation::WriteFd
             | FsOperation::Fsync

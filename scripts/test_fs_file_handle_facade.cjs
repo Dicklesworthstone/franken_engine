@@ -127,6 +127,33 @@ test('FileHandle mutations preserve the held inode, cursor and Node results', as
   assert.equal(calls.filter(call => call.operation === 'open').length, 1);
 });
 
+test('exclusive and synchronous flags flow through handle and whole-file Promise opens', async () => {
+  async function exercise(api, file) {
+    const handle = await api.promises.open(file, 'wx+');
+    await handle.write('first');
+    await handle.close();
+    await assert.rejects(api.promises.open(file, 'xw'), { code: 'EEXIST' });
+    await assert.rejects(api.promises.writeFile(file, 'overwrite', { flag: 'wx' }), { code: 'EEXIST' });
+    await assert.rejects(api.promises.appendFile(file, 'append', { flag: 'ax' }), { code: 'EEXIST' });
+    const original = fs.readFileSync(file, 'utf8');
+    const append = await api.promises.open(file, 'sa+');
+    await append.write('!', 0);
+    await append.close();
+    const reader = await api.promises.open(file, 'sr');
+    const content = await reader.readFile('utf8');
+    await reader.close();
+    await api.promises.writeFile(file + '-new', 'created', { flag: 'xw' });
+    await api.promises.appendFile(file + '-log', 'log', { flag: 'xa' });
+    return [original, content, fs.readFileSync(file + '-new', 'utf8'), fs.readFileSync(file + '-log', 'utf8')];
+  }
+  const { facade, file, calls } = fixture();
+  assert.deepEqual(await exercise(facade, file), await exercise(fs, file + '-node'));
+  const openCalls = calls.filter(call => call.operation === 'open');
+  assert.deepEqual(openCalls.map(call => call.args[1]), ['wx+', 'xw', 'wx', 'ax', 'sa+', 'sr', 'xw', 'xa']);
+  assert(openCalls.every(call => call.authority === 'fs_write'));
+  assert.equal(calls.filter(call => call.operation === 'close_fd').length, 5);
+});
+
 test('descriptor mutation arguments reject before host entry and closed handles stay closed', async () => {
   const { facade, calls, file } = fixture();
   const handle = await facade.promises.open(file, 'w+');

@@ -73,6 +73,198 @@ fn assert_output_goal(source: &str, expected: &[&str], goal: ParseGoal) {
 }
 
 #[test]
+fn enums_execute_at_inline_and_function_local_declaration_sites() {
+    assert_output(
+        r#"
+        const __enum = 11, __enum_next = 17, __value = 23, __franken_enum_0 = 29;
+        enum First { A = __enum, B = __enum_next, C = __value, D = __franken_enum_0 } enum Second { Start = 1, Next }
+        function make(base: number) { enum Local { A = base, B = A + 1 } return Local; }
+        const first = make(40), second = make(70);
+        console.log(First.A, First.B, First.C, First.D, Second.Next, Second[2]);
+        console.log(first.A, first.B, second.A, second.B, first === second);
+        "#,
+        &["11 17 23 29 2 Next", "40 41 70 71 false"],
+    );
+}
+
+#[test]
+fn enum_initializers_preserve_scopes_closures_and_constant_members() {
+    assert_output(
+        r#"
+        let read;
+        enum Values {
+            A = 1,
+            B = (read = () => A, 2),
+            C = (({ A }) => A + 3)({ A: 4 }),
+            D = /[,}]/.test('}') ? 5 : 6,
+        }
+        Values.A = 9;
+        enum Values { Next = A + 1 }
+        console.log(read(), Values.C, Values.D, Values.Next, Values[2]);
+        "#,
+        &["9 7 5 2 Next"],
+    );
+}
+
+#[test]
+fn local_enum_bindings_have_lexical_tdz_and_per_block_identity() {
+    assert_output(
+        r#"
+        enum State { Outer = 8 }
+        function make() {
+            let before = '';
+            try { before = typeof State; } catch (error) { before = error.name; }
+            enum State { A = 1 } enum State { B = A + 1 }
+            let inner;
+            { enum State { A = 9 } inner = State; }
+            return [before, State.A, State.B, inner.A, inner === State];
+        }
+        console.log(JSON.stringify(make()), State.Outer);
+        "#,
+        &["[\"ReferenceError\",1,2,9,false] 8"],
+    );
+}
+
+#[test]
+fn exported_enums_preserve_module_bindings_and_literal_text() {
+    assert_module_output(
+        r#"
+        const text = 'enum Ghost { A, B }'; const pattern = /enum Ghost/;
+        declare enum Ambient { A }
+        export enum Flags { Read = 1, Write = 2, Both = Read | Write }
+        export enum Flags { Last = Both + 1 }
+        export const enum Kind { Text = 'text', Number = 'number' }
+        console.log(Flags.Both, Flags.Last, Flags[4], Kind.Text, typeof Ambient);
+        console.log(text, pattern.test(text), Object.isFrozen(Flags));
+        "#,
+        &["3 4 Last text undefined", "enum Ghost { A, B } true false"],
+    );
+}
+
+#[test]
+fn namespace_enums_merge_without_losing_local_aliases_or_private_scopes() {
+    assert_output(
+        r#"
+        namespace Model {
+            const base = 10;
+            enum Hidden { A = base }
+            export enum Kind { A = Hidden.A, B = A + 1 }
+            export function original() { return Kind; }
+        }
+        namespace Model {
+            enum Hidden { A = 40 }
+            export enum Kind { C = Hidden.A }
+            export function second() { return Kind; }
+        }
+        namespace Model { export function current() { return Kind; } }
+        const original = Model.Kind;
+        Model.Kind = { A: 99 };
+        console.log(original.A, original.B, original.C, original[40]);
+        console.log(Model.original() === original, Model.second() === original,
+            Model.current() === Model.Kind, typeof Model.Hidden);
+        "#,
+        &["10 11 40 C", "true true true undefined"],
+    );
+}
+
+#[test]
+fn namespace_enum_objects_are_published_before_initializers_and_keep_tdz() {
+    assert_output(
+        r#"
+        const trace = [];
+        namespace State {
+            try { trace.push(typeof Code); } catch (error) { trace.push(error.name); }
+            export enum Code {
+                A = (trace.push(State.Code === Code), 7),
+                B = (trace.push(Code.A), 8),
+            }
+        }
+        trace.push(State.Code[8]);
+        console.log(JSON.stringify(trace));
+        "#,
+        &["[\"ReferenceError\",true,7,\"B\"]"],
+    );
+}
+
+#[test]
+fn enums_and_namespaces_augment_the_same_binding_in_source_order() {
+    assert_output(
+        r#"
+        enum Code { A = 1 }
+        namespace Code { export function next() { return Code.A + 1; } }
+        enum Code { B = 3 }
+        namespace Api {
+            export namespace Kind { export const label = 'kind'; }
+            export enum Kind { A = 4 }
+            export namespace Kind { export function read() { return Kind.A; } }
+            export enum Kind { B = A + 1 }
+        }
+        console.log(Code.next(), Code.B, Code[3]);
+        console.log(Api.Kind.label, Api.Kind.read(), Api.Kind.B, Api.Kind[5]);
+        "#,
+        &["2 3 B", "kind 4 5 B"],
+    );
+}
+
+#[test]
+fn function_local_enums_inside_namespaces_capture_live_exports() {
+    assert_output(
+        r#"
+        namespace Factory {
+            export let base = 3;
+            export function make(offset: number) {
+                enum Result { A = base + offset, B = A + 1 }
+                return Result;
+            }
+        }
+        const first = Factory.make(4);
+        Factory.base = 10;
+        const second = Factory.make(4);
+        console.log(first.A, first.B, second.A, second.B, first === second);
+        "#,
+        &["7 8 14 15 false"],
+    );
+}
+
+#[test]
+fn ambient_enum_types_do_not_suppress_runtime_namespace_bindings() {
+    assert_output(
+        r#"
+        declare enum State { Missing }
+        namespace State { export const value = 1; }
+        namespace Model {
+            export declare enum Kind { Missing }
+            export namespace Kind { export const value = 2; }
+        }
+        console.log(State.value, Model.Kind.value, typeof State.Missing, typeof Model.Kind.Missing);
+        "#,
+        &["1 2 undefined undefined"],
+    );
+}
+
+#[test]
+fn nested_namespace_bindings_preserve_tdz_and_local_object_identity() {
+    assert_output(
+        r#"
+        const trace = [];
+        namespace Outer {
+            try { trace.push(typeof Child); } catch (error) { trace.push(error.name); }
+            export namespace Child {
+                export const value = 3;
+                export const self = Child;
+            }
+            export function original() { return Child; }
+        }
+        const original = Outer.Child;
+        Outer.Child = { value: 9 };
+        console.log(trace[0], original.value, original.self === original,
+            Outer.original() === original, Outer.Child.value);
+        "#,
+        &["ReferenceError 3 true true 9"],
+    );
+}
+
+#[test]
 fn overloads_keep_implementation_hoisting_and_identity() {
     assert_output(
         r#"

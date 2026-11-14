@@ -580,6 +580,11 @@ pub(super) fn render(
 /// Lower enums wherever declarations can occur. Braced lexical scopes own
 /// their own enum bindings; merged declarations in one scope share one object.
 pub fn lower(source: &str) -> Result<String, &'static str> {
+    lower_with_budget(source, &mut Budget::default())
+}
+
+/// Share the caller's expansion budget when lowering a namespace body.
+pub(super) fn lower_with_budget(source: &str, budget: &mut Budget) -> Result<String, &'static str> {
     if !source.contains("enum") {
         return Ok(source.to_owned());
     }
@@ -621,7 +626,6 @@ pub fn lower(source: &str) -> Result<String, &'static str> {
     let mut exported = BTreeSet::new();
     let mut serial = 0;
     let mut constants: BTreeMap<(usize, String), Constants> = BTreeMap::new();
-    let mut budget = Budget::default();
     for (scope, site) in sites {
         let key = (scope, site.name.clone());
         let declaration = if site.ambient || !declared.insert(key.clone()) {
@@ -645,7 +649,7 @@ pub fn lower(source: &str) -> Result<String, &'static str> {
                 identifiers: &mut identifiers,
                 serial: &mut serial,
                 namespace_scope: false,
-                budget: &mut budget,
+                budget,
             },
         )?;
         edits.push(Edit {
@@ -770,6 +774,22 @@ mod tests {
         let namespaced = format!("namespace N{{export {head}}} namespace N{{export {tail}}}");
         assert_eq!(
             namespaces::lower(&namespaced, str::to_owned),
+            Err("enum retained constant budget")
+        );
+    }
+
+    #[test]
+    fn function_local_enums_share_the_namespace_expansion_budget() {
+        let mut declaration = format!("enum E{{A0='{}'", "a".repeat(16_384));
+        for index in 1..=32 {
+            declaration.push_str(&format!(",A{index}=A0"));
+        }
+        declaration.push('}');
+        let source = format!(
+            "namespace N{{export function first(){{{declaration}}}}} namespace N{{export function second(){{{declaration}}}}}"
+        );
+        assert_eq!(
+            namespaces::lower(&source, str::to_owned),
             Err("enum retained constant budget")
         );
     }

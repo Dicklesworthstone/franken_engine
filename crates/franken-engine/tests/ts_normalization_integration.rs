@@ -54,6 +54,33 @@ fn ingest(source: &str) -> Result<TsIngestionArtifacts, TsIngestionError> {
     )
 }
 
+fn assert_enum_result(source: &str, expression: &str, expected: serde_json::Value) {
+    use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore};
+    use frankenengine_engine::capability::RuntimeCapability;
+
+    let artifacts = ingest(&format!(
+        "{source}\nconsole.log(JSON.stringify({expression}));"
+    ))
+    .expect("enum source must normalize, parse and lower");
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.granted_capabilities = [
+        RuntimeCapability::VmDispatch,
+        RuntimeCapability::HeapAllocate,
+        RuntimeCapability::Builtin,
+        RuntimeCapability::Console,
+    ]
+    .into_iter()
+    .collect();
+    let mut core = InterpreterCore::new(config, "enum-normalization");
+    let result = core
+        .execute(&artifacts.lowering_output.ir3)
+        .expect("normalized enum must execute");
+    assert_eq!(result.console_output.len(), 1);
+    let actual: serde_json::Value =
+        serde_json::from_str(&result.console_output[0].message).expect("enum result JSON");
+    assert_eq!(actual, expected);
+}
+
 // ===========================================================================
 // 1. Config — default values, serde
 // ===========================================================================
@@ -138,13 +165,10 @@ fn normalize_elides_type_only_imports() {
 
 #[test]
 fn normalize_lowers_enums() {
-    let source = "enum Color { Red, Green, Blue }";
-    let output = normalize(source).unwrap();
-    assert!(
-        output.normalized_source.contains("Object.freeze")
-            || output.normalized_source.contains("Color"),
-        "enum should be lowered: {}",
-        output.normalized_source
+    assert_enum_result(
+        "enum Color { Red, Green, Blue }",
+        "[Color.Red, Color.Green, Color.Blue, Color[0], Color[2], Object.isFrozen(Color)]",
+        serde_json::json!([0, 1, 2, "Red", "Blue", false]),
     );
 }
 
@@ -1742,23 +1766,10 @@ fn normalize_strips_parameter_type_annotations() {
 
 #[test]
 fn normalize_enum_with_string_values() {
-    let source = r#"enum Direction { Up = "UP", Down = "DOWN" }"#;
-    let output = normalize(source).unwrap();
-    // TypeScript's enum object form (bd-9vouw.413).
-    assert!(
-        output
-            .normalized_source
-            .contains("var Direction; (function (__enum)")
-    );
-    assert!(
-        output
-            .normalized_source
-            .contains(r#"const __value = ("UP"); __enum["Up"] = __value;"#)
-    );
-    assert!(
-        output
-            .normalized_source
-            .contains(r#"const __value = ("DOWN"); __enum["Down"] = __value;"#)
+    assert_enum_result(
+        r#"enum Direction { Up = "UP", Down = "DOWN" }"#,
+        "[Direction.Up, Direction.Down, Object.keys(Direction).length, typeof Direction.UP]",
+        serde_json::json!(["UP", "DOWN", 2, "undefined"]),
     );
 }
 
@@ -2277,38 +2288,10 @@ fn normalize_runtime_default_import_named_type_with_named_clause_is_preserved() 
 
 #[test]
 fn normalize_multiple_enums() {
-    let source = "enum A { X, Y }\nenum B { P = 10, Q }";
-    let output = normalize(source).unwrap();
-    // TypeScript's enum object form (bd-9vouw.413), values folded.
-    assert!(
-        output
-            .normalized_source
-            .contains("var A; (function (__enum)")
-    );
-    assert!(
-        output
-            .normalized_source
-            .contains("var B; (function (__enum)")
-    );
-    assert!(
-        output
-            .normalized_source
-            .contains("const __value = (0); __enum[\"X\"] = __value;")
-    );
-    assert!(
-        output
-            .normalized_source
-            .contains("const __value = (1); __enum[\"Y\"] = __value;")
-    );
-    assert!(
-        output
-            .normalized_source
-            .contains("const __value = (10); __enum[\"P\"] = __value;")
-    );
-    assert!(
-        output
-            .normalized_source
-            .contains("const __value = (11); __enum[\"Q\"] = __value;")
+    assert_enum_result(
+        "enum A { X, Y }\nenum B { P = 10, Q }",
+        "[A.X, A.Y, B.P, B.Q, A[0], A[1], B[10], B[11]]",
+        serde_json::json!([0, 1, 10, 11, "X", "Y", "P", "Q"]),
     );
 }
 
@@ -2484,70 +2467,28 @@ fn enrichment_export_type_alias_stripped() {
 
 #[test]
 fn enrichment_enum_numeric_auto_increment() {
-    let source = "enum Status { Ready, Active, Done }";
-    let output = normalize(source).unwrap();
-    // TypeScript's enum object form (bd-9vouw.413), values folded.
-    assert!(
-        output
-            .normalized_source
-            .contains("const __value = (0); __enum[\"Ready\"] = __value;")
-    );
-    assert!(
-        output
-            .normalized_source
-            .contains("const __value = (1); __enum[\"Active\"] = __value;")
-    );
-    assert!(
-        output
-            .normalized_source
-            .contains("const __value = (2); __enum[\"Done\"] = __value;")
-    );
-    assert!(
-        output
-            .normalized_source
-            .contains("var Status; (function (__enum)")
+    assert_enum_result(
+        "enum Status { Ready, Active, Done }",
+        "[Status.Ready, Status.Active, Status.Done, Status[0], Status[1], Status[2]]",
+        serde_json::json!([0, 1, 2, "Ready", "Active", "Done"]),
     );
 }
 
 #[test]
 fn enrichment_enum_explicit_numeric_values() {
-    let source = "enum Level { Low = 1, Medium = 5, High = 10 }";
-    let output = normalize(source).unwrap();
-    assert!(
-        output
-            .normalized_source
-            .contains("const __value = (1); __enum[\"Low\"] = __value;")
-    );
-    assert!(
-        output
-            .normalized_source
-            .contains("const __value = (5); __enum[\"Medium\"] = __value;")
-    );
-    assert!(
-        output
-            .normalized_source
-            .contains("const __value = (10); __enum[\"High\"] = __value;")
+    assert_enum_result(
+        "enum Level { Low = 1, Medium = 5, High = 10 }",
+        "[Level.Low, Level.Medium, Level.High, Level[1], Level[5], Level[10]]",
+        serde_json::json!([1, 5, 10, "Low", "Medium", "High"]),
     );
 }
 
 #[test]
 fn enrichment_enum_mixed_explicit_and_auto() {
-    let source = "enum Priority { Low, Medium = 5, High }";
-    let output = normalize(source).unwrap();
-    assert!(
-        output
-            .normalized_source
-            .contains("const __value = (0); __enum[\"Low\"] = __value;")
-    );
-    assert!(
-        output
-            .normalized_source
-            .contains("const __value = (5); __enum[\"Medium\"] = __value;")
-    );
-    assert!(
-        output
-            .normalized_source
-            .contains("const __value = (6); __enum[\"High\"] = __value;")
+    assert_enum_result(
+        "enum Priority { Low, Medium = 5, High }",
+        "[Priority.Low, Priority.Medium, Priority.High, Priority[0], Priority[5], Priority[6]]",
+        serde_json::json!([0, 5, 6, "Low", "Medium", "High"]),
     );
 }
 

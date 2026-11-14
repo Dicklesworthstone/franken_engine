@@ -780,7 +780,6 @@ fn body(
         }
         if let Some((site, finish)) = super::enums::site(&source, &lexed, cursor)? {
             if !site.ambient {
-                bindings.insert(site.name.clone());
                 let key = if site.exported {
                     NamespaceKey::Exported(group, site.name.clone())
                 } else {
@@ -998,48 +997,82 @@ fn render_body_exports(
 
 fn render_body(site: &Site, alias: &str, lowering: &mut Lowering) -> Result<String, &'static str> {
     let flattened;
-    let parsed = if site.body.namespaces.is_empty() && site.body.enums.is_empty() {
+    let parsed = if site.body.namespaces.is_empty()
+        && site.body.enums.is_empty()
+        && !site.body.source.contains("enum")
+    {
         &site.body
     } else {
+        enum Child<'a> {
+            Namespace(&'a Site),
+            Enum(&'a super::enums::Site, usize),
+        }
+
+        let mut children = site
+            .body
+            .namespaces
+            .iter()
+            .map(Child::Namespace)
+            .chain(
+                site.body
+                    .enums
+                    .iter()
+                    .map(|(declaration, group)| Child::Enum(declaration, *group)),
+            )
+            .collect::<Vec<_>>();
+        children.sort_by_key(|child| match child {
+            Child::Namespace(site) => site.start,
+            Child::Enum(site, _) => site.start,
+        });
         let mut bindings = site.body.bindings.clone();
         let mut edits = Vec::new();
-        for child in &site.body.namespaces {
-            edits.push(Edit {
-                start: child.start,
-                end: child.end,
-                replacement: render_namespace(child, Some(alias), &mut bindings, None, lowering)?,
-            });
-        }
-        let mut declared_enums = BTreeSet::new();
-        for (declaration, group) in &site.body.enums {
-            let binding = if declaration.ambient || !declared_enums.insert(declaration.name.clone())
-            {
-                ""
-            } else {
-                "let"
+        for child in children {
+            let edit = match child {
+                Child::Namespace(child) => Edit {
+                    start: child.start,
+                    end: child.end,
+                    replacement: render_namespace(
+                        child,
+                        Some(alias),
+                        &mut bindings,
+                        None,
+                        lowering,
+                    )?,
+                },
+                Child::Enum(declaration, group) => {
+                    let binding =
+                        if declaration.ambient || !bindings.insert(declaration.name.clone()) {
+                            ""
+                        } else {
+                            "let"
+                        };
+                    Edit {
+                        start: declaration.start,
+                        end: declaration.end,
+                        replacement: super::enums::render(
+                            &site.body.source,
+                            declaration,
+                            super::enums::Emission {
+                                members: lowering.enum_members.entry(group).or_default(),
+                                constants: lowering.enum_constants.entry(group).or_default(),
+                                parent: declaration.exported.then_some(alias),
+                                declaration: binding,
+                                export: false,
+                                identifiers: &mut lowering.identifiers,
+                                serial: &mut lowering.next_alias,
+                                namespace_scope: true,
+                                budget: &mut lowering.enum_budget,
+                            },
+                        )?,
+                    }
+                }
             };
-            edits.push(Edit {
-                start: declaration.start,
-                end: declaration.end,
-                replacement: super::enums::render(
-                    &site.body.source,
-                    declaration,
-                    super::enums::Emission {
-                        members: lowering.enum_members.entry(*group).or_default(),
-                        constants: lowering.enum_constants.entry(*group).or_default(),
-                        parent: declaration.exported.then_some(alias),
-                        declaration: binding,
-                        export: false,
-                        identifiers: &mut lowering.identifiers,
-                        serial: &mut lowering.next_alias,
-                        namespace_scope: true,
-                        budget: &mut lowering.enum_budget,
-                    },
-                )?,
-            });
+            edits.push(edit);
         }
-        edits.sort_by_key(|edit| (edit.start, edit.end));
         let source = apply(&site.body.source, &edits, 0, site.body.source.len())?;
+        // Function and block scopes can still contain enums. Lower those
+        // declarations before resolving references to this namespace's exports.
+        let source = super::enums::lower_with_budget(&source, &mut lowering.enum_budget)?;
         // Resolve the enclosing scope over the generated JavaScript too. Its
         // references remain free inside child activations unless a child has
         // a real local binding, exactly as in ordinary nested functions.
@@ -1060,7 +1093,8 @@ fn render_namespace(
     let body = render_body(site, &alias, lowering)?;
     let mut out = String::new();
     if bindings.insert(site.name.clone()) {
-        out.push_str(&format!("var {}; ", site.name));
+        let declaration = if parent.is_some() { "let" } else { "var" };
+        out.push_str(&format!("{declaration} {}; ", site.name));
     }
     if site.exported
         && let Some(exports) = named_exports
@@ -1281,7 +1315,7 @@ mod tests {
             str::to_owned,
         )
         .unwrap();
-        assert_eq!(actual.matches("var Hidden;").count(), 2);
+        assert_eq!(actual.matches("let Hidden;").count(), 2);
         assert!(actual.contains("return Hidden.value;"));
         assert!(actual.contains("return Hidden.read();"));
         assert!(actual.contains("return value;"));
@@ -1297,7 +1331,64 @@ mod tests {
         .unwrap();
         assert!(actual.contains("return Child.x;"));
         assert!(actual.contains("return __franken_namespace_2.Child.x;"));
-        assert_eq!(actual.matches("var Child;").count(), 1);
+        assert_eq!(actual.matches("let Child;").count(), 1);
+    }
+
+    #[test]
+    fn function_local_enums_resolve_enclosing_namespace_exports() {
+        let actual = lower(
+            "namespace Factory { export let base = 3; export function make(offset) { enum Result { A = base + offset, B = A + 1 } return Result; } }",
+            str::to_owned,
+        )
+        .unwrap();
+        assert!(actual.contains("let Result;"));
+        assert!(!actual.contains("enum Result"));
+        assert!(actual.contains("__franken_namespace_0.base + offset"));
+        assert!(actual.contains("return Result;"));
+        assert!(actual.contains("__franken_namespace_0.make = make;"));
+    }
+
+    #[test]
+    fn nested_namespace_bindings_are_lexical_at_the_declaration_site() {
+        let actual = lower(
+            "namespace Outer { observe(typeof Child); export namespace Child { export const value = 3; } export function read() { return Child; } }",
+            str::to_owned,
+        )
+        .unwrap();
+        assert_eq!(actual.matches("let Child;").count(), 1);
+        assert!(!actual.contains("var Child;"));
+        assert!(actual.contains("observe(typeof Child);"));
+        let observation = actual.find("observe(typeof Child);").unwrap();
+        let declaration = actual.find("let Child;").unwrap();
+        assert!(observation < declaration);
+        assert!(
+            actual.contains(
+                "Child = __franken_namespace_0.Child || (__franken_namespace_0.Child = {})"
+            )
+        );
+        assert!(actual.contains("return Child;"));
+    }
+
+    #[test]
+    fn enum_and_namespace_merges_share_the_first_lexical_binding() {
+        let actual = lower(
+            "namespace Api { export namespace First { export const tag = 1; } export enum First { A = 2 } export namespace First { export const tail = 3; } export enum First { B = A + 1 } export enum Second { A = 4 } export namespace Second { export const tag = 5; } export enum Second { B = A + 1 } }",
+            str::to_owned,
+        )
+        .unwrap();
+        for name in ["First", "Second"] {
+            assert_eq!(actual.matches(&format!("let {name};")).count(), 1);
+            assert!(!actual.contains(&format!("var {name};")));
+        }
+        assert!(actual.find("let First;").unwrap() < actual.find(".tag = 1;").unwrap());
+        let first_namespace = actual.find(".tag = 1;").unwrap();
+        let first_enum = actual.find("(2); __enum[\"A\"]").unwrap();
+        let second_enum = actual.find("(4); __enum[\"A\"]").unwrap();
+        let second_namespace = actual.find(".tag = 5;").unwrap();
+        assert!(first_namespace < first_enum);
+        assert!(second_enum < second_namespace);
+        assert!(actual.contains("(3); __enum[\"B\"]"));
+        assert!(actual.contains("(5); __enum[\"B\"]"));
     }
 
     #[test]

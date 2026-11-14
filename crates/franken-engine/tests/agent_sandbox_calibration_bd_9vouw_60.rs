@@ -317,3 +317,190 @@ fn planted_attacks_are_refused_or_contained() {
         escapes.join("\n")
     );
 }
+
+fn record_replayable_sandbox(dir: &Path) -> serde_json::Value {
+    let manifest_path = write_manifest(dir);
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(&manifest_path).expect("manifest")).expect("json");
+    manifest["tool_grants"]
+        .as_array_mut()
+        .expect("grants")
+        .push(serde_json::json!({"tool_name": "write_file", "capability_tag": "fs_write"}));
+    fs::write(&manifest_path, serde_json::to_vec(&manifest).expect("json")).expect("manifest");
+    let (output, report) = sandbox(
+        dir,
+        &manifest_path,
+        "recorded",
+        "const fs = require('fs'); fs.writeFileSync('output.txt', 'recorded write'); const text = fs.readFileSync('notes.txt', 'utf8'); console.log(text.trim().length); try { fs.readFileSync('missing.txt', 'utf8'); } catch (e) { console.log('missing'); }",
+    );
+    assert!(
+        output.status.success(),
+        "sandbox recording failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report = report.expect("sandbox report");
+    assert_eq!(report["report"]["host_effects"], 3);
+    assert_eq!(
+        fs::read_to_string(dir.join("root/output.txt")).expect("real write"),
+        "recorded write"
+    );
+    assert!(report["replay"]["replay_input_signature"].is_object());
+    assert_eq!(report["replay"]["replay_input"]["module_hashes_exact"], true);
+    report
+}
+
+fn replay_sandbox_report(dir: &Path, name: &str, report: &serde_json::Value) -> Output {
+    let path = dir.join(format!("{name}.replay-input.json"));
+    fs::write(&path, serde_json::to_vec(report).expect("report json")).expect("report write");
+    Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "replay",
+            "run",
+            "--trace",
+            path.to_str().expect("utf8"),
+            "--mode",
+            "strict",
+        ])
+        .current_dir(dir)
+        .output()
+        .expect("replay executes")
+}
+
+#[test]
+fn sandbox_replay_uses_recorded_host_effects_without_live_root_rc_c2() {
+    let dir = scratch_dir("offline_replay");
+    let report = record_replayable_sandbox(&dir);
+    fs::rename(dir.join("root"), dir.join("retained-root")).expect("retain original files");
+    fs::write(dir.join("retained-root/notes.txt"), "changed after recording")
+        .expect("change live input");
+    fs::write(dir.join("retained-root/output.txt"), "must remain untouched").expect("canary");
+
+    let output = replay_sandbox_report(&dir, "offline", &report);
+    assert!(
+        output.status.success(),
+        "offline replay failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let replay: serde_json::Value = serde_json::from_slice(&output.stdout).expect("replay json");
+    assert_eq!(replay["complete"], true);
+    assert_eq!(replay["decisions_match"], true);
+    assert_eq!(replay["unsigned_execution_content_match"], true);
+    assert_eq!(replay["randomness_transcript_match"], true);
+    assert_eq!(replay["evidence_authenticated"], false);
+    assert!(
+        !dir.join("root").exists(),
+        "replay must not recreate the host root"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.join("retained-root/output.txt")).expect("canary"),
+        "must remain untouched"
+    );
+}
+
+#[test]
+fn sandbox_replay_refuses_missing_extra_and_reordered_effects_rc_c2() {
+    let dir = scratch_dir("tampered_effects");
+    let original = record_replayable_sandbox(&dir);
+    for mutation in ["missing", "extra", "reordered"] {
+        let mut report = original.clone();
+        let transcript = report["replay"]["replay_input"]["host_effect_transcript"]
+            .as_array_mut()
+            .expect("recorded effects");
+        match mutation {
+            "missing" => {
+                transcript.pop();
+            }
+            "extra" => transcript.push(transcript[0].clone()),
+            "reordered" => transcript.reverse(),
+            _ => unreachable!(),
+        }
+        let output = replay_sandbox_report(&dir, mutation, &report);
+        assert!(
+            !output.status.success(),
+            "{mutation} effect transcript must not certify replay: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("re-execution failed"),
+            "{mutation}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn sandbox_replay_rejects_authority_and_summary_drift_rc_c2() {
+    let dir = scratch_dir("tampered_authority");
+    let original = record_replayable_sandbox(&dir);
+    let mut authority = original.clone();
+    authority["replay"]["replay_input"]["agent_sandbox_manifest"]["tool_grants"] =
+        serde_json::json!([]);
+    let rejected = replay_sandbox_report(&dir, "authority", &authority);
+    assert!(!rejected.status.success());
+    assert!(
+        String::from_utf8_lossy(&rejected.stderr)
+            .contains("sandbox replay authority differs from the recorded manifest")
+    );
+
+    let mut provenance = original.clone();
+    provenance["replay"]["replay_input"]["host_io_exception_provenance"] =
+        serde_json::json!("unknown");
+    let rejected = replay_sandbox_report(&dir, "provenance", &provenance);
+    assert!(!rejected.status.success());
+    assert!(
+        String::from_utf8_lossy(&rejected.stderr)
+            .contains("filesystem exception provenance differs from the CLI composition")
+    );
+
+    let mut identity = original.clone();
+    identity["report"]["evidence_verification_identity"]["producer_id"] =
+        serde_json::json!("unrelated-producer");
+    let rejected = replay_sandbox_report(&dir, "identity", &identity);
+    assert!(!rejected.status.success());
+    assert!(
+        String::from_utf8_lossy(&rejected.stderr)
+            .contains("sandbox summary signer differs from its evidence chain")
+    );
+
+    let mut summary = original;
+    summary["report"]["guardplane"]["containment_action"] = serde_json::json!("quarantine");
+    let rejected = replay_sandbox_report(&dir, "summary", &summary);
+    assert!(!rejected.status.success());
+    assert!(
+        String::from_utf8_lossy(&rejected.stderr)
+            .contains("sandbox authority or guardplane summary differs")
+    );
+}
+
+#[test]
+fn sandbox_replay_records_caught_denials_without_a_live_provider_rc_c2() {
+    let dir = scratch_dir("denial_replay");
+    let manifest_path = write_manifest(&dir);
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(&manifest_path).expect("manifest")).expect("json");
+    manifest
+        .as_object_mut()
+        .expect("manifest object")
+        .remove("host_io_root");
+    fs::write(&manifest_path, serde_json::to_vec(&manifest).expect("json")).expect("manifest");
+    let (output, report) = sandbox(
+        &dir,
+        &manifest_path,
+        "denied",
+        "const fs = require('fs'); try { fs.readFileSync('notes.txt', 'utf8'); } catch (e) { console.log('denied'); }",
+    );
+    assert!(
+        output.status.success(),
+        "caught denial must complete: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report = report.expect("denied sandbox report");
+    assert_eq!(report["report"]["host_effects"], 1);
+    assert_eq!(report["replay"]["console_output"][0]["message"], "denied");
+    let replay = replay_sandbox_report(&dir, "denied", &report);
+    assert!(
+        replay.status.success(),
+        "denied effect replay failed: {}",
+        String::from_utf8_lossy(&replay.stderr)
+    );
+}

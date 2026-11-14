@@ -9751,7 +9751,7 @@ impl InterpreterCore {
                 other => other,
             };
             let resolved = self.resolve_specifier_base(relative)?;
-            self.resolve_require_candidate(&resolved, relative.ends_with('/'))
+            self.resolve_require_candidate(&resolved, relative.ends_with('/'))?
                 .ok_or_else(|| InterpreterError::ModuleResolutionFailed {
                     specifier: specifier.to_string(),
                     reason: ModuleResolutionFailureReason::ModuleNotFound,
@@ -9838,29 +9838,29 @@ impl InterpreterCore {
         &self,
         candidate: &Path,
         force_directory: bool,
-    ) -> Option<PathBuf> {
+    ) -> Result<Option<PathBuf>, InterpreterError> {
         if !force_directory {
             if candidate.is_file() {
-                return Some(candidate.to_path_buf());
+                return Ok(Some(candidate.to_path_buf()));
             }
             let with_extension = ["js", "json", "node"]
                 .into_iter()
                 .map(|extension| package_resolution::with_appended_extension(candidate, extension))
                 .find(|path| path.is_file());
             if with_extension.is_some() {
-                return with_extension;
+                return Ok(with_extension);
             }
         }
         if candidate.is_dir() {
-            if let Some(main) = Self::resolve_package_main(candidate) {
-                return Some(main);
+            if let Some(main) = self.resolve_package_main(candidate)? {
+                return Ok(Some(main));
             }
-            return ["index.js", "index.json", "index.node"]
+            return Ok(["index.js", "index.json", "index.node"]
                 .into_iter()
                 .map(|index| candidate.join(index))
-                .find(|path| path.is_file());
+                .find(|path| path.is_file()));
         }
-        None
+        Ok(None)
     }
 
     pub(super) fn ensure_module_record(
@@ -12979,10 +12979,25 @@ impl InterpreterCore {
             });
         }
         self.check_temporary_memory_budget(source_bytes)?;
+        self.observe_module_input(Path::new(resolved), &bytes)
+            .map_err(|error| InterpreterError::ModuleReadFailed {
+                specifier: resolved.to_string(),
+                error,
+            })?;
         String::from_utf8(bytes).map_err(|error| InterpreterError::ModuleReadFailed {
             specifier: resolved.to_string(),
             error: error.to_string(),
         })
+    }
+
+    pub(super) fn observe_module_input(&self, path: &Path, bytes: &[u8]) -> Result<(), String> {
+        let Some(integrity) = &self.config.module_source_integrity else {
+            return Ok(());
+        };
+        let root = self
+            .canonical_module_root_path()
+            .ok_or_else(|| "module integrity requires a configured root".to_string())?;
+        integrity.observe(&root, path, bytes)
     }
 
     /// A declared format wins over source detection. An ambiguous .js or

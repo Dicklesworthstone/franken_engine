@@ -1,13 +1,16 @@
 #![forbid(unsafe_code)]
 
 //! Resolve real on-disk packages through the shipped CommonJS entry pipeline.
+use std::collections::BTreeMap;
 use std::path::Path;
 
+use frankenengine_engine::ast::ParseGoal;
 use frankenengine_engine::baseline_interpreter::LaneChoice;
 use frankenengine_engine::execution_orchestrator::LabFixtureExecutionOrchestratorExt as _;
 use frankenengine_engine::execution_orchestrator::{
-    ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig,
+    ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig, OrchestratorResult,
 };
+use frankenengine_engine::hash_tiers::ContentHash;
 
 fn write_tree(root: &Path, files: &[(&str, &str)]) {
     for (name, source) in files {
@@ -18,6 +21,21 @@ fn write_tree(root: &Path, files: &[(&str, &str)]) {
 }
 
 fn run(root: &Path, entry: &str, lane: LaneChoice) -> Result<Vec<String>, String> {
+    run_with_integrity(root, entry, lane, None).map(|result| {
+        result
+            .console_output
+            .into_iter()
+            .map(|line| line.message)
+            .collect()
+    })
+}
+
+fn run_with_integrity(
+    root: &Path,
+    entry: &str,
+    lane: LaneChoice,
+    expected: Option<BTreeMap<String, String>>,
+) -> Result<OrchestratorResult, String> {
     let entry = root.join(entry);
     let package = ExtensionPackage {
         extension_id: "package-scope-regression".to_string(),
@@ -28,20 +46,211 @@ fn run(root: &Path, entry: &str, lane: LaneChoice) -> Result<Vec<String>, String
         version: "1.0.0".to_string(),
         metadata: Default::default(),
     };
-    ExecutionOrchestrator::new(OrchestratorConfig {
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig {
         force_lane: Some(lane),
         commonjs_entry: true,
         ..OrchestratorConfig::default()
-    })
-    .execute(&package)
-    .map(|result| {
-        result
-            .console_output
-            .into_iter()
-            .map(|line| line.message)
-            .collect()
-    })
-    .map_err(|error| error.to_string())
+    });
+    if let Some(expected) = expected {
+        orchestrator.set_expected_imported_module_hashes(expected);
+    }
+    orchestrator
+        .execute(&package)
+        .map_err(|error| error.to_string())
+}
+
+#[test]
+fn module_integrity_records_consumed_package_json_and_extensionless_sources() {
+    let root = tempfile::tempdir().expect("module root");
+    let files = [
+        (
+            "app.cjs",
+            "console.log(require('pkg') + require('./data.json').n + require('./extensionless'));",
+        ),
+        ("node_modules/pkg/package.json", r#"{"main":"entry.cjs"}"#),
+        ("node_modules/pkg/entry.cjs", "module.exports = 10;"),
+        ("data.json", r#"{"n":20}"#),
+        ("extensionless", "module.exports = 12;"),
+        ("unread.js", "throw 'not a dependency';"),
+    ];
+    write_tree(root.path(), &files);
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let result = run_with_integrity(root.path(), "app.cjs", lane, None).unwrap();
+        assert_eq!(result.console_output[0].message, "42");
+        let expected: BTreeMap<_, _> = files[1..5]
+            .iter()
+            .map(|(path, source)| {
+                (
+                    path.to_string(),
+                    ContentHash::compute(source.as_bytes()).to_hex(),
+                )
+            })
+            .collect();
+        assert_eq!(result.imported_module_hashes, expected, "{lane:?}");
+        // A file no loader consumed is not a replay dependency.
+        write_tree(root.path(), &[("unread.js", "now invalid JavaScript")]);
+        let replay = run_with_integrity(root.path(), "app.cjs", lane, Some(expected)).unwrap();
+        assert_eq!(replay.console_output[0].message, "42");
+    }
+}
+
+#[test]
+fn module_integrity_rejects_package_source_edits_even_with_identical_output() {
+    let root = tempfile::tempdir().expect("module root");
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        write_tree(
+            root.path(),
+            &[
+                ("app.cjs", "console.log(require('pkg'));"),
+                ("node_modules/pkg/package.json", r#"{"main":"entry.cjs"}"#),
+                ("node_modules/pkg/entry.cjs", "module.exports = 42;"),
+            ],
+        );
+        let result = run_with_integrity(root.path(), "app.cjs", lane, None).unwrap();
+        write_tree(
+            root.path(),
+            &[(
+                "node_modules/pkg/entry.cjs",
+                "/* changed */ module.exports = 42;",
+            )],
+        );
+        let error = run_with_integrity(
+            root.path(),
+            "app.cjs",
+            lane,
+            Some(result.imported_module_hashes),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("module integrity content mismatch"),
+            "{lane:?}: {error}"
+        );
+    }
+}
+
+#[test]
+fn module_integrity_checks_relative_directory_manifest_before_fallback() {
+    let root = tempfile::tempdir().expect("module root");
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        write_tree(
+            root.path(),
+            &[
+                ("app.cjs", "console.log(require('./directory'));"),
+                ("directory/package.json", r#"{"main":"entry.cjs"}"#),
+                ("directory/entry.cjs", "module.exports = 42;"),
+                ("directory/index.js", "throw 'must not evaluate fallback';"),
+            ],
+        );
+        let result = run_with_integrity(root.path(), "app.cjs", lane, None).unwrap();
+        assert!(
+            result
+                .imported_module_hashes
+                .contains_key("directory/package.json")
+        );
+        write_tree(root.path(), &[("directory/package.json", "invalid JSON")]);
+        let error = run_with_integrity(
+            root.path(),
+            "app.cjs",
+            lane,
+            Some(result.imported_module_hashes),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("module integrity content mismatch"),
+            "{lane:?}: {error}"
+        );
+    }
+}
+
+#[test]
+fn caught_module_integrity_error_cannot_certify_a_successful_replay() {
+    let root = tempfile::tempdir().expect("module root");
+    write_tree(
+        root.path(),
+        &[
+            (
+                "app.cjs",
+                "try { require('./dep.cjs'); } catch (e) {} console.log('after');",
+            ),
+            ("dep.cjs", "module.exports = 1;"),
+        ],
+    );
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let error =
+            run_with_integrity(root.path(), "app.cjs", lane, Some(BTreeMap::new())).unwrap_err();
+        assert!(error.contains("was not recorded"), "{lane:?}: {error}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn module_integrity_records_canonical_symlink_target_once() {
+    let root = tempfile::tempdir().expect("module root");
+    write_tree(
+        root.path(),
+        &[
+            (
+                "app.cjs",
+                "console.log(require('./alias.cjs') + require('./actual.cjs'));",
+            ),
+            ("actual.cjs", "module.exports = 21;"),
+        ],
+    );
+    std::os::unix::fs::symlink("actual.cjs", root.path().join("alias.cjs")).unwrap();
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let result = run_with_integrity(root.path(), "app.cjs", lane, None).unwrap();
+        assert_eq!(result.console_output[0].message, "42");
+        assert_eq!(
+            result.imported_module_hashes,
+            BTreeMap::from([(
+                "actual.cjs".to_string(),
+                ContentHash::compute(b"module.exports = 21;").to_hex(),
+            )])
+        );
+    }
+}
+
+#[test]
+fn module_integrity_covers_static_and_dynamic_esm_imports() {
+    let root = tempfile::tempdir().expect("module root");
+    let source = "import { value } from './static.mjs'; const other = await import('./dynamic.mjs'); console.log(value + other.value);";
+    write_tree(
+        root.path(),
+        &[
+            ("app.mjs", source),
+            ("static.mjs", "export const value = 20;"),
+            ("dynamic.mjs", "export const value = 22;"),
+        ],
+    );
+    let package = ExtensionPackage {
+        extension_id: "esm-module-integrity".to_string(),
+        source: source.to_string(),
+        source_file: Some(root.path().join("app.mjs").display().to_string()),
+        module_root: Some(root.path().display().to_string()),
+        capabilities: vec!["module_load".to_string(), "builtin".to_string()],
+        version: "1.0.0".to_string(),
+        metadata: Default::default(),
+    };
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let config = OrchestratorConfig {
+            parse_goal: ParseGoal::Module,
+            force_lane: Some(lane),
+            ..OrchestratorConfig::default()
+        };
+        let result = ExecutionOrchestrator::new(config.clone())
+            .execute(&package)
+            .unwrap();
+        assert_eq!(result.console_output[0].message, "42");
+        assert_eq!(result.imported_module_hashes.len(), 2);
+        assert!(result.imported_module_hashes.contains_key("static.mjs"));
+        assert!(result.imported_module_hashes.contains_key("dynamic.mjs"));
+        let mut replay = ExecutionOrchestrator::new(config);
+        replay.set_expected_imported_module_hashes(result.imported_module_hashes);
+        assert_eq!(
+            replay.execute(&package).unwrap().console_output[0].message,
+            "42"
+        );
+    }
 }
 
 fn assert_output(files: &[(&str, &str)], entry: &str, expected: &[&str]) {

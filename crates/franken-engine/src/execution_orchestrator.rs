@@ -27,7 +27,7 @@ use crate::ast::ParseGoal;
 use crate::baseline_interpreter::{
     CompactTier1Program, ConsoleEntry, ExecutionResult, FailedConsoleSink, HookAction,
     InterpreterConfig, InterpreterError, InterpreterHook, LaneChoice, LaneReason, LaneRouter,
-    RoutedResult,
+    ModuleSourceIntegrity, RoutedResult,
 };
 use crate::bayesian_posterior::{Evidence, Posterior, RiskState, UpdateResult, UpdaterStore};
 use crate::capability::RuntimeCapability;
@@ -1257,6 +1257,11 @@ pub struct OrchestratorResult {
     /// unlike independent family transcripts it preserves interleaving.
     pub host_effect_journal: Vec<HostEffectJournalEntry>,
 
+    /// Hashes of the exact filesystem source and package-manifest bytes read
+    /// during this run, keyed by canonical paths relative to the module root.
+    /// Includes node_modules and extensionless sources; excludes unread files.
+    pub imported_module_hashes: BTreeMap<String, String>,
+
     // Replay (bd-9mr8o): the finalised nondeterminism trace the interpreter
     // recorded during this run. Surfaced so `frankenctl run --emit-trace`
     // can hand operators the exact trace `frankenctl replay debug --input`
@@ -2063,6 +2068,8 @@ pub struct ExecutionOrchestrator {
     process_argv: Vec<String>,
     /// Closed-world source delivery, installed only for one resolved-entry run.
     module_resolver: Option<(ExecutionModuleResolver, ContentHash)>,
+    /// Shared read-boundary capture/verification for filesystem module inputs.
+    module_source_integrity: ModuleSourceIntegrity,
     /// Optional per-run cancellation signal supplied by the product supervisor.
     cancellation_token: Option<CancellationToken>,
     /// Optional data-contract IFC ingress binding (bd-fqlfw.8.2): the labeled
@@ -2406,6 +2413,7 @@ impl ExecutionOrchestrator {
             last_failed_console_output: Arc::default(),
             process_argv: Vec::new(),
             module_resolver: None,
+            module_source_integrity: ModuleSourceIntegrity::default(),
             cancellation_token: None,
             data_contract_ingress: None,
             data_contract_flow_events: Vec::new(),
@@ -2669,6 +2677,13 @@ impl ExecutionOrchestrator {
     /// them. Unset, the program sees an empty array.
     pub fn set_process_argv(&mut self, argv: Vec<String>) {
         self.process_argv = argv;
+    }
+
+    /// Validate every filesystem dependency against an exact prior run's
+    /// consumed-input map before its bytes reach parsing or evaluation.
+    /// The expectation applies to subsequent attempts; each gets fresh state.
+    pub fn set_expected_imported_module_hashes(&mut self, hashes: BTreeMap<String, String>) {
+        self.module_source_integrity = ModuleSourceIntegrity::replaying(hashes);
     }
 
     /// Install a per-run cooperative cancellation signal for both interpreter
@@ -3012,6 +3027,7 @@ impl ExecutionOrchestrator {
         // Consume it before validation so a malformed package cannot preserve
         // the authority and reuse it for a later, unrelated package.
         let process_spawn_attempt = self.process_spawn_attempt.clone();
+        self.module_source_integrity = self.module_source_integrity.new_attempt();
         self.last_failed_host_effect_journal.clear();
         self.last_failed_host_effect_journal_records.clear();
         self.last_failed_trace_id = None;
@@ -3383,6 +3399,13 @@ impl ExecutionOrchestrator {
                 cancellation.cancel();
             }
             self.ensure_not_cancelled()?;
+            let imported_module_hashes =
+                self.module_source_integrity.finish().map_err(|error| {
+                    OrchestratorError::Interpreter(InterpreterError::ModuleReadFailed {
+                        specifier: source_label.clone(),
+                        error,
+                    })
+                })?;
             let lane = routed.lane;
             let lane_reason = adaptive_routing_decision.reported_lane_reason(routed.reason);
             if lane != adaptive_routing_decision.selected_lane {
@@ -3577,6 +3600,7 @@ impl ExecutionOrchestrator {
                 cell_execution_transcript: None,
                 host_effect_transcript,
                 host_effect_journal: host_effect_journal_entries,
+                imported_module_hashes,
                 nondeterminism_trace: exec_result.nondeterminism_trace.clone(),
                 ir4_witness,
                 epoch: self.config.epoch,
@@ -4312,6 +4336,7 @@ impl ExecutionOrchestrator {
         // budgets) as the entry, not the parser's built-in defaults.
         quickjs_config.module_parser_options = self.config.parser_options.clone();
         quickjs_config.module_conditions = self.config.module_conditions.clone();
+        quickjs_config.module_source_integrity = Some(self.module_source_integrity.clone());
         quickjs_config.process_argv = self.process_argv.clone();
         quickjs_config.process_shape_read_allowed =
             self.ambient_authority_grant == AmbientAuthorityGrant::TrustedProcessShape;
@@ -4332,6 +4357,7 @@ impl ExecutionOrchestrator {
         v8_config.commonjs_entry = self.commonjs_entry();
         v8_config.module_parser_options = self.config.parser_options.clone();
         v8_config.module_conditions = self.config.module_conditions.clone();
+        v8_config.module_source_integrity = Some(self.module_source_integrity.clone());
         v8_config.process_argv = self.process_argv.clone();
         v8_config.process_shape_read_allowed =
             self.ambient_authority_grant == AmbientAuthorityGrant::TrustedProcessShape;

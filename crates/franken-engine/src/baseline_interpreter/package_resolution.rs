@@ -233,17 +233,21 @@ impl fmt::Display for PackageTargetError {
     }
 }
 
+#[cfg(test)]
 fn read_package_manifest(dir: &Path) -> Result<Option<PackageManifest>, String> {
     let path = dir.join("package.json");
     if !path.is_file() {
         return Ok(None);
     }
-    read_package_manifest_file(&path).map(Some)
+    read_package_manifest_file(&path, |_| Ok(())).map(Some)
 }
 
 /// Read the already-selected manifest, without rebuilding its lexical path.
 /// The runtime resolver passes a containment-checked canonical path here.
-fn read_package_manifest_file(path: &Path) -> Result<PackageManifest, String> {
+fn read_package_manifest_file(
+    path: &Path,
+    observe: impl FnOnce(&[u8]) -> Result<(), String>,
+) -> Result<PackageManifest, String> {
     let file = fs::File::open(path)
         .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
     let mut bytes = Vec::new();
@@ -256,6 +260,7 @@ fn read_package_manifest_file(path: &Path) -> Result<PackageManifest, String> {
             path.display()
         ));
     }
+    observe(&bytes)?;
     // Node accepts one UTF-8 BOM at the start of package.json. Charge it to
     // the existing byte limit before stripping it; do not trim malformed JSON
     // or accept a second/interior BOM as whitespace.
@@ -766,9 +771,11 @@ impl InterpreterCore {
             ))
         })?;
         self.canonicalize_module_candidate(specifier, &canonical)?;
-        read_package_manifest_file(&canonical)
-            .map(Some)
-            .map_err(failed)
+        read_package_manifest_file(&canonical, |bytes| {
+            self.observe_module_input(&canonical, bytes)
+        })
+        .map(Some)
+        .map_err(failed)
     }
 
     /// The nearest package scope determines a module's declared format.
@@ -1274,7 +1281,7 @@ impl InterpreterCore {
                     .ok_or_else(|| failed(ModuleResolutionFailureReason::ModuleNotFound));
             }
             if let Some(found) = self
-                .resolve_require_candidate(&modules_dir.join(specifier), specifier.ends_with('/'))
+                .resolve_require_candidate(&modules_dir.join(specifier), specifier.ends_with('/'))?
             {
                 return Ok(found);
             }
@@ -1314,9 +1321,13 @@ impl InterpreterCore {
     /// `index.js`/`index.json`/`index.node`. A selected native addon is refused
     /// by the loader, not skipped in favor of another candidate. `None` when
     /// the directory declares no usable `main`, so its own index is tried.
-    pub(super) fn resolve_package_main(directory: &Path) -> Option<PathBuf> {
-        let manifest = read_package_manifest(directory).ok().flatten()?;
-        resolve_manifest_main(directory, &manifest)
+    pub(super) fn resolve_package_main(
+        &self,
+        directory: &Path,
+    ) -> Result<Option<PathBuf>, InterpreterError> {
+        let specifier = directory.display().to_string();
+        let manifest = self.read_contained_package_manifest(&specifier, directory)?;
+        Ok(manifest.and_then(|manifest| resolve_manifest_main(directory, &manifest)))
     }
 }
 

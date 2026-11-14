@@ -40,7 +40,7 @@ use frankenengine_engine::capability_witness::{
     CapabilityWitness, ConfidenceInterval, ProofKind, ProofObligation, WitnessBuilder,
 };
 use frankenengine_engine::data_contract::{
-    DEFAULT_DATA_CONTRACT_PURPOSE, DataContract, DataContractRunBinding,
+    DEFAULT_DATA_CONTRACT_PURPOSE, DataContract, DataContractIfcIngress, DataContractRunBinding,
     E8_REFUSAL_LEDGER_SCHEMA_VERSION, E8RefusalLedgerReceipt,
 };
 use frankenengine_engine::deterministic_replay::{NondeterminismTrace, ReplayEngine, ReplayMode};
@@ -150,8 +150,8 @@ use frankenengine_engine::ts_normalization::{
     SourceIngestionSummary, prepare_source_entry_for_public_entrypoints,
 };
 use frankenengine_extension_host::host_io::{
-    DenyAllHostIo, HostIoOutcome, HostIoRecorder, HostIoRequest, InMemoryHostIoTranscript,
-    SandboxedHostIo,
+    DenyAllHostIo, HostIoCapability, HostIoError, HostIoExceptionProvenance, HostIoOutcome,
+    HostIoProvider, HostIoRecorder, HostIoRequest, InMemoryHostIoTranscript, SandboxedHostIo,
 };
 use rand::RngCore;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -1107,6 +1107,19 @@ struct RunReplayInput {
     policy_id: String,
     policy_epoch: u64,
     cell_close_budget_ms: u64,
+    /// Preserve the actual authority, including a witness-narrowed run profile.
+    /// Older run reports reconstruct the historical CLI profile when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    capabilities: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    capability_witness: Option<CapabilityWitness>,
+    /// Reinstall the original IFC boundary instead of replaying unlabelled input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    data_contract_ingress: Option<DataContractIfcIngress>,
+    /// The sandbox manifest reconstructs both tool grants and guardplane metadata.
+    /// Its host root is never opened during replay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_sandbox_manifest: Option<AgentSandboxManifest>,
     /// `--instruction-budget` override used by the run (bd-9vouw.6). Absent
     /// for default-budget runs, so earlier reports keep their exact bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1125,17 +1138,42 @@ struct RunReplayInput {
     /// are read again on replay, not recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     module_root: Option<String>,
-    /// Content hashes of module files under `module_root` at original run time
-    /// (`[RC-C2]` / `g2vrp.9`). Verified before replay re-execution.
+    /// Content hashes of consumed module sources and package manifests.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     imported_module_hashes: BTreeMap<String, String>,
+    /// New reports commit to the bytes read by the loader, including an empty
+    /// dependency set. Historical reports used a whole-directory snapshot.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    module_hashes_exact: bool,
     /// Recorded host I/O transcript for deterministic side-effect-free replay
     /// (`[RC-C2]` / `g2vrp.9`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     host_effect_transcript: Vec<(HostIoRequest, HostIoOutcome)>,
+    /// Original lowering provenance, bound to the signed input. Restoration is
+    /// confined to the CLI's no-live-I/O replay adapter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    host_io_exception_provenance: Option<HostIoExceptionProvenance>,
     ir3_hash: String,
     randomness_transcript: NondeterminismTrace,
     unsigned_execution_content: UnsignedExecutionContent,
+}
+
+impl RunReplayInput {
+    fn command_schema_version(&self) -> &'static str {
+        if self.agent_sandbox_manifest.is_some() {
+            AGENT_SANDBOX_COMMAND_SCHEMA_VERSION
+        } else {
+            RUN_COMMAND_SCHEMA_VERSION
+        }
+    }
+
+    fn trace_id_prefix(&self) -> &'static str {
+        if self.agent_sandbox_manifest.is_some() {
+            "frankenctl-agent-sandbox"
+        } else {
+            "frankenctl-run"
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1147,7 +1185,7 @@ struct UnsignedExecutionContent {
     console_output: Vec<ConsoleEntry>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct ReplayableRunReport {
     schema_version: String,
     extension_id: String,
@@ -5600,16 +5638,18 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
             )
         })?;
     }
-    if let Some(witness) = loaded_witness {
-        orchestrator.set_capability_witness(witness);
+    if let Some(witness) = loaded_witness.as_ref() {
+        orchestrator.set_capability_witness(witness.clone());
     }
     // bd-fqlfw.8.2: the bound contract's ingress label + sink surface gates
     // execution fail-closed and records flow edges in the provenance index.
-    if let Some((contract, binding)) = bound_contract.as_ref() {
-        let ingress = contract.ifc_ingress(binding).map_err(|error| {
-            format!("failed to derive data-contract IFC ingress binding: {error}")
-        })?;
-        orchestrator.set_data_contract_ingress(ingress);
+    let data_contract_ingress = bound_contract
+        .as_ref()
+        .map(|(contract, binding)| contract.ifc_ingress(binding))
+        .transpose()
+        .map_err(|error| format!("failed to derive data-contract IFC ingress binding: {error}"))?;
+    if let Some(ingress) = data_contract_ingress.as_ref() {
+        orchestrator.set_data_contract_ingress(ingress.clone());
     }
     let result = match orchestrator.execute(&package) {
         Ok(result) => result,
@@ -5749,10 +5789,6 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         instructions_executed: result.instructions_executed,
         console_output: result.console_output.clone(),
     };
-    let imported_module_hashes = match module_root.as_deref() {
-        Some(root) => snapshot_module_root_hashes(Path::new(root))?,
-        None => BTreeMap::new(),
-    };
     let replay_input = RunReplayInput {
         source: package.source.clone(),
         source_label: source_label.clone(),
@@ -5761,13 +5797,19 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         policy_id: policy_id.clone(),
         policy_epoch: result.epoch.as_u64(),
         cell_close_budget_ms: replay_cell_close_budget_ms,
+        capabilities: Some(package.capabilities.clone()),
+        capability_witness: loaded_witness,
+        data_contract_ingress,
+        agent_sandbox_manifest: None,
         instruction_budget: args.instruction_budget,
         parser_max_token_count: args.parser_max_token_count,
         limits: args.limits,
         commonjs_entry: args.commonjs_entry,
         module_root,
-        imported_module_hashes,
+        imported_module_hashes: result.imported_module_hashes.clone(),
+        module_hashes_exact: true,
         host_effect_transcript: result.host_effect_transcript.clone(),
+        host_io_exception_provenance: Some(HostIoExceptionProvenance::ProviderInternal),
         ir3_hash: result.ir4_witness.executed_ir3_hash.to_hex(),
         randomness_transcript: result.nondeterminism_trace.clone(),
         unsigned_execution_content,
@@ -5941,7 +5983,22 @@ struct AgentSandboxCommandOutput {
     evidence_ledger_id: String,
     evidence_chain_head: String,
     evidence_chain_artifact: EvidenceChainArtifact,
+    /// Signed execution material consumed by `replay run`, without reopening
+    /// the sandbox's filesystem root or performing live host effects.
+    replay: ReplayableRunReport,
     observability_mode: ObservabilityModeOutput,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReplayableAgentSandboxReport {
+    schema_version: String,
+    manifest_schema_version: String,
+    report: AgentSandboxReport,
+    evidence_chain_instance_id: String,
+    evidence_ledger_id: String,
+    evidence_chain_head: String,
+    evidence_chain_artifact: EvidenceChainArtifact,
+    replay: ReplayableRunReport,
 }
 
 /// `frankenctl agent-sandbox` (bd-fqlfw.8.5, E8.T5): execute agent-generated
@@ -6014,6 +6071,7 @@ fn execute_agent_sandbox(args: AgentSandboxArgs) -> Result<i32, String> {
     if let Some(cell_close_budget_ms) = args.cell_close_budget_ms {
         orchestrator_config.cell_close_budget_ms = cell_close_budget_ms;
     }
+    let replay_cell_close_budget_ms = orchestrator_config.cell_close_budget_ms;
     let evidence_authority = RuntimeEvidenceAuthority::generate_runtime_owned(
         fresh_runtime_evidence_producer_id("frankenctl.agent-sandbox", &source_hash.to_hex())?,
         orchestrator_config.epoch,
@@ -6025,14 +6083,16 @@ fn execute_agent_sandbox(args: AgentSandboxArgs) -> Result<i32, String> {
         orchestrator_config,
         run_runtime_config(args.instruction_budget, &args.limits),
         AmbientAuthorityGrant::DenyAll,
-        evidence_authority,
+        evidence_authority.clone(),
     )
     .map_err(|error| format!("failed to initialize execution orchestrator: {error}"))?;
-    if let Some((contract, binding)) = bound_contract.as_ref() {
-        let ingress = contract.ifc_ingress(binding).map_err(|error| {
-            format!("failed to derive data-contract IFC ingress binding: {error}")
-        })?;
-        orchestrator.set_data_contract_ingress(ingress);
+    let data_contract_ingress = bound_contract
+        .as_ref()
+        .map(|(contract, binding)| contract.ifc_ingress(binding))
+        .transpose()
+        .map_err(|error| format!("failed to derive data-contract IFC ingress binding: {error}"))?;
+    if let Some(ingress) = data_contract_ingress.as_ref() {
+        orchestrator.set_data_contract_ingress(ingress.clone());
     }
     // Host I/O stays deny-all unless the manifest declares a sandbox root
     // (fail-closed default); the transcript recorder feeds the certificate's
@@ -6048,6 +6108,11 @@ fn execute_agent_sandbox(args: AgentSandboxArgs) -> Result<i32, String> {
             Arc::new(provider),
             Some(Arc::new(InMemoryHostIoTranscript::recording())),
         );
+    } else {
+        // Capture the engine-owned constant denial without changing the
+        // no-provider filesystem exception label used by source lowering.
+        let denied = Arc::new(ReportHostIo::recording_denials());
+        orchestrator.set_host_io(denied.clone(), Some(denied));
     }
 
     let result = match orchestrator.execute(&package) {
@@ -6112,6 +6177,73 @@ fn execute_agent_sandbox(args: AgentSandboxArgs) -> Result<i32, String> {
         _ => None,
     };
 
+    let unsigned_execution_content = UnsignedExecutionContent {
+        ir4_witness_hash: result.ir4_witness.content_hash().to_hex(),
+        ir4_witness: result.ir4_witness.clone(),
+        execution_value: result.execution_value.clone(),
+        instructions_executed: result.instructions_executed,
+        console_output: result.console_output.clone(),
+    };
+    let replay_input = RunReplayInput {
+        source: package.source.clone(),
+        source_label: args.input.display().to_string(),
+        extension_id: package.extension_id.clone(),
+        parse_goal: args.parse_goal.as_str().to_string(),
+        policy_id: policy_id.clone(),
+        policy_epoch: result.epoch.as_u64(),
+        cell_close_budget_ms: replay_cell_close_budget_ms,
+        capabilities: Some(package.capabilities.clone()),
+        capability_witness: None,
+        data_contract_ingress,
+        agent_sandbox_manifest: Some(manifest),
+        instruction_budget: args.instruction_budget,
+        parser_max_token_count: None,
+        limits: args.limits,
+        commonjs_entry: false,
+        module_root: package.module_root.clone(),
+        imported_module_hashes: result.imported_module_hashes.clone(),
+        module_hashes_exact: true,
+        host_effect_transcript: result.host_effect_transcript.clone(),
+        host_io_exception_provenance: Some(HostIoExceptionProvenance::ProviderInternal),
+        ir3_hash: result.ir4_witness.executed_ir3_hash.to_hex(),
+        randomness_transcript: result.nondeterminism_trace.clone(),
+        unsigned_execution_content,
+    };
+    let replay_input_signature = evidence_authority
+        .sign_detached(
+            &run_replay_input_preimage(
+                &result.trace_id,
+                &evidence_ledger_id,
+                &result.evidence_chain_receipt.head_chain_hash,
+                &replay_input,
+            )?,
+            result.epoch,
+        )
+        .map_err(|error| format!("failed to sign sandbox replay input: {error}"))?;
+    let replay = ReplayableRunReport {
+        schema_version: AGENT_SANDBOX_COMMAND_SCHEMA_VERSION.to_string(),
+        extension_id: result.extension_id.clone(),
+        trace_id: result.trace_id.clone(),
+        decision_id: result.decision_id.clone(),
+        policy_id,
+        parse_goal: args.parse_goal.as_str().to_string(),
+        ir4_witness_hash: result.ir4_witness.content_hash().to_hex(),
+        ir4_witness: result.ir4_witness.clone(),
+        execution_value: result.execution_value.clone(),
+        instructions_executed: result.instructions_executed,
+        console_output: result.console_output.clone(),
+        replay_input,
+        replay_input_signature: Some(replay_input_signature),
+        lane: result.lane.to_string(),
+        lane_reason: result.lane_reason.to_string(),
+        containment_action: result.containment_action.to_string(),
+        expected_loss_millionths: result.expected_loss_millionths,
+        evidence_entries: result.evidence_entries.len(),
+        evidence_chain_instance_id: evidence_chain_instance_id.clone(),
+        evidence_ledger_id: evidence_ledger_id.clone(),
+        evidence_chain_head: result.evidence_chain_receipt.head_chain_hash.clone(),
+        evidence_chain_artifact: evidence_chain_artifact.clone(),
+    };
     let output = AgentSandboxCommandOutput {
         schema_version: AGENT_SANDBOX_COMMAND_SCHEMA_VERSION.to_string(),
         manifest_schema_version: AGENT_SANDBOX_MANIFEST_SCHEMA_VERSION.to_string(),
@@ -6124,6 +6256,7 @@ fn execute_agent_sandbox(args: AgentSandboxArgs) -> Result<i32, String> {
         evidence_ledger_id,
         evidence_chain_head: result.evidence_chain_receipt.head_chain_hash.clone(),
         evidence_chain_artifact,
+        replay,
         observability_mode: default_capture_observability_mode(),
     };
     if let Some(path) = args.out.as_ref() {
@@ -10528,6 +10661,79 @@ fn execute_replay(args: ReplayArgs) -> Result<i32, String> {
     Ok(0)
 }
 
+/// A private CLI composition with no live host effects. During replay the
+/// exact recorder is the only outcome source; during denial recording the
+/// provider emits the engine's constant deny response. This is deliberately
+/// not a public provenance override for arbitrary replay recorders.
+///
+/// Without a pinned trust snapshot this reproduces claimant input semantics
+/// only; the replay output remains unauthenticated and exports no signed
+/// execution receipt or non-use certificate.
+#[derive(Debug)]
+struct ReportHostIo {
+    transcript: InMemoryHostIoTranscript,
+    provenance: HostIoExceptionProvenance,
+}
+
+impl ReportHostIo {
+    fn recording_denials() -> Self {
+        Self {
+            transcript: InMemoryHostIoTranscript::recording(),
+            provenance: HostIoExceptionProvenance::ProviderInternal,
+        }
+    }
+
+    fn replaying(
+        entries: Vec<(HostIoRequest, HostIoOutcome)>,
+        provenance: HostIoExceptionProvenance,
+    ) -> Self {
+        Self {
+            transcript: InMemoryHostIoTranscript::replaying(entries),
+            provenance,
+        }
+    }
+}
+
+impl HostIoProvider for ReportHostIo {
+    fn name(&self) -> &str {
+        "report-only-host-io"
+    }
+
+    fn filesystem_exception_provenance(&self) -> HostIoExceptionProvenance {
+        self.provenance
+    }
+
+    fn perform(&self, request: &HostIoRequest, granted: &[HostIoCapability]) -> HostIoOutcome {
+        DenyAllHostIo.perform(request, granted)
+    }
+}
+
+impl HostIoRecorder for ReportHostIo {
+    fn filesystem_exception_provenance(&self) -> HostIoExceptionProvenance {
+        self.provenance
+    }
+
+    fn begin_execution(&self) -> Result<(), HostIoError> {
+        self.transcript.begin_execution()
+    }
+
+    fn replay(&self, request: &HostIoRequest) -> Option<HostIoOutcome> {
+        self.transcript.replay(request)
+    }
+
+    fn record(&self, request: &HostIoRequest, outcome: &HostIoOutcome) {
+        self.transcript.record(request, outcome);
+    }
+
+    fn finish_execution(&self) -> Result<Vec<(HostIoRequest, HostIoOutcome)>, HostIoError> {
+        self.transcript.finish_execution()
+    }
+
+    fn recorded_entries(&self) -> Vec<(HostIoRequest, HostIoOutcome)> {
+        self.transcript.recorded_entries()
+    }
+}
+
 fn snapshot_module_root_hashes(root: &Path) -> Result<BTreeMap<String, String>, String> {
     fn visit_dir(
         base: &Path,
@@ -10608,14 +10814,46 @@ fn execute_run_report_replay(args: ReplayArgs) -> Result<i32, String> {
             })?;
         return execute_failed_run_report_replay(args, failed_report);
     }
-    let report: ReplayableRunReport = serde_json::from_value(raw_value).map_err(|error| {
-        format!(
-            "replay without --compare-trace requires a replayable frankenctl run report: {error}"
-        )
-    })?;
-    if report.schema_version != RUN_COMMAND_SCHEMA_VERSION {
+    let (report, sandbox_summary) = if raw_value
+        .get("schema_version")
+        .and_then(serde_json::Value::as_str)
+        == Some(AGENT_SANDBOX_COMMAND_SCHEMA_VERSION)
+    {
+        let sandbox: ReplayableAgentSandboxReport = serde_json::from_value(raw_value)
+            .map_err(|error| format!("agent-sandbox report lacks replay material: {error}"))?;
+        if sandbox.manifest_schema_version != AGENT_SANDBOX_MANIFEST_SCHEMA_VERSION
+            || sandbox.replay.schema_version != sandbox.schema_version
+        {
+            return Err("agent-sandbox replay schema mismatch".to_string());
+        }
+        if sandbox.evidence_chain_instance_id != sandbox.replay.evidence_chain_instance_id
+            || sandbox.evidence_ledger_id != sandbox.replay.evidence_ledger_id
+            || sandbox.evidence_chain_head != sandbox.replay.evidence_chain_head
+            || sandbox.evidence_chain_artifact != sandbox.replay.evidence_chain_artifact
+        {
+            return Err("agent-sandbox replay evidence differs from the outer report".to_string());
+        }
+        let identity = &sandbox.report.evidence_verification_identity;
+        let signer = sandbox.evidence_chain_artifact.receipt.signed_envelope();
+        if identity.producer_id != signer.producer_id
+            || identity.key_provenance != signer.key_provenance
+            || identity.verification_key != signer.verification_key
+        {
+            return Err("agent-sandbox summary signer differs from its evidence chain".to_string());
+        }
+        (sandbox.replay, Some(sandbox.report))
+    } else {
+        let report: ReplayableRunReport = serde_json::from_value(raw_value).map_err(|error| {
+            format!(
+                "replay without --compare-trace requires a replayable frankenctl run or agent-sandbox report: {error}"
+            )
+        })?;
+        (report, None)
+    };
+    if report.schema_version != report.replay_input.command_schema_version() {
         return Err(format!(
-            "replayable run report schema mismatch: expected `{RUN_COMMAND_SCHEMA_VERSION}`, got `{}`",
+            "replayable run report schema mismatch: expected `{}`, got `{}`",
+            report.replay_input.command_schema_version(),
             report.schema_version
         ));
     }
@@ -10665,22 +10903,49 @@ fn execute_run_report_replay(args: ReplayArgs) -> Result<i32, String> {
     }
 
     let parse_goal = parse_goal(&input.parse_goal)?;
-    let capabilities = run_cli_capabilities(parse_goal, input.commonjs_entry);
-    let package = ExtensionPackage {
-        extension_id: input.extension_id.clone(),
-        source: input.source.clone(),
-        source_file: Some(input.source_label.clone()),
-        module_root: input.module_root.clone(),
-        capabilities,
-        version: env!("CARGO_PKG_VERSION").to_string(),
-        metadata: BTreeMap::new(),
+    let package = if let Some(manifest) = input.agent_sandbox_manifest.as_ref() {
+        if input.commonjs_entry || input.module_root.is_some() || input.capability_witness.is_some() {
+            return Err(
+                "sandbox replay contains unsupported execution authority overrides".to_string()
+            );
+        }
+        let package = manifest
+            .to_extension_package(
+                input.source.clone(),
+                Some(input.source_label.clone()),
+                env!("CARGO_PKG_VERSION"),
+                parse_goal == ParseGoal::Module,
+            )
+            .map_err(|error| format!("sandbox replay manifest rejected: {error}"))?;
+        if package.extension_id != input.extension_id
+            || input
+                .capabilities
+                .as_ref()
+                .is_some_and(|caps| caps != &package.capabilities)
+        {
+            return Err("sandbox replay authority differs from the recorded manifest".to_string());
+        }
+        package
+    } else {
+        ExtensionPackage {
+            extension_id: input.extension_id.clone(),
+            source: input.source.clone(),
+            source_file: Some(input.source_label.clone()),
+            module_root: input.module_root.clone(),
+            capabilities: input
+                .capabilities
+                .clone()
+                .unwrap_or_else(|| run_cli_capabilities(parse_goal, input.commonjs_entry)),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            metadata: BTreeMap::new(),
+        }
     };
     let source_hash = ContentHash::compute(input.source.as_bytes());
     let mut orchestrator_config = OrchestratorConfig {
         parse_goal,
         commonjs_entry: input.commonjs_entry,
-        auto_size_register_window: true,
-        trace_id_prefix: "frankenctl-run".to_string(),
+        auto_size_register_window: input.agent_sandbox_manifest.is_none(),
+        trace_id_prefix: input.trace_id_prefix().to_string(),
         policy_id: input.policy_id.clone(),
         epoch: SecurityEpoch::from_raw(input.policy_epoch),
         cell_close_budget_ms: input.cell_close_budget_ms,
@@ -10704,7 +10969,15 @@ fn execute_run_report_replay(args: ReplayArgs) -> Result<i32, String> {
         evidence_authority,
     )
     .map_err(|error| format!("failed to initialize replay execution orchestrator: {error}"))?;
-    if !input.imported_module_hashes.is_empty() {
+    if let Some(witness) = input.capability_witness.as_ref() {
+        orchestrator.set_capability_witness(witness.clone());
+    }
+    if let Some(ingress) = input.data_contract_ingress.as_ref() {
+        orchestrator.set_data_contract_ingress(ingress.clone());
+    }
+    if input.module_hashes_exact {
+        orchestrator.set_expected_imported_module_hashes(input.imported_module_hashes.clone());
+    } else if !input.imported_module_hashes.is_empty() {
         if let Some(root) = input.module_root.as_deref() {
             let current_hashes = snapshot_module_root_hashes(Path::new(root))?;
             if current_hashes != input.imported_module_hashes {
@@ -10724,12 +10997,33 @@ fn execute_run_report_replay(args: ReplayArgs) -> Result<i32, String> {
             divergences.push(detail);
         }
     }
-    if !input.host_effect_transcript.is_empty() {
-        let replay_transcript: Arc<dyn HostIoRecorder> = Arc::new(
-            InMemoryHostIoTranscript::replaying(input.host_effect_transcript.clone()),
-        );
-        orchestrator.set_host_io(Arc::new(DenyAllHostIo), Some(replay_transcript));
-    }
+    // An empty recording is still an exact boundary: unexpected effects must
+    // fail, and replay must never reopen a live provider as a fallback.
+    let provenance = match input.host_io_exception_provenance {
+        Some(HostIoExceptionProvenance::ProviderInternal) => {
+            HostIoExceptionProvenance::ProviderInternal
+        }
+        Some(HostIoExceptionProvenance::Unknown) => {
+            return Err(
+                "recorded filesystem exception provenance differs from the CLI composition"
+                    .to_string(),
+            );
+        }
+        // Historical ordinary run reports had no host provider. Their empty
+        // transcript therefore has the same bounded, engine-owned failures.
+        None => {
+            if input.agent_sandbox_manifest.is_none() && input.host_effect_transcript.is_empty() {
+                HostIoExceptionProvenance::ProviderInternal
+            } else {
+                HostIoExceptionProvenance::Unknown
+            }
+        }
+    };
+    let replay_io = Arc::new(ReportHostIo::replaying(
+        input.host_effect_transcript.clone(),
+        provenance,
+    ));
+    orchestrator.set_host_io(replay_io.clone(), Some(replay_io));
     let replayed = orchestrator
         .execute(&package)
         .map_err(|error| format!("re-execution failed: {error}"))?;
@@ -10754,8 +11048,25 @@ fn execute_run_report_replay(args: ReplayArgs) -> Result<i32, String> {
         divergences.push("re-executed randomness transcript differs".to_string());
     }
     let decision_divergences = run_report_decision_divergences(&report, &replayed);
-    let decisions_match = decision_divergences.is_empty();
+    let mut decisions_match = decision_divergences.is_empty();
     divergences.extend(decision_divergences);
+    if let (Some(summary), Some(manifest)) = (
+        sandbox_summary.as_ref(),
+        input.agent_sandbox_manifest.as_ref(),
+    ) {
+        let mut actual =
+            AgentSandboxReport::from_run(manifest, &replayed, parse_goal == ParseGoal::Module)
+                .map_err(|error| format!("failed to reconstruct sandbox report: {error}"))?;
+        // The replay has its own runtime signer. Authenticate the original
+        // signer through the pinned trust snapshot, never through this summary.
+        actual.evidence_verification_identity = summary.evidence_verification_identity.clone();
+        if &actual != summary {
+            divergences.push(
+                "re-executed sandbox authority or guardplane summary differs".to_string(),
+            );
+            decisions_match = false;
+        }
+    }
     if args.mode == ReplayMode::Strict
         && let Some(divergence) = divergences.first()
     {
@@ -10809,7 +11120,7 @@ fn run_replay_input_preimage(
 ) -> Result<Vec<u8>, String> {
     serde_json::to_vec(&(
         RUN_REPLAY_INPUT_SIGNATURE_DOMAIN,
-        RUN_COMMAND_SCHEMA_VERSION,
+        input.command_schema_version(),
         trace_id,
         ledger_id,
         chain_head,
@@ -10900,7 +11211,7 @@ fn authenticate_run_report_evidence(
         let expected_ledger = derive_runtime_evidence_ledger_id(
             &report.policy_id,
             epoch,
-            "frankenctl-run",
+            input.trace_id_prefix(),
             identity,
             &report.evidence_chain_instance_id,
         )
@@ -15348,7 +15659,7 @@ fn replay_run_usage() -> String {
         "      [--trust-snapshot <public-trust.json> --expected-trust-digest <sha256>]",
         "",
         "notes:",
-        "  Without --compare-trace, --trace must be a frankenctl run report;",
+        "  Without --compare-trace, --trace must be a frankenctl run or agent-sandbox report;",
         "  replay re-parses, re-lowers, and re-executes its embedded source and",
         "  compares the IR3 hash, unsigned IR4 execution content, and recorded",
         "  nondeterminism transcript. Synthetic trace self-comparison is refused.",
@@ -15362,8 +15673,10 @@ fn replay_run_usage() -> String {
         "  copied from an untrusted report is not a trust anchor. Runtime-only",
         "  key provenance and rotation windows are checked by the trust registry.",
         "  Older reports without signed inputs cannot use authenticated replay.",
-        "  Imported/required module file contents are read again from disk and",
-        "  are not recorded by this signature; retain those dependencies separately.",
+        "  New reports sign the exact imported sources and package-manifest hashes;",
+        "  retain those files separately. Replay checks their bytes at each load.",
+        "  Sandbox replay restores the recorded tool authority and guardplane policy,",
+        "  consumes host-I/O recordings, and never opens the original live host root.",
         "  Trust flags cannot be combined with --compare-trace or --fleet-trace.",
         "  --compare-trace explicitly compares two nondeterminism trace files.",
         "  --fleet-trace stitches per-node traces into one globally-consistent",

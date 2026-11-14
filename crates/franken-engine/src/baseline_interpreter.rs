@@ -98,6 +98,8 @@ mod json_module;
 mod json_parse;
 mod json_stringify;
 mod legacy_regexp;
+mod module_integrity;
+pub use module_integrity::ModuleSourceIntegrity;
 mod number_locale;
 mod object_integrity;
 mod package_resolution;
@@ -13156,6 +13158,10 @@ pub struct InterpreterConfig {
     /// Cached canonicalized module root to avoid repeated canonicalization.
     #[serde(skip)]
     pub canonical_module_root: Option<PathBuf>,
+    /// Exact source/package bytes consumed by this execution. The shared
+    /// state also validates strict replay hashes before interpreting a file.
+    #[serde(skip)]
+    pub module_source_integrity: Option<ModuleSourceIntegrity>,
     /// Set of capabilities granted to this execution context.
     pub granted_capabilities: BTreeSet<RuntimeCapability>,
     /// Monotone authority and memory restriction installed by a live Sandbox
@@ -13254,6 +13260,7 @@ impl InterpreterConfig {
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             module_root: None,
             canonical_module_root: None,
+            module_source_integrity: None,
             commonjs_entry: false,
             module_parser_options: ParserOptions::default(),
             module_conditions: Vec::new(),
@@ -13284,6 +13291,7 @@ impl InterpreterConfig {
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             module_root: None,
             canonical_module_root: None,
+            module_source_integrity: None,
             commonjs_entry: false,
             module_parser_options: ParserOptions::default(),
             module_conditions: Vec::new(),
@@ -13320,6 +13328,7 @@ impl InterpreterConfig {
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             module_root: None,
             canonical_module_root: None,
+            module_source_integrity: None,
             commonjs_entry: false,
             module_parser_options: ParserOptions::default(),
             module_conditions: Vec::new(),
@@ -13356,6 +13365,7 @@ impl InterpreterConfig {
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             module_root: None,
             canonical_module_root: None,
+            module_source_integrity: None,
             commonjs_entry: false,
             module_parser_options: ParserOptions::default(),
             module_conditions: Vec::new(),

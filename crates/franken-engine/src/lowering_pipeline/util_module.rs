@@ -36,11 +36,10 @@
 //! JavaScript too: Node's Readable / Writable / Duplex / Transform /
 //! PassThrough state machines, finished and pipeline, over the events
 //! module's EventEmitter, string_decoder and the process.nextTick queue. It
-//! serves the `require('stream')` calls the stream facade cannot claim
-//! (`class X extends Transform`, `stream.Readable`, Duplex, finished, a
-//! `require` inside a function, async iteration, ...); a top-level
-//! destructure whose every name and use the facade serves keeps the facade's
-//! HostCall lowering. `buffer` (bd-305gi.3) is Node's module object over the
+//! serves every free CommonJS `require('stream')` / `require('node:stream')`,
+//! so direct destructures, namespace bindings and deferred loads share the
+//! same constructors, async iteration and lifecycle. Named ESM imports retain
+//! their existing native facade boundary. `buffer` (bd-305gi.3) is Node's module object over the
 //! realm's Buffer, atob, btoa and Blob, so `require('buffer').Buffer`,
 //! safer-buffer's key copy and a destructured `{ Buffer }` load; the script
 //! goal refused every such form as a file read. No filesystem/module-load
@@ -64,6 +63,7 @@ mod native_module_loader;
 #[cfg(test)]
 #[path = "readline_module_tests.rs"]
 mod readline_module_tests;
+#[cfg(test)]
 #[path = "stream_operators.rs"]
 mod stream_operators;
 #[path = "zlib_module.rs"]
@@ -980,21 +980,16 @@ fn rewrite_module_objects_with_options(
         modules: BTreeSet::new(),
         preserve_runtime_requires,
     };
-    // Keep an isolated facade program on its existing path. If this same
-    // program also needs a first-class stream module, every stream binding
-    // must use that module's constructors and queues (bd-305gi.2).
-    let stream_claimed = if root.contains("require") {
-        BTreeSet::new()
-    } else {
-        facade_claimed_stream_declarators(&tree.body)
-    };
+    // Every free CJS stream load uses the shared module. Constructor syntax
+    // cannot prove the methods, iterator protocol or lifecycle a stream will
+    // need later, so withholding direct destructures split equivalent
+    // programs between incompatible implementations (bd-305gi.2).
     let events_claimed = if root.contains("require") {
         BTreeSet::new()
     } else {
         facade_claimed_events_declarators(&tree.body)
     };
-    let mut claimed = stream_claimed.clone();
-    claimed.extend(events_claimed.iter().copied());
+    let mut claimed = events_claimed.clone();
     if !root.contains("require") {
         claimed.extend(zlib_module::claimed_declarators(&tree.body));
     }
@@ -1003,20 +998,6 @@ fn rewrite_module_objects_with_options(
         let outcome = rewriter.statement(statement);
         restore_claimed_initializers(statement, held);
         outcome?;
-    }
-    if rewriter.modules.contains(&PureModule::Stream) && !stream_claimed.is_empty() {
-        // The first pass discovers module uses with the normal lexical-scope
-        // checks. Revisit only the withheld stream initializers; other native
-        // facades keep their authenticated call shapes. These are top-level
-        // declarators, so the rewriter's root scope is the correct scope.
-        for (index, statement) in rewritten.body.iter_mut().enumerate() {
-            let mut held = take_claimed_initializers(statement, index, &stream_claimed);
-            let outcome = held
-                .iter_mut()
-                .try_for_each(|(_, initializer)| rewriter.expression(initializer));
-            restore_claimed_initializers(statement, held);
-            outcome?;
-        }
     }
     // The final loader pass also defers these private dependencies. Their
     // declarations precede the dependent loader, but initialization is on use.
@@ -1273,192 +1254,6 @@ fn events_alias_calls_once(body: &[Statement], local: &str) -> bool {
     };
     body.iter()
         .any(|statement| calls.statement(&mut statement.clone()).is_err() || calls.found)
-}
-
-/// The top-level `const { ... } = require('stream')` declarators, as
-/// (statement, declarator) indexes, that the stream facade claims: each
-/// destructured name is one it serves and its own pre-scan confirms, and
-/// every reference to each local is one of its forms. The facade confirms
-/// `Readable` by a single supported use, so `Readable.from(x)` beside
-/// `class X extends Readable` would bind it to nothing; counting every
-/// reference leaves such a program to the module instead.
-fn facade_claimed_stream_declarators(body: &[Statement]) -> BTreeSet<(usize, usize)> {
-    // An input passed to readline escapes the finite direct-call stream
-    // facade. Keep real EventEmitter-backed Node streams for that program.
-    // A shadowed literal may conservatively disable this optimization, but
-    // the ordinary scope-aware rewriter still preserves the user's require.
-    const READLINE: Search = Search {
-        statement: |_| false,
-        expression: |expression| {
-            matches!(
-                builtin_require_member(expression),
-                Some((PureModule::Readline, _))
-            )
-        },
-    };
-    if stream_operators::requires_stream_module(body)
-        || body
-            .iter()
-            .any(|statement| READLINE.in_statement(statement))
-    {
-        return BTreeSet::new();
-    }
-    let lookup = BTreeMap::new();
-    let confirmed = [
-        (
-            "Readable",
-            super::confirmed_stream_readable_destructured_requires(body, &lookup),
-        ),
-        (
-            "Writable",
-            super::confirmed_stream_writable_destructured_requires(body, &lookup),
-        ),
-        (
-            "PassThrough",
-            super::confirmed_stream_passthrough_destructured_requires(body, &lookup),
-        ),
-        (
-            "Transform",
-            super::confirmed_stream_transform_destructured_requires(body, &lookup),
-        ),
-        (
-            "pipeline",
-            super::confirmed_stream_pipeline_destructured_requires(body, &lookup),
-        ),
-        (
-            "promises",
-            super::confirmed_stream_promises_destructured_requires(body, &lookup),
-        ),
-    ];
-    let mut claimed = BTreeSet::new();
-    for (statement_index, statement) in body.iter().enumerate() {
-        let Statement::VariableDeclaration(declaration) = statement else {
-            continue;
-        };
-        if declaration.kind != VariableDeclarationKind::Const {
-            continue;
-        }
-        for (declarator_index, declarator) in declaration.declarations.iter().enumerate() {
-            let Some(initializer) = &declarator.initializer else {
-                continue;
-            };
-            if !matches!(
-                builtin_require_member(initializer),
-                Some((PureModule::Stream, None))
-            ) {
-                continue;
-            }
-            let BindingPattern::ObjectPattern(properties) = &declarator.pattern else {
-                continue;
-            };
-            let served = !properties.is_empty()
-                && properties.iter().all(|property| {
-                    let Some(export) = (!property.computed)
-                        .then(|| super::well_formed_static_name(&property.key))
-                        .flatten()
-                    else {
-                        return false;
-                    };
-                    let BindingPattern::Identifier(local) = &property.value else {
-                        return false;
-                    };
-                    confirmed
-                        .iter()
-                        .any(|(name, locals)| *name == export && locals.contains(local))
-                        && every_reference_is_a_facade_form(body, local, export)
-                });
-            if served {
-                claimed.insert((statement_index, declarator_index));
-            }
-        }
-    }
-    claimed
-}
-
-/// Whether each reference to `local` in `body` (at any depth, shadowed or
-/// not) is one of the facade's forms for `export`, and none is inside a
-/// function declaration. A declaration is hoisted and lowered before the
-/// `const` that switches the facade on, so a form inside one constructed the
-/// elided binding: undefined (split2's `new Transform(options)`). A
-/// declaration that binds `local` itself (a parameter, or a declaration in
-/// its body) reads its own binding there, which the facade leaves alone
-/// (`function f(Readable) { new Readable(); }`, bd-fw7zd).
-fn every_reference_is_a_facade_form(body: &[Statement], local: &str, export: &str) -> bool {
-    let mut counter = FacadeFormCounter {
-        local,
-        export,
-        references: 0,
-        forms: 0,
-        function_declaration_depth: 0,
-        shadowing_declaration_depth: 0,
-        in_function_declaration: false,
-    };
-    let mut body = body.to_vec();
-    if counter.statements(&mut body).is_err() {
-        return false;
-    }
-    counter.forms > 0 && counter.forms == counter.references && !counter.in_function_declaration
-}
-
-struct FacadeFormCounter<'a> {
-    local: &'a str,
-    export: &'a str,
-    references: usize,
-    forms: usize,
-    /// How many function declarations enclose the walk's position.
-    function_declaration_depth: usize,
-    /// How many of them bind `local` themselves.
-    shadowing_declaration_depth: usize,
-    /// Whether a reference to the module's `local` appeared inside a function
-    /// declaration.
-    in_function_declaration: bool,
-}
-
-impl Walk for FacadeFormCounter<'_> {
-    fn statement(&mut self, statement: &mut Statement) -> Outcome {
-        let (declaration, shadowing) = match &*statement {
-            Statement::FunctionDeclaration(function) => {
-                let mut names = BTreeSet::new();
-                lexical_names(&function.body.body, &mut names);
-                var_names(&function.body.body, &mut names);
-                let shadowing = names.contains(self.local)
-                    || function
-                        .params
-                        .iter()
-                        .any(|param| param.pattern.binding_names().contains(&self.local));
-                (true, shadowing)
-            }
-            _ => (false, false),
-        };
-        self.function_declaration_depth += usize::from(declaration);
-        self.shadowing_declaration_depth += usize::from(shadowing);
-        let outcome = walk_statement(self, statement);
-        self.function_declaration_depth -= usize::from(declaration);
-        self.shadowing_declaration_depth -= usize::from(shadowing);
-        outcome
-    }
-
-    fn expression(&mut self, expression: &mut Expression) -> Outcome {
-        if matches!(expression, Expression::Identifier(name) if name == self.local) {
-            self.references += 1;
-            self.in_function_declaration |=
-                self.function_declaration_depth > 0 && self.shadowing_declaration_depth == 0;
-            return Ok(());
-        }
-        let form = match self.export {
-            "Readable" => super::is_stream_readable_usage(expression, self.local),
-            "Writable" | "PassThrough" | "Transform" => {
-                super::is_stream_constructor_use(expression, self.local)
-            }
-            "pipeline" => super::is_stream_pipeline_direct_call(expression, self.local),
-            "promises" => super::is_stream_promises_pipeline_call(expression, self.local),
-            _ => false,
-        };
-        if form {
-            self.forms += 1;
-        }
-        walk_expression(self, expression)
-    }
 }
 
 /// Take the initializers of `statement`'s claimed declarators out while the
@@ -2583,12 +2378,10 @@ mod events_tests {
         );
     }
 
-    /// A top-level destructure whose every name and use the stream facade
-    /// serves keeps its `require('stream')` for the facade (bd-305gi.1),
-    /// also when a function declaration has its own binding of the name
-    /// (a parameter or a declaration in its body, bd-fw7zd).
+    /// Direct destructures share the complete module even when all uses fit
+    /// the former facade. Shadowing a constructor does not shadow `require`.
     #[test]
-    fn stream_facade_keeps_the_declarations_it_claims() {
+    fn direct_stream_declarations_use_the_shared_module_with_local_constructor_shadows() {
         for source in [
             "const { Readable } = require('stream'); Readable.from(['a']);",
             "const { Writable, PassThrough: P } = require('stream'); new Writable({}); new P();",
@@ -2599,10 +2392,21 @@ mod events_tests {
              function f() { const Writable = g(); return new Writable(); }",
         ] {
             let tree = parse(source, ParseGoal::Script);
-            assert!(
-                rewrite_util_requires(&tree).expect(source).is_none(),
+            let rewritten = rewrite_util_requires(&tree)
+                .expect(source)
+                .expect("direct CJS stream module");
+            assert_eq!(
+                rewritten
+                    .body
+                    .iter()
+                    .filter(|statement| is_module_declaration(statement))
+                    .count(),
+                3,
                 "{source}"
             );
+            if matches!(tree.body.last(), Some(Statement::FunctionDeclaration(_))) {
+                assert_eq!(rewritten.body.last(), tree.body.last(), "{source}");
+            }
         }
     }
 
@@ -2650,13 +2454,75 @@ mod events_tests {
     }
 
     #[test]
-    fn shadowed_stream_require_does_not_change_the_outer_route_bd_305gi_2() {
+    fn standalone_stream_destructures_load_the_shared_module_bd_305gi_2() {
+        for source in [
+            "const { Readable } = require('stream'); Readable.from([Promise.resolve(1)]);",
+            "const { Readable: R } = require('node:stream'); R.from(source);",
+            "const { Writable, PassThrough, Transform } = require('stream'); new Writable(); new PassThrough(); new Transform();",
+            "const { pipeline, promises } = require('node:stream'); pipeline(a, b, done); promises.pipeline(a, b);",
+        ] {
+            let rewritten = rewrite_util_requires(&parse(source, ParseGoal::Script))
+                .expect("rewrite")
+                .expect("every free stream require loads the module");
+            let declarator = rewritten
+                .body
+                .iter()
+                .find_map(|statement| match statement {
+                    Statement::VariableDeclaration(declaration)
+                        if !is_module_declaration(statement) =>
+                    {
+                        declaration.declarations.first()
+                    }
+                    _ => None,
+                })
+                .expect("source destructure");
+            assert!(
+                matches!(declarator.initializer.as_ref(),
+                    Some(Expression::Call { callee, arguments, .. })
+                        if arguments.is_empty() && matches!(callee.as_ref(),
+                            Expression::Identifier(name) if name == STREAM_MODULE_BINDING)),
+                "the destructure must invoke the shared deferred loader: {source}"
+            );
+            assert_eq!(
+                rewritten
+                    .body
+                    .iter()
+                    .filter(|statement| is_module_declaration(statement))
+                    .count(),
+                3,
+                "one events, decoder and stream factory: {source}"
+            );
+            assert!(
+                rewrite_util_requires(&rewritten)
+                    .expect("idempotent")
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn shadowed_stream_require_stays_local_beside_the_shared_outer_module_bd_305gi_2() {
         let tree = parse(
             "const { Readable } = require('stream'); Readable.from(['a']); \
              function local(require) { return require('node:stream'); }",
             ParseGoal::Script,
         );
-        assert!(rewrite_util_requires(&tree).expect("rewrite").is_none());
+        let rewritten = rewrite_util_requires(&tree)
+            .expect("rewrite")
+            .expect("outer stream module");
+        assert_eq!(
+            rewritten.body.last(),
+            tree.body.last(),
+            "the function parameter keeps its require call unchanged"
+        );
+        assert_eq!(
+            rewritten
+                .body
+                .iter()
+                .filter(|statement| is_module_declaration(statement))
+                .count(),
+            3
+        );
     }
 
     #[test]

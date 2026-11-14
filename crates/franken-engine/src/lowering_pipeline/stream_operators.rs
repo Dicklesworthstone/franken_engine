@@ -1,220 +1,15 @@
-//! Keep collection-operator programs on the complete stream module path.
+//! Canonical CommonJS stream routing, including operators and adapters.
 //!
-//! The legacy facade proves constructor forms, not the subsequent methods of
-//! the values those forms return. Claiming `Readable.from(xs)` inside
-//! `Readable.from(xs).map(fn)` would erase the binding and bypass the module
-//! that installs the operators. The same problem occurs through an alias.
-//!
-//! Until the facade has value-flow/type information, a collection member (or
-//! a dynamically computed member) conservatively selects the complete module
-//! for ALL stream constructors in the program. Ordinary facade-only programs
-//! keep their fast path; we do not guess that an alias is an array or a stream.
-
-use std::collections::BTreeSet;
-
-use super::{
-    BindingPattern, Expression, Outcome, PureModule, Statement, Walk, builtin_require_member,
-    walk_expression, walk_statement,
-};
-
-pub(super) fn requires_stream_module(body: &[Statement]) -> bool {
-    // Only top-level named requires are candidates for the constructor facade.
-    // Namespace, escaping and nested imports already take the full module path.
-    // A shadowed local can conservatively disable optimization, but this scan
-    // never rewrites a binding or decides filesystem/host-call authority.
-    let mut constructors = BTreeSet::new();
-    for statement in body {
-        if let Statement::VariableDeclaration(declaration) = statement {
-            for declarator in &declaration.declarations {
-                if let Some(initializer) = &declarator.initializer
-                    && matches!(
-                        builtin_require_member(initializer),
-                        Some((PureModule::Stream, None))
-                    )
-                    && let BindingPattern::ObjectPattern(properties) = &declarator.pattern
-                {
-                    for property in properties {
-                        if !property.computed
-                            && matches!(
-                                super::super::well_formed_static_name(&property.key),
-                                Some(
-                                    "Readable"
-                                        | "Writable"
-                                        | "Duplex"
-                                        | "Transform"
-                                        | "PassThrough"
-                                )
-                            )
-                            && let BindingPattern::Identifier(local) = &property.value
-                        {
-                            constructors.insert(local.clone());
-                        }
-                    }
-                }
-            }
-        }
-    }
-    let mut search = OperatorUse {
-        found: false,
-        constructors,
-    };
-    // The canonical walker accepts mutable nodes; it does not change them.
-    // Fail toward the full module if a future AST form cannot be walked.
-    search.statements(&mut body.to_vec()).is_err() || search.found
-}
-
-struct OperatorUse {
-    found: bool,
-    constructors: BTreeSet<String>,
-}
-
-impl OperatorUse {
-    fn has_constructor_options(&self, expression: &Expression) -> bool {
-        let (callee, arguments) = match expression {
-            Expression::New {
-                callee, arguments, ..
-            }
-            | Expression::Call {
-                callee, arguments, ..
-            } => (callee.as_ref(), arguments),
-            _ => return false,
-        };
-        let option_index = match callee {
-            Expression::Identifier(local) if self.constructors.contains(local) => 0,
-            Expression::Member {
-                object, property, ..
-            } if matches!(object.as_ref(), Expression::Identifier(local) if self.constructors.contains(local))
-                && super::super::well_formed_static_name(property) == Some("from") =>
-            {
-                1
-            }
-            _ => return false,
-        };
-        // Spread can place options at either position. Dynamic values and
-        // nonempty objects can supply signal through getters/prototypes/spread;
-        // constructor-form recognition is not a proof of their lifecycle.
-        // Keep the existing absent/null/undefined/empty-literal fast path.
-        if arguments
-            .iter()
-            .any(|argument| matches!(argument, Expression::SpreadElement(_)))
-        {
-            return true;
-        }
-        match arguments.get(option_index) {
-            None | Some(Expression::UndefinedLiteral | Expression::NullLiteral) => false,
-            Some(Expression::ObjectLiteral(properties)) => !properties.is_empty(),
-            Some(_) => true,
-        }
-    }
-}
-
-impl Walk for OperatorUse {
-    fn statement(&mut self, statement: &mut Statement) -> Outcome {
-        if self.found {
-            return Ok(());
-        }
-        // A Duplex can consume an independently imported Readable/Writable.
-        // Keep those values on the same real state machines even when their
-        // constructors would be facade-eligible in isolation. Match the export
-        // name, not its local alias; ordinary Readable.from keeps its fast path.
-        if let Statement::VariableDeclaration(declaration) = &*statement {
-            for declarator in &declaration.declarations {
-                if let Some(initializer) = &declarator.initializer
-                    && matches!(
-                        builtin_require_member(initializer),
-                        Some((PureModule::Stream, None))
-                    )
-                    && let BindingPattern::ObjectPattern(properties) = &declarator.pattern
-                    && properties.iter().any(|property| {
-                        matches!(
-                            super::super::well_formed_static_name(&property.key),
-                            Some("Duplex" | "duplexPair" | "addAbortSignal" | "compose")
-                        )
-                    })
-                {
-                    self.found = true;
-                    return Ok(());
-                }
-            }
-        }
-        walk_statement(self, statement)
-    }
-
-    fn expression(&mut self, expression: &mut Expression) -> Outcome {
-        if self.found {
-            return Ok(());
-        }
-        // Select one shared implementation for ALL endpoints. Leaving a
-        // separately imported sink on the finite facade would split a pipeline
-        // between incompatible stream representations.
-        if self.has_constructor_options(expression) {
-            self.found = true;
-            return Ok(());
-        }
-        // A consumer drives its source through async iteration rather than a
-        // constructor-specific HostCall. Keep sources passed into it on the
-        // full stream state machine path, even without an operator member.
-        // Web stages likewise require the shared pipeline/adapter state machines;
-        // a constructor-only facade cannot consume a ReadableStream or writer.
-        if matches!(
-            builtin_require_member(expression),
-            Some((PureModule::StreamConsumers | PureModule::WebStreams, None))
-        ) {
-            self.found = true;
-            return Ok(());
-        }
-        if let Expression::Member {
-            property, computed, ..
-        }
-        | Expression::OptionalMember {
-            property, computed, ..
-        } = &*expression
-        {
-            let name = match (*computed, property.as_ref()) {
-                (false, Expression::Identifier(name)) => Some(name.as_str()),
-                (true, Expression::StringLiteral(name)) => name.as_str(),
-                // A dynamic key might be an operator name; constructor-form
-                // recognition alone cannot prove the facade can service it.
-                (true, _) => {
-                    self.found = true;
-                    return Ok(());
-                }
-                _ => None,
-            };
-            self.found = matches!(
-                name,
-                Some(
-                    "map"
-                        | "filter"
-                        | "flatMap"
-                        | "toArray"
-                        | "forEach"
-                        | "some"
-                        | "every"
-                        | "find"
-                        | "reduce"
-                        | "take"
-                        | "drop"
-                        | "Duplex"
-                        | "duplexPair"
-                        | "addAbortSignal"
-                        | "compose"
-                )
-            );
-            if self.found {
-                return Ok(());
-            }
-        }
-        walk_expression(self, expression)
-    }
-}
+//! Every free stream require selects the complete module. These regressions
+//! exercise both simple producers and compositions that formerly needed a
+//! whole-program heuristic to avoid the finite constructor facade.
 
 #[cfg(test)]
 mod tests {
-    use super::super::{is_module_declaration, rewrite_util_requires};
-    use super::*;
+    use super::super::{PureModule, is_module_declaration, rewrite_util_requires};
     use crate::ast::{ParseGoal, SyntaxTree};
     use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
+    use std::collections::BTreeSet;
 
     fn parse(source: &str) -> SyntaxTree {
         CanonicalEs2020Parser
@@ -242,7 +37,6 @@ mod tests {
             "const { Readable } = require('stream'); const { Writable } = require('node:stream'); Readable.from([1]).map(x => x).pipe(new Writable({}));",
         ] {
             let tree = parse(source);
-            assert!(requires_stream_module(&tree.body), "{source}");
             let rewritten = rewrite_util_requires(&tree)
                 .expect("rewrite succeeds")
                 .expect("operators must not be claimed by the legacy facade");
@@ -272,7 +66,6 @@ mod tests {
             "const D = require('node:stream').Duplex; const { Readable } = require('stream'); D.from(Readable.from([1]));",
         ] {
             let tree = parse(source);
-            assert!(requires_stream_module(&tree.body), "{source}");
             let rewritten = rewrite_util_requires(&tree)
                 .expect("duplex rewrite")
                 .expect("full stream module");
@@ -301,7 +94,6 @@ mod tests {
             "const s = require('stream'); const { Transform: T } = require('node:stream'); s.duplexPair(); new T({});",
         ] {
             let tree = parse(source);
-            assert!(requires_stream_module(&tree.body), "{source}");
             let rewritten = rewrite_util_requires(&tree)
                 .expect("paired transport rewrite")
                 .expect("complete stream module");
@@ -330,7 +122,6 @@ mod tests {
             "const s = require('stream'); const { PassThrough } = require('node:stream'); s.addAbortSignal(signal, new PassThrough());",
         ] {
             let tree = parse(source);
-            assert!(requires_stream_module(&tree.body), "{source}");
             let rewritten = rewrite_util_requires(&tree)
                 .expect("cancellation rewrite")
                 .expect("complete stream module");
@@ -352,15 +143,28 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_constructor_programs_keep_the_facade_fast_path() {
+    fn ordinary_constructor_programs_use_the_same_complete_module() {
         for source in [
             "const { Readable } = require('stream'); Readable.from(['a']);",
             "const { Writable, PassThrough: P } = require('stream'); new Writable({}); new P();",
         ] {
             let tree = parse(source);
-            assert!(!requires_stream_module(&tree.body), "{source}");
+            let rewritten = rewrite_util_requires(&tree)
+                .expect("rewrite")
+                .expect("simple constructors also need the shared module");
+            assert_eq!(
+                rewritten
+                    .body
+                    .iter()
+                    .filter(|statement| is_module_declaration(statement))
+                    .count(),
+                3,
+                "one events, decoder and stream module: {source}"
+            );
             assert!(
-                rewrite_util_requires(&tree).expect("rewrite").is_none(),
+                rewrite_util_requires(&rewritten)
+                    .expect("idempotent")
+                    .is_none(),
                 "{source}"
             );
         }
@@ -379,7 +183,6 @@ mod tests {
             "const { Writable: W }=require('stream'); new W({[key]:value});",
         ] {
             let tree = parse(source);
-            assert!(requires_stream_module(&tree.body), "{source}");
             let rewritten = rewrite_util_requires(&tree)
                 .expect("constructor lifecycle rewrite")
                 .expect("complete stream module");
@@ -401,12 +204,23 @@ mod tests {
     }
 
     #[test]
-    fn constructor_option_scan_does_not_claim_unrelated_objects_or_shadowed_loaders() {
+    fn unrelated_options_do_not_change_stream_routing_and_shadowed_loaders_stay_local() {
         for source in [
             "const cfg={signal:controller.signal}; const {Readable:R}=require('stream'); R.from([1]);",
             "const {Writable:W}=require('stream'); new Unrelated(settings); new W({});",
         ] {
-            assert!(!requires_stream_module(&parse(source).body), "{source}");
+            let rewritten = rewrite_util_requires(&parse(source))
+                .expect("rewrite")
+                .expect("the free stream require always selects the shared module");
+            assert_eq!(
+                rewritten
+                    .body
+                    .iter()
+                    .filter(|statement| is_module_declaration(statement))
+                    .count(),
+                3,
+                "{source}"
+            );
         }
         for source in [
             "const require=custom; const {Writable:W}=require('stream'); new W({signal});",
@@ -432,9 +246,13 @@ mod tests {
     }
 
     #[test]
-    fn object_keys_and_text_are_not_operator_accesses() {
+    fn object_keys_and_text_do_not_materialize_a_stream_module() {
         for source in ["const x = { map: 1 };", "const text = 'stream.map(fn)';"] {
-            assert!(!requires_stream_module(&parse(source).body));
+            assert!(
+                rewrite_util_requires(&parse(source))
+                    .expect("rewrite")
+                    .is_none()
+            );
         }
     }
 
@@ -513,7 +331,6 @@ mod tests {
             "const { promises: p, Readable: R } = require('node:stream'); const web = require('node:stream/web'); p.pipeline(R.from([1]), new web.WritableStream());",
         ] {
             let tree = parse(source);
-            assert!(requires_stream_module(&tree.body));
             let rewritten = rewrite_util_requires(&tree)
                 .expect("pipeline lowering")
                 .expect("complete stream and Web module");
@@ -543,7 +360,6 @@ mod tests {
             "const chain = require('stream').compose; const { PassThrough } = require('node:stream'); chain(new PassThrough(), stage);",
         ] {
             let tree = parse(source);
-            assert!(requires_stream_module(&tree.body), "{source}");
             let rewritten = rewrite_util_requires(&tree)
                 .expect("composition lowering")
                 .expect("complete stream module");

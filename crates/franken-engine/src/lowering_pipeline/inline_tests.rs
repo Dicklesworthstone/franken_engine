@@ -7578,13 +7578,13 @@ fn tls_alias_escape_mutation_shadow_and_value_reads_fail_closed_bd_70cv1() {
 }
 
 #[test]
-fn stream_destructured_constructors_lower_to_distinct_builtins_bd_fw7zd() {
-    let ops = lower_script_source_ops(
-        "const { Readable, Writable, PassThrough } = require('node:stream');\n\
+fn stream_named_esm_constructors_keep_distinct_native_builtins_bd_fw7zd() {
+    let ops = lower_esm_source_ops(
+        "import { Readable, Writable, PassThrough } from 'node:stream';\n\
          const readable = new Readable({ highWaterMark: 4, read() {} });\n\
          const writable = new Writable({ highWaterMark: 8, write(c, e, cb) { cb(); } });\n\
          const passthrough = new PassThrough({ highWaterMark: 16 });\n",
-        "stream_constructors_bd_fw7zd.js",
+        "stream_constructors_bd_fw7zd.mjs",
     );
     assert_eq!(count_hostcall_deep(&ops, "builtin:StreamReadable"), 1);
     assert_eq!(count_hostcall_deep(&ops, "builtin:StreamWritable"), 1);
@@ -7597,7 +7597,7 @@ fn stream_destructured_constructors_lower_to_distinct_builtins_bd_fw7zd() {
 }
 
 #[test]
-fn stream_transform_and_pipeline_surfaces_lower_statically_bd_fw7zd_12() {
+fn stream_cjs_pipeline_uses_the_shared_module_and_esm_keeps_native_calls_bd_fw7zd_12() {
     let source = r#"
         const { Readable, Writable, Transform, pipeline, promises } = require('stream');
         const upper = new Transform({ transform(chunk, encoding, callback) { callback(null, chunk); } });
@@ -7605,43 +7605,28 @@ fn stream_transform_and_pipeline_surfaces_lower_statically_bd_fw7zd_12() {
         pipeline(Readable.from(['x']), upper, sink, () => {});
         promises.pipeline(Readable.from(['y']), sink);
     "#;
-    let tree =
-        crate::parser_api_stability::parse_script(source).expect("parse stream pipeline CJS");
-    let ir0 = Ir0Module::from_syntax_tree(tree, "stream_pipeline_bd_fw7zd_12.js");
-    let ir1 = lower_ir0_to_ir1(&ir0).expect("lower stream pipeline CJS");
-    assert_eq!(
-        count_hostcall_deep(&ir1.module.ops, "builtin:StreamTransform"),
-        1
-    );
-    assert_eq!(
-        count_hostcall_deep(&ir1.module.ops, "builtin:StreamPipeline"),
-        1
-    );
-    assert_eq!(
-        count_hostcall_deep(&ir1.module.ops, "builtin:StreamPromisesPipeline"),
-        1
-    );
-    assert_eq!(count_hostcall_deep(&ir1.module.ops, "module:require"), 0);
+    assert_served_by_stream_module(source, "stream_pipeline_bd_fw7zd_12.js");
 
     let ops = lower_esm_source_ops(
-        "import { Readable, Writable, Transform } from 'node:stream';\n\
+        "import { Readable, Writable, Transform, pipeline as callbackPipeline } from 'node:stream';\n\
          import { pipeline } from 'node:stream/promises';\n\
          const t = new Transform({ transform(c, e, cb) { cb(null, c); } });\n\
          const w = new Writable({ write(c, e, cb) { cb(); } });\n\
+         callbackPipeline(Readable.from(['x']), t, w, () => {});\n\
          await pipeline(Readable.from(['x']), t, w);",
         "stream_pipeline_bd_fw7zd_12.mjs",
     );
     assert_eq!(count_hostcall_deep(&ops, "builtin:StreamTransform"), 1);
+    assert_eq!(count_hostcall_deep(&ops, "builtin:StreamPipeline"), 1);
     assert_eq!(
         count_hostcall_deep(&ops, "builtin:StreamPromisesPipeline"),
         1
     );
 }
 
-/// bd-305gi.1: a stream form the facade does not claim is never elided to
-/// a stream kernel HostCall; it lowers with the engine-owned stream module
-/// (whose process.nextTick HostCall marks it) instead of the ambient
-/// `require` refusal it met before that module existed.
+/// bd-305gi.2: every free CJS stream load uses the engine-owned module,
+/// including forms previously claimed by the finite native facade. Its
+/// process.nextTick HostCall marks the complete scheduler integration.
 fn assert_served_by_stream_module(source: &str, label: &str) {
     let ops = lower_script_source_ops(source, label);
     for kernel in [
@@ -7663,6 +7648,24 @@ fn assert_served_by_stream_module(source: &str, label: &str) {
         count_hostcall_deep(&ops, "builtin:ProcessNextTick") > 0,
         "{label}: the stream module was not materialized for {source}"
     );
+    assert_eq!(count_hostcall_deep(&ops, "module:require"), 0, "{label}");
+    assert!(
+        !ops.iter()
+            .any(|op| matches!(op, Ir1Op::ImportModule { .. })),
+        "{label}: a pure CJS stream load must not require ambient module authority"
+    );
+}
+
+#[test]
+fn isolated_cjs_stream_constructors_and_async_sources_use_the_complete_module_bd_305gi_2() {
+    for source in [
+        "const { Readable } = require('stream'); Readable.from([Promise.resolve(1)]).on('data', value => console.log(value));",
+        "const { Readable: R } = require('node:stream'); async function* values() { yield 1; } R.from(values()).on('data', value => console.log(value));",
+        "const { Readable, Writable, PassThrough, Transform } = require('stream'); new Readable(); new Writable(); new PassThrough(); new Transform();",
+        "const { pipeline, promises } = require('node:stream'); pipeline(a, b, () => {}); promises.pipeline(a, b);",
+    ] {
+        assert_served_by_stream_module(source, "isolated_stream_cjs_bd_305gi_2.js");
+    }
 }
 
 #[test]
@@ -7739,34 +7742,34 @@ fn stream_passthrough_elision_requires_every_unshadowed_use_bd_fw7zd() {
 
 #[test]
 fn stream_constructor_sentinels_do_not_cross_parameter_shadows_bd_fw7zd() {
-    let ops = lower_script_source_ops(
-        "const { Readable, Writable } = require('stream');\n\
+    let ops = lower_esm_source_ops(
+        "import { Readable, Writable } from 'stream';\n\
          new Readable({ read() {} });\n\
          new Writable({ write(c, e, cb) { cb(); } });\n\
          function shadowed(Readable, Writable) {\n\
            new Readable();\n\
            new Writable();\n\
          }\n",
-        "stream_constructor_shadows_bd_fw7zd.js",
+        "stream_constructor_shadows_bd_fw7zd.mjs",
     );
     assert_eq!(count_hostcall_deep(&ops, "builtin:StreamReadable"), 1);
     assert_eq!(count_hostcall_deep(&ops, "builtin:StreamWritable"), 1);
 }
 
 #[test]
-fn stream_constructor_sentinels_activate_only_at_cjs_declaration_bd_fw7zd() {
-    let ops = lower_script_source_ops(
-        "new Readable({ read() {} });\n\
+fn stream_cjs_constructors_keep_ordinary_tdz_aware_lowering_bd_fw7zd() {
+    let source = "new Readable({ read() {} });\n\
          const { Readable, Writable } = require('stream');\n\
          new Readable({ read() {} });\n\
-         new Writable({ write(c, e, cb) { cb(); } });\n",
-        "stream_constructor_tdz_bd_fw7zd.js",
-    );
-    assert_eq!(count_hostcall_deep(&ops, "builtin:StreamReadable"), 1);
-    assert_eq!(count_hostcall_deep(&ops, "builtin:StreamWritable"), 1);
-    assert!(
-        ops.iter().any(|op| matches!(op, Ir1Op::Construct { .. })),
-        "the pre-declaration constructor must retain ordinary TDZ-aware lowering"
+         new Writable({ write(c, e, cb) { cb(); } });\n";
+    assert_served_by_stream_module(source, "stream_constructor_tdz_bd_fw7zd.js");
+    let ops = lower_script_source_ops(source, "stream_constructor_tdz_bd_fw7zd.js");
+    assert_eq!(
+        ops.iter()
+            .filter(|op| matches!(op, Ir1Op::Construct { .. }))
+            .count(),
+        3,
+        "all guest constructors retain ordinary calls, including the pre-declaration TDZ read"
     );
 }
 

@@ -13,6 +13,8 @@ const native = require('node:stream');
 const root = path.resolve(__dirname, '../..');
 const fixture = fs.readFileSync(path.join(root,
   'crates/franken-engine/tests/fixtures/stream_mixed_routes.js'), 'utf8');
+const asyncFixture = fs.readFileSync(path.join(root,
+  'crates/franken-engine/tests/fixtures/stream_cjs_async_sources.js'), 'utf8');
 const source = fs.readFileSync(process.env.STREAM_SOURCE || path.join(root,
   'crates/franken-engine/src/lowering_pipeline/stream_module.js'), 'utf8');
 const factory = vm.runInThisContext(
@@ -53,6 +55,20 @@ test('mixed CJS constructors, event order and shadowed require match live Node',
   assert.equal(expected[1], 'shadow:local');
   assert.equal(expected.length, 3);
   console.log(expected.join('\n'));
+});
+
+test('isolated CJS Readable.from awaits producer values and cleanup like live Node', { timeout: 1000 }, async () => {
+  const candidate = factory(events.EventEmitter, decoder, process.nextTick);
+  const [actual, expected] = await Promise.all([
+    run(candidate, asyncFixture), run(native, asyncFixture),
+  ]);
+  assert.deepEqual(expected, [
+    'promised:a,b,c,end',
+    'generated:1,2,end',
+    'cancelled:first,finally,close',
+    'rejected:same-error,close',
+  ]);
+  assert.deepEqual(actual, expected);
 });
 
 function prematureClose(module) {

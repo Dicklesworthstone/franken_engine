@@ -13,8 +13,9 @@
 //! throughout the staged implementation.
 //!
 //! These tests exercise only engine-contained computation and deterministic
-//! scheduling. Recognizing a supported static `stream` import must not grant a
-//! materialized module object or general-purpose module-loading authority.
+//! scheduling. CJS loads use the shared pure module without general-purpose
+//! module-loading authority. The explicit `native_*` regressions use named
+//! ESM imports so they continue exercising native stream kernels.
 
 use std::collections::BTreeSet;
 
@@ -2061,12 +2062,12 @@ fn readable_pipe_returns_destination_and_preserves_lifecycle_order_bd_7h43f() {
     ]);
 }
 
-// Direct destructuring of require('stream') intentionally exercises the native
-// facade, including its authenticated pipe edge, rather than the JS fallback.
+// Named ESM imports intentionally exercise the native facade, including its
+// authenticated pipe edge. Free CJS requires use the complete JS module.
 #[test]
 fn native_pipe_resumes_after_async_destination_drain_bd_305gi_2() {
     let source = r#"
-        const { Readable, Writable } = require('stream');
+        import { Readable, Writable } from 'stream';
         const source = Readable.from([1, 2, 3]);
         const events = [];
         const sink = new Writable({
@@ -2093,7 +2094,7 @@ fn native_pipe_resumes_after_async_destination_drain_bd_305gi_2() {
 #[test]
 fn native_pipe_zero_high_water_mark_preserves_all_chunks_bd_305gi_2() {
     let source = r#"
-        const { Readable, Writable } = require('stream');
+        import { Readable, Writable } from 'stream';
         const chunks = [];
         const source = Readable.from(['a', 'b', 'c', 'd']);
         const sink = new Writable({
@@ -2110,7 +2111,7 @@ fn native_pipe_zero_high_water_mark_preserves_all_chunks_bd_305gi_2() {
 #[test]
 fn native_pipe_synthetic_drain_cannot_release_pending_write_bd_305gi_2() {
     let source = r#"
-        const { Readable, Writable } = require('stream');
+        import { Readable, Writable } from 'stream';
         const source = Readable.from([1, 2]);
         const observations = [];
         const sink = new Writable({
@@ -2134,7 +2135,7 @@ fn native_pipe_synthetic_drain_cannot_release_pending_write_bd_305gi_2() {
 #[test]
 fn native_pipe_replacement_during_drain_ignores_stale_callback_bd_305gi_2() {
     let source = r#"
-        const { Readable, Writable } = require('stream');
+        import { Readable, Writable } from 'stream';
         const source = Readable.from([1, 2, 3]);
         const firstChunks = [];
         const secondChunks = [];
@@ -2172,7 +2173,7 @@ fn native_pipe_removing_drain_listeners_cancels_resume_bd_305gi_2() {
     for observe_removal in [false, true] {
         let source = format!(
             r#"
-                const {{ Readable, Writable }} = require('stream');
+                import {{ Readable, Writable }} from 'stream';
                 const source = Readable.from([1, 2, 3]);
                 const chunks = [];
                 const sink = new Writable({{
@@ -2200,7 +2201,7 @@ fn native_pipe_removing_drain_listeners_cancels_resume_bd_305gi_2() {
 #[test]
 fn native_from_iterable_collects_set_and_live_mutation_bd_305gi_2() {
     let source = r#"
-        const { Readable } = require('stream');
+        import { Readable } from 'stream';
         const values = new Set([1, 2]);
         const stream = Readable.from(values);
         values.delete(1);
@@ -2213,7 +2214,7 @@ fn native_from_iterable_collects_set_and_live_mutation_bd_305gi_2() {
 #[test]
 fn native_from_iterable_collects_map_entries_bd_305gi_2() {
     let source = r#"
-        const { Readable } = require('node:stream');
+        import { Readable } from 'node:stream';
         const values = new Map([['a', 1], ['b', 2]]);
         Readable.from(values).toArray().then(result => console.log(result.map(pair => pair.join(':')).join(',')));
     "#;
@@ -2223,7 +2224,7 @@ fn native_from_iterable_collects_map_entries_bd_305gi_2() {
 #[test]
 fn native_from_iterable_generator_preserves_values_and_finally_bd_305gi_2() {
     let source = r#"
-        const { Readable } = require('stream');
+        import { Readable } from 'stream';
         const retained = { value: 2, then: 42 };
         const events = [];
         function* values() {
@@ -2245,7 +2246,7 @@ fn native_from_iterable_generator_preserves_values_and_finally_bd_305gi_2() {
 #[test]
 fn native_from_iterable_observes_dynamic_next_and_result_getters_bd_305gi_2() {
     let source = r#"
-        const { Readable } = require('stream');
+        import { Readable } from 'stream';
         const events = [];
         let count = 0;
         const iterable = {
@@ -2276,7 +2277,7 @@ fn native_from_iterable_observes_dynamic_next_and_result_getters_bd_305gi_2() {
 #[test]
 fn native_from_iterable_honors_array_iterator_override_bd_305gi_2() {
     let source = r#"
-        const { Readable } = require('stream');
+        import { Readable } from 'stream';
         const values = [1, 2, 3];
         values[Symbol.iterator] = function* () { yield 8; yield 9; };
         Readable.from(values).toArray().then(result => console.log(result.join(',')));
@@ -2287,7 +2288,7 @@ fn native_from_iterable_honors_array_iterator_override_bd_305gi_2() {
 #[test]
 fn native_from_iterable_read_then_collects_remaining_values_bd_305gi_2() {
     let source = r#"
-        const { Readable } = require('stream');
+        import { Readable } from 'stream';
         function* values() { yield 1; yield 2; yield 3; }
         const stream = Readable.from(values());
         console.log(stream.read());
@@ -2299,7 +2300,7 @@ fn native_from_iterable_read_then_collects_remaining_values_bd_305gi_2() {
 #[test]
 fn native_from_iterable_destroy_runs_generator_finally_bd_305gi_2() {
     let source = r#"
-        const { Readable } = require('stream');
+        import { Readable } from 'stream';
         let finalized = 0;
         function* produce() {
           try { while (true) yield 1; }
@@ -2318,7 +2319,7 @@ fn native_from_iterable_destroy_runs_generator_finally_bd_305gi_2() {
 #[test]
 fn native_from_iterable_preserves_thrown_values_and_closes_bd_305gi_2() {
     let source = r#"
-        const { Readable } = require('stream');
+        import { Readable } from 'stream';
         const failure = function failure() {};
         const events = [];
         const source = {
@@ -2337,7 +2338,7 @@ fn native_from_iterable_preserves_thrown_values_and_closes_bd_305gi_2() {
 #[test]
 fn native_from_iterable_aggregates_cleanup_failure_bd_305gi_2() {
     let source = r#"
-        const { Readable } = require('stream');
+        import { Readable } from 'stream';
         const failure = new Error('source failed');
         const cleanup = new Error('close failed');
         const source = {
@@ -2356,7 +2357,7 @@ fn native_from_iterable_aggregates_cleanup_failure_bd_305gi_2() {
 #[test]
 fn native_from_iterable_preserves_destroy_outcome_after_reentrant_next_bd_305gi_2() {
     let source = r#"
-        const { Readable } = require('stream');
+        import { Readable } from 'stream';
         const events = [];
         let closed = 0;
         let stream;
@@ -2385,7 +2386,7 @@ fn native_from_iterable_preserves_destroy_outcome_after_reentrant_next_bd_305gi_
 #[test]
 fn native_from_iterable_rejects_null_and_runs_cleanup_bd_305gi_2() {
     let source = r#"
-        const { Readable } = require('stream');
+        import { Readable } from 'stream';
         let closed = 0;
         function* values() { try { yield null; } finally { closed++; } }
         Readable.from(values()).toArray().catch(error => {
@@ -2398,7 +2399,7 @@ fn native_from_iterable_rejects_null_and_runs_cleanup_bd_305gi_2() {
 #[test]
 fn native_from_iterable_keeps_buffer_fast_path_and_typed_array_iteration_bd_305gi_2() {
     let source = r#"
-        const { Readable } = require('stream');
+        import { Readable } from 'stream';
         const buffer = Buffer.from([1, 2, 3]);
         Readable.from(buffer).toArray().then(result => {
           console.log(result.length, result[0] === buffer, Buffer.isBuffer(result[0]));
@@ -2411,7 +2412,7 @@ fn native_from_iterable_keeps_buffer_fast_path_and_typed_array_iteration_bd_305g
 #[test]
 fn native_from_iterable_byte_mode_validation_closes_producer_bd_305gi_2() {
     let source = r#"
-        const { Readable } = require('stream');
+        import { Readable } from 'stream';
         const events = [];
         function* values() {
           try { yield 7; }
@@ -2428,7 +2429,7 @@ fn native_from_iterable_byte_mode_validation_closes_producer_bd_305gi_2() {
 #[test]
 fn native_from_iterable_cleanup_get_order_and_reentrant_destroy_bd_305gi_2() {
     let source = r#"
-        const { Readable } = require('stream');
+        import { Readable } from 'stream';
         const events = [];
         let stream;
         const source = {
@@ -2462,7 +2463,7 @@ fn native_from_iterable_cleanup_get_order_and_reentrant_destroy_bd_305gi_2() {
 #[test]
 fn native_from_iterable_throw_cleanup_failure_does_not_call_return_bd_305gi_2() {
     let source = r#"
-        const { Readable } = require('stream');
+        import { Readable } from 'stream';
         const events = [];
         const failure = new Error('source');
         const cleanup = new Error('cleanup');
@@ -2488,7 +2489,7 @@ fn native_from_iterable_throw_cleanup_failure_does_not_call_return_bd_305gi_2() 
 #[test]
 fn native_from_iterable_invalid_throw_result_does_not_call_return_bd_305gi_2() {
     let source = r#"
-        const { Readable } = require('stream');
+        import { Readable } from 'stream';
         let returned = 0;
         const failure = new Error('source');
         const source = {
@@ -2507,7 +2508,7 @@ fn native_from_iterable_invalid_throw_result_does_not_call_return_bd_305gi_2() {
 #[test]
 fn native_from_iterable_falsy_throws_close_without_error_events_bd_305gi_2() {
     let source = r#"
-        const { Readable } = require('stream');
+        import { Readable } from 'stream';
         const checks = [undefined, null, false, 0, ''].map(failure => {
           const events = [];
           const source = {
@@ -2531,7 +2532,7 @@ fn native_from_iterable_falsy_throws_close_without_error_events_bd_305gi_2() {
 #[test]
 fn native_from_iterable_reuses_existing_cleanup_aggregate_bd_305gi_2() {
     let source = r#"
-        const { Readable } = require('stream');
+        import { Readable } from 'stream';
         const earlier = new Error('earlier');
         const failure = new Error('source');
         const cleanup = new AggregateError([earlier], 'cleanup');
@@ -2551,7 +2552,7 @@ fn native_from_iterable_reuses_existing_cleanup_aggregate_bd_305gi_2() {
 #[test]
 fn native_from_iterable_cleanup_aggregate_observes_message_and_code_bd_305gi_2() {
     let source = r#"
-        const { Readable } = require('stream');
+        import { Readable } from 'stream';
         const events = [];
         const failure = new Error('source');
         const cleanup = {
@@ -2577,7 +2578,7 @@ fn native_from_iterable_cleanup_aggregate_observes_message_and_code_bd_305gi_2()
 #[test]
 fn native_to_array_consumes_later_read_callbacks_bd_305gi_2() {
     let source = r#"
-        const { Readable } = require('stream');
+        import { Readable } from 'stream';
         let next = 1;
         let reads = 0;
         const source = new Readable({
@@ -2601,7 +2602,7 @@ fn native_to_array_consumes_later_read_callbacks_bd_305gi_2() {
 #[test]
 fn native_to_array_drains_bounded_readable_backpressure_bd_305gi_2() {
     let source = r#"
-        const { Readable } = require('stream');
+        import { Readable } from 'stream';
         let next = 1;
         let reads = 0;
         const source = new Readable({
@@ -2623,7 +2624,7 @@ fn native_to_array_drains_bounded_readable_backpressure_bd_305gi_2() {
 #[test]
 fn native_to_array_coalesces_passthrough_bytes_bd_305gi_2() {
     let source = r#"
-        const { PassThrough } = require('stream');
+        import { PassThrough } from 'stream';
         const stream = new PassThrough();
         const result = stream.toArray();
         stream.write(Buffer.from([1, 2]));
@@ -2639,7 +2640,7 @@ fn native_to_array_coalesces_passthrough_bytes_bd_305gi_2() {
 #[test]
 fn native_to_array_ignores_empty_bytes_but_keeps_empty_objects_bd_305gi_2() {
     let source = r#"
-        const { Readable, PassThrough } = require('stream');
+        import { Readable, PassThrough } from 'stream';
         const options = { read() { this.push(''); this.push(Buffer.alloc(0)); this.push(null); } };
         const bytes = new Readable(options);
         const decoded = new Readable(options);
@@ -2660,7 +2661,7 @@ fn native_to_array_ignores_empty_bytes_but_keeps_empty_objects_bd_305gi_2() {
 #[test]
 fn native_to_array_collects_async_transform_and_flush_bd_305gi_2() {
     let source = r#"
-        const { Transform } = require('stream');
+        import { Transform } from 'stream';
         const stream = new Transform({
           objectMode: true,
           highWaterMark: 1,
@@ -2680,7 +2681,7 @@ fn native_to_array_collects_async_transform_and_flush_bd_305gi_2() {
 #[test]
 fn native_to_array_preserves_partial_reads_and_chunk_identity_bd_305gi_2() {
     let source = r#"
-        const { Readable } = require('stream');
+        import { Readable } from 'stream';
         const retained = { value: 2 };
         const source = new Readable({ objectMode: true, read() {} });
         source.push(1);
@@ -2699,7 +2700,7 @@ fn native_to_array_preserves_partial_reads_and_chunk_identity_bd_305gi_2() {
 #[test]
 fn native_to_array_collects_decoded_utf8_across_pushes_bd_305gi_2() {
     let source = r#"
-        const { Readable } = require('stream');
+        import { Readable } from 'stream';
         const source = new Readable({ read() {} });
         source.setEncoding('utf8');
         const result = source.toArray();
@@ -2715,7 +2716,7 @@ fn native_to_array_collects_decoded_utf8_across_pushes_bd_305gi_2() {
 #[test]
 fn native_to_array_rejects_read_throw_without_error_listener_bd_305gi_2() {
     let source = r#"
-        const { Readable } = require('stream');
+        import { Readable } from 'stream';
         const failure = new Error('read failed');
         const events = [];
         const source = new Readable({ read() { throw failure; } });
@@ -2731,7 +2732,7 @@ fn native_to_array_rejects_read_throw_without_error_listener_bd_305gi_2() {
 #[test]
 fn native_to_array_rejects_destroy_error_once_bd_305gi_2() {
     let source = r#"
-        const { Readable } = require('stream');
+        import { Readable } from 'stream';
         const failure = new Error('destroy failed');
         const events = [];
         let settlements = 0;
@@ -2751,7 +2752,7 @@ fn native_to_array_rejects_destroy_error_once_bd_305gi_2() {
 #[test]
 fn native_to_array_preserves_first_error_before_explicit_destroy_bd_305gi_2() {
     let source = r#"
-        const { Readable } = require('stream');
+        import { Readable } from 'stream';
         const failure = new Error('manual error');
         const later = new Error('destroy error');
         const events = [];
@@ -2770,7 +2771,7 @@ fn native_to_array_preserves_first_error_before_explicit_destroy_bd_305gi_2() {
 #[test]
 fn native_to_array_rejects_manual_error_before_destroy_closes_bd_305gi_2() {
     let source = r#"
-        const { PassThrough } = require('stream');
+        import { PassThrough } from 'stream';
         const failure = new Error('manual error');
         const events = [];
         const stream = new PassThrough({ objectMode: true });
@@ -2790,7 +2791,7 @@ fn native_to_array_rejects_manual_error_before_destroy_closes_bd_305gi_2() {
 #[test]
 fn native_to_array_handles_manual_error_without_error_listener_bd_305gi_2() {
     let source = r#"
-        const { PassThrough } = require('stream');
+        import { PassThrough } from 'stream';
         const failure = new Error('handled by the consumer');
         const stream = new PassThrough({ objectMode: true });
         stream.on('close', () => console.log('closed'));
@@ -2804,7 +2805,7 @@ fn native_to_array_handles_manual_error_without_error_listener_bd_305gi_2() {
 #[test]
 fn native_to_array_preserves_exact_rejection_values_bd_305gi_2() {
     let source = r#"
-        const { Readable, PassThrough } = require('stream');
+        import { Readable, PassThrough } from 'stream';
         const captured = 42;
         const closure = () => captured;
         const promise = Promise.resolve(7);
@@ -2827,7 +2828,7 @@ fn native_to_array_preserves_exact_rejection_values_bd_305gi_2() {
 #[test]
 fn native_to_array_rejects_premature_close_with_error_object_bd_305gi_2() {
     let source = r#"
-        const { Readable } = require('stream');
+        import { Readable } from 'stream';
         const source = new Readable({ read() {} });
         const result = source.toArray();
         source.destroy();
@@ -2842,7 +2843,7 @@ fn native_to_array_rejects_premature_close_with_error_object_bd_305gi_2() {
 #[test]
 fn native_pipe_end_false_reuses_destination_after_backpressure_bd_305gi_2() {
     let source = r#"
-        const { Readable, Writable } = require('stream');
+        import { Readable, Writable } from 'stream';
         const first = Readable.from(['a', 'b']);
         const second = Readable.from(['c', 'd']);
         const chunks = [];
@@ -2866,7 +2867,7 @@ fn native_pipe_end_false_reuses_destination_after_backpressure_bd_305gi_2() {
 #[test]
 fn native_pipe_end_false_keeps_manual_end_and_tail_write_bd_305gi_2() {
     let source = r#"
-        const { Readable, Writable } = require('stream');
+        import { Readable, Writable } from 'stream';
         const source = Readable.from(['body']);
         const chunks = [];
         const events = [];
@@ -2898,7 +2899,7 @@ fn native_pipe_observes_end_option_once_before_pipe_bd_305gi_2() {
     ] {
         let source = format!(
             r#"
-                const {{ Readable, Writable }} = require('stream');
+                import {{ Readable, Writable }} from 'stream';
                 const events = [];
                 const source = Readable.from(['one']);
                 const sink = new Writable({{
@@ -2944,7 +2945,7 @@ fn native_pipe_observes_end_option_strict_false_semantics_bd_305gi_2() {
     ] {
         let source = format!(
             r#"
-                const {{ Readable, Writable }} = require('stream');
+                import {{ Readable, Writable }} from 'stream';
                 const source = Readable.from(['one']);
                 const sink = new Writable({{ write(chunk, encoding, done) {{ done(); }} }});
                 source.pipe(sink, {options});
@@ -2952,14 +2953,18 @@ fn native_pipe_observes_end_option_strict_false_semantics_bd_305gi_2() {
                 sink.on('finish', () => console.log('finished'));
             "#,
         );
-        assert_eq!(eval_console(&source), "true\nfinished", "options: {options}");
+        assert_eq!(
+            eval_console(&source),
+            "true\nfinished",
+            "options: {options}"
+        );
     }
 }
 
 #[test]
 fn native_pipe_observes_end_option_throw_without_attaching_bd_305gi_2() {
     let source = r#"
-        const { Readable, Writable } = require('stream');
+        import { Readable, Writable } from 'stream';
         const source = Readable.from(['one']);
         const failure = new Error('option failure');
         const chunks = [];
@@ -2983,7 +2988,7 @@ fn native_pipe_observes_end_option_throw_without_attaching_bd_305gi_2() {
 #[test]
 fn native_pipe_end_false_destroy_while_paused_leaves_sink_open_bd_305gi_2() {
     let source = r#"
-        const { Readable, Writable } = require('stream');
+        import { Readable, Writable } from 'stream';
         const source = Readable.from([1, 2, 3]);
         const chunks = [];
         const sink = new Writable({

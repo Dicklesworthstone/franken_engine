@@ -11,6 +11,8 @@
 //! program runs on the default QuickJS lane (100,000 heap objects, asserted)
 //! with 250,000 short-lived objects. Expected strings are Node v22.2.0's
 //! console output for the same programs.
+//! Named ESM imports keep these probes on the native stream kernels; a
+//! separate CJS probe covers the shared module's guest-owned stream state.
 //!
 //! No-claim: an unfinished stream's live state is a root, so a stream nothing
 //! references is not reclaimed until it finishes or is destroyed and its
@@ -37,7 +39,7 @@ fn console_output(source: &str) -> String {
 /// A PassThrough with a data listener keeps working after 250,000 short-lived objects.
 #[test]
 fn stream_collection_passthrough_survives_collection() {
-    let source = "const { PassThrough } = require('stream');\n\
+    let source = "import { PassThrough } from 'stream';\n\
          const p = new PassThrough(); const got = [];\n\
          p.on('data', (chunk) => got.push(String(chunk)));\n\
          p.on('end', () => console.log('end', got.join('+'), s));\n\
@@ -49,7 +51,7 @@ fn stream_collection_passthrough_survives_collection() {
 /// A Writable's write implementation, queued write callback and end callback survive collection.
 #[test]
 fn stream_collection_writable_callbacks_survive_collection() {
-    let source = "const { Writable } = require('stream');\n\
+    let source = "import { Writable } from 'stream';\n\
          const seen = [];\n\
          const w = new Writable({ write(chunk, encoding, callback) { seen.push(String(chunk)); callback(); } });\n\
          w.write('x', () => console.log('written', seen.join('')));\n\
@@ -62,11 +64,25 @@ fn stream_collection_writable_callbacks_survive_collection() {
 /// A pipeline started before the garbage completes after it.
 #[test]
 fn stream_collection_pipeline_survives_collection() {
-    let source = "const { pipeline, Readable, PassThrough, Writable } = require('stream');\n\
+    let source = "import { pipeline, Readable, PassThrough, Writable } from 'stream';\n\
          const out = [];\n\
          pipeline(Readable.from(['a', 'b', 'c']), new PassThrough(),\n\
            new Writable({ write(chunk, encoding, callback) { out.push(String(chunk)); callback(); } }),\n\
            (error) => console.log('pipeline', error === undefined ? 'ok' : String(error), out.join('')));\n\
          let s = 0; for (let i = 0; i < 250000; i++) { const o = { a: i }; s += o.a & 1; }";
     assert_eq!(console_output(source), "pipeline ok abc");
+}
+
+/// Direct CJS construction retains the module, chunks and listener closures
+/// while allocation pressure collects unrelated guest objects.
+#[test]
+fn cjs_stream_module_survives_collection_bd_305gi_2() {
+    let source = "const { PassThrough } = require('stream');\n\
+         const stream = new PassThrough(); const values = [];\n\
+         stream.on('data', value => values.push(String(value)));\n\
+         stream.on('end', () => console.log(values.join('+'), sum));\n\
+         stream.write('before');\n\
+         let sum = 0; for (let i = 0; i < 250000; i++) { const value = { n: i }; sum += value.n & 1; }\n\
+         stream.end('after');";
+    assert_eq!(console_output(source), "before+after 125000");
 }

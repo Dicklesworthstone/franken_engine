@@ -9,12 +9,17 @@
 //! _final, construct, destroy, errors with Node's codes, Transform
 //! subclassing through `class` and util.inherits, pipe backpressure,
 //! pipeline (callback, promises and async-generator stages), finished,
-//! Duplex and the legacy Stream. Each probe reads `require('stream')`
-//! through a namespace binding, a form the lowering facade never claims,
-//! so every probe runs the module (the facade's own forms are pinned by
-//! stream_builtin_bd_m8vaa).
+//! Duplex and the legacy Stream. Both namespace and direct destructured CJS
+//! loads run the same module. Native facade probes use explicit named ESM
+//! imports in stream_builtin_bd_m8vaa.
+
+use std::collections::BTreeMap;
 
 use frankenengine_engine::HybridRouter;
+use frankenengine_engine::baseline_interpreter::LaneChoice;
+use frankenengine_engine::execution_orchestrator::{
+    ExecutionOrchestrator, ExtensionPackage, LabFixtureExecutionOrchestratorExt, OrchestratorConfig,
+};
 
 /// Large enough for every probe; the default lane budgets are a
 /// containment posture, not part of what these probes check.
@@ -34,8 +39,7 @@ fn console_line(source: &str) -> String {
 
 #[test]
 fn mixed_cjs_forms_share_constructor_identity_and_event_order_bd_305gi_2() {
-    // The direct destructure is facade-eligible in isolation. Namespace use
-    // must route both bindings to the same module, without rewriting local's
+    // Both forms must load the same module without rewriting local's
     // shadowed require. The expected trace is also run against live Node by
     // scripts/tests/stream_mixed_routes.cjs.
     let source = include_str!("fixtures/stream_mixed_routes.js");
@@ -43,6 +47,63 @@ fn mixed_cjs_forms_share_constructor_identity_and_event_order_bd_305gi_2() {
         console_line(source),
         "identity:true,true\nshadow:local\norder:write:a,data:x,written,end,ended,finish,microtask"
     );
+}
+
+#[test]
+fn isolated_cjs_from_awaits_values_async_iterators_and_cleanup_bd_305gi_2() {
+    // No namespace, collection operator or constructor options force this
+    // source onto the module route. This is the direct CJS shape that formerly
+    // reached the synchronous native producer and refused async values.
+    let source = include_str!("fixtures/stream_cjs_async_sources.js");
+    assert_eq!(
+        console_line(source),
+        "promised:a,b,c,end\ngenerated:1,2,end\ncancelled:first,finally,close\nrejected:same-error,close"
+    );
+}
+
+#[test]
+fn isolated_cjs_async_sources_need_no_module_or_io_authority_bd_305gi_2() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let mut runtime = ExecutionOrchestrator::new(OrchestratorConfig {
+            force_lane: Some(lane),
+            ..OrchestratorConfig::default()
+        });
+        let package = ExtensionPackage {
+            extension_id: "isolated-cjs-async-streams".into(),
+            source: include_str!("fixtures/stream_cjs_async_sources.js").into(),
+            source_file: None,
+            module_root: None,
+            capabilities: [
+                "vm_dispatch",
+                "heap_allocate",
+                "builtin",
+                "console",
+                "timer",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+            version: "1.0.0".into(),
+            metadata: BTreeMap::new(),
+        };
+        let result = runtime
+            .execute(&package)
+            .expect("pure stream sources complete");
+        assert_eq!(
+            result
+                .console_output
+                .iter()
+                .map(|entry| entry.message.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "promised:a,b,c,end",
+                "generated:1,2,end",
+                "cancelled:first,finally,close",
+                "rejected:same-error,close",
+            ],
+            "lane {lane:?}"
+        );
+    }
 }
 
 #[test]

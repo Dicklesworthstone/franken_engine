@@ -8997,7 +8997,7 @@ fn readable_from_state_is_memory_accounted_and_released_bd_fw7zd() {
     core.mutate_registers(|registers| registers[0] = Value::Object(source));
 
     let Value::Object(readable_id) = core
-        .construct_readable_from(RegRange { start: 0, count: 1 })
+        .construct_readable_from(None, RegRange { start: 0, count: 1 })
         .expect("construct finite readable")
     else {
         panic!("Readable.from must return an object");
@@ -10558,7 +10558,7 @@ fn readable_from_precharges_fixed_state_before_heap_side_effects_bd_fw7zd() {
         baseline_bytes.saturating_add(state_bytes).saturating_sub(1);
 
     let error = core
-        .construct_readable_from(RegRange { start: 0, count: 1 })
+        .construct_readable_from(None, RegRange { start: 0, count: 1 })
         .expect_err("state charge above the memory budget must fail first");
     assert!(matches!(
         error,
@@ -10586,7 +10586,7 @@ fn readable_from_precharges_fixed_state_before_heap_side_effects_bd_fw7zd() {
         .saturating_sub(1);
 
     let error = core
-        .construct_readable_from(RegRange { start: 0, count: 1 })
+        .construct_readable_from(None, RegRange { start: 0, count: 1 })
         .expect_err("full Readable object charge must be preflighted atomically");
     assert!(matches!(
         error,
@@ -10608,7 +10608,7 @@ fn readable_from_precharges_fixed_state_before_heap_side_effects_bd_fw7zd() {
         .saturating_add(pump_bytes);
     core.config.max_total_memory_bytes = exact_bytes.saturating_sub(1);
     let error = core
-        .construct_readable_from(RegRange { start: 0, count: 1 })
+        .construct_readable_from(None, RegRange { start: 0, count: 1 })
         .expect_err("successor pump charge must be part of constructor preflight");
     assert!(matches!(
         error,
@@ -10621,7 +10621,7 @@ fn readable_from_precharges_fixed_state_before_heap_side_effects_bd_fw7zd() {
 
     core.config.max_total_memory_bytes = exact_bytes;
     let Value::Object(readable) = core
-        .construct_readable_from(RegRange { start: 0, count: 1 })
+        .construct_readable_from(None, RegRange { start: 0, count: 1 })
         .expect("exact state, object, and pump ceiling must succeed")
     else {
         panic!("Readable.from must return an object");

@@ -6508,7 +6508,7 @@ fn incremental_readable_to_array_retains_selection_labels_bd_305gi_2() {
                 core.write_reg_with_label(2, Value::Object(empty), Label::Public)
                     .expect("argument list");
                 let readable = if finite_source {
-                    core.construct_readable_from(RegRange { start: 2, count: 1 })
+                    core.construct_readable_from(None, RegRange { start: 2, count: 1 })
                 } else {
                     core.construct_stream_readable(RegRange { start: 0, count: 0 })
                 };
@@ -6780,7 +6780,7 @@ fn readable_to_array_terminal_budget_releases_live_state_before_admission_bd_305
                 core.write_reg_with_label(0, Value::Object(source), label.clone())
                     .expect("source");
                 let readable = if finite_source {
-                    core.construct_readable_from(RegRange { start: 0, count: 1 })
+                    core.construct_readable_from(None, RegRange { start: 0, count: 1 })
                 } else {
                     core.construct_stream_readable(RegRange { start: 0, count: 0 })
                 };
@@ -6937,7 +6937,7 @@ fn readable_to_array_settles_only_after_close_with_source_label_bd_fw7zd() {
     core.set_register_label(0, Label::Secret)
         .expect("source label");
     let Value::Object(readable) = core
-        .construct_readable_from(RegRange { start: 0, count: 1 })
+        .construct_readable_from(None, RegRange { start: 0, count: 1 })
         .expect("finite Readable")
     else {
         panic!("Readable.from must return an object");
@@ -7019,7 +7019,7 @@ fn readable_from_carries_stored_element_label_into_lifecycle_bd_ojvo1() {
     core.write_reg_with_label(0, Value::Object(source), Label::Public)
         .expect("Public source register");
     let Value::Object(readable) = core
-        .construct_readable_from(RegRange { start: 0, count: 1 })
+        .construct_readable_from(None, RegRange { start: 0, count: 1 })
         .expect("finite Readable")
     else {
         panic!("Readable.from must return an object");
@@ -7051,6 +7051,298 @@ fn readable_from_carries_stored_element_label_into_lifecycle_bd_ojvo1() {
     );
 }
 
+fn readable_sync_iterator_fixture(
+    object_mode: bool,
+) -> (InterpreterCore, Ir3Module, ObjectId, ObjectId, ObjectId) {
+    let mut module = test_module_with_functions(
+        vec![
+            Ir3Instruction::LoadThis { dst: 0 },
+            Ir3Instruction::LoadStr {
+                dst: 1,
+                pool_index: 0,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 0,
+                key: 1,
+                dst: 2,
+            },
+            Ir3Instruction::Return { value: 2 },
+            Ir3Instruction::LoadThis { dst: 0 },
+            Ir3Instruction::Return { value: 0 },
+        ],
+        vec![
+            Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 3,
+                name: Some("stream_iterator_next".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            },
+            Ir3FunctionDesc {
+                entry: 4,
+                arity: 0,
+                frame_size: 1,
+                name: Some("stream_iterator_self".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            },
+        ],
+    );
+    module.constant_pool = vec!["result".into()];
+    let mut core = test_interpreter();
+    let result = core
+        .alloc_object_with_properties(&[("value", Value::Int(7)), ("done", Value::Bool(false))])
+        .expect("iterator result");
+    let source = core
+        .alloc_object_with_properties(&[
+            ("next", Value::Function(0)),
+            ("result", Value::Object(result)),
+        ])
+        .expect("iterator source");
+    core.set_object_runtime_property(
+        source,
+        RuntimePropertyKey::Symbol(WellKnownSymbol::Iterator.id()),
+        Value::Function(1),
+    )
+    .expect("iterator acquisition method");
+    let options = core
+        .alloc_object_with_properties(&[("objectMode", Value::Bool(object_mode))])
+        .expect("stream options");
+    core.write_reg(0, Value::Object(source))
+        .expect("source argument");
+    core.write_reg(1, Value::Object(options))
+        .expect("options argument");
+    let Value::Object(readable) = core
+        .construct_readable_from(Some(&module), RegRange { start: 0, count: 2 })
+        .expect("native iterable stream")
+    else {
+        panic!("Readable object");
+    };
+    core.clear_pending_hostcall_result_label();
+    (core, module, readable, source, result)
+}
+
+#[test]
+fn readable_from_iterator_budget_refuses_before_next_and_releases_reservations_bd_305gi_2() {
+    let (mut core, module, readable, _, _) = readable_sync_iterator_fixture(true);
+    let before = core.readable_from_streams[&readable].clone();
+    let memory = core.estimated_memory_bytes();
+    let instructions = core.instructions_executed;
+    assert!(before.buffer.is_empty());
+    assert!(
+        core.pending_readable_from_pumps.is_empty(),
+        "construction must be lazy"
+    );
+    core.config.instruction_budget = instructions;
+    assert!(matches!(
+        core.drive_readable_iterator_source(readable, &module, before.clone()),
+        Err(InterpreterError::BudgetExhausted { .. })
+    ));
+    core.config.instruction_budget = u64::MAX;
+    core.config.max_total_memory_bytes = memory;
+    assert!(matches!(
+        core.drive_readable_iterator_source(readable, &module, before.clone()),
+        Err(InterpreterError::MemoryBudgetExceeded { .. })
+    ));
+    assert_eq!(core.readable_from_streams[&readable], before);
+    assert_eq!(core.instructions_executed, instructions);
+    assert!(core.readable_pump_reservations.is_empty());
+    assert!(core.pending_readable_from_pumps.is_empty());
+    assert_eq!(core.estimated_memory_bytes(), memory);
+    assert_eq!(memory, core.recompute_estimated_memory_bytes());
+
+    core.config.max_total_memory_bytes = u64::MAX;
+    core.drive_readable_iterator_source(readable, &module, before)
+        .expect("retry admitted pull");
+    assert_eq!(
+        core.readable_from_streams[&readable]
+            .buffer
+            .front()
+            .unwrap()
+            .value,
+        Value::Int(7)
+    );
+    assert!(
+        core.instructions_executed > instructions + 1,
+        "guest next instructions remain charged"
+    );
+    assert!(core.readable_pump_reservations.is_empty());
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+}
+
+#[test]
+fn readable_from_iterator_classified_value_failure_retains_lifecycle_label_bd_305gi_2() {
+    let (mut core, module, readable, _, result) = readable_sync_iterator_fixture(false);
+    core.set_own_property_label(result, "value", &Label::Secret)
+        .expect("classified iterator result property");
+    assert_eq!(
+        core.readable_from_streams[&readable].lifecycle_label,
+        Label::Public
+    );
+    let projected = core
+        .clone_readable_state_with_budget(readable)
+        .unwrap()
+        .unwrap();
+    core.drive_readable_iterator_source(readable, &module, projected)
+        .expect("byte validation becomes stream error");
+    let state = &core.readable_from_streams[&readable];
+    assert_eq!(state.lifecycle_label, Label::Secret);
+    assert!(state.destroy_requested);
+    assert_eq!(state.phase, ReadableFromPumpPhase::DestroyError);
+    assert!(state.destroy_error.is_some());
+    assert_eq!(
+        state.source,
+        Value::Undefined,
+        "failed producer has been closed"
+    );
+    assert!(state.buffer.is_empty());
+    assert!(core.readable_pump_reservations.is_empty());
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+}
+
+#[test]
+fn readable_from_iterator_fatal_end_listener_prevents_cleanup_bd_305gi_2() {
+    let (mut core, module, readable, source, _) = readable_sync_iterator_fixture(true);
+    core.set_object_property(source, "return".to_string(), Value::Function(0))
+        .expect("producer cleanup callback");
+    core.write_reg(0, Value::str("end")).expect("end event");
+    core.write_reg(1, Value::Function(1)).expect("end listener");
+    core.dispatch_builtin_function(
+        &module,
+        &BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterOn),
+        RegRange { start: 0, count: 2 },
+        Some(Value::Object(readable)),
+        None,
+    )
+    .expect("register end listener");
+    core.readable_resume(Value::Object(readable))
+        .expect("flowing source");
+    core.readable_request_eof(readable, Label::Public)
+        .expect("terminal producer");
+    core.config.instruction_budget = core.instructions_executed;
+    assert!(matches!(
+        core.drive_readable_from_pump(readable, Some(&module)),
+        Err(InterpreterError::BudgetExhausted { .. })
+    ));
+    assert_eq!(
+        core.readable_from_streams[&readable].source,
+        Value::Object(source),
+        "fatal end listener must not enter producer cleanup"
+    );
+    assert_eq!(
+        core.heap[readable.0 as usize].properties.get("destroyed"),
+        Some(&Value::Bool(false))
+    );
+    assert!(core.readable_pump_reservations.is_empty());
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+}
+
+#[test]
+fn readable_from_iterator_explicitly_refuses_async_sources_and_values_bd_305gi_2() {
+    for asynchronous in [true, false] {
+        let (mut core, module, readable, _, result) = readable_sync_iterator_fixture(true);
+        let chunk = if asynchronous {
+            Value::Promise(core.create_promise().expect("pending source value").0)
+        } else {
+            Value::Object(
+                core.alloc_object_with_properties(&[("then", Value::Function(0))])
+                    .expect("thenable source value"),
+            )
+        };
+        core.set_object_property(result, "value".to_string(), chunk)
+            .expect("asynchronous chunk");
+        let projected = core
+            .clone_readable_state_with_budget(readable)
+            .unwrap()
+            .unwrap();
+        core.drive_readable_iterator_source(readable, &module, projected)
+            .expect("unsupported continuation follows stream error lifecycle");
+        let state = &core.readable_from_streams[&readable];
+        assert!(state.destroy_requested);
+        assert_eq!(state.source, Value::Undefined);
+        assert!(state.buffer.is_empty(), "never emit a Promise as data");
+        let Some(Value::Object(error)) = state.destroy_error else {
+            panic!("typed source refusal");
+        };
+        let message = core.heap[error.0 as usize]
+            .properties
+            .get("message")
+            .unwrap()
+            .to_string();
+        assert!(message.contains("Promise/thenable continuation is not implemented"));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    for method in [Value::Function(1), Value::Int(1)] {
+        let (mut core, module, _, source, _) = readable_sync_iterator_fixture(true);
+        core.set_object_runtime_property(
+            source,
+            RuntimePropertyKey::Symbol(WellKnownSymbol::AsyncIterator.id()),
+            method,
+        )
+        .expect("async iterator selection");
+        core.write_reg(0, Value::Object(source))
+            .expect("source argument");
+        let streams = core.readable_from_streams.len();
+        assert!(
+            matches!(core.construct_readable_from(Some(&module), RegRange { start: 0, count: 1 }),
+            Err(InterpreterError::TypeError { expected, .. }) if expected.contains("async iterator continuation"))
+        );
+        assert_eq!(core.readable_from_streams.len(), streams);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+}
+
+#[test]
+fn readable_from_iterator_callee_selection_label_survives_public_source_bd_305gi_2() {
+    let (mut core, module, _, source, _) = readable_sync_iterator_fixture(true);
+    core.config
+        .granted_capabilities
+        .insert(RuntimeCapability::Builtin);
+    let from = BuiltinFunction::static_hostcall("builtin:StreamReadableFrom");
+    core.write_reg_with_label(0, Value::Object(source), Label::Public)
+        .expect("public source alias");
+    core.write_reg_with_label(2, Value::BuiltinFunction(from.clone()), Label::Secret)
+        .expect("classified method selection");
+    let Value::Object(readable) = core
+        .dispatch_builtin_function_with_callee_register(
+            &module,
+            &from,
+            RegRange { start: 0, count: 1 },
+            None,
+            None,
+            2,
+        )
+        .expect("classified Readable.from invocation")
+    else {
+        panic!("Readable object");
+    };
+    assert_eq!(
+        core.readable_from_streams[&readable].lifecycle_label,
+        Label::Secret
+    );
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+}
+
 #[test]
 fn readable_prefetched_to_array_peak_is_exact_atomic_and_labeled_bd_71jw4() {
     let fixture = || {
@@ -7065,7 +7357,7 @@ fn readable_prefetched_to_array_peak_is_exact_atomic_and_labeled_bd_71jw4() {
         core.write_reg_with_label(0, Value::Object(source), Label::Secret)
             .expect("secret source register");
         let Value::Object(readable) = core
-            .construct_readable_from(RegRange { start: 0, count: 1 })
+            .construct_readable_from(None, RegRange { start: 0, count: 1 })
             .expect("finite Readable")
         else {
             panic!("Readable.from must return an object");
@@ -7178,7 +7470,7 @@ fn readable_to_array_terminal_settlement_is_transactional_bd_33wvn() {
             core.write_reg(0, Value::Object(source))
                 .expect("source register");
             let Value::Object(readable) = core
-                .construct_readable_from(RegRange { start: 0, count: 1 })
+                .construct_readable_from(None, RegRange { start: 0, count: 1 })
                 .expect("finite Readable")
             else {
                 panic!("Readable.from must return an object");
@@ -7471,7 +7763,7 @@ fn readable_state_guards_reentrancy_brand_and_sparse_to_array_bd_fw7zd() {
         .write_reg(0, Value::Object(source))
         .expect("sparse source register");
     let Value::Object(sparse_readable) = sparse_core
-        .construct_readable_from(RegRange { start: 0, count: 1 })
+        .construct_readable_from(None, RegRange { start: 0, count: 1 })
         .expect("sparse finite Readable")
     else {
         panic!("Readable.from must return an object");
@@ -7644,7 +7936,7 @@ fn readable_destroy_is_synchronous_idempotent_and_memory_exact_bd_fw7zd() {
         .write_reg(0, Value::Object(source))
         .expect("source register");
     let Value::Object(array_readable) = array_core
-        .construct_readable_from(RegRange { start: 0, count: 1 })
+        .construct_readable_from(None, RegRange { start: 0, count: 1 })
         .expect("finite Readable")
     else {
         panic!("Readable.from must return an object");
@@ -7866,7 +8158,7 @@ fn readable_from_data_end_and_close_promises_retain_source_label_bd_fw7zd() {
     core.set_register_label(0, Label::Secret)
         .expect("source label");
     let Value::Object(readable_id) = core
-        .construct_readable_from(RegRange { start: 0, count: 1 })
+        .construct_readable_from(None, RegRange { start: 0, count: 1 })
         .expect("construct finite readable")
     else {
         panic!("Readable.from must return an object");
@@ -8177,7 +8469,7 @@ fn readable_from_throwing_data_or_end_listener_still_closes_bd_fw7zd() {
             .expect("single-chunk source array");
         core.mutate_registers(|registers| registers[0] = Value::Object(source));
         let Value::Object(readable_id) = core
-            .construct_readable_from(RegRange { start: 0, count: 1 })
+            .construct_readable_from(None, RegRange { start: 0, count: 1 })
             .expect("construct finite readable")
         else {
             panic!("Readable.from must return an object");

@@ -10785,44 +10785,108 @@ impl InterpreterCore {
         Ok(true)
     }
 
-    /// Build the finite, pure-compute subset of `Readable.from(iterable,
-    /// options)`. This slice deliberately accepts arrays and strings only:
-    /// strings are one chunk (Node's `Readable.from(string)` fast path), while
-    /// array elements retain identity and order. Other iterable protocols stay
-    /// fail-closed until their iterator/async-iterator continuation is modeled.
+    /// Acquire a synchronous Readable.from source without taking a step.
+    /// Ordinary arrays and strings retain their finite fast paths; other
+    /// sources keep the acquired iterator in private stream state and are
+    /// driven by the same pull scheduler as a native Readable producer.
     pub(super) fn construct_readable_from(
         &mut self,
+        module: Option<&Ir3Module>,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         if args.count == 0 {
             return Err(InterpreterError::TypeError {
-                expected: "array or string source for Readable.from".to_string(),
+                expected: "iterable source for Readable.from".to_string(),
                 got: "missing argument".to_string(),
             });
         }
 
         let source = self.read_reg(args.start)?;
-        let source_label = self
-            .get_register_label(args.start)?
-            .clone()
+        let mut source_label = self
+            .writable_invocation_label(args)?
             .join(&match &source {
                 Value::Object(object_id) => self.binary_storage_label(*object_id),
                 _ => Label::Public,
             });
-        match &source {
-            Value::Str(_) => {}
-            Value::Object(object_id)
-                if self
-                    .heap
-                    .get(object_id.0 as usize)
-                    .is_some_and(|object| object.is_array) => {}
-            other => {
-                return Err(InterpreterError::TypeError {
-                    expected: "array or string source for Readable.from".to_string(),
-                    got: other.type_name().to_string(),
-                });
+        let is_array = matches!(&source, Value::Object(id)
+            if self.heap.get(id.0 as usize).is_some_and(|object| object.is_array));
+        let is_buffer = matches!(&source, Value::Object(id) if self.is_buffer_object(*id));
+        let (source, push_only) = if matches!(source, Value::Str(_)) || is_buffer {
+            (source, false)
+        } else if let Some(module) = module {
+            let observation = self.begin_property_observation([args.start])?;
+            let acquired = (|| {
+                let async_method = self
+                    .readable_iterator_property(
+                        module,
+                        &source,
+                        &RuntimePropertyKey::Symbol(WellKnownSymbol::AsyncIterator.id()),
+                    )?
+                    .is_truthy();
+                if async_method {
+                    return Err(InterpreterError::TypeError {
+                        expected: "synchronous Readable.from source; async iterator continuation is not implemented".to_string(),
+                        got: "truthy Symbol.asyncIterator".to_string(),
+                    });
+                }
+                let key = RuntimePropertyKey::Symbol(WellKnownSymbol::Iterator.id());
+                let selected = self
+                    .readable_iterator_property(module, &source, &key)?
+                    .is_truthy();
+                if !selected {
+                    return Err(InterpreterError::TypeError {
+                        expected: "iterable source for Readable.from".to_string(),
+                        got: source.type_name().to_string(),
+                    });
+                }
+                // Node observes the method once for selection, then again
+                // as the actual call target. Accessors can change between
+                // those two reads.
+                let method = self.readable_iterator_property(module, &source, &key)?;
+                if is_array
+                    && matches!(&method, Value::BuiltinFunction(builtin)
+                    if builtin.kind == BuiltinFunctionKind::ArrayValues)
+                {
+                    return Ok((source, false));
+                }
+                if !method.is_callable() {
+                    return Err(InterpreterError::TypeError {
+                        expected: "callable Symbol.iterator for Readable.from".to_string(),
+                        got: method.type_name().to_string(),
+                    });
+                }
+                self.gc_nested_request = None;
+                let (iterator, label) = self.invoke_inline_method_call_with_argument_label(
+                    Some(module),
+                    method,
+                    source,
+                    Vec::new(),
+                    Some(source_label.clone()),
+                )?;
+                source_label =
+                    self.join_owned_label_with_temporary_budget(source_label.clone(), &label)?;
+                if !iterator.is_object_like() {
+                    return Err(InterpreterError::TypeError {
+                        expected: "object returned by Symbol.iterator".to_string(),
+                        got: iterator.type_name().to_string(),
+                    });
+                }
+                Ok((iterator, true))
+            })();
+            let acquired = self.finish_property_read_observation(observation, acquired)?;
+            if let Some(observed) = &self.pending_hostcall_result_label {
+                source_label =
+                    self.join_owned_label_with_temporary_budget(source_label, observed)?;
             }
-        }
+            acquired
+        } else if is_array {
+            (source, false)
+        } else {
+            return Err(InterpreterError::TypeError {
+                expected: "module context for Readable.from iterator acquisition".to_string(),
+                got: source.type_name().to_string(),
+            });
+        };
         let object_mode = if args.count > 1 {
             match self.read_reg(args.start + 1)? {
                 Value::Object(options_id) => self
@@ -10839,7 +10903,7 @@ impl InterpreterCore {
         };
         let state = ReadableFromState {
             source,
-            push_only: false,
+            push_only,
             object_mode,
             high_water_mark: 1,
             read_callback: None,
@@ -10862,7 +10926,7 @@ impl InterpreterCore {
             to_array_waiter: None,
         };
         let object_properties = Self::readable_object_properties(object_mode, 1);
-        self.allocate_readable_with_state(state, &object_properties, true)
+        self.allocate_readable_with_state(state, &object_properties, !push_only)
     }
 
     pub(super) fn stream_constructor_options(

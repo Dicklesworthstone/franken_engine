@@ -9405,9 +9405,9 @@ impl InterpreterCore {
             "builtin:EventsAddAbortListener" => self.register_protected_abort_listener(args),
             "builtin:StreamReadableFrom" => {
                 // bd-fw7zd: statically proven `Readable.from(...)` is an
-                // engine-contained finite stream. No module object or host
+                // engine-contained iterable stream. No module object or host
                 // authority is materialized by this dispatch.
-                self.construct_readable_from(args)
+                self.construct_readable_from(Some(module), args)
             }
             "builtin:StreamReadable" => {
                 // bd-fw7zd: statically proven `new Readable(options)` exposes

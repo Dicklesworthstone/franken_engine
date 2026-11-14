@@ -990,7 +990,7 @@ impl InterpreterCore {
                 self.readable_to_array(receiver.unwrap_or(Value::Undefined))
             }
             BuiltinFunctionKind::StreamReadableRead => {
-                self.readable_read(receiver.unwrap_or(Value::Undefined), args)
+                self.dispatch_readable_read(module, receiver.unwrap_or(Value::Undefined), args)
             }
             BuiltinFunctionKind::StreamReadableUnshift => {
                 self.readable_unshift(receiver.unwrap_or(Value::Undefined), args)
@@ -1022,7 +1022,7 @@ impl InterpreterCore {
                 self.readable_set_encoding(receiver.unwrap_or(Value::Undefined), args)
             }
             BuiltinFunctionKind::StreamReadableDestroy => {
-                self.readable_destroy(receiver.unwrap_or(Value::Undefined), args)
+                self.dispatch_readable_destroy(module, receiver.unwrap_or(Value::Undefined), args)
             }
             BuiltinFunctionKind::StreamWritableWrite => {
                 self.writable_write(module, receiver.unwrap_or(Value::Undefined), args)

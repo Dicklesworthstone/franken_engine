@@ -2198,6 +2198,383 @@ fn native_pipe_removing_drain_listeners_cancels_resume_bd_305gi_2() {
 }
 
 #[test]
+fn native_from_iterable_collects_set_and_live_mutation_bd_305gi_2() {
+    let source = r#"
+        const { Readable } = require('stream');
+        const values = new Set([1, 2]);
+        const stream = Readable.from(values);
+        values.delete(1);
+        values.add(3);
+        stream.toArray().then(result => console.log(result.join(',')));
+    "#;
+    assert_eq!(eval_console(source), "2,3");
+}
+
+#[test]
+fn native_from_iterable_collects_map_entries_bd_305gi_2() {
+    let source = r#"
+        const { Readable } = require('node:stream');
+        const values = new Map([['a', 1], ['b', 2]]);
+        Readable.from(values).toArray().then(result => console.log(result.map(pair => pair.join(':')).join(',')));
+    "#;
+    assert_eq!(eval_console(source), "a:1,b:2");
+}
+
+#[test]
+fn native_from_iterable_generator_preserves_values_and_finally_bd_305gi_2() {
+    let source = r#"
+        const { Readable } = require('stream');
+        const retained = { value: 2, then: 42 };
+        const events = [];
+        function* values() {
+          try { events.push('start'); yield 1; yield retained; yield 3; }
+          finally { events.push('finally'); }
+        }
+        const stream = Readable.from(values());
+        events.push('created');
+        stream.on('end', () => events.push('end'));
+        stream.on('close', () => events.push('close'));
+        stream.toArray().then(result => console.log(result.length, result[1] === retained, events.join(',')));
+    "#;
+    assert_eq!(
+        eval_console(source),
+        "3 true created,start,finally,end,close"
+    );
+}
+
+#[test]
+fn native_from_iterable_observes_dynamic_next_and_result_getters_bd_305gi_2() {
+    let source = r#"
+        const { Readable } = require('stream');
+        const events = [];
+        let count = 0;
+        const iterable = {
+          [Symbol.iterator]() { events.push('iterator'); return this; },
+          get next() {
+            events.push('next-get');
+            return function () {
+              events.push('next-call');
+              const value = ++count;
+              return {
+                get done() { events.push('done'); return value > 2; },
+                get value() { events.push('value'); return value; }
+              };
+            };
+          },
+          return() { events.push('return'); return { done: true }; }
+        };
+        const stream = Readable.from(iterable);
+        events.push('created');
+        stream.toArray().then(result => console.log(result.join(','), events.join(',')));
+    "#;
+    assert_eq!(
+        eval_console(source),
+        "1,2 iterator,created,next-get,next-call,value,done,next-get,next-call,value,done,next-get,next-call,value,done,return"
+    );
+}
+
+#[test]
+fn native_from_iterable_honors_array_iterator_override_bd_305gi_2() {
+    let source = r#"
+        const { Readable } = require('stream');
+        const values = [1, 2, 3];
+        values[Symbol.iterator] = function* () { yield 8; yield 9; };
+        Readable.from(values).toArray().then(result => console.log(result.join(',')));
+    "#;
+    assert_eq!(eval_console(source), "8,9");
+}
+
+#[test]
+fn native_from_iterable_read_then_collects_remaining_values_bd_305gi_2() {
+    let source = r#"
+        const { Readable } = require('stream');
+        function* values() { yield 1; yield 2; yield 3; }
+        const stream = Readable.from(values());
+        console.log(stream.read());
+        stream.toArray().then(result => console.log(result.join(',')));
+    "#;
+    assert_eq!(eval_console(source), "1\n2,3");
+}
+
+#[test]
+fn native_from_iterable_destroy_runs_generator_finally_bd_305gi_2() {
+    let source = r#"
+        const { Readable } = require('stream');
+        let finalized = 0;
+        function* produce() {
+          try { while (true) yield 1; }
+          finally { finalized++; }
+        }
+        const stream = Readable.from(produce());
+        console.log(stream.read());
+        stream.destroy();
+        stream.destroy();
+        console.log(finalized);
+        stream.on('close', () => console.log(finalized));
+    "#;
+    assert_eq!(eval_console(source), "1\n1\n1");
+}
+
+#[test]
+fn native_from_iterable_preserves_thrown_values_and_closes_bd_305gi_2() {
+    let source = r#"
+        const { Readable } = require('stream');
+        const failure = function failure() {};
+        const events = [];
+        const source = {
+          [Symbol.iterator]() { return this; },
+          next() { throw failure; },
+          throw(error) { events.push(error === failure ? 'throw' : 'wrong'); return { done: false }; },
+          return() { events.push('return'); return { done: true }; }
+        };
+        const stream = Readable.from(source);
+        stream.on('close', () => events.push('close'));
+        stream.toArray().catch(error => console.log(error === failure, events.join(',')));
+    "#;
+    assert_eq!(eval_console(source), "true throw,return,close");
+}
+
+#[test]
+fn native_from_iterable_aggregates_cleanup_failure_bd_305gi_2() {
+    let source = r#"
+        const { Readable } = require('stream');
+        const failure = new Error('source failed');
+        const cleanup = new Error('close failed');
+        const source = {
+          [Symbol.iterator]() { return this; },
+          next() { throw failure; },
+          return() { throw cleanup; }
+        };
+        Readable.from(source).toArray().catch(error => {
+          console.log(error instanceof AggregateError, error.errors[0] === cleanup,
+                      error.errors[1] === failure, error.message);
+        });
+    "#;
+    assert_eq!(eval_console(source), "true true true close failed");
+}
+
+#[test]
+fn native_from_iterable_preserves_destroy_outcome_after_reentrant_next_bd_305gi_2() {
+    let source = r#"
+        const { Readable } = require('stream');
+        const events = [];
+        let closed = 0;
+        let stream;
+        const source = {
+          [Symbol.iterator]() { return this; },
+          next() {
+            events.push('before');
+            stream.destroy();
+            events.push('after');
+            return {
+              get value() { events.push('value'); return 1; },
+              get done() { events.push('done'); throw new Error('result getter after destroy'); }
+            };
+          },
+          return() { events.push('return'); closed++; return { done: true }; }
+        };
+        stream = Readable.from(source);
+        stream.toArray().catch(error => console.log(error.code, closed, events.join(',')));
+    "#;
+    assert_eq!(
+        eval_console(source),
+        "ERR_STREAM_PREMATURE_CLOSE 1 before,return,after,value,done"
+    );
+}
+
+#[test]
+fn native_from_iterable_rejects_null_and_runs_cleanup_bd_305gi_2() {
+    let source = r#"
+        const { Readable } = require('stream');
+        let closed = 0;
+        function* values() { try { yield null; } finally { closed++; } }
+        Readable.from(values()).toArray().catch(error => {
+          console.log(error instanceof TypeError, error.code, closed);
+        });
+    "#;
+    assert_eq!(eval_console(source), "true ERR_STREAM_NULL_VALUES 1");
+}
+
+#[test]
+fn native_from_iterable_keeps_buffer_fast_path_and_typed_array_iteration_bd_305gi_2() {
+    let source = r#"
+        const { Readable } = require('stream');
+        const buffer = Buffer.from([1, 2, 3]);
+        Readable.from(buffer).toArray().then(result => {
+          console.log(result.length, result[0] === buffer, Buffer.isBuffer(result[0]));
+          Readable.from(new Uint8Array([4, 5])).toArray().then(values => console.log(values.join(',')));
+        });
+    "#;
+    assert_eq!(eval_console(source), "1 true true\n4,5");
+}
+
+#[test]
+fn native_from_iterable_byte_mode_validation_closes_producer_bd_305gi_2() {
+    let source = r#"
+        const { Readable } = require('stream');
+        const events = [];
+        function* values() {
+          try { yield 7; }
+          finally { events.push('finally'); }
+        }
+        const stream = Readable.from(values(), { objectMode: false });
+        stream.on('data', () => events.push('data'));
+        stream.on('error', error => events.push(error instanceof TypeError ? 'error' : 'wrong'));
+        stream.on('close', () => console.log(events.join(',')));
+    "#;
+    assert_eq!(eval_console(source), "finally,error");
+}
+
+#[test]
+fn native_from_iterable_cleanup_get_order_and_reentrant_destroy_bd_305gi_2() {
+    let source = r#"
+        const { Readable } = require('stream');
+        const events = [];
+        let stream;
+        const source = {
+          get [Symbol.iterator]() {
+            events.push('iterator-get');
+            return function () { events.push('iterator-call'); return this; };
+          },
+          next() { events.push('next'); return { done: true }; },
+          get throw() { events.push('throw-get'); return undefined; },
+          get return() {
+            events.push('return-get');
+            return function () {
+              events.push('return-call:' + stream.destroyed);
+              stream.destroy(new Error('ignored while closing'));
+              return {
+                get value() { events.push('value'); return 1; },
+                get done() { throw new Error('return.done must not be read'); }
+              };
+            };
+          }
+        };
+        stream = Readable.from(source);
+        stream.toArray().then(() => console.log(events.join(',')));
+    "#;
+    assert_eq!(
+        eval_console(source),
+        "iterator-get,iterator-get,iterator-call,next,throw-get,return-get,return-get,return-call:true,value"
+    );
+}
+
+#[test]
+fn native_from_iterable_throw_cleanup_failure_does_not_call_return_bd_305gi_2() {
+    let source = r#"
+        const { Readable } = require('stream');
+        const events = [];
+        const failure = new Error('source');
+        const cleanup = new Error('cleanup');
+        const source = {
+          [Symbol.iterator]() { return this; },
+          next() { throw failure; },
+          get throw() {
+            events.push('throw-get');
+            return function () { events.push('throw-call'); throw cleanup; };
+          },
+          return() { events.push('return'); return { done: true }; }
+        };
+        Readable.from(source).toArray().catch(error => console.log(
+          error instanceof AggregateError, error.errors[0] === cleanup,
+          error.errors[1] === failure, events.join(',')));
+    "#;
+    assert_eq!(
+        eval_console(source),
+        "true true true throw-get,throw-get,throw-call"
+    );
+}
+
+#[test]
+fn native_from_iterable_invalid_throw_result_does_not_call_return_bd_305gi_2() {
+    let source = r#"
+        const { Readable } = require('stream');
+        let returned = 0;
+        const failure = new Error('source');
+        const source = {
+          [Symbol.iterator]() { return this; },
+          next() { throw failure; },
+          throw() { return undefined; },
+          return() { returned++; return { done: true }; }
+        };
+        Readable.from(source).toArray().catch(error => console.log(
+          error instanceof AggregateError, error.errors[0] instanceof TypeError,
+          error.errors[1] === failure, returned));
+    "#;
+    assert_eq!(eval_console(source), "true true true 0");
+}
+
+#[test]
+fn native_from_iterable_falsy_throws_close_without_error_events_bd_305gi_2() {
+    let source = r#"
+        const { Readable } = require('stream');
+        const checks = [undefined, null, false, 0, ''].map(failure => {
+          const events = [];
+          const source = {
+            [Symbol.iterator]() { return this; },
+            next() { throw failure; },
+            throw() { events.push('throw'); return { done: true }; },
+            return() { events.push('return'); return { done: true }; }
+          };
+          const stream = Readable.from(source);
+          stream.on('error', () => events.push('error'));
+          return stream.toArray().catch(error => error.code + ':' + events.join(','));
+        });
+        Promise.all(checks).then(results => console.log(results.join('|')));
+    "#;
+    assert_eq!(
+        eval_console(source),
+        "ERR_STREAM_PREMATURE_CLOSE:return|ERR_STREAM_PREMATURE_CLOSE:return|ERR_STREAM_PREMATURE_CLOSE:return|ERR_STREAM_PREMATURE_CLOSE:return|ERR_STREAM_PREMATURE_CLOSE:return"
+    );
+}
+
+#[test]
+fn native_from_iterable_reuses_existing_cleanup_aggregate_bd_305gi_2() {
+    let source = r#"
+        const { Readable } = require('stream');
+        const earlier = new Error('earlier');
+        const failure = new Error('source');
+        const cleanup = new AggregateError([earlier], 'cleanup');
+        cleanup.code = 'CLEANUP';
+        const source = {
+          [Symbol.iterator]() { return this; },
+          next() { throw failure; },
+          return() { throw cleanup; }
+        };
+        Readable.from(source).toArray().catch(error => console.log(
+          error === cleanup, error.errors[0] === earlier,
+          error.errors[1] === failure, error.code));
+    "#;
+    assert_eq!(eval_console(source), "true true true CLEANUP");
+}
+
+#[test]
+fn native_from_iterable_cleanup_aggregate_observes_message_and_code_bd_305gi_2() {
+    let source = r#"
+        const { Readable } = require('stream');
+        const events = [];
+        const failure = new Error('source');
+        const cleanup = {
+          get errors() { events.push('errors'); return undefined; },
+          get message() { events.push('message'); return 'cleanup'; },
+          get code() { events.push('code'); return 'CLEANUP'; }
+        };
+        const source = {
+          [Symbol.iterator]() { return this; },
+          next() { throw failure; },
+          return() { throw cleanup; }
+        };
+        Readable.from(source).toArray().catch(error => console.log(
+          error.errors[0] === cleanup, error.errors[1] === failure,
+          error.message, error.code, events.join(',')));
+    "#;
+    assert_eq!(
+        eval_console(source),
+        "true true cleanup CLEANUP errors,message,code"
+    );
+}
+
+#[test]
 fn native_to_array_consumes_later_read_callbacks_bd_305gi_2() {
     let source = r#"
         const { Readable } = require('stream');

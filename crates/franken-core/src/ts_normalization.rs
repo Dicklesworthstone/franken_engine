@@ -11,6 +11,7 @@ use crate::ir_contract::{EffectBoundary, Ir0Module};
 use crate::lowering_pipeline::{LoweringContext, LoweringPipelineOutput, lower_ir0_to_ir3};
 use crate::parser::{CanonicalEs2020Parser, ParseEventIr, ParserOptions};
 
+pub mod enums;
 pub mod namespaces;
 pub mod parameter_properties;
 pub mod type_erasure;
@@ -499,11 +500,20 @@ pub fn normalize_typescript_to_es2020(
     ));
     current = type_annotations_stripped;
 
-    let enum_lowered = lower_simple_enums(&current);
+    let enum_lowered = lower_simple_enums(&current).inspect_err(|_| {
+        events.push(failure_event(
+            trace_id,
+            decision_id,
+            policy_id,
+            "ts_normalization",
+            "enum_normalization",
+            "FE-TSNORM-0004",
+        ));
+    })?;
     decisions.push(build_decision(
         "enum_lowering",
         enum_lowered != current,
-        "Simple enum declarations lowered to ES2020 object freeze forms.",
+        "Enum declarations lowered to mutable objects with scoped bindings and numeric reverse mappings.",
     ));
     current = enum_lowered;
 
@@ -1921,74 +1931,8 @@ fn parse_class_declaration_name(class_declaration: &str) -> Option<String> {
     }
 }
 
-fn lower_simple_enums(source: &str) -> String {
-    let mut out = Vec::<String>::new();
-
-    for line in source.lines() {
-        let trimmed = line.trim();
-        if !trimmed.starts_with("enum ") {
-            out.push(line.to_string());
-            continue;
-        }
-
-        let Some(rest) = trimmed.strip_prefix("enum ") else {
-            out.push(line.to_string());
-            continue;
-        };
-        let Some(brace_start) = rest.find('{') else {
-            out.push(line.to_string());
-            continue;
-        };
-        let Some(brace_end) = rest.rfind('}') else {
-            out.push(line.to_string());
-            continue;
-        };
-
-        let enum_name = rest[..brace_start].trim();
-        let body = rest[brace_start + 1..brace_end].trim();
-        if enum_name.is_empty() {
-            out.push(line.to_string());
-            continue;
-        }
-
-        let mut entries = Vec::<String>::new();
-        let mut numeric_counter = 0i64;
-
-        for raw_member in body.split(',') {
-            let member = raw_member.trim();
-            if member.is_empty() {
-                continue;
-            }
-
-            if let Some((name, value)) = member.split_once('=') {
-                let key = name.trim();
-                let value_trimmed = value.trim();
-                if key.is_empty() {
-                    continue;
-                }
-                entries.push(format!("{key}: {value_trimmed}"));
-                if let Ok(parsed) = value_trimmed.parse::<i64>() {
-                    numeric_counter = parsed.saturating_add(1);
-                }
-            } else {
-                let key = member;
-                entries.push(format!("{key}: {numeric_counter}"));
-                numeric_counter = numeric_counter.saturating_add(1);
-            }
-        }
-
-        if entries.is_empty() {
-            out.push(line.to_string());
-            continue;
-        }
-
-        out.push(format!(
-            "const {enum_name} = Object.freeze({{{}}});",
-            entries.join(", ")
-        ));
-    }
-
-    out.join("\n")
+fn lower_simple_enums(source: &str) -> Result<String, TsNormalizationError> {
+    enums::lower(source).map_err(|feature| TsNormalizationError::UnsupportedSyntax { feature })
 }
 
 fn lower_constructor_parameter_properties(source: &str) -> String {
@@ -2277,9 +2221,14 @@ const value: number = 1;
         assert!(
             output
                 .normalized_source
-                .contains("const Status = Object.freeze(")
+                .contains("var Status; (function (__enum)")
         );
-        assert!(output.normalized_source.contains("Ready: 0"));
+        assert!(
+            output
+                .normalized_source
+                .contains("const __value = (0); __enum[\"Ready\"]")
+        );
+        assert!(!output.normalized_source.contains("Object.freeze"));
         assert!(output.normalized_source.contains("Busy"));
     }
 
@@ -3133,27 +3082,37 @@ abstract class Base { }"#;
             "p",
         )
         .unwrap();
-        assert!(output.normalized_source.contains("Up: 10"));
-        assert!(output.normalized_source.contains("Down: 11"));
+        assert!(
+            output
+                .normalized_source
+                .contains("const __value = (10); __enum[\"Up\"]")
+        );
+        assert!(
+            output
+                .normalized_source
+                .contains("const __value = (11); __enum[\"Down\"]")
+        );
     }
 
     #[test]
-    fn enum_missing_opening_brace_passes_through() {
+    fn enum_missing_opening_brace_is_refused() {
         let source = "enum NoBrace }";
-        let output = normalize_typescript_to_es2020(
+        let error = normalize_typescript_to_es2020(
             source,
             &TsNormalizationConfig::default(),
             "t",
             "d",
             "p",
         )
-        .unwrap();
-        // Line passes through unchanged when no opening brace
-        assert!(output.normalized_source.contains("enum NoBrace"));
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            TsNormalizationError::UnsupportedSyntax { .. }
+        ));
     }
 
     #[test]
-    fn enum_empty_body_passes_through() {
+    fn enum_empty_body_creates_an_object() {
         let source = "enum Empty { }";
         let output = normalize_typescript_to_es2020(
             source,
@@ -3163,8 +3122,12 @@ abstract class Base { }"#;
             "p",
         )
         .unwrap();
-        // Empty body → entries is empty → line passes through
-        assert!(output.normalized_source.contains("enum Empty"));
+        assert!(
+            output
+                .normalized_source
+                .contains("var Empty; (function (__enum)")
+        );
+        assert!(!output.normalized_source.contains("enum Empty"));
     }
 
     #[test]
@@ -3178,9 +3141,17 @@ abstract class Base { }"#;
             "p",
         )
         .unwrap();
-        assert!(output.normalized_source.contains("Object.freeze"));
-        assert!(output.normalized_source.contains(r#"Red: "RED""#));
-        assert!(output.normalized_source.contains(r#"Blue: "BLUE""#));
+        assert!(!output.normalized_source.contains("Object.freeze"));
+        assert!(
+            output
+                .normalized_source
+                .contains(r#"const __value = ("RED"); __enum["Red"]"#)
+        );
+        assert!(
+            output
+                .normalized_source
+                .contains(r#"const __value = ("BLUE"); __enum["Blue"]"#)
+        );
     }
 
     // --- Constructor parameter property edge cases ---
@@ -3523,7 +3494,7 @@ abstract class Base { }"#;
 
     #[test]
     fn lower_simple_enums_no_enums() {
-        assert_eq!(lower_simple_enums("const x = 1;"), "const x = 1;");
+        assert_eq!(lower_simple_enums("const x = 1;").unwrap(), "const x = 1;");
     }
 
     // --- Lower simple JSX ---

@@ -13,11 +13,39 @@ use super::{Edit, Lexed, Token, TokenKind};
 const UNSUPPORTED: &str = "unsupported namespace reference syntax";
 const MAX_DEPTH: usize = 256;
 
-pub(super) fn rewrite(
+pub(in super::super) fn rewrite(
     source: &str,
     lexed: &Lexed,
     replacements: &BTreeMap<String, String>,
     ignored_bindings: &BTreeSet<usize>,
+) -> Result<Vec<Edit>, &'static str> {
+    rewrite_references(source, lexed, replacements, ignored_bindings, true)
+}
+
+/// TypeScript leaves enum initializer shorthand values as ordinary lexical
+/// names outside namespaces. Its namespace emitter qualifies those members,
+/// so direct namespace enum declarations opt into that separate rule.
+pub(in super::super) fn rewrite_enum(
+    source: &str,
+    lexed: &Lexed,
+    replacements: &BTreeMap<String, String>,
+    namespace_scope: bool,
+) -> Result<Vec<Edit>, &'static str> {
+    rewrite_references(
+        source,
+        lexed,
+        replacements,
+        &BTreeSet::new(),
+        namespace_scope,
+    )
+}
+
+fn rewrite_references(
+    source: &str,
+    lexed: &Lexed,
+    replacements: &BTreeMap<String, String>,
+    ignored_bindings: &BTreeSet<usize>,
+    qualify_shorthand: bool,
 ) -> Result<Vec<Edit>, &'static str> {
     let mut resolver = Resolver::new(source, lexed, ignored_bindings);
     while resolver.cursor < resolver.tokens.len() {
@@ -26,6 +54,9 @@ pub(super) fn rewrite(
 
     let mut edits = Vec::new();
     for reference in &resolver.references {
+        if reference.shorthand && !qualify_shorthand {
+            continue;
+        }
         let token = &resolver.tokens[reference.token];
         let Some(replacement) = replacements.get(&token.text) else {
             continue;

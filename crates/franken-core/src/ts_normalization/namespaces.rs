@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-mod bindings;
+pub(super) mod bindings;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum TokenKind {
@@ -469,6 +469,7 @@ struct Body {
     lexed: Lexed,
     exports: Vec<Export>,
     namespaces: Vec<Site>,
+    enums: Vec<(super::enums::Site, usize)>,
     bindings: BTreeSet<String>,
 }
 
@@ -486,6 +487,9 @@ struct Lowering {
     identifiers: BTreeSet<String>,
     next_alias: usize,
     next_scope: usize,
+    enum_constants: BTreeMap<usize, super::enums::Constants>,
+    enum_members: BTreeMap<usize, BTreeSet<String>>,
+    enum_budget: super::enums::Budget,
 }
 
 impl Lowering {
@@ -757,6 +761,7 @@ fn body(
     lowering.next_scope += 1;
     let mut exports = Vec::new();
     let mut namespaces = Vec::new();
+    let mut enums = Vec::new();
     let mut bindings = BTreeSet::new();
     let mut cursor = 0;
     while cursor < lexed.tokens.len() {
@@ -770,6 +775,30 @@ fn body(
             depth,
         )? {
             namespaces.push(site);
+            cursor = finish;
+            continue;
+        }
+        if let Some((site, finish)) = super::enums::site(&source, &lexed, cursor)? {
+            if !site.ambient {
+                bindings.insert(site.name.clone());
+                let key = if site.exported {
+                    NamespaceKey::Exported(group, site.name.clone())
+                } else {
+                    NamespaceKey::Private(scope, site.name.clone())
+                };
+                let enum_group = lowering.group(key);
+                lowering
+                    .enum_members
+                    .entry(enum_group)
+                    .or_default()
+                    .extend(site.members.iter().map(|member| member.name.clone()));
+                if site.exported {
+                    lowering.members[group].insert(site.name.clone());
+                }
+                enums.push((site, enum_group));
+            } else {
+                enums.push((site, group));
+            }
             cursor = finish;
             continue;
         }
@@ -853,6 +882,7 @@ fn body(
         lexed,
         exports,
         namespaces,
+        enums,
         bindings,
     })
 }
@@ -867,7 +897,12 @@ struct Site {
     body: Body,
 }
 
-fn apply(source: &str, edits: &[Edit], start: usize, end: usize) -> Result<String, &'static str> {
+pub(super) fn apply(
+    source: &str,
+    edits: &[Edit],
+    start: usize,
+    end: usize,
+) -> Result<String, &'static str> {
     let mut out = String::new();
     let mut cursor = start;
     for edit in edits
@@ -963,7 +998,7 @@ fn render_body_exports(
 
 fn render_body(site: &Site, alias: &str, lowering: &mut Lowering) -> Result<String, &'static str> {
     let flattened;
-    let parsed = if site.body.namespaces.is_empty() {
+    let parsed = if site.body.namespaces.is_empty() && site.body.enums.is_empty() {
         &site.body
     } else {
         let mut bindings = site.body.bindings.clone();
@@ -975,6 +1010,35 @@ fn render_body(site: &Site, alias: &str, lowering: &mut Lowering) -> Result<Stri
                 replacement: render_namespace(child, Some(alias), &mut bindings, None, lowering)?,
             });
         }
+        let mut declared_enums = BTreeSet::new();
+        for (declaration, group) in &site.body.enums {
+            let binding = if declaration.ambient || !declared_enums.insert(declaration.name.clone())
+            {
+                ""
+            } else {
+                "let"
+            };
+            edits.push(Edit {
+                start: declaration.start,
+                end: declaration.end,
+                replacement: super::enums::render(
+                    &site.body.source,
+                    declaration,
+                    super::enums::Emission {
+                        members: lowering.enum_members.entry(*group).or_default(),
+                        constants: lowering.enum_constants.entry(*group).or_default(),
+                        parent: declaration.exported.then_some(alias),
+                        declaration: binding,
+                        export: false,
+                        identifiers: &mut lowering.identifiers,
+                        serial: &mut lowering.next_alias,
+                        namespace_scope: true,
+                        budget: &mut lowering.enum_budget,
+                    },
+                )?,
+            });
+        }
+        edits.sort_by_key(|edit| (edit.start, edit.end));
         let source = apply(&site.body.source, &edits, 0, site.body.source.len())?;
         // Resolve the enclosing scope over the generated JavaScript too. Its
         // references remain free inside child activations unless a child has
@@ -1046,6 +1110,17 @@ pub fn lower(source: &str, erase_types: fn(&str) -> String) -> Result<String, &'
             namespace_site(source, &lexed, cursor, erase_types, &mut lowering, None, 0)?
         {
             sites.push(site);
+            cursor = finish;
+            continue;
+        }
+        if let Some((declaration, finish)) = super::enums::site(source, &lexed, cursor)? {
+            if !declaration.ambient {
+                lowering.group(NamespaceKey::Root(declaration.name.clone()));
+                bindings.insert(declaration.name.clone());
+                if declaration.exported {
+                    named_exports.insert(declaration.name.clone());
+                }
+            }
             cursor = finish;
             continue;
         }

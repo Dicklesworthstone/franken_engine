@@ -277,7 +277,7 @@ fn text(lexed: &Lexed, index: usize) -> &str {
         .map_or("", |token| token.text.as_str())
 }
 
-fn quoted_key(name: &str) -> String {
+pub(super) fn quoted_key(name: &str) -> String {
     let mut quoted = String::from("\"");
     for ch in name.chars() {
         match ch {
@@ -298,7 +298,7 @@ fn quoted_key(name: &str) -> String {
 
 // Only decoded identifier names enter the binding map. Keep the original key
 // literal for emission, including escapes and non-identifier string members.
-fn string_member_name(raw: &str) -> Option<String> {
+pub(super) fn string_member_name(raw: &str) -> Option<String> {
     let quote = raw.chars().next()?;
     if !matches!(quote, '\'' | '"') || !raw.ends_with(quote) {
         return None;

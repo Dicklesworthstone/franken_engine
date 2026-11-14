@@ -461,6 +461,13 @@ enum Export {
         end: usize,
         name: String,
     },
+    /// A lowered decorated class keeps its local binding and publishes only
+    /// after member and class decoration has completed.
+    Publication {
+        start: usize,
+        end: usize,
+        name: String,
+    },
 }
 
 #[derive(Debug)]
@@ -608,7 +615,7 @@ fn namespace_site(
             Export::Variables { declarations, .. } => {
                 members.extend(declarations.iter().map(|item| item.name.clone()));
             }
-            Export::Declaration { name, .. } => {
+            Export::Declaration { name, .. } | Export::Publication { name, .. } => {
                 members.insert(name.clone());
             }
         }
@@ -806,6 +813,15 @@ fn body(
         }
         if text(&lexed, cursor) == "export" {
             let next = text(&lexed, cursor + 1);
+            if let Some((name, end)) = local_publication(&lexed, cursor) {
+                exports.push(Export::Publication {
+                    start: lexed.tokens[cursor].start,
+                    end: lexed.tokens[end - 1].end,
+                    name,
+                });
+                cursor = end;
+                continue;
+            }
             if matches!(next, "const" | "let" | "var") {
                 let (export, end) = variable_exports(&lexed, &source, cursor)?;
                 exports.push(export);
@@ -886,6 +902,18 @@ fn body(
     })
 }
 
+fn local_publication(lexed: &Lexed, start: usize) -> Option<(String, usize)> {
+    if text(lexed, start) != "export"
+        || text(lexed, start + 1) != "{"
+        || lexed.tokens.get(start + 2)?.kind != TokenKind::Word
+        || text(lexed, start + 3) != "}"
+    {
+        return None;
+    }
+    let end = start + 4 + usize::from(text(lexed, start + 4) == ";");
+    Some((lexed.tokens[start + 2].text.clone(), end))
+}
+
 #[derive(Debug)]
 struct Site {
     start: usize,
@@ -936,12 +964,12 @@ fn render_body_exports(
             Export::Variables { declarations, .. } => {
                 declarations.iter().map(|item| item.token).collect()
             }
-            Export::Declaration { .. } => Vec::new(),
+            Export::Declaration { .. } | Export::Publication { .. } => Vec::new(),
         })
         .collect::<BTreeSet<_>>();
     let references = bindings::rewrite(&body.source, &body.lexed, &replacements, &ignored)?;
     let mut edits = references.iter().filter(|edit| !body.exports.iter().any(|export| {
-        matches!(export, Export::Variables { start, end, .. } if edit.start >= *start && edit.end <= *end)
+        matches!(export, Export::Variables { start, end, .. } | Export::Publication { start, end, .. } if edit.start >= *start && edit.end <= *end)
     })).cloned().collect::<Vec<_>>();
     for export in &body.exports {
         match export {
@@ -987,6 +1015,13 @@ fn render_body_exports(
                     start: *end,
                     end: *end,
                     replacement: format!(" {alias}.{name} = {name};"),
+                });
+            }
+            Export::Publication { start, end, name } => {
+                edits.push(Edit {
+                    start: *start,
+                    end: *end,
+                    replacement: format!("{alias}.{name} = {name};"),
                 });
             }
         }
@@ -1140,6 +1175,9 @@ pub fn lower(source: &str, erase_types: fn(&str) -> String) -> Result<String, &'
     lowering.observe_identifiers(&lexed);
     let mut cursor = 0;
     while cursor < lexed.tokens.len() {
+        if let Some((name, _)) = local_publication(&lexed, cursor) {
+            named_exports.insert(name);
+        }
         if let Some((site, finish)) =
             namespace_site(source, &lexed, cursor, erase_types, &mut lowering, None, 0)?
         {

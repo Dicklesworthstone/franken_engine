@@ -255,7 +255,7 @@ class Widget {}
     assert!(
         output
             .normalized_source
-            .contains("function __applyClassDecorator(decorator, target)")
+            .contains("function __applyClassDecorator(decorators, target, key, descriptor)")
     );
     assert!(
         output
@@ -265,7 +265,7 @@ class Widget {}
     assert!(
         output
             .normalized_source
-            .contains("Widget = __applyClassDecorator(sealed, Widget);")
+            .contains("__applyClassDecorator([sealed], Widget);")
     );
 }
 

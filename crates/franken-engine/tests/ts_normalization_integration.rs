@@ -3506,8 +3506,8 @@ fn enrichment_all_fourteen_decision_steps_present() {
         .collect();
     assert_eq!(steps[0], "type_only_import_elision");
     assert_eq!(steps[1], "type_space_declaration_elision");
-    assert_eq!(steps[2], "namespace_lowering");
-    assert_eq!(steps[3], "decorator_lowering");
+    assert_eq!(steps[2], "decorator_lowering");
+    assert_eq!(steps[3], "namespace_lowering");
     assert_eq!(steps[4], "definite_assignment_normalization");
     assert_eq!(steps[5], "const_assertion_normalization");
     assert_eq!(steps[6], "type_annotation_stripping");

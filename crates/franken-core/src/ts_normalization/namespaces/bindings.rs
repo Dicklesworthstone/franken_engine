@@ -22,6 +22,18 @@ pub(in super::super) fn rewrite(
     rewrite_references(source, lexed, replacements, ignored_bindings, true)
 }
 
+/// Legacy decorated classes use a mutable self alias for ordinary references.
+/// TypeScript retains shorthand values as references to the class's original
+/// inner binding, so those must not be expanded into alias references.
+pub(in super::super) fn rewrite_class_self(
+    source: &str,
+    lexed: &Lexed,
+    replacements: &BTreeMap<String, String>,
+    ignored_bindings: &BTreeSet<usize>,
+) -> Result<Vec<Edit>, &'static str> {
+    rewrite_references(source, lexed, replacements, ignored_bindings, false)
+}
+
 /// TypeScript leaves enum initializer shorthand values as ordinary lexical
 /// names outside namespaces. Its namespace emitter qualifies those members,
 /// so direct namespace enum declarations opt into that separate rule.
@@ -307,6 +319,11 @@ impl<'a> Resolver<'a> {
             "export" => {
                 self.cursor += 1;
                 match self.text(self.cursor) {
+                    "{" if self.word(self.cursor + 1) && self.text(self.cursor + 2) == "}" => {
+                        self.reference(scope, self.cursor + 1, false);
+                        self.cursor += 3;
+                        self.end_statement()
+                    }
                     "const" | "let" | "var" | "function" | "class" => self.statement(scope),
                     "async" if self.text(self.cursor + 1) == "function" => self.statement(scope),
                     _ => Err(UNSUPPORTED),

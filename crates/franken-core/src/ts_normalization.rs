@@ -11,6 +11,7 @@ use crate::ir_contract::{EffectBoundary, Ir0Module};
 use crate::lowering_pipeline::{LoweringContext, LoweringPipelineOutput, lower_ir0_to_ir3};
 use crate::parser::{CanonicalEs2020Parser, ParseEventIr, ParserOptions};
 
+pub mod decorators;
 pub mod enums;
 pub mod namespaces;
 pub mod parameter_properties;
@@ -434,6 +435,27 @@ pub fn normalize_typescript_to_es2020(
     ));
     current = type_space_declarations_stripped;
 
+    let decorator_lowered = match lower_simple_class_decorators(&current) {
+        Ok(lowered) => lowered,
+        Err(error) => {
+            events.push(failure_event(
+                trace_id,
+                decision_id,
+                policy_id,
+                "ts_normalization",
+                "decorator_normalization",
+                "FE-TSNORM-0003",
+            ));
+            return Err(error);
+        }
+    };
+    decisions.push(build_decision(
+        "decorator_lowering",
+        decorator_lowered != current,
+        "Legacy class, member and parameter decorators lowered in evaluation and application order.",
+    ));
+    current = decorator_lowered;
+
     let namespace_lowered = match lower_simple_namespaces(&current) {
         Ok(lowered) => lowered,
         Err(error) => {
@@ -454,27 +476,6 @@ pub fn normalize_typescript_to_es2020(
         "Simple namespace declarations lowered with deterministic merge semantics.",
     ));
     current = namespace_lowered;
-
-    let decorator_lowered = match lower_simple_class_decorators(&current) {
-        Ok(lowered) => lowered,
-        Err(error) => {
-            events.push(failure_event(
-                trace_id,
-                decision_id,
-                policy_id,
-                "ts_normalization",
-                "decorator_normalization",
-                "FE-TSNORM-0003",
-            ));
-            return Err(error);
-        }
-    };
-    decisions.push(build_decision(
-        "decorator_lowering",
-        decorator_lowered != current,
-        "Simple legacy class decorators lowered to deterministic wrapper application.",
-    ));
-    current = decorator_lowered;
 
     let definite_assignment_removed = normalize_definite_assignment_assertions(&current);
     decisions.push(build_decision(
@@ -1842,93 +1843,7 @@ fn lower_simple_namespaces(source: &str) -> Result<String, TsNormalizationError>
 }
 
 fn lower_simple_class_decorators(source: &str) -> Result<String, TsNormalizationError> {
-    let lines = source.lines().collect::<Vec<_>>();
-    let mut lowered = Vec::<String>::new();
-    let mut index = 0usize;
-    let mut lowered_any = false;
-
-    while index < lines.len() {
-        let trimmed = lines[index].trim();
-        if !trimmed.starts_with('@') {
-            lowered.push(lines[index].to_string());
-            index += 1;
-            continue;
-        }
-
-        let decorator_expr = trimmed.trim_start_matches('@').trim().trim_end_matches(';');
-        if decorator_expr.is_empty() {
-            return Err(TsNormalizationError::UnsupportedSyntax {
-                feature: "unsupported decorator declaration form",
-            });
-        }
-
-        index += 1;
-        while index < lines.len() && lines[index].trim().is_empty() {
-            index += 1;
-        }
-
-        if index >= lines.len() {
-            return Err(TsNormalizationError::UnsupportedSyntax {
-                feature: "unsupported decorator target",
-            });
-        }
-
-        let class_line = lines[index].trim();
-        if !class_line.starts_with("class ") {
-            return Err(TsNormalizationError::UnsupportedSyntax {
-                feature: "unsupported decorator target",
-            });
-        }
-        let Some(class_name) = parse_class_declaration_name(class_line) else {
-            return Err(TsNormalizationError::UnsupportedSyntax {
-                feature: "unsupported decorator target",
-            });
-        };
-
-        let mut class_expr = class_line.to_string();
-        if !class_expr.ends_with(';') {
-            class_expr.push(';');
-        }
-
-        lowered.push(format!("let {class_name} = {class_expr}"));
-        lowered.push(format!(
-            "{class_name} = __applyClassDecorator({decorator_expr}, {class_name});"
-        ));
-
-        lowered_any = true;
-        index += 1;
-    }
-
-    if !lowered_any || source.contains("function __applyClassDecorator(") {
-        return Ok(lowered.join("\n"));
-    }
-
-    let mut with_helper = vec![
-        "function __applyClassDecorator(decorator, target) {".to_string(),
-        "  const next = decorator(target);".to_string(),
-        "  return next ?? target;".to_string(),
-        "}".to_string(),
-    ];
-    with_helper.extend(lowered);
-    Ok(with_helper.join("\n"))
-}
-
-fn parse_class_declaration_name(class_declaration: &str) -> Option<String> {
-    let remainder = class_declaration.strip_prefix("class ")?;
-    let mut identifier = String::new();
-    for ch in remainder.chars() {
-        if ch.is_ascii_alphanumeric() || ch == '_' || ch == '$' {
-            identifier.push(ch);
-            continue;
-        }
-        break;
-    }
-
-    if identifier.is_empty() {
-        None
-    } else {
-        Some(identifier)
-    }
+    decorators::lower(source).map_err(|feature| TsNormalizationError::UnsupportedSyntax { feature })
 }
 
 fn lower_simple_enums(source: &str) -> Result<String, TsNormalizationError> {

@@ -345,8 +345,9 @@ impl InterpreterCore {
     }
 
     /// Resolve the same private key identity as WeakMap. Function, promise
-    /// and iterator carriers use their existing own-property backing object;
-    /// that registry currently roots those carriers conservatively.
+    /// and iterator carriers use their existing own-property backing object.
+    /// Recognized closure and exotic identities are traced with their live
+    /// carriers; intrinsic and unclassified owners remain conservative roots.
     pub(super) fn weak_collection_key(
         &mut self,
         module: Option<&Ir3Module>,
@@ -8738,8 +8739,8 @@ impl InterpreterCore {
     /// derived_constructor_metadata for a constructor whose default
     /// prototype object is already resolved. The [[Construct]] paths
     /// resolve it once and read the metadata, the instance field list and
-    /// the HomeObject from it (bd-9vouw.504): an entry in
-    /// `function_prototypes` is only ever inserted, never replaced.
+    /// the HomeObject from it (bd-9vouw.504): a live constructor's entry in
+    /// `function_prototypes` is never replaced.
     pub(super) fn derived_constructor_metadata_of_prototype(
         &self,
         prototype: ObjectId,
@@ -11254,23 +11255,29 @@ impl InterpreterCore {
             | Value::Generator(id)
             | Value::AsyncGeneratorObject(id)
             | Value::Iterator(id) => {
-                static OWNERS: OnceLock<[ContentHash; 4]> = OnceLock::new();
-                let owners = OWNERS.get_or_init(|| {
-                    let mut digest = Sha256::new();
-                    digest.update(b"FrankenEngine.ExoticObjectOwnProperties.v1");
-                    let base = ContentHash::from_bytes(digest.finalize().into());
-                    [6u8, 7, 8, 9].map(|kind| Self::function_own_property_owner(kind, &base))
-                });
                 let slot = match function {
                     Value::Promise(_) => 0,
                     Value::Generator(_) => 1,
                     Value::AsyncGeneratorObject(_) => 2,
                     _ => 3,
                 };
-                Ok(Some((owners[slot], *id)))
+                Ok(Some((Self::exotic_object_own_property_owners()[slot], *id)))
             }
             _ => Ok(None),
         }
+    }
+
+    /// Stable registry namespaces for promise, generator, async-generator
+    /// and iterator own properties. The collector uses the same identities
+    /// to trace a backing object only while its runtime carrier is live.
+    pub(super) fn exotic_object_own_property_owners() -> &'static [ContentHash; 4] {
+        static OWNERS: OnceLock<[ContentHash; 4]> = OnceLock::new();
+        OWNERS.get_or_init(|| {
+            let mut digest = Sha256::new();
+            digest.update(b"FrankenEngine.ExoticObjectOwnProperties.v1");
+            let base = ContentHash::from_bytes(digest.finalize().into());
+            [6u8, 7, 8, 9].map(|kind| Self::function_own_property_owner(kind, &base))
+        })
     }
 
     /// bd-9vouw.272: whether `function` is an ordinary function whose code is

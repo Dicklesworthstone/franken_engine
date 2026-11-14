@@ -1,4 +1,4 @@
-//! Conditional reachability for WeakMap entries, URLs and child-process pipes.
+//! Conditional reachability for weak entries and private runtime identities.
 //!
 //! Eligibility depends on object marks, but a value may first enqueue a
 //! closure, promise, carrier, iterator or generator. Always drain every
@@ -16,6 +16,7 @@ const MAX_EPHEMERON_SCRATCH_BYTES: usize = 8 * 1024 * 1024;
 enum EdgeTarget<'a> {
     Value(&'a Value),
     Object(ObjectId),
+    Carrier(PrototypeCarrier, u32),
 }
 
 struct ConditionalEdge<'a> {
@@ -78,6 +79,7 @@ impl<'a> ConditionalIndex<'a> {
         match edge.target {
             EdgeTarget::Value(value) => marker.value(value),
             EdgeTarget::Object(id) => marker.object(id),
+            EdgeTarget::Carrier(carrier, id) => carrier.mark(marker, id),
         }
         true
     }
@@ -118,7 +120,7 @@ impl InterpreterCore {
         let headroom = self
             .config
             .max_total_memory_bytes
-            .saturating_sub(self.estimated_memory_bytes);
+            .saturating_sub(self.estimated_memory_bytes());
         let limit = usize::try_from(headroom)
             .unwrap_or(usize::MAX)
             .min(MAX_EPHEMERON_SCRATCH_BYTES);
@@ -177,7 +179,8 @@ impl InterpreterCore {
             .url_objects
             .len()
             .checked_add(self.url_search_params.len())?
-            .checked_add(self.child_process_streams.len())?;
+            .checked_add(self.child_process_streams.len())?
+            .checked_add(self.function_prototypes.len())?;
         for storage in self.weakmap_storage.values() {
             count = count
                 .checked_add(storage.entries.len())?
@@ -185,7 +188,14 @@ impl InterpreterCore {
         }
         // All fallible reservations precede marking. add() never grows
         // beyond these capacities, and sort_unstable allocates no scratch.
+        let scratch_bytes = ConditionalIndex::scratch_bytes(count, count.checked_mul(2)?)?;
+        self.check_temporary_memory_budget(u64::try_from(scratch_bytes).ok()?)
+            .ok()?;
         let mut index = ConditionalIndex::try_new(count, limit)?;
+        let allocated_bytes =
+            ConditionalIndex::scratch_bytes(index.edges.capacity(), index.watchers.capacity())?;
+        self.check_temporary_memory_budget(u64::try_from(allocated_bytes).ok()?)
+            .ok()?;
         for (owner, storage) in &self.weakmap_storage {
             for (key, value) in &storage.entries {
                 index.add(marker, owner.0, Some(*key), EdgeTarget::Value(value));
@@ -209,6 +219,19 @@ impl InterpreterCore {
         // traced directly by gc_trace_network_object.
         for (stream, (child, _)) in &self.child_process_streams {
             index.add(marker, child.0, None, EdgeTarget::Object(*stream));
+        }
+        // A function used as an ordinary object's [[Prototype]] is stored
+        // as its own-property backing object. That strong identity edge
+        // keeps the callable alive even when no Value::Closure remains.
+        // Default .prototype objects are ordinary objects: without their
+        // constructor property they do not retain the original function.
+        for ((owner, id), object) in self.function_prototypes.iter() {
+            if let Some(carrier) = self
+                .gc_prototype_carrier(owner, *id)
+                .filter(|carrier| carrier.is_identity())
+            {
+                index.add(marker, object.0, None, EdgeTarget::Carrier(carrier, *id));
+            }
         }
         index.watchers.sort_unstable();
         Some(index)
@@ -247,6 +270,15 @@ impl InterpreterCore {
             for (stream, (child, _)) in &self.child_process_streams {
                 if marker.is_marked(child.0) {
                     marker.object(*stream);
+                }
+            }
+            for ((owner, id), object) in self.function_prototypes.iter() {
+                if marker.is_marked(object.0)
+                    && let Some(carrier) = self
+                        .gc_prototype_carrier(owner, *id)
+                        .filter(|carrier| carrier.is_identity())
+                {
+                    carrier.mark(marker, *id);
                 }
             }
 
@@ -525,6 +557,49 @@ mod tests {
         assert_same_marks(&core, &indexed, &rejected);
         assert!(rejected.is_marked(payload.0));
         assert!(rejected.closure_stack.is_empty());
+    }
+
+    #[test]
+    fn scratch_preflight_respects_live_seed_reservations_and_sandbox_ceiling() {
+        for sandbox_ceiling in [false, true] {
+            let mut core = core();
+            let map = object(&mut core);
+            let key = object(&mut core);
+            let payload = object(&mut core);
+            let closure = captured(&mut core, payload);
+            store(&mut core, map, key, Value::Closure(closure));
+            core.sync_estimated_memory_bytes().expect("account fixture");
+            let _seed = core.capture_execution_seed().expect("reserve snapshot");
+            let total = core.estimated_memory_bytes();
+            assert!(
+                total > core.estimated_memory_bytes,
+                "snapshot has a separate charge"
+            );
+            if sandbox_ceiling {
+                core.config.sandbox_policy.max_memory_bytes = u64::MAX;
+                core.active_sandbox.set(Some(ActiveSandbox {
+                    memory_ceiling_bytes: total,
+                    instruction_index: 0,
+                    timestamp_tick: 0,
+                }));
+            } else {
+                core.config.max_total_memory_bytes = total;
+            }
+            let mut marker = roots(&core, &[map, key]);
+            assert!(
+                core.gc_ephemeron_index(&mut marker, MAX_EPHEMERON_SCRATCH_BYTES)
+                    .is_none(),
+                "scratch must fit alongside reservations and the active sandbox"
+            );
+            assert!(!marker.closures.is_marked(closure as usize));
+            assert!(!marker.is_marked(payload.0));
+            core.gc_mark_ephemerons_with_limit(&mut marker, MAX_EPHEMERON_SCRATCH_BYTES);
+            assert!(marker.closures.is_marked(closure as usize));
+            assert!(
+                marker.is_marked(payload.0),
+                "fallback must preserve reachability"
+            );
+        }
     }
 
     #[test]

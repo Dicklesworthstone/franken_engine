@@ -254,6 +254,45 @@ impl Hasher for AddressHasher {
 
 type AddressSet = HashSet<usize, BuildHasherDefault<AddressHasher>>;
 
+/// A registry entry owned by a reclaimable runtime value rather than by an
+/// intrinsic. Its heap object is an outgoing edge of this carrier.
+#[derive(Clone, Copy)]
+enum PrototypeCarrier {
+    ClosurePrototype,
+    Closure,
+    Promise,
+    Generator,
+    AsyncGenerator,
+    Iterator,
+}
+
+impl PrototypeCarrier {
+    fn is_marked(&self, marker: &GcMarker, id: u32) -> bool {
+        let marks = match self {
+            Self::ClosurePrototype | Self::Closure => &marker.closures,
+            Self::Promise => &marker.promises,
+            Self::Generator => &marker.generators,
+            Self::AsyncGenerator => &marker.async_generators,
+            Self::Iterator => &marker.iterators,
+        };
+        marks.is_marked(id as usize)
+    }
+
+    fn mark(self, marker: &mut GcMarker, id: u32) {
+        match self {
+            Self::ClosurePrototype | Self::Closure => marker.closure(id),
+            Self::Promise => marker.promise(id),
+            Self::Generator => marker.generator_id(id),
+            Self::AsyncGenerator => marker.async_generator(id),
+            Self::Iterator => marker.iterator_handle(id),
+        }
+    }
+
+    fn is_identity(self) -> bool {
+        !matches!(self, Self::ClosurePrototype)
+    }
+}
+
 /// Mark state for one collection.
 struct GcMarker {
     objects: ChunkedMarks,
@@ -1264,6 +1303,30 @@ impl InterpreterCore {
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(reclaimed_bytes);
         reclaimed_bytes = reclaimed_bytes.saturating_add(released_arguments);
 
+        // A private backing is an edge from its carrier, not a permanent
+        // realm root. Remove its registry key when either endpoint dies.
+        // A separately retained prototype can outlive its closure after its
+        // `constructor` was deleted; it must not leave a stale registry key
+        // once that closure's provenance is released below.
+        let dead_prototypes = self
+            .function_prototypes
+            .iter()
+            .filter(|((owner, id), object)| {
+                !marker.objects.is_marked(object.0 as usize)
+                    || self
+                        .gc_prototype_carrier(owner, *id)
+                        .is_some_and(|carrier| !carrier.is_marked(&marker, *id))
+            })
+            .map(|(key, _)| *key)
+            .collect::<Vec<_>>();
+        if !dead_prototypes.is_empty() {
+            self.mutate_function_prototypes(|prototypes| {
+                for key in dead_prototypes {
+                    prototypes.remove(&key);
+                }
+            });
+        }
+
         // Mutation labels of reclaimed objects can never be read again, but
         // they stay charged against the memory budget until purged.
         let heap = &self.heap;
@@ -1550,12 +1613,22 @@ impl InterpreterCore {
                 continue;
             }
             if let Some(generator) = marker.generator_stack.pop() {
+                self.gc_trace_prototype_backing(
+                    marker,
+                    Self::exotic_object_own_property_owners()[1],
+                    generator,
+                );
                 if let Some(object) = self.generators.get(generator as usize) {
                     marker.generator(object);
                 }
                 continue;
             }
             if let Some(id) = marker.async_generator_stack.pop() {
+                self.gc_trace_prototype_backing(
+                    marker,
+                    Self::exotic_object_own_property_owners()[2],
+                    id,
+                );
                 if let Some(generator) = self.async_generators.get(id as usize) {
                     marker.generator_id(generator.generator_id);
                     generator.for_each_value(|value| marker.value(value));
@@ -1564,6 +1637,11 @@ impl InterpreterCore {
                 continue;
             }
             if let Some(iterator) = marker.iterator_stack.pop() {
+                self.gc_trace_prototype_backing(
+                    marker,
+                    Self::exotic_object_own_property_owners()[3],
+                    iterator,
+                );
                 if let Some(state) = self.iterators.get(iterator as usize) {
                     marker.iterator(state);
                 }
@@ -1576,6 +1654,11 @@ impl InterpreterCore {
                 continue;
             }
             if let Some(promise) = marker.promise_stack.pop() {
+                self.gc_trace_prototype_backing(
+                    marker,
+                    Self::exotic_object_own_property_owners()[0],
+                    promise,
+                );
                 self.promise_store.for_each_edge(
                     crate::promise_model::PromiseHandle(promise),
                     |edge| match edge {
@@ -1694,9 +1777,65 @@ impl InterpreterCore {
         }
     }
 
-    /// A live closure keeps its captured environment and its per-closure
-    /// metadata (home object, lexical `this`) alive.
+    /// Recover closure ownership from retained code, not the bounded digest
+    /// memo: collecting after visiting many modules must keep the same edges.
+    /// Originless private fixtures and malformed provenance remain rooted
+    /// conservatively, since their registry identity cannot be proven here.
+    fn gc_closure_prototype_owners(&self, closure: u32) -> Option<PrototypeOwnerIds> {
+        let module = if let Some(handle) = self
+            .closure_generated_function_artifacts
+            .get(&closure)
+            .copied()
+        {
+            self.retained_generated_closure_module(closure, handle)
+                .ok()?
+        } else {
+            let origin = self.closure_module_origins.get(&closure)?;
+            self.retained_closure_module(closure, origin).ok()?
+        };
+        Some(self.prototype_owner_ids(&module))
+    }
+
+    fn gc_prototype_carrier(&self, owner: &ContentHash, id: u32) -> Option<PrototypeCarrier> {
+        let owners = Self::exotic_object_own_property_owners();
+        if owner == &owners[0] {
+            return Some(PrototypeCarrier::Promise);
+        }
+        if owner == &owners[1] {
+            return Some(PrototypeCarrier::Generator);
+        }
+        if owner == &owners[2] {
+            return Some(PrototypeCarrier::AsyncGenerator);
+        }
+        if owner == &owners[3] {
+            return Some(PrototypeCarrier::Iterator);
+        }
+        let owners = self.gc_closure_prototype_owners(id)?;
+        if owner == &owners.closure {
+            Some(PrototypeCarrier::ClosurePrototype)
+        } else {
+            owners.own_property[1..]
+                .contains(owner)
+                .then_some(PrototypeCarrier::Closure)
+        }
+    }
+
+    fn gc_trace_prototype_backing(&self, marker: &mut GcMarker, owner: ContentHash, id: u32) {
+        if let Some(object) = self.function_prototypes.get(&(owner, id)) {
+            marker.object(*object);
+        }
+    }
+
+    /// A live closure keeps its captured environment, private own properties,
+    /// default prototype and per-closure metadata alive. Backing objects may
+    /// in turn retain other carriers, so these edges join the ordinary drain.
     fn gc_trace_closure(&self, marker: &mut GcMarker, closure: u32) {
+        if let Some(owners) = self.gc_closure_prototype_owners(closure) {
+            self.gc_trace_prototype_backing(marker, owners.closure, closure);
+            for owner in &owners.own_property[1..] {
+                self.gc_trace_prototype_backing(marker, *owner, closure);
+            }
+        }
         if let Some(entry) = self.closures.get(closure as usize) {
             marker.scope_frames(&entry.captured_env);
         }
@@ -2094,8 +2233,15 @@ impl InterpreterCore {
             }
         }
 
-        // Intrinsics.
-        function_prototypes.values().for_each(|id| m.object(*id));
+        // Intrinsics and unknown registry owners remain roots. Reclaimable
+        // carriers trace their own backings when their value queues drain;
+        // rooting those objects here would make weak collection membership
+        // permanently retain a function, promise, iterator or generator.
+        for ((owner, id), object) in function_prototypes.iter() {
+            if self.gc_prototype_carrier(owner, *id).is_none() {
+                m.object(*object);
+            }
+        }
         builtin_prototypes.values().for_each(|id| m.object(*id));
         // A tagged template's call site answers its one template object on
         // every evaluation (bd-9vouw.343).
@@ -2336,6 +2482,331 @@ mod tests {
     use crate::ir_contract::Ir0Module;
     use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
     use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
+
+    fn carrier_module(source: &str) -> Ir3Module {
+        let tree = CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource {
+                    label: "gc-carriers.js".into(),
+                    text: source.into(),
+                },
+                ParseGoal::Script,
+                &ParserOptions::default(),
+            )
+            .expect("parse carrier fixture");
+        lower_ir0_to_ir3(
+            &Ir0Module::from_syntax_tree(tree, "gc-carriers.js"),
+            &LoweringContext::new("gc-carriers", "gc-decision", "gc-policy"),
+        )
+        .expect("lower carrier fixture")
+        .ir3
+    }
+
+    fn carrier_core() -> InterpreterCore {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.instruction_budget = 1_000_000_000;
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]
+        .into_iter()
+        .collect();
+        InterpreterCore::new(config, "gc-carriers")
+    }
+
+    #[test]
+    fn live_carriers_trace_private_backings_and_dead_weak_members_release_them() {
+        let module = carrier_module(
+            "(() => { const payload = { answer: 42 }; \
+             function ordinary() { return payload; } \
+             function* generatorFunction() { yield payload; } \
+             async function asyncFunction() { return payload; } \
+             async function* asyncGeneratorFunction() { yield payload; } \
+             return [ordinary, generatorFunction, asyncFunction, asyncGeneratorFunction, \
+               Promise.resolve(payload), [payload].values(), generatorFunction(), \
+               asyncGeneratorFunction(), payload]; })()",
+        );
+        let mut core = carrier_core();
+        let Value::Object(result) = core.execute(&module).expect("create carriers").value else {
+            panic!("fixture returns the carrier array");
+        };
+        let carriers = (0..8)
+            .map(|index| {
+                core.heap[result.0 as usize]
+                    .properties
+                    .get(&index.to_string())
+                    .expect("carrier array element")
+                    .clone()
+            })
+            .collect::<Vec<_>>();
+        let Some(Value::Object(payload)) = core.heap[result.0 as usize].properties.get("8") else {
+            panic!("fixture payload");
+        };
+        let payload = *payload;
+        let set = core.alloc_weak_collection("WeakSet").expect("weak owner");
+        let mut backings = Vec::new();
+        let mut property_payloads = Vec::new();
+        for carrier in &carriers {
+            core.set_reg(0, carrier.clone());
+            core.weakset_method(
+                Some(&module),
+                "add",
+                Value::Object(set),
+                RegRange { start: 0, count: 1 },
+            )
+            .expect("add carrier");
+            let backing = core
+                .function_own_property_object(&module, carrier)
+                .expect("resolve private identity")
+                .expect("carrier owns a backing");
+            let property_payload = core.alloc_object_with_prototype(None).expect("own payload");
+            core.set_object_property(backing, "payload".into(), Value::Object(property_payload))
+                .expect("own property edge");
+            backings.push(backing);
+            property_payloads.push(property_payload);
+        }
+        core.clear_current_register_frame();
+        core.set_reg(0, Value::Object(set));
+        for (index, carrier) in carriers.iter().enumerate() {
+            core.set_reg(index + 1, carrier.clone());
+        }
+        // Evict every cached owner digest. Retained module provenance must
+        // still trace the live closures' own properties and prototypes.
+        let mut another_module = module.clone();
+        for index in 0..PROTOTYPE_OWNER_MEMO_ENTRIES + 1 {
+            another_module.header.source_label = format!("gc-other-{index}.js");
+            core.prototype_owner_ids(&another_module);
+        }
+        assert!(
+            !core
+                .prototype_owner_ids
+                .borrow()
+                .iter()
+                .any(|(header, _)| *header == module.header)
+        );
+        core.collect_garbage();
+        for object in backings.iter().chain(&property_payloads).chain([&payload]) {
+            assert!(
+                core.heap.get(object.0 as usize).is_some(),
+                "live carrier edge {object:?}"
+            );
+        }
+        for carrier in &carriers {
+            core.set_reg(9, carrier.clone());
+            assert_eq!(
+                core.weakset_method(
+                    Some(&module),
+                    "has",
+                    Value::Object(set),
+                    RegRange { start: 9, count: 1 },
+                ),
+                Ok(Value::Bool(true))
+            );
+        }
+        assert_eq!(core.weakmap_storage[&set].entries.len(), carriers.len());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        core.clear_current_register_frame();
+        core.set_reg(0, Value::Object(set));
+        let seed = core.capture_execution_seed().expect("reserve lazy seed");
+        core.collect_garbage();
+        assert!(core.weakmap_storage[&set].entries.is_empty());
+        for object in backings.iter().chain(&property_payloads).chain([&payload]) {
+            assert!(
+                core.heap.is_reclaimed(object.0 as usize),
+                "dead carrier edge {object:?}"
+            );
+        }
+        assert!(
+            !core
+                .function_prototypes
+                .values()
+                .any(|object| backings.contains(object))
+        );
+        // Registry pruning observes the same lazy-seed write barrier as the
+        // heap and weak entries, so the old realm snapshot stays coherent.
+        let snapshot = seed.0.state.borrow();
+        let ExecutionSeed::Materialized {
+            heap,
+            function_prototypes,
+            weakmap_storage,
+            ..
+        } = snapshot.as_ref()
+        else {
+            panic!("collection must materialize the pending seed");
+        };
+        assert_eq!(weakmap_storage[&set].entries.len(), carriers.len());
+        for backing in backings {
+            assert!(heap.get(backing.0 as usize).is_some());
+            assert!(
+                function_prototypes
+                    .values()
+                    .any(|object| *object == backing)
+            );
+        }
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn prototype_links_keep_callable_backing_identity_alive_in_both_marking_paths() {
+        for declaration in [
+            "const callable = () => payload.answer;",
+            "function callable() { return payload.answer; } delete callable.prototype.constructor;",
+        ] {
+            for force_scanning in [false, true] {
+                let module = carrier_module(&format!(
+                    "(() => {{ const payload = {{ answer: 42 }}; {declaration} \
+                     return [Object.create(callable), callable, payload]; }})()"
+                ));
+                let mut core = carrier_core();
+                let Value::Object(result) = core.execute(&module).expect("create prototype link").value
+                else {
+                    panic!("fixture returns identity witnesses");
+                };
+                let values = (0..3)
+                    .map(|index| {
+                        core.heap[result.0 as usize]
+                            .properties
+                            .get(&index.to_string())
+                            .expect("identity witness")
+                            .clone()
+                    })
+                    .collect::<Vec<_>>();
+                let [Value::Object(holder), Value::Closure(closure), Value::Object(payload)] =
+                    values.as_slice()
+                else {
+                    panic!("holder, callable and captured payload");
+                };
+                let (holder, closure, payload) = (*holder, *closure, *payload);
+                let backing = core.heap[holder.0 as usize].prototype.expect("callable backing");
+                core.clear_current_register_frame();
+                core.set_reg(0, Value::Object(holder));
+                let memory_limit = core.config.max_total_memory_bytes;
+                if force_scanning {
+                    // With no scratch headroom the same strong identity edge
+                    // must be discovered by the allocation-free fixpoint.
+                    core.config.max_total_memory_bytes = core.estimated_memory_bytes;
+                }
+                core.collect_garbage();
+                core.config.max_total_memory_bytes = memory_limit;
+                assert!(core.closures.get(closure as usize).is_some());
+                assert!(core.heap.get(payload.0 as usize).is_some());
+                let callable = core
+                    .dispatch_builtin_hostcall(
+                        "builtin:ObjectGetPrototypeOf",
+                        RegRange { start: 0, count: 1 },
+                        Some(&module),
+                    )
+                    .expect("recover prototype identity after collection");
+                assert_eq!(callable, Value::Closure(closure));
+                assert_eq!(
+                    core.invoke_inline_method_call(
+                        Some(&module),
+                        callable,
+                        Value::Undefined,
+                        Vec::new(),
+                    ),
+                    Ok(Value::Int(42))
+                );
+                assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+
+                core.clear_current_register_frame();
+                core.collect_garbage();
+                assert!(core.closures.get(closure as usize).is_none());
+                for object in [holder, backing, payload] {
+                    assert!(core.heap.is_reclaimed(object.0 as usize));
+                }
+                assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+            }
+        }
+    }
+
+    #[test]
+    fn prototype_surviving_its_closure_does_not_become_a_permanent_registry_root() {
+        let module = carrier_module("(function Detached() {})");
+        let mut core = carrier_core();
+        let Value::Closure(closure) = core.execute(&module).expect("create closure").value else {
+            panic!("fixture returns a closure");
+        };
+        let prototype = core
+            .ensure_closure_prototype(&module, closure)
+            .expect("prototype");
+        let key = (core.prototype_owner_ids(&module).closure, closure);
+        assert!(
+            core.proxy_aware_delete_runtime_property(
+                Some(&module),
+                prototype,
+                &RuntimePropertyKey::String(JsString::from("constructor")),
+                0,
+            )
+            .expect("detach constructor")
+        );
+        core.clear_current_register_frame();
+        core.set_reg(0, Value::Object(prototype));
+        core.collect_garbage();
+        assert!(core.closures.get(closure as usize).is_none());
+        assert!(core.heap.get(prototype.0 as usize).is_some());
+        assert!(!core.function_prototypes.contains_key(&key));
+        core.set_reg(0, Value::Undefined);
+        core.collect_garbage();
+        assert!(core.heap.is_reclaimed(prototype.0 as usize));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn temporary_weak_carrier_members_fit_a_bounded_heap_without_registry_growth() {
+        let module = carrier_module(
+            "const weak = new WeakSet(); const keep = function (n) { return n + 1; }; \
+             keep.answer = { value: 40 }; weak.add(keep); let count = 0; \
+             for (let i = 0; i < 800; i++) { const payload = { value: i }; \
+               const f = function () { return payload.value; }; \
+               const p = Promise.resolve(payload); const it = [payload].values(); \
+               weak.add(f); weak.add(p); weak.add(it); \
+               f.extra = payload; p.extra = payload; it.extra = payload; \
+               if (weak.has(f) && weak.has(p) && weak.has(it)) count++; \
+             } count + keep(keep.answer.value)",
+        );
+        let mut core = carrier_core();
+        core.config.max_heap_objects = 512;
+        core.set_gc_stress_interval(Some(64));
+        assert_eq!(
+            core.execute(&module).expect("bounded carrier churn").value,
+            Value::Int(841)
+        );
+        core.collect_garbage();
+        let stats = core.gc_stats();
+        assert!(stats.reclaimed_closures >= 750, "{stats:?}");
+        assert!(stats.reclaimed_promises >= 750, "{stats:?}");
+        assert!(stats.reclaimed_iterators >= 750, "{stats:?}");
+        let dynamic_entries = core
+            .function_prototypes
+            .keys()
+            .filter(|(owner, id)| core.gc_prototype_carrier(owner, *id).is_some())
+            .count();
+        assert!(
+            dynamic_entries <= 16,
+            "{dynamic_entries} carrier backing entries retained"
+        );
+        assert!(
+            core.weakmap_storage
+                .values()
+                .all(|storage| storage.entries.len() <= 12)
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
 
     #[test]
     fn cached_module_exception_is_a_gc_root_after_pending_throw_is_consumed() {

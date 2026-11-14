@@ -730,6 +730,144 @@ mod tests {
     }
 
     #[test]
+    fn weakset_does_not_root_members_or_their_object_graphs() {
+        let mut core = core();
+        let set = core.alloc_weak_collection("WeakSet").expect("WeakSet");
+        let live = object(&mut core);
+        let dead = object(&mut core);
+        let payload = object(&mut core);
+        core.set_object_property(dead, "payload".to_string(), Value::Object(payload))
+            .expect("member graph");
+        core.seed_register(0, Value::Object(set)).expect("set root");
+        core.seed_register(1, Value::Object(live)).expect("live member root");
+        for id in [live, dead] {
+            core.write_reg(2, Value::Object(id)).expect("add argument");
+            core.weakset_method(
+                None,
+                "add",
+                Value::Object(set),
+                RegRange { start: 2, count: 1 },
+            )
+            .expect("weak insertion");
+        }
+        core.write_reg(2, Value::Undefined).expect("release argument");
+        let before = core.estimated_memory_bytes;
+        core.collect_garbage();
+        assert!(core.heap.get(live.0 as usize).is_some());
+        assert!(core.heap.is_reclaimed(dead.0 as usize));
+        assert!(core.heap.is_reclaimed(payload.0 as usize));
+        assert!(core.weakmap_storage[&set].has(live.0));
+        assert!(!core.weakmap_storage[&set].has(dead.0));
+        assert!(core.estimated_memory_bytes < before);
+        assert_eq!(
+            core.estimated_memory_bytes,
+            core.recompute_base_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn weakset_churn_reclaims_members_and_their_exact_accounting() {
+        let mut core = core();
+        core.config.max_total_memory_bytes = 2 * 1024 * 1024;
+        let set = core.alloc_weak_collection("WeakSet").expect("WeakSet");
+        core.seed_register(0, Value::Object(set)).expect("set root");
+        let empty_storage_bytes = core.weakmap_storage_memory_bytes();
+        for _ in 0..32 {
+            for _ in 0..32 {
+                let key = object(&mut core);
+                core.set_object_property(key, "payload".to_string(), Value::str("x".repeat(8192)))
+                    .expect("temporary member payload");
+                core.write_reg(1, Value::Object(key)).expect("add argument");
+                core.weakset_method(
+                    None,
+                    "add",
+                    Value::Object(set),
+                    RegRange { start: 1, count: 1 },
+                )
+                .expect("member insertion");
+            }
+            core.write_reg(1, Value::Undefined).expect("release final member");
+            core.collect_garbage();
+            assert!(core.weakmap_storage[&set].entries.is_empty());
+            assert!(core.weakmap_storage[&set].weak_key_objects.is_empty());
+            assert_eq!(core.weakmap_storage_memory_bytes(), empty_storage_bytes);
+            assert_eq!(
+                core.estimated_memory_bytes,
+                core.recompute_base_estimated_memory_bytes()
+            );
+        }
+        assert!(core.gc_stats().reclaimed_bytes >= 8 * 1024 * 1024);
+    }
+
+    #[test]
+    fn weakset_membership_and_provenance_commit_together_at_the_memory_limit() {
+        let mut core = core();
+        let set = core.alloc_weak_collection("WeakSet").expect("WeakSet");
+        let key = object(&mut core);
+        let label = Label::Custom { name: "membership".repeat(128), level: 7 };
+        core.write_reg_with_label(0, Value::Object(key), label.clone())
+            .expect("classified membership input");
+        core.clear_pending_hostcall_result_label();
+        let before = core.estimated_memory_bytes;
+        let admitted = before
+            + MEMORY_ESTIMATE_MAP_ENTRY_BYTES * 2
+            + InterpreterCore::estimate_value_bytes(&Value::Bool(true))
+            + InterpreterCore::estimate_object_mutation_label_entry_bytes(&label)
+            + InterpreterCore::estimate_label_bytes(&label);
+        core.config.max_total_memory_bytes = admitted - 1;
+        assert!(matches!(
+            core.weakset_method(
+                None, "add", Value::Object(set), RegRange { start: 0, count: 1 },
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert!(!core.weakmap_storage[&set].has(key.0));
+        assert!(!core.object_mutation_labels.contains_key(&set));
+        assert!(core.pending_hostcall_result_label.is_none());
+        assert_eq!(core.estimated_memory_bytes, before);
+
+        core.config.max_total_memory_bytes = admitted;
+        assert_eq!(
+            core.weakset_method(
+                None, "add", Value::Object(set), RegRange { start: 0, count: 1 },
+            ),
+            Ok(Value::Object(set))
+        );
+        assert_eq!(core.estimated_memory_bytes, admitted);
+        assert_eq!(core.object_mutation_labels[&set], label);
+        assert_eq!(core.pending_hostcall_result_label.as_ref(), Some(&label));
+
+        core.config.max_total_memory_bytes = u64::MAX;
+        core.set_register_label(0, Label::Public).expect("public query identity");
+        core.clear_pending_hostcall_result_label();
+        assert_eq!(
+            core.weakset_method(
+                None, "has", Value::Object(set), RegRange { start: 0, count: 1 },
+            ),
+            Ok(Value::Bool(true))
+        );
+        assert_eq!(core.pending_hostcall_result_label.as_ref(), Some(&label));
+        assert_eq!(
+            core.weakset_method(
+                None, "delete", Value::Object(set), RegRange { start: 0, count: 1 },
+            ),
+            Ok(Value::Bool(true))
+        );
+        core.clear_pending_hostcall_result_label();
+        assert_eq!(
+            core.weakset_method(
+                None, "has", Value::Object(set), RegRange { start: 0, count: 1 },
+            ),
+            Ok(Value::Bool(false))
+        );
+        assert_eq!(core.pending_hostcall_result_label.as_ref(), Some(&label));
+        assert_eq!(
+            core.estimated_memory_bytes,
+            core.recompute_base_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
     fn javascript_weakmap_churn_completes_under_a_bounded_memory_budget() {
         use crate::ast::ParseGoal;
         use crate::ir_contract::Ir0Module;

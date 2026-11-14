@@ -167,7 +167,13 @@ impl InterpreterCore {
         }
     }
 
-    pub(super) fn finish_collection_seed(&mut self, label: Label) -> Result<(), InterpreterError> {
+    pub(super) fn finish_collection_seed(
+        &mut self,
+        mut label: Label,
+    ) -> Result<(), InterpreterError> {
+        // A final `next`/`done` read also controls membership, including an
+        // empty iterable. Do not discard its observation when no value yields.
+        self.observe_collection_seed_label(&mut label);
         self.replace_pending_hostcall_result_label(Some(label))
     }
 
@@ -303,29 +309,15 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
         values_id: ObjectId,
         iterable: Value,
-        weak_values_only: bool,
     ) -> Result<(), InterpreterError> {
         let mut label = Label::Public;
         let mut source = self.collection_seed_source(module, iterable)?;
         while let Some(value) = self.next_collection_seed(module, &mut source)? {
             self.observe_collection_seed_label(&mut label);
-            // A Set stores the member itself (as `add` does) so iteration can
-            // yield it; a WeakSet is not iterable and keeps a presence marker
-            // under the key `WeakSet.prototype.add` uses, and a value that
-            // cannot be weakly held is a TypeError, as for `add`.
-            let (value_str, stored) = if weak_values_only {
-                if !self.can_be_held_weakly(&value) {
-                    let error = InterpreterError::TypeError {
-                        expected: "object WeakSet value".to_string(),
-                        got: value.type_name().to_string(),
-                    };
-                    return self.close_collection_seed(module, source, error);
-                }
-                (Self::collection_key_repr(&value), Value::Bool(true))
-            } else {
-                let value = Self::collection_canonical_member(value);
-                (Self::collection_key_repr(&value), value)
-            };
+            // Set retains its members for iteration. WeakSet has a separate
+            // private weak seed path and must never use this strong storage.
+            let stored = Self::collection_canonical_member(value);
+            let value_str = Self::collection_key_repr(&stored);
 
             let values_index = values_id.0 as usize;
 
@@ -352,6 +344,88 @@ impl InterpreterCore {
         self.finish_collection_seed(label)
     }
 
+    /// Resolve the same private key identity as WeakMap. Function, promise
+    /// and iterator carriers use their existing own-property backing object;
+    /// that registry currently roots those carriers conservatively.
+    pub(super) fn weak_collection_key(
+        &mut self,
+        module: Option<&Ir3Module>,
+        key: &Value,
+        create: bool,
+    ) -> Result<Option<WeakMapKey>, InterpreterError> {
+        if key.is_object_like() {
+            return Ok(self
+                .own_property_holder(module, key, create)?
+                .map(|id| WeakMapKey::Object(id.0)));
+        }
+        Ok(match key {
+            Value::Symbol(symbol) if self.can_be_held_weakly(key) => {
+                Some(WeakMapKey::Symbol(symbol.0))
+            }
+            _ => None,
+        })
+    }
+
+    /// WeakSet shares the ephemeron store with inert membership values. A
+    /// member and the objects it references never become strong edges.
+    pub(super) fn alloc_weak_collection(
+        &mut self,
+        brand: &str,
+    ) -> Result<ObjectId, InterpreterError> {
+        // Canonical prototype creation has its own lifetime. Roll back only
+        // this unpublished collection, never a cached prototype.
+        let prototype = self.ensure_builtin_prototype(brand)?;
+        let previous_heap_len = self.heap.len();
+        let previous_estimated_bytes = self.estimated_memory_bytes;
+        let mut published = None;
+        let outcome = (|| {
+            let id = self.alloc_object_with_prototype(Some(prototype))?;
+            published = Some(id);
+            self.set_object_brand(id, brand)?;
+            self.apply_memory_component_delta(0, MEMORY_ESTIMATE_MAP_ENTRY_BYTES)?;
+            self.weakmap_storage.insert(id, WeakMapStorage::new());
+            Ok(id)
+        })();
+        if outcome.is_err() {
+            if let Some(id) = published {
+                self.weakmap_storage.remove(&id);
+            }
+            self.rollback_heap_to_len(previous_heap_len);
+            self.estimated_memory_bytes = previous_estimated_bytes;
+        }
+        outcome
+    }
+
+    pub(super) fn seed_weakset_from_iterable(
+        &mut self,
+        module: Option<&Ir3Module>,
+        set_id: ObjectId,
+        iterable: Value,
+    ) -> Result<(), InterpreterError> {
+        let mut label = self.clone_active_execution_context_label()?;
+        let mut source = self.collection_seed_source(module, iterable)?;
+        while let Some(value) = self.next_collection_seed(module, &mut source)? {
+            self.observe_collection_seed_label(&mut label);
+            let key = match self.weak_collection_key(module, &value, true) {
+                Ok(Some(key)) => key,
+                Ok(None) => {
+                    let error = InterpreterError::TypeError {
+                        expected: "object WeakSet value".to_string(),
+                        got: value.type_name().to_string(),
+                    };
+                    return self.close_collection_seed(module, source, error);
+                }
+                Err(error) => return self.close_collection_seed(module, source, error),
+            };
+            if let Err(error) = self.update_weakset_membership(set_id, key, true, label) {
+                return self.close_collection_seed(module, source, error);
+            }
+            label = Label::Public;
+            self.observe_collection_seed_label(&mut label);
+        }
+        self.finish_collection_seed(label)
+    }
+
     /// A WeakMap seed entry's key and value. As for `WeakMap.prototype.set`,
     /// the key is an object, a function keyed by its own-property backing
     /// object, or a symbol outside the global registry; anything else is a
@@ -362,16 +436,7 @@ impl InterpreterCore {
         entry: &Value,
     ) -> Result<(WeakMapKey, Value), InterpreterError> {
         let (key, value) = self.collection_seed_entry(module, entry)?;
-        let key_id = if key.is_object_like() {
-            self.own_property_holder(module, &key, true)?
-                .map(|id| WeakMapKey::Object(id.0))
-        } else if let Value::Symbol(symbol) = &key
-            && self.can_be_held_weakly(&key)
-        {
-            Some(WeakMapKey::Symbol(symbol.0))
-        } else {
-            None
-        };
+        let key_id = self.weak_collection_key(module, &key, true)?;
         key_id
             .map(|key_id| (key_id, value))
             .ok_or_else(|| InterpreterError::TypeError {
@@ -439,38 +504,33 @@ impl InterpreterCore {
         &self,
         receiver: Value,
     ) -> Result<ObjectId, InterpreterError> {
-        let weakmap_id = match receiver {
-            Value::Object(object_id) => object_id,
-            other => {
-                return Err(InterpreterError::TypeError {
-                    expected: "WeakMap".to_string(),
-                    got: other.type_name().to_string(),
-                });
-            }
+        self.validate_weak_collection_receiver(&receiver, "WeakMap")
+    }
+
+    pub(super) fn validate_weak_collection_receiver(
+        &self,
+        receiver: &Value,
+        brand: &str,
+    ) -> Result<ObjectId, InterpreterError> {
+        let Value::Object(id) = receiver else {
+            return Err(InterpreterError::TypeError {
+                expected: brand.to_string(),
+                got: receiver.type_name().to_string(),
+            });
         };
-
-        // Validate that this is actually a WeakMap object
-        let weakmap_obj = self
+        let object = self
             .heap
-            .get(weakmap_id.0 as usize)
-            .ok_or(InterpreterError::ObjectNotFound { id: weakmap_id.0 })?;
-
-        if weakmap_obj.brand() != Some("WeakMap") {
+            .get(id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
+        // Sharing storage does not share the public receiver brand. Guest
+        // properties cannot forge or replace either collection's side table.
+        if object.brand() != Some(brand) || !self.weakmap_storage.contains_key(id) {
             return Err(InterpreterError::TypeError {
-                expected: "WeakMap".to_string(),
-                got: "object".to_string(),
+                expected: brand.to_string(),
+                got: "object without matching weak collection storage".to_string(),
             });
         }
-
-        // Ensure we have storage for this WeakMap
-        if !self.weakmap_storage.contains_key(&weakmap_id) {
-            return Err(InterpreterError::TypeError {
-                expected: "WeakMap".to_string(),
-                got: "uninitialized WeakMap".to_string(),
-            });
-        }
-
-        Ok(weakmap_id)
+        Ok(*id)
     }
 
     #[allow(dead_code)]
@@ -10298,7 +10358,7 @@ impl InterpreterCore {
                 if !matches!(iterable, Value::Undefined | Value::Null) {
                     match self.collection_seed_adder(module, object_id, "Set")? {
                         None => {
-                            self.seed_set_values_from_iterable(module, values_id, iterable, false)?
+                            self.seed_set_values_from_iterable(module, values_id, iterable)?
                         }
                         Some(adder) => self.seed_collection_with_adder(
                             module, object_id, adder, false, iterable,

@@ -7552,8 +7552,8 @@ impl InterpreterCore {
     }
 
     /// The receiver's collection storage, gated on its private brand. Map
-    /// and Set never consult guest properties for their backing object;
-    /// WeakSet and FinalizationRegistry retain their separate representations.
+    /// and Set never consult guest properties for their backing object.
+    /// WeakMap/WeakSet use the private weak side table instead of heap storage.
     pub(super) fn collection_storage_id(
         &self,
         obj_id: ObjectId,
@@ -7565,10 +7565,6 @@ impl InterpreterCore {
         }
         match type_tag {
             "Map" | "Set" => obj.collection_storage.as_deref().copied(),
-            "WeakSet" => match obj.properties.get("__values") {
-                Some(Value::Object(id)) => Some(*id),
-                _ => None,
-            },
             "FinalizationRegistry" => match obj.properties.get("__tokens") {
                 Some(Value::Object(id)) => Some(*id),
                 _ => None,

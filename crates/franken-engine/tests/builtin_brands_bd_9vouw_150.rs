@@ -448,3 +448,76 @@ console.log(/d/m.flags, /d/y.sticky, String(/d/m));"#;
         ]
     );
 }
+
+#[test]
+fn weakset_membership_is_private_under_guest_writes_and_integrity_levels() {
+    assert_profile_value(
+        r#"var first = {}, second = {}, third = {};
+var set = new WeakSet([first]);
+var out = [Reflect.ownKeys(set).length, '__values' in set, String(set.__values)];
+set.__values = {};
+out.push(set.has(first));
+Object.defineProperty(set, '__values', {
+    get() { throw 'guest storage read'; },
+    set(v) { throw 'guest storage write'; }, configurable: true
+});
+out.push(set.add(second) === set, set.has(second), set.delete(first), set.has(first));
+delete set.__values;
+Object.freeze(set);
+out.push(set.add(third) === set, set.has(third), set.delete(second),
+         Reflect.ownKeys(set).length, Object.isFrozen(set));
+out.join('|');"#,
+        "0|false|undefined|true|true|true|true|false|true|true|true|0|true",
+    );
+}
+
+#[test]
+fn weakset_keys_use_carrier_identity_without_sharing_weakmap_brands() {
+    assert_profile_value(
+        r#"function f() {}
+var p = Promise.resolve(1), iterator = [1, 2].values(), proxy = new Proxy({}, {});
+var set = new WeakSet([f, p, iterator, proxy, Object.keys]);
+var out = [set.has(f), set.has(p), set.has(iterator), set.has(proxy), set.has(Object.keys),
+           set.has(function() {}), set.has({}), set.delete(p), set.has(p)];
+out.push(set.add(p) === set, set.has(p));
+function attempt(fn) { try { return fn(); } catch (e) { return e.name; } }
+out.push(attempt(() => WeakMap.prototype.has.call(set, f)),
+         attempt(() => WeakSet.prototype.has.call(new WeakMap(), f)),
+         attempt(() => WeakSet.prototype.has.call(Object.create(set), f)),
+         attempt(() => WeakSet.prototype.has.call(new Proxy(set, {}), f)),
+         attempt(() => WeakSet.prototype.add.call({__values: {}}, f)),
+         attempt(() => set.add(1)), set.has(1), set.delete(1));
+out.join('|');"#,
+        "true|true|true|true|true|false|false|true|false|true|true|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|false|false",
+    );
+}
+
+#[test]
+fn weakset_constructor_closes_bad_iterators_without_rolling_back_guest_effects() {
+    assert_profile_value(
+        r#"var key = {}, observed = [], saved, retained;
+var nativeAdd = WeakSet.prototype.add;
+WeakSet.prototype.add = function(value) {
+    saved = this;
+    observed.push('add');
+    return nativeAdd.call(this, value);
+};
+var iterable = {
+    [Symbol.iterator]() {
+        var step = 0;
+        return {
+            next() {
+                retained = { step: step };
+                return { value: step++ === 0 ? key : 1, done: false };
+            },
+            return() { observed.push('close'); return {}; }
+        };
+    }
+};
+try { new WeakSet(iterable); } catch (e) { observed.push(e.name); }
+WeakSet.prototype.add = nativeAdd;
+[observed.join(','), saved.has(key), retained.step,
+ Reflect.ownKeys(saved).length].join('|');"#,
+        "add,add,close,TypeError|true|1|0",
+    );
+}

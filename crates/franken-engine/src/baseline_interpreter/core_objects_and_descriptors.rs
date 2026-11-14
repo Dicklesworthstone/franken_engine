@@ -12689,7 +12689,7 @@ impl InterpreterCore {
                 if !matches!(iterable, Value::Undefined | Value::Null) {
                     match self.collection_seed_adder(module, set_id, "Set")? {
                         None => {
-                            self.seed_set_values_from_iterable(module, values_id, iterable, false)?
+                            self.seed_set_values_from_iterable(module, values_id, iterable)?
                         }
                         Some(adder) => {
                             self.seed_collection_with_adder(module, set_id, adder, false, iterable)?
@@ -12700,30 +12700,7 @@ impl InterpreterCore {
                 Ok(Value::Object(set_id))
             }
             "builtin:WeakMap" => {
-                let previous_heap_len = self.heap.len();
-                let previous_estimated_bytes = self.estimated_memory_bytes;
-                let mut published_weakmap = None;
-                let outcome = (|| {
-                    let weakmap_prototype = self.ensure_builtin_prototype("WeakMap")?;
-                    let weakmap_id = self.alloc_object_with_prototype(Some(weakmap_prototype))?;
-                    published_weakmap = Some(weakmap_id);
-
-                    self.set_object_brand(weakmap_id, "WeakMap")?;
-
-                    self.apply_memory_component_delta(0, MEMORY_ESTIMATE_MAP_ENTRY_BYTES)?;
-                    self.weakmap_storage
-                        .insert(weakmap_id, WeakMapStorage::new());
-
-                    Ok(weakmap_id)
-                })();
-                if outcome.is_err() {
-                    if let Some(weakmap_id) = published_weakmap {
-                        self.weakmap_storage.remove(&weakmap_id);
-                    }
-                    self.rollback_heap_to_len(previous_heap_len);
-                    self.estimated_memory_bytes = previous_estimated_bytes;
-                }
-                let weakmap_id = outcome?;
+                let weakmap_id = self.alloc_weak_collection("WeakMap")?;
                 // Seeding runs after that rollback boundary: it can run guest
                 // code (a user iterator, an entry getter) whose allocations
                 // the program may keep, so a seeding error must not roll the
@@ -12742,32 +12719,27 @@ impl InterpreterCore {
             "builtin:WeakRef" => self.construct_weak_ref(args),
             "builtin:FinalizationRegistry" => self.construct_finalization_registry(args),
             "builtin:WeakSet" => {
-                // WeakSet([iterable]) constructor implementation (simplified)
-                let weakset_prototype = self.ensure_builtin_prototype("WeakSet")?;
-                let weakset_id = self.alloc_object_with_prototype(Some(weakset_prototype))?;
-                let values_id = self.alloc_object_with_prototype(None)?;
-
-                self.set_object_brand(weakset_id, "WeakSet")?;
-                self.set_object_property(
-                    weakset_id,
-                    "__values".to_string(),
-                    Value::Object(values_id),
-                )?;
-                self.hide_internal_slots(weakset_id, &["__values"])?;
-
-                // Note: In a full implementation, WeakSet would use weak references
+                let weakset_id = self.alloc_weak_collection("WeakSet")?;
+                let input_label = self.join_arg_range_with_object_mutation_label(args)?;
+                self.join_object_mutation_label(weakset_id, &input_label)?;
+                // Guest iterator effects survive a seeding failure. Only
+                // allocation before the iterator is entered may roll back.
                 let iterable = self.arg_or_undefined(args, 0)?;
                 if !matches!(iterable, Value::Undefined | Value::Null) {
                     match self.collection_seed_adder(module, weakset_id, "WeakSet")? {
                         None => {
-                            self.seed_set_values_from_iterable(module, values_id, iterable, true)?
+                            self.seed_weakset_from_iterable(module, weakset_id, iterable)?
                         }
                         Some(adder) => self.seed_collection_with_adder(
                             module, weakset_id, adder, false, iterable,
                         )?,
                     }
                 }
-
+                // Persist the iterator's final completion observation as well
+                // as yielded values, even for an empty or custom-adder seed.
+                if let Some(label) = self.pending_hostcall_result_label.clone() {
+                    self.join_direct_object_mutation_label(weakset_id, &label)?;
+                }
                 Ok(Value::Object(weakset_id))
             }
             "builtin:MapPrototypeSet" => {

@@ -11569,57 +11569,148 @@ impl InterpreterCore {
         }))
     }
 
+    /// WeakSet membership is private and weak, including objects represented
+    /// by function, promise, generator and iterator carriers.
     pub(super) fn weakset_method(
         &mut self,
+        module: Option<&Ir3Module>,
         method: &str,
         receiver: Value,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        let values_id = match &receiver {
-            Value::Object(set_id) => self.collection_storage_id(*set_id, "WeakSet"),
-            _ => None,
-        }
-        .ok_or_else(|| InterpreterError::TypeError {
-            expected: format!("WeakSet receiver for WeakSet.prototype.{method}"),
-            got: receiver.type_name().to_string(),
-        })?;
+        let set_id = self.validate_weak_collection_receiver(&receiver, "WeakSet")?;
         let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-        // An object or a symbol outside the global registry (ES2023
-        // CanBeHeldWeakly).
-        let is_object = self.can_be_held_weakly(&value);
-        let repr = Self::collection_key_repr(&value);
+        let key = self.weak_collection_key(module, &value, method == "add")?;
+        let label = self.join_arg_range_label(args)?;
+        let label = self.join_owned_label_with_temporary_budget(
+            label,
+            self.object_mutation_labels
+                .get(&set_id)
+                .unwrap_or(&Label::Public),
+        )?;
+        let label = self.join_owned_label_with_temporary_budget(
+            label,
+            self.pending_hostcall_result_label
+                .as_ref()
+                .unwrap_or(&Label::Public),
+        )?;
         match method {
             "add" => {
-                if !is_object {
+                let Some(key) = key else {
                     return Err(InterpreterError::TypeError {
                         expected: "object WeakSet value".to_string(),
                         got: value.type_name().to_string(),
                     });
-                }
-                self.set_object_property(values_id, repr, value)?;
+                };
+                self.update_weakset_membership(set_id, key, true, label)?;
                 Ok(receiver)
             }
-            "has" => Ok(Value::Bool(
-                is_object
-                    && self
-                        .heap
-                        .get(values_id.0 as usize)
-                        .is_some_and(|values| values.properties.contains_key(&repr)),
-            )),
+            "has" => {
+                let storage = &self.weakmap_storage[&set_id];
+                let present = match key {
+                    Some(WeakMapKey::Object(id)) => storage.has(id),
+                    Some(WeakMapKey::Symbol(id)) => storage.get_symbol(id).is_some(),
+                    None => false,
+                };
+                self.replace_pending_hostcall_result_label(Some(label))?;
+                Ok(Value::Bool(present))
+            }
             "delete" => {
-                if !is_object {
+                let Some(key) = key else {
+                    self.replace_pending_hostcall_result_label(Some(label))?;
                     return Ok(Value::Bool(false));
-                }
-                let key = RuntimePropertyKey::String(JsString::from(repr));
-                Ok(Value::Bool(
-                    self.remove_object_runtime_property(values_id, &key)?,
-                ))
+                };
+                let present = self.update_weakset_membership(set_id, key, false, label)?;
+                Ok(Value::Bool(present))
             }
             other => Err(InterpreterError::TypeError {
                 expected: "WeakSet method".to_string(),
                 got: other.to_string(),
             }),
         }
+    }
+
+    /// Publish membership and its control provenance together. Reserve all
+    /// retained bytes before changing either the private table or its label;
+    /// a memory refusal must not add/delete a key or expose a public result.
+    pub(super) fn update_weakset_membership(
+        &mut self,
+        set_id: ObjectId,
+        key: WeakMapKey,
+        insert: bool,
+        label: Label,
+    ) -> Result<bool, InterpreterError> {
+        let storage = &self.weakmap_storage[&set_id];
+        let present = match key {
+            WeakMapKey::Object(id) => storage.has(id),
+            WeakMapKey::Symbol(id) => storage.get_symbol(id).is_some(),
+        };
+        let entry_bytes = MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_mul(2)
+            .saturating_add(Self::estimate_value_bytes(&Value::Bool(true)));
+        let label = self.join_owned_label_with_temporary_budget(
+            label,
+            self.object_mutation_labels
+                .get(&set_id)
+                .unwrap_or(&Label::Public),
+        )?;
+        let label = self.join_owned_label_with_temporary_budget(
+            label,
+            self.pending_hostcall_result_label
+                .as_ref()
+                .unwrap_or(&Label::Public),
+        )?;
+        let previous_label_bytes = self
+            .object_mutation_labels
+            .get(&set_id)
+            .map_or(0, Self::estimate_object_mutation_label_entry_bytes);
+        let next_label_bytes = if label == Label::Public {
+            0
+        } else {
+            Self::estimate_object_mutation_label_entry_bytes(&label)
+        };
+        let previous_result_bytes = self
+            .pending_hostcall_result_label
+            .as_ref()
+            .map_or(0, Self::estimate_label_bytes);
+        let requested_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(if present { entry_bytes } else { 0 })
+            .saturating_add(if insert { entry_bytes } else { 0 })
+            .saturating_sub(previous_label_bytes)
+            .saturating_add(next_label_bytes)
+            .saturating_sub(previous_result_bytes)
+            .saturating_add(Self::estimate_label_bytes(&label));
+        if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
+            return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
+        }
+        // Keep the incoming owned label for the owner, and clone only the
+        // result label after both retained and temporary bytes are admitted.
+        self.check_temporary_memory_budget(Self::estimate_label_bytes(&label).saturating_mul(2))?;
+        let result_label = label.clone();
+        self.before_seed_surface_write();
+        let storage = self
+            .weakmap_storage
+            .get_mut(&set_id)
+            .expect("validated WeakSet");
+        match (key, insert) {
+            (WeakMapKey::Object(id), true) => storage.set(id, Value::Bool(true)),
+            (WeakMapKey::Symbol(id), true) => storage.set_symbol(id, Value::Bool(true)),
+            (WeakMapKey::Object(id), false) => {
+                storage.delete(id);
+            }
+            (WeakMapKey::Symbol(id), false) => {
+                storage.delete_symbol(id);
+            }
+        }
+        if label == Label::Public {
+            self.object_mutation_labels.remove(&set_id);
+        } else {
+            self.object_mutation_labels.insert(set_id, label);
+        }
+        self.pending_hostcall_result_label = Some(result_label);
+        self.estimated_memory_bytes = requested_bytes;
+        Ok(present)
     }
 
     /// ES2021 CanBeHeldWeakly: an object, or a Symbol outside the global

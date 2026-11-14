@@ -5630,26 +5630,138 @@ fn weakmap_and_weakset_constructors_seed_iterable_input() {
     else {
         panic!("WeakSet constructor should return object");
     };
-    let Value::Object(values_id) = core.heap[weakset_id.0 as usize]
-        .properties
-        .get("__values")
-        .cloned()
-        .expect("WeakSet should hold values backing storage")
+    let membership = core
+        .weakmap_storage
+        .get(&weakset_id)
+        .expect("private WeakSet membership");
+    assert_eq!(membership.get(key_a.0), Some(&Value::Bool(true)));
+    assert_eq!(membership.get(key_b.0), Some(&Value::Bool(true)));
+    assert!(
+        !core.heap[weakset_id.0 as usize]
+            .properties
+            .contains_key("__values")
+    );
+}
+
+#[test]
+fn weakset_empty_iterator_completion_retains_membership_provenance() {
+    let mut core = quickjs_test_core();
+    let module = test_module(vec![Ir3Instruction::Halt]);
+    let result = core
+        .alloc_object_with_prototype(None)
+        .expect("iterator result");
+    core.set_object_property(result, "done".to_string(), Value::Bool(true))
+        .expect("terminal iterator result");
+    core.set_own_runtime_property_label(
+        result,
+        &RuntimePropertyKey::String(JsString::from("done")),
+        &Label::Secret,
+    )
+    .expect("classified done property");
+    // Object.prototype.valueOf returns this result object as next(). The
+    // iterable handle is public; only reading its terminal done is secret.
+    let iterator = core
+        .init_iterator_from_state(
+            Value::Object(result),
+            RuntimeForOfInit::from_receiver(
+                Value::Object(result),
+                Value::BuiltinFunction(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::ObjectPrototypeValueOf,
+                )),
+            ),
+            IterationKind::ForOf,
+        )
+        .expect("custom iterator");
+    core.write_reg_with_label(0, iterator, Label::Public)
+        .expect("public iterator argument");
+    let Value::Object(set) = core
+        .dispatch_builtin_hostcall(
+            "builtin:WeakSet",
+            RegRange { start: 0, count: 1 },
+            Some(&module),
+        )
+        .expect("empty iterator seed")
     else {
-        panic!("WeakSet values backing storage should be object");
+        panic!("WeakSet must return an object");
     };
+    assert!(core.weakmap_storage[&set].entries.is_empty());
+    assert_eq!(core.object_mutation_labels.get(&set), Some(&Label::Secret));
+    assert_eq!(core.pending_hostcall_result_label.as_ref(), Some(&Label::Secret));
+
+    let absent = core
+        .alloc_object_with_prototype(None)
+        .expect("public membership query key");
+    core.write_reg_with_label(0, Value::Object(absent), Label::Public)
+        .expect("public query argument");
+    core.clear_pending_hostcall_result_label();
     assert_eq!(
-        core.heap[values_id.0 as usize]
-            .properties
-            .get(&format!("o:{}", key_a.0)),
-        Some(&Value::Bool(true))
+        core.weakset_method(
+            Some(&module),
+            "has",
+            Value::Object(set),
+            RegRange { start: 0, count: 1 },
+        ),
+        Ok(Value::Bool(false))
     );
-    assert_eq!(
-        core.heap[values_id.0 as usize]
-            .properties
-            .get(&format!("o:{}", key_b.0)),
-        Some(&Value::Bool(true))
-    );
+    assert_eq!(core.pending_hostcall_result_label.as_ref(), Some(&Label::Secret));
+}
+
+#[test]
+fn weakset_membership_retains_receiver_and_callee_selection_across_public_aliases() {
+    let module = test_module(vec![
+        Ir3Instruction::CallMethod {
+            receiver: 1,
+            callee: 2,
+            args: RegRange { start: 3, count: 1 },
+            dst: 6,
+        },
+        Ir3Instruction::CallMethod {
+            receiver: 4,
+            callee: 5,
+            args: RegRange { start: 3, count: 1 },
+            dst: 0,
+        },
+        Ir3Instruction::Halt,
+    ]);
+    for config in [test_quickjs_config(), test_v8_config()] {
+        // Isolate receiver selection from callee selection: each must reach
+        // the collection itself, even when the query uses a Public alias.
+        for selected_register in [1, 2] {
+            let mut core = InterpreterCore::new(config.clone(), "weakset-selection");
+            let set = core.alloc_weak_collection("WeakSet").expect("WeakSet");
+            let key = core
+                .alloc_object_with_prototype(None)
+                .expect("member identity");
+            let add = InterpreterCore::collection_prototype_method("WeakSet", "add")
+                .expect("intrinsic add");
+            let has = InterpreterCore::collection_prototype_method("WeakSet", "has")
+                .expect("intrinsic has");
+            for (register, value) in [
+                (1, Value::Object(set)),
+                (2, Value::BuiltinFunction(add)),
+                (3, Value::Object(key)),
+                (4, Value::Object(set)),
+                (5, Value::BuiltinFunction(has)),
+            ] {
+                core.seed_register(register, value).expect("seed operand");
+            }
+            let label = Label::Custom {
+                name: "weakset-selection".to_string(),
+                level: 7,
+            };
+            core.set_register_label(selected_register, label.clone())
+                .expect("classified selection");
+            let result = core.execute(&module).expect("actual builtin method calls");
+            assert_eq!(result.value, Value::Bool(true));
+            assert_eq!(result.completion_label, label);
+            assert_eq!(core.object_mutation_labels.get(&set), Some(&label));
+            assert!(core.active_inline_callback_context_label.is_none());
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
 }
 
 fn assert_string_split_result(result: Value, expected: Vec<&str>, core: &mut InterpreterCore) {

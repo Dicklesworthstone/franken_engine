@@ -15188,11 +15188,11 @@ impl InterpreterCore {
         Some(Cow::Borrowed(tag))
     }
 
-    /// A native effect function selected from a classified module or property
-    /// must carry that selection into its request state and immediate effects,
-    /// not only the eventual destination register. Other builtins retain their
-    /// existing invocation contract. The observation scope accounts its label
-    /// and restores the caller on successful, thrown and resource-limit exits.
+    /// A native effect function or WeakSet method selected from a classified
+    /// module or property carries that selection into its request state or
+    /// private membership before mutation. Other builtins retain their existing
+    /// invocation contract. The observation scope accounts its label and
+    /// restores the caller on successful, thrown and resource-limit exits.
     pub(super) fn dispatch_builtin_function_with_callee_register(
         &mut self,
         module: &Ir3Module,
@@ -15202,7 +15202,9 @@ impl InterpreterCore {
         receiver_register: Option<u32>,
         callee: u32,
     ) -> Result<Value, InterpreterError> {
-        if !builtin.kind.observes_host_effect_selection() {
+        if !builtin.kind.observes_host_effect_selection()
+            && builtin.kind != BuiltinFunctionKind::WeakSetMethod
+        {
             return self.dispatch_builtin_function(
                 module,
                 builtin,

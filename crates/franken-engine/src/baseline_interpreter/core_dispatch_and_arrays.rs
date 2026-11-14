@@ -354,7 +354,16 @@ impl InterpreterCore {
                     .as_deref()
                     .unwrap_or_default()
                     .to_string();
-                self.weakset_method(&method, receiver.unwrap_or(Value::Undefined), args)
+                // A classified receiver can select a public collection.
+                // Retain that selection on membership before it is changed.
+                let observation = self.begin_property_observation(receiver_register)?;
+                let outcome = self.weakset_method(
+                    Some(module),
+                    &method,
+                    receiver.unwrap_or(Value::Undefined),
+                    args,
+                );
+                self.finish_property_read_observation(observation, outcome)
             }
             BuiltinFunctionKind::TextCodecMethod => {
                 let method = builtin

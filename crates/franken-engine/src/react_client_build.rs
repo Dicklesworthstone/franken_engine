@@ -3,7 +3,9 @@
 //! Source capture is bounded by an explicit project root and resource limits.
 //! Modules remain ESM, so the browser owns live bindings, cycles, top-level
 //! await, and evaluation order. No guest code or external provider is executed
-//! while building. CommonJS, dynamic imports, and non-code assets are refused.
+//! while building. Literal dynamic imports retain lazy ESM execution and share
+//! the bounded graph with static imports. Computed imports, CommonJS, import
+//! attributes, and non-code assets are refused.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
@@ -13,9 +15,10 @@ use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::ast::{ExportKind, ImportClause, Statement};
+use crate::ast::{ExportKind, Expression, ImportClause, Statement};
 use crate::capability::RuntimeCapability;
 use crate::hash_tiers::ContentHash;
+use crate::jsx_tsx_parser::import_call_candidates;
 use crate::module_resolver::{
     CapabilityPolicyHook, DeterministicModuleResolver, ImportStyle, ModuleDefinition,
     ModuleDependency, ModuleRequest, ModuleResolver, ModuleSyntax, ResolutionContext,
@@ -170,6 +173,15 @@ impl std::error::Error for ReactClientBuildError {}
 type BuildResult<T> = Result<T, ReactClientBuildError>;
 
 #[derive(Debug)]
+struct SourceImport {
+    specifier: String,
+    span: std::ops::Range<usize>,
+    /// A declaration prefix for static imports; None edits only the literal
+    /// argument of import(), retaining comments and lazy execution.
+    declaration: Option<String>,
+}
+
+#[derive(Debug)]
 struct SourceEdit {
     start: usize,
     end: usize,
@@ -226,11 +238,12 @@ pub fn build_react_client(config: &ReactClientBuildConfig) -> BuildResult<ReactC
             .map_err(|error| {
                 ReactClientBuildError::new("FE-REACT-BUILD-PARSE", format!("{name}: {error}"))
             })?;
-        reject_unbounded_loading(
-            &serde_json::to_value(&tree).map_err(serialization_error)?,
-            &name,
-        )?;
+        let mut expected_ast = serde_json::to_value(&tree).map_err(serialization_error)?;
+        let mut imports =
+            bounded_dynamic_imports(&compiled.generated_code, &expected_ast, &name)?;
         let mut edits = Vec::new();
+        let mut dynamic_edits = Vec::new();
+        let mut dynamic_targets = BTreeMap::new();
         let mut dependencies = Vec::new();
         let mut definition =
             ModuleDefinition::new(ModuleSyntax::EsModule, compiled.generated_code.clone())
@@ -268,6 +281,17 @@ pub fn build_react_client(config: &ReactClientBuildConfig) -> BuildResult<ReactC
                     ),
                 ));
             }
+            let span = statement.span();
+            imports.push(SourceImport {
+                specifier: specifier.to_string(),
+                span: usize::try_from(span.start_offset).map_err(|_| invalid_span())?
+                    ..usize::try_from(span.end_offset).map_err(|_| invalid_span())?,
+                declaration,
+            });
+        }
+        imports.sort_unstable_by_key(|import| import.span.start);
+        for import in imports {
+            let specifier = import.specifier.as_str();
             let (target, emitted_specifier, external) =
                 if let Some(url) = config.externals.get(specifier) {
                     (url.clone(), specifier.to_string(), true)
@@ -299,25 +323,40 @@ pub fn build_react_client(config: &ReactClientBuildConfig) -> BuildResult<ReactC
                 target,
                 external,
             });
-            let span = statement.span();
-            let start = usize::try_from(span.start_offset).map_err(|_| invalid_span())?;
-            let end = usize::try_from(span.end_offset).map_err(|_| invalid_span())?;
             let original = compiled
                 .generated_code
-                .get(start..end)
+                .get(import.span.clone())
                 .ok_or_else(invalid_span)?;
-            let mut replacement = format!(
-                "{}{};",
-                declaration.expect("static declaration"),
-                js_string(&emitted_specifier)?
-            );
-            // Keep physical line counts, then remap columns for unchanged code.
-            replacement.push_str(&"\n".repeat(line_offsets(original).len() - 1));
+            let newlines = line_offsets(original).len() - 1;
+            let mut literal = js_string(&emitted_specifier)?;
+            let replacement = if let Some(declaration) = import.declaration {
+                // Keep physical line counts, then remap columns for unchanged code.
+                format!("{declaration}{literal};{}", "\n".repeat(newlines))
+            } else {
+                // Preserve line continuations inside the literal, so neither
+                // comments nor restricted productions change their position.
+                literal.insert_str(literal.len() - 1, &"\\\n".repeat(newlines));
+                dynamic_targets.insert(import.specifier, emitted_specifier);
+                dynamic_edits.push(SourceEdit {
+                    start: import.span.start,
+                    end: import.span.end,
+                    replacement: literal.clone(),
+                });
+                literal
+            };
             edits.push(SourceEdit {
-                start,
-                end,
+                start: import.span.start,
+                end: import.span.end,
                 replacement,
             });
+        }
+        if !dynamic_edits.is_empty() {
+            verify_dynamic_import_edits(
+                &compiled.generated_code,
+                &mut expected_ast,
+                &dynamic_edits,
+                &dynamic_targets,
+            )?;
         }
         let mut code = apply_edits(&compiled.generated_code, &edits)?;
         let asset = asset_path(&name);
@@ -332,9 +371,8 @@ pub fn build_react_client(config: &ReactClientBuildConfig) -> BuildResult<ReactC
                 asset.strip_prefix("modules/").expect("asset prefix")
             ));
         }
-        // Rewriting uses AST declaration spans, not text substitution. Check
-        // the complete delivered bytes as well, so span/reconstruction defects
-        // cannot produce a successful build containing invalid JavaScript.
+        // Check the complete delivered bytes as well, so declaration-span
+        // or ImportCall reconstruction defects cannot emit invalid JavaScript.
         CanonicalEs2020Parser
             .parse(code.as_str(), crate::ast::ParseGoal::Module)
             .map_err(|error| {
@@ -639,16 +677,106 @@ fn import_prefix(clause: &ImportClause) -> BuildResult<String> {
     })
 }
 
-fn reject_unbounded_loading(value: &serde_json::Value, name: &str) -> BuildResult<()> {
+/// Validate the whole AST first; lexical candidates are never permission to
+/// broaden the closed graph. Calls' parser spans currently name the enclosing
+/// expression, so the shared JavaScript scanner supplies exact byte ranges.
+fn bounded_dynamic_imports(
+    source: &str,
+    ast: &serde_json::Value,
+    name: &str,
+) -> BuildResult<Vec<SourceImport>> {
+    let mut expected = BTreeMap::new();
+    collect_bounded_imports(ast, name, &mut expected)?;
+    if expected.is_empty() {
+        return Ok(Vec::new());
+    }
+    let candidates = import_call_candidates(source)
+        .map_err(|error| ReactClientBuildError::new("FE-REACT-BUILD-SPAN", error.to_string()))?;
+    let mut observed = BTreeMap::new();
+    let mut imports = Vec::new();
+    for range in candidates {
+        let text = source.get(range.clone()).ok_or_else(invalid_span)?;
+        // A method named import can be a lexical candidate, but cannot have
+        // a string literal as its parameter. Keep only standalone ImportCalls.
+        let Ok(tree) = CanonicalEs2020Parser.parse(text, crate::ast::ParseGoal::Module) else {
+            continue;
+        };
+        let [Statement::Expression(statement)] = tree.body.as_slice() else {
+            continue;
+        };
+        let Expression::Call {
+            callee, arguments, ..
+        } = &statement.expression
+        else {
+            continue;
+        };
+        let [Expression::StringLiteral(specifier)] = arguments.as_slice() else {
+            continue;
+        };
+        if !matches!(callee.as_ref(), Expression::Identifier(identifier) if identifier == "import") {
+            continue;
+        }
+        let Some(specifier) = specifier
+            .as_str()
+            .filter(|specifier| expected.contains_key(*specifier))
+        else {
+            continue;
+        };
+        let literal = dynamic_import_literal_span(text)?;
+        *observed.entry(specifier.to_string()).or_insert(0usize) += 1;
+        imports.push(SourceImport {
+            specifier: specifier.to_string(),
+            span: range.start + literal.start..range.start + literal.end,
+            declaration: None,
+        });
+    }
+    if observed != expected {
+        return Err(invalid_span());
+    }
+    Ok(imports)
+}
+
+fn collect_bounded_imports(
+    value: &serde_json::Value,
+    name: &str,
+    imports: &mut BTreeMap<String, usize>,
+) -> BuildResult<()> {
     match value {
         serde_json::Value::Object(fields) => {
+            if let Some(call) = fields.get("Call")
+                && call
+                    .pointer("/callee/Identifier")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("import")
+            {
+                let arguments = call.get("arguments").and_then(serde_json::Value::as_array);
+                let literal = arguments
+                    .filter(|arguments| arguments.len() == 1)
+                    .and_then(|arguments| arguments[0].get("StringLiteral"));
+                let Some(literal) = literal else {
+                    return Err(ReactClientBuildError::new(
+                        "FE-REACT-BUILD-DYNAMIC",
+                        format!("{name}: import() requires one string literal and no options in a closed-world ESM client build"),
+                    ));
+                };
+                let specifier: crate::js_string::JsString =
+                    serde_json::from_value(literal.clone()).map_err(serialization_error)?;
+                let specifier = specifier.as_str().ok_or_else(|| {
+                    ReactClientBuildError::new(
+                        "FE-REACT-BUILD-SPECIFIER",
+                        format!("{name}: module specifier is not valid UTF-8"),
+                    )
+                })?;
+                *imports.entry(specifier.to_string()).or_insert(0) += 1;
+                return Ok(());
+            }
             if let Some(identifier) = fields.get("Identifier").and_then(serde_json::Value::as_str)
                 && matches!(identifier, "require" | "module" | "exports" | "import")
             {
                 return Err(ReactClientBuildError::new(
                     "FE-REACT-BUILD-DYNAMIC",
                     format!(
-                        "{name}: CommonJS bindings and dynamic imports are unsupported in a closed-world ESM client build ({identifier})",
+                        "{name}: CommonJS bindings and unbounded imports are unsupported in a closed-world ESM client build ({identifier})",
                     ),
                 ));
             }
@@ -659,17 +787,123 @@ fn reject_unbounded_loading(value: &serde_json::Value, name: &str) -> BuildResul
                 {
                     continue;
                 }
-                reject_unbounded_loading(child, name)?;
+                collect_bounded_imports(child, name, imports)?;
             }
         }
         serde_json::Value::Array(values) => {
             for child in values {
-                reject_unbounded_loading(child, name)?;
+                collect_bounded_imports(child, name, imports)?;
             }
         }
         _ => {}
     }
     Ok(())
+}
+
+/// The AST has already proved this is import() with one string literal.
+/// Locate that literal inside the exact lexical call range, keeping its
+/// surrounding comments and redundant parentheses unchanged.
+fn dynamic_import_literal_span(source: &str) -> BuildResult<std::ops::Range<usize>> {
+    fn skip_trivia(source: &str, cursor: &mut usize) -> BuildResult<()> {
+        loop {
+            let rest = source.get(*cursor..).ok_or_else(invalid_span)?;
+            if rest.starts_with("/*") {
+                *cursor += rest.find("*/").ok_or_else(invalid_span)? + 2;
+            } else if rest.starts_with("//") {
+                *cursor += rest
+                    .find(['\r', '\n', '\u{2028}', '\u{2029}'])
+                    .unwrap_or(rest.len());
+            } else if let Some(ch) = rest.chars().next()
+                && (ch.is_whitespace() || ch == '\u{feff}')
+            {
+                *cursor += ch.len_utf8();
+            } else {
+                return Ok(());
+            }
+        }
+    }
+
+    let mut cursor = "import".len();
+    skip_trivia(source, &mut cursor)?;
+    if source.as_bytes().get(cursor) != Some(&b'(') {
+        return Err(invalid_span());
+    }
+    loop {
+        cursor += 1;
+        skip_trivia(source, &mut cursor)?;
+        if source.as_bytes().get(cursor) != Some(&b'(') {
+            break;
+        }
+    }
+    let start = cursor;
+    let quote = *source.as_bytes().get(cursor).ok_or_else(invalid_span)?;
+    if !matches!(quote, b'\'' | b'"') {
+        return Err(invalid_span());
+    }
+    cursor += 1;
+    while let Some(&byte) = source.as_bytes().get(cursor) {
+        cursor += 1;
+        if byte == b'\\' {
+            cursor += 1;
+        } else if byte == quote {
+            return Ok(start..cursor);
+        }
+    }
+    Err(invalid_span())
+}
+
+/// Even a lexically plausible range cannot change another expression. Compare
+/// the full AST after only dynamic edits against the exact permitted literal
+/// substitutions, ignoring source positions that necessarily moved.
+fn verify_dynamic_import_edits(
+    source: &str,
+    expected: &mut serde_json::Value,
+    edits: &[SourceEdit],
+    targets: &BTreeMap<String, String>,
+) -> BuildResult<()> {
+    let rewritten = apply_edits(source, edits)?;
+    let actual = CanonicalEs2020Parser
+        .parse(rewritten.as_str(), crate::ast::ParseGoal::Module)
+        .map_err(|_| invalid_span())?;
+    let mut actual = serde_json::to_value(actual).map_err(serialization_error)?;
+    normalize_dynamic_import_ast(expected, targets);
+    normalize_dynamic_import_ast(&mut actual, &BTreeMap::new());
+    if *expected != actual {
+        return Err(invalid_span());
+    }
+    Ok(())
+}
+
+fn normalize_dynamic_import_ast(
+    value: &mut serde_json::Value,
+    targets: &BTreeMap<String, String>,
+) {
+    match value {
+        serde_json::Value::Object(fields) => {
+            fields.remove("span");
+            if let Some(call) = fields.get_mut("Call")
+                && call
+                    .pointer("/callee/Identifier")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("import")
+                && let Some(target) = call
+                    .pointer("/arguments/0/StringLiteral")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|specifier| targets.get(specifier))
+            {
+                call["arguments"][0]["StringLiteral"] = serde_json::Value::String(target.clone());
+            }
+            for child in fields.values_mut() {
+                normalize_dynamic_import_ast(child, targets);
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for child in values {
+                normalize_dynamic_import_ast(child, targets);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn apply_edits(source: &str, edits: &[SourceEdit]) -> BuildResult<String> {
@@ -690,7 +924,7 @@ fn apply_edits(source: &str, edits: &[SourceEdit]) -> BuildResult<String> {
 fn invalid_span() -> ReactClientBuildError {
     ReactClientBuildError::new(
         "FE-REACT-BUILD-SPAN",
-        "native parser returned an invalid or overlapping module declaration span",
+        "native parser and lexical scanner disagree on a module import span",
     )
 }
 
@@ -993,6 +1227,285 @@ mod tests {
         }
     }
 
+
+    #[test]
+    fn client_build_closes_lazy_tsx_graph_without_eager_imports() {
+        let files = [
+            (
+                "app.tsx",
+                "import { lazy } from 'react'; export const View = lazy(() => import('./views/card')); export const load = () => import('./views/card');",
+            ),
+            (
+                "views/card.tsx",
+                "import { value } from '../value.js'; export default function Card() { return <span>{value}</span>; } export const parent = () => import('../app.tsx');",
+            ),
+            ("value.js", "export const value = 7;"),
+        ];
+        let (_directory, mut config) = fixture(&files);
+        config.externals = BTreeMap::from([
+            ("react".into(), "https://example.invalid/react.mjs".into()),
+            (
+                "react/jsx-runtime".into(),
+                "https://example.invalid/jsx.mjs".into(),
+            ),
+        ]);
+        config.compile.generate_source_maps = true;
+        let build = build_react_client(&config).expect("lazy TSX graph");
+        assert_eq!(
+            build.modules.len(),
+            3,
+            "duplicate edges do not duplicate modules"
+        );
+        let entry = &build.modules[0];
+        let lazy_name = asset_path("views/card.tsx");
+        let lazy_call = format!(
+            "import(\"./{}\")",
+            lazy_name.strip_prefix("modules/").unwrap()
+        );
+        assert_eq!(entry.code.matches(&lazy_call).count(), 2);
+        assert!(
+            !entry.code.contains("from \"./"),
+            "lazy edge stays an ImportCall"
+        );
+        assert_eq!(
+            entry
+                .dependencies
+                .iter()
+                .filter(|dep| dep.target == lazy_name)
+                .count(),
+            2
+        );
+        let card = build
+            .modules
+            .iter()
+            .find(|module| module.source_path == "views/card.tsx")
+            .unwrap();
+        assert!(
+            card.dependencies
+                .iter()
+                .any(|dep| dep.target == build.entry_asset)
+        );
+        assert!(card.code.contains("react/jsx-runtime"));
+        build.verify_integrity().unwrap();
+        assert_eq!(build, build_react_client(&config).unwrap());
+
+        let (_other, mut relocated) = fixture(&files);
+        relocated.externals = config.externals.clone();
+        relocated.compile = config.compile.clone();
+        assert_eq!(build, build_react_client(&relocated).unwrap());
+        fs::write(
+            config.project_root.join("value.js"),
+            "export const value = 8;",
+        )
+        .unwrap();
+        assert_ne!(
+            build.graph_hash,
+            build_react_client(&config).unwrap().graph_hash
+        );
+    }
+
+    #[test]
+    fn client_build_dynamic_imports_preserve_literals_comments_and_templates() {
+        let source = r#"const text = "import('./fake.js')"; const regex = /import\('\.\/fake.js'\)/;
+const object = { import(path) { return path; } };
+object.import('./fake.js');
+const escaped = a\u{62}import('./fake.js');
+export const meta = import.meta;
+export const load = () => import /* keep */ (
+    (('./l\u0061zy.js'))
+);
+export const describe = async () => `loaded:${(await import('./lazy.js')).value}`;
+"#;
+        let (_directory, mut config) = fixture(&[
+            ("app.js", source),
+            ("lazy.js", "export const value = 1;"),
+        ]);
+        config.compile.generate_source_maps = true;
+        let build = build_react_client(&config).expect("exact lexical import rewriting");
+        let entry = &build.modules[0];
+        assert_eq!(entry.dependencies.len(), 2);
+        assert!(entry.code.contains("import /* keep */ (\n    ((\"./"));
+        assert!(entry.code.contains("object.import('./fake.js')"));
+        assert!(entry.code.contains(r"a\u{62}import('./fake.js')"));
+        assert!(entry.code.contains("import.meta"));
+        assert!(entry.code.contains("`loaded:${(await import("));
+        let map: serde_json::Value =
+            serde_json::from_str(entry.source_map.as_ref().unwrap()).unwrap();
+        assert_eq!(map["sourcesContent"][0], source);
+    }
+
+    #[test]
+    fn client_build_dynamic_imports_enforce_missing_ambiguous_and_root_bounds() {
+        let (directory, config) = fixture(&[
+            ("app.js", "export const load = () => import('./missing.js');"),
+            ("both.js", "export const value = 1;"),
+            ("both.ts", "export const value: number = 2;"),
+        ]);
+        assert_eq!(
+            build_react_client(&config).unwrap_err().code,
+            "FE-REACT-BUILD-MISSING"
+        );
+        fs::write(&config.entry, "export const load = () => import('./both');").unwrap();
+        assert_eq!(
+            build_react_client(&config).unwrap_err().code,
+            "FE-REACT-BUILD-AMBIGUOUS"
+        );
+        fs::write(
+            &config.entry,
+            "if (false) { import('./missing.js'); } export {};",
+        )
+        .unwrap();
+        assert_eq!(
+            build_react_client(&config).unwrap_err().code,
+            "FE-REACT-BUILD-MISSING"
+        );
+
+        let nested = directory.path().join("project");
+        fs::create_dir(&nested).unwrap();
+        let mut confined = config.clone();
+        confined.project_root = nested.clone();
+        confined.entry = nested.join("app.js");
+        fs::write(
+            &confined.entry,
+            "export const load = () => import('../both.js');",
+        )
+        .unwrap();
+        assert_eq!(
+            build_react_client(&confined).unwrap_err().code,
+            "FE-REACT-BUILD-ROOT"
+        );
+    }
+
+    #[test]
+    fn client_build_dynamic_imports_share_all_graph_budgets_and_external_policy() {
+        let app = "export const load = () => import('./lazy.js');";
+        let lazy = "export const value = 1;";
+        let (_directory, mut config) = fixture(&[("app.js", app), ("lazy.js", lazy)]);
+        let baseline = build_react_client(&config).unwrap();
+        config.max_modules = 1;
+        assert_eq!(
+            build_react_client(&config).unwrap_err().code,
+            "FE-REACT-BUILD-LIMIT"
+        );
+        config.max_modules = 2;
+        config.max_source_bytes = app.len() + lazy.len();
+        build_react_client(&config).expect("exact source budget");
+        config.max_source_bytes -= 1;
+        assert_eq!(
+            build_react_client(&config).unwrap_err().code,
+            "FE-REACT-BUILD-LIMIT"
+        );
+        config.max_source_bytes += 1;
+        config.max_output_bytes = baseline
+            .modules
+            .iter()
+            .map(|module| module.code.len())
+            .sum();
+        build_react_client(&config).expect("exact output budget");
+        config.max_output_bytes -= 1;
+        assert_eq!(
+            build_react_client(&config).unwrap_err().code,
+            "FE-REACT-BUILD-LIMIT"
+        );
+        config.max_output_bytes = 4096;
+        config.max_source_bytes = 4096;
+        fs::write(
+            &config.entry,
+            "export const load = () => import('optional-ui');",
+        )
+        .unwrap();
+        assert_eq!(
+            build_react_client(&config).unwrap_err().code,
+            "FE-REACT-BUILD-EXTERNAL"
+        );
+        config.externals.insert(
+            "optional-ui".into(),
+            "https://example.invalid/ui.mjs".into(),
+        );
+        let build = build_react_client(&config).unwrap();
+        assert_eq!(build.modules.len(), 1);
+        assert!(build.modules[0].code.contains("import(\"optional-ui\")"));
+        assert!(build.modules[0].dependencies[0].external);
+        build.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn dynamic_import_literal_edits_preserve_line_continuations_and_utf16_maps() {
+        let original = "const emoji = '😀'; const load = () => import('./la\\\nzy.js'); const value = 1;";
+        let tree = CanonicalEs2020Parser
+            .parse(original, crate::ast::ParseGoal::Module)
+            .unwrap();
+        let mut ast = serde_json::to_value(tree).unwrap();
+        let imports = bounded_dynamic_imports(original, &ast, "app.js").unwrap();
+        assert_eq!(imports.len(), 1);
+        let mut replacement = js_string("./hashed.mjs").unwrap();
+        replacement.insert_str(replacement.len() - 1, "\\\n");
+        let edits = [SourceEdit {
+            start: imports[0].span.start,
+            end: imports[0].span.end,
+            replacement,
+        }];
+        let targets = BTreeMap::from([("./lazy.js".into(), "./hashed.mjs".into())]);
+        verify_dynamic_import_edits(original, &mut ast, &edits, &targets).unwrap();
+        let generated = apply_edits(original, &edits).unwrap();
+        assert_eq!(line_offsets(original).len(), line_offsets(&generated).len());
+        let value_offset = original.find("const value").unwrap();
+        let (_, value_column) =
+            offset_line_column(original, &line_offsets(original), value_offset).unwrap();
+        let map = serde_json::json!({
+            "version": 3, "sources": ["app.js"], "sourcesContent": [original], "names": [],
+            "mappings": format!(
+                "{};{}",
+                encode_vlq(&[0, 0, 0, 0]),
+                encode_vlq(&[value_column as i64, 0, 1, value_column as i64]),
+            ),
+        })
+        .to_string();
+        let mapped: serde_json::Value = serde_json::from_str(
+            &remap_source_map(&map, original, &generated, &edits, "modules/app.mjs").unwrap(),
+        )
+        .unwrap();
+        let segment = decode_vlq(
+            mapped["mappings"]
+                .as_str()
+                .unwrap()
+                .split(';')
+                .nth(1)
+                .unwrap(),
+        )
+        .unwrap();
+        let (_, new_column) = offset_line_column(
+            &generated,
+            &line_offsets(&generated),
+            generated.find("const value").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(segment, vec![new_column as i64, 0, 1, value_column as i64]);
+        assert_eq!(mapped["sourcesContent"][0], original);
+    }
+
+    #[test]
+    fn dynamic_import_edit_verifier_rejects_changes_to_another_expression() {
+        let source = "const text = './lazy.js'; export const load = () => import('./lazy.js');";
+        let tree = CanonicalEs2020Parser
+            .parse(source, crate::ast::ParseGoal::Module)
+            .unwrap();
+        let mut expected = serde_json::to_value(tree).unwrap();
+        let start = source.find("'./lazy.js'").unwrap();
+        let edits = [SourceEdit {
+            start,
+            end: start + "'./lazy.js'".len(),
+            replacement: "\"./other.mjs\"".into(),
+        }];
+        let targets = BTreeMap::from([("./lazy.js".into(), "./other.mjs".into())]);
+        assert_eq!(
+            verify_dynamic_import_edits(source, &mut expected, &edits, &targets)
+                .unwrap_err()
+                .code,
+            "FE-REACT-BUILD-SPAN"
+        );
+    }
+
     #[test]
     fn client_build_preserves_esm_cycles_and_reexports() {
         let (_directory, config) = fixture(&[
@@ -1068,7 +1581,9 @@ mod tests {
         assert_eq!(error.code, "FE-REACT-BUILD-EXTERNAL");
         assert!(error.message.contains("--external react/jsx-runtime="));
         for source in [
-            "const load = () => import('./later.js');",
+            "const path = './later.js'; const load = () => import(path);",
+            "const load = () => import('./' + 'later.js');",
+            "const load = () => import('./later.js', {});",
             "const data = require('./data.js');",
             "module.exports = 1;",
         ] {

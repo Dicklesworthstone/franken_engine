@@ -10,6 +10,7 @@ on:
       - 'crates/franken-engine/src/react_client_build.rs'
       - 'crates/franken-engine/src/jsx_tsx_parser.rs'
       - 'crates/franken-engine/tests/frankenctl_cli.rs'
+      - 'scripts/e2e/react_client_dynamic_imports.mjs'
       - 'crates/franken-engine/Cargo.toml'
       - 'rust-toolchain.toml'
       - 'crates/franken-engine/src/checkpoint.rs'
@@ -698,6 +699,13 @@ jobs:
         run: |
           cargo test --locked -j1 -p frankenengine-engine --no-default-features \
             --test frankenctl_cli react -- --nocapture --test-threads=1
+      - name: Execute emitted lazy modules with Node
+        if: always()
+        run: |
+          set -euo pipefail
+          node --version
+          react_target_dir="$(cargo metadata --locked --no-deps --format-version 1 | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')"
+          node scripts/e2e/react_client_dynamic_imports.mjs "$react_target_dir/debug/frankenctl"
       - name: Verify validation did not alter tracked source
         if: always()
         run: git diff --exit-code

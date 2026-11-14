@@ -785,7 +785,7 @@ frankenctl react  tsx        ─┼─ × ─ ───┤              ─┼�
 ```
 
 - **`frankenctl react compile`** lowers a complete JS/JSX or TS/TSX module under `--source-form jsx|tsx`, preserving imports, exports, and directive prologues while erasing TypeScript types. Choose `--runtime classic|automatic|jsx-dev`; `--sourcemap` retains the input filename and original source. The explicit `jsx-fragment` form accepts one JSX expression and needs no runtime option.
-- **`frankenctl react build --target client`** offers a bounded ES-module client-build preview. It compiles complete local JS/JSX/TS/TSX modules, follows static imports and re-exports, preserves module boundaries and live bindings, and emits JavaScript assets with source maps. `ssr` and `hydration` remain unsupported and return exit 25.
+- **`frankenctl react build --target client`** offers a bounded ES-module client-build preview. It compiles complete local JS/JSX/TS/TSX modules, follows static imports, re-exports, and literal dynamic imports, preserves module boundaries and live bindings, and emits JavaScript assets with source maps. `ssr` and `hydration` remain unsupported and return exit 25.
 - **`frankenctl react doctor`** compiles actual source files with `--input <file|directory>` to report syntax errors and JSX lowering warnings, including warnings inside component functions. It also accepts an existing mismatch catalog with `--catalog` and supports severity and target filters.
 - **`frankenctl react contract`** emits the React compile/build contract artifact for downstream consumption.
 
@@ -812,8 +812,12 @@ without a verified origin remain unmapped.
 
 Source discovery stays inside `--root` (the entry directory by default), including
 symlink targets. Missing or ambiguous local files, undeclared bare dependencies,
-CommonJS, dynamic imports, and non-code assets fail before publication. Defaults
+CommonJS, computed dynamic imports, import options, and non-code assets fail before publication. Defaults
 bound the build to 1,024 modules, 32 MiB of source, and 64 MiB of generated output.
+Literal calls such as `import('./Card.tsx')`, including those used by `React.lazy`,
+are resolved and emitted at build time but retain native lazy `import()` execution.
+They share the static graph's root restrictions, provider configuration, and budgets.
+The preview emits separate ESM files; it does not combine them into chunks.
 External modules and DOM execution remain the selected runtime's responsibility;
 the preview is not an npm bundler or a claim of SSR/hydration support.
 

@@ -1498,6 +1498,28 @@ where
     })
 }
 
+/// Locate lexical `import(...)` candidates in already validated JavaScript.
+/// The shared scanner preserves strings, comments, regexes and template raw
+/// text, while visiting template substitutions and nested function bodies.
+/// Object/class methods named `import` can also be candidates; consumers must
+/// confirm the call in the module AST before rewriting these byte ranges.
+pub(crate) fn import_call_candidates(
+    source: &str,
+) -> Result<Vec<std::ops::Range<usize>>, JsxParseError> {
+    let config = JsxParserConfig::default();
+    let mut scanner = JsExpressionScanner::new(source, &config, 0, false);
+    scanner.import_calls = Some(Vec::new());
+    if source.trim_start_matches('\u{feff}').starts_with("#!") {
+        scanner.pos = source
+            .find(['\r', '\n', '\u{2028}', '\u{2029}'])
+            .unwrap_or(source.len());
+    }
+    scanner.scan_code(None, 0, true, false)?;
+    let mut calls = scanner.import_calls.unwrap_or_default();
+    calls.sort_unstable_by_key(|range| range.start);
+    Ok(calls)
+}
+
 // Bound lexical recursion separately from JSX nesting: ordinary JavaScript
 // parentheses must not consume the JSX element depth budget.
 const MAX_JS_EXPRESSION_NESTING: usize = 256;
@@ -1516,6 +1538,7 @@ struct JsExpressionScanner<'a> {
     collect_jsx: bool,
     saw_token: bool,
     jsx_regions: Vec<EmbeddedJsxRegion>,
+    import_calls: Option<Vec<std::ops::Range<usize>>>,
 }
 
 impl<'a> JsExpressionScanner<'a> {
@@ -1533,6 +1556,7 @@ impl<'a> JsExpressionScanner<'a> {
             collect_jsx,
             saw_token: false,
             jsx_regions: Vec::new(),
+            import_calls: None,
         }
     }
 
@@ -1570,6 +1594,7 @@ impl<'a> JsExpressionScanner<'a> {
         let mut control_parenthesis = false;
         let mut for_parenthesis = false;
         let mut function_parenthesis = None;
+        let mut import_parenthesis = None;
         let mut class_bodies = Vec::new();
         let mut statement_start = statement_context;
         // Some marks a block; its boolean says whether a statement, rather
@@ -1582,7 +1607,7 @@ impl<'a> JsExpressionScanner<'a> {
             }
             if byte >= 0x80 {
                 let ch = self.source[self.pos..].chars().next().unwrap_or_default();
-                if ch.is_whitespace() {
+                if ch.is_whitespace() || ch == '\u{feff}' {
                     self.pos += ch.len_utf8();
                     continue;
                 }
@@ -1617,6 +1642,7 @@ impl<'a> JsExpressionScanner<'a> {
             let at_statement_start = statement_start;
             statement_start = false;
             let block_after_previous = next_block.take();
+            let import_after_previous = import_parenthesis.take();
             match byte {
                 b'\'' | b'"' => {
                     self.scan_quoted(byte)?;
@@ -1671,6 +1697,11 @@ impl<'a> JsExpressionScanner<'a> {
                     for_parenthesis = false;
                     self.pos += 1;
                     self.scan_code(Some(b')'), nesting + 1, false, is_for)?;
+                    if let Some(start) = import_after_previous
+                        && let Some(calls) = self.import_calls.as_mut()
+                    {
+                        calls.push(start..self.pos);
+                    }
                     expect_operand = is_control;
                     statement_start = is_control && statement_context;
                     next_block = function_body.or_else(|| is_control.then_some(true));
@@ -1728,21 +1759,43 @@ impl<'a> JsExpressionScanner<'a> {
                     after_dot = false;
                 }
                 byte if byte.is_ascii_alphabetic()
-                    || matches!(byte, b'_' | b'$')
+                    || matches!(byte, b'_' | b'$' | b'\\')
                     || byte >= 0x80 =>
                 {
                     let start = self.pos;
                     while let Some(ch) = self.source[self.pos..].chars().next() {
-                        if ch.is_alphanumeric()
+                        if ch == '\\' && self.source[self.pos..].starts_with("\\u") {
+                            // Keep an escaped identifier as one token. Splitting
+                            // `a\\u{62}import` would invent an import keyword.
+                            self.pos += 2;
+                            if self.byte(0) == Some(b'{') {
+                                self.pos += 1;
+                                let Some(end) = self.source[self.pos..].find('}') else {
+                                    return Err(self.error("Unterminated identifier escape"));
+                                };
+                                self.pos += end + 1;
+                            } else {
+                                for _ in 0..4 {
+                                    let Some(next) = self.source[self.pos..].chars().next() else {
+                                        return Err(self.error("Incomplete identifier escape"));
+                                    };
+                                    self.pos += next.len_utf8();
+                                }
+                            }
+                        } else if ch.is_alphanumeric()
                             || matches!(ch, '_' | '$')
-                            || (!ch.is_ascii() && !ch.is_whitespace())
+                            || (!ch.is_ascii() && !ch.is_whitespace() && ch != '\u{feff}')
                         {
                             self.pos += ch.len_utf8();
                         } else {
                             break;
                         }
                     }
+                    if self.pos == start {
+                        return Err(self.error("Invalid identifier escape"));
+                    }
                     let word = &self.source[start..self.pos];
+                    import_parenthesis = (!after_dot && word == "import").then_some(start);
                     control_parenthesis = !after_dot
                         && matches!(word, "if" | "for" | "while" | "with" | "switch" | "catch");
                     for_parenthesis = !after_dot && word == "for";
@@ -2289,6 +2342,42 @@ pub fn write_jsx_evidence_bundle(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn import_candidates_skip_non_code_and_member_names() {
+        let source = r##"#!/usr/bin/env node
+// import('comment.js')
+const text = "import('string.js')";
+const regex = /import\('regex.js'\)/;
+const raw = `import('raw.js') ${import('./template.js')}`;
+const escaped = a\u{62}import('./identifier.js');
+object.import('./member.js');
+object?.import('./optional-member.js');
+const load = () => import /* comment */ (
+    './lazy.js'
+);
+if (true) /import\('statement-regex.js'\)/.test(text);
+"##;
+        let calls = import_call_candidates(source).expect("validated module scanner");
+        let calls: Vec<_> = calls.into_iter().map(|range| &source[range]).collect();
+        assert_eq!(
+            calls,
+            [
+                "import('./template.js')",
+                "import /* comment */ (\n    './lazy.js'\n)",
+            ]
+        );
+    }
+
+    #[test]
+    fn import_candidates_keep_nested_byte_offsets_and_division_context() {
+        let source = "const text = '😀'; const value = 4 / 2; function f() { return import('./a.js').then(() => import('./b.js')); }";
+        let calls = import_call_candidates(source).expect("nested calls");
+        assert_eq!(calls.len(), 2);
+        assert_eq!(&source[calls[0].clone()], "import('./a.js')");
+        assert_eq!(&source[calls[1].clone()], "import('./b.js')");
+        assert!(calls[0].end < calls[1].start);
+    }
 
     fn default_config() -> JsxParserConfig {
         JsxParserConfig::default()

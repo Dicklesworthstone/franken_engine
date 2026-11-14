@@ -15565,7 +15565,8 @@ fn react_build_usage() -> String {
         "  --root bounds source access (default: entry directory); --external is repeatable.",
         "  --out-dir publishes index.html, import-map.json and modules under the graph hash.",
         "  Without --out-dir, the JSON report contains all generated assets.",
-        "  CommonJS and dynamic imports are rejected; SSR and hydration remain unsupported.",
+        "  Literal import('./module') calls join the bounded graph and retain lazy ESM execution.",
+        "  Computed imports, import options and CommonJS are rejected; SSR and hydration remain unsupported.",
     ]
     .join("\n")
 }

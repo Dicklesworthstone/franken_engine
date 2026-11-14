@@ -9749,13 +9749,22 @@ impl InterpreterCore {
     pub(super) fn resolve_module_specifier(
         &self,
         specifier: &str,
-    ) -> Result<String, InterpreterError> {
+    ) -> Result<package_resolution::ModuleResolutionTarget, InterpreterError> {
+        use package_resolution::ModuleResolutionTarget;
+
+        if let Some(native) = NativeBuiltinModule::from_specifier(specifier) {
+            return Ok(ModuleResolutionTarget::Native(native));
+        }
         // bd-mgfhs: an ES module's bare specifier names a package, resolved
-        // like `require` but with the `import` condition.
+        // like `require` but with the `import` condition. A private mapping
+        // may select a native provider instead of a file.
         if Self::is_bare_module_specifier(specifier) {
-            let candidate = self.resolve_bare_import_specifier(specifier)?;
+            let target = self.resolve_bare_import_specifier(specifier)?;
+            let ModuleResolutionTarget::File(candidate) = target else {
+                return Ok(target);
+            };
             let canonical = self.canonicalize_module_candidate(specifier, &candidate)?;
-            return Ok(self.module_key_for_canonical_path(&canonical));
+            return Ok(ModuleResolutionTarget::File(canonical));
         }
         let resolved = self.resolve_specifier_base(specifier)?;
         let candidate = self.resolve_module_candidate(&resolved).ok_or_else(|| {
@@ -9765,7 +9774,7 @@ impl InterpreterCore {
             }
         })?;
         let canonical = self.canonicalize_module_candidate(specifier, &candidate)?;
-        Ok(self.module_key_for_canonical_path(&canonical))
+        Ok(ModuleResolutionTarget::File(canonical))
     }
 
     /// Authorize an exact captured route before consulting the evaluation
@@ -11102,32 +11111,34 @@ impl InterpreterCore {
             );
             return Ok(namespace);
         }
-        if delivered.is_none()
-            && let Some(native) = NativeBuiltinModule::from_specifier(specifier)
-        {
-            Self::check_module_import_attributes(
-                specifier,
-                ImportStyle::Import,
-                ModuleSyntax::EsModule,
-                import_attributes,
-            )?;
-            let namespace = self.load_ordinary_native_builtin_namespace(
-                module,
-                specifier,
-                native,
-                import_bound.as_ref(),
-            )?;
-            *native_effect = matches!(
-                native,
-                NativeBuiltinModule::Http
-                    | NativeBuiltinModule::Https
-                    | NativeBuiltinModule::ChildProcess
-            );
-            return Ok(namespace);
-        }
         let resolved = match &delivered {
             Some(source) => source.module.record.id.clone(),
-            None => self.resolve_module_specifier(specifier)?,
+            None => match self.resolve_module_specifier(specifier)? {
+                package_resolution::ModuleResolutionTarget::File(path) => {
+                    self.module_key_for_canonical_path(&path)
+                }
+                package_resolution::ModuleResolutionTarget::Native(native) => {
+                    Self::check_module_import_attributes(
+                        specifier,
+                        ImportStyle::Import,
+                        ModuleSyntax::EsModule,
+                        import_attributes,
+                    )?;
+                    let namespace = self.load_ordinary_native_builtin_namespace(
+                        module,
+                        specifier,
+                        native,
+                        import_bound.as_ref(),
+                    )?;
+                    *native_effect = matches!(
+                        native,
+                        NativeBuiltinModule::Http
+                            | NativeBuiltinModule::Https
+                            | NativeBuiltinModule::ChildProcess
+                    );
+                    return Ok(namespace);
+                }
+            },
         };
         self.load_module_resolved(
             module,

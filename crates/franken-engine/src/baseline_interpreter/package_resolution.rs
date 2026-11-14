@@ -90,6 +90,22 @@ enum PackageLookupMode {
     PackageUrl,
 }
 
+/// Package resolution can select a native provider as well as a source file.
+/// Keep that distinction until the loader applies the provider's capabilities;
+/// a core-module name must never be canonicalized or opened as a filesystem path.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum ModuleResolutionTarget {
+    File(PathBuf),
+    Native(NativeBuiltinModule),
+}
+
+#[cfg(test)]
+impl From<PathBuf> for ModuleResolutionTarget {
+    fn from(path: PathBuf) -> Self {
+        Self::File(path)
+    }
+}
+
 /// Largest package.json the resolver reads.
 const MAX_PACKAGE_MANIFEST_BYTES: u64 = 1 << 20;
 
@@ -828,7 +844,20 @@ impl InterpreterCore {
         specifier: &str,
     ) -> Result<PathBuf, InterpreterError> {
         let conditions = self.effective_module_conditions(specifier, REQUIRE_EXPORT_CONDITIONS)?;
-        self.resolve_bare_package_specifier(specifier, &conditions, PackageLookupMode::CommonJs)
+        match self.resolve_bare_package_specifier(
+            specifier,
+            &conditions,
+            PackageLookupMode::CommonJs,
+        )? {
+            ModuleResolutionTarget::File(path) => Ok(path),
+            ModuleResolutionTarget::Native(_) => Err(InterpreterError::ModuleResolutionFailed {
+                specifier: specifier.to_string(),
+                reason: ModuleResolutionFailureReason::Other(
+                    "ERR_INVALID_URL_SCHEME: a CommonJS package import must resolve to a file"
+                        .to_string(),
+                ),
+            }),
+        }
     }
 
     /// An ES module's bare specifier (bd-mgfhs): match `import` conditions,
@@ -836,7 +865,7 @@ impl InterpreterCore {
     pub(super) fn resolve_bare_import_specifier(
         &self,
         specifier: &str,
-    ) -> Result<PathBuf, InterpreterError> {
+    ) -> Result<ModuleResolutionTarget, InterpreterError> {
         let conditions = self.effective_module_conditions(specifier, IMPORT_EXPORT_CONDITIONS)?;
         self.resolve_bare_package_specifier(specifier, &conditions, PackageLookupMode::PackageUrl)
     }
@@ -1116,7 +1145,7 @@ impl InterpreterCore {
         specifier: &str,
         conditions: &[&str],
         mode: PackageLookupMode,
-    ) -> Result<PathBuf, InterpreterError> {
+    ) -> Result<ModuleResolutionTarget, InterpreterError> {
         let failed = |reason| InterpreterError::ModuleResolutionFailed {
             specifier: specifier.to_string(),
             reason,
@@ -1147,7 +1176,9 @@ impl InterpreterCore {
             let target = resolve_package_imports_target(&scope, specifier, imports, conditions)
                 .map_err(|reason| failed(ModuleResolutionFailureReason::Other(reason)))?;
             return match target {
-                ExportsTargetResolution::Found(path) if path.is_file() => Ok(path),
+                ExportsTargetResolution::Found(path) if path.is_file() => {
+                    Ok(ModuleResolutionTarget::File(path))
+                }
                 ExportsTargetResolution::Package(target) => {
                     self.resolve_named_require_from(
                         &target,
@@ -1186,11 +1217,19 @@ impl InterpreterCore {
         root: &Path,
         conditions: &[&str],
         mode: PackageLookupMode,
-    ) -> Result<PathBuf, InterpreterError> {
+    ) -> Result<ModuleResolutionTarget, InterpreterError> {
         let failed = |reason| InterpreterError::ModuleResolutionFailed {
             specifier: specifier.to_string(),
             reason,
         };
+        // PACKAGE_RESOLVE gives core modules precedence over self references
+        // and node_modules, including when a package imports alias selected
+        // the bare name. The loader, rather than package lookup, authorizes
+        // and instantiates the native provider. URL targets in an imports map
+        // were already rejected by PACKAGE_TARGET_RESOLVE.
+        if let Some(native) = NativeBuiltinModule::from_specifier(specifier) {
+            return Ok(ModuleResolutionTarget::Native(native));
+        }
         if specifier.starts_with("node:") || NODE_CORE_MODULE_NAMES.contains(&specifier) {
             return Err(failed(ModuleResolutionFailureReason::Other(format!(
                 "`{specifier}` is a Node core module without a runtime module object"
@@ -1214,7 +1253,7 @@ impl InterpreterCore {
                         )))
                     })?;
             return if target.is_file() {
-                Ok(target)
+                Ok(ModuleResolutionTarget::File(target))
             } else {
                 Err(failed(ModuleResolutionFailureReason::ModuleNotFound))
             };
@@ -1251,7 +1290,7 @@ impl InterpreterCore {
                     )))
                 })?;
                 return if target.is_file() {
-                    Ok(target)
+                    Ok(ModuleResolutionTarget::File(target))
                 } else {
                     Err(failed(ModuleResolutionFailureReason::ModuleNotFound))
                 };
@@ -1278,12 +1317,13 @@ impl InterpreterCore {
                 // file is absent. Never substitute another installed version.
                 return found
                     .filter(|candidate| candidate.is_file())
+                    .map(ModuleResolutionTarget::File)
                     .ok_or_else(|| failed(ModuleResolutionFailureReason::ModuleNotFound));
             }
             if let Some(found) = self
                 .resolve_require_candidate(&modules_dir.join(specifier), specifier.ends_with('/'))?
             {
-                return Ok(found);
+                return Ok(ModuleResolutionTarget::File(found));
             }
         }
         Err(failed(ModuleResolutionFailureReason::ModuleNotFound))
@@ -1348,14 +1388,69 @@ mod tests {
         fs::write(path, content).expect("fixture file");
     }
 
-    fn assert_package_path(actual: Result<PathBuf, InterpreterError>, expected: &Path) {
+    fn assert_package_path(
+        actual: Result<impl Into<ModuleResolutionTarget>, InterpreterError>,
+        expected: &Path,
+    ) {
+        let ModuleResolutionTarget::File(actual) = actual.expect("resolved package").into() else {
+            panic!("expected a source file, got a native provider");
+        };
         assert_eq!(
-            actual
-                .expect("resolved package")
-                .canonicalize()
-                .expect("resolved path"),
+            actual.canonicalize().expect("resolved path"),
             expected.canonicalize().expect("expected path")
         );
+    }
+
+    #[test]
+    fn private_imports_keep_native_provider_identity_and_condition_selection() {
+        let root = tempfile::tempdir().unwrap();
+        write_package_fixture(
+            root.path(),
+            "package.json",
+            r##"{"imports":{"#path":"path","#parts/*":"path/*","#dual":{"import":"path/posix","require":"./fallback.cjs"},"#invalid":"node:path","#opaque":"vm"}}"##,
+        );
+        write_package_fixture(root.path(), "fallback.cjs", "module.exports = 42;");
+        // A user package with the core module's name must not be selected.
+        write_package_fixture(
+            root.path(),
+            "node_modules/path/package.json",
+            r#"{"main":"index.js"}"#,
+        );
+        write_package_fixture(
+            root.path(),
+            "node_modules/path/index.js",
+            "throw 'core module was shadowed';",
+        );
+        write_package_fixture(
+            root.path(),
+            "node_modules/vm/index.js",
+            "throw 'unsupported core module was shadowed';",
+        );
+        let core = package_test_core(root.path());
+        for (request, expected) in [
+            ("#path", NativeBuiltinModule::Path),
+            ("#parts/posix", NativeBuiltinModule::PathPosix),
+            ("#parts/win32", NativeBuiltinModule::PathWin32),
+            ("#dual", NativeBuiltinModule::PathPosix),
+        ] {
+            assert_eq!(
+                core.resolve_bare_import_specifier(request).unwrap(),
+                ModuleResolutionTarget::Native(expected),
+                "{request}"
+            );
+        }
+        assert_package_path(
+            core.resolve_bare_require_specifier("#dual"),
+            &root.path().join("fallback.cjs"),
+        );
+        // Node's CommonJS loader requires package-import targets to be file
+        // URLs. Adding ESM support must not widen this separate boundary.
+        let error = core.resolve_bare_require_specifier("#path").unwrap_err();
+        assert!(error.to_string().contains("ERR_INVALID_URL_SCHEME"));
+        let invalid = core.resolve_bare_import_specifier("#invalid").unwrap_err();
+        assert!(invalid.to_string().contains("ERR_INVALID_PACKAGE_TARGET"));
+        let opaque = core.resolve_bare_import_specifier("#opaque").unwrap_err();
+        assert!(opaque.to_string().contains("core module"));
     }
 
     #[test]

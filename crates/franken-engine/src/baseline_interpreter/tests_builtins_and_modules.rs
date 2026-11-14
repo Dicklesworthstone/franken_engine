@@ -3495,7 +3495,10 @@ mod module_resolution_security_tests {
         let core = core_with_root(&root, &entry);
         let resolved = core.resolve_module_specifier("./dep")?;
 
-        assert_eq!(Path::new(&resolved), dep.canonicalize()?.as_path());
+        assert_eq!(
+            resolved,
+            package_resolution::ModuleResolutionTarget::File(dep.canonicalize()?)
+        );
         Ok(())
     }
 

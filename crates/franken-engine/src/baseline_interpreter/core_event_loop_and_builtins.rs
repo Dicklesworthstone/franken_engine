@@ -173,7 +173,19 @@ impl InterpreterCore {
                 Some(delivered.module),
             );
         }
-        if let Some(native) = NativeBuiltinModule::from_specifier(specifier) {
+        if NativeBuiltinModule::from_specifier(specifier).is_none()
+            && import_bound.is_some()
+            && !crate::lowering_pipeline::is_bounded_import_specifier(specifier)
+        {
+            return Err(InterpreterError::ModuleResolutionFailed {
+                specifier: specifier.to_string(),
+                reason: ModuleResolutionFailureReason::Other(
+                    "a core module is opaque to the bounded-imports contract".to_string(),
+                ),
+            });
+        }
+        let target = self.resolve_module_specifier(specifier)?;
+        if let package_resolution::ModuleResolutionTarget::Native(native) = target {
             let namespace = self.load_ordinary_native_builtin_namespace(
                 module,
                 specifier,
@@ -188,17 +200,10 @@ impl InterpreterCore {
             );
             return Ok(namespace);
         }
-        if import_bound.is_some()
-            && !crate::lowering_pipeline::is_bounded_import_specifier(specifier)
-        {
-            return Err(InterpreterError::ModuleResolutionFailed {
-                specifier: specifier.to_string(),
-                reason: ModuleResolutionFailureReason::Other(
-                    "a core module is opaque to the bounded-imports contract".to_string(),
-                ),
-            });
-        }
-        let resolved = self.resolve_module_specifier(specifier)?;
+        let package_resolution::ModuleResolutionTarget::File(path) = target else {
+            unreachable!("native import targets returned their namespace above");
+        };
+        let resolved = self.module_key_for_canonical_path(&path);
         self.load_module_resolved(
             module,
             &resolved,

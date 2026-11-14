@@ -16,13 +16,24 @@ use frankenengine_engine::execution_orchestrator::{
 };
 
 fn run(root: &Path, lane: LaneChoice) -> Result<Vec<String>, String> {
+    run_with_capabilities(root, lane, &["module_load", "builtin"])
+}
+
+fn run_with_capabilities(
+    root: &Path,
+    lane: LaneChoice,
+    capabilities: &[&str],
+) -> Result<Vec<String>, String> {
     let entry = root.join("app.mjs");
     let package = ExtensionPackage {
         extension_id: "esm-package-imports".to_string(),
         source: std::fs::read_to_string(&entry).expect("entry source"),
         source_file: Some(entry.display().to_string()),
         module_root: Some(root.display().to_string()),
-        capabilities: vec!["module_load".to_string(), "builtin".to_string()],
+        capabilities: capabilities
+            .iter()
+            .map(|value| (*value).to_string())
+            .collect(),
         version: "1.0.0".to_string(),
         metadata: Default::default(),
     };
@@ -164,4 +175,72 @@ fn lookup_walks_up_from_a_nested_module() {
         ],
         &["nested esm"],
     );
+}
+
+/// Package imports may select a bare core module, just as PACKAGE_RESOLVE
+/// does for a direct ES import. Node v24.22.1 produced these exact lines.
+#[test]
+fn private_imports_select_native_modules_with_shared_namespace_identity() {
+    assert_output(
+        &[
+            (
+                "package.json",
+                r##"{"type":"module","imports":{"#path":"path","#parts/*":"path/*","#conditional":{"import":"path/posix","require":"./fallback.cjs"}}}"##,
+            ),
+            ("fallback.cjs", "module.exports = 'require branch';\n"),
+            (
+                "from_cjs.cjs",
+                "module.exports = require('#conditional');\n",
+            ),
+            (
+                "nested/use.mjs",
+                "export { join } from '#parts/posix';\nexport * as paths from '#path';\n",
+            ),
+            (
+                "app.mjs",
+                "import direct from 'node:path';\nimport alias, { join } from '#path';\nimport * as ns from '#path';\nimport posix from '#conditional';\nimport cjs from './from_cjs.cjs';\nimport { join as nestedJoin, paths } from './nested/use.mjs';\nconsole.log(alias === direct, join('a', 'b'), posix === direct.posix, cjs);\nconsole.log(paths === ns, nestedJoin('c', 'd'));\nimport('#path').then(function (dynamic) { console.log(dynamic === ns, dynamic.default === direct, dynamic.join('e', 'f')); });\n",
+            ),
+        ],
+        &["true a/b true require branch", "true c/d", "true true e/f"],
+    );
+}
+
+#[test]
+fn native_package_imports_recheck_provider_capabilities() {
+    let root = tempfile::tempdir().expect("module root");
+    std::fs::write(
+        root.path().join("package.json"),
+        r##"{"type":"module","imports":{"#path":"path"}}"##,
+    )
+    .unwrap();
+    std::fs::write(root.path().join("app.mjs"), "import '#path';\n").unwrap();
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let error = run_with_capabilities(root.path(), lane, &["module_load"])
+            .expect_err("selecting a native provider must require its builtin capability");
+        assert!(error.contains("builtin"), "{lane:?}: {error}");
+        assert!(
+            error.contains("capability"),
+            "a package alias must not bypass native-provider authorization: {error}"
+        );
+    }
+}
+
+/// URL targets are invalid in package imports even when that URL names a
+/// builtin. An invalid target is distinct from a valid bare builtin target.
+#[test]
+fn package_import_url_targets_stay_invalid() {
+    let root = tempfile::tempdir().expect("module root");
+    std::fs::write(
+        root.path().join("package.json"),
+        r##"{"type":"module","imports":{"#invalid":"node:path"}}"##,
+    )
+    .unwrap();
+    std::fs::write(root.path().join("app.mjs"), "import '#invalid';\n").unwrap();
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let error = run(root.path(), lane).expect_err("a URL target is not a package target");
+        assert!(
+            error.contains("invalid package target"),
+            "{lane:?}: {error}"
+        );
+    }
 }

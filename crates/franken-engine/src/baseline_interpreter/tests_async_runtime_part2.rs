@@ -6331,6 +6331,601 @@ fn readable_unshift_byte_mode_noop_chunks_match_node_bd_fw7zd() {
 }
 
 #[test]
+fn incremental_readable_to_array_registration_is_atomic_bd_305gi_2() {
+    let fixture = || {
+        let mut core = test_interpreter();
+        let options = core
+            .alloc_object_with_properties(&[("objectMode", Value::Bool(true))])
+            .expect("object-mode options");
+        core.write_reg(0, Value::Object(options)).expect("options");
+        let Value::Object(readable) = core
+            .construct_stream_readable(RegRange { start: 0, count: 1 })
+            .expect("generic Readable")
+        else {
+            panic!("Readable must be an object");
+        };
+        core.readable_enqueue_value(readable, Value::str("buffered"), Label::Secret)
+            .expect("preexisting chunk");
+        (core, readable)
+    };
+    let operation =
+        |core: &mut InterpreterCore, readable| core.readable_to_array(Value::Object(readable));
+    let exact_ceiling = calibrate_readable_memory_ceiling(fixture, operation);
+    let (mut refused, readable) = fixture();
+    let before_state = refused.readable_from_streams[&readable].clone();
+    let before_heap_len = refused.heap.len();
+    let before_memory = refused.estimated_memory_bytes();
+    let before_promises = refused.promise_store.len();
+    let before_witness = refused.promise_store.witness_log().to_vec();
+    let before_pumps = refused.pending_readable_from_pumps.clone();
+    refused.config.max_total_memory_bytes = exact_ceiling - 1;
+    assert!(matches!(
+        operation(&mut refused, readable),
+        Err(InterpreterError::MemoryBudgetExceeded { .. })
+    ));
+    assert_eq!(refused.readable_from_streams[&readable], before_state);
+    assert_eq!(refused.heap.len(), before_heap_len);
+    assert_eq!(refused.promise_store.len(), before_promises);
+    assert_eq!(refused.promise_store.witness_log(), before_witness);
+    assert_eq!(refused.pending_readable_from_pumps, before_pumps);
+    assert_eq!(refused.estimated_memory_bytes(), before_memory);
+    assert_eq!(before_memory, refused.recompute_estimated_memory_bytes());
+
+    let (mut exact, readable) = fixture();
+    exact.config.max_total_memory_bytes = exact_ceiling;
+    let Value::Promise(promise) = operation(&mut exact, readable).expect("exact registration")
+    else {
+        panic!("toArray must return a Promise");
+    };
+    let state = &exact.readable_from_streams[&readable];
+    let waiter = state.to_array_waiter.as_ref().expect("private consumer");
+    assert_eq!(state.phase, ReadableFromPumpPhase::Data);
+    assert_eq!(state.buffer.len(), 1, "registration does not eagerly drain");
+    assert!(state.paused);
+    assert!(!state.flowing);
+    assert_eq!(waiter.label, Label::Secret);
+    assert!(waiter.error.is_none());
+    assert!(exact.read_array_like_values(waiter.result).is_empty());
+    assert!(matches!(
+        exact
+            .promise_store
+            .get(crate::promise_model::PromiseHandle(promise))
+            .map(|record| &record.state),
+        Ok(crate::promise_model::PromiseState::Pending)
+    ));
+    assert_eq!(
+        exact.estimated_memory_bytes(),
+        exact.recompute_estimated_memory_bytes()
+    );
+}
+
+#[test]
+fn incremental_readable_to_array_chunk_commit_is_atomic_bd_305gi_2() {
+    let module = test_module_with_functions(Vec::new(), Vec::new());
+    for object_mode in [false, true] {
+        let fixture = || {
+            let mut core = test_interpreter();
+            let options = core
+                .alloc_object_with_properties(&[("objectMode", Value::Bool(object_mode))])
+                .expect("readable options");
+            core.write_reg(0, Value::Object(options)).expect("options");
+            let Value::Object(readable) = core
+                .construct_stream_readable(RegRange { start: 0, count: 1 })
+                .expect("generic Readable")
+            else {
+                panic!("Readable must be an object");
+            };
+            core.readable_to_array(Value::Object(readable))
+                .expect("consumer");
+            core.readable_enqueue_value(readable, Value::str("alpha"), Label::Public)
+                .expect("first chunk");
+            core.readable_enqueue_value(readable, Value::str("beta"), Label::Public)
+                .expect("second chunk");
+            (core, readable)
+        };
+        let operation = |core: &mut InterpreterCore, readable| {
+            let projected = core
+                .clone_readable_state_with_budget(readable)?
+                .expect("live queue");
+            core.drive_readable_to_array(readable, &module, projected)
+        };
+        let exact_ceiling = calibrate_readable_memory_ceiling(&fixture, &operation);
+        let (mut refused, readable) = fixture();
+        let before_state = refused.readable_from_streams[&readable].clone();
+        let result = before_state
+            .to_array_waiter
+            .as_ref()
+            .expect("waiter")
+            .result;
+        let before_result = refused.heap[result.0 as usize].properties.clone();
+        let before_heap_len = refused.heap.len();
+        let before_memory = refused.estimated_memory_bytes();
+        let before_instructions = refused.instructions_executed;
+        let before_pumps = refused.pending_readable_from_pumps.clone();
+        refused.config.max_total_memory_bytes = exact_ceiling - 1;
+        assert!(matches!(
+            operation(&mut refused, readable),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(refused.readable_from_streams[&readable], before_state);
+        assert_eq!(refused.heap[result.0 as usize].properties, before_result);
+        assert_eq!(
+            refused.heap.len(),
+            before_heap_len,
+            "coalesced allocations roll back"
+        );
+        assert_eq!(refused.pending_readable_from_pumps, before_pumps);
+        assert_eq!(refused.instructions_executed, before_instructions);
+        assert_eq!(refused.estimated_memory_bytes(), before_memory);
+        assert_eq!(before_memory, refused.recompute_estimated_memory_bytes());
+
+        refused.config.max_total_memory_bytes = u64::MAX;
+        refused.config.instruction_budget = before_instructions;
+        assert!(matches!(
+            operation(&mut refused, readable),
+            Err(InterpreterError::BudgetExhausted { .. })
+        ));
+        assert_eq!(refused.readable_from_streams[&readable], before_state);
+        assert!(refused.read_array_like_values(result).is_empty());
+
+        let (mut exact, readable) = fixture();
+        exact.config.max_total_memory_bytes = exact_ceiling;
+        operation(&mut exact, readable).expect("exact chunk admission");
+        let state = &exact.readable_from_streams[&readable];
+        let waiter = state.to_array_waiter.as_ref().expect("waiter");
+        let values = exact.read_array_like_values(waiter.result);
+        assert_eq!(values.len(), 1);
+        if object_mode {
+            assert_eq!(values, vec![Value::str("alpha")]);
+            assert_eq!(state.buffer.len(), 1);
+        } else {
+            let view = exact
+                .buffer_like_view(&values[0])
+                .expect("coalesced Buffer");
+            assert_eq!(
+                exact.typed_array_view_bytes(&view).expect("bytes"),
+                b"alphabeta"
+            );
+            assert!(state.buffer.is_empty());
+        }
+        assert_eq!(
+            exact.estimated_memory_bytes(),
+            exact.recompute_estimated_memory_bytes()
+        );
+    }
+}
+
+#[test]
+fn incremental_readable_to_array_retains_selection_labels_bd_305gi_2() {
+    let module = test_module_with_functions(Vec::new(), Vec::new());
+    for finite_source in [false, true] {
+        for invocation in ["direct", "call", "apply", "reflect"] {
+            for secret_register in [0, 1] {
+                let mut core = test_interpreter();
+                let empty = core
+                    .alloc_array_from_values(&[])
+                    .expect("empty arguments/source");
+                core.write_reg_with_label(2, Value::Object(empty), Label::Public)
+                    .expect("argument list");
+                let readable = if finite_source {
+                    core.construct_readable_from(RegRange { start: 2, count: 1 })
+                } else {
+                    core.construct_stream_readable(RegRange { start: 0, count: 0 })
+                };
+                let Value::Object(readable) = readable.expect("public Readable") else {
+                    panic!("Readable must be an object");
+                };
+                let builtin = BuiltinFunction::new_kind(BuiltinFunctionKind::StreamReadableToArray);
+                core.write_reg_with_label(
+                    0,
+                    Value::BuiltinFunction(builtin.clone()),
+                    Label::Public,
+                )
+                .expect("callee");
+                core.write_reg_with_label(1, Value::Object(readable), Label::Public)
+                    .expect("receiver");
+                core.set_register_label(secret_register, Label::Secret)
+                    .expect("classified method or receiver selection");
+                let registration = match invocation {
+                    "direct" => core.dispatch_builtin_function_with_callee_register(
+                        &module,
+                        &builtin,
+                        RegRange { start: 2, count: 0 },
+                        Some(Value::Object(readable)),
+                        Some(1),
+                        0,
+                    ),
+                    "call" | "apply" => core.forward_function_invocation(
+                        Some(&module),
+                        Value::BuiltinFunction(builtin),
+                        Some(0),
+                        RegRange {
+                            start: 1,
+                            count: if invocation == "apply" { 2 } else { 1 },
+                        },
+                        invocation == "apply",
+                    ),
+                    "reflect" => core.reflect_invocation_builtin(
+                        Some(&module),
+                        RegRange { start: 0, count: 3 },
+                        false,
+                    ),
+                    _ => unreachable!(),
+                };
+                let Value::Promise(promise) =
+                    registration.expect("classified consumer registration")
+                else {
+                    panic!("toArray must return a Promise");
+                };
+                assert_eq!(
+                    core.readable_from_streams[&readable]
+                        .to_array_waiter
+                        .as_ref()
+                        .expect("private consumer")
+                        .label,
+                    Label::Secret,
+                );
+                core.clear_pending_hostcall_result_label();
+                if !finite_source {
+                    core.readable_request_eof(readable, Label::Public)
+                        .expect("public empty EOF");
+                }
+                for _ in 0..12 {
+                    if !core.readable_from_streams.contains_key(&readable) {
+                        break;
+                    }
+                    let previous = core.promise_runtime_memory_bytes();
+                    let task = core
+                        .event_loop
+                        .turn()
+                        .macrotask
+                        .expect("pending stream turn");
+                    let transferred = core.begin_promise_task_transfer(previous);
+                    let outcome = core.execute_macrotask_callback(&task, Some(&module));
+                    core.finish_promise_task_transfer(transferred);
+                    outcome.expect("classified empty completion");
+                    assert_eq!(
+                        core.estimated_memory_bytes(),
+                        core.recompute_estimated_memory_bytes()
+                    );
+                }
+                let record = core
+                    .promise_store
+                    .get(crate::promise_model::PromiseHandle(promise))
+                    .expect("consumer Promise");
+                let crate::promise_model::PromiseState::Fulfilled(
+                    crate::object_model::JsValue::Object(result),
+                ) = &record.state
+                else {
+                    panic!("consumer must fulfill with an empty array");
+                };
+                assert_eq!(record.label, Label::Secret);
+                assert_eq!(
+                    core.object_mutation_labels.get(&ObjectId(result.0)),
+                    Some(&Label::Secret)
+                );
+                assert!(core.read_array_like_values(ObjectId(result.0)).is_empty());
+            }
+        }
+    }
+}
+
+#[test]
+fn incremental_readable_to_array_retains_late_buffer_and_eof_labels_bd_305gi_2() {
+    let module = test_module_with_functions(Vec::new(), Vec::new());
+    let mut core = test_interpreter();
+    let Value::Object(readable) = core
+        .construct_stream_readable(RegRange { start: 0, count: 0 })
+        .expect("byte Readable")
+    else {
+        panic!("Readable must be an object");
+    };
+    let Value::Promise(promise) = core
+        .readable_to_array(Value::Object(readable))
+        .expect("consumer")
+    else {
+        panic!("toArray must return a Promise");
+    };
+    let buffer = core
+        .alloc_buffer_from_bytes(b"secret")
+        .expect("chunk Buffer");
+    core.readable_enqueue_value(readable, Value::Object(buffer), Label::Public)
+        .expect("public push");
+    core.join_binary_storage_label(buffer, &Label::Secret)
+        .expect("later classified buffer mutation");
+    let projected = core
+        .clone_readable_state_with_budget(readable)
+        .unwrap()
+        .unwrap();
+    core.drive_readable_to_array(readable, &module, projected)
+        .expect("consume late-classified bytes");
+    let waiter = core.readable_from_streams[&readable]
+        .to_array_waiter
+        .as_ref()
+        .unwrap();
+    let result = waiter.result;
+    assert_eq!(waiter.label, Label::Secret);
+    assert_eq!(
+        core.object_mutation_labels.get(&result),
+        Some(&Label::Secret)
+    );
+    core.readable_request_eof(readable, Label::TopSecret)
+        .expect("classified termination");
+    for _ in 0..12 {
+        if !core.readable_from_streams.contains_key(&readable) {
+            break;
+        }
+        let previous_promise_bytes = core.promise_runtime_memory_bytes();
+        let task = core
+            .event_loop
+            .turn()
+            .macrotask
+            .expect("pending stream turn");
+        let transferred = core.begin_promise_task_transfer(previous_promise_bytes);
+        let outcome = core.execute_macrotask_callback(&task, Some(&module));
+        core.finish_promise_task_transfer(transferred);
+        outcome.expect("stream completion");
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+    let record = core
+        .promise_store
+        .get(crate::promise_model::PromiseHandle(promise))
+        .expect("settled result");
+    assert!(matches!(
+        record.state,
+        crate::promise_model::PromiseState::Fulfilled(_)
+    ));
+    assert_eq!(record.label, Label::TopSecret);
+    assert_eq!(
+        core.object_mutation_labels.get(&result),
+        Some(&Label::TopSecret)
+    );
+    assert_eq!(
+        core.read_array_like_values(result),
+        vec![Value::Object(buffer)]
+    );
+    assert!(!core.readable_from_streams.contains_key(&readable));
+    assert!(core.pending_readable_from_pumps.is_empty());
+}
+
+#[test]
+fn incremental_readable_to_array_preserves_first_error_and_accounting_bd_305gi_2() {
+    let module = test_module_with_functions(Vec::new(), Vec::new());
+    for explicit_destroy in [false, true] {
+        let mut core = test_interpreter();
+        let Value::Object(readable) = core
+            .construct_stream_readable(RegRange { start: 0, count: 0 })
+            .expect("Readable")
+        else {
+            panic!("Readable must be an object");
+        };
+        let Value::Promise(promise) = core.readable_to_array(Value::Object(readable)).unwrap()
+        else {
+            panic!("toArray must return a Promise");
+        };
+        let first_error = Value::str("first classified failure".repeat(100));
+        core.readable_to_array_error_event(readable, Some(&first_error), &Label::Secret)
+            .expect("private error observation");
+        assert!(!core.readable_from_streams[&readable].destroy_requested);
+        if explicit_destroy {
+            core.write_reg(0, Value::str("later destroy failure"))
+                .expect("later error");
+            core.readable_destroy(Value::Object(readable), RegRange { start: 0, count: 1 })
+                .expect("explicit later destroy");
+        }
+        for _ in 0..8 {
+            if !core.readable_from_streams.contains_key(&readable) {
+                break;
+            }
+            let previous_promise_bytes = core.promise_runtime_memory_bytes();
+            let task = core
+                .event_loop
+                .turn()
+                .macrotask
+                .expect("pending stream turn");
+            let transferred = core.begin_promise_task_transfer(previous_promise_bytes);
+            let outcome = core.execute_macrotask_callback(&task, Some(&module));
+            core.finish_promise_task_transfer(transferred);
+            outcome.expect("handled error and close");
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+        let record = core
+            .promise_store
+            .get(crate::promise_model::PromiseHandle(promise))
+            .expect("rejected result");
+        assert_eq!(
+            record.state,
+            crate::promise_model::PromiseState::Rejected(InterpreterCore::value_to_js_value(
+                &first_error
+            ))
+        );
+        assert_eq!(record.label, Label::Secret);
+        assert_eq!(
+            core.promise_store
+                .witness_log()
+                .iter()
+                .filter(|event| matches!(
+                    event,
+                    crate::promise_model::WitnessEvent::PromiseRejected { handle, .. }
+                        if handle.0 == promise
+                ))
+                .count(),
+            1,
+            "each consumer rejects exactly once despite later error and close phases",
+        );
+        assert!(!core.readable_from_streams.contains_key(&readable));
+        assert!(core.pending_readable_from_pumps.is_empty());
+    }
+}
+
+#[test]
+fn readable_to_array_terminal_budget_releases_live_state_before_admission_bd_305gi_2() {
+    for finite_source in [false, true] {
+        for label in [
+            Label::Public,
+            Label::Custom {
+                name: "completion".into(),
+                level: 7,
+            },
+        ] {
+            let fixture = || {
+                let mut core = test_interpreter();
+                let source = core.alloc_array_from_values(&[]).expect("empty source");
+                core.write_reg_with_label(0, Value::Object(source), label.clone())
+                    .expect("source");
+                let readable = if finite_source {
+                    core.construct_readable_from(RegRange { start: 0, count: 1 })
+                } else {
+                    core.construct_stream_readable(RegRange { start: 0, count: 0 })
+                };
+                let Value::Object(readable) = readable.expect("Readable") else {
+                    panic!("object");
+                };
+                let Value::Promise(promise) =
+                    core.readable_to_array(Value::Object(readable)).unwrap()
+                else {
+                    panic!("Promise");
+                };
+                if !finite_source {
+                    core.readable_request_eof(readable, label.clone())
+                        .expect("labelled EOF");
+                }
+                let state = core.readable_from_streams.get_mut(&readable).unwrap();
+                // A drained queue retains its allocation until the live
+                // kernel is released. Include that real resident storage so
+                // even Custom label promotion fits below the live footprint.
+                state.buffer.reserve(16);
+                state.phase = ReadableFromPumpPhase::SettleToArray;
+                core.sync_estimated_memory_bytes()
+                    .expect("retained drained queue accounting");
+                (core, readable, crate::promise_model::PromiseHandle(promise))
+            };
+            let (probe, readable, promise) = fixture();
+            let state = &probe.readable_from_streams[&readable];
+            let result = state.to_array_waiter.as_ref().unwrap().result;
+            let result_value = InterpreterCore::value_to_js_value(&Value::Object(result));
+            let (store_bytes, queue_bytes) = probe
+                .promise_store
+                .projected_fulfill_memory_bytes(
+                    promise,
+                    &result_value,
+                    &label,
+                    &probe.event_loop.microtasks,
+                )
+                .expect("projected settlement");
+            let promise_growth = store_bytes - probe.promise_store.estimated_memory_bytes()
+                + queue_bytes
+                - probe.event_loop.microtasks.estimated_memory_bytes();
+            let result_label_bytes = if label == Label::Public {
+                0
+            } else {
+                InterpreterCore::estimate_object_mutation_label_entry_bytes(&label)
+            };
+            let label_temporary = InterpreterCore::estimate_label_bytes(&label);
+            let expected_final = probe.estimated_memory_bytes()
+                - InterpreterCore::estimate_readable_from_state_bytes(state)
+                + MEMORY_ESTIMATE_READABLE_TERMINAL_BASE_BYTES
+                + InterpreterCore::estimate_label_bytes(&state.lifecycle_label)
+                + result_label_bytes
+                + promise_growth;
+            let exact_ceiling = expected_final + label_temporary;
+            assert!(
+                exact_ceiling < probe.estimated_memory_bytes(),
+                "terminal storage must fit below the live state"
+            );
+
+            let (mut refused, readable, promise) = fixture();
+            let before_state = refused.readable_from_streams[&readable].clone();
+            let before_total = refused.estimated_memory_bytes();
+            refused.config.max_total_memory_bytes = exact_ceiling - 1;
+            assert!(
+                matches!(refused.settle_readable_to_array_after_close(readable),
+                Err(InterpreterError::MemoryBudgetExceeded { requested_bytes, .. }) if requested_bytes == exact_ceiling)
+            );
+            assert_eq!(refused.readable_from_streams[&readable], before_state);
+            assert!(!refused.object_mutation_labels.contains_key(&result));
+            assert!(
+                !refused
+                    .promise_store
+                    .get(promise)
+                    .unwrap()
+                    .state
+                    .is_settled()
+            );
+            assert_eq!(refused.estimated_memory_bytes(), before_total);
+            assert_eq!(
+                refused.estimated_memory_bytes(),
+                refused.recompute_estimated_memory_bytes()
+            );
+
+            refused.config.max_total_memory_bytes = exact_ceiling;
+            refused
+                .settle_readable_to_array_after_close(readable)
+                .expect("exact smaller terminal ceiling");
+            assert_eq!(refused.estimated_memory_bytes(), expected_final);
+            assert_eq!(
+                refused.estimated_memory_bytes(),
+                refused.recompute_estimated_memory_bytes()
+            );
+            assert_eq!(refused.promise_store.get(promise).unwrap().label, label);
+            assert!(!refused.readable_from_streams.contains_key(&readable));
+        }
+    }
+}
+
+#[test]
+fn incremental_readable_to_array_exact_rejection_rolls_back_carriers_bd_305gi_2() {
+    let mut core = test_interpreter();
+    let promise = core.create_promise().expect("consumer Promise");
+    let reason = Value::BigInt("9876543210".repeat(100).into());
+    let label = Label::Custom {
+        name: "error-source".into(),
+        level: 8,
+    };
+    let before_total = core.estimated_memory_bytes();
+    let before_next = core.next_promise_value_carrier;
+    let before_carriers = core.promise_value_carriers.clone();
+    let before_witness = core.promise_store.witness_log().to_vec();
+    core.config.max_total_memory_bytes = before_total
+        + InterpreterCore::estimate_value_bytes(&reason)
+        + InterpreterCore::estimate_label_bytes(&label)
+        + InterpreterCore::estimate_promise_value_carrier_bytes(&reason);
+    assert!(matches!(
+        core.reject_readable_to_array_promise(promise, &reason, &label),
+        Err(InterpreterError::MemoryBudgetExceeded { .. })
+    ));
+    assert_eq!(core.next_promise_value_carrier, before_next);
+    assert_eq!(core.promise_value_carriers, before_carriers);
+    assert_eq!(core.promise_store.witness_log(), before_witness.as_slice());
+    assert!(!core.promise_store.get(promise).unwrap().state.is_settled());
+    assert_eq!(core.estimated_memory_bytes(), before_total);
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+    core.config.max_total_memory_bytes = DEFAULT_QUICKJS_MAX_TOTAL_MEMORY_BYTES;
+    core.reject_readable_to_array_promise(promise, &reason, &label)
+        .expect("exact rejection");
+    let crate::promise_model::PromiseState::Rejected(stored) =
+        &core.promise_store.get(promise).unwrap().state
+    else {
+        panic!("rejected Promise");
+    };
+    assert_eq!(core.js_value_to_value(stored), reason);
+    assert_eq!(core.promise_store.get(promise).unwrap().label, label);
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+}
+
+#[test]
 fn readable_to_array_settles_only_after_close_with_source_label_bd_fw7zd() {
     let module = test_module_with_functions(Vec::new(), Vec::new());
     let mut core = test_interpreter();

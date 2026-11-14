@@ -10723,8 +10723,10 @@ impl InterpreterCore {
     ) -> Result<bool, InterpreterError> {
         let settled_waiter =
             self.settle_event_promise_waiters(target_id, &event, &arguments, &emission_label)?;
+        let readable_consumer = event.as_str() == Some("error")
+            && self.readable_to_array_error_event(target_id, arguments.first(), &emission_label)?;
         if records.is_empty() {
-            if event.as_str() == Some("error") && !settled_waiter {
+            if event.as_str() == Some("error") && !settled_waiter && !readable_consumer {
                 let thrown = if let Some(value) = arguments.first() {
                     value.clone()
                 } else {
@@ -10742,7 +10744,7 @@ impl InterpreterCore {
                     value: self.uncaught_exception_description(&thrown),
                 });
             }
-            return Ok(settled_waiter);
+            return Ok(settled_waiter || readable_consumer);
         }
 
         for record in records {

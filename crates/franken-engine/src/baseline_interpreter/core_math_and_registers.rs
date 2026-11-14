@@ -2942,12 +2942,17 @@ impl InterpreterCore {
             .saturating_add(label_bytes)
     }
 
-    pub(super) fn estimate_readable_to_array_waiter_bytes(label: &Label) -> u64 {
+    pub(super) fn estimate_readable_to_array_waiter_bytes(
+        label: &Label,
+        error: Option<&Value>,
+    ) -> u64 {
         let label_bytes = match label {
             Label::Custom { name, .. } => Self::estimate_string_bytes(name),
             _ => 0,
         };
-        MEMORY_ESTIMATE_READABLE_TO_ARRAY_WAITER_BYTES.saturating_add(label_bytes)
+        MEMORY_ESTIMATE_READABLE_TO_ARRAY_WAITER_BYTES
+            .saturating_add(label_bytes)
+            .saturating_add(error.map_or(0, Self::estimate_value_bytes))
     }
 
     pub(super) fn estimate_readable_buffer_bytes(buffer: &VecDeque<ReadableBufferedChunk>) -> u64 {
@@ -2989,7 +2994,12 @@ impl InterpreterCore {
                 state
                     .to_array_waiter
                     .as_ref()
-                    .map(|waiter| Self::estimate_readable_to_array_waiter_bytes(&waiter.label))
+                    .map(|waiter| {
+                        Self::estimate_readable_to_array_waiter_bytes(
+                            &waiter.label,
+                            waiter.error.as_ref(),
+                        )
+                    })
                     .unwrap_or(0),
             )
     }

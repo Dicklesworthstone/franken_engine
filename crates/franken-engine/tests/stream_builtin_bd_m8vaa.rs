@@ -2198,6 +2198,271 @@ fn native_pipe_removing_drain_listeners_cancels_resume_bd_305gi_2() {
 }
 
 #[test]
+fn native_to_array_consumes_later_read_callbacks_bd_305gi_2() {
+    let source = r#"
+        const { Readable } = require('stream');
+        let next = 1;
+        let reads = 0;
+        const source = new Readable({
+          objectMode: true,
+          highWaterMark: 1,
+          read() {
+            reads++;
+            const value = next++;
+            setImmediate(() => this.push(value <= 3 ? value : null));
+          }
+        });
+        const result = source.toArray();
+        console.log(result instanceof Promise, source.readableFlowing, source.isPaused());
+        result.then(values => {
+          console.log(values.join(','), reads, source.readableEnded, source.destroyed);
+        });
+    "#;
+    assert_eq!(eval_console(source), "true false true\n1,2,3 4 true true");
+}
+
+#[test]
+fn native_to_array_drains_bounded_readable_backpressure_bd_305gi_2() {
+    let source = r#"
+        const { Readable } = require('stream');
+        let next = 1;
+        let reads = 0;
+        const source = new Readable({
+          objectMode: true,
+          highWaterMark: 1,
+          read() {
+            reads++;
+            while (next <= 4) {
+              if (!this.push(next++)) return;
+            }
+            this.push(null);
+          }
+        });
+        source.toArray().then(values => console.log(values.join(','), reads));
+    "#;
+    assert_eq!(eval_console(source), "1,2,3,4 5");
+}
+
+#[test]
+fn native_to_array_coalesces_passthrough_bytes_bd_305gi_2() {
+    let source = r#"
+        const { PassThrough } = require('stream');
+        const stream = new PassThrough();
+        const result = stream.toArray();
+        stream.write(Buffer.from([1, 2]));
+        stream.end(Buffer.from([3]));
+        result.then(chunks => {
+          console.log(chunks.length, Buffer.concat(chunks).toString('hex'),
+                      Buffer.isBuffer(chunks[0]), stream.readableEnded, stream.writableFinished);
+        });
+    "#;
+    assert_eq!(eval_console(source), "1 010203 true true true");
+}
+
+#[test]
+fn native_to_array_ignores_empty_bytes_but_keeps_empty_objects_bd_305gi_2() {
+    let source = r#"
+        const { Readable, PassThrough } = require('stream');
+        const options = { read() { this.push(''); this.push(Buffer.alloc(0)); this.push(null); } };
+        const bytes = new Readable(options);
+        const decoded = new Readable(options);
+        decoded.setEncoding('utf8');
+        const pass = new PassThrough();
+        const passed = pass.toArray();
+        pass.end(Buffer.alloc(0));
+        const objects = new Readable({ objectMode: true,
+            read() { this.push(''); this.push(Buffer.alloc(0)); this.push(null); } });
+        Promise.all([bytes.toArray(), decoded.toArray(), passed, objects.toArray()])
+            .then(results => console.log(results[0].length, results[1].length,
+                results[2].length, results[3].length, results[3][0] === '',
+                Buffer.isBuffer(results[3][1])));
+    "#;
+    assert_eq!(eval_console(source), "0 0 0 2 true true");
+}
+
+#[test]
+fn native_to_array_collects_async_transform_and_flush_bd_305gi_2() {
+    let source = r#"
+        const { Transform } = require('stream');
+        const stream = new Transform({
+          objectMode: true,
+          highWaterMark: 1,
+          transform(chunk, encoding, done) {
+            setImmediate(() => done(null, chunk * 2));
+          },
+          flush(done) { setImmediate(() => done(null, 99)); }
+        });
+        const result = stream.toArray();
+        stream.write(1);
+        stream.end(2);
+        result.then(values => console.log(values.join(','), stream.writableFinished));
+    "#;
+    assert_eq!(eval_console(source), "2,4,99 true");
+}
+
+#[test]
+fn native_to_array_preserves_partial_reads_and_chunk_identity_bd_305gi_2() {
+    let source = r#"
+        const { Readable } = require('stream');
+        const retained = { value: 2 };
+        const source = new Readable({ objectMode: true, read() {} });
+        source.push(1);
+        source.push(retained);
+        console.log(source.read());
+        const result = source.toArray();
+        source.readableLength = 1000000;
+        source.readableEnded = true;
+        source.push(3);
+        source.push(null);
+        result.then(values => console.log(values.length, values[0] === retained, values[1]));
+    "#;
+    assert_eq!(eval_console(source), "1\n2 true 3");
+}
+
+#[test]
+fn native_to_array_collects_decoded_utf8_across_pushes_bd_305gi_2() {
+    let source = r#"
+        const { Readable } = require('stream');
+        const source = new Readable({ read() {} });
+        source.setEncoding('utf8');
+        const result = source.toArray();
+        source.push(Buffer.from([0xe2]));
+        source.push(Buffer.from([0x82, 0xac]));
+        source.push(Buffer.from('!'));
+        source.push(null);
+        result.then(chunks => console.log(chunks.length, chunks[0], typeof chunks[0]));
+    "#;
+    assert_eq!(eval_console(source), "1 €! string");
+}
+
+#[test]
+fn native_to_array_rejects_read_throw_without_error_listener_bd_305gi_2() {
+    let source = r#"
+        const { Readable } = require('stream');
+        const failure = new Error('read failed');
+        const events = [];
+        const source = new Readable({ read() { throw failure; } });
+        source.on('close', () => events.push('close'));
+        source.toArray().then(
+          () => console.log('unexpected fulfillment'),
+          error => console.log(error === failure, events.join(','))
+        );
+    "#;
+    assert_eq!(eval_console(source), "true close");
+}
+
+#[test]
+fn native_to_array_rejects_destroy_error_once_bd_305gi_2() {
+    let source = r#"
+        const { Readable } = require('stream');
+        const failure = new Error('destroy failed');
+        const events = [];
+        let settlements = 0;
+        const source = new Readable({
+          objectMode: true,
+          read() { this.push('discarded'); this.destroy(failure); }
+        });
+        source.on('error', error => events.push(error === failure ? 'error' : 'wrong error'));
+        source.on('close', () => events.push('close'));
+        const result = source.toArray();
+        result.catch(error => { settlements++; console.log(error === failure, events.join(',')); });
+        result.then(() => console.log('unexpected fulfillment'), () => console.log(settlements));
+    "#;
+    assert_eq!(eval_console(source), "true error,close\n1");
+}
+
+#[test]
+fn native_to_array_preserves_first_error_before_explicit_destroy_bd_305gi_2() {
+    let source = r#"
+        const { Readable } = require('stream');
+        const failure = new Error('manual error');
+        const later = new Error('destroy error');
+        const events = [];
+        const source = new Readable({ read() {} });
+        source.on('error', () => events.push('error'));
+        source.on('close', () => events.push('close'));
+        const result = source.toArray();
+        console.log(source.emit('error', failure));
+        events.push('after');
+        source.destroy(later);
+        result.catch(error => console.log(error === failure, events.join(',')));
+    "#;
+    assert_eq!(eval_console(source), "true\ntrue error,after,error,close");
+}
+
+#[test]
+fn native_to_array_rejects_manual_error_before_destroy_closes_bd_305gi_2() {
+    let source = r#"
+        const { PassThrough } = require('stream');
+        const failure = new Error('manual error');
+        const events = [];
+        const stream = new PassThrough({ objectMode: true });
+        stream.on('error', () => events.push('error'));
+        stream.on('close', () => { events.push('close'); console.log(events.join(',')); });
+        const result = stream.toArray();
+        console.log(stream.emit('error', failure), stream.destroyed);
+        events.push('after');
+        result.catch(error => console.log(error === failure, events.join(','), stream.destroyed));
+    "#;
+    assert_eq!(
+        eval_console(source),
+        "true false\ntrue error,after true\nerror,after,error,close"
+    );
+}
+
+#[test]
+fn native_to_array_handles_manual_error_without_error_listener_bd_305gi_2() {
+    let source = r#"
+        const { PassThrough } = require('stream');
+        const failure = new Error('handled by the consumer');
+        const stream = new PassThrough({ objectMode: true });
+        stream.on('close', () => console.log('closed'));
+        const result = stream.toArray();
+        result.catch(error => console.log(error === failure, stream.destroyed));
+        console.log(stream.emit('error', failure), stream.destroyed);
+    "#;
+    assert_eq!(eval_console(source), "true false\ntrue true\nclosed");
+}
+
+#[test]
+fn native_to_array_preserves_exact_rejection_values_bd_305gi_2() {
+    let source = r#"
+        const { Readable, PassThrough } = require('stream');
+        const captured = 42;
+        const closure = () => captured;
+        const promise = Promise.resolve(7);
+        const thrown = new Readable({ read() { throw closure; } }).toArray();
+        const emitted = new PassThrough();
+        const bigint = emitted.toArray();
+        emitted.emit('error', 12345678901234567890n);
+        const destroyed = new Readable({ read() {} });
+        const rejected = destroyed.toArray();
+        destroyed.destroy(promise);
+        Promise.all([
+            thrown.catch(error => error === closure && error() === 42),
+            bigint.catch(error => error === 12345678901234567890n),
+            rejected.catch(error => error === promise)
+        ]).then(values => console.log(values.join(',')));
+    "#;
+    assert_eq!(eval_console(source), "true,true,true");
+}
+
+#[test]
+fn native_to_array_rejects_premature_close_with_error_object_bd_305gi_2() {
+    let source = r#"
+        const { Readable } = require('stream');
+        const source = new Readable({ read() {} });
+        const result = source.toArray();
+        source.destroy();
+        result.catch(error => console.log(error instanceof Error, error.code, error.message));
+    "#;
+    assert_eq!(
+        eval_console(source),
+        "true ERR_STREAM_PREMATURE_CLOSE Premature close"
+    );
+}
+
+#[test]
 fn native_pipe_end_false_reuses_destination_after_backpressure_bd_305gi_2() {
     let source = r#"
         const { Readable, Writable } = require('stream');

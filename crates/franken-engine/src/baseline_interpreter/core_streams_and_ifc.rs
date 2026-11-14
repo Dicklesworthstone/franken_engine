@@ -447,10 +447,14 @@ impl InterpreterCore {
     }
 
     pub(super) fn has_readable_pull_observer(&self, object_id: ObjectId) -> bool {
-        self.event_listeners
+        self.readable_from_streams
             .get(&object_id)
-            .and_then(|events| events.get(&RuntimePropertyKey::from("readable")))
-            .is_some_and(|records| !records.is_empty())
+            .is_some_and(|state| state.push_only && state.to_array_waiter.is_some())
+            || self
+                .event_listeners
+                .get(&object_id)
+                .and_then(|events| events.get(&RuntimePropertyKey::from("readable")))
+                .is_some_and(|records| !records.is_empty())
             || self
                 .event_promise_waiters
                 .get(&object_id)
@@ -3080,157 +3084,8 @@ impl InterpreterCore {
             return Ok(Value::Null);
         }
 
-        let mut raw_allocation_checkpoint = None;
-        let result = if projected.object_mode {
-            let chunk = projected
-                .buffer
-                .pop_front()
-                .expect("non-empty Readable queue");
-            projected.buffered_length = projected.buffered_length.saturating_sub(chunk.units);
-            chunk.value
-        } else if projected.decode_utf8 {
-            let unit_bytes = u64::try_from(projected.buffered_length)
-                .unwrap_or(u64::MAX)
-                .saturating_mul(2);
-            // `from_code_units` may transiently own both its intermediate
-            // three-byte-per-unit UTF-8 replacement String and the copied
-            // Arc<str>, plus a two-byte-per-unit exact-unit Arc. Account the
-            // worst sequential result/remainder peak together with the
-            // already-live transactional state clone and Vec<u16>, before any
-            // of those infallible host allocations.
-            let string_bytes = u64::try_from(projected.buffered_length)
-                .unwrap_or(u64::MAX)
-                .saturating_mul(10)
-                .saturating_add(MEMORY_ESTIMATE_STRING_BASE_BYTES.saturating_mul(6));
-            let temporary_bytes = Self::estimate_readable_from_state_bytes(&projected)
-                .saturating_add(unit_bytes)
-                .saturating_add(string_bytes);
-            self.check_temporary_memory_budget(temporary_bytes)?;
-            let mut units = Vec::new();
-            units
-                .try_reserve_exact(projected.buffered_length)
-                .map_err(|_| {
-                    self.memory_budget_error(
-                        self.estimated_memory_bytes.saturating_add(temporary_bytes),
-                        self.heap_object_count_u32(),
-                    )
-                })?;
-            for chunk in &projected.buffer {
-                let Value::Str(value) = &chunk.value else {
-                    return Err(InterpreterError::TypeError {
-                        expected: "decoded Readable string chunk".to_string(),
-                        got: chunk.value.type_name().to_string(),
-                    });
-                };
-                units.extend(value.encode_utf16());
-            }
-            let consumed = requested_size.unwrap_or(units.len()).min(units.len());
-            let result = Value::Str(JsString::from_code_units(&units[..consumed]));
-            let remainder = &units[consumed..];
-            projected.buffer.clear();
-            projected.buffered_length = remainder.len();
-            if !remainder.is_empty() {
-                projected.buffer.push_back(ReadableBufferedChunk {
-                    value: Value::Str(JsString::from_code_units(remainder)),
-                    label: projected.lifecycle_label.clone(),
-                    units: remainder.len(),
-                });
-            }
-            result
-        } else {
-            let single_buffer = projected
-                .buffer
-                .front()
-                .and_then(|chunk| match chunk.value {
-                    Value::Object(buffer_id)
-                        if projected.buffer.len() == 1
-                            && requested_size
-                                .is_none_or(|size| size >= projected.buffered_length)
-                            && self.is_buffer_object(buffer_id) =>
-                    {
-                        Some(buffer_id)
-                    }
-                    _ => None,
-                });
-            if let Some(buffer_id) = single_buffer {
-                projected.buffer.clear();
-                projected.buffered_length = 0;
-                Value::Object(buffer_id)
-            } else {
-                let projection_peak_bytes = Self::estimate_readable_from_state_bytes(&projected);
-                self.check_temporary_memory_budget(
-                    projection_peak_bytes.saturating_add(
-                        u64::try_from(projected.buffered_length).unwrap_or(u64::MAX),
-                    ),
-                )?;
-                let mut bytes = Vec::new();
-                bytes
-                    .try_reserve_exact(projected.buffered_length)
-                    .map_err(|_| {
-                        self.memory_budget_error(
-                            self.estimated_memory_bytes.saturating_add(
-                                u64::try_from(projected.buffered_length).unwrap_or(u64::MAX),
-                            ),
-                            self.heap_object_count_u32(),
-                        )
-                    })?;
-                let coalescing_temporary_bytes = projection_peak_bytes
-                    .saturating_add(u64::try_from(bytes.capacity()).unwrap_or(u64::MAX));
-                self.check_temporary_memory_budget(coalescing_temporary_bytes)?;
-                for chunk in &projected.buffer {
-                    match &chunk.value {
-                        Value::Str(value) => bytes.extend_from_slice(value.as_bytes()),
-                        value @ Value::Object(_) => {
-                            let view = self.buffer_like_view(value)?;
-                            bytes.extend_from_slice(self.typed_array_view_bytes(&view)?);
-                        }
-                        value => {
-                            return Err(InterpreterError::TypeError {
-                                expected: "buffered byte chunk".to_string(),
-                                got: value.type_name().to_string(),
-                            });
-                        }
-                    }
-                }
-                let consumed = requested_size.unwrap_or(bytes.len()).min(bytes.len());
-                let checkpoint = (self.heap.len(), self.estimated_memory_bytes);
-                let result = match self.alloc_buffer_from_bytes_with_temporary(
-                    &bytes[..consumed],
-                    coalescing_temporary_bytes,
-                ) {
-                    Ok(result) => Value::Object(result),
-                    Err(error) => {
-                        self.rollback_heap_to_len(checkpoint.0);
-                        self.estimated_memory_bytes = checkpoint.1;
-                        return Err(error);
-                    }
-                };
-                let remainder = &bytes[consumed..];
-                projected.buffer.clear();
-                projected.buffered_length = remainder.len();
-                if !remainder.is_empty() {
-                    let remainder_len = remainder.len();
-                    let remainder_buffer = match self.alloc_buffer_from_bytes_with_temporary(
-                        remainder,
-                        coalescing_temporary_bytes,
-                    ) {
-                        Ok(remainder) => remainder,
-                        Err(error) => {
-                            self.rollback_heap_to_len(checkpoint.0);
-                            self.estimated_memory_bytes = checkpoint.1;
-                            return Err(error);
-                        }
-                    };
-                    projected.buffer.push_back(ReadableBufferedChunk {
-                        value: Value::Object(remainder_buffer),
-                        label: projected.lifecycle_label.clone(),
-                        units: remainder_len,
-                    });
-                }
-                raw_allocation_checkpoint = Some(checkpoint);
-                result
-            }
-        };
+        let (result, raw_allocation_checkpoint) =
+            self.readable_take_buffered_value(&mut projected, requested_size)?;
         if !projected.flowing && self.active_readable_listener_target == Some(object_id) {
             projected.nonflowing_read_consumed = true;
         }
@@ -3249,6 +3104,168 @@ impl InterpreterCore {
             let _ = self.readable_pull_source_chunk(object_id)?;
         }
         Ok(result)
+    }
+
+    /// Take one object-mode chunk, or an unsized/sized byte-mode read, from
+    /// an owned projection. The caller commits the queue only after its own
+    /// result storage is admitted. No guest code runs while the projection
+    /// or any freshly allocated coalesced Buffer is outside the live state.
+    pub(super) fn readable_take_buffered_value(
+        &mut self,
+        projected: &mut ReadableFromState,
+        requested_size: Option<usize>,
+    ) -> Result<(Value, Option<(usize, u64)>), InterpreterError> {
+        let mut raw_allocation_checkpoint = None;
+        let result =
+            if projected.object_mode {
+                let chunk = projected
+                    .buffer
+                    .pop_front()
+                    .expect("non-empty Readable queue");
+                projected.buffered_length = projected.buffered_length.saturating_sub(chunk.units);
+                chunk.value
+            } else if projected.decode_utf8 {
+                let unit_bytes = u64::try_from(projected.buffered_length)
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(2);
+                // `from_code_units` may transiently own both its intermediate
+                // three-byte-per-unit UTF-8 replacement String and the copied
+                // Arc<str>, plus a two-byte-per-unit exact-unit Arc. Account the
+                // worst sequential result/remainder peak together with the
+                // already-live transactional state clone and Vec<u16>, before any
+                // of those infallible host allocations.
+                let string_bytes = u64::try_from(projected.buffered_length)
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(10)
+                    .saturating_add(MEMORY_ESTIMATE_STRING_BASE_BYTES.saturating_mul(6));
+                let temporary_bytes = Self::estimate_readable_from_state_bytes(projected)
+                    .saturating_add(unit_bytes)
+                    .saturating_add(string_bytes);
+                self.check_temporary_memory_budget(temporary_bytes)?;
+                let mut units = Vec::new();
+                units
+                    .try_reserve_exact(projected.buffered_length)
+                    .map_err(|_| {
+                        self.memory_budget_error(
+                            self.estimated_memory_bytes.saturating_add(temporary_bytes),
+                            self.heap_object_count_u32(),
+                        )
+                    })?;
+                for chunk in &projected.buffer {
+                    let Value::Str(value) = &chunk.value else {
+                        return Err(InterpreterError::TypeError {
+                            expected: "decoded Readable string chunk".to_string(),
+                            got: chunk.value.type_name().to_string(),
+                        });
+                    };
+                    units.extend(value.encode_utf16());
+                }
+                let consumed = requested_size.unwrap_or(units.len()).min(units.len());
+                let result = Value::Str(JsString::from_code_units(&units[..consumed]));
+                let remainder = &units[consumed..];
+                projected.buffer.clear();
+                projected.buffered_length = remainder.len();
+                if !remainder.is_empty() {
+                    projected.buffer.push_back(ReadableBufferedChunk {
+                        value: Value::Str(JsString::from_code_units(remainder)),
+                        label: projected.lifecycle_label.clone(),
+                        units: remainder.len(),
+                    });
+                }
+                result
+            } else {
+                let single_buffer = projected
+                    .buffer
+                    .front()
+                    .and_then(|chunk| match chunk.value {
+                        Value::Object(buffer_id)
+                            if projected.buffer.len() == 1
+                                && requested_size
+                                    .is_none_or(|size| size >= projected.buffered_length)
+                                && self.is_buffer_object(buffer_id) =>
+                        {
+                            Some(buffer_id)
+                        }
+                        _ => None,
+                    });
+                if let Some(buffer_id) = single_buffer {
+                    projected.buffer.clear();
+                    projected.buffered_length = 0;
+                    Value::Object(buffer_id)
+                } else {
+                    let projection_peak_bytes = Self::estimate_readable_from_state_bytes(projected);
+                    self.check_temporary_memory_budget(projection_peak_bytes.saturating_add(
+                        u64::try_from(projected.buffered_length).unwrap_or(u64::MAX),
+                    ))?;
+                    let mut bytes = Vec::new();
+                    bytes
+                        .try_reserve_exact(projected.buffered_length)
+                        .map_err(|_| {
+                            self.memory_budget_error(
+                                self.estimated_memory_bytes.saturating_add(
+                                    u64::try_from(projected.buffered_length).unwrap_or(u64::MAX),
+                                ),
+                                self.heap_object_count_u32(),
+                            )
+                        })?;
+                    let coalescing_temporary_bytes = projection_peak_bytes
+                        .saturating_add(u64::try_from(bytes.capacity()).unwrap_or(u64::MAX));
+                    self.check_temporary_memory_budget(coalescing_temporary_bytes)?;
+                    for chunk in &projected.buffer {
+                        match &chunk.value {
+                            Value::Str(value) => bytes.extend_from_slice(value.as_bytes()),
+                            value @ Value::Object(_) => {
+                                let view = self.buffer_like_view(value)?;
+                                bytes.extend_from_slice(self.typed_array_view_bytes(&view)?);
+                            }
+                            value => {
+                                return Err(InterpreterError::TypeError {
+                                    expected: "buffered byte chunk".to_string(),
+                                    got: value.type_name().to_string(),
+                                });
+                            }
+                        }
+                    }
+                    let consumed = requested_size.unwrap_or(bytes.len()).min(bytes.len());
+                    let checkpoint = (self.heap.len(), self.estimated_memory_bytes);
+                    let result = match self.alloc_buffer_from_bytes_with_temporary(
+                        &bytes[..consumed],
+                        coalescing_temporary_bytes,
+                    ) {
+                        Ok(result) => Value::Object(result),
+                        Err(error) => {
+                            self.rollback_heap_to_len(checkpoint.0);
+                            self.estimated_memory_bytes = checkpoint.1;
+                            return Err(error);
+                        }
+                    };
+                    let remainder = &bytes[consumed..];
+                    projected.buffer.clear();
+                    projected.buffered_length = remainder.len();
+                    if !remainder.is_empty() {
+                        let remainder_len = remainder.len();
+                        let remainder_buffer = match self.alloc_buffer_from_bytes_with_temporary(
+                            remainder,
+                            coalescing_temporary_bytes,
+                        ) {
+                            Ok(remainder) => remainder,
+                            Err(error) => {
+                                self.rollback_heap_to_len(checkpoint.0);
+                                self.estimated_memory_bytes = checkpoint.1;
+                                return Err(error);
+                            }
+                        };
+                        projected.buffer.push_back(ReadableBufferedChunk {
+                            value: Value::Object(remainder_buffer),
+                            label: projected.lifecycle_label.clone(),
+                            units: remainder_len,
+                        });
+                    }
+                    raw_allocation_checkpoint = Some(checkpoint);
+                    result
+                }
+            };
+        Ok((result, raw_allocation_checkpoint))
     }
 
     pub(super) fn readable_requested_size(
@@ -3527,7 +3544,12 @@ impl InterpreterCore {
                 current
                     .to_array_waiter
                     .as_ref()
-                    .map(|waiter| Self::estimate_readable_to_array_waiter_bytes(&waiter.label))
+                    .map(|waiter| {
+                        Self::estimate_readable_to_array_waiter_bytes(
+                            &waiter.label,
+                            waiter.error.as_ref(),
+                        )
+                    })
                     .unwrap_or(0),
             );
         let pump_bytes = if self.has_pending_readable_pump(object_id)
@@ -3606,11 +3628,31 @@ impl InterpreterCore {
         let object_id = self.readable_receiver_id(receiver)?;
         let Some(snapshot) = self.clone_readable_state_with_budget(object_id)? else {
             return Err(InterpreterError::TypeError {
-                expected: "live finite Readable.from receiver".to_string(),
+                expected: "live Readable receiver".to_string(),
                 got: "closed Readable".to_string(),
             });
         };
         let mut projected = snapshot;
+        let mut winner = &projected.lifecycle_label;
+        for candidate in [
+            self.active_execution_context_label(),
+            self.pending_hostcall_result_label.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if candidate > winner {
+                winner = candidate;
+            }
+        }
+        self.check_temporary_memory_budget(
+            Self::estimate_readable_from_state_bytes(&projected)
+                .saturating_add(Self::estimate_label_bytes(winner)),
+        )?;
+        projected.lifecycle_label = winner.clone();
+        if projected.push_only && projected.to_array_waiter.is_none() {
+            return self.start_incremental_readable_to_array(object_id, projected);
+        }
         let next_index = projected.next_index;
         let phase = projected.phase;
         let push_only = projected.push_only;
@@ -3642,7 +3684,7 @@ impl InterpreterCore {
                 message: "Readable toArray result length overflows host address space".to_string(),
             })?;
         let waiter_bytes =
-            Self::estimate_readable_to_array_waiter_bytes(&projected.lifecycle_label);
+            Self::estimate_readable_to_array_waiter_bytes(&projected.lifecycle_label, None);
         let projected_state_bytes = Self::estimate_readable_from_state_bytes(&projected);
         let projected_buffer_bytes = Self::estimate_readable_buffer_bytes(&projected.buffer);
         let final_state_bytes = projected_state_bytes
@@ -3771,6 +3813,7 @@ impl InterpreterCore {
             promise,
             result,
             label: projected.lifecycle_label.clone(),
+            error: None,
         });
         if let Err(error) = self.commit_readable_state_and_schedule(object_id, projected) {
             self.rollback_fresh_promise(promise);
@@ -3779,6 +3822,535 @@ impl InterpreterCore {
             return Err(error);
         }
         Ok(Value::Promise(promise.0))
+    }
+
+    /// A native Readable, PassThrough, or Transform is not a finite array to
+    /// copy at registration. Its private waiter owns an initially empty result
+    /// and consumes the same pull queue as read(), including later pushes and
+    /// asynchronous producer callbacks. No guest-visible listener or mirror
+    /// grants access to that accumulator before the Promise settles.
+    pub(super) fn start_incremental_readable_to_array(
+        &mut self,
+        object_id: ObjectId,
+        mut projected: ReadableFromState,
+    ) -> Result<Value, InterpreterError> {
+        self.check_temporary_memory_budget(
+            Self::estimate_readable_from_state_bytes(&projected)
+                .saturating_add(Self::estimate_label_bytes(&projected.lifecycle_label)),
+        )?;
+        let consumer_label = projected.lifecycle_label.clone();
+        let waiter_bytes = Self::estimate_readable_to_array_waiter_bytes(&consumer_label, None);
+        let promise_bytes = self
+            .promise_store
+            .projected_create_memory_bytes()
+            .saturating_sub(self.promise_store.estimated_memory_bytes());
+        let pump_bytes = if self.has_pending_readable_pump(object_id)
+            || self.readable_pump_reservations.contains_key(&object_id)
+        {
+            0
+        } else {
+            self.readable_pump_retained_bytes()
+        };
+        let mut empty_array = HeapObject::new();
+        empty_array.is_array = true;
+        empty_array.cached_dense_length = Some(0);
+        empty_array
+            .properties
+            .insert("length".to_string(), Value::Int(0));
+        let result_bytes = Self::estimate_heap_object_bytes(&empty_array);
+        drop(empty_array);
+        self.check_temporary_memory_budget(
+            Self::estimate_readable_from_state_bytes(&projected)
+                .saturating_add(waiter_bytes)
+                .saturating_add(promise_bytes)
+                .saturating_add(result_bytes)
+                .saturating_add(pump_bytes),
+        )?;
+
+        let previous_total = self.estimated_memory_bytes;
+        let previous_heap_len = self.heap.len();
+        let promise = self.create_promise()?;
+        let result = match self.alloc_array_from_values(&[]) {
+            Ok(result) => result,
+            Err(error) => {
+                self.rollback_fresh_promise(promise);
+                self.rollback_heap_to_len(previous_heap_len);
+                self.estimated_memory_bytes = previous_total;
+                return Err(error);
+            }
+        };
+        projected.to_array_waiter = Some(ReadableToArrayWaiter {
+            promise,
+            result,
+            label: consumer_label,
+            error: None,
+        });
+        projected.flowing = false;
+        projected.paused = true;
+        if let Err(error) = self.commit_readable_state_and_schedule(object_id, projected) {
+            self.rollback_fresh_promise(promise);
+            self.rollback_heap_to_len(previous_heap_len);
+            self.estimated_memory_bytes = previous_total;
+            return Err(error);
+        }
+        self.mirror_readable_bool(object_id, "readableFlowing", false);
+        Ok(Value::Promise(promise.0))
+    }
+
+    /// Commit one pull result and the consumed queue as one admission. The
+    /// accumulator cannot escape before settlement, so extending its own
+    /// dense storage needs no guest property operation or whole-array clone.
+    /// This avoids cloning the accumulated array for every new chunk.
+    pub(super) fn commit_readable_to_array_progress(
+        &mut self,
+        object_id: ObjectId,
+        mut projected: ReadableFromState,
+        value: Option<Value>,
+    ) -> Result<(), InterpreterError> {
+        let waiter = projected
+            .to_array_waiter
+            .as_ref()
+            .expect("incremental consumer owns a waiter");
+        let result = waiter.result;
+        let winner = if waiter.label >= projected.lifecycle_label {
+            &waiter.label
+        } else {
+            &projected.lifecycle_label
+        };
+        let previous_result_label_bytes = self
+            .object_mutation_labels
+            .get(&result)
+            .map_or(0, Self::estimate_object_mutation_label_entry_bytes);
+        let result_label_bytes = if winner == &Label::Public {
+            0
+        } else {
+            Self::estimate_object_mutation_label_entry_bytes(winner)
+        };
+        self.check_temporary_memory_budget(
+            Self::estimate_readable_from_state_bytes(&projected)
+                .saturating_add(value.as_ref().map_or(0, Self::estimate_value_bytes))
+                .saturating_add(Self::estimate_label_bytes(winner).saturating_mul(2)),
+        )?;
+        let result_label = winner.clone();
+        projected
+            .to_array_waiter
+            .as_mut()
+            .expect("incremental consumer waiter remains owned")
+            .label = result_label.clone();
+
+        let result_object = self
+            .heap
+            .get(result.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: result.0 })?;
+        let length =
+            result_object
+                .cached_dense_length
+                .ok_or_else(|| InterpreterError::InternalError {
+                    details: "private Readable.toArray accumulator lost dense array storage"
+                        .to_string(),
+                })?;
+        let (element_key, next_length, element_bytes) = if let Some(value) = value.as_ref() {
+            let next_length =
+                length
+                    .checked_add(1)
+                    .ok_or_else(|| InterpreterError::RangeError {
+                        message: "Readable.toArray exceeds the maximum array length".to_string(),
+                    })?;
+            let key = length.to_string();
+            if result_object.properties.contains_key(&key) {
+                return Err(InterpreterError::InternalError {
+                    details: "private Readable.toArray accumulator contains its next index"
+                        .to_string(),
+                });
+            }
+            let bytes = Self::estimate_property_entry_bytes(&key, value);
+            (Some(key), next_length, bytes)
+        } else {
+            (None, length, 0)
+        };
+        let pump_bytes = if self.has_pending_readable_pump(object_id)
+            || self.readable_pump_reservations.contains_key(&object_id)
+        {
+            0
+        } else {
+            self.readable_pump_retained_bytes()
+        };
+        self.check_temporary_memory_budget(
+            Self::estimate_readable_from_state_bytes(&projected)
+                .saturating_add(element_bytes)
+                .saturating_add(result_label_bytes)
+                .saturating_add(pump_bytes),
+        )?;
+        // The state/scheduler helper can still refuse and restores both on
+        // failure. Everything after it is an admitted, callback-free commit.
+        self.commit_readable_state_and_schedule(object_id, projected)?;
+        if let Some(key) = element_key {
+            self.mutate_heap(|heap| {
+                let object = &mut heap[result.0 as usize];
+                object
+                    .properties
+                    .insert(key, value.expect("an appended element has a value"));
+                *object
+                    .properties
+                    .get_mut("length")
+                    .expect("private accumulator owns its length") =
+                    Value::Int(i64::from(next_length));
+                object.cached_dense_length = Some(next_length);
+            });
+            self.gc_write_barrier(result);
+        }
+        if result_label == Label::Public {
+            self.object_mutation_labels.remove(&result);
+        } else {
+            self.object_mutation_labels.insert(result, result_label);
+        }
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_add(element_bytes)
+            .saturating_sub(previous_result_label_bytes)
+            .saturating_add(result_label_bytes);
+        Ok(())
+    }
+
+    pub(super) fn drive_readable_to_array(
+        &mut self,
+        object_id: ObjectId,
+        module: &Ir3Module,
+        mut projected: ReadableFromState,
+    ) -> Result<(), InterpreterError> {
+        if !projected.buffer.is_empty() {
+            let consumed_chunks = if projected.object_mode {
+                1
+            } else {
+                projected.buffer.len()
+            };
+            let next_instructions = self
+                .instructions_executed
+                .saturating_add(u64::try_from(consumed_chunks).unwrap_or(u64::MAX));
+            if next_instructions > self.config.instruction_budget {
+                return Err(InterpreterError::BudgetExhausted {
+                    executed: self.instructions_executed,
+                    budget: self.config.instruction_budget,
+                });
+            }
+            // A Buffer can acquire a stronger label after it was pushed.
+            // Observe that backing before copying or exposing its bytes.
+            let mut winner = &projected.lifecycle_label;
+            for chunk in projected.buffer.iter().take(consumed_chunks) {
+                if chunk.label > *winner {
+                    winner = &chunk.label;
+                }
+                if let Value::Object(id) = chunk.value
+                    && let Some(label) = self.binary_storage_label_ref(id)
+                    && label > winner
+                {
+                    winner = label;
+                }
+            }
+            self.check_temporary_memory_budget(
+                Self::estimate_readable_from_state_bytes(&projected)
+                    .saturating_add(Self::estimate_label_bytes(winner)),
+            )?;
+            let label = winner.clone();
+            projected.lifecycle_label = label;
+            let (value, allocation_checkpoint) =
+                if !projected.object_mode && projected.buffered_length == 0 {
+                    // Empty byte pushes can wake a producer without yielding
+                    // a pull value. Drain their queue entries and retain their
+                    // provenance, then request the next producer turn. Empty
+                    // strings and Buffers remain real object-mode values.
+                    projected.buffer.clear();
+                    (None, None)
+                } else {
+                    let (value, checkpoint) =
+                        self.readable_take_buffered_value(&mut projected, None)?;
+                    (Some(value), checkpoint)
+                };
+            projected.nonflowing_read_consumed = true;
+            if projected.buffer.is_empty() {
+                projected.data_readable_pending = false;
+                if projected.eof_requested {
+                    projected.eof_readable_pending = false;
+                    projected.phase = ReadableFromPumpPhase::End;
+                }
+            }
+            if let Err(error) = self.commit_readable_to_array_progress(object_id, projected, value)
+            {
+                if let Some((heap_len, previous_total)) = allocation_checkpoint {
+                    self.rollback_heap_to_len(heap_len);
+                    self.estimated_memory_bytes = previous_total;
+                }
+                return Err(error);
+            }
+            self.instructions_executed = next_instructions;
+            return Ok(());
+        }
+        if projected.eof_requested {
+            projected.phase = ReadableFromPumpPhase::End;
+            projected.eof_readable_pending = false;
+            return self.commit_readable_to_array_progress(object_id, projected, None);
+        }
+        if let Err(error) = self.drive_readable_read_callback(object_id, module, projected) {
+            if Self::stops_guest_execution(&error) {
+                return Err(error);
+            }
+            let fallback_label = self.stream_state_label_with_temporary_budget(object_id, 0)?;
+            let (error_value, error_label, restore_exception) =
+                self.writable_invocation_error_value(&error, fallback_label);
+            self.record_readable_to_array_failure(
+                object_id,
+                error_value,
+                error_label,
+                restore_exception,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// A pull consumer owns the stream's error outcome even without a public
+    /// error listener. The first error still reaches existing listeners; its
+    /// exact value and provenance survive both rejection before auto-destroy
+    /// closes and rejection after an explicit destroy's close event.
+    pub(super) fn readable_to_array_error_event(
+        &mut self,
+        object_id: ObjectId,
+        error: Option<&Value>,
+        emission_label: &Label,
+    ) -> Result<bool, InterpreterError> {
+        let Some(state) = self
+            .readable_from_streams
+            .get(&object_id)
+            .filter(|state| state.push_only && state.to_array_waiter.is_some())
+        else {
+            return Ok(false);
+        };
+        let mut projected = self.try_clone_readable_state(state)?;
+        let waiter = projected.to_array_waiter.as_ref().expect("checked waiter");
+        let winner = (&projected.lifecycle_label)
+            .max(&waiter.label)
+            .max(emission_label);
+        self.check_temporary_memory_budget(
+            Self::estimate_readable_from_state_bytes(&projected)
+                .saturating_add(error.map_or(0, Self::estimate_value_bytes))
+                .saturating_add(Self::estimate_label_bytes(winner).saturating_mul(2)),
+        )?;
+        let next_label = winner.clone();
+        projected.lifecycle_label = next_label.clone();
+        let waiter = projected.to_array_waiter.as_mut().expect("checked waiter");
+        waiter.label = next_label;
+        if waiter.error.is_none() {
+            waiter.error = Some(error.cloned().unwrap_or(Value::Undefined));
+        }
+        // Close on the next pump, after the current emit and its caller have
+        // returned. An explicit destroy(err) in that interval still owns its
+        // ordinary error emission, while the consumer retains the first one.
+        self.commit_readable_state_and_schedule(object_id, projected)?;
+        Ok(true)
+    }
+
+    pub(super) fn record_readable_to_array_failure(
+        &mut self,
+        object_id: ObjectId,
+        error: Value,
+        error_label: Label,
+        restore_pending_exception_on_refusal: bool,
+    ) -> Result<(), InterpreterError> {
+        let outcome = (|| {
+            let Some(state) = self.readable_from_streams.get(&object_id) else {
+                return Ok(());
+            };
+            if state.destroy_requested {
+                return Ok(());
+            }
+            let temporary = Self::estimate_value_bytes(&error)
+                .saturating_mul(2)
+                .saturating_add(Self::estimate_label_bytes(&error_label).saturating_mul(2));
+            if self.writable_streams.contains_key(&object_id) {
+                self.check_temporary_memory_budget(temporary)?;
+                return self.record_dual_stream_failure(
+                    object_id,
+                    error.clone(),
+                    error_label.clone(),
+                    WritableErrorOrigin::Destroy,
+                    false,
+                );
+            }
+            let lifecycle_label = self.clone_dominant_label_with_temporary_budget(
+                &state.lifecycle_label,
+                &error_label,
+                temporary,
+            )?;
+            self.commit_readable_destroy(
+                object_id,
+                Value::Object(object_id),
+                Some(error.clone()),
+                lifecycle_label,
+            )?;
+            Ok(())
+        })();
+        if outcome.is_err() && restore_pending_exception_on_refusal {
+            self.estimated_memory_bytes = self
+                .estimated_memory_bytes
+                .saturating_add(Self::estimate_value_bytes(&error))
+                .saturating_add(Self::estimate_label_bytes(&error_label));
+            self.pending_exception = Some(error);
+            self.pending_exception_label = error_label;
+        }
+        outcome
+    }
+
+    /// Preserve arbitrary rejection values without publishing a carrier when
+    /// Promise settlement is refused. This transaction invokes no guest code.
+    pub(super) fn reject_readable_to_array_promise(
+        &mut self,
+        promise: crate::promise_model::PromiseHandle,
+        error: &Value,
+        label: &Label,
+    ) -> Result<(), InterpreterError> {
+        let temporary =
+            Self::estimate_value_bytes(error).saturating_add(Self::estimate_label_bytes(label));
+        self.with_promise_temporary_bytes(temporary, |core| {
+            let carrier_checkpoint = core.next_promise_value_carrier;
+            let reason = core.promise_value(error)?;
+            let outcome = core.reject_promise(promise, reason, label.clone());
+            if outcome.is_err() && core.next_promise_value_carrier != carrier_checkpoint {
+                let retained = core
+                    .promise_value_carriers
+                    .remove(&carrier_checkpoint)
+                    .expect("callback-free rejection allocated exactly one carrier");
+                core.estimated_memory_bytes = core
+                    .estimated_memory_bytes
+                    .saturating_sub(Self::estimate_promise_value_carrier_bytes(&retained));
+                core.next_promise_value_carrier = carrier_checkpoint;
+            }
+            outcome
+        })
+    }
+
+    /// Settle only after the owner has released its larger live kernel.
+    /// Result provenance and Promise state commit together; a refusal restores
+    /// the old result label before the caller reinstates the stream state.
+    pub(super) fn settle_readable_to_array_waiter(
+        &mut self,
+        state: &ReadableFromState,
+    ) -> Result<(), InterpreterError> {
+        let Some(waiter) = state.to_array_waiter.as_ref() else {
+            return Ok(());
+        };
+        if self
+            .promise_store
+            .get(waiter.promise)
+            .is_ok_and(|record| record.state.is_settled())
+        {
+            return Ok(());
+        }
+        let mut winner = (&state.lifecycle_label).max(&waiter.label);
+        if let Some(error) = waiter.error.as_ref().or(state.destroy_error.as_ref()) {
+            return self.reject_readable_to_array_promise(waiter.promise, error, winner);
+        }
+        if state.destroy_requested {
+            if state.push_only {
+                let error =
+                    self.stream_error_value("ERR_STREAM_PREMATURE_CLOSE", "Premature close")?;
+                return self.reject_readable_to_array_promise(waiter.promise, &error, winner);
+            }
+            return self.reject_promise(
+                waiter.promise,
+                Self::value_to_js_value(&Value::str("Premature close")),
+                winner.clone(),
+            );
+        }
+        let result = waiter.result;
+        if let Some(result_label) = self.object_mutation_labels.get(&result)
+            && result_label > winner
+        {
+            winner = result_label;
+        }
+        let next_label_bytes = Self::estimate_label_bytes(winner);
+        let next_result_bytes = if winner == &Label::Public {
+            0
+        } else {
+            Self::estimate_object_mutation_label_entry_bytes(winner)
+        };
+        let previous_label = self.object_mutation_labels.get(&result);
+        let previous_bytes =
+            previous_label.map_or(0, Self::estimate_object_mutation_label_entry_bytes);
+        let label_changes = previous_label.unwrap_or(&Label::Public) != winner;
+        if !label_changes && next_label_bytes == 0 {
+            return self.fulfill_promise(
+                waiter.promise,
+                Self::value_to_js_value(&Value::Object(result)),
+                winner.clone(),
+            );
+        }
+        let temporary = next_label_bytes.saturating_add(if label_changes {
+            previous_label.map_or(0, Self::estimate_label_bytes)
+        } else {
+            0
+        });
+        self.check_temporary_memory_budget(temporary)?;
+        let label = winner.clone();
+        self.with_promise_temporary_bytes(temporary, |core| {
+            let previous_label = if label_changes {
+                core.apply_memory_component_delta(previous_bytes, next_result_bytes)?;
+                Some(core.object_mutation_labels.insert(result, label.clone()))
+            } else {
+                None
+            };
+            let outcome = core.fulfill_promise(
+                waiter.promise,
+                Self::value_to_js_value(&Value::Object(result)),
+                label,
+            );
+            if outcome.is_err()
+                && let Some(previous_label) = previous_label
+            {
+                match previous_label {
+                    Some(label) => {
+                        core.object_mutation_labels.insert(result, label);
+                    }
+                    None => {
+                        core.object_mutation_labels.remove(&result);
+                    }
+                }
+                core.estimated_memory_bytes = core
+                    .estimated_memory_bytes
+                    .saturating_sub(next_result_bytes)
+                    .saturating_add(previous_bytes);
+            }
+            outcome
+        })
+    }
+
+    /// A manually emitted error wakes the pull iterator before the destroy
+    /// it requests has emitted close. Preserve that ordering while retaining
+    /// the private error observer until close; explicit destroy(err) already
+    /// in progress continues through the ordinary close settlement instead.
+    pub(super) fn reject_readable_to_array_before_close(
+        &mut self,
+        object_id: ObjectId,
+    ) -> Result<(), InterpreterError> {
+        let Some(state) = self.readable_from_streams.get(&object_id) else {
+            return Ok(());
+        };
+        let Some(waiter) = state.to_array_waiter.as_ref() else {
+            return Ok(());
+        };
+        let Some(error) = waiter.error.as_ref() else {
+            return Ok(());
+        };
+        let winner = (&state.lifecycle_label).max(&waiter.label);
+        self.check_temporary_memory_budget(
+            Self::estimate_value_bytes(error).saturating_add(Self::estimate_label_bytes(winner)),
+        )?;
+        let promise = waiter.promise;
+        let temporary =
+            Self::estimate_value_bytes(error).saturating_add(Self::estimate_label_bytes(winner));
+        let error = error.clone();
+        let label = winner.clone();
+        self.with_promise_temporary_bytes(temporary, |core| {
+            core.reject_readable_to_array_promise(promise, &error, &label)
+        })
     }
 
     pub(super) fn settle_readable_to_array_after_close(
@@ -3798,6 +4370,7 @@ impl InterpreterCore {
         };
         debug_assert_eq!(state.phase, ReadableFromPumpPhase::SettleToArray);
         let previous_total = self.estimated_memory_bytes;
+        let previous_heap_len = self.heap.len();
         let state_bytes = Self::estimate_readable_from_state_bytes(&state);
         let terminal_bytes = MEMORY_ESTIMATE_READABLE_TERMINAL_BASE_BYTES
             .saturating_add(Self::estimate_label_bytes(&state.lifecycle_label));
@@ -3811,29 +4384,11 @@ impl InterpreterCore {
             .saturating_sub(state_bytes)
             .saturating_add(terminal_bytes);
 
-        let settlement = if let Some(waiter) = state.to_array_waiter.as_ref() {
-            if state.destroy_requested {
-                self.reject_promise(
-                    waiter.promise,
-                    state.destroy_error.as_ref().map_or_else(
-                        || Self::value_to_js_value(&Value::str("Premature close")),
-                        Self::value_to_js_value,
-                    ),
-                    state.lifecycle_label.join(&waiter.label),
-                )
-            } else {
-                self.fulfill_promise(
-                    waiter.promise,
-                    Self::value_to_js_value(&Value::Object(waiter.result)),
-                    waiter.label.clone(),
-                )
-            }
-        } else {
-            Ok(())
-        };
-
-        if let Err(error) = settlement {
-            self.estimated_memory_bytes = previous_total;
+        if let Err(error) = self.settle_readable_to_array_waiter(&state) {
+            // Only callback-free premature-close Error construction can append
+            // heap objects here. Roll back its new intrinsic prototypes too,
+            // then reinstate the original owner and unmodified waiter.
+            self.rollback_heap_and_new_prototypes(previous_heap_len, previous_total);
             let previous = self.readable_from_streams.insert(object_id, state);
             debug_assert!(previous.is_none());
             debug_assert_eq!(
@@ -3950,6 +4505,31 @@ impl InterpreterCore {
             expected: "module context for Readable.from pump".to_string(),
             got: "missing module context".to_string(),
         })?;
+        if self
+            .readable_from_streams
+            .get(&object_id)
+            .is_some_and(|state| {
+                state.push_only
+                    && !state.destroy_requested
+                    && state
+                        .to_array_waiter
+                        .as_ref()
+                        .is_some_and(|waiter| waiter.error.is_some())
+            })
+        {
+            let state = &self.readable_from_streams[&object_id];
+            let waiter = state.to_array_waiter.as_ref().expect("checked consumer");
+            let error = waiter.error.as_ref().expect("checked consumer error");
+            let label = (&state.lifecycle_label).max(&waiter.label);
+            self.check_temporary_memory_budget(
+                Self::estimate_value_bytes(error).saturating_add(Self::estimate_label_bytes(label)),
+            )?;
+            let error = error.clone();
+            let label = label.clone();
+            self.record_readable_to_array_failure(object_id, error, label, false)?;
+            self.reject_readable_to_array_before_close(object_id)?;
+            return Ok(());
+        }
         let Some(phase) = self
             .readable_from_streams
             .get(&object_id)
@@ -3963,7 +4543,8 @@ impl InterpreterCore {
                 let Some(snapshot) = self.clone_readable_state_with_budget(object_id)? else {
                     return Ok(());
                 };
-                if !snapshot.flowing {
+                let incremental_to_array = snapshot.push_only && snapshot.to_array_waiter.is_some();
+                if !snapshot.flowing || incremental_to_array {
                     let mut pull_pump_reserved = false;
                     let should_pull = snapshot.buffer.is_empty()
                         && !snapshot.push_only
@@ -4091,6 +4672,9 @@ impl InterpreterCore {
                         return Ok(());
                     }
                     self.settle_readable_pump_reservation(object_id, pull_pump_reserved)?;
+                    if incremental_to_array {
+                        return self.drive_readable_to_array(object_id, module, projected);
+                    }
                     if projected.push_only
                         && !projected.eof_requested
                         && projected.buffered_length < projected.high_water_mark
@@ -15202,7 +15786,7 @@ impl InterpreterCore {
         Some(Cow::Borrowed(tag))
     }
 
-    /// A native effect function or WeakSet method selected from a classified
+    /// A native effect function, WeakSet method, or stream consumer selected from a classified
     /// module or property carries that selection into its request state or
     /// private membership before mutation. Other builtins retain their existing
     /// invocation contract. The observation scope accounts its label and
@@ -15217,7 +15801,10 @@ impl InterpreterCore {
         callee: u32,
     ) -> Result<Value, InterpreterError> {
         if !builtin.kind.observes_host_effect_selection()
-            && builtin.kind != BuiltinFunctionKind::WeakSetMethod
+            && !matches!(
+                builtin.kind,
+                BuiltinFunctionKind::WeakSetMethod | BuiltinFunctionKind::StreamReadableToArray
+            )
         {
             return self.dispatch_builtin_function(
                 module,
@@ -15312,6 +15899,9 @@ impl InterpreterCore {
             | BuiltinFunctionKind::StreamWritableDestroy => {
                 self.dispatch_writable_builtin_function(module, builtin.kind, args, receiver)
             }
+            BuiltinFunctionKind::StreamReadableToArray => {
+                self.dispatch_readable_to_array(receiver, receiver_register)
+            }
             _ => self.dispatch_builtin_function_inner(
                 module,
                 builtin,
@@ -15335,6 +15925,19 @@ impl InterpreterCore {
             self.label_legacy_regexp_match(legacy_regexp_generation, &label);
         }
         result
+    }
+
+    /// Retain receiver selection in the asynchronous consumer even when the
+    /// resulting Promise is later reached through a Public alias. Callee
+    /// selection is observed by the common function-invocation boundary.
+    pub(super) fn dispatch_readable_to_array(
+        &mut self,
+        receiver: Option<Value>,
+        receiver_register: Option<u32>,
+    ) -> Result<Value, InterpreterError> {
+        let observation = self.begin_property_observation(receiver_register)?;
+        let outcome = self.readable_to_array(receiver.unwrap_or(Value::Undefined));
+        self.finish_property_read_observation(observation, outcome)
     }
 
     /// Date's time belongs to the object, so a Public alias must still

@@ -891,11 +891,15 @@ impl GcMarker {
         if let Some(ReadableToArrayWaiter {
             promise,
             result,
+            error,
             label: _,
         }) = to_array_waiter
         {
             self.promise(promise.0);
             self.object(*result);
+            if let Some(error) = error {
+                self.value(error);
+            }
         }
     }
 

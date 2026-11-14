@@ -659,7 +659,8 @@ const MEMORY_ESTIMATE_READABLE_FROM_BASE_BYTES: u64 = 64;
 const MEMORY_ESTIMATE_READABLE_BUFFERED_CHUNK_BYTES: u64 = 32;
 /// Additional retained side-table charge while `Readable.toArray()` waits for
 /// the stream's terminal close phase before settling its Promise.
-const MEMORY_ESTIMATE_READABLE_TO_ARRAY_WAITER_BYTES: u64 = 48;
+const MEMORY_ESTIMATE_READABLE_TO_ARRAY_WAITER_BYTES: u64 =
+    48 + std::mem::size_of::<Option<Value>>() as u64;
 /// Fixed charge retained after a Readable releases its live kernel. The
 /// terminal lifecycle label is charged separately.
 const MEMORY_ESTIMATE_READABLE_TERMINAL_BASE_BYTES: u64 = 64;
@@ -15485,14 +15486,19 @@ enum ReadableFromPumpPhase {
     SettleToArray,
 }
 
-/// Deferred result for `Readable.from(...).toArray()`. The result array is
-/// materialized when consumption begins, but the Promise is intentionally not
-/// fulfilled until the Close pump phase has emitted `close`.
+/// Private result for native Readable.toArray(). Finite sources can populate
+/// it immediately; pushed streams append only as their pull queue is consumed.
+/// Success and explicit destruction settle after `close`. A manually emitted
+/// error rejects before automatic destruction closes; its private observer
+/// remains alive until that close so later errors cannot become unhandled.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ReadableToArrayWaiter {
     promise: crate::promise_model::PromiseHandle,
     result: ObjectId,
     label: Label,
+    /// Preserve the first observed error independently of a later destroy
+    /// error. Observing `error` must not synchronously destroy the stream.
+    error: Option<Value>,
 }
 
 /// Authenticated, engine-owned WHATWG URL state (bd-8y0gs). The guest heap

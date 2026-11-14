@@ -2,8 +2,13 @@
 
 //! ES2020 ImportCall: `import(specifier)` returns a promise for the module
 //! namespace, from ES modules and CommonJS alike, and every guest-visible
-//! failure is a rejection rather than a throw at the call site. Expected
-//! lines are Node v22's output for the same file trees.
+//! failure is a rejection rather than a throw at the call site. The original
+//! one-argument fixtures use Node v22's output for the same file trees.
+//!
+//! The import-options/JSON fixtures below cover the separately supported
+//! modern import-attributes extension, checked against Node v24.22.1. Two
+//! documented assertions follow the ECMAScript algorithm and the existing
+//! reject-before-cache contract where that Node version behaves differently.
 
 use std::path::Path;
 
@@ -577,4 +582,214 @@ main();",
             &["evaluate once", expected, &repeated, "true"],
         );
     }
+}
+
+#[test]
+fn dynamic_options_json_shares_static_and_require_identity_and_snapshots_attributes() {
+    assert_output(
+        &[
+            ("data.json", r#"{"answer":42}"#),
+            ("fresh.json", r#"[1,"x",{"k":"v"}]"#),
+            ("use.cjs", r#"module.exports = require('./data.json');"#),
+            (
+                "entry.mjs",
+                r#"import data from './data.json' with { type: 'json' };
+import required from './use.cjs';
+const options = { with: { type: 'json' } };
+const pending = import('./data.json', options);
+options.with.type = 'javascript';
+async function main() {
+  const ns = await pending;
+  console.log(ns.default === data, ns.default === required, Object.keys(ns).join(), data.answer);
+  ns.default.answer = 43;
+  console.log(required.answer);
+  JSON.parse = () => { throw new Error('guest JSON.parse must not run'); };
+  const fresh = await import('./fresh.json', { with: { type: 'json' } });
+  console.log(Array.isArray(fresh.default), fresh.default.length, fresh.default[1], fresh.default[2].k);
+}
+main();"#,
+            ),
+        ],
+        "entry.mjs",
+        ParseGoal::Module,
+        &["true true default 42", "43", "true 3 x v"],
+    );
+}
+
+#[test]
+fn dynamic_options_accepts_empty_options_and_callable_attribute_objects() {
+    assert_output(
+        &[
+            ("data.json", r#"{"answer":42}"#),
+            ("value.mjs", r#"export const value = 7;"#),
+            (
+                "entry.mjs",
+                r#"async function main() {
+  const first = await import('./value.mjs', undefined);
+  const empty = await import('./value.mjs', {});
+  const absent = await import('./value.mjs', { with: undefined });
+  const noAttributes = await import('./value.mjs', { with: {} });
+  console.log(empty === first, absent === first, noAttributes === first);
+  function attributes() {}
+  attributes.type = 'json';
+  Object.defineProperty(attributes, 'hidden', { get() { throw new Error('nonenumerable'); } });
+  Object.defineProperty(attributes, Symbol('ignored'), {
+    enumerable: true, get() { throw new Error('symbol'); }
+  });
+  let reads = 0;
+  function options() {}
+  Object.defineProperty(options, 'with', { get() { reads++; return attributes; } });
+  const ns = await import('./data.json', options);
+  console.log(ns.default.answer, reads);
+  const inherited = Object.create({ get with() { reads++; return { type: 'json' }; } });
+  console.log((await import('./data.json', inherited)) === ns, reads);
+}
+main();"#,
+            ),
+        ],
+        "entry.mjs",
+        ParseGoal::Module,
+        &["true true true", "42 1", "true 2"],
+    );
+}
+
+#[test]
+fn dynamic_options_collects_values_in_order_and_preserves_the_original_getter_throw() {
+    // ES2025 EvaluateImportCall calls EnumerableOwnProperties(key+value):
+    // each enumerable descriptor is followed by its Get before the next
+    // descriptor. Node 24.22.1 instead batches these two descriptor traps.
+    // https://tc39.es/ecma262/2025/multipage/abstract-operations.html#sec-enumerableownproperties
+    assert_output(
+        &[
+            ("data.json", r#"{"answer":42}"#),
+            (
+                "entry.mjs",
+                r#"const order = [];
+const marker = { tag: 'original getter value' };
+const ignored = Symbol('ignored');
+const attributes = new Proxy({}, {
+  ownKeys() { order.push('keys'); return ['type', 'later', ignored]; },
+  getOwnPropertyDescriptor(target, key) {
+    order.push('desc:' + String(key));
+    return { enumerable: true, configurable: true, value: 0 };
+  },
+  get(target, key) {
+    order.push('get:' + String(key));
+    if (key === 'type') return 7;
+    throw marker;
+  }
+});
+function options() {
+  order.push('options-expr');
+  return { get with() { order.push('with'); return attributes; } };
+}
+let synchronous = false;
+let pending;
+try {
+  pending = import({ toString() { order.push('specifier'); return './data.json'; } }, options());
+} catch (error) { synchronous = true; }
+order.push('returned');
+console.log(synchronous, pending instanceof Promise);
+console.log(order.join());
+pending.catch(error => console.log(error === marker, error.tag));"#,
+            ),
+        ],
+        "entry.mjs",
+        ParseGoal::Module,
+        &[
+            "false true",
+            "options-expr,specifier,with,keys,desc:type,get:type,desc:later,get:later,returned",
+            "true original getter value",
+        ],
+    );
+}
+
+#[test]
+fn dynamic_options_getter_and_coercion_failures_are_promise_rejections() {
+    assert_output(
+        &[
+            ("data.json", r#"{"answer":42}"#),
+            (
+                "entry.mjs",
+                r#"async function main() {
+  const marker = { original: true };
+  let reads = 0;
+  const throwing = { get with() { reads++; throw marker; } };
+  let synchronous = false;
+  let pending;
+  try { pending = import('./data.json', throwing); } catch (error) { synchronous = true; }
+  console.log(synchronous, pending instanceof Promise, reads);
+  await pending.catch(error => console.log(error === marker));
+  const coercion = { toString() { throw marker; } };
+  await import(coercion, throwing).catch(error => console.log(error === marker, reads));
+  for (const options of [null, 1, 'text', { with: null }, { with: 1 }, { with: { type: 1 } }]) {
+    try { await import('./data.json', options); console.log('unexpected'); }
+    catch (error) { console.log(error instanceof TypeError); }
+  }
+  let later = 0;
+  await import('./data.json', { with: {
+    type: 1, get extra() { later++; return 'value'; }
+  } }).catch(error => console.log(error instanceof TypeError, later));
+}
+main();"#,
+            ),
+        ],
+        "entry.mjs",
+        ParseGoal::Module,
+        &[
+            "false true 1",
+            "true",
+            "true 1",
+            "true",
+            "true",
+            "true",
+            "true",
+            "true",
+            "true",
+            "true 1",
+        ],
+    );
+}
+
+#[test]
+fn dynamic_options_validate_each_request_after_cache_hits_and_preserve_format_errors() {
+    // Unknown attributes must still reject a cached request. Node 24.22.1
+    // accepts the cached JSON/integrity request below; this loader deliberately
+    // retains static import's validation-before-cache contract for ImportCall.
+    assert_output(
+        &[
+            ("data.json", r#"{"answer":42}"#),
+            ("value.mjs", r#"export const value = 7;"#),
+            (
+                "entry.mjs",
+                r#"async function main() {
+  const first = await import('./data.json', { with: { type: 'json' } });
+  for (const options of [undefined, {}, { with: { type: 'javascript' } },
+                         { with: { type: 'json', integrity: 'opaque' } }]) {
+    try { await import('./data.json', options); console.log('unexpected'); }
+    catch (error) { console.log(error instanceof TypeError, error.code); }
+  }
+  const js = await import('./value.mjs');
+  await import('./value.mjs', { with: { type: 'json' } })
+    .catch(error => console.log(error instanceof TypeError, error.code));
+  await import('node:path', { with: { type: 'json' } })
+    .catch(error => console.log(error instanceof TypeError, error.code));
+  console.log((await import('./data.json', { with: { type: 'json' } })) === first,
+              (await import('./value.mjs', { with: {} })) === js);
+}
+main();"#,
+            ),
+        ],
+        "entry.mjs",
+        ParseGoal::Module,
+        &[
+            "true ERR_IMPORT_ATTRIBUTE_MISSING",
+            "true ERR_IMPORT_ATTRIBUTE_MISSING",
+            "true ERR_IMPORT_ATTRIBUTE_UNSUPPORTED",
+            "true ERR_IMPORT_ATTRIBUTE_UNSUPPORTED",
+            "true ERR_IMPORT_ATTRIBUTE_TYPE_INCOMPATIBLE",
+            "true ERR_IMPORT_ATTRIBUTE_TYPE_INCOMPATIBLE",
+            "true true",
+        ],
+    );
 }

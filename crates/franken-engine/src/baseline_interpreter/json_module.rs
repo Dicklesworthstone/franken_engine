@@ -177,22 +177,21 @@ mod tests {
     }
 
     #[test]
-    fn typed_static_import_and_require_share_the_native_json_value_in_both_orders() {
-        for import_first in [false, true] {
+    fn typed_imports_and_require_share_the_native_json_value_in_every_first_load_order() {
+        let attributes = json_attributes();
+        for first_kind in [
+            ModuleLoadKind::Require,
+            ModuleLoadKind::Import(&attributes),
+            ModuleLoadKind::DynamicImport(&attributes),
+        ] {
             let mut core = core();
             let module = caller();
             let source = delivered(r#"{"answer":42}"#);
-            let attributes = json_attributes();
-            let kinds = if import_first {
-                [ModuleLoadKind::Import(&attributes), ModuleLoadKind::Require]
-            } else {
-                [ModuleLoadKind::Require, ModuleLoadKind::Import(&attributes)]
-            };
             let first = core
                 .load_module_resolved(
                     &module,
                     "captured:data",
-                    kinds[0],
+                    first_kind,
                     None,
                     Some(source.clone()),
                 )
@@ -212,11 +211,23 @@ mod tests {
             core.set_object_property(value_object, "answer".into(), Value::Int(43))
                 .unwrap();
             let work = core.instructions_executed;
-            assert_eq!(
-                core.load_module_resolved(&module, "captured:data", kinds[1], None, Some(source),)
+            for kind in [
+                ModuleLoadKind::Require,
+                ModuleLoadKind::Import(&attributes),
+                ModuleLoadKind::DynamicImport(&attributes),
+            ] {
+                assert_eq!(
+                    core.load_module_resolved(
+                        &module,
+                        "captured:data",
+                        kind,
+                        None,
+                        Some(source.clone()),
+                    )
                     .unwrap(),
-                first
-            );
+                    first
+                );
+            }
             assert_eq!(
                 core.instructions_executed, work,
                 "cached JSON is not parsed again"
@@ -244,7 +255,7 @@ mod tests {
     }
 
     #[test]
-    fn cached_json_never_authorizes_missing_unknown_or_dynamic_attributes() {
+    fn cached_json_checks_static_and_dynamic_attributes_before_returning_the_namespace() {
         let mut core = core();
         let module = caller();
         let source = delivered("42");
@@ -277,10 +288,18 @@ mod tests {
             assert!(matches!(core.load_module_resolved(
                 &module, "captured:data", ModuleLoadKind::Import(&attributes), None, Some(source.clone()),
             ), Err(InterpreterError::ModuleLoweringFailed { error, .. }) if error.contains(expected)));
+            assert!(matches!(core.load_module_resolved(
+                &module, "captured:data", ModuleLoadKind::DynamicImport(&attributes), None, Some(source.clone()),
+            ), Err(InterpreterError::DynamicImportAttributeRejected { code, .. }) if code == expected));
         }
-        assert!(matches!(core.load_module_resolved(
-            &module, "captured:data", ModuleLoadKind::DynamicImport, None, Some(source),
-        ), Err(InterpreterError::ModuleLoweringFailed { error, .. }) if error.contains("import-options transport")));
+        core.load_module_resolved(
+            &module,
+            "captured:data",
+            ModuleLoadKind::DynamicImport(&json_attributes()),
+            None,
+            Some(source),
+        )
+        .expect("valid dynamic attributes still reach the same cached JSON record");
         assert_eq!(core.heap.len(), heap_objects);
         assert_eq!(core.instructions_executed, work);
         assert_eq!(

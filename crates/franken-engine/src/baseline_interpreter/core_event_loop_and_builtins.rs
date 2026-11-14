@@ -84,7 +84,12 @@ impl InterpreterCore {
         self.clear_pending_hostcall_result_label();
         let mut native_effect = false;
         let outcome = self
-            .dynamic_import_namespace(module, &task.specifier, &mut native_effect)
+            .dynamic_import_namespace(
+                module,
+                &task.specifier,
+                &task.import_attributes,
+                &mut native_effect,
+            )
             .and_then(|namespace| {
                 let label = if native_effect && let Value::Object(object) = &namespace {
                     // As for static imports and require, authenticated native
@@ -125,14 +130,15 @@ impl InterpreterCore {
     }
 
     /// Load the module an ImportCall names and return its namespace. The
-    /// format is Node's: `.mjs` is an ES module, `.cjs` (and `.json`)
-    /// CommonJS, and any other file follows its package.json `"type"` or its
-    /// syntax, so a CommonJS module's namespace holds `default:
-    /// module.exports` beside its own properties.
+    /// format is Node's: `.mjs` is an ES module, `.cjs` is CommonJS, and
+    /// `.json` is intrinsic data requiring the JSON import attribute. Other
+    /// files follow package.json `"type"` or their syntax. A CommonJS module's
+    /// namespace holds `default: module.exports` beside its own properties.
     pub(super) fn dynamic_import_namespace(
         &mut self,
         module: &Ir3Module,
         specifier: &str,
+        import_attributes: &ImportAttributes,
         native_effect: &mut bool,
     ) -> Result<Value, InterpreterError> {
         *native_effect = false;
@@ -144,10 +150,11 @@ impl InterpreterCore {
         let import_bound = Self::unit_declares_bounded_imports(module)
             .then_some(crate::lowering_pipeline::IFC_BOUNDED_IMPORT_LABEL);
         if self.module_resolver.is_some() {
-            let delivered = self.resolve_installed_module(
+            let delivered = self.resolve_installed_module_with_attribute_rejection(
                 specifier,
                 ImportStyle::Import,
-                &ImportAttributes::default(),
+                import_attributes,
+                true,
             )?;
             let resolved = delivered.module.record.id.clone();
             if let Some(native) = NativeBuiltinModule::from_record(&delivered.module.record) {
@@ -168,7 +175,7 @@ impl InterpreterCore {
             return self.load_module_resolved(
                 module,
                 &resolved,
-                ModuleLoadKind::DynamicImport,
+                ModuleLoadKind::DynamicImport(import_attributes),
                 import_bound.as_ref(),
                 Some(delivered.module),
             );
@@ -186,6 +193,11 @@ impl InterpreterCore {
         }
         let target = self.resolve_module_specifier(specifier)?;
         if let package_resolution::ModuleResolutionTarget::Native(native) = target {
+            Self::check_dynamic_import_attributes(
+                specifier,
+                ModuleSyntax::EsModule,
+                import_attributes,
+            )?;
             let namespace = self.load_ordinary_native_builtin_namespace(
                 module,
                 specifier,
@@ -207,7 +219,7 @@ impl InterpreterCore {
         self.load_module_resolved(
             module,
             &resolved,
-            ModuleLoadKind::DynamicImport,
+            ModuleLoadKind::DynamicImport(import_attributes),
             import_bound.as_ref(),
             None,
         )
@@ -260,6 +272,46 @@ impl InterpreterCore {
             other => return Err(other),
         };
         Ok((self.promise_value(&thrown)?, specifier_label.clone()))
+    }
+
+    /// Preserve the static loader's exact format rules. Resource bounds and
+    /// authority refusals remain engine errors; format failures are the host's
+    /// TypeError rejection of an ImportCall.
+    pub(super) fn check_dynamic_import_attributes(
+        specifier: &str,
+        syntax: ModuleSyntax,
+        attributes: &ImportAttributes,
+    ) -> Result<(), InterpreterError> {
+        validate_import_attributes(ImportStyle::Import, syntax, attributes).map_err(|error| {
+            if matches!(
+                error,
+                crate::module_resolver::ImportAttributeValidationError::Malformed(_)
+            ) {
+                InterpreterError::ModuleLoweringFailed {
+                    specifier: specifier.to_string(),
+                    error: error.to_string(),
+                }
+            } else {
+                Self::dynamic_import_attribute_error(error.to_string())
+            }
+        })
+    }
+
+    /// Called only after typed attribute validation (or the resolver's typed
+    /// InvalidImportAttributes result). Message text selects the Node code,
+    /// never whether a policy or provenance failure is catchable.
+    pub(super) fn dynamic_import_attribute_error(message: String) -> InterpreterError {
+        let code = match message.split_once(':').map(|(code, _)| code) {
+            Some("ERR_IMPORT_ATTRIBUTE_MISSING") => "ERR_IMPORT_ATTRIBUTE_MISSING",
+            Some("ERR_IMPORT_ATTRIBUTE_TYPE_INCOMPATIBLE") => {
+                "ERR_IMPORT_ATTRIBUTE_TYPE_INCOMPATIBLE"
+            }
+            _ => "ERR_IMPORT_ATTRIBUTE_UNSUPPORTED",
+        };
+        InterpreterError::DynamicImportAttributeRejected {
+            code: code.to_string(),
+            message,
+        }
     }
 
     pub(super) fn dispatch_promise_hostcall_inner(

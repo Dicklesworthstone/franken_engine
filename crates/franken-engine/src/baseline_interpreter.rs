@@ -2033,6 +2033,7 @@ fn interpreter_error_telemetry_code(err: &InterpreterError) -> u32 {
         | InterpreterError::ModuleReadFailed { .. }
         | InterpreterError::ModuleParseFailed { .. }
         | InterpreterError::ModuleLoweringFailed { .. }
+        | InterpreterError::DynamicImportAttributeRejected { .. }
         | InterpreterError::ModuleEvaluationFailed { .. } => 11,
         InterpreterError::RequireSpecifierNotString { .. }
         | InterpreterError::ImportSpecifierNotString { .. } => 12,
@@ -2290,6 +2291,7 @@ struct PendingDynamicImportTask {
     owner_module: Arc<Ir3Module>,
     referrer: String,
     specifier: String,
+    import_attributes: ImportAttributes,
     promise: crate::promise_model::PromiseHandle,
     label: Label,
     cjs_context: Option<CjsModuleContext>,
@@ -10199,7 +10201,7 @@ enum RuntimeIteratorState {
 enum ModuleLoadKind<'a> {
     Require,
     Import(&'a ImportAttributes),
-    DynamicImport,
+    DynamicImport(&'a ImportAttributes),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -12933,6 +12935,9 @@ pub enum InterpreterError {
     ModuleParseFailed { specifier: String, error: String },
     /// Failed to lower module source to IR3.
     ModuleLoweringFailed { specifier: String, error: String },
+    /// A dynamic import's format attributes were rejected, independently of
+    /// source authorization. Created only by the dynamic import path.
+    DynamicImportAttributeRejected { code: String, message: String },
     /// Module evaluation failed.
     ModuleEvaluationFailed { specifier: String, reason: String },
     /// Export encountered outside an active module evaluation.
@@ -13060,6 +13065,9 @@ impl fmt::Display for InterpreterError {
             }
             Self::ModuleLoweringFailed { specifier, error } => {
                 write!(f, "failed to lower module '{specifier}': {error}")
+            }
+            Self::DynamicImportAttributeRejected { code, message } => {
+                write!(f, "dynamic import attribute error {code}: {message}")
             }
             Self::ModuleEvaluationFailed { specifier, reason } => {
                 write!(f, "module '{specifier}' evaluation failed: {reason}")

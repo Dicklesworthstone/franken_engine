@@ -1365,6 +1365,10 @@ pub enum ResolutionErrorCode {
     PackagePathNotExported,
     /// A captured package scope has no matching private imports mapping.
     PackageImportNotDefined,
+    /// The admitted module's requested format attributes are invalid. This is
+    /// distinct from an unknown route or a policy refusal; ImportCall rejects
+    /// its Promise for this category without making authority failures catchable.
+    InvalidImportAttributes,
 }
 
 impl ResolutionErrorCode {
@@ -1377,6 +1381,7 @@ impl ResolutionErrorCode {
             Self::PolicyDenied => "FE-MODRES-0005",
             Self::PackagePathNotExported => "FE-MODRES-0006",
             Self::PackageImportNotDefined => "FE-MODRES-0007",
+            Self::InvalidImportAttributes => "FE-MODRES-0008",
         }
     }
 }
@@ -2922,7 +2927,11 @@ impl DeterministicModuleResolver {
             .map_err(|error| {
                 Box::new(
                     ResolutionError::new(
-                        ResolutionErrorCode::UnsupportedSpecifier,
+                        if matches!(error, ImportAttributeValidationError::Malformed(_)) {
+                            ResolutionErrorCode::UnsupportedSpecifier
+                        } else {
+                            ResolutionErrorCode::InvalidImportAttributes
+                        },
                         error.to_string(),
                         context,
                     )
@@ -3640,17 +3649,23 @@ mod tests {
         let error = resolver
             .resolve(&import, &context(), &AllowAllPolicy)
             .expect_err("source delivery cannot validate absent import attributes");
-        assert_eq!(error.code, ResolutionErrorCode::UnsupportedSpecifier);
+        assert_eq!(error.code, ResolutionErrorCode::InvalidImportAttributes);
         assert!(error.message.contains("ERR_IMPORT_ATTRIBUTE_MISSING"));
         assert_eq!(error.request_specifier, "/app/data");
         assert_eq!(error.canonical_specifier.as_deref(), Some("/app/data"));
 
-        let typed = resolver
+        let typed_request = import.with_import_attributes(json_import_attributes());
+        let denied = resolver
             .resolve(
-                &import.with_import_attributes(json_import_attributes()),
+                &typed_request,
                 &context(),
-                &AllowAllPolicy,
+                &CapabilityPolicyHook::new(BTreeSet::new()),
             )
+            .expect_err("valid format attributes cannot authorize JSON source delivery");
+        assert_eq!(denied.code, ResolutionErrorCode::PolicyDenied);
+
+        let typed = resolver
+            .resolve(&typed_request, &context(), &AllowAllPolicy)
             .expect("typed static import admits the exact JSON source record");
         assert_eq!(typed.module.record, outcome.module.record);
         assert_eq!(typed.module.content_hash, outcome.module.content_hash);
@@ -5866,6 +5881,7 @@ mod tests {
             ResolutionErrorCode::PolicyDenied,
             ResolutionErrorCode::PackagePathNotExported,
             ResolutionErrorCode::PackageImportNotDefined,
+            ResolutionErrorCode::InvalidImportAttributes,
         ];
         for code in &codes {
             let stable = code.stable_code();
@@ -5887,16 +5903,18 @@ mod tests {
             ResolutionErrorCode::PolicyDenied.stable_code(),
             ResolutionErrorCode::PackagePathNotExported.stable_code(),
             ResolutionErrorCode::PackageImportNotDefined.stable_code(),
+            ResolutionErrorCode::InvalidImportAttributes.stable_code(),
         ];
         let unique: BTreeSet<&str> = codes.iter().copied().collect();
         assert_eq!(unique.len(), codes.len(), "all stable codes must be unique");
     }
 
     #[test]
-    fn package_resolution_codes_from_policy_remain_uncatchable_denials() {
+    fn guest_error_categories_from_policy_remain_uncatchable_denials() {
         for code in [
             ResolutionErrorCode::PackagePathNotExported,
             ResolutionErrorCode::PackageImportNotDefined,
+            ResolutionErrorCode::InvalidImportAttributes,
         ] {
             let error = ResolutionError::new(code, "policy hid an existing source", &context())
                 .into_policy_denial();

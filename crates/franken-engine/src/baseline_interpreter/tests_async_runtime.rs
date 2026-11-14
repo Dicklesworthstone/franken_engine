@@ -3432,6 +3432,115 @@ fn deferred_dynamic_import_rechecks_effect_only_hostcall_hooks() {
 }
 
 #[test]
+fn dynamic_import_attribute_getters_preserve_labels_and_native_local_roots() {
+    for (value, rejected) in [("'json'", false), ("7", true)] {
+        let root = tempfile::tempdir().expect("classified import options root");
+        let entry = root.path().join("entry.mjs");
+        let source = format!(
+            "export const options = {{ get with() {{ return {{ get type() {{ return {value}; }} }}; }} }};"
+        );
+        std::fs::write(&entry, &source).expect("entry source");
+        let module = lower_module_graph_entry_bd_yn3lv(&entry, &source);
+        let mut core = async_module_graph_core_bd_yn3lv(root.path());
+        core.set_gc_stress_interval(Some(1));
+        core.prepare_execution(&module).expect("entry preparation");
+        assert!(matches!(
+            core.run_loop(&module),
+            Ok(_) | Err(InterpreterError::Halted)
+        ));
+        let Value::Object(options) = core.module_state.modules[&module.header.source_label].exports
+            [&JsString::from("options")]
+            .clone()
+        else {
+            panic!("exported import options")
+        };
+        core.set_own_property_label(options, "with", &Label::Secret)
+            .expect("classify the options getter");
+        core.write_reg_with_label(0, Value::str("./data.json"), Label::Public)
+            .expect("public module specifier");
+        core.write_reg_with_label(1, Value::Object(options), Label::Public)
+            .expect("public reference to classified getter");
+        let Value::Promise(handle) = core
+            .dynamic_import(RegRange { start: 0, count: 2 }, Some(&module))
+            .expect("option extraction returns a Promise")
+        else {
+            panic!("dynamic import Promise")
+        };
+        if rejected {
+            let promise = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(handle))
+                .expect("rejected Promise");
+            assert!(matches!(
+                promise.state,
+                crate::promise_model::PromiseState::Rejected(_)
+            ));
+            assert_eq!(promise.label, Label::Secret);
+            assert!(core.pending_dynamic_imports.is_empty());
+        } else {
+            let task = core.pending_dynamic_imports.values().next().unwrap();
+            assert_eq!(task.label, Label::Secret);
+            assert_eq!(task.import_attributes.get("type"), Some("json"));
+        }
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+        core.clear_residual_event_state()
+            .expect("release captured attributes and queued work");
+        assert!(core.pending_dynamic_imports.is_empty());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+}
+
+#[test]
+fn queued_json_import_rechecks_authority_and_releases_retained_attributes() {
+    let root = tempfile::tempdir().expect("revoked JSON import root");
+    let entry = root.path().join("entry.mjs");
+    let source = "import('./data.json', { with: { type: 'json' } });";
+    std::fs::write(&entry, source).expect("entry source");
+    std::fs::write(root.path().join("data.json"), r#"{"answer":42}"#).expect("JSON source");
+    let module = lower_module_graph_entry_bd_yn3lv(&entry, source);
+    let mut core = async_module_graph_core_bd_yn3lv(root.path());
+    core.prepare_execution(&module).expect("entry preparation");
+    assert!(matches!(
+        core.run_loop(&module),
+        Ok(_) | Err(InterpreterError::Halted)
+    ));
+    assert_eq!(core.pending_dynamic_imports.len(), 1);
+    assert_eq!(
+        core.pending_dynamic_imports
+            .values()
+            .next()
+            .unwrap()
+            .import_attributes
+            .get("type"),
+        Some("json")
+    );
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+    core.config
+        .granted_capabilities
+        .remove(&RuntimeCapability::ModuleLoad);
+    assert!(matches!(
+        core.run_event_loop_until_idle_with_module(Some(&module)),
+        Err(InterpreterError::CapabilityDenied { capability }) if capability == "module_load"
+    ));
+    assert!(core.pending_dynamic_imports.is_empty());
+    assert_eq!(core.module_snapshot_in_flight_bytes, 0);
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+}
+
+#[test]
 fn cyclic_module_import_publication_preserves_taint_and_is_atomic() {
     let mut core = test_interpreter();
     let module = lower_module_graph_entry_bd_yn3lv(Path::new("cycle.mjs"), "export const x = 1;");

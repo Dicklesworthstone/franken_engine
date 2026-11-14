@@ -3374,6 +3374,9 @@ impl InterpreterCore {
             .saturating_add(std::mem::size_of::<[usize; 2]>() as u64)
             .saturating_add(Self::estimate_string_bytes(&task.referrer))
             .saturating_add(Self::estimate_string_bytes(&task.specifier))
+            .saturating_add(Self::import_attributes_memory_bytes(
+                &task.import_attributes,
+            ))
             .saturating_add(Self::estimate_label_bytes(&task.label))
             .saturating_add(
                 task.cjs_context
@@ -3929,7 +3932,8 @@ impl InterpreterCore {
             InterpreterError::ModuleEvaluationFailed { specifier, reason } => {
                 string(specifier).saturating_add(string(reason))
             }
-            InterpreterError::HostFilesystem { code, message } => {
+            InterpreterError::HostFilesystem { code, message }
+            | InterpreterError::DynamicImportAttributeRejected { code, message } => {
                 string(code).saturating_add(string(message))
             }
             InterpreterError::HostProcess {

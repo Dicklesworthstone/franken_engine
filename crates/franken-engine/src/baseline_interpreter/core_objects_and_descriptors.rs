@@ -9407,7 +9407,7 @@ impl InterpreterCore {
                 // bd-fw7zd: statically proven `Readable.from(...)` is an
                 // engine-contained iterable stream. No module object or host
                 // authority is materialized by this dispatch.
-                self.construct_readable_from(Some(module), args)
+                self.construct_readable_from(module, args)
             }
             "builtin:StreamReadable" => {
                 // bd-fw7zd: statically proven `new Readable(options)` exposes

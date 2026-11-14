@@ -2717,9 +2717,9 @@ impl InterpreterCore {
             // Language type errors: `null.x`, bad receivers, non-callable
             // calls, and "assignment to constant variable" all surface as
             // `TypeError` in JS.
-            InterpreterError::TypeError { .. } | InterpreterError::ConstAssignment { .. } => {
-                Some("TypeError")
-            }
+            InterpreterError::TypeError { .. }
+            | InterpreterError::ConstAssignment { .. }
+            | InterpreterError::DynamicImportAttributeRejected { .. } => Some("TypeError"),
             InterpreterError::RangeError { .. } | InterpreterError::StackOverflow { .. } => {
                 Some("RangeError")
             }
@@ -2762,7 +2762,8 @@ impl InterpreterCore {
             }
             // The message already is the JavaScript text ("Invalid time
             // value"); the Display prefix is for host diagnostics.
-            InterpreterError::RangeError { message } => message.clone(),
+            InterpreterError::RangeError { message }
+            | InterpreterError::DynamicImportAttributeRejected { message, .. } => message.clone(),
             // A property access on null or undefined (bd-9vouw.108):
             // "Cannot read properties of null (reading 'x')", as Node.
             InterpreterError::TypeError { expected, got }
@@ -2790,7 +2791,9 @@ impl InterpreterCore {
         let prototype = self.ensure_builtin_prototype(name)?;
         let error_id = self.alloc_object_with_prototype(Some(prototype))?;
         self.initialize_error_like_object(error_id, name, message)?;
-        if let InterpreterError::HostFilesystem { code, .. } = err {
+        if let InterpreterError::HostFilesystem { code, .. }
+        | InterpreterError::DynamicImportAttributeRejected { code, .. } = err
+        {
             self.set_object_property(error_id, "code".to_string(), Value::str(code.as_str()))?;
         }
         if let InterpreterError::HostProcess {
@@ -12838,6 +12841,158 @@ impl InterpreterCore {
         )
     }
 
+    /// Read ImportCall's options using ordinary Get and own-property
+    /// operations. Enumerate every value before checking its type: an earlier
+    /// non-string value must not skip a later getter or replace its throw.
+    fn dynamic_import_attributes(
+        &mut self,
+        module: &Ir3Module,
+        options: Value,
+    ) -> Result<ImportAttributes, InterpreterError> {
+        if matches!(options, Value::Undefined) {
+            return Ok(ImportAttributes::default());
+        }
+        if !options.is_object_like() {
+            return Err(InterpreterError::TypeError {
+                expected: "object or undefined for import() options".to_string(),
+                got: options.type_name().to_string(),
+            });
+        }
+        // Getter results and enumeration keys live in native locals until
+        // extraction completes, as in the canonical Object.entries path.
+        self.gc_nested_request = None;
+        let attributes = self.get_v(module, &options, &RuntimePropertyKey::from("with"))?;
+        self.observe_scoped_callback_result()?;
+        if matches!(attributes, Value::Undefined) {
+            return Ok(ImportAttributes::default());
+        }
+        if !attributes.is_object_like() {
+            return Err(InterpreterError::TypeError {
+                expected: "object or undefined for import() options.with".to_string(),
+                got: attributes.type_name().to_string(),
+            });
+        }
+        let Some(holder) = self.own_property_holder(Some(module), &attributes, true)? else {
+            return Ok(ImportAttributes::default());
+        };
+        if let Some(shape) = self.object_mutation_labels.get(&holder) {
+            self.check_temporary_memory_budget(Self::estimate_label_bytes(shape))?;
+            let shape = shape.clone();
+            self.json_observe_label(shape)?;
+        }
+        let keys = self.proxy_aware_own_property_keys(Some(module), holder, 0)?;
+        let mut scratch = Self::estimate_value_vec_bytes(&keys);
+        self.json_reserve_temporary(scratch)?;
+        let outcome = (|| {
+            let mut entries = Vec::new();
+            for key in keys {
+                self.json_charge_work()?;
+                let Value::Str(key) = key else {
+                    continue;
+                };
+                let property = RuntimePropertyKey::String(key.clone());
+                self.reflect_observe_selected_property(holder, &property)?;
+                let string_index = self.active_proxy_record(holder)?.is_none()
+                    && key.as_str().is_some_and(|name| {
+                        name != "length" && self.string_wrapper_own_property(holder, name).is_some()
+                    });
+                if !string_index
+                    && !self.own_string_key_is_enumerable(Some(module), holder, &key, 0)?
+                {
+                    continue;
+                }
+                if entries.len() == crate::import_attributes::MAX_IMPORT_ATTRIBUTES {
+                    return Err(InterpreterError::ModuleLoweringFailed {
+                        specifier: "<dynamic import>".to_string(),
+                        error: "dynamic import attribute count exceeds the configured limit"
+                            .to_string(),
+                    });
+                }
+                let value = self.get_v(module, &attributes, &property)?;
+                self.observe_scoped_callback_result()?;
+                let bytes = (std::mem::size_of::<(JsString, Value)>() as u64)
+                    .saturating_add(Self::estimate_value_bytes(&Value::Str(key.clone())))
+                    .saturating_add(Self::estimate_value_bytes(&value));
+                self.json_reserve_temporary(bytes)?;
+                scratch = scratch.saturating_add(bytes);
+                entries.push((key, value));
+            }
+            let mut values = BTreeMap::new();
+            for (key, value) in entries {
+                let Value::Str(value) = value else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "string import attribute value".to_string(),
+                        got: value.type_name().to_string(),
+                    });
+                };
+                let (Some(key), Some(value)) = (key.as_str(), value.as_str()) else {
+                    return Err(Self::dynamic_import_attribute_error(
+                        "ERR_IMPORT_ATTRIBUTE_UNSUPPORTED: import attributes require supported Unicode strings"
+                            .to_string(),
+                    ));
+                };
+                if key.len() > crate::import_attributes::MAX_IMPORT_ATTRIBUTE_KEY_BYTES
+                    || value.len() > crate::import_attributes::MAX_IMPORT_ATTRIBUTE_VALUE_BYTES
+                {
+                    return Err(InterpreterError::ModuleLoweringFailed {
+                        specifier: "<dynamic import>".to_string(),
+                        error: "dynamic import attribute string exceeds the configured limit"
+                            .to_string(),
+                    });
+                }
+                let bytes = MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                    .saturating_add(Self::estimate_string_bytes(key))
+                    .saturating_add(Self::estimate_string_bytes(value));
+                self.json_reserve_temporary(bytes)?;
+                scratch = scratch.saturating_add(bytes);
+                values.insert(key.to_string(), value.to_string());
+            }
+            let attributes = ImportAttributes::new(values).map_err(|error| {
+                InterpreterError::ModuleLoweringFailed {
+                    specifier: "<dynamic import>".to_string(),
+                    error: error.to_string(),
+                }
+            })?;
+            if let Some((key, _)) = attributes.iter().find(|(key, _)| key.as_str() != "type") {
+                return Err(Self::dynamic_import_attribute_error(format!(
+                    "ERR_IMPORT_ATTRIBUTE_UNSUPPORTED: import attribute '{key}' is not supported"
+                )));
+            }
+            Ok(attributes)
+        })();
+        self.json_release_temporary(scratch);
+        outcome
+    }
+
+    fn dynamic_import_selection(
+        &mut self,
+        module: &Ir3Module,
+        args: RegRange,
+    ) -> Result<(String, ImportAttributes), InterpreterError> {
+        let end =
+            args.start
+                .checked_add(args.count)
+                .ok_or(InterpreterError::RegisterOutOfBounds {
+                    register: args.start,
+                    max: self.config.max_registers,
+                })?;
+        let observation = self.begin_property_observation(args.start..end)?;
+        let mut specifier_bytes = 0;
+        let outcome = (|| {
+            let specifier = self.builtin_search_js_string(module, args, 0)?;
+            let specifier = Self::utf8_module_specifier(&specifier)?;
+            let bytes = Self::estimate_string_bytes(specifier);
+            self.json_reserve_temporary(bytes)?;
+            specifier_bytes = bytes;
+            let specifier = specifier.to_string();
+            let options = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+            let attributes = self.dynamic_import_attributes(module, options)?;
+            Ok((specifier, attributes))
+        })();
+        self.json_release_temporary(specifier_bytes);
+        self.finish_property_read_observation(observation, outcome)
+    }
+
     /// `import(specifier)` (ES2020 12.3.10.1 with HostImportModuleDynamically
     /// and FinishDynamicImport, 15.2.1.17-18): a new promise fulfilled with
     /// the module's namespace object, or rejected with what ToString of the
@@ -12853,32 +13008,20 @@ impl InterpreterCore {
         args: RegRange,
         module: Option<&Ir3Module>,
     ) -> Result<Value, InterpreterError> {
-        if args.count > 1 {
-            return Err(InterpreterError::ModuleLoweringFailed {
-                specifier: "<dynamic import>".to_string(),
-                error: "dynamic import options are not transported by the runtime yet".to_string(),
-            });
-        }
         let module = module.ok_or_else(|| InterpreterError::InternalError {
             details: "module:dynamic_import hostcall missing module context".to_string(),
         })?;
         let mut specifier_label = self.join_arg_range_label(args)?;
-        let specifier = self
-            .builtin_search_js_string(module, args, 0)
-            .and_then(|specifier| {
-                let specifier = Self::utf8_module_specifier(&specifier)?;
-                self.check_temporary_memory_budget(Self::estimate_string_bytes(specifier))?;
-                Ok(specifier.to_string())
-            });
+        let selection = self.dynamic_import_selection(module, args);
         if let Some(label) = self.pending_hostcall_result_label.as_ref() {
             specifier_label =
                 self.join_owned_label_with_temporary_budget(specifier_label, label)?;
         }
         // Intrinsic Promise allocation is unobservable. Do it after the
-        // arbitrary guest ToString callback, so no unrooted Promise spans it.
+        // arbitrary ToString/options callbacks, so no unrooted Promise spans them.
         let promise = self.create_promise()?;
-        let specifier = match specifier {
-            Ok(specifier) => specifier,
+        let (specifier, import_attributes) = match selection {
+            Ok(selection) => selection,
             Err(error) => {
                 let result = self
                     .dynamic_import_rejection(error, &specifier_label)
@@ -12929,6 +13072,7 @@ impl InterpreterCore {
             owner_module,
             referrer: referrer.to_string(),
             specifier,
+            import_attributes,
             promise,
             label: specifier_label,
             cjs_context: self.active_cjs_context.clone(),

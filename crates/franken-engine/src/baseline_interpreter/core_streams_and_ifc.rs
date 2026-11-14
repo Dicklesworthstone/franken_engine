@@ -11016,6 +11016,21 @@ impl InterpreterCore {
         style: ImportStyle,
         import_attributes: &ImportAttributes,
     ) -> Result<SharedResolutionOutcome, InterpreterError> {
+        self.resolve_installed_module_with_attribute_rejection(
+            specifier,
+            style,
+            import_attributes,
+            false,
+        )
+    }
+
+    pub(super) fn resolve_installed_module_with_attribute_rejection(
+        &self,
+        specifier: &str,
+        style: ImportStyle,
+        import_attributes: &ImportAttributes,
+        dynamic_import: bool,
+    ) -> Result<SharedResolutionOutcome, InterpreterError> {
         let installed =
             self.module_resolver
                 .as_ref()
@@ -11047,7 +11062,10 @@ impl InterpreterCore {
                 // refusal into its closed world. Optional dependencies may
                 // catch those exact Node errors. Unknown routes and runtime
                 // policy denials remain outside guest exception handling.
-                if let Some(reason) = ModuleResolutionFailureReason::from_captured_code(error.code)
+                if dynamic_import && error.code == ResolutionErrorCode::InvalidImportAttributes {
+                    Self::dynamic_import_attribute_error(error.message.clone())
+                } else if let Some(reason) =
+                    ModuleResolutionFailureReason::from_captured_code(error.code)
                 {
                     InterpreterError::ModuleResolutionFailed {
                         specifier: specifier.to_string(),
@@ -11061,7 +11079,16 @@ impl InterpreterCore {
                 }
             })?;
         let record = &resolved.module.record;
-        Self::check_module_import_attributes(specifier, style, record.syntax, import_attributes)?;
+        if dynamic_import {
+            Self::check_dynamic_import_attributes(specifier, record.syntax, import_attributes)?;
+        } else {
+            Self::check_module_import_attributes(
+                specifier,
+                style,
+                record.syntax,
+                import_attributes,
+            )?;
+        }
         if u64::try_from(record.source.len()).unwrap_or(u64::MAX)
             > self.config.module_parser_options.budget.max_source_bytes
         {
@@ -11798,19 +11825,12 @@ impl InterpreterCore {
                 .extension()
                 .is_some_and(|extension| extension.eq_ignore_ascii_case("json")),
         };
-        // Dynamic options have no runtime transport yet. A typed static import
-        // or require cache entry cannot authorize an untyped ImportCall.
-        if is_json && matches!(load_kind, ModuleLoadKind::DynamicImport) {
-            return Err(InterpreterError::ModuleLoweringFailed {
-                specifier: resolved.to_string(),
-                error: "dynamic JSON import requires import-options transport; use a static import with type: 'json' or require()".to_string(),
-            });
-        }
         let empty_attributes = ImportAttributes::default();
         let (style, attributes) = match load_kind {
             ModuleLoadKind::Require => (ImportStyle::Require, &empty_attributes),
-            ModuleLoadKind::Import(attributes) => (ImportStyle::Import, attributes),
-            ModuleLoadKind::DynamicImport => (ImportStyle::Import, &empty_attributes),
+            ModuleLoadKind::Import(attributes) | ModuleLoadKind::DynamicImport(attributes) => {
+                (ImportStyle::Import, attributes)
+            }
         };
         // Delivered records declare their format, including extensionless JSON
         // and JavaScript whose identity happens to end in .json. Only the
@@ -11823,7 +11843,13 @@ impl InterpreterCore {
             },
             |source| source.record.syntax,
         );
-        Self::check_module_import_attributes(resolved, style, syntax, attributes)?;
+        // Format requirements apply on every request, before cache hits too.
+        // Only dynamic imports turn a format mismatch into a Promise rejection.
+        if matches!(load_kind, ModuleLoadKind::DynamicImport(_)) {
+            Self::check_dynamic_import_attributes(resolved, syntax, attributes)?;
+        } else {
+            Self::check_module_import_attributes(resolved, style, syntax, attributes)?;
+        }
         let source_hash = delivered.as_ref().map(|source| source.content_hash);
         if let Some(record) = self.module_state.modules.get(resolved) {
             if source_hash.is_some() && record.resolved_source_hash != source_hash {
@@ -14570,11 +14596,11 @@ impl InterpreterCore {
             Some("cjs" | "cts") => Some(ParseGoal::Script),
             Some("json") => Some(match load_kind {
                 ModuleLoadKind::Import(_) => ParseGoal::Module,
-                ModuleLoadKind::Require | ModuleLoadKind::DynamicImport => ParseGoal::Script,
+                ModuleLoadKind::Require | ModuleLoadKind::DynamicImport(_) => ParseGoal::Script,
             }),
             Some("js" | "ts" | "tsx") => self.package_parse_goal_for_module(resolved)?,
             _ => match load_kind {
-                ModuleLoadKind::DynamicImport => self.package_parse_goal_for_module(resolved)?,
+                ModuleLoadKind::DynamicImport(_) => self.package_parse_goal_for_module(resolved)?,
                 ModuleLoadKind::Require => Some(ParseGoal::Script),
                 ModuleLoadKind::Import(_) => Some(ParseGoal::Module),
             },

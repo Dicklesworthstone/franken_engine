@@ -863,6 +863,8 @@ fn object_like_resolution_getters_preserve_the_input_label_for_effects() {
         "async function value() {}",
         "function* value() {}",
         "(function* value() { yield 1; })()",
+        "Promise.resolve(5)",
+        "new Promise(function () {})",
     ] {
         for label in [Label::Public, Label::Secret] {
             let source = format!(
@@ -919,6 +921,343 @@ fn object_like_resolution_getters_preserve_the_input_label_for_effects() {
             );
         }
     }
+}
+
+#[test]
+fn promise_reaction_returns_preserve_captured_labels_at_the_console_boundary() {
+    for rejected in [false, true] {
+        for payload in [
+            "42",
+            "Promise.resolve(42)",
+            "({then(resolve) {resolve(42);}})",
+            "({then(resolve) {queueMicrotask(() => resolve(42));}})",
+        ] {
+            for label in [Label::Public, Label::Secret] {
+                let source = format!(
+                    "const state = {{marker: 9491, payload: {payload}}}; \
+                     const input = new Promise(function () {{}}); \
+                     const result = input.then(() => state.payload, () => state.payload); \
+                     result.then(value => console.log(value)); \
+                     const holder = {{marker: 9492, state, input, result}};"
+                );
+                let module = module(&source);
+                let mut core = InterpreterCore::new(config(false), "reaction-return-provenance");
+                core.execute(&module).expect("pending reaction setup");
+                let holder = core
+                    .heap
+                    .iter()
+                    .find(|object| object.properties.get("marker") == Some(&Value::Int(9492)))
+                    .expect("retained holder");
+                let Value::Object(state) = holder.properties.get("state").unwrap().clone() else {
+                    panic!("state object");
+                };
+                let Value::Promise(input) = holder.properties.get("input").unwrap().clone() else {
+                    panic!("input promise");
+                };
+                let Value::Promise(result) = holder.properties.get("result").unwrap().clone() else {
+                    panic!("result promise");
+                };
+                core.set_own_property_label(state, "payload", &label)
+                    .expect("captured payload provenance");
+                let input = crate::promise_model::PromiseHandle(input);
+                if rejected {
+                    core.reject_promise(input, crate::object_model::JsValue::Int(1), Label::Public)
+                        .expect("public rejection");
+                } else {
+                    core.fulfill_promise(input, crate::object_model::JsValue::Int(1), Label::Public)
+                        .expect("public fulfillment");
+                }
+                let outcome = core.drain_microtasks(Some(&module));
+                if label == Label::Secret {
+                    assert!(
+                        matches!(outcome, Err(InterpreterError::CapabilityDenied { ref capability })
+                            if capability == "console:log:confidentiality"),
+                        "rejected={rejected}, payload={payload}"
+                    );
+                    assert!(core.console_output.is_empty());
+                } else {
+                    outcome.expect("Public callback return reaches the sink");
+                    assert_eq!(core.console_output.len(), 1);
+                    assert_eq!(core.console_output[0].message, "42");
+                }
+                let record = core
+                    .promise_store
+                    .get(crate::promise_model::PromiseHandle(result))
+                    .unwrap();
+                assert_eq!(
+                    record.state,
+                    PromiseState::Fulfilled(crate::object_model::JsValue::Int(42))
+                );
+                assert_eq!(record.label, label);
+                assert!(core.active_inline_callback_context_label.is_none());
+                assert_eq!(core.json_parse_temporary_bytes, 0);
+                assert_eq!(core.promise_in_flight_task_bytes, 0);
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn native_adoption_preserves_source_provenance_before_and_after_settlement() {
+    for settled_first in [false, true] {
+        for rejected in [false, true] {
+            for label in [Label::Public, Label::Secret] {
+                let module = module(
+                    "const input = new Promise(function () {}); \
+                     const result = new Promise(function () {}); \
+                     result.then(value => console.log(value), reason => console.log(reason)); \
+                     const holder = {marker: 9493, input, result};",
+                );
+                let mut core = InterpreterCore::new(config(false), "native-adoption-provenance");
+                core.execute(&module).expect("pending adoption setup");
+                let holder = core
+                    .heap
+                    .iter()
+                    .find(|object| object.properties.get("marker") == Some(&Value::Int(9493)))
+                    .expect("retained holder");
+                let Value::Promise(input) = holder.properties.get("input").unwrap().clone() else {
+                    panic!("input promise");
+                };
+                let Value::Promise(result) = holder.properties.get("result").unwrap().clone() else {
+                    panic!("result promise");
+                };
+                let input = crate::promise_model::PromiseHandle(input);
+                let result = crate::promise_model::PromiseHandle(result);
+                if !settled_first {
+                    core.resolve_promise_to_native(result, input, Label::Public)
+                        .expect("pending adoption");
+                }
+                let value = crate::object_model::JsValue::Int(37);
+                if rejected {
+                    core.reject_promise(input, value, label.clone())
+                        .expect("source rejection");
+                } else {
+                    core.fulfill_promise(input, value, label.clone())
+                        .expect("source fulfillment");
+                }
+                if settled_first {
+                    core.resolve_promise_to_native(result, input, Label::Public)
+                        .expect("settled adoption");
+                }
+                let outcome = core.drain_microtasks(Some(&module));
+                if label == Label::Secret {
+                    assert!(
+                        matches!(outcome, Err(InterpreterError::CapabilityDenied { ref capability })
+                            if capability == "console:log:confidentiality"),
+                        "settled_first={settled_first}, rejected={rejected}"
+                    );
+                    assert!(core.console_output.is_empty());
+                } else {
+                    outcome.expect("Public source remains observable");
+                    assert_eq!(core.console_output.len(), 1);
+                    assert_eq!(core.console_output[0].message, "37");
+                }
+                assert_eq!(core.promise_store.get(result).unwrap().label, label);
+                assert!(core.active_inline_callback_context_label.is_none());
+                assert_eq!(core.json_parse_temporary_bytes, 0);
+                assert_eq!(core.promise_in_flight_task_bytes, 0);
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes()
+                );
+            }
+        }
+    }
+}
+
+fn native_promise_getter_fixture(
+    getter_body: &str,
+) -> (
+    InterpreterCore,
+    Ir3Module,
+    Value,
+    crate::promise_model::PromiseHandle,
+    ObjectId,
+) {
+    let source = format!(
+        "const state = {{marker: 9494, calls: 0, reason: {{}}}}; \
+         const value = Promise.resolve(5); \
+         const result = new Promise(function () {{}}); \
+         const holder = {{marker: 9495, state, value, result}}; \
+         Object.defineProperty(value, 'then', {{get() {{state.calls++; {getter_body}}}}});"
+    );
+    let module = module(&source);
+    let mut core = InterpreterCore::new(config(false), "native-resolution-context");
+    core.execute(&module).expect("native getter setup");
+    let holder = core
+        .heap
+        .iter()
+        .find(|object| object.properties.get("marker") == Some(&Value::Int(9495)))
+        .expect("retained holder");
+    let Value::Object(state) = holder.properties.get("state").unwrap().clone() else {
+        panic!("state object");
+    };
+    let value = holder.properties.get("value").unwrap().clone();
+    let Value::Promise(result) = holder.properties.get("result").unwrap().clone() else {
+        panic!("result promise");
+    };
+    (
+        core,
+        module,
+        value,
+        crate::promise_model::PromiseHandle(result),
+        state,
+    )
+}
+
+#[test]
+fn native_promise_getters_restore_context_and_keep_exact_abrupt_values() {
+    for throws in [false, true] {
+        let (mut core, module, value, result, state) = native_promise_getter_fixture(if throws {
+            "throw state.reason;"
+        } else {
+            "return undefined;"
+        });
+        let reason = core.heap[state.0 as usize]
+            .properties
+            .get("reason")
+            .unwrap()
+            .clone();
+        let reason = core.promise_value(&reason).expect("exact thrown object");
+        let original_context = Label::Custom {
+            name: "outer-callback".into(),
+            level: 1,
+        };
+        core.active_inline_callback_context_label = Some(original_context.clone());
+        core.replace_pending_hostcall_result_label(Some(Label::TopSecret))
+            .unwrap();
+        core.sync_estimated_memory_bytes().unwrap();
+        core.resolve_promise_with_value(Some(&module), result, value.clone(), Label::Secret)
+            .expect("catchable getter completion resolves or rejects the target");
+        let expected = if throws {
+            PromiseState::Rejected(reason)
+        } else {
+            PromiseState::Fulfilled(core.promise_value(&value).unwrap())
+        };
+        let record = core.promise_store.get(result).unwrap();
+        assert_eq!(record.state, expected);
+        assert_eq!(record.label, Label::Secret);
+        assert_eq!(
+            core.heap[state.0 as usize].properties.get("calls"),
+            Some(&Value::Int(1))
+        );
+        assert_eq!(core.own_property_label(state, "calls"), Label::Secret);
+        assert_eq!(
+            core.active_inline_callback_context_label,
+            Some(original_context)
+        );
+        assert_eq!(
+            core.take_pending_hostcall_result_label(),
+            Some(Label::TopSecret)
+        );
+        assert!(core.pending_exception.is_none());
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+}
+
+#[test]
+fn native_promise_resolution_context_budget_failure_runs_no_getter_and_restores_state() {
+    let (mut core, module, value, result, state) =
+        native_promise_getter_fixture("return undefined;");
+    let original_context = Label::Custom {
+        name: "outer-callback".into(),
+        level: 1,
+    };
+    core.active_inline_callback_context_label = Some(original_context.clone());
+    core.replace_pending_hostcall_result_label(Some(Label::TopSecret))
+        .unwrap();
+    let before = core.sync_estimated_memory_bytes().unwrap();
+    core.config.max_total_memory_bytes = before;
+    let outcome = core.resolve_promise_with_value(
+        Some(&module),
+        result,
+        value,
+        Label::Custom {
+            name: "classified-origin".repeat(256),
+            level: 7,
+        },
+    );
+    assert!(matches!(
+        outcome,
+        Err(InterpreterError::MemoryBudgetExceeded { .. })
+    ));
+    assert_eq!(
+        core.heap[state.0 as usize].properties.get("calls"),
+        Some(&Value::Int(0))
+    );
+    assert_eq!(
+        core.promise_store.get(result).unwrap().state,
+        PromiseState::Pending
+    );
+    assert_eq!(
+        core.active_inline_callback_context_label,
+        Some(original_context)
+    );
+    assert_eq!(core.pending_hostcall_result_label, Some(Label::TopSecret));
+    assert!(core.pending_exception.is_none());
+    assert_eq!(core.json_parse_temporary_bytes, 0);
+    assert_eq!(core.estimated_memory_bytes(), before);
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+}
+
+const NATIVE_PROMISE_REENTRANCY_SOURCE: &str = r#"
+(async () => {
+  let checks = 0;
+  for (const pending of [false, true]) {
+    for (const reentrant of ['resolve', 'reject']) {
+      for (const mode of ['callable', 'noncallable', 'throw']) {
+        let resolve, reject, finish;
+        const target = new Promise((a, b) => { resolve = a; reject = b; });
+        const source = new Promise(r => { finish = r; });
+        if (!pending) finish(42);
+        const reason = {}; const events = []; let reads = 0;
+        Object.defineProperty(source, 'then', { get() {
+          reads++; events.push('get');
+          if (this !== source) throw Error('getter receiver');
+          if (reentrant === 'resolve') resolve(99); else reject(99);
+          if (mode === 'throw') throw reason;
+          return mode === 'callable' ? Promise.prototype.then : undefined;
+        } });
+        resolve(source);
+        events.push('resolved');
+        if (pending) finish(42);
+        Promise.resolve().then(() => events.push('tick'));
+        let caught = false;
+        try {
+          const value = await target;
+          if (mode === 'throw' || value !== (mode === 'callable' ? 42 : source))
+            throw Error('reentrant resolver replaced the resolution');
+          events.push('fulfilled');
+        } catch (error) {
+          caught = true;
+          if (mode !== 'throw' || error !== reason) throw error;
+          events.push('rejected');
+        }
+        const expected = 'get:resolved:tick:' + (mode === 'throw' ? 'rejected' : 'fulfilled');
+        if (reads !== 1 || caught !== (mode === 'throw') || events.join(':') !== expected)
+          throw Error('reentrant resolution order ' + events.join(':'));
+        checks++;
+      }
+    }
+  }
+  console.log('native promise reentrancy', checks);
+})().catch(error => console.log('FAIL', error.message));
+"#;
+
+#[test]
+fn native_then_getters_cannot_reenter_the_original_resolving_functions() {
+    assert_fixture(NATIVE_PROMISE_REENTRANCY_SOURCE, "native promise reentrancy 12");
 }
 
 #[test]

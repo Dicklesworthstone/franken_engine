@@ -671,7 +671,7 @@ impl InterpreterCore {
         handler: crate::closure_model::ClosureHandle,
         arguments: Vec<Value>,
         task_label: Label,
-    ) -> Result<Value, InterpreterError> {
+    ) -> Result<(Value, Label), InterpreterError> {
         let module = module.ok_or_else(|| InterpreterError::TypeError {
             expected: "module-backed Promise reaction handler dispatch".to_string(),
             got: "missing module context".to_string(),
@@ -705,11 +705,10 @@ impl InterpreterCore {
                 );
             }
         }
-        let (result, _) = result?;
-        // Return the interpreter Value unchanged: the reaction drain routes a
-        // native-promise completion into state adoption instead of letting the
-        // JsValue conversion flatten it through the Display catch-all.
-        Ok(result)
+        // The callback can read classified captures independently of the
+        // queued task's label. Keep its returned provenance with the Value
+        // through the derived promise's resolution and thenable observations.
+        result
     }
 
     /// Whether a promise handle has left the pending state.
@@ -743,10 +742,10 @@ impl InterpreterCore {
             let reason = self.promise_value(&Value::Object(error_id))?;
             return self.reject_promise(target, reason, label);
         }
-        let source_state = self
+        let (source_state, label) = self
             .promise_store
             .get(source)
-            .map(|record| record.state.clone())
+            .map(|record| (record.state.clone(), label.join(&record.label)))
             .map_err(|_| InterpreterError::TypeError {
                 expected: "valid promise handle".to_string(),
                 got: "invalid promise resolution source".to_string(),
@@ -905,14 +904,20 @@ impl InterpreterCore {
         let Some(module) = module.filter(|_| source != promise) else {
             return self.resolve_promise_to_native(promise, source, label);
         };
+        // Claim the resolving pair before the observable Get, just as for
+        // other thenables. A native promise's own getter can call the saved
+        // resolve/reject functions while the target is still pending.
+        self.retire_promise_resolvers(promise)?;
         // As for any thenable, what the Get reads labels the resolution, and
         // the enclosing HostCall's pending result label is set aside.
         let saved_result_label = self.take_pending_hostcall_result_label();
-        let then = self.get_v(
-            module,
-            &Value::Promise(source_handle),
-            &RuntimePropertyKey::String(JsString::from("then")),
-        );
+        let then = self.in_promise_resolution_context(&label, |core| {
+            core.get_v(
+                module,
+                &Value::Promise(source_handle),
+                &RuntimePropertyKey::String(JsString::from("then")),
+            )
+        });
         let observed = self.take_pending_hostcall_result_label();
         if let Some(saved) = saved_result_label {
             self.replace_pending_hostcall_result_label(Some(saved))?;
@@ -954,8 +959,8 @@ impl InterpreterCore {
 
     /// Enqueue an [`crate::promise_model::Microtask::AdoptNative`] job
     /// (memory-preflighted, as [`Self::enqueue_resolve_thenable`]). The
-    /// first (`settle` false) is the resolving functions' resolution: they
-    /// are already resolved from here on.
+    /// first (`settle` false) is the resolving functions' resolution: the
+    /// caller has already claimed the pair before its observable Get(then).
     pub(super) fn enqueue_adopt_native(
         &mut self,
         promise: crate::promise_model::PromiseHandle,
@@ -988,12 +993,7 @@ impl InterpreterCore {
             .saturating_add(self.promise_in_flight_task_bytes);
         self.apply_memory_component_delta(previous_promise_bytes, next_promise_bytes)?;
         self.event_loop.microtasks.enqueue(task);
-        self.settle_projected_promise_bytes(next_promise_bytes)?;
-        if settle {
-            Ok(())
-        } else {
-            self.retire_promise_resolvers(promise)
-        }
+        self.settle_projected_promise_bytes(next_promise_bytes)
     }
 
     /// Enqueue a PromiseResolveThenableJob (memory-preflighted, mirroring
@@ -1411,12 +1411,12 @@ impl InterpreterCore {
                                 // handler's result (ES2020 PromiseReactionJob):
                                 // a native promise or a thenable is adopted,
                                 // never used as the fulfillment value.
-                                Ok(result) => {
+                                Ok((result, result_label)) => {
                                     self.resolve_promise_with_value(
                                         module,
                                         *result_promise,
                                         result,
-                                        task_label.clone(),
+                                        task_label.join(&result_label),
                                     )?;
                                 }
                                 Err(err) => {

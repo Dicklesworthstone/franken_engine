@@ -14,7 +14,7 @@ const sourcePath = process.env.FRANKEN_FS_CALLBACK_SOURCE || path.join(__dirname
 const source = fs.readFileSync(sourcePath, 'utf8');
 const names = ['stat','lstat','fstat','readdir','mkdir','mkdtemp','realpath','readlink','access','rmdir','rm',
   'truncate','unlink','rename','chmod','utimes','copyFile','symlink','exists','open','close','fsync',
-  'read','write','readv','writev','cp'];
+  'read','write','readv','writev','cp','ftruncate','fdatasync','fchmod','futimes'];
 function candidate(overrides = {}, globals = {}) {
   const base = Object.create(null);
   for (const name of names) base[name+'Sync'] = fs[name+'Sync'];
@@ -102,6 +102,66 @@ test('fstat snapshots options and validates fd and callback before scheduling', 
   assert.throws(() => api.fstat(3, {}), { code: 'ERR_INVALID_ARG_TYPE' });
   assert.throws(() => api.fstat(3, null, () => {}), { name: 'TypeError' });
   assert.equal(jobs.length, 0); assert.equal(effects.length, 1);
+});
+
+test('fd mutations match Node after pathname replacement and preserve the cursor', async () => {
+  await both(async (api, {file}) => {
+    const descriptor = fs.openSync(file, 'r+');
+    const prefix = Buffer.alloc(2);
+    fs.readSync(descriptor, prefix);
+    fs.renameSync(file, file + '-held');
+    fs.writeFileSync(file, 'replacement');
+    const results = [await invoke(api, 'ftruncate', descriptor, 4),
+      await invoke(api, 'ftruncate', descriptor, 8),
+      await invoke(api, 'fchmod', descriptor, '640'),
+      await invoke(api, 'futimes', descriptor, new Date(-2500), '-1.25'),
+      await invoke(api, 'fdatasync', descriptor)];
+    const stat = fs.fstatSync(descriptor);
+    const remaining = Buffer.alloc(6);
+    fs.readSync(descriptor, remaining);
+    fs.closeSync(descriptor);
+    await assert.rejects(invoke(api, 'fdatasync', descriptor), { code: 'EBADF' });
+    return [results, stat.size, stat.mode & 0o777, stat.atimeMs, stat.mtimeMs,
+      remaining.toString('hex'), fs.readFileSync(file, 'utf8')];
+  });
+});
+
+test('fd mutation callbacks validate before scheduling and snapshot Dates', () => {
+  const effects = [], jobs = [];
+  const { api } = candidate({
+    ftruncateSync(...args) { effects.push(['ftruncate', ...args]); },
+    fdatasyncSync(...args) { effects.push(['fdatasync', ...args]); },
+    fchmodSync(...args) { effects.push(['fchmod', ...args]); },
+    futimesSync(...args) { effects.push(['futimes', ...args]); },
+  }, { queueMicrotask: job => jobs.push(job) });
+  for (const [name, args, code] of [
+    ['ftruncate', [3, '2'], 'ERR_INVALID_ARG_TYPE'],
+    ['ftruncate', [3, 1.5], 'ERR_OUT_OF_RANGE'],
+    ['fchmod', [3, '8'], 'ERR_INVALID_ARG_VALUE'],
+    ['fchmod', [3, -1], 'ERR_OUT_OF_RANGE'],
+    ['futimes', [3, 1, NaN], 'ERR_INVALID_ARG_TYPE'],
+    ['futimes', [3, {}, 1], 'ERR_INVALID_ARG_TYPE'],
+    ['fdatasync', [-1], 'ERR_OUT_OF_RANGE'],
+  ]) assert.throws(() => api[name](...args, () => {}), { code });
+  for (const [name, args] of [['ftruncate', [3, 1]], ['fdatasync', [3]],
+    ['fchmod', [3, 0o600]], ['futimes', [3, 1, 2]]]) {
+    assert.throws(() => api[name](...args), { code: 'ERR_INVALID_ARG_TYPE' });
+  }
+  assert.equal(jobs.length, 0);
+  const time = new Date(-2500);
+  let deliveries = 0;
+  const done = (...args) => { assert.deepEqual(args, [null]); deliveries += 1; };
+  api.futimes(3, time, '1.25', done);
+  time.setTime(999999);
+  api.ftruncate(3, done);
+  api.ftruncate(3, -7, done);
+  api.fchmod(3, '640', done);
+  api.fdatasync(3, done);
+  assert.deepEqual(effects, []);
+  while (jobs.length) jobs.shift()();
+  assert.equal(deliveries, 5);
+  assert.deepEqual(effects, [['futimes', 3, '-2.5', '1.25'], ['ftruncate', 3, 0],
+    ['ftruncate', 3, 0], ['fchmod', 3, 0o640], ['fdatasync', 3]]);
 });
 test('mkdir returns first created directory and undefined once it exists', async () => {
   await both(async (api, {root}) => {

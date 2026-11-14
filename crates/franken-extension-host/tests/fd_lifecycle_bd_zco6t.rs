@@ -192,7 +192,11 @@ fn fstat_observes_the_held_file_after_rename_replacement_and_unlink() {
     assert!(!initial.is_symbolic_link);
 
     std::fs::rename(root.join("original.txt"), root.join("renamed.txt")).unwrap();
-    std::fs::write(root.join("original.txt"), b"a replacement with another size").unwrap();
+    std::fs::write(
+        root.join("original.txt"),
+        b"a replacement with another size",
+    )
+    .unwrap();
     assert_eq!(provider.stat_fd(fd).unwrap(), initial);
     // Remove only this test's renamed fixture. The descriptor must remain
     // usable; resolving either its old or current pathname is incorrect.
@@ -216,11 +220,15 @@ fn fstat_supports_read_only_and_write_only_descriptors_without_changing_modes() 
     std::fs::write(root.join("read.txt"), b"read only").unwrap();
     let read_only = provider.open_fd("read.txt", "r").unwrap();
     assert_eq!(provider.stat_fd(read_only).unwrap().size, 9);
-    assert!(matches!(provider.write_fd(read_only, b"x"), Err(HostIoError::Fs { code, .. }) if code == "EBADF"));
+    assert!(
+        matches!(provider.write_fd(read_only, b"x"), Err(HostIoError::Fs { code, .. }) if code == "EBADF")
+    );
     let write_only = provider.open_fd("write.txt", "w").unwrap();
     provider.write_fd(write_only, b"write only").unwrap();
     assert_eq!(provider.stat_fd(write_only).unwrap().size, 10);
-    assert!(matches!(provider.read_fd(write_only, 1, None), Err(HostIoError::Fs { code, .. }) if code == "EBADF"));
+    assert!(
+        matches!(provider.read_fd(write_only, 1, None), Err(HostIoError::Fs { code, .. }) if code == "EBADF")
+    );
     provider.close_fd(read_only).unwrap();
     provider.close_fd(write_only).unwrap();
 }
@@ -242,10 +250,14 @@ fn fstat_requires_read_authority_and_replays_exact_descriptor_metadata() {
     assert_eq!(request.required_capability(), HostIoCapability::FsRead);
     assert_eq!(
         provider.perform(&request, &[HostIoCapability::FsWrite]),
-        Err(HostIoError::CapabilityMissing { capability: HostIoCapability::FsRead })
+        Err(HostIoError::CapabilityMissing {
+            capability: HostIoCapability::FsRead
+        })
     );
     let outcome = provider.perform(&request, &[HostIoCapability::FsRead]);
-    assert!(matches!(&outcome, Ok(HostIoResponse::FsMeta { result: FsMetaResult::Metadata(metadata) }) if metadata.size == 8));
+    assert!(
+        matches!(&outcome, Ok(HostIoResponse::FsMeta { result: FsMetaResult::Metadata(metadata) }) if metadata.size == 8)
+    );
     let recorder = InMemoryHostIoTranscript::recording();
     recorder.begin_execution().unwrap();
     recorder.record(&request, &outcome);
@@ -265,16 +277,364 @@ fn fstat_requires_read_authority_and_replays_exact_descriptor_metadata() {
 #[test]
 fn fstat_rejects_missing_malformed_unknown_and_closed_descriptors() {
     let (_root, provider) = sandbox();
-    for argument in [None, Some("fd=-1"), Some("fd=1.5"), Some("fd=not-a-number"), Some("fd=0"), Some("fd=18446744073709551615")] {
+    for argument in [
+        None,
+        Some("fd=-1"),
+        Some("fd=1.5"),
+        Some("fd=not-a-number"),
+        Some("fd=0"),
+        Some("fd=18446744073709551615"),
+    ] {
         let request = HostIoRequest::FsMeta {
             operation: FsOperation::Fstat,
             path: "ignored.txt".into(),
             arguments: argument.into_iter().map(str::to_string).collect(),
             data: Vec::new(),
         };
-        assert!(matches!(provider.perform(&request, &[HostIoCapability::FsRead]), Err(HostIoError::Fs { code, .. }) if code == "EBADF"));
+        assert!(
+            matches!(provider.perform(&request, &[HostIoCapability::FsRead]), Err(HostIoError::Fs { code, .. }) if code == "EBADF")
+        );
     }
     let fd = provider.open_fd("closed.txt", "w").unwrap();
     provider.close_fd(fd).unwrap();
     assert!(matches!(provider.stat_fd(fd), Err(HostIoError::Fs { code, .. }) if code == "EBADF"));
+}
+
+fn descriptor_mutation_request(
+    operation: FsOperation,
+    descriptor: Option<&str>,
+    arguments: &[&str],
+) -> HostIoRequest {
+    let mut values: Vec<String> = descriptor
+        .into_iter()
+        .map(|value| format!("fd={value}"))
+        .collect();
+    values.extend(arguments.iter().map(|value| (*value).to_string()));
+    HostIoRequest::FsMeta {
+        operation,
+        // Descriptor mutations must never resolve this diagnostic field.
+        path: "../not-the-opened-file".to_string(),
+        arguments: values,
+        data: Vec::new(),
+    }
+}
+
+#[test]
+fn descriptor_mutations_follow_the_held_inode_and_preserve_the_cursor() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (root, provider) = sandbox();
+    let original = root.join("original.txt");
+    let renamed = root.join("renamed.txt");
+    std::fs::write(&original, b"abcdefgh").unwrap();
+    let fd = provider.open_fd("original.txt", "r+").unwrap();
+    assert_eq!(provider.read_fd(fd, 2, None).unwrap(), b"ab");
+    std::fs::rename(&original, &renamed).unwrap();
+    std::fs::write(&original, b"replacement").unwrap();
+    let replacement = std::fs::metadata(&original).unwrap();
+
+    // A clone shares the admitted descriptor; no operation may reopen its
+    // former pathname or seek the file to emulate a descriptor mutation.
+    let clone = provider.clone();
+    clone.truncate_fd(fd, 5).unwrap();
+    clone.chmod_fd(fd, 0o640).unwrap();
+    clone.utimes_fd(fd, 1_250.25, 2_500.75).unwrap();
+    clone.datasync_fd(fd).unwrap();
+    let metadata = std::fs::metadata(&renamed).unwrap();
+    assert_eq!(metadata.len(), 5);
+    assert_eq!(metadata.permissions().mode() & 0o777, 0o640);
+    assert_eq!(
+        metadata
+            .accessed()
+            .unwrap()
+            .duration_since(UNIX_EPOCH)
+            .unwrap(),
+        std::time::Duration::from_millis(1_250_250)
+    );
+    assert_eq!(
+        metadata
+            .modified()
+            .unwrap()
+            .duration_since(UNIX_EPOCH)
+            .unwrap(),
+        std::time::Duration::from_millis(2_500_750)
+    );
+    assert_eq!(provider.read_fd(fd, 2, None).unwrap(), b"cd");
+
+    // This test owns the removed fixture. An unlinked inode must remain a
+    // valid mutation target until the held descriptor itself is closed.
+    std::fs::remove_file(&renamed).unwrap();
+    clone.truncate_fd(fd, 7).unwrap();
+    clone.chmod_fd(fd, 0o600).unwrap();
+    clone.utimes_fd(fd, -1.25, -0.5).unwrap();
+    clone.datasync_fd(fd).unwrap();
+    let held = provider.stat_fd(fd).unwrap();
+    assert_eq!(held.size, 7);
+    assert_eq!(held.mode & 0o777, 0o600);
+    assert_eq!(held.modified_millis, -500);
+    assert_eq!(provider.read_fd(fd, 3, None).unwrap(), b"e\0\0");
+
+    let unchanged = std::fs::metadata(&original).unwrap();
+    assert_eq!(unchanged.len(), replacement.len());
+    assert_eq!(
+        unchanged.permissions().mode(),
+        replacement.permissions().mode()
+    );
+    assert_eq!(
+        unchanged.modified().unwrap(),
+        replacement.modified().unwrap()
+    );
+    assert_eq!(std::fs::read(&original).unwrap(), b"replacement");
+    clone.close_fd(fd).unwrap();
+}
+
+#[test]
+fn descriptor_metadata_mutations_accept_read_only_handles_without_upgrading_them() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (root, provider) = sandbox();
+    let path = root.join("read-only.txt");
+    std::fs::write(&path, b"abcdef").unwrap();
+    let fd = provider.open_fd("read-only.txt", "r").unwrap();
+    assert_eq!(provider.read_fd(fd, 1, None).unwrap(), b"a");
+    provider.datasync_fd(fd).unwrap();
+    provider.chmod_fd(fd, 0o600).unwrap();
+    provider.utimes_fd(fd, 1.25, 2.5).unwrap();
+    let metadata = std::fs::metadata(&path).unwrap();
+    assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+    assert_eq!(provider.stat_fd(fd).unwrap().modified_millis, 2_500);
+    let error = provider.truncate_fd(fd, 2).expect_err("read-only truncate");
+    #[cfg(target_os = "linux")]
+    assert!(matches!(&error, HostIoError::Fs { code, .. } if code == "EINVAL"));
+    #[cfg(not(target_os = "linux"))]
+    assert!(matches!(&error, HostIoError::Fs { .. }));
+    assert_eq!(std::fs::read(&path).unwrap(), b"abcdef");
+    assert_eq!(provider.read_fd(fd, 2, None).unwrap(), b"bc");
+    assert!(
+        matches!(provider.write_fd(fd, b"x"), Err(HostIoError::Fs { code, .. }) if code == "EBADF")
+    );
+    provider.close_fd(fd).unwrap();
+
+    let write_only = provider.open_fd("write-only.txt", "w").unwrap();
+    provider.write_fd(write_only, b"abcdef").unwrap();
+    provider.truncate_fd(write_only, 3).unwrap();
+    provider.chmod_fd(write_only, 0o640).unwrap();
+    provider.utimes_fd(write_only, 3.25, 4.5).unwrap();
+    provider.datasync_fd(write_only).unwrap();
+    assert_eq!(provider.stat_fd(write_only).unwrap().size, 3);
+    assert!(
+        matches!(provider.read_fd(write_only, 1, None), Err(HostIoError::Fs { code, .. }) if code == "EBADF")
+    );
+    provider.close_fd(write_only).unwrap();
+}
+
+#[test]
+fn descriptor_mutations_require_write_authority_and_replay_exact_requests() {
+    let (root, provider) = sandbox();
+    let fd = provider.open_fd("recorded-mutations.txt", "w+").unwrap();
+    provider.write_fd(fd, b"abcdef").unwrap();
+    let descriptor = fd.to_string();
+    let operations: [(FsOperation, &str, &[&str]); 4] = [
+        (FsOperation::Ftruncate, "ftruncate", &["length=4"]),
+        (FsOperation::Fchmod, "fchmod", &["mode=384"]),
+        (
+            FsOperation::Futimes,
+            "futimes",
+            &["atime=1.25", "mtime=2.5"],
+        ),
+        (FsOperation::Fdatasync, "fdatasync", &[]),
+    ];
+    let recorder = InMemoryHostIoTranscript::recording();
+    recorder.begin_execution().unwrap();
+    for (operation, name, arguments) in operations {
+        assert_eq!(FsOperation::parse_name(name), Some(operation));
+        assert_eq!(operation.as_str(), name);
+        let request = descriptor_mutation_request(operation, Some(&descriptor), arguments);
+        assert_eq!(request.required_capability(), HostIoCapability::FsWrite);
+        let before = provider.stat_fd(fd).unwrap();
+        for denied in [
+            request.clone(),
+            descriptor_mutation_request(operation, Some("0"), arguments),
+        ] {
+            assert_eq!(
+                provider.perform(&denied, &[HostIoCapability::FsRead]),
+                Err(HostIoError::CapabilityMissing {
+                    capability: HostIoCapability::FsWrite
+                })
+            );
+        }
+        assert_eq!(provider.stat_fd(fd).unwrap(), before);
+        let outcome = provider.perform(&request, &[HostIoCapability::FsWrite]);
+        assert_eq!(
+            outcome,
+            Ok(HostIoResponse::FsMeta {
+                result: FsMetaResult::Unit
+            })
+        );
+        recorder.record(&request, &outcome);
+    }
+    let entries = recorder.finish_execution().unwrap();
+    assert_eq!(entries.len(), 4);
+    let encoded = serde_json::to_string(&entries).unwrap();
+    let decoded = serde_json::from_str(&encoded).unwrap();
+    let replay = InMemoryHostIoTranscript::replaying(decoded);
+    provider.close_fd(fd).unwrap();
+    let later = provider.open_fd("recorded-mutations.txt", "w+").unwrap();
+    assert_ne!(later, fd);
+    provider.write_fd(later, b"later work").unwrap();
+    let before_replay = provider.stat_fd(later).unwrap();
+    replay.begin_execution().unwrap();
+    for (request, outcome) in &entries {
+        assert_eq!(replay.replay(request), Some(outcome.clone()));
+    }
+    assert_eq!(replay.finish_execution().unwrap(), entries);
+    assert_eq!(provider.stat_fd(later).unwrap(), before_replay);
+    assert_eq!(
+        std::fs::read(root.join("recorded-mutations.txt")).unwrap(),
+        b"later work"
+    );
+    provider.close_fd(later).unwrap();
+
+    // A different operation or argument cannot reuse a recorded successful
+    // mutation just because it carries the same numeric descriptor.
+    for changed in [
+        descriptor_mutation_request(FsOperation::Ftruncate, Some(&descriptor), &["length=3"]),
+        descriptor_mutation_request(FsOperation::Fdatasync, Some(&descriptor), &[]),
+    ] {
+        let diverged = InMemoryHostIoTranscript::replaying(entries.clone());
+        diverged.begin_execution().unwrap();
+        assert!(matches!(
+            diverged.replay(&changed),
+            Some(Err(HostIoError::SandboxViolation { .. }))
+        ));
+        assert!(diverged.finish_execution().is_err());
+    }
+}
+
+#[test]
+fn descriptor_mutations_reject_invalid_descriptors_and_never_reuse_closed_ownership() {
+    let (root, provider) = sandbox();
+    let operations: [(FsOperation, &[&str]); 4] = [
+        (FsOperation::Ftruncate, &["length=1"]),
+        (FsOperation::Fchmod, &["mode=384"]),
+        (FsOperation::Futimes, &["atime=1", "mtime=2"]),
+        (FsOperation::Fdatasync, &[]),
+    ];
+    for (operation, arguments) in operations {
+        for descriptor in [
+            None,
+            Some("-1"),
+            Some("1.5"),
+            Some("unknown"),
+            Some("0"),
+            Some("18446744073709551615"),
+        ] {
+            let request = descriptor_mutation_request(operation, descriptor, arguments);
+            assert!(
+                matches!(provider.perform(&request, &[HostIoCapability::FsWrite]), Err(HostIoError::Fs { code, .. }) if code == "EBADF")
+            );
+        }
+    }
+    let closed = provider.open_fd("closed-mutations.txt", "w+").unwrap();
+    provider.close_fd(closed).unwrap();
+    let live = provider.open_fd("closed-mutations.txt", "w+").unwrap();
+    assert_ne!(live, closed);
+    provider.write_fd(live, b"must remain").unwrap();
+    let before = provider.stat_fd(live).unwrap();
+    for result in [
+        provider.truncate_fd(closed, 1),
+        provider.chmod_fd(closed, 0o600),
+        provider.utimes_fd(closed, 1.0, 2.0),
+        provider.datasync_fd(closed),
+    ] {
+        assert!(matches!(result, Err(HostIoError::Fs { code, .. }) if code == "EBADF"));
+    }
+    assert_eq!(provider.stat_fd(live).unwrap(), before);
+    assert_eq!(
+        std::fs::read(root.join("closed-mutations.txt")).unwrap(),
+        b"must remain"
+    );
+    provider.close_fd(live).unwrap();
+}
+
+#[test]
+fn invalid_descriptor_mutation_arguments_cannot_partially_change_the_file() {
+    let (root, provider) = sandbox();
+    let path = root.join("invalid-arguments.txt");
+    std::fs::write(&path, b"abcdef").unwrap();
+    let fd = provider.open_fd("invalid-arguments.txt", "r+").unwrap();
+    let descriptor = fd.to_string();
+    let invalid: [(FsOperation, &[&str]); 19] = [
+        (FsOperation::Ftruncate, &[]),
+        (FsOperation::Ftruncate, &["length=-1"]),
+        (FsOperation::Ftruncate, &["length=1.5"]),
+        (FsOperation::Ftruncate, &["length=not-a-number"]),
+        (FsOperation::Ftruncate, &["length=18446744073709551616"]),
+        (FsOperation::Fchmod, &[]),
+        (FsOperation::Fchmod, &["mode=-1"]),
+        (FsOperation::Fchmod, &["mode=1.5"]),
+        (FsOperation::Fchmod, &["mode=4294967296"]),
+        (FsOperation::Fchmod, &["mode=not-a-number"]),
+        (FsOperation::Futimes, &[]),
+        (FsOperation::Futimes, &["atime=1"]),
+        (FsOperation::Futimes, &["mtime=2"]),
+        (FsOperation::Futimes, &["atime=NaN", "mtime=2"]),
+        (FsOperation::Futimes, &["atime=1", "mtime=NaN"]),
+        (FsOperation::Futimes, &["atime=1", "mtime=inf"]),
+        (FsOperation::Futimes, &["atime=-inf", "mtime=2"]),
+        (FsOperation::Futimes, &["atime=1", "mtime=1e30"]),
+        (FsOperation::Futimes, &["atime=not-a-number", "mtime=2"]),
+    ];
+    let before = provider.stat_fd(fd).unwrap();
+    let accessed = std::fs::metadata(&path).unwrap().accessed().unwrap();
+    for (operation, arguments) in invalid {
+        let request = descriptor_mutation_request(operation, Some(&descriptor), arguments);
+        let outcome = provider.perform(&request, &[HostIoCapability::FsWrite]);
+        assert!(
+            matches!(&outcome, Err(HostIoError::Fs { code, .. }) if code == "EINVAL"),
+            "{request:?}: {outcome:?}"
+        );
+        assert_eq!(provider.stat_fd(fd).unwrap(), before);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().accessed().unwrap(),
+            accessed
+        );
+    }
+    assert_eq!(provider.read_fd(fd, 6, None).unwrap(), b"abcdef");
+    provider.close_fd(fd).unwrap();
+}
+
+#[test]
+fn descriptor_truncate_enforces_the_host_byte_cap_before_changing_length() {
+    let (root, _default_provider) = sandbox();
+    std::fs::write(root.join("bounded.txt"), b"abcdef").unwrap();
+    let provider = SandboxedHostIo::with_root_and_limit(&root, 8).unwrap();
+    let fd = provider.open_fd("bounded.txt", "r+").unwrap();
+    assert_eq!(provider.read_fd(fd, 2, None).unwrap(), b"ab");
+    let before = provider.stat_fd(fd).unwrap();
+    for length in [9, u64::MAX] {
+        provider
+            .truncate_fd(fd, length)
+            .expect_err("truncate byte cap");
+        assert_eq!(provider.stat_fd(fd).unwrap(), before);
+        let request = descriptor_mutation_request(
+            FsOperation::Ftruncate,
+            Some(&fd.to_string()),
+            &[&format!("length={length}")],
+        );
+        assert!(
+            provider
+                .perform(&request, &[HostIoCapability::FsWrite])
+                .is_err()
+        );
+        assert_eq!(provider.stat_fd(fd).unwrap(), before);
+    }
+    provider.truncate_fd(fd, 8).unwrap();
+    assert_eq!(provider.stat_fd(fd).unwrap().size, 8);
+    assert_eq!(provider.read_fd(fd, 6, None).unwrap(), b"cdef\0\0");
+    provider.close_fd(fd).unwrap();
+    assert_eq!(
+        std::fs::read(root.join("bounded.txt")).unwrap(),
+        b"abcdef\0\0"
+    );
 }

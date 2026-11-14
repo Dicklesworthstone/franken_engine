@@ -22,6 +22,8 @@
   var asyncIteratorKey = Symbol.asyncIterator;
   var isView = ArrayBuffer.isView;
   var NativeAggregateError = AggregateError;
+  var dateTime = Date.prototype.getTime;
+  var dateNow = Date.now;
   // Authenticate byte windows at the same boundary for scalar, vector and
   // stream I/O. Public view metadata (including subclass getters) is not the
   // storage selected by the caller's ArrayBufferView. Capture realm accessors
@@ -56,13 +58,16 @@
   function lstatSync(path, options) {
     return __franken_fs_read('\0fsop:lstat', path, options);
   }
-  function fstatSync(fd, options) {
+  function validateDescriptor(fd) {
     if (typeof fd !== 'number') { throw argumentError('fd'); }
     if (fd % 1 !== 0 || fd < 0 || fd > 2147483647) {
       var error = new RangeError('File descriptor is out of range');
       error.code = 'ERR_OUT_OF_RANGE';
       throw error;
     }
+  }
+  function fstatSync(fd, options) {
+    validateDescriptor(fd);
     // Observe the option once, before host entry. In particular an accessor
     // may close its owning FileHandle; perform() keeps that fd alive until
     // the active stat completes. Only literal true selects BigInt stats.
@@ -122,6 +127,73 @@
   }
   function fsyncSync(fd) {
     return __franken_fs_write('\0fsop:fsync', fd);
+  }
+  function descriptorLength(length) {
+    if (length === undefined) { return 0; }
+    if (typeof length !== 'number') { throw argumentError('len'); }
+    if (length % 1 !== 0 || length < -9007199254740991 || length > 9007199254740991) {
+      var error = new RangeError('File length is out of range');
+      error.code = 'ERR_OUT_OF_RANGE';
+      throw error;
+    }
+    return length < 0 ? 0 : length;
+  }
+  function descriptorMode(mode) {
+    if (typeof mode === 'string') {
+      var parsed = 0;
+      for (var index = 0; index < mode.length; index += 1) {
+        var digit = mode[index];
+        if (digit < '0' || digit > '7') { break; }
+        parsed = parsed * 8 + +digit;
+      }
+      if (mode.length === 0 || index !== mode.length) {
+        var invalid = new TypeError('Invalid octal mode');
+        invalid.code = 'ERR_INVALID_ARG_VALUE';
+        throw invalid;
+      }
+      mode = parsed;
+    }
+    if (typeof mode !== 'number') { throw argumentError('mode'); }
+    if (mode % 1 !== 0 || mode < 0 || mode > 4294967295) {
+      var error = new RangeError('File mode is out of range');
+      error.code = 'ERR_OUT_OF_RANGE';
+      throw error;
+    }
+    return mode;
+  }
+  function descriptorTime(value, name) {
+    var seconds;
+    if (typeof value === 'number') {
+      seconds = value;
+      if (seconds < 0 && seconds !== -1 / 0) { seconds = dateNow() / 1000; }
+    } else if (typeof value === 'string') {
+      seconds = +value;
+    } else {
+      try { seconds = apply(dateTime, value, []) / 1000; }
+      catch (error) { throw argumentError(name); }
+    }
+    if (seconds !== seconds || seconds === 1 / 0 || seconds === -1 / 0) {
+      throw argumentError(name);
+    }
+    return seconds;
+  }
+  function ftruncateSync(fd, length) {
+    validateDescriptor(fd);
+    return __franken_fs_write('\0fsop:ftruncate', fd, descriptorLength(length));
+  }
+  function fdatasyncSync(fd) {
+    validateDescriptor(fd);
+    return __franken_fs_write('\0fsop:fdatasync', fd);
+  }
+  function fchmodSync(fd, mode) {
+    validateDescriptor(fd);
+    return __franken_fs_write('\0fsop:fchmod', fd, descriptorMode(mode));
+  }
+  function futimesSync(fd, atime, mtime) {
+    validateDescriptor(fd);
+    atime = descriptorTime(atime, 'atime');
+    mtime = descriptorTime(mtime, 'mtime');
+    return __franken_fs_write('\0fsop:futimes', fd, atime, mtime);
   }
   function readSync(fd, buffer, offset, length, position) {
     return __franken_fs_read('\0fsop:read_fd', fd, buffer, offset, length, position);
@@ -621,6 +693,18 @@
       },
       sync: function () {
         return perform('fsync', function (fd) { fsyncSync(fd); });
+      },
+      datasync: function () {
+        return perform('fdatasync', function (fd) { fdatasyncSync(fd); });
+      },
+      truncate: function (length) {
+        return perform('ftruncate', function (fd) { ftruncateSync(fd, length); });
+      },
+      chmod: function (mode) {
+        return perform('fchmod', function (fd) { fchmodSync(fd, mode); });
+      },
+      utimes: function (atime, mtime) {
+        return perform('futimes', function (fd) { futimesSync(fd, atime, mtime); });
       },
       stat: function (options) {
         return perform('fstat', function (fd) { return fstatSync(fd, options); });
@@ -1291,6 +1375,8 @@
     chmodSync: chmodSync, utimesSync: utimesSync, realpathSync: realpathSync,
     readlinkSync: readlinkSync, symlinkSync: symlinkSync, truncateSync: truncateSync,
     mkdtempSync: mkdtempSync, openSync: openSync, closeSync: closeSync, fsyncSync: fsyncSync,
+    ftruncateSync: ftruncateSync, fdatasyncSync: fdatasyncSync,
+    fchmodSync: fchmodSync, futimesSync: futimesSync,
     readSync: readSync, writeSync: writeSync,
     readvSync: readvSync, writevSync: writevSync,
     readFile: readFile, writeFile: writeFile, appendFile: appendFile,

@@ -2841,12 +2841,39 @@ impl InterpreterCore {
                 args.get(1)
                     .map_or_else(|| "r".to_string(), |value| self.fs_value_argument(value))
             )],
-            FsOperation::WriteFd | FsOperation::Fsync | FsOperation::CloseFd | FsOperation::Fstat => {
+            FsOperation::WriteFd
+            | FsOperation::Fsync
+            | FsOperation::Fdatasync
+            | FsOperation::CloseFd
+            | FsOperation::Fstat => {
                 vec![format!(
                     "fd={}",
                     args.first()
                         .map_or_else(String::new, |value| self.fs_value_argument(value))
                 )]
+            }
+            FsOperation::Ftruncate | FsOperation::Fchmod | FsOperation::Futimes => {
+                // These facade methods validate and snapshot primitive arguments
+                // before crossing this seam. Keep the actual operation and each
+                // normalized value in the replayable, capability-checked request.
+                let mut arguments = vec![format!(
+                    "fd={}",
+                    args.first()
+                        .map_or_else(String::new, |value| self.fs_value_argument(value))
+                )];
+                let names: &[&str] = match operation {
+                    FsOperation::Ftruncate => &["length"],
+                    FsOperation::Fchmod => &["mode"],
+                    _ => &["atime", "mtime"],
+                };
+                for (index, name) in names.iter().enumerate() {
+                    arguments.push(format!(
+                        "{name}={}",
+                        args.get(index + 1)
+                            .map_or_else(String::new, |value| self.fs_value_argument(value))
+                    ));
+                }
+                arguments
             }
             FsOperation::ReadFd => {
                 // readSync(fd, buffer, offset, length, position): length
@@ -3205,6 +3232,10 @@ impl InterpreterCore {
             FsOperation::ReadFd
                 | FsOperation::WriteFd
                 | FsOperation::Fsync
+                | FsOperation::Fdatasync
+                | FsOperation::Ftruncate
+                | FsOperation::Fchmod
+                | FsOperation::Futimes
                 | FsOperation::CloseFd
                 | FsOperation::Fstat
         ) {
@@ -10833,12 +10864,10 @@ impl InterpreterCore {
         }
 
         let source = self.read_reg(args.start)?;
-        let mut source_label = self
-            .writable_invocation_label(args)?
-            .join(&match &source {
-                Value::Object(object_id) => self.binary_storage_label(*object_id),
-                _ => Label::Public,
-            });
+        let mut source_label = self.writable_invocation_label(args)?.join(&match &source {
+            Value::Object(object_id) => self.binary_storage_label(*object_id),
+            _ => Label::Public,
+        });
         let is_array = matches!(&source, Value::Object(id)
             if self.heap.get(id.0 as usize).is_some_and(|object| object.is_array));
         let is_buffer = matches!(&source, Value::Object(id) if self.is_buffer_object(*id));

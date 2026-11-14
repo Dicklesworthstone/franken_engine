@@ -22,6 +22,7 @@
   const URLClass = URL;
   const urlString = URL.prototype.toString;
   const dateTime = Date.prototype.getTime;
+  const dateNow = Date.now;
   const PromiseClass = Promise;
   const promiseThen = Promise.prototype.then;
   const custom = Symbol.for('nodejs.util.promisify.custom');
@@ -220,6 +221,60 @@
   install('fsync', function (descriptor, cb) {
     callback(cb); fd(descriptor);
     run(function () { return fsyncSync(descriptor); }, cb, voidResult);
+  });
+  const fdatasyncSync = fs.fdatasyncSync, ftruncateSync = fs.ftruncateSync;
+  const fchmodSync = fs.fchmodSync, futimesSync = fs.futimesSync;
+  install('fdatasync', function (descriptor, cb) {
+    callback(cb); fd(descriptor);
+    run(function () { return fdatasyncSync(descriptor); }, cb, voidResult);
+  });
+  install('ftruncate', function (descriptor, length, cb) {
+    if (typeof length === 'function') { cb = length; length = undefined; }
+    callback(cb); fd(descriptor);
+    if (length === undefined) length = 0;
+    if (typeof length !== 'number') throw invalid('len');
+    if (length % 1 !== 0 || length < -9007199254740991 || length > 9007199254740991) throw range('len');
+    if (length < 0) length = 0;
+    run(function () { return ftruncateSync(descriptor, length); }, cb, voidResult);
+  });
+  install('fchmod', function (descriptor, mode, cb) {
+    callback(cb); fd(descriptor);
+    if (typeof mode === 'string') {
+      let parsed = 0, i = 0;
+      for (; i < mode.length; i++) {
+        const digit = mode[i];
+        if (digit < '0' || digit > '7') break;
+        parsed = parsed * 8 + +digit;
+      }
+      if (mode.length === 0 || i !== mode.length) {
+        const error = invalid('mode'); error.code = 'ERR_INVALID_ARG_VALUE'; throw error;
+      }
+      mode = parsed;
+    }
+    integer(mode, 'mode', 4294967295);
+    run(function () { return fchmodSync(descriptor, mode); }, cb, voidResult);
+  });
+  function descriptorTime(value, name) {
+    let seconds;
+    if (typeof value === 'number') {
+      seconds = value;
+      if (seconds < 0 && seconds !== -1 / 0) seconds = dateNow() / 1000;
+    } else if (typeof value === 'string') {
+      seconds = +value;
+    } else {
+      try { seconds = apply(dateTime, value, []) / 1000; }
+      catch (error) { throw invalid(name); }
+    }
+    if (seconds !== seconds || seconds === 1 / 0 || seconds === -1 / 0) throw invalid(name);
+    // Snapshot Date objects before scheduling. A string preserves pre-epoch
+    // Date/string values when the sync facade normalizes its public arguments;
+    // a negative number would incorrectly request the current time again.
+    return '' + seconds;
+  }
+  install('futimes', function (descriptor, atime, mtime, cb) {
+    callback(cb); fd(descriptor);
+    atime = descriptorTime(atime, 'atime'); mtime = descriptorTime(mtime, 'mtime');
+    run(function () { return futimesSync(descriptor, atime, mtime); }, cb, voidResult);
   });
   const fstatSync = fs.fstatSync;
   install('fstat', function (descriptor, settings, cb) {

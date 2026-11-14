@@ -24,6 +24,12 @@ function fixture(hook = () => {}, globals = {}) {
       case 'open': return fs.openSync(...args);
       case 'close_fd': return fs.closeSync(...args);
       case 'fsync': return fs.fsyncSync(...args);
+      case 'fdatasync': return fs.fdatasyncSync(...args);
+      case 'ftruncate': return fs.ftruncateSync(...args);
+      case 'fchmod': return fs.fchmodSync(...args);
+      // The intrinsic receives already-normalized seconds. Node's public API
+      // would otherwise reinterpret a pre-epoch number as a request for now.
+      case 'futimes': return fs.futimesSync(args[0], String(args[1]), String(args[2]));
       case 'read_fd': return fs.readSync(...args);
       case 'write_fd': return fs.writeSync(...args);
       case 'stat': return fs.statSync(...args);
@@ -91,6 +97,95 @@ test('buffer windows and positional operations agree with Node FileHandle', asyn
   const actual = await exercise(facade.promises.open, file);
   const expected = await exercise(fs.promises.open, file + '-node');
   assert.deepEqual(actual, expected);
+});
+
+test('FileHandle mutations preserve the held inode, cursor and Node results', async () => {
+  async function exercise(open, file) {
+    fs.writeFileSync(file, 'abcdef');
+    const handle = await open(file, 'r+');
+    const prefix = Buffer.alloc(2);
+    await handle.read(prefix);
+    fs.renameSync(file, file + '-held');
+    fs.writeFileSync(file, 'replacement');
+    const results = [await handle.truncate(4), await handle.truncate(8),
+      await handle.chmod('640'), await handle.utimes(new Date(-2500), '1234.5'),
+      await handle.datasync()];
+    const stat = fs.statSync(file + '-held');
+    const remaining = Buffer.alloc(6);
+    const read = await handle.read(remaining);
+    await handle.close();
+    return [results, prefix.toString(), read.bytesRead, remaining.toString('hex'),
+      stat.size, stat.mode & 0o777, stat.atimeMs, stat.mtimeMs,
+      fs.readFileSync(file, 'utf8')];
+  }
+  const { facade, file, calls } = fixture();
+  assert.deepEqual(await exercise(facade.promises.open, file),
+    await exercise(fs.promises.open, file + '-node'));
+  const mutations = calls.filter(call => ['ftruncate', 'fdatasync', 'fchmod', 'futimes'].includes(call.operation));
+  assert.equal(mutations.length, 5);
+  assert(mutations.every(call => call.authority === 'fs_write'));
+  assert.equal(calls.filter(call => call.operation === 'open').length, 1);
+});
+
+test('descriptor mutation arguments reject before host entry and closed handles stay closed', async () => {
+  const { facade, calls, file } = fixture();
+  const handle = await facade.promises.open(file, 'w+');
+  await handle.write('abcdef');
+  const before = calls.length;
+  for (const length of [NaN, Infinity, 1.5, 9007199254740992, -9007199254740992]) {
+    await assert.rejects(handle.truncate(length), { code: 'ERR_OUT_OF_RANGE' });
+  }
+  await assert.rejects(handle.truncate('2'), { code: 'ERR_INVALID_ARG_TYPE' });
+  for (const mode of ['', '8', '0o640', '600tail']) {
+    await assert.rejects(handle.chmod(mode), { code: 'ERR_INVALID_ARG_VALUE' });
+  }
+  for (const mode of [NaN, 0.5, -1, 4294967296]) {
+    await assert.rejects(handle.chmod(mode), { code: 'ERR_OUT_OF_RANGE' });
+  }
+  await assert.rejects(handle.chmod({}), { code: 'ERR_INVALID_ARG_TYPE' });
+  for (const time of [NaN, Infinity, null, {}, 'bad', new Date(NaN)]) {
+    await assert.rejects(handle.utimes(1, time), { code: 'ERR_INVALID_ARG_TYPE' });
+  }
+  for (const name of ['ftruncateSync', 'fdatasyncSync', 'fchmodSync', 'futimesSync']) {
+    assert.throws(() => facade[name](-1, 0, 0), { code: 'ERR_OUT_OF_RANGE' });
+    assert.throws(() => facade[name]('3', 0, 0), { code: 'ERR_INVALID_ARG_TYPE' });
+  }
+  assert.equal(calls.length, before);
+  assert.equal(fs.statSync(file).size, 6);
+  assert.equal(await handle.truncate(-1), undefined);
+  assert.equal(fs.statSync(file).size, 0);
+  await handle.write('x', 0);
+  assert.equal(await handle.truncate(), undefined);
+  await handle.close();
+  const closed = calls.length;
+  for (const [method, syscall, args] of [['truncate', 'ftruncate', [1]],
+    ['datasync', 'fdatasync', []], ['chmod', 'fchmod', [0o600]], ['utimes', 'futimes', [1, 2]]]) {
+    await assert.rejects(handle[method](...args), { code: 'EBADF', syscall });
+  }
+  assert.equal(calls.length, closed);
+});
+
+test('descriptor timestamps use captured Date intrinsics and preserve pre-epoch values', async () => {
+  const { facade, file, context } = fixture();
+  const handle = await facade.promises.open(file, 'w+');
+  const accessed = new Date(-2500);
+  accessed.getTime = () => { throw new Error('public Date method must not be called'); };
+  accessed.valueOf = () => { throw new Error('generic coercion must not run'); };
+  vm.runInNewContext('Date.prototype.getTime = function () { throw new Error("replaced"); }; Date.now = function () { throw new Error("replaced"); };', context);
+  // Public fs functions and a forged fd never redirect the owned methods.
+  facade.futimesSync = () => { throw new Error('replaced fs method'); };
+  Object.defineProperty(handle, 'fd', { value: 999999 });
+  await handle.utimes(accessed, '-1.25');
+  const stats = fs.statSync(file);
+  assert.equal(stats.atimeMs, -2500);
+  assert.equal(stats.mtimeMs, -1250);
+  const before = Date.now();
+  await handle.utimes(-1, -1);
+  const after = Date.now();
+  const current = fs.statSync(file);
+  assert(current.atimeMs >= before - 1 && current.atimeMs <= after);
+  assert(current.mtimeMs >= before - 1 && current.mtimeMs <= after);
+  await handle.close();
 });
 
 test('read defaults, explicit options buffer and -1 current position', async () => {

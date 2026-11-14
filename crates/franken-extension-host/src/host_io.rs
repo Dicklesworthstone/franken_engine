@@ -88,6 +88,14 @@ pub enum FsOperation {
     /// Read metadata from an already-owned descriptor, without resolving its
     /// former pathname or changing its cursor.
     Fstat,
+    /// Change the length of the held file without resolving its pathname.
+    Ftruncate,
+    /// Flush the held file's data to stable storage.
+    Fdatasync,
+    /// Change the held file's permissions.
+    Fchmod,
+    /// Change both timestamps of the held file (seconds since Unix epoch).
+    Futimes,
 }
 
 impl FsOperation {
@@ -120,6 +128,10 @@ impl FsOperation {
             | Self::Open
             | Self::WriteFd
             | Self::Fsync
+            | Self::Ftruncate
+            | Self::Fdatasync
+            | Self::Fchmod
+            | Self::Futimes
             | Self::CloseFd => HostIoCapability::FsWrite,
         }
     }
@@ -154,6 +166,10 @@ impl FsOperation {
             Self::Fsync => "fsync",
             Self::CloseFd => "close_fd",
             Self::Fstat => "fstat",
+            Self::Ftruncate => "ftruncate",
+            Self::Fdatasync => "fdatasync",
+            Self::Fchmod => "fchmod",
+            Self::Futimes => "futimes",
         }
     }
 
@@ -187,6 +203,10 @@ impl FsOperation {
             "fsync" => Self::Fsync,
             "close_fd" => Self::CloseFd,
             "fstat" => Self::Fstat,
+            "ftruncate" => Self::Ftruncate,
+            "fdatasync" => Self::Fdatasync,
+            "fchmod" => Self::Fchmod,
+            "futimes" => Self::Futimes,
             _ => return None,
         })
     }
@@ -1953,6 +1973,106 @@ impl SandboxedHostIo {
         })
     }
 
+    /// Resize the exact file held by a guest descriptor, preserving its cursor.
+    /// Growth is bounded by the provider's file-size limit before any mutation.
+    ///
+    /// # Errors
+    /// Unknown descriptors, non-writable files, excessive lengths and filesystem
+    /// failures are returned without reopening the original pathname.
+    pub fn truncate_fd(&self, fd: u64, length: u64) -> Result<(), HostIoError> {
+        self.with_fd_entry(fd, |entry| {
+            if length > self.max_bytes {
+                return Err(HostIoError::Io {
+                    detail: format!(
+                        "ftruncate length {length} exceeds the {}-byte cap",
+                        self.max_bytes
+                    ),
+                });
+            }
+            entry
+                .file
+                .set_len(length)
+                .map_err(|err| Self::fs_error("ftruncate", &entry.guest_path, err))
+        })
+    }
+
+    /// Flush a held file's data without requiring a writable open mode.
+    ///
+    /// # Errors
+    /// Unknown descriptors and filesystem failures retain their typed error.
+    pub fn datasync_fd(&self, fd: u64) -> Result<(), HostIoError> {
+        self.with_fd_entry(fd, |entry| {
+            entry
+                .file
+                .sync_data()
+                .map_err(|err| Self::fs_error("fdatasync", &entry.guest_path, err))
+        })
+    }
+
+    /// Change permissions through the owned descriptor, including read-only
+    /// handles. The request still requires filesystem write authority.
+    ///
+    /// # Errors
+    /// Unknown descriptors, invalid modes and filesystem failures are returned.
+    pub fn chmod_fd(&self, fd: u64, mode: u32) -> Result<(), HostIoError> {
+        #[cfg(not(unix))]
+        {
+            let _ = (fd, mode);
+            Err(Self::fs_not_implemented("fchmod"))
+        }
+        #[cfg(unix)]
+        {
+            self.with_fd_entry(fd, |entry| {
+                // RawMode is u16 on Apple platforms and u32 elsewhere. Only
+                // permission bits are meaningful, as with Node's fchmod.
+                #[allow(clippy::useless_conversion, clippy::unnecessary_fallible_conversions)]
+                let raw_mode =
+                    rustix::fs::RawMode::try_from(mode & 0o7777).map_err(|_| HostIoError::Fs {
+                        code: "EINVAL".to_string(),
+                        detail: "fchmod mode is out of range".to_string(),
+                    })?;
+                rustix::fs::fchmod(&entry.file, rustix::fs::Mode::from_raw_mode(raw_mode))
+                    .map_err(|err| Self::rustix_fs_error("fchmod", &entry.guest_path, err))
+            })
+        }
+    }
+
+    fn fd_timestamp(seconds: f64) -> Result<std::time::SystemTime, HostIoError> {
+        let invalid = || HostIoError::Fs {
+            code: "EINVAL".to_string(),
+            detail: "futimes requires finite, representable timestamps in seconds".to_string(),
+        };
+        let duration = Duration::try_from_secs_f64(seconds.abs()).map_err(|_| invalid())?;
+        if seconds < 0.0 {
+            std::time::UNIX_EPOCH.checked_sub(duration)
+        } else {
+            std::time::UNIX_EPOCH.checked_add(duration)
+        }
+        .ok_or_else(invalid)
+    }
+
+    /// Set both timestamps on the admitted inode. Negative seconds represent
+    /// pre-epoch times; guest-facing "now" coercion happens before recording.
+    /// No clock read or pathname lookup is needed to replay this operation.
+    ///
+    /// # Errors
+    /// Invalid timestamps, unknown descriptors and filesystem failures retain
+    /// their typed error. Both timestamps are validated before either changes.
+    pub fn utimes_fd(&self, fd: u64, atime: f64, mtime: f64) -> Result<(), HostIoError> {
+        let accessed = Self::fd_timestamp(atime)?;
+        let modified = Self::fd_timestamp(mtime)?;
+        self.with_fd_entry(fd, |entry| {
+            entry
+                .file
+                .set_times(
+                    std::fs::FileTimes::new()
+                        .set_accessed(accessed)
+                        .set_modified(modified),
+                )
+                .map_err(|err| Self::fs_error("futimes", &entry.guest_path, err))
+        })
+    }
+
     /// Read the metadata of the exact file admitted by [`Self::open_fd`].
     /// Renaming, replacing or unlinking its pathname cannot redirect this
     /// operation. Metadata is available on read-only and write-only handles,
@@ -2062,6 +2182,46 @@ impl SandboxedHostIo {
             }
             FsOperation::Fstat => {
                 FsMetaResult::Metadata(self.stat_fd(Self::fs_fd_argument(arguments)?)?)
+            }
+            FsOperation::Ftruncate => {
+                let length = Self::fs_argument(arguments, "length")
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .ok_or_else(|| HostIoError::Fs {
+                        code: "EINVAL".to_string(),
+                        detail: "ftruncate requires a nonnegative integer length".to_string(),
+                    })?;
+                self.truncate_fd(Self::fs_fd_argument(arguments)?, length)?;
+                FsMetaResult::Unit
+            }
+            FsOperation::Fdatasync => {
+                self.datasync_fd(Self::fs_fd_argument(arguments)?)?;
+                FsMetaResult::Unit
+            }
+            FsOperation::Fchmod => {
+                let mode = Self::fs_argument(arguments, "mode")
+                    .and_then(|value| value.parse::<u32>().ok())
+                    .ok_or_else(|| HostIoError::Fs {
+                        code: "EINVAL".to_string(),
+                        detail: "fchmod requires an unsigned integer mode".to_string(),
+                    })?;
+                self.chmod_fd(Self::fs_fd_argument(arguments)?, mode)?;
+                FsMetaResult::Unit
+            }
+            FsOperation::Futimes => {
+                let timestamp = |name| {
+                    Self::fs_argument(arguments, name)
+                        .and_then(|value| value.parse::<f64>().ok())
+                        .ok_or_else(|| HostIoError::Fs {
+                            code: "EINVAL".to_string(),
+                            detail: format!("futimes requires a numeric {name} timestamp"),
+                        })
+                };
+                self.utimes_fd(
+                    Self::fs_fd_argument(arguments)?,
+                    timestamp("atime")?,
+                    timestamp("mtime")?,
+                )?;
+                FsMetaResult::Unit
             }
             FsOperation::CloseFd => {
                 self.close_fd(Self::fs_fd_argument(arguments)?)?;

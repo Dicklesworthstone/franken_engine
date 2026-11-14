@@ -952,6 +952,13 @@ impl Walk for DirectFsCalls {
                 || arguments.get(1).is_none_or(|options| matches!(options,
                     Expression::UndefinedLiteral | Expression::NullLiteral
                     | Expression::StringLiteral(_))))
+            // Whole-file write option objects carry flag/flush/getter semantics.
+            // Their facade opens an owned descriptor instead of dropping those
+            // options on the one-shot write/append host effect.
+            && (!matches!(method, "writeFileSync" | "appendFileSync")
+                || arguments.get(2).is_none_or(|options| matches!(options,
+                    Expression::UndefinedLiteral | Expression::NullLiteral
+                    | Expression::StringLiteral(_))))
             && arguments.len() >= spec.min_args
             && arguments.len() <= spec.max_args
             && !arguments.iter().any(|argument| matches!(argument, Expression::SpreadElement(_)))
@@ -1658,6 +1665,27 @@ mod tests {
                 .expect("idempotent")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn whole_file_write_options_keep_descriptor_semantics_in_the_shared_facade() {
+        for method in ["writeFileSync", "appendFileSync"] {
+            for options in ["{ flag: 'wx' }", "{ flush: true }", "settings"] {
+                for source in [
+                    format!("require('fs').{method}('file', 'bytes', {options});"),
+                    format!(
+                        "const fs = require('node:fs'); fs.{method}('file', 'bytes', {options});"
+                    ),
+                    format!(
+                        "const {{ {method}: write }} = require('fs'); write('file', 'bytes', {options});"
+                    ),
+                ] {
+                    let tree = parse(&source);
+                    assert!(direct_fs_calls(&tree).unwrap().is_none(), "{source}");
+                    assert!(rewrite_fs_requires(&tree).unwrap().is_some(), "{source}");
+                }
+            }
+        }
     }
 
     #[test]

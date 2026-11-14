@@ -151,6 +151,62 @@
       run(function () { return method(first, second, third); }, cb, voidResult);
     });
   }
+  function writeAborted(signal) {
+    if (signal === undefined || !signal.aborted) return undefined;
+    const error = new ErrorClass('The operation was aborted');
+    error.name = 'AbortError'; error.code = 'ABORT_ERR'; error.cause = signal.reason;
+    return error;
+  }
+  function wholeFileWrite(name) {
+    const previous = fs[name], sync = fs[name + 'Sync'], promiseWrite = fs.promises[name];
+    install(name, function (path, data, settings, cb) {
+      if (typeof settings === 'function') { cb = settings; settings = undefined; }
+      callback(cb);
+      if (settings === null || typeof settings !== 'object') {
+        return apply(previous, fs, [path, data, settings, cb]);
+      }
+      path = typeof path === 'number' ? fd(path) : pathValue(path);
+      settings = settingsValue(settings, ['encoding', 'flag', 'mode', 'flush', 'signal']);
+      if (settings.encoding !== undefined && settings.encoding !== null && !isEncoding(settings.encoding)) {
+        const error = invalid('encoding'); error.code = 'ERR_INVALID_ARG_VALUE'; throw error;
+      }
+      if (settings.flush !== undefined && typeof settings.flush !== 'boolean') throw invalid('options.flush');
+      const signal = settings.signal;
+      if (signal !== undefined && (signal === null || typeof signal !== 'object' ||
+          typeof signal.aborted !== 'boolean')) throw invalid('options.signal');
+      if (typeof data !== 'string') {
+        if (!isView(data)) throw invalid('data');
+        data = view(data).buffer;
+      }
+      const aborted = writeAborted(signal);
+      if (aborted !== undefined) { cb(aborted); return; }
+      if (typeof path === 'number') {
+        // Numeric descriptors remain caller-owned and must not be reopened or
+        // closed by a whole-file callback operation.
+        run(function () {
+          const aborted = writeAborted(signal);
+          if (aborted !== undefined) throw aborted;
+          return sync(path, data, settings);
+        }, cb, voidResult);
+        return;
+      }
+      // Reuse the Promise writer's owned descriptor, short-write retry, abort
+      // and flush/close protocol. Snapshot options before scheduling so later
+      // mutation cannot turn an exclusive create into an overwriting write.
+      enqueue(function () {
+        let pending, failure, failed = false;
+        try { pending = promiseWrite(path, data, settings); }
+        catch (error) { failed = true; failure = error; }
+        if (failed) { cb(errorFirst(failure)); return; }
+        apply(promiseThen, pending, [
+          function () { enqueue(function () { cb(null); }); },
+          function (error) { enqueue(function () { cb(errorFirst(error)); }); },
+        ]);
+      });
+    });
+  }
+  wholeFileWrite('writeFile');
+  wholeFileWrite('appendFile');
   optional('stat', fs.statSync, valueResult, ['bigint']);
   optional('lstat', fs.lstatSync, valueResult, ['bigint']);
   optional('readdir', fs.readdirSync, valueResult, ['encoding', 'withFileTypes', 'recursive']);

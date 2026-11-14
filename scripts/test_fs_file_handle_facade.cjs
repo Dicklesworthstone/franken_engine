@@ -12,6 +12,8 @@ const vm = require('node:vm');
 const { test } = require('node:test');
 const source = fs.readFileSync(process.env.FRANKEN_FS_SOURCE || path.join(__dirname,
   '../crates/franken-engine/src/lowering_pipeline/fs_module.js'), 'utf8');
+const callbacksSource = fs.readFileSync(path.join(__dirname,
+  '../crates/franken-engine/src/lowering_pipeline/fs_callbacks.js'), 'utf8');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'franken-fs-handles-'));
 let nextFile = 0;
 function fixture(hook = () => {}, globals = {}) {
@@ -50,6 +52,25 @@ function fixture(hook = () => {}, globals = {}) {
     facade: vm.runInNewContext(source, context), calls, context,
     file: path.join(root, `file-${nextFile++}`),
   };
+}
+
+function callbackFixture(hook = () => {}) {
+  const result = fixture(hook, { queueMicrotask, URL });
+  result.facade = vm.runInNewContext(callbacksSource, result.context)(result.facade);
+  return result;
+}
+
+function invokeWrite(api, name, ...args) {
+  return new Promise((resolve, reject) => {
+    let returned = false;
+    assert.equal(api[name](...args, function (error) {
+      try {
+        assert.equal(returned, true, 'whole-file callback must be deferred');
+        if (error) reject(error); else resolve();
+      } catch (failure) { reject(failure); }
+    }), undefined);
+    returned = true;
+  });
 }
 
 test('constructing the module has no host effects', () => {
@@ -241,6 +262,100 @@ test('exclusive and synchronous flags flow through handle and whole-file Promise
   assert.deepEqual(openCalls.map(call => call.args[1]), ['wx+', 'xw', 'wx', 'ax', 'sa+', 'sr', 'xw', 'xa']);
   assert(openCalls.every(call => call.authority === 'fs_write'));
   assert.equal(calls.filter(call => call.operation === 'close_fd').length, 5);
+});
+
+test('sync whole-file options honor exclusive append and nontruncating flags like Node', () => {
+  function exercise(api, file) {
+    fs.writeFileSync(file, 'original');
+    assert.throws(() => api.writeFileSync(file, 'destroyed', { flag: 'wx' }), { code: 'EEXIST' });
+    assert.throws(() => api.appendFileSync(file, 'destroyed', { flag: 'ax' }), { code: 'EEXIST' });
+    const preserved = fs.readFileSync(file, 'utf8');
+    api.writeFileSync(file, 'AB', { flag: 'r+' });
+    const retained = fs.readFileSync(file, 'utf8');
+    api.writeFileSync(file, '!', { flag: 'as', flush: true });
+    const appended = fs.readFileSync(file, 'utf8');
+    api.appendFileSync(file, 'replacement', { flag: 'w' });
+    api.writeFileSync(file + '-new', '4142', { flag: 'wx+', encoding: 'hex', flush: true });
+    const fd = fs.openSync(file, 'r+');
+    api.writeFileSync(fd, 'Z', { flag: 'wx', flush: true });
+    assert.equal(fs.fstatSync(fd).isFile(), true, 'borrowed descriptor stays open');
+    fs.closeSync(fd);
+    return [preserved, retained, appended, fs.readFileSync(file, 'utf8'), fs.readFileSync(file + '-new', 'hex')];
+  }
+  const { facade, file, calls } = fixture();
+  assert.deepEqual(exercise(facade, file), exercise(fs, file + '-node'));
+  assert.equal(calls.filter(call => call.operation === 'open').length, 6);
+  assert.equal(calls.filter(call => call.operation === 'close_fd').length, 4);
+  assert.equal(calls.filter(call => call.operation === 'fsync').length, 3);
+});
+
+test('whole-file callbacks share exclusive creation and descriptor cleanup with Promise writes', async () => {
+  async function exercise(api, file) {
+    fs.writeFileSync(file, 'original');
+    await assert.rejects(invokeWrite(api, 'writeFile', file, 'destroyed', { flag: 'wx' }), { code: 'EEXIST' });
+    await assert.rejects(invokeWrite(api, 'appendFile', file, 'destroyed', { flag: 'ax' }), { code: 'EEXIST' });
+    const preserved = fs.readFileSync(file, 'utf8');
+    await invokeWrite(api, 'writeFile', file, '!', { flag: 'as', flush: true });
+    const appended = fs.readFileSync(file, 'utf8');
+    await invokeWrite(api, 'appendFile', file, 'replacement', { flag: 'w' });
+    const fd = fs.openSync(file, 'r+');
+    await invokeWrite(api, 'writeFile', fd, 'Z', { flag: 'wx' });
+    fs.closeSync(fd);
+    return [preserved, appended, fs.readFileSync(file, 'utf8')];
+  }
+  const { facade, file, calls } = callbackFixture();
+  assert.deepEqual(await exercise(facade, file), await exercise(fs, file + '-node'));
+  assert.equal(calls.filter(call => call.operation === 'open').length, 4);
+  assert.equal(calls.filter(call => call.operation === 'close_fd').length, 2);
+});
+
+test('queued whole-file callbacks snapshot options and keep captured methods', async () => {
+  const { facade, file, calls } = callbackFixture();
+  fs.writeFileSync(file, 'must survive');
+  let reads = 0;
+  const options = { get flag() { reads += 1; return 'wx'; } };
+  const pending = invokeWrite(facade, 'writeFile', file, 'destroyed', options);
+  Object.defineProperty(options, 'flag', { value: 'w' });
+  facade.promises.writeFile = () => { throw new Error('replacement must not be called'); };
+  assert.equal(reads, 1);
+  assert.equal(calls.length, 0, 'no host effect before the queued operation');
+  await assert.rejects(pending, { code: 'EEXIST' });
+  assert.equal(fs.readFileSync(file, 'utf8'), 'must survive');
+  assert.deepEqual(calls.map(call => call.operation), ['open']);
+});
+
+test('whole-file option validation and pre-abort never truncate or acquire a descriptor', () => {
+  const { facade, file, calls } = callbackFixture();
+  fs.writeFileSync(file, 'must survive');
+  for (const options of [{ flag: 'w', flush: 1 }, { flag: 'w', encoding: 'invalid' }]) {
+    assert.throws(() => facade.writeFileSync(file, 'x', options));
+    assert.throws(() => facade.writeFile(file, 'x', options, () => {}));
+  }
+  assert.throws(() => facade.writeFileSync(file, {}, { flag: 'w' }), { code: 'ERR_INVALID_ARG_TYPE' });
+  assert.throws(() => facade.writeFile(file, {}, { flag: 'w' }, () => {}), { code: 'ERR_INVALID_ARG_TYPE' });
+  const controller = new AbortController();
+  controller.abort('stop');
+  let deliveries = 0;
+  facade.writeFile(file, 'x', { flag: 'w', signal: controller.signal }, error => {
+    assert.equal(error.code, 'ABORT_ERR'); assert.equal(error.cause, 'stop'); deliveries += 1;
+  });
+  assert.equal(deliveries, 1);
+  assert.equal(calls.length, 0);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'must survive');
+});
+
+test('sync option writes close owned descriptors after short-write and flush failures', () => {
+  let writes = 0;
+  const failure = new Error('host write failed');
+  const { facade, file, calls } = fixture((authority, operation) => {
+    if (operation === 'write_fd' && ++writes === 2) throw failure;
+  });
+  assert.throws(() => facade.writeFileSync(file, Buffer.alloc(20000), { flag: 'wx' }), error => error === failure);
+  assert.equal(calls.filter(call => call.operation === 'close_fd').length, 1);
+  assert.equal(fs.statSync(file).size, 16384);
+  const flush = fixture((authority, operation) => { if (operation === 'fsync') throw failure; });
+  assert.throws(() => flush.facade.appendFileSync(flush.file, 'x', { flag: 'ax', flush: true }), error => error === failure);
+  assert.equal(flush.calls.filter(call => call.operation === 'close_fd').length, 1);
 });
 
 test('descriptor mutation arguments reject before host entry and closed handles stay closed', async () => {

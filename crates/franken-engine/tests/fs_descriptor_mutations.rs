@@ -456,7 +456,10 @@ fs.promises.writeFile('owned.txt', 'must not overwrite', { flag: 'wx' }).catch(f
             })
             .collect();
         assert_eq!(opens.len(), 7);
-        for (entry, flags) in opens.iter().zip(["wx+", "r", "xw", "wx", "ax", "sa+", "sr"]) {
+        for (entry, flags) in opens
+            .iter()
+            .zip(["wx+", "r", "xw", "wx", "ax", "sa+", "sr"])
+        {
             assert_eq!(entry.0, &[format!("flags={flags}")]);
         }
         for (_, outcome) in &opens[2..5] {
@@ -467,6 +470,80 @@ fs.promises.writeFile('owned.txt', 'must not overwrite', { flag: 'wx' }).catch(f
         assert_eq!(
             std::fs::read(root.path().join("owned.txt")).unwrap(),
             b"original!"
+        );
+    }
+}
+
+#[test]
+fn whole_file_sync_and_callback_options_preserve_exclusive_creation() {
+    let source = r#"
+import { writeFileSync, appendFileSync, readFileSync } from 'node:fs';
+const fs = require('fs');
+try { writeFileSync('owned.txt', 'destroyed', { flag: 'wx' }); }
+catch (error) { console.log('SYNC', error.code); }
+try { appendFileSync('owned.txt', 'destroyed', { flag: 'ax' }); }
+catch (error) { console.log('APPEND', error.code); }
+writeFileSync('owned.txt', 'AB', { flag: 'r+', flush: true });
+console.log('PRESERVED', readFileSync('owned.txt', 'utf8'));
+let returned = false;
+const settings = { flag: 'wx' };
+const result = fs.writeFile('owned.txt', 'destroyed', settings, function (error) {
+  console.log('CALLBACK', returned, error.code);
+  fs.appendFile('owned.txt', 'replacement', { flag: 'w', flush: true }, function (error) {
+    if (error) throw error;
+    console.log('REPLACED', readFileSync('owned.txt', 'utf8'));
+  });
+});
+settings.flag = 'w';
+console.log('RETURN', result === undefined);
+returned = true;
+"#;
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let root = tempfile::tempdir().expect("sandbox");
+        std::fs::write(root.path().join("owned.txt"), b"original").unwrap();
+        let (output, entries) = run(source, root.path(), lane);
+        assert_eq!(
+            output,
+            [
+                "SYNC EEXIST",
+                "APPEND EEXIST",
+                "PRESERVED ABiginal",
+                "RETURN true",
+                "CALLBACK true EEXIST",
+                "REPLACED replacement"
+            ]
+        );
+        let flags: Vec<_> = entries
+            .iter()
+            .filter_map(|(request, _)| match request {
+                HostIoRequest::FsMeta {
+                    operation: FsOperation::Open,
+                    arguments,
+                    ..
+                } => arguments.first().cloned(),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            flags,
+            ["flags=wx", "flags=ax", "flags=r+", "flags=wx", "flags=w"]
+        );
+        let closed = entries
+            .iter()
+            .filter(|(request, _)| {
+                matches!(
+                    request,
+                    HostIoRequest::FsMeta {
+                        operation: FsOperation::CloseFd,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(closed, 2, "only successful internally-owned opens close");
+        assert_eq!(
+            std::fs::read(root.path().join("owned.txt")).unwrap(),
+            b"replacement"
         );
     }
 }

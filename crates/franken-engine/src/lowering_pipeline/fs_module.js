@@ -44,9 +44,15 @@
     return __franken_fs_read('\0fsop:read', path, readOptions(options, false, true));
   }
   function writeFileSync(path, data, options) {
+    if (options !== null && typeof options === 'object') {
+      return writePathSnapshot(writeSnapshot(path, data, options, 'w'));
+    }
     return __franken_fs_write('\0fsop:write', path, data, options);
   }
   function appendFileSync(path, data, options) {
+    if (options !== null && typeof options === 'object') {
+      return writePathSnapshot(writeSnapshot(path, data, options, 'a'));
+    }
     return __franken_fs_write('\0fsop:append', path, data, options);
   }
   function existsSync(path) {
@@ -498,6 +504,44 @@
         length, 'write', true);
     }
     checkAbort(options.signal);
+  }
+  function writeSnapshot(path, data, options, defaultFlag) {
+    // The one-shot native write does not carry open flags. Object options
+    // therefore need the same owned descriptor protocol as Promise writes;
+    // otherwise flag:'wx' could silently overwrite an existing destination.
+    // Like Node's synchronous write, this does not observe AbortSignal state.
+    var settings = fileOptions(options, 'utf8', false, true);
+    var flag = options.flag;
+    var mode = options.mode;
+    var flush = options.flush;
+    if (flush !== undefined && typeof flush !== 'boolean') { throw argumentError('options.flush'); }
+    data = typeof data === 'string' ? bufferFrom(data, settings.encoding) : byteBuffer(data);
+    if (typeof path === 'number') { validateDescriptor(path); }
+    return { path: path, data: data, settings: settings,
+      flag: flag === undefined ? defaultFlag : flag, mode: mode, flush: flush === true };
+  }
+  function writePathSnapshot(snapshot) {
+    var owned = typeof snapshot.path !== 'number';
+    var fd = owned ? openSync(snapshot.path, snapshot.flag, snapshot.mode) : snapshot.path;
+    var failed = false;
+    var failure;
+    try {
+      writeChunk(fd, snapshot.data, snapshot.settings);
+      if (snapshot.flush) { fsyncSync(fd); }
+    } catch (error) { failed = true; failure = error; }
+    // A numeric fd belongs to the caller. Every internally opened descriptor
+    // closes once, including short writes and flush failures.
+    if (owned) {
+      try { closeSync(fd); }
+      catch (closeError) {
+        if (failed) {
+          throw new NativeAggregateError([failure, closeError],
+            'Filesystem write and descriptor close both failed');
+        }
+        throw closeError;
+      }
+    }
+    if (failed) { throw failure; }
   }
   function iterableSource(data) {
     if (data === null || (typeof data !== 'object' && typeof data !== 'function')) {

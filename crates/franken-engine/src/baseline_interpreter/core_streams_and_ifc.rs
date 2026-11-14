@@ -5140,6 +5140,16 @@ impl InterpreterCore {
                     function_prototypes: self.function_prototypes.value.clone(),
                     builtin_prototypes: self.builtin_prototypes.value.clone(),
                     symbol_state: self.symbol_state.value.clone(),
+                    weakmap_storage: self.weakmap_storage.clone(),
+                    weak_collection_labels: self
+                        .weakmap_storage
+                        .keys()
+                        .filter_map(|owner| {
+                            self.object_mutation_labels
+                                .get(owner)
+                                .map(|label| (*owner, label.clone()))
+                        })
+                        .collect(),
                 };
             }
         }
@@ -5158,7 +5168,9 @@ impl InterpreterCore {
         let previous_seed_surface_bytes = self
             .registers_memory_bytes()
             .saturating_add(self.heap_memory_bytes())
-            .saturating_add(self.symbol_state_memory_bytes());
+            .saturating_add(self.symbol_state_memory_bytes())
+            .saturating_add(self.weakmap_storage_memory_bytes())
+            .saturating_add(self.weak_collection_labels_memory_bytes());
         let next_seed_surface_bytes = {
             let snapshot = seed.0.state.borrow();
             match &**snapshot {
@@ -5176,6 +5188,8 @@ impl InterpreterCore {
                     registers,
                     heap,
                     symbol_state,
+                    weakmap_storage,
+                    weak_collection_labels,
                     ..
                 } => {
                     self.check_temporary_memory_budget(seed.0.snapshot_bytes)?;
@@ -5190,10 +5204,26 @@ impl InterpreterCore {
                         validate_heap_symbol_references(symbol_state, object)
                             .map_err(|details| InterpreterError::InternalError { details })?;
                     }
+                    for storage in weakmap_storage.values() {
+                        for value in storage
+                            .entries
+                            .values()
+                            .chain(storage.symbol_entries.values())
+                        {
+                            validate_symbol_value(symbol_state, value)
+                                .map_err(|details| InterpreterError::InternalError { details })?;
+                        }
+                        for symbol in storage.symbol_entries.keys() {
+                            validate_symbol_value(symbol_state, &Value::Symbol(SymbolId(*symbol)))
+                                .map_err(|details| InterpreterError::InternalError { details })?;
+                        }
+                    }
                     Some(Self::estimate_seed_surface_active_bytes(
                         registers,
                         heap,
                         symbol_state,
+                        weakmap_storage,
+                        weak_collection_labels,
                     ))
                 }
             }
@@ -5244,12 +5274,16 @@ impl InterpreterCore {
                     function_prototypes,
                     builtin_prototypes,
                     symbol_state,
+                    weakmap_storage,
+                    weak_collection_labels,
                 } => Some((
                     registers.clone(),
                     heap.clone(),
                     function_prototypes.clone(),
                     builtin_prototypes.clone(),
                     symbol_state.clone(),
+                    weakmap_storage.clone(),
+                    weak_collection_labels.clone(),
                 )),
                 ExecutionSeed::Lazy { .. } => {
                     return Err(InterpreterError::InternalError {
@@ -5261,8 +5295,15 @@ impl InterpreterCore {
             None
         };
 
-        if let Some((registers, heap, function_prototypes, builtin_prototypes, symbol_state)) =
-            restore
+        if let Some((
+            registers,
+            heap,
+            function_prototypes,
+            builtin_prototypes,
+            symbol_state,
+            weakmap_storage,
+            weak_collection_labels,
+        )) = restore
         {
             self.before_seed_surface_write();
             self.note_registers_written_to(registers.len());
@@ -5276,6 +5317,8 @@ impl InterpreterCore {
             self.virtual_property_deletions = true;
             self.builtin_prototypes.value = builtin_prototypes;
             self.symbol_state.value = symbol_state;
+            self.weakmap_storage = weakmap_storage;
+            self.object_mutation_labels = weak_collection_labels;
             let committed_seed_surface_bytes = next_seed_surface_bytes
                 .expect("materialized execution seed has a projected active size");
             self.estimated_memory_bytes = self
@@ -7681,9 +7724,9 @@ impl InterpreterCore {
         self.atomics_async_waiters.clear();
         self.pending_stream_emissions.clear();
 
-        // Heap-ObjectId-keyed tables not covered by the seed surfaces or by
-        // the execution-local clears in `reset_execution_state_from_seed`.
-        self.weakmap_storage.clear();
+        // Weak collection entries and their owner labels were restored with
+        // the seeded heap. Clearing them here would invalidate seeded owners.
+        // These remaining tables are execution-local.
         self.gc_remembered_set.clear();
         self.module_state.modules.clear();
         self.module_state.retained_program_bytes = 0;

@@ -1249,6 +1249,9 @@ impl InterpreterCore {
             Self::estimate_object_mutation_label_entry_bytes(&next)
         };
         self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+        if self.weakmap_storage.contains_key(&object_id) {
+            self.before_seed_surface_write();
+        }
         if next == Label::Public {
             self.object_mutation_labels.remove(&object_id);
         } else {
@@ -10444,8 +10447,14 @@ impl InterpreterCore {
     }
 
     pub(super) fn clear_object_mutation_labels(&mut self) {
-        let released_bytes = self.object_mutation_labels_memory_bytes();
-        self.object_mutation_labels.clear();
+        let previous_bytes = self.object_mutation_labels_memory_bytes();
+        // A weak collection's membership and its control provenance are one
+        // seeded state. Other object labels remain execution-local.
+        let weakmap_storage = &self.weakmap_storage;
+        self.object_mutation_labels
+            .retain(|owner, _| weakmap_storage.contains_key(owner));
+        let released_bytes =
+            previous_bytes.saturating_sub(self.object_mutation_labels_memory_bytes());
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
     }
 

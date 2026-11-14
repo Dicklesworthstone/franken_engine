@@ -936,6 +936,170 @@ mod lazy_seed_tests {
         ));
     }
 
+    fn weak_collection_seed_fixture() -> (
+        InterpreterCore,
+        Ir3Module,
+        ObjectId,
+        ObjectId,
+        SymbolId,
+    ) {
+        let mut core = test_core();
+        core.config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]
+        .into_iter()
+        .collect();
+        let tree = CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource {
+                    label: "weak-seed.js".into(),
+                    text: "0;".into(),
+                },
+                crate::ast::ParseGoal::Script,
+                &ParserOptions::default(),
+            )
+            .expect("parse seed probe");
+        let module = lower_ir0_to_ir3(
+            &Ir0Module::from_syntax_tree(tree, "weak-seed.js"),
+            &LoweringContext::new("weak-seed", "weak-seed-decision", "weak-seed-policy"),
+        )
+        .expect("lower seed probe")
+        .ir3;
+        let Value::Object(owner) = core
+            .execute_builtin_call("builtin:WeakMap", vec![])
+            .expect("construct WeakMap")
+        else {
+            panic!("WeakMap constructor must produce an object");
+        };
+        let object_key = core
+            .alloc_object_with_prototype(None)
+            .expect("allocate weak key");
+        let symbol_key = core
+            .allocate_private_symbol(Some(JsString::from("seed-key")))
+            .expect("allocate private weak key");
+        for (key, value) in [
+            (Value::Object(object_key), Value::str("original")),
+            (Value::Symbol(symbol_key), Value::Bool(true)),
+        ] {
+            core.seed_register(0, key).expect("stage key");
+            core.seed_register(1, value).expect("stage value");
+            core.weakmap_method(
+                &module,
+                "set",
+                Value::Object(owner),
+                RegRange { start: 0, count: 2 },
+            )
+            .expect("seed weak entry through its native method");
+        }
+        core.join_direct_object_mutation_label(owner, &Label::Secret)
+            .expect("retain membership provenance");
+        core.seed_register(30, Value::Object(owner))
+            .expect("root seeded collection");
+        core.seed_register(31, Value::Object(object_key))
+            .expect("root seeded key");
+        core.sync_estimated_memory_bytes()
+            .expect("fixture accounting");
+        (core, module, owner, object_key, symbol_key)
+    }
+
+    #[test]
+    fn weak_collection_seed_restores_object_and_symbol_mutations() {
+        for method in ["set", "delete"] {
+            for symbol in [false, true] {
+                let (mut core, module, owner, object_key, symbol_key) =
+                    weak_collection_seed_fixture();
+                let key = if symbol {
+                    Value::Symbol(symbol_key)
+                } else {
+                    Value::Object(object_key)
+                };
+                core.seed_register(0, key).expect("stage mutation key");
+                core.seed_register(1, Value::str("changed"))
+                    .expect("stage mutation value");
+                let seed = core.capture_execution_seed().expect("capture weak table");
+                assert!(seed.is_lazy());
+                core.weakmap_method(
+                    &module,
+                    method,
+                    Value::Object(owner),
+                    RegRange { start: 0, count: 2 },
+                )
+                .expect("mutate weak table without a register write");
+                assert!(!seed.is_lazy(), "{method} must materialize its old table");
+                core.reset_execution_state_from_seed(&seed)
+                    .expect("restore weak collection state");
+                let storage = &core.weakmap_storage[&owner];
+                assert_eq!(storage.get(object_key.0), Some(&Value::str("original")));
+                assert_eq!(storage.get_symbol(symbol_key.0), Some(&Value::Bool(true)));
+                assert_eq!(core.object_mutation_labels.get(&owner), Some(&Label::Secret));
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn weak_collection_seed_reserves_owned_state_and_restores_label_only_writes() {
+        let (mut core, _, owner, object_key, _) = weak_collection_seed_fixture();
+        let before_total = core.estimated_memory_bytes();
+        let exact_total = expected_capture_total(&core);
+        core.config.max_total_memory_bytes = exact_total.saturating_sub(1);
+        assert!(matches!(
+            core.capture_execution_seed(),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.estimated_memory_bytes(), before_total);
+        assert!(core.pending_lazy_seeds.is_empty());
+        assert!(core.weakmap_storage[&owner].has(object_key.0));
+
+        core.config.max_total_memory_bytes = exact_total;
+        let seed = core.capture_execution_seed().expect("exact seed budget");
+        assert_eq!(core.estimated_memory_bytes(), exact_total);
+        core.reset_execution_state_from_seed(&seed)
+            .expect("unchanged lazy state");
+        assert!(seed.is_lazy());
+        assert_eq!(core.object_mutation_labels.get(&owner), Some(&Label::Secret));
+
+        core.join_direct_object_mutation_label(owner, &Label::TopSecret)
+            .expect("same-size owner label mutation");
+        assert!(!seed.is_lazy(), "label-only writes must preserve the old label");
+        seed.inspect(|state| match state {
+            ExecutionSeed::Materialized {
+                weak_collection_labels,
+                ..
+            } => assert_eq!(weak_collection_labels.get(&owner), Some(&Label::Secret)),
+            ExecutionSeed::Lazy { .. } => panic!("owner label mutation was not tracked"),
+        });
+        core.config.max_total_memory_bytes = u64::MAX;
+        core.reset_execution_state_from_seed(&seed)
+            .expect("restore owner provenance");
+        assert_eq!(core.object_mutation_labels.get(&owner), Some(&Label::Secret));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn seeded_weak_collection_survives_repeated_execute() {
+        let (mut core, module, owner, object_key, symbol_key) = weak_collection_seed_fixture();
+        for _ in 0..2 {
+            core.execute(&module).expect("execute from seeded weak state");
+            let storage = &core.weakmap_storage[&owner];
+            assert_eq!(storage.get(object_key.0), Some(&Value::str("original")));
+            assert_eq!(storage.get_symbol(symbol_key.0), Some(&Value::Bool(true)));
+            assert_eq!(core.object_mutation_labels.get(&owner), Some(&Label::Secret));
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
     #[test]
     fn execution_seed_accessor_estimator_is_bounded_bd_x6010() {
         let mut value = Value::Undefined;

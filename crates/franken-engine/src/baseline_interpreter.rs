@@ -15071,6 +15071,10 @@ pub enum ExecutionSeed {
         function_prototypes: BTreeMap<(ContentHash, u32), ObjectId>,
         builtin_prototypes: BTreeMap<String, ObjectId>,
         symbol_state: RuntimeSymbolState,
+        /// Private weak entries must travel with the heap identities they name.
+        weakmap_storage: BTreeMap<ObjectId, WeakMapStorage>,
+        /// Only labels owned by weak collections survive the execution reset.
+        weak_collection_labels: BTreeMap<ObjectId, Label>,
     },
 }
 

@@ -420,6 +420,7 @@ impl InterpreterCore {
                 .saturating_add(Self::estimate_value_bytes(value))
         }));
         self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+        self.before_seed_surface_write();
         let storage = self
             .weakmap_storage
             .get_mut(&weakmap_id)
@@ -2688,16 +2689,60 @@ impl InterpreterCore {
             .saturating_add(function_prototypes)
             .saturating_add(builtin_prototypes)
             .saturating_add(Self::estimate_symbol_state_bytes(&self.symbol_state))
+            .saturating_add(Self::estimate_execution_seed_weakmap_storage_bytes(
+                &self.weakmap_storage,
+            ))
+            .saturating_add(self.weak_collection_labels_memory_bytes())
     }
 
     pub(super) fn estimate_seed_surface_active_bytes(
         registers: &[Value],
         heap: &Heap,
         symbol_state: &RuntimeSymbolState,
+        weakmap_storage: &BTreeMap<ObjectId, WeakMapStorage>,
+        weak_collection_labels: &BTreeMap<ObjectId, Label>,
     ) -> u64 {
         Self::saturating_sum(registers.iter().map(Self::estimate_value_bytes))
             .saturating_add(heap.estimated_bytes())
             .saturating_add(Self::estimate_symbol_state_bytes(symbol_state))
+            .saturating_add(Self::estimate_weakmap_storage_bytes(weakmap_storage))
+            .saturating_add(Self::saturating_sum(
+                weak_collection_labels
+                    .values()
+                    .map(Self::estimate_object_mutation_label_entry_bytes),
+            ))
+    }
+
+    /// Reserve the owned map/set nodes and each copied value before a lazy
+    /// seed can materialize. Use the bounded seed estimator for accessors.
+    pub(super) fn estimate_execution_seed_weakmap_storage_bytes(
+        storage: &BTreeMap<ObjectId, WeakMapStorage>,
+    ) -> u64 {
+        Self::saturating_sum(storage.values().map(|storage| {
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                .saturating_add(std::mem::size_of::<(ObjectId, WeakMapStorage)>() as u64)
+                .saturating_add(Self::saturating_sum(
+                    storage
+                        .entries
+                        .values()
+                        .chain(storage.symbol_entries.values())
+                        .map(|value| {
+                            MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                                .saturating_mul(2)
+                                .saturating_add(std::mem::size_of::<(u32, Value)>() as u64)
+                                .saturating_add(Self::estimate_execution_seed_value_bytes(value))
+                        }),
+                ))
+        }))
+    }
+
+    pub(super) fn weak_collection_labels_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(
+            self.weakmap_storage
+                .keys()
+                .filter_map(|owner| self.object_mutation_labels.get(owner))
+                .map(Self::estimate_object_mutation_label_entry_bytes),
+        )
     }
 
     pub(super) fn estimate_plain_string_map_entry_bytes(key: &str, value: &Value) -> u64 {
@@ -3519,7 +3564,13 @@ impl InterpreterCore {
     }
 
     pub(super) fn weakmap_storage_memory_bytes(&self) -> u64 {
-        Self::saturating_sum(self.weakmap_storage.values().map(|storage| {
+        Self::estimate_weakmap_storage_bytes(&self.weakmap_storage)
+    }
+
+    pub(super) fn estimate_weakmap_storage_bytes(
+        storage: &BTreeMap<ObjectId, WeakMapStorage>,
+    ) -> u64 {
+        Self::saturating_sum(storage.values().map(|storage| {
             MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(Self::saturating_sum(
                 storage
                     .entries

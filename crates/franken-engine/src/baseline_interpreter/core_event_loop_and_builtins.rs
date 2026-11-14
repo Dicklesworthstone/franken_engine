@@ -11830,6 +11830,7 @@ impl InterpreterCore {
                 "has" => Ok(Value::Bool(storage.get_symbol(symbol).is_some())),
                 "delete" => {
                     let released = storage.get_symbol(symbol).map(entry_bytes).unwrap_or(0);
+                    self.before_seed_surface_write();
                     let deleted = self
                         .weakmap_storage
                         .get_mut(&weakmap_id)
@@ -11845,6 +11846,7 @@ impl InterpreterCore {
                     let value = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
                     let previous = storage.get_symbol(symbol).map(entry_bytes).unwrap_or(0);
                     self.apply_memory_component_delta(previous, entry_bytes(&value))?;
+                    self.before_seed_surface_write();
                     self.weakmap_storage
                         .get_mut(&weakmap_id)
                         .expect("WeakMap storage was checked above")
@@ -11867,6 +11869,7 @@ impl InterpreterCore {
                     return Ok(Value::Bool(false));
                 };
                 let released = storage.get(key).map(entry_bytes).unwrap_or(0);
+                self.before_seed_surface_write();
                 let storage = self
                     .weakmap_storage
                     .get_mut(&weakmap_id)
@@ -11888,6 +11891,7 @@ impl InterpreterCore {
                 let value = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
                 let previous = storage.get(key).map(entry_bytes).unwrap_or(0);
                 self.apply_memory_component_delta(previous, entry_bytes(&value))?;
+                self.before_seed_surface_write();
                 self.weakmap_storage
                     .get_mut(&weakmap_id)
                     .expect("WeakMap storage was checked above")

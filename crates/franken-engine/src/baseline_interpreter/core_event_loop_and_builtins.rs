@@ -11746,30 +11746,72 @@ impl InterpreterCore {
         let prototype = self.ensure_builtin_prototype("WeakRef")?;
         let weak_ref = self.alloc_object_with_prototype(Some(prototype))?;
         self.set_object_brand(weak_ref, "WeakRef")?;
-        self.set_object_property(weak_ref, "__target".to_string(), target)?;
-        self.set_own_runtime_property_label(
-            weak_ref,
-            &RuntimePropertyKey::String(JsString::from("__target")),
-            &label,
-        )?;
-        self.hide_internal_slots(weak_ref, &["__target"])?;
+        self.set_weak_ref_target(weak_ref, target, label)?;
         Ok(Value::Object(weak_ref))
     }
 
+    /// Install [[WeakRefTarget]] only after its full value/label ownership
+    /// fits the memory budget. Ordinary properties and integrity levels do
+    /// not participate in this engine-private edge.
+    pub(super) fn set_weak_ref_target(
+        &mut self,
+        weak_ref: ObjectId,
+        value: Value,
+        label: Label,
+    ) -> Result<(), InterpreterError> {
+        let object = self
+            .heap
+            .get(weak_ref.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: weak_ref.0 })?;
+        if object.brand() != Some("WeakRef") || !self.can_be_held_weakly(&value) {
+            return Err(InterpreterError::TypeError {
+                expected: "WeakRef receiver and weakly holdable target".to_string(),
+                got: value.type_name().to_string(),
+            });
+        }
+        let previous_bytes = object
+            .weak_ref_target
+            .as_deref()
+            .map_or(0, Self::estimate_weak_ref_target_bytes);
+        let target = WeakRefTarget { value, label };
+        self.apply_memory_component_delta(
+            previous_bytes,
+            Self::estimate_weak_ref_target_bytes(&target),
+        )?;
+        self.mutate_heap(|heap| {
+            let slot = &mut heap[weak_ref.0 as usize].weak_ref_target;
+            match slot.as_deref_mut() {
+                Some(current) => *current = target,
+                None => *slot = Some(Box::new(target)),
+            }
+        });
+        self.gc_write_barrier(weak_ref);
+        Ok(())
+    }
+
     /// `WeakRef.prototype.deref()` (ES2021 26.1.3.2).
-    pub(super) fn weak_ref_deref(&self, receiver: &Value) -> Result<Value, InterpreterError> {
+    pub(super) fn weak_ref_deref(&mut self, receiver: &Value) -> Result<Value, InterpreterError> {
         let target = match receiver {
             Value::Object(weak_ref) => self
                 .heap
                 .get(weak_ref.0 as usize)
                 .filter(|object| object.brand() == Some("WeakRef"))
-                .and_then(|object| object.properties.get("__target").cloned()),
+                .and_then(|object| object.weak_ref_target.as_deref()),
             _ => None,
-        };
-        target.ok_or_else(|| InterpreterError::TypeError {
+        }
+        .ok_or_else(|| InterpreterError::TypeError {
             expected: "WeakRef receiver for WeakRef.prototype.deref".to_string(),
             got: receiver.type_name().to_string(),
-        })
+        })?;
+        self.check_temporary_memory_budget(
+            Self::estimate_value_bytes(&target.value)
+                .saturating_add(Self::estimate_label_bytes(&target.label)),
+        )?;
+        let value = target.value.clone();
+        let label = target.label.clone();
+        self.join_into_pending_hostcall_result_label(Some(label))?;
+        self.observe_scoped_callback_result()?;
+        Ok(value)
     }
 
     /// `new FinalizationRegistry(cleanup)` (ES2021 26.2.1.1). Cleanup
@@ -11795,8 +11837,7 @@ impl InterpreterCore {
         let registry = self.alloc_object_with_prototype(Some(prototype))?;
         let tokens = self.alloc_object_with_prototype(None)?;
         self.set_object_brand(registry, "FinalizationRegistry")?;
-        self.set_object_property(registry, "__tokens".to_string(), Value::Object(tokens))?;
-        self.hide_internal_slots(registry, &["__tokens"])?;
+        self.set_collection_storage(registry, tokens)?;
         Ok(Value::Object(registry))
     }
 

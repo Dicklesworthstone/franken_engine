@@ -2667,6 +2667,12 @@ impl InterpreterCore {
             )
             .saturating_add(
                 object
+                    .weak_ref_target
+                    .as_deref()
+                    .map_or(0, Self::estimate_weak_ref_target_bytes),
+            )
+            .saturating_add(
+                object
                     .array_buffer
                     .as_ref()
                     .map(|backing| {
@@ -4317,6 +4323,12 @@ impl InterpreterCore {
         })
     }
 
+    pub(super) fn estimate_weak_ref_target_bytes(target: &WeakRefTarget) -> u64 {
+        (std::mem::size_of::<WeakRefTarget>() as u64)
+            .saturating_add(Self::estimate_execution_seed_value_bytes(&target.value))
+            .saturating_add(Self::estimate_label_bytes(&target.label))
+    }
+
     pub(super) fn estimate_heap_object_bytes(object: &HeapObject) -> u64 {
         let properties = Self::estimate_ordered_property_map_bytes(&object.properties);
         let property_labels =
@@ -4373,6 +4385,12 @@ impl InterpreterCore {
                     .collection_storage
                     .as_ref()
                     .map_or(0, |_| std::mem::size_of::<ObjectId>() as u64),
+            )
+            .saturating_add(
+                object
+                    .weak_ref_target
+                    .as_deref()
+                    .map_or(0, Self::estimate_weak_ref_target_bytes),
             )
             .saturating_add(array_buffer_bytes)
             .saturating_add(typed_array_bytes)

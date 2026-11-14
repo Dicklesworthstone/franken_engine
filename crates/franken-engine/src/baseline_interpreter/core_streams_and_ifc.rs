@@ -7381,6 +7381,9 @@ impl InterpreterCore {
                         &mut queued,
                     );
                 }
+                if let Some(target) = object.weak_ref_target.as_deref() {
+                    Self::queue_object_id_from_value(&target.value, &mut frontier, &mut queued);
+                }
                 if let Some(prototype) = object.prototype {
                     Self::queue_object_id_from_value(
                         &Value::Object(prototype),

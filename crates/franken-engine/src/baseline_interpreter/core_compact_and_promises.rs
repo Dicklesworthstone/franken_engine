@@ -7551,8 +7551,8 @@ impl InterpreterCore {
         Ok(Some(pairs))
     }
 
-    /// The receiver's collection storage, gated on its private brand. Map
-    /// and Set never consult guest properties for their backing object.
+    /// The receiver's collection storage, gated on its private brand. Map,
+    /// Set and FinalizationRegistry never consult guest properties for storage.
     /// WeakMap/WeakSet use the private weak side table instead of heap storage.
     pub(super) fn collection_storage_id(
         &self,
@@ -7564,16 +7564,12 @@ impl InterpreterCore {
             return None;
         }
         match type_tag {
-            "Map" | "Set" => obj.collection_storage.as_deref().copied(),
-            "FinalizationRegistry" => match obj.properties.get("__tokens") {
-                Some(Value::Object(id)) => Some(*id),
-                _ => None,
-            },
+            "Map" | "Set" | "FinalizationRegistry" => obj.collection_storage.as_deref().copied(),
             _ => None,
         }
     }
 
-    /// Publish a private Map/Set backing edge after charging its allocation.
+    /// Publish a private collection backing edge after charging its allocation.
     /// A collection's integrity level governs its ordinary properties only.
     pub(super) fn set_collection_storage(
         &mut self,
@@ -7584,9 +7580,9 @@ impl InterpreterCore {
             .heap
             .get(obj_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: obj_id.0 })?;
-        if !matches!(object.brand(), Some("Map" | "Set")) {
+        if !matches!(object.brand(), Some("Map" | "Set" | "FinalizationRegistry")) {
             return Err(InterpreterError::TypeError {
-                expected: "Map or Set receiver for private collection storage".to_string(),
+                expected: "collection receiver for private backing storage".to_string(),
                 got: "object".to_string(),
             });
         }

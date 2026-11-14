@@ -1631,8 +1631,10 @@ impl InterpreterCore {
                 regexp: _,
                 // A Date's Number: no references.
                 date_value: _,
-                // Map/Set data is private but keeps its backing object alive.
+                // Collection data is private but keeps its backing object alive.
                 collection_storage,
+                // Deterministic WeakRef retention is unchanged by slot privacy.
+                weak_ref_target,
             } = object;
             for value in private_elements.values().flat_map(PrivateElement::values) {
                 marker.value(value);
@@ -1670,6 +1672,9 @@ impl InterpreterCore {
             }
             if let Some(storage) = collection_storage {
                 marker.object(**storage);
+            }
+            if let Some(target) = weak_ref_target {
+                marker.value(&target.value);
             }
             if let Some(view) = typed_array {
                 marker.object(view.buffer);

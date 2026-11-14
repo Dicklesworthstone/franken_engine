@@ -954,7 +954,8 @@ fn promise_reaction_returns_preserve_captured_labels_at_the_console_boundary() {
                 let Value::Promise(input) = holder.properties.get("input").unwrap().clone() else {
                     panic!("input promise");
                 };
-                let Value::Promise(result) = holder.properties.get("result").unwrap().clone() else {
+                let Value::Promise(result) = holder.properties.get("result").unwrap().clone()
+                else {
                     panic!("result promise");
                 };
                 core.set_own_property_label(state, "payload", &label)
@@ -964,8 +965,12 @@ fn promise_reaction_returns_preserve_captured_labels_at_the_console_boundary() {
                     core.reject_promise(input, crate::object_model::JsValue::Int(1), Label::Public)
                         .expect("public rejection");
                 } else {
-                    core.fulfill_promise(input, crate::object_model::JsValue::Int(1), Label::Public)
-                        .expect("public fulfillment");
+                    core.fulfill_promise(
+                        input,
+                        crate::object_model::JsValue::Int(1),
+                        Label::Public,
+                    )
+                    .expect("public fulfillment");
                 }
                 let outcome = core.drain_microtasks(Some(&module));
                 if label == Label::Secret {
@@ -1022,7 +1027,8 @@ fn native_adoption_preserves_source_provenance_before_and_after_settlement() {
                 let Value::Promise(input) = holder.properties.get("input").unwrap().clone() else {
                     panic!("input promise");
                 };
-                let Value::Promise(result) = holder.properties.get("result").unwrap().clone() else {
+                let Value::Promise(result) = holder.properties.get("result").unwrap().clone()
+                else {
                     panic!("result promise");
                 };
                 let input = crate::promise_model::PromiseHandle(input);
@@ -1257,7 +1263,10 @@ const NATIVE_PROMISE_REENTRANCY_SOURCE: &str = r#"
 
 #[test]
 fn native_then_getters_cannot_reenter_the_original_resolving_functions() {
-    assert_fixture(NATIVE_PROMISE_REENTRANCY_SOURCE, "native promise reentrancy 12");
+    assert_fixture(
+        NATIVE_PROMISE_REENTRANCY_SOURCE,
+        "native promise reentrancy 12",
+    );
 }
 
 #[test]

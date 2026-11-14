@@ -254,11 +254,16 @@ impl InterpreterCore {
         let Some(heap_object) = self.heap.get(object.0 as usize) else {
             return Ok(());
         };
-        // Moving Map/Set data out of guest properties must not hide its
+        // Moving builtin data out of guest properties must not hide its
         // contents from either confidentiality walk. Follow the same heap
         // edge explicitly, without invoking guest getters or Proxy traps.
         if let Some(storage) = heap_object.collection_storage.as_deref() {
             visit(*storage)?;
+        }
+        if let Some(target) = heap_object.weak_ref_target.as_deref()
+            && let Value::Object(child) = &target.value
+        {
+            visit(*child)?;
         }
         match edges {
             ReachableEdges::Data => {
@@ -328,6 +333,12 @@ impl InterpreterCore {
                     .get(&object)
                     .into_iter()
                     .chain(self.binary_storage_label_ref(object))
+                    .chain(
+                        self.heap
+                            .get(object.0 as usize)
+                            .and_then(|object| object.weak_ref_target.as_deref())
+                            .map(|target| &target.label),
+                    )
                     .max();
                 if let Some(label) = label {
                     self.check_temporary_memory_budget(Self::estimate_label_bytes(label))?;

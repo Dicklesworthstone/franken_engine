@@ -9112,11 +9112,21 @@ pub struct HeapObject {
     /// levels (ES2020 20.4.5). A boxed Number keeps ordinary objects small
     /// and preserves NaN exactly in execution seeds and serialized heaps.
     date_value: Option<Box<Float64>>,
-    /// A Map's [[MapData]] or Set's [[SetData]] backing object. This edge is
+    /// A Map, Set or FinalizationRegistry backing object. This edge is
     /// private: reflection, guest properties and Object.freeze never expose
     /// or alter the collection's contents. The backing map's length is the
     /// authoritative entry count, so there is no separate mutable size slot.
     collection_storage: Option<Box<ObjectId>>,
+    /// A WeakRef's target and provenance, inaccessible to guest property
+    /// operations. The deterministic collector retains the target while
+    /// the WeakRef is reachable, as it did before the slot became private.
+    weak_ref_target: Option<Box<WeakRefTarget>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct WeakRefTarget {
+    value: Value,
+    label: Label,
 }
 
 /// A RegExp's pattern, escaped as `source` reads it back (bd-9vouw.243),
@@ -9388,6 +9398,7 @@ impl Serialize for HeapObject {
                 + usize::from(self.regexp.is_some())
                 + usize::from(self.date_value.is_some())
                 + usize::from(self.collection_storage.is_some())
+                + usize::from(self.weak_ref_target.is_some())
                 + if has_constructor_metadata { 4 } else { 0 },
         )?;
         object.serialize_field("properties", &self.properties)?;
@@ -9441,6 +9452,9 @@ impl Serialize for HeapObject {
         }
         if let Some(storage) = &self.collection_storage {
             object.serialize_field("collection_storage", storage)?;
+        }
+        if let Some(target) = &self.weak_ref_target {
+            object.serialize_field("weak_ref_target", target)?;
         }
         if !self.private_elements.is_empty() {
             let elements = self
@@ -9553,6 +9567,8 @@ impl<'de> Deserialize<'de> for HeapObject {
             date_value: Option<Box<Float64>>,
             #[serde(default)]
             collection_storage: Option<Box<ObjectId>>,
+            #[serde(default)]
+            weak_ref_target: Option<Box<WeakRefTarget>>,
         }
 
         #[derive(Deserialize)]
@@ -9677,6 +9693,7 @@ impl<'de> Deserialize<'de> for HeapObject {
             regexp: wire.regexp,
             date_value: wire.date_value,
             collection_storage: wire.collection_storage,
+            weak_ref_target: wire.weak_ref_target,
         };
         for record in wire.symbol_properties {
             let symbol = SymbolId(record.symbol_id);
@@ -9837,6 +9854,9 @@ fn validate_heap_symbol_references(
     }
     if let Some(value) = &object.primitive_value {
         validate_symbol_value(state, value)?;
+    }
+    if let Some(target) = &object.weak_ref_target {
+        validate_symbol_value(state, &target.value)?;
     }
     for value in object.properties.all_data_values() {
         validate_symbol_value(state, value)?;

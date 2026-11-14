@@ -10,11 +10,12 @@
 //! built-ins. Expected strings are Node v22.2.0's output for the same
 //! programs.
 //!
-//! Map, Set, Date and RegExp also store their state in private heap slots.
+//! Map, Set, Date, RegExp, WeakRef and FinalizationRegistry also store their
+//! state in private heap slots. WeakSet uses private weak entries.
 //! The collection regressions cover reflection, guest properties with the
 //! former storage names, integrity levels, constructors, cloning and GC.
-//! Other built-ins' internal slots (for example WeakRef's `__target`) are
-//! outside this coverage.
+//! Weak-object regressions prevent guest access to the former `__values`,
+//! `__target` and `__tokens` slots and cover integrity levels and receiver brands.
 
 use frankenengine_engine::{
     HybridRouter, JsEngine, QuickJsInspiredNativeEngine, V8InspiredNativeEngine,
@@ -149,6 +150,95 @@ out.push(seen.join(','), mi.next().value.join(':'), si.next().value,
          mi.next().done, si.next().done, m.size, s.size);
 out.join('|');"#,
         "a:1|1|c:3|3|a1,c3,d4,1,3,4|d:4|4|true|true|3|3",
+    );
+}
+
+#[test]
+fn weak_collection_storage_is_private_across_guest_property_operations() {
+    assert_profile_value(
+        r#"var key = {}, other = {}, token = {};
+var set = new WeakSet([key]), registry = new FinalizationRegistry(() => {});
+registry.register(key, 'held', token);
+var out = [Reflect.ownKeys(set).length, Reflect.ownKeys(registry).length,
+           '__values' in set, '__tokens' in registry,
+           String(set.__values), String(registry.__tokens)];
+set.__values = {}; registry.__tokens = {};
+out.push(set.has(key), registry.unregister(token), registry.unregister(token),
+         Reflect.ownKeys(set).join(), Reflect.ownKeys(registry).join());
+for (var pair of [[set, '__values'], [registry, '__tokens']]) {
+    Object.defineProperty(pair[0], pair[1], {
+        get() { throw 'guest slot read'; }, set(v) { throw 'guest slot write'; },
+        configurable: true
+    });
+}
+out.push(set.add(other) === set, set.has(other), set.delete(key), set.has(key));
+registry.register(other, 7, token);
+out.push(registry.unregister(token), delete set.__values, delete registry.__tokens,
+         Reflect.ownKeys(set).length, Reflect.ownKeys(registry).length);
+out.join('|');"#,
+        "0|0|false|false|undefined|undefined|true|true|false|__values|__tokens|true|true|true|false|true|true|true|0|0",
+    );
+}
+
+#[test]
+fn weak_collections_ignore_inherited_slot_accessors_and_integrity_levels() {
+    assert_profile_value(
+        r#"class W extends WeakSet {}
+class F extends FinalizationRegistry {}
+Object.defineProperty(W.prototype, '__values', {
+    get() { throw 'inherited values read'; }, set(v) { throw 'inherited values write'; }
+});
+Object.defineProperty(F.prototype, '__tokens', {
+    get() { throw 'inherited tokens read'; }, set(v) { throw 'inherited tokens write'; }
+});
+var out = [];
+for (var transform of [Object.freeze, Object.seal, Object.preventExtensions]) {
+    var first = {}, second = {}, token = {};
+    var set = transform(new W([first])), registry = transform(new F(() => {}));
+    registry.register(first, 'held', token);
+    registry.register(second, 'also held', token);
+    out.push(set instanceof W, registry instanceof F, set.has(first),
+             set.add(second) === set, set.delete(first), set.has(second),
+             registry.unregister(token), registry.unregister(token),
+             Reflect.ownKeys(set).length, Reflect.ownKeys(registry).length);
+}
+function attempt(f) { try { return f(); } catch (e) { return e.name; } }
+out.push(attempt(() => WeakSet.prototype.has.call({__values: {}}, {})),
+         attempt(() => FinalizationRegistry.prototype.unregister.call({__tokens: {}}, {})),
+         attempt(() => WeakSet.prototype.has.call(new Proxy(new W(), {}), {})));
+out.join('|');"#,
+        "true|true|true|true|true|true|true|false|0|0|true|true|true|true|true|true|true|false|0|0|true|true|true|true|true|true|true|false|0|0|TypeError|TypeError|TypeError",
+    );
+}
+
+#[test]
+fn weak_ref_target_is_private_and_survives_guest_slot_mutations() {
+    assert_profile_value(
+        r#"var target = {n: 7}, other = {n: 99}, ref = new WeakRef(target);
+var out = [Reflect.ownKeys(ref).length, '__target' in ref,
+           String(ref.__target), ref.deref() === target];
+ref.__target = other;
+out.push(ref.deref().n, ref.__target === other, Reflect.ownKeys(ref).join());
+Object.defineProperty(ref, '__target', {
+    get() { throw 'guest target read'; }, set(v) { throw 'guest target write'; },
+    configurable: true
+});
+out.push(ref.deref() === target, delete ref.__target, ref.deref() === target,
+         Reflect.ownKeys(ref).length);
+for (var transform of [Object.freeze, Object.seal, Object.preventExtensions]) {
+    out.push(transform(new WeakRef(target)).deref() === target);
+}
+class W extends WeakRef {}
+Object.defineProperty(W.prototype, '__target', {
+    get() { throw 'inherited target read'; }, set(v) { throw 'inherited target write'; }
+});
+var derived = Reflect.construct(WeakRef, [target], W);
+out.push(derived instanceof W, derived.deref() === target, Reflect.ownKeys(derived).length);
+function attempt(f) { try { return f(); } catch (e) { return e.name; } }
+out.push(attempt(() => WeakRef.prototype.deref.call({__target: target})),
+         attempt(() => WeakRef.prototype.deref.call(new Proxy(ref, {}))));
+out.join('|');"#,
+        "0|false|undefined|true|7|true|__target|true|true|true|0|true|true|true|true|true|0|TypeError|TypeError",
     );
 }
 

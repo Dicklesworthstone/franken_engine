@@ -306,6 +306,322 @@ fn private_collection_edges_participate_in_state_capture() {
 }
 
 #[test]
+fn private_finalization_registry_storage_survives_gc_serde_and_execution_seed_restore() {
+    let (brand, former_slot) = ("FinalizationRegistry", "__tokens");
+    let mut core = quickjs_test_core();
+    let receiver = core.alloc_object_with_prototype(None).unwrap();
+    let storage = core.alloc_object_with_prototype(None).unwrap();
+    let member = core.alloc_object_with_prototype(None).unwrap();
+    core.set_object_brand(receiver, brand).unwrap();
+    core.set_collection_storage(receiver, storage).unwrap();
+    core.write_reg(4, Value::Object(member)).unwrap();
+    core.write_reg(5, Value::Int(73)).unwrap();
+    core.write_reg(6, Value::Object(member)).unwrap();
+    core.finalization_registry_method(
+        "register",
+        Value::Object(receiver),
+        RegRange { start: 4, count: 3 },
+    )
+    .expect("native FinalizationRegistry registration");
+    core.write_reg(6, Value::Undefined).unwrap();
+    core.write_reg(4, Value::Undefined).unwrap();
+    core.write_reg_with_label(0, Value::Object(receiver), Label::Secret)
+        .unwrap();
+    let garbage = core.alloc_object_with_prototype(None).unwrap();
+    core.gc_safe_point();
+    for object in [receiver, storage, member] {
+        assert!(
+            core.heap.get(object.0 as usize).is_some(),
+            "{brand}: {object:?}"
+        );
+    }
+    assert!(core.heap.is_reclaimed(garbage.0 as usize));
+    let sources = core.capture_heap_label_sources();
+    for object in [receiver, storage, member] {
+        assert_eq!(sources[object.0 as usize], Some(0), "{brand}: {object:?}");
+    }
+
+    let original: Vec<_> = core.heap.iter().cloned().collect();
+    let encoded = serde_json::to_string(&original).unwrap();
+    let restored: Vec<HeapObject> = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(restored, original);
+    assert_eq!(
+        restored[receiver.0 as usize].collection_storage.as_deref(),
+        Some(&storage)
+    );
+    assert!(
+        !restored[receiver.0 as usize]
+            .properties
+            .contains_key(former_slot)
+    );
+
+    let seed = core.capture_execution_seed().unwrap();
+    let replacement = core.alloc_object_with_prototype(None).unwrap();
+    core.set_collection_storage(receiver, replacement).unwrap();
+    core.set_object_property(receiver, former_slot.into(), Value::Object(replacement))
+        .unwrap();
+    assert!(!seed.is_lazy());
+    core.reset_execution_state_from_seed(&seed).unwrap();
+    assert_eq!(core.collection_storage_id(receiver, brand), Some(storage));
+    assert!(
+        !core.heap[receiver.0 as usize]
+            .properties
+            .contains_key(former_slot)
+    );
+    core.write_reg(4, Value::Object(member)).unwrap();
+    let result = core.finalization_registry_method(
+        "unregister",
+        Value::Object(receiver),
+        RegRange { start: 4, count: 1 },
+    );
+    assert_eq!(result.unwrap(), Value::Bool(true), "{brand}");
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+}
+
+#[test]
+fn private_weak_ref_target_and_label_survive_gc_serde_and_execution_seed_restore() {
+    let mut core = quickjs_test_core();
+    let target = core
+        .alloc_object_with_properties(&[("payload", Value::Int(42))])
+        .unwrap();
+    let label = Label::Custom {
+        name: "weak-ref-target-origin".repeat(16),
+        level: 7,
+    };
+    core.write_reg_with_label(0, Value::Object(target), label.clone())
+        .unwrap();
+    let Value::Object(weak_ref) = core
+        .construct_weak_ref(RegRange { start: 0, count: 1 })
+        .unwrap()
+    else {
+        panic!("WeakRef construction returns an object");
+    };
+    core.write_reg_with_label(0, Value::Object(weak_ref), Label::Secret)
+        .unwrap();
+    let garbage = core.alloc_object_with_prototype(None).unwrap();
+    core.gc_safe_point();
+    assert!(core.heap.get(target.0 as usize).is_some());
+    assert!(core.heap.is_reclaimed(garbage.0 as usize));
+    let sources = core.capture_heap_label_sources();
+    assert_eq!(sources[weak_ref.0 as usize], Some(0));
+    assert_eq!(
+        sources[target.0 as usize],
+        Some(0),
+        "private target remains a state-capture edge"
+    );
+
+    let original: Vec<_> = core.heap.iter().cloned().collect();
+    let encoded = serde_json::to_string(&original).unwrap();
+    let restored: Vec<HeapObject> = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(restored, original);
+    let restored_target = restored[weak_ref.0 as usize]
+        .weak_ref_target
+        .as_deref()
+        .unwrap();
+    assert_eq!(restored_target.value, Value::Object(target));
+    assert_eq!(restored_target.label, label);
+    assert!(
+        !restored[weak_ref.0 as usize]
+            .properties
+            .contains_key("__target")
+    );
+
+    let seed = core.capture_execution_seed().unwrap();
+    let replacement = core.alloc_object_with_prototype(None).unwrap();
+    core.set_weak_ref_target(weak_ref, Value::Object(replacement), Label::Public)
+        .unwrap();
+    core.set_object_property(target, "payload".into(), Value::Int(99))
+        .unwrap();
+    core.set_object_property(weak_ref, "__target".into(), Value::Object(replacement))
+        .unwrap();
+    assert!(!seed.is_lazy());
+    core.reset_execution_state_from_seed(&seed).unwrap();
+    assert_eq!(
+        core.weak_ref_deref(&Value::Object(weak_ref)).unwrap(),
+        Value::Object(target)
+    );
+    assert_eq!(core.take_pending_hostcall_result_label(), Some(label));
+    assert_eq!(
+        core.heap[target.0 as usize].properties.get("payload"),
+        Some(&Value::Int(42))
+    );
+    assert!(
+        !core.heap[weak_ref.0 as usize]
+            .properties
+            .contains_key("__target")
+    );
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+}
+
+#[test]
+fn private_weak_ref_target_budget_refusal_is_atomic() {
+    let mut core = quickjs_test_core();
+    let weak_ref = core.alloc_object_with_prototype(None).unwrap();
+    let target = core.alloc_object_with_prototype(None).unwrap();
+    core.set_object_brand(weak_ref, "WeakRef").unwrap();
+    let label = Label::Custom {
+        name: "budgeted-weak-ref-origin".repeat(32),
+        level: 7,
+    };
+    let slot = WeakRefTarget {
+        value: Value::Object(target),
+        label: label.clone(),
+    };
+    let charge = InterpreterCore::estimate_weak_ref_target_bytes(&slot);
+    let before = core.estimated_memory_bytes();
+    let previous = core.heap[weak_ref.0 as usize].clone();
+    core.config.max_total_memory_bytes = before + charge - 1;
+    assert!(matches!(
+        core.set_weak_ref_target(weak_ref, Value::Object(target), label.clone()),
+        Err(InterpreterError::MemoryBudgetExceeded { .. })
+    ));
+    assert_eq!(core.heap[weak_ref.0 as usize], previous);
+    assert_eq!(core.estimated_memory_bytes(), before);
+    core.config.max_total_memory_bytes = before + charge;
+    core.set_weak_ref_target(weak_ref, Value::Object(target), label)
+        .unwrap();
+    assert_eq!(core.estimated_memory_bytes(), before + charge);
+    assert!(core.gc_is_remembered(weak_ref));
+    let installed = core.heap[weak_ref.0 as usize].clone();
+    assert!(matches!(
+        core.set_weak_ref_target(weak_ref, Value::Int(1), Label::Public),
+        Err(InterpreterError::TypeError { .. })
+    ));
+    assert_eq!(core.heap[weak_ref.0 as usize], installed);
+    assert_eq!(core.estimated_memory_bytes(), before + charge);
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+}
+
+#[test]
+fn private_weak_ref_target_label_reaches_the_real_console_boundary() {
+    let mut module = test_module(vec![
+        Ir3Instruction::LoadStr {
+            dst: 2,
+            pool_index: 0,
+        },
+        Ir3Instruction::GetProperty {
+            obj: 1,
+            key: 2,
+            dst: 3,
+        },
+        Ir3Instruction::CallMethod {
+            receiver: 1,
+            callee: 3,
+            args: RegRange { start: 7, count: 0 },
+            dst: 4,
+        },
+        Ir3Instruction::HostCall {
+            capability: CapabilityTag("console:log".into()),
+            args: RegRange { start: 4, count: 1 },
+            dst: 5,
+        },
+        Ir3Instruction::Halt,
+    ]);
+    module.constant_pool.push("deref".into());
+    for label in [Label::Public, Label::Secret] {
+        let mut core = quickjs_test_core();
+        core.config
+            .granted_capabilities
+            .insert(RuntimeCapability::Console);
+        let target = core.alloc_object_with_prototype(None).unwrap();
+        core.write_reg_with_label(0, Value::Object(target), label.clone())
+            .unwrap();
+        let weak_ref = core
+            .construct_weak_ref(RegRange { start: 0, count: 1 })
+            .unwrap();
+        core.write_reg_with_label(0, Value::Undefined, Label::Public)
+            .unwrap();
+        core.write_reg_with_label(1, weak_ref, Label::Public)
+            .unwrap();
+        let outcome = core.execute(&module);
+        assert_eq!(core.read_reg(4).unwrap(), Value::Object(target));
+        assert_eq!(core.get_register_label(4).unwrap(), &label);
+        if label == Label::Secret {
+            assert!(
+                matches!(outcome, Err(InterpreterError::CapabilityDenied { ref capability })
+                    if capability == "console:log:confidentiality")
+            );
+            assert!(core.console_output.is_empty());
+        } else {
+            outcome.expect("Public deref remains executable");
+            assert_eq!(core.console_output.len(), 1);
+        }
+        assert!(core.active_inline_callback_context_label.is_none());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+}
+
+#[test]
+fn private_weak_ref_provenance_reaches_console_without_deref() {
+    let module = test_module(vec![
+        Ir3Instruction::HostCall {
+            capability: CapabilityTag("console:log".into()),
+            args: RegRange { start: 1, count: 1 },
+            dst: 2,
+        },
+        Ir3Instruction::Halt,
+    ]);
+    for (target_label, child_label) in [
+        (Label::Public, Label::Public),
+        (Label::Secret, Label::Public),
+        (Label::Public, Label::Secret),
+    ] {
+        let mut core = quickjs_test_core();
+        core.config
+            .granted_capabilities
+            .insert(RuntimeCapability::Console);
+        let child = core
+            .alloc_object_with_properties(&[("payload", Value::Int(42))])
+            .unwrap();
+        core.join_direct_object_mutation_label(child, &child_label)
+            .unwrap();
+        let target = core
+            .alloc_object_with_properties(&[("child", Value::Object(child))])
+            .unwrap();
+        core.write_reg_with_label(0, Value::Object(target), target_label.clone())
+            .unwrap();
+        let weak_ref = core
+            .construct_weak_ref(RegRange { start: 0, count: 1 })
+            .unwrap();
+        core.write_reg_with_label(0, Value::Undefined, Label::Public)
+            .unwrap();
+        core.write_reg_with_label(1, weak_ref, Label::Public)
+            .unwrap();
+        let outcome = core.execute(&module);
+        assert_eq!(core.get_register_label(1).unwrap(), &Label::Public);
+        if target_label == Label::Secret || child_label == Label::Secret {
+            assert!(
+                matches!(outcome, Err(InterpreterError::CapabilityDenied { ref capability })
+                    if capability == "console:log:confidentiality"),
+                "target={target_label:?}, child={child_label:?}"
+            );
+            assert!(core.console_output.is_empty());
+        } else {
+            outcome.expect("a Public WeakRef and its Public contents remain printable");
+            assert_eq!(core.console_output.len(), 1);
+        }
+        assert!(core.active_inline_callback_context_label.is_none());
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+}
+
+#[test]
 fn alloc_iterator_updates_memory_incrementally() {
     let config = test_quickjs_config();
     let mut core = InterpreterCore::new(config, "iterator-memory-delta");

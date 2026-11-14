@@ -6161,7 +6161,11 @@ fn parse_statement_inner(
                     Some(span),
                 ));
             }
-            let body = parse_statement(body_source, goal, span.clone(), context)?;
+            let mut body = parse_statement(body_source, goal, span.clone(), context)?;
+            if crate::ts_normalization::for_await::is_for_await_statement(body_source) {
+                attach_for_await_label(&mut body, &label, &span, context)?;
+                return Ok(body);
+            }
             return Ok(Statement::Labeled(LabeledStatement {
                 label,
                 body: Box::new(body),
@@ -13645,6 +13649,11 @@ fn extract_for_header_with_context(
 ) -> Option<(&str, &str)> {
     let after_keyword = statement.strip_prefix("for")?;
     let after_trivia = trim_directive_trivia(after_keyword).0;
+    let after_trivia = if starts_with_keyword(after_trivia, "await") {
+        trim_directive_trivia(&after_trivia["await".len()..]).0
+    } else {
+        after_trivia
+    };
     if !after_trivia.starts_with('(') {
         return None;
     }
@@ -13678,6 +13687,8 @@ fn parse_for_statement(
     span: SourceSpan,
     context: &mut ParseExecutionContext<'_>,
 ) -> ParseResult<Statement> {
+    let after_for = trim_directive_trivia(statement.strip_prefix("for").unwrap_or(statement)).0;
+    let is_await = starts_with_keyword(after_for, "await");
     let (header_src, rest) = extract_for_header_with_context(
         statement,
         ScanGrammarContext::from_execution_context(context),
@@ -13691,8 +13702,43 @@ fn parse_for_statement(
         )
     })?;
 
+    if is_await {
+        if !context.allow_await_expression {
+            return Err(ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "for await requires an async function or module",
+                context.source_label.to_string(),
+                Some(span),
+            ));
+        }
+        let lowered = crate::ts_normalization::for_await::lower(header_src, rest, &[]).map_err(
+            |message| {
+                ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    message,
+                    context.source_label.to_string(),
+                    Some(span.clone()),
+                )
+            },
+        )?;
+        if !matches!(
+            try_parse_for_in_of(header_src, "{}", &span, goal, context, true)?,
+            Some(Statement::ForOf(_))
+        ) {
+            return Err(ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "for await requires an of header with one binding or assignment target",
+                context.source_label.to_string(),
+                Some(span),
+            ));
+        }
+        let mut parsed = parse_statement(&lowered.source, goal, span.clone(), context)?;
+        authenticate_for_await_intrinsics(&mut parsed, &lowered.prefix, &span, context)?;
+        return Ok(parsed);
+    }
+
     // Detect for-in / for-of before trying semicolon split.
-    if let Some(forin) = try_parse_for_in_of(header_src, rest, &span, goal, context)? {
+    if let Some(forin) = try_parse_for_in_of(header_src, rest, &span, goal, context, false)? {
         return Ok(forin);
     }
 
@@ -13749,6 +13795,114 @@ fn parse_for_statement(
     }))
 }
 
+/// Authenticate only the fresh intrinsic initializers emitted by the shared
+/// renderer; guest syntax cannot name any of these private operations.
+fn authenticate_for_await_intrinsics(
+    statement: &mut Statement,
+    prefix: &str,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<()> {
+    use crate::ts_normalization::for_await;
+    let invalid = || {
+        ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "invalid generated for-await intrinsic",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        )
+    };
+    let Statement::Block(block) = statement else {
+        return Err(invalid());
+    };
+    for (index, (suffix, intrinsic)) in [
+        ("apply", for_await::CALL_INTRINSIC),
+        ("TypeError", for_await::TYPE_ERROR_INTRINSIC),
+        ("asyncKey", for_await::ASYNC_ITERATOR_INTRINSIC),
+        ("syncKey", for_await::ITERATOR_INTRINSIC),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let Some(Statement::VariableDeclaration(declaration)) = block.body.get_mut(index) else {
+            return Err(invalid());
+        };
+        if declaration.declarations.len() != 1 {
+            return Err(invalid());
+        }
+        let declarator = &mut declaration.declarations[0];
+        if declarator.name() != Some(format!("{prefix}{suffix}").as_str()) {
+            return Err(invalid());
+        }
+        let initializer = declarator.initializer.as_mut().ok_or_else(&invalid)?;
+        if index < 2 {
+            let Expression::Function { body, .. } = initializer else {
+                return Err(invalid());
+            };
+            let [
+                Statement::Return(ReturnStatement {
+                    argument: Some(Expression::Call { callee, arguments }),
+                    ..
+                }),
+            ] = body.body.as_mut_slice()
+            else {
+                return Err(invalid());
+            };
+            if arguments.len() != if index == 0 { 3 } else { 1 } {
+                return Err(invalid());
+            }
+            *callee = Box::new(Expression::Identifier(intrinsic.to_string()));
+            if index == 0 {
+                arguments.truncate(2);
+            }
+        } else {
+            *initializer = Expression::Call {
+                callee: Box::new(Expression::Identifier(intrinsic.to_string())),
+                arguments: Vec::new(),
+            };
+        }
+    }
+    Ok(())
+}
+
+fn attach_for_await_label(
+    statement: &mut Statement,
+    label: &str,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<()> {
+    let invalid = || {
+        ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "invalid generated for-await label target",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        )
+    };
+    let Statement::Block(block) = statement else {
+        return Err(invalid());
+    };
+    let Some(Statement::TryCatch(continuation)) = block.body.last_mut() else {
+        return Err(invalid());
+    };
+    if !matches!(
+        continuation.block.body.as_slice(),
+        [Statement::While(_) | Statement::Labeled(_)]
+    ) {
+        return Err(invalid());
+    }
+    let body = continuation.block.body.remove(0);
+    continuation
+        .block
+        .body
+        .push(Statement::Labeled(LabeledStatement {
+            label: label.to_string(),
+            body: Box::new(body),
+            span: span.clone(),
+        }));
+    Ok(())
+}
+
 /// Detect `for (binding in expr)` or `for (binding of expr)` patterns.
 /// Returns `Some(Statement)` if matched, `None` for a classic C-style for.
 fn try_parse_for_in_of(
@@ -13757,6 +13911,7 @@ fn try_parse_for_in_of(
     span: &SourceSpan,
     goal: ParseGoal,
     context: &mut ParseExecutionContext<'_>,
+    is_await: bool,
 ) -> ParseResult<Option<Statement>> {
     // A contextual `of` may itself be the binding name (`for (let of of
     // values)`). Try top-level keyword-token candidates in source order and
@@ -13850,6 +14005,7 @@ fn try_parse_for_in_of(
         // ES2020's for-of early errors reserve bare `async`; declaration
         // bindings and the analogous for-in assignment target remain valid.
         if keyword == "of"
+            && !is_await
             && binding_kind.is_none()
             && matches!(&binding, BindingPattern::Identifier(name) if name == "async")
         {

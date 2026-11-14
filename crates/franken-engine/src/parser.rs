@@ -5279,7 +5279,11 @@ fn parse_statement_inner(
                 &span,
                 context,
             )?;
-            let body = parse_statement(body_src, goal, span.clone(), context)?;
+            let mut body = parse_statement(body_src, goal, span.clone(), context)?;
+            if frankenengine_core::ts_normalization::for_await::is_for_await_statement(body_src) {
+                attach_for_await_label(&mut body, name, &span, context)?;
+                return Ok(body);
+            }
             return Ok(Statement::Labeled(LabeledStatement {
                 label: label.to_string(),
                 body: Box::new(body),
@@ -15095,12 +15099,7 @@ fn parse_for_statement(
         .strip_prefix("for")
         .unwrap_or(statement)
         .trim_start();
-    // bd-suwvw: accept the `for await (const x of iterable)` header shape.
-    // A `for await ... of` runs the async iteration protocol through
-    // `desugar_for_await_of`. Engine-vended iterables without
-    // `@@asyncIterator` (`require('timers/promises').setInterval`) take its
-    // sync-iterator fallback, which awaits each value. `await` must be a
-    // whole word (`for awaitFoo(...)` is not a for-await header).
+    // `await` must be a whole word (`for awaitFoo(...)` is not a header).
     let (after_for, is_await) = match after_for.strip_prefix("await") {
         Some(rest) if rest.starts_with(|c: char| c.is_ascii_whitespace() || c == '(') => {
             (rest.trim_start(), true)
@@ -15116,8 +15115,33 @@ fn parse_for_statement(
         )
     })?;
 
-    if is_await && let Some(desugared) = desugar_for_await_of(header_src, rest) {
-        return parse_statement(&desugared, goal, span, context);
+    if is_await {
+        if !context.await_context {
+            return Err(ParseError::new(
+                ParseErrorCode::AwaitOutsideAsync,
+                "for await requires an async function or module",
+                context.source_label.to_string(),
+                Some(span),
+            ));
+        }
+        let lowered = frankenengine_core::ts_normalization::for_await::lower(header_src, rest, &[])
+            .map_err(|message| invalid_syntax_error(message, &span, context))?;
+        // Retain the ordinary parser's binding, assignment-target and RHS
+        // grammar checks before parsing the generated continuation code.
+        if !matches!(
+            try_parse_for_in_of(header_src, "{}", &span, goal, context)?,
+            Some(Statement::ForOf(_))
+        ) {
+            return Err(invalid_syntax_error(
+                "for await requires an of header",
+                &span,
+                context,
+            ));
+        }
+        reject_declaration_in_statement_position(rest, StatementPosition::Loop, &span, context)?;
+        let mut parsed = parse_statement(&lowered.source, goal, span.clone(), context)?;
+        authenticate_for_await_intrinsics(&mut parsed, &lowered.prefix, &span, context)?;
+        return Ok(parsed);
     }
 
     // `for (async of` is excluded by a lookahead (ES2020 13.7.5): it would
@@ -15444,74 +15468,107 @@ fn for_in_of_statement(
     }
 }
 
-/// Find a keyword (like ` in ` or ` of `) at the top level of an expression,
-/// respecting parentheses, brackets, braces, and quotes.
-/// `for await (TARGET of ITERABLE) BODY` as ordinary async code (ES2020
-/// 13.7.5.13 ForIn/OfBodyEvaluation with iteratorKind async). It uses:
-/// - `ITERABLE[Symbol.asyncIterator]`, else the sync iterator with each value
-///   awaited (CreateAsyncFromSyncIterator);
-/// - an awaited `next()` per step;
-/// - on break, return or throw from the body, an awaited `return()`
-///   (AsyncIteratorClose). No close after `next()` throws or reports done.
-///   After a throw, getting, calling or awaiting `return` cannot replace the
-///   body's exception: its errors are dropped (ES2022 AsyncIteratorClose
-///   returns a throw completion before the close's own).
-///
-/// Before this, `for await` ran as a synchronous for-of: an async
-/// generator's `next()` promise was taken as the iteration result, and the
-/// loop body never saw a value.
-///
-/// Every helper is a block-scoped `let` in the rewritten block, so nested
-/// loops shadow each other correctly. A labeled `continue` that targets the
-/// `for await` itself is not supported by this rewrite.
-fn desugar_for_await_of(header: &str, body: &str) -> Option<String> {
-    let ("of", split) = find_for_in_of_keyword(header)? else {
-        return None;
+/// Replace only the four fresh initializers emitted by the shared renderer.
+/// These AST-only names cannot be spelled by source identifiers. In particular,
+/// neither lexical `Symbol`/`TypeError`/`Reflect` nor a method's `.call` property
+/// can change the language protocol.
+fn authenticate_for_await_intrinsics(
+    statement: &mut Statement,
+    prefix: &str,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<()> {
+    use frankenengine_core::ts_normalization::for_await;
+    let invalid = || invalid_syntax_error("invalid generated for-await intrinsic", span, context);
+    let Statement::Block(block) = statement else {
+        return Err(invalid());
     };
-    let lhs = header[..split].trim();
-    let iterable = header[split + "of".len()..].trim();
-    if lhs.is_empty() || iterable.is_empty() {
-        return None;
+    for (index, (suffix, intrinsic)) in [
+        ("apply", for_await::CALL_INTRINSIC),
+        ("TypeError", for_await::TYPE_ERROR_INTRINSIC),
+        ("asyncKey", for_await::ASYNC_ITERATOR_INTRINSIC),
+        ("syncKey", for_await::ITERATOR_INTRINSIC),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let Some(Statement::VariableDeclaration(declaration)) = block.body.get_mut(index) else {
+            return Err(invalid());
+        };
+        if declaration.declarations.len() != 1 {
+            return Err(invalid());
+        }
+        let declarator = &mut declaration.declarations[0];
+        if declarator.name() != Some(format!("{prefix}{suffix}").as_str()) {
+            return Err(invalid());
+        }
+        let initializer = declarator.initializer.as_mut().ok_or_else(&invalid)?;
+        if index < 2 {
+            let Expression::Function { body, .. } = initializer else {
+                return Err(invalid());
+            };
+            let [
+                Statement::Return(ReturnStatement {
+                    argument:
+                        Some(Expression::Call {
+                            callee, arguments, ..
+                        }),
+                    ..
+                }),
+            ] = body.body.as_mut_slice()
+            else {
+                return Err(invalid());
+            };
+            if arguments.len() != if index == 0 { 3 } else { 1 } {
+                return Err(invalid());
+            }
+            *callee = Box::new(Expression::Identifier(intrinsic.to_string()));
+            if index == 0 {
+                arguments.truncate(2);
+            }
+        } else {
+            *initializer = Expression::Call {
+                callee: Box::new(Expression::Identifier(intrinsic.to_string())),
+                arguments: Vec::new(),
+                span: None,
+            };
+        }
     }
-    let value = "__franken_fa_sync ? await __franken_fa_r.value : __franken_fa_r.value";
-    let is_declaration = ["let", "const", "var"].iter().any(|kind| {
-        lhs.strip_prefix(kind).is_some_and(|rest| {
-            rest.starts_with(|c: char| c.is_ascii_whitespace() || c == '[' || c == '{')
-        })
-    });
-    let bind = if is_declaration {
-        format!("{lhs} = {value};")
-    } else if lhs.starts_with('{') {
-        format!("({lhs} = {value});")
-    } else {
-        format!("{lhs} = {value};")
+    Ok(())
+}
+
+/// Labels name the generated while, so continuing this loop does not leave its
+/// try/finally; breaking or continuing an outer loop still awaits IteratorClose.
+fn attach_for_await_label(
+    statement: &mut Statement,
+    label: &str,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<()> {
+    let invalid =
+        || invalid_syntax_error("invalid generated for-await label target", span, context);
+    let Statement::Block(block) = statement else {
+        return Err(invalid());
     };
-    let body = body.trim();
-    let body_terminator = if body.ends_with('}') || body.ends_with(';') {
-        ""
-    } else {
-        ";"
+    let Some(Statement::TryCatch(continuation)) = block.body.last_mut() else {
+        return Err(invalid());
     };
-    Some(format!(
-        "{{ let __franken_fa_src = ({iterable}); \
-         let __franken_fa_am = __franken_fa_src[Symbol.asyncIterator]; \
-         let __franken_fa_sync = __franken_fa_am == null; \
-         let __franken_fa_it = __franken_fa_sync ? __franken_fa_src[Symbol.iterator]() : \
-         __franken_fa_am.call(__franken_fa_src); \
-         let __franken_fa_fin = false; let __franken_fa_thrown = false; \
-         try {{ while (true) {{ __franken_fa_fin = true; \
-         let __franken_fa_r = await __franken_fa_it.next(); \
-         if (__franken_fa_r.done) break; \
-         __franken_fa_fin = false; \
-         {bind} {body}{body_terminator} }} }} \
-         catch (__franken_fa_e) {{ __franken_fa_thrown = true; throw __franken_fa_e; }} \
-         finally {{ if (!__franken_fa_fin) {{ if (__franken_fa_thrown) {{ \
-         try {{ let __franken_fa_ret = __franken_fa_it.return; \
-         if (__franken_fa_ret != null) await __franken_fa_ret.call(__franken_fa_it); }} \
-         catch (__franken_fa_ignored) {{}} }} else {{ \
-         let __franken_fa_ret = __franken_fa_it.return; \
-         if (__franken_fa_ret != null) await __franken_fa_ret.call(__franken_fa_it); }} }} }} }}"
-    ))
+    if !matches!(
+        continuation.block.body.as_slice(),
+        [Statement::While(_) | Statement::Labeled(_)]
+    ) {
+        return Err(invalid());
+    }
+    let body = continuation.block.body.remove(0);
+    continuation
+        .block
+        .body
+        .push(Statement::Labeled(LabeledStatement {
+            label: label.to_string(),
+            body: Box::new(body),
+            span: span.clone(),
+        }));
+    Ok(())
 }
 
 /// The `in` or `of` of a for-in/of head: a whole word at the top level

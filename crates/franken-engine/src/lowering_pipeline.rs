@@ -19766,6 +19766,62 @@ fn lower_expression_to_ir1_inner(
                     span: *span,
                 });
             }
+            // Language-level iteration invokes the cached method with its
+            // iterator receiver and no arguments, independently of mutable
+            // guest Reflect/Function helpers. Only parser-created ASTs can
+            // name these operations; the existing VM and builtin gates apply.
+            if let Expression::Identifier(name) = callee.as_ref() {
+                use frankenengine_core::ts_normalization::for_await;
+                let arity = match name.as_str() {
+                    for_await::CALL_INTRINSIC => Some(2),
+                    for_await::TYPE_ERROR_INTRINSIC => Some(1),
+                    for_await::ASYNC_ITERATOR_INTRINSIC | for_await::ITERATOR_INTRINSIC => Some(0),
+                    _ => None,
+                };
+                if let Some(arity) = arity {
+                    if arguments.len() != arity {
+                        return Err(LoweringPipelineError::InvariantViolation {
+                            detail: "invalid for-await intrinsic arity",
+                        });
+                    }
+                    for argument in arguments {
+                        lower_expression_to_ir1(
+                            argument,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            label_counter,
+                            span_table,
+                        )?;
+                    }
+                    match name.as_str() {
+                        for_await::CALL_INTRINSIC => ops.push(Ir1Op::CallMethod { arg_count: 0 }),
+                        for_await::ASYNC_ITERATOR_INTRINSIC => {
+                            ops.push(Ir1Op::LoadLiteral {
+                                value: Ir1Literal::Integer(i64::from(
+                                    crate::object_model::WellKnownSymbol::AsyncIterator.id().0,
+                                )),
+                            });
+                            ops.push(Ir1Op::HostCall {
+                                capability: "builtin:WellKnownSymbol".to_string(),
+                                arg_count: 1,
+                            });
+                        }
+                        _ => ops.push(Ir1Op::HostCall {
+                            capability: if name == for_await::TYPE_ERROR_INTRINSIC {
+                                "builtin:TypeError"
+                            } else {
+                                "builtin:SymbolIterator"
+                            }
+                            .to_string(),
+                            arg_count: arity as u32,
+                        }),
+                    }
+                    return Ok(());
+                }
+            }
             // The `with` and util rewrites' intrinsics (`%WithBase(...)`,
             // `%UtilInspect(...)`, ...) and a tagged template's
             // `%TemplateObject(...)`: a HostCall on the evaluated arguments.

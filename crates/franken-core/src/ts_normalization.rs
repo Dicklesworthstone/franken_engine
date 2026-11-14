@@ -13,6 +13,7 @@ use crate::parser::{CanonicalEs2020Parser, ParseEventIr, ParserOptions};
 
 pub mod decorators;
 pub mod enums;
+pub mod for_await;
 pub mod namespaces;
 pub mod parameter_properties;
 pub mod type_erasure;

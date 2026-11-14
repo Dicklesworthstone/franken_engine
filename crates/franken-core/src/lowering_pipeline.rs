@@ -11897,6 +11897,53 @@ fn lower_expression_to_ir1(
             });
         }
         Expression::Call { callee, arguments } => {
+            // The shared for-await renderer receives private AST intrinsics
+            // from the parser, so guest globals and `.call` replacements do
+            // not intercept language iteration. CallMethod preserves the
+            // ordinary invocation, budget, capability and GC machinery.
+            if let Expression::Identifier(name) = callee.as_ref() {
+                use crate::ts_normalization::for_await;
+                let arity = match name.as_str() {
+                    for_await::CALL_INTRINSIC => Some(2),
+                    for_await::TYPE_ERROR_INTRINSIC => Some(1),
+                    for_await::ASYNC_ITERATOR_INTRINSIC | for_await::ITERATOR_INTRINSIC => Some(0),
+                    _ => None,
+                };
+                if let Some(arity) = arity {
+                    if arguments.len() != arity {
+                        return Err(LoweringPipelineError::InvariantViolation {
+                            detail: "invalid for-await intrinsic arity",
+                        });
+                    }
+                    for argument in arguments {
+                        lower_expression_to_ir1(
+                            argument,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            label_counter,
+                        )?;
+                    }
+                    if name == for_await::CALL_INTRINSIC {
+                        ops.push(Ir1Op::CallMethod { arg_count: 0 });
+                    } else {
+                        ops.push(Ir1Op::HostCall {
+                            capability: match name.as_str() {
+                                for_await::TYPE_ERROR_INTRINSIC => "builtin:TypeError",
+                                for_await::ASYNC_ITERATOR_INTRINSIC => {
+                                    "builtin:SymbolAsyncIterator"
+                                }
+                                _ => "builtin:SymbolIterator",
+                            }
+                            .to_string(),
+                            arg_count: arity as u32,
+                        });
+                    }
+                    return Ok(());
+                }
+            }
             if matches!(callee.as_ref(), Expression::Super) {
                 if arguments
                     .iter()

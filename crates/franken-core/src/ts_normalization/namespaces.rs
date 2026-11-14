@@ -468,6 +468,164 @@ struct Body {
     source: String,
     lexed: Lexed,
     exports: Vec<Export>,
+    namespaces: Vec<Site>,
+    bindings: BTreeSet<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum NamespaceKey {
+    Root(String),
+    Exported(usize, String),
+    Private(usize, String),
+}
+
+#[derive(Default)]
+struct Lowering {
+    groups: BTreeMap<NamespaceKey, usize>,
+    members: Vec<BTreeSet<String>>,
+    identifiers: BTreeSet<String>,
+    next_alias: usize,
+    next_scope: usize,
+}
+
+impl Lowering {
+    fn group(&mut self, key: NamespaceKey) -> usize {
+        if let Some(group) = self.groups.get(&key) {
+            return *group;
+        }
+        let group = self.members.len();
+        self.members.push(BTreeSet::new());
+        self.groups.insert(key, group);
+        group
+    }
+
+    fn observe_identifiers(&mut self, lexed: &Lexed) {
+        self.identifiers.extend(
+            lexed
+                .tokens
+                .iter()
+                .filter(|token| token.kind == TokenKind::Word)
+                .map(|token| token.text.clone()),
+        );
+    }
+
+    fn alias(&mut self) -> String {
+        loop {
+            let candidate = format!("__franken_namespace_{}", self.next_alias);
+            self.next_alias += 1;
+            if self.identifiers.insert(candidate.clone()) {
+                return candidate;
+            }
+        }
+    }
+}
+
+fn declaration_binding(lexed: &Lexed, cursor: usize) -> Option<(&str, bool)> {
+    let exported = text(lexed, cursor) == "export";
+    let mut head = cursor + usize::from(exported);
+    if text(lexed, head) == "async" {
+        head += 1;
+    }
+    if !matches!(
+        text(lexed, head),
+        "class" | "function" | "const" | "let" | "var" | "enum"
+    ) {
+        return None;
+    }
+    let name = head + 1 + usize::from(text(lexed, head + 1) == "*");
+    lexed
+        .tokens
+        .get(name)
+        .filter(|token| token.kind == TokenKind::Word)
+        .map(|token| (token.text.as_str(), exported))
+}
+
+fn namespace_site(
+    source: &str,
+    lexed: &Lexed,
+    cursor: usize,
+    erase_types: fn(&str) -> String,
+    lowering: &mut Lowering,
+    parent: Option<(usize, usize)>,
+    depth: usize,
+) -> Result<Option<(Site, usize)>, &'static str> {
+    let exported = text(lexed, cursor) == "export";
+    let declaration = cursor + usize::from(exported);
+    if !is_namespace(lexed, declaration) {
+        return Ok(None);
+    }
+    if depth >= MAX_NESTING {
+        return Err("namespace declaration nesting limit");
+    }
+    let mut path = Vec::new();
+    let mut name_token = declaration + 1;
+    loop {
+        let name = lexed
+            .tokens
+            .get(name_token)
+            .filter(|token| token.kind == TokenKind::Word)
+            .ok_or(INVALID_NAMESPACE)?;
+        path.push(name.text.clone());
+        if path.len().saturating_add(depth) > MAX_NESTING {
+            return Err("namespace declaration nesting limit");
+        }
+        if text(lexed, name_token + 1) != "." {
+            break;
+        }
+        name_token += 2;
+    }
+    let open = name_token + 1;
+    if text(lexed, open) != "{" {
+        return Err(INVALID_NAMESPACE);
+    }
+    let close = lexed.pairs[open].ok_or(INVALID_NAMESPACE)?;
+    let finish = close + 1 + usize::from(text(lexed, close + 1) == ";");
+    let name = path[0].clone();
+    let key = match parent {
+        None => NamespaceKey::Root(name.clone()),
+        Some((group, _)) if exported => NamespaceKey::Exported(group, name.clone()),
+        Some((_, scope)) => NamespaceKey::Private(scope, name.clone()),
+    };
+    let group = lowering.group(key);
+    let content = &source[lexed.tokens[open].end..lexed.tokens[close].start];
+    // A.B.C is the same declaration tree as A { export namespace B.C { ... } }.
+    // Keep the original body intact, including its line terminators and trivia.
+    let expanded;
+    let content = if path.len() > 1 {
+        expanded = format!("export namespace {} {{{content}}}", path[1..].join("."));
+        expanded.as_str()
+    } else {
+        content
+    };
+    let body = body(content, erase_types, lowering, group, depth + 1)?;
+    let members = &mut lowering.members[group];
+    for export in &body.exports {
+        match export {
+            Export::Variables { declarations, .. } => {
+                members.extend(declarations.iter().map(|item| item.name.clone()));
+            }
+            Export::Declaration { name, .. } => {
+                members.insert(name.clone());
+            }
+        }
+    }
+    members.extend(
+        body.namespaces
+            .iter()
+            .filter(|site| site.exported)
+            .map(|site| site.name.clone()),
+    );
+    Ok(Some((
+        Site {
+            start: lexed.tokens[cursor].start,
+            end: lexed.tokens[finish - 1].end,
+            name,
+            exported,
+            group,
+            body,
+        },
+        finish,
+    )))
 }
 
 fn statement_end(lexed: &Lexed, source: &str, mut cursor: usize) -> usize {
@@ -585,14 +743,38 @@ fn variable_exports(
     ))
 }
 
-fn body(source: &str, erase_types: fn(&str) -> String) -> Result<Body, &'static str> {
+fn body(
+    source: &str,
+    erase_types: fn(&str) -> String,
+    lowering: &mut Lowering,
+    group: usize,
+    depth: usize,
+) -> Result<Body, &'static str> {
     let source = erase_types(source);
     let lexed = lex(&source)?;
+    lowering.observe_identifiers(&lexed);
+    let scope = lowering.next_scope;
+    lowering.next_scope += 1;
     let mut exports = Vec::new();
+    let mut namespaces = Vec::new();
+    let mut bindings = BTreeSet::new();
     let mut cursor = 0;
     while cursor < lexed.tokens.len() {
-        if is_namespace(&lexed, cursor) {
-            return Err("nested namespace declarations are not yet supported");
+        if let Some((site, finish)) = namespace_site(
+            &source,
+            &lexed,
+            cursor,
+            str::to_owned,
+            lowering,
+            Some((group, scope)),
+            depth,
+        )? {
+            namespaces.push(site);
+            cursor = finish;
+            continue;
+        }
+        if let Some((name, _)) = declaration_binding(&lexed, cursor) {
+            bindings.insert(name.to_owned());
         }
         if text(&lexed, cursor) == "export" {
             let next = text(&lexed, cursor + 1);
@@ -657,7 +839,11 @@ fn body(source: &str, erase_types: fn(&str) -> String) -> Result<Body, &'static 
             continue;
         }
         if matches!(text(&lexed, cursor), "(" | "[" | "{" | "\x24{") {
-            cursor = lexed.pairs[cursor].unwrap() + 1;
+            let end = lexed.pairs[cursor].unwrap();
+            if (cursor + 1..end).any(|index| is_namespace(&lexed, index)) {
+                return Err("namespace declarations require module or namespace scope");
+            }
+            cursor = end + 1;
         } else {
             cursor += 1;
         }
@@ -666,6 +852,8 @@ fn body(source: &str, erase_types: fn(&str) -> String) -> Result<Body, &'static 
         source,
         lexed,
         exports,
+        namespaces,
+        bindings,
     })
 }
 
@@ -675,6 +863,7 @@ struct Site {
     end: usize,
     name: String,
     exported: bool,
+    group: usize,
     body: Body,
 }
 
@@ -696,13 +885,13 @@ fn apply(source: &str, edits: &[Edit], start: usize, end: usize) -> Result<Strin
     Ok(out)
 }
 
-fn render_body(
-    site: &Site,
+fn render_body_exports(
+    body: &Body,
+    name: &str,
     members: &BTreeSet<String>,
     alias: &str,
 ) -> Result<String, &'static str> {
-    let body = &site.body;
-    let mut replacements = BTreeMap::from([(site.name.clone(), alias.to_owned())]);
+    let mut replacements = BTreeMap::from([(name.to_owned(), alias.to_owned())]);
     for member in members {
         replacements.insert(member.clone(), format!("{alias}.{member}"));
     }
@@ -772,11 +961,75 @@ fn render_body(
     apply(&body.source, &edits, 0, body.source.len())
 }
 
+fn render_body(site: &Site, alias: &str, lowering: &mut Lowering) -> Result<String, &'static str> {
+    let flattened;
+    let parsed = if site.body.namespaces.is_empty() {
+        &site.body
+    } else {
+        let mut bindings = site.body.bindings.clone();
+        let mut edits = Vec::new();
+        for child in &site.body.namespaces {
+            edits.push(Edit {
+                start: child.start,
+                end: child.end,
+                replacement: render_namespace(child, Some(alias), &mut bindings, None, lowering)?,
+            });
+        }
+        let source = apply(&site.body.source, &edits, 0, site.body.source.len())?;
+        // Resolve the enclosing scope over the generated JavaScript too. Its
+        // references remain free inside child activations unless a child has
+        // a real local binding, exactly as in ordinary nested functions.
+        flattened = body(&source, str::to_owned, lowering, site.group, 0)?;
+        &flattened
+    };
+    render_body_exports(parsed, &site.name, &lowering.members[site.group], alias)
+}
+
+fn render_namespace(
+    site: &Site,
+    parent: Option<&str>,
+    bindings: &mut BTreeSet<String>,
+    named_exports: Option<&mut BTreeSet<String>>,
+    lowering: &mut Lowering,
+) -> Result<String, &'static str> {
+    let alias = lowering.alias();
+    let body = render_body(site, &alias, lowering)?;
+    let mut out = String::new();
+    if bindings.insert(site.name.clone()) {
+        out.push_str(&format!("var {}; ", site.name));
+    }
+    if site.exported
+        && let Some(exports) = named_exports
+        && exports.insert(site.name.clone())
+    {
+        out.push_str(&format!("export {{ {} }}; ", site.name));
+    }
+    let initializer = if site.exported
+        && let Some(parent) = parent
+    {
+        // A nested namespace has a local binding in this parent fragment.
+        // Publish the shared object before the body runs, while preserving
+        // that binding if a guest later replaces the exported property.
+        format!(
+            "{name} = {parent}.{name} || ({parent}.{name} = {{}})",
+            name = site.name,
+        )
+    } else {
+        format!("{name} || ({name} = {{}})", name = site.name)
+    };
+    out.push_str(&format!(
+        "(function ({alias}) {{{body}\n}})({initializer});"
+    ));
+    Ok(out)
+}
+
 /// Lower supported namespaces using the caller's real annotation eraser.
 ///
 /// A new function activation at each declaration site preserves private
 /// locals and evaluation order. Only exported variable references become
-/// namespace properties; function and class declarations retain their bindings.
+/// namespace properties; function, class and nested namespace declarations
+/// retain their local bindings. Exported descendants merge by their parent
+/// namespace identity; private descendants belong to one parent activation.
 pub fn lower(source: &str, erase_types: fn(&str) -> String) -> Result<String, &'static str> {
     if !source.contains("namespace") {
         return Ok(source.to_owned());
@@ -785,67 +1038,21 @@ pub fn lower(source: &str, erase_types: fn(&str) -> String) -> Result<String, &'
     let mut sites = Vec::new();
     let mut bindings = BTreeSet::new();
     let mut named_exports = BTreeSet::new();
-    let mut identifiers = lexed
-        .tokens
-        .iter()
-        .filter(|token| token.kind == TokenKind::Word)
-        .map(|token| token.text.clone())
-        .collect::<BTreeSet<_>>();
+    let mut lowering = Lowering::default();
+    lowering.observe_identifiers(&lexed);
     let mut cursor = 0;
     while cursor < lexed.tokens.len() {
-        let exported = text(&lexed, cursor) == "export";
-        let declaration = if exported { cursor + 1 } else { cursor };
-        if is_namespace(&lexed, declaration) {
-            let name = lexed
-                .tokens
-                .get(declaration + 1)
-                .filter(|token| token.kind == TokenKind::Word)
-                .ok_or(INVALID_NAMESPACE)?;
-            let open = declaration + 2;
-            if text(&lexed, open) != "{" {
-                return Err(INVALID_NAMESPACE);
-            }
-            let close = lexed.pairs[open].ok_or(INVALID_NAMESPACE)?;
-            let finish = if text(&lexed, close + 1) == ";" {
-                close + 2
-            } else {
-                close + 1
-            };
-            let namespace_body = body(
-                &source[lexed.tokens[open].end..lexed.tokens[close].start],
-                erase_types,
-            )?;
-            sites.push(Site {
-                start: lexed.tokens[cursor].start,
-                end: lexed.tokens[finish - 1].end,
-                name: name.text.clone(),
-                exported,
-                body: namespace_body,
-            });
+        if let Some((site, finish)) =
+            namespace_site(source, &lexed, cursor, erase_types, &mut lowering, None, 0)?
+        {
+            sites.push(site);
             cursor = finish;
             continue;
         }
-        let mut head = declaration;
-        if text(&lexed, head) == "async" {
-            head += 1;
-        }
-        if matches!(
-            text(&lexed, head),
-            "class" | "function" | "const" | "let" | "var" | "enum"
-        ) {
-            let mut name = head + 1;
-            if text(&lexed, name) == "*" {
-                name += 1;
-            }
-            if let Some(token) = lexed
-                .tokens
-                .get(name)
-                .filter(|token| token.kind == TokenKind::Word)
-            {
-                bindings.insert(token.text.clone());
-                if exported {
-                    named_exports.insert(token.text.clone());
-                }
+        if let Some((name, exported)) = declaration_binding(&lexed, cursor) {
+            bindings.insert(name.to_owned());
+            if exported {
+                named_exports.insert(name.to_owned());
             }
         }
         if matches!(text(&lexed, cursor), "(" | "[" | "{" | "\x24{") {
@@ -861,51 +1068,17 @@ pub fn lower(source: &str, erase_types: fn(&str) -> String) -> Result<String, &'
     if sites.is_empty() {
         return Ok(source.to_owned());
     }
-    let mut groups = BTreeMap::<String, BTreeSet<String>>::new();
-    for site in &sites {
-        let members = groups.entry(site.name.clone()).or_default();
-        for export in &site.body.exports {
-            match export {
-                Export::Variables { declarations, .. } => {
-                    members.extend(declarations.iter().map(|item| item.name.clone()))
-                }
-                Export::Declaration { name, .. } => {
-                    members.insert(name.clone());
-                }
-            }
-        }
-        identifiers.extend(
-            site.body
-                .lexed
-                .tokens
-                .iter()
-                .filter(|token| token.kind == TokenKind::Word)
-                .map(|token| token.text.clone()),
-        );
-    }
     let mut out = String::with_capacity(source.len());
     let mut copied = 0;
-    let mut next_alias = 0usize;
     for site in sites {
-        let alias = loop {
-            let candidate = format!("__franken_namespace_{next_alias}");
-            next_alias += 1;
-            if identifiers.insert(candidate.clone()) {
-                break candidate;
-            }
-        };
-        let body = render_body(&site, &groups[&site.name], &alias)?;
         out.push_str(&source[copied..site.start]);
-        if bindings.insert(site.name.clone()) {
-            out.push_str(&format!("var {}; ", site.name));
-        }
-        if site.exported && named_exports.insert(site.name.clone()) {
-            out.push_str(&format!("export {{ {} }}; ", site.name));
-        }
-        out.push_str(&format!(
-            "(function ({alias}) {{{body}\n}})({name} || ({name} = {{}}));",
-            name = site.name
-        ));
+        out.push_str(&render_namespace(
+            &site,
+            None,
+            &mut bindings,
+            Some(&mut named_exports),
+            &mut lowering,
+        )?);
         copied = site.end;
     }
     out.push_str(&source[copied..]);
@@ -1004,6 +1177,83 @@ mod tests {
         assert!(!actual.contains("var Box;"));
         assert!(!actual.contains("export { Box };"));
         assert!(actual.contains("__franken_namespace_1.other = __franken_namespace_1.value;"));
+    }
+
+    #[test]
+    fn nested_and_dotted_fragments_share_only_their_exported_namespace_groups() {
+        let actual = lower(
+            "namespace App { export let offset = 2; export namespace Model { export function read() { return offset + value; } } } namespace App.Model { export let value = 3; } namespace Other.Model { export function read() { return value; } }",
+            str::to_owned,
+        )
+        .unwrap();
+        assert!(
+            actual.contains("return __franken_namespace_0.offset + __franken_namespace_1.value;")
+        );
+        assert!(
+            actual.contains(
+                "Model = __franken_namespace_0.Model || (__franken_namespace_0.Model = {})"
+            )
+        );
+        assert!(actual.contains("__franken_namespace_3.value = 3;"));
+        assert!(actual.contains("return value;"));
+        assert_eq!(actual.matches("var App;").count(), 1);
+    }
+
+    #[test]
+    fn private_nested_groups_belong_to_one_parent_fragment() {
+        let actual = lower(
+            "const value = 7; namespace App { namespace Hidden { export const value = 1; } export function first() { return Hidden.value; } } namespace App { namespace Hidden { export function read() { return value; } } export function second() { return Hidden.read(); } }",
+            str::to_owned,
+        )
+        .unwrap();
+        assert_eq!(actual.matches("var Hidden;").count(), 2);
+        assert!(actual.contains("return Hidden.value;"));
+        assert!(actual.contains("return Hidden.read();"));
+        assert!(actual.contains("return value;"));
+        assert!(!actual.contains(".Hidden ="));
+    }
+
+    #[test]
+    fn nested_namespace_bindings_survive_export_property_replacement() {
+        let actual = lower(
+            "namespace App { export namespace Child { export let x = 1; } export function local() { return Child.x; } } namespace App { export function shared() { return Child.x; } }",
+            str::to_owned,
+        )
+        .unwrap();
+        assert!(actual.contains("return Child.x;"));
+        assert!(actual.contains("return __franken_namespace_2.Child.x;"));
+        assert_eq!(actual.matches("var Child;").count(), 1);
+    }
+
+    #[test]
+    fn exported_dotted_namespace_exports_only_its_root_binding() {
+        let actual = lower(
+            "export namespace Api.V1.Models { export const value = 1; } export namespace Api.V1.Models { export const next = value + 1; }",
+            str::to_owned,
+        )
+        .unwrap();
+        assert_eq!(actual.matches("export { Api };").count(), 1);
+        assert!(!actual.contains("export { V1 }"));
+        assert!(!actual.contains("export { Models }"));
+        assert!(actual.contains("__franken_namespace_5.next = __franken_namespace_5.value + 1;"));
+    }
+
+    #[test]
+    fn nested_namespace_paths_and_declaration_scopes_are_validated() {
+        for source in [
+            "namespace A. { export let x = 1; }",
+            "namespace A..B { export let x = 1; }",
+            "namespace A { export namespace {} }",
+            "namespace A { if (true) { namespace B {} } }",
+            "namespace A { function f() { namespace B {} } }",
+        ] {
+            assert!(lower(source, str::to_owned).is_err(), "{source}");
+        }
+        let source = format!("namespace {} {{}}", vec!["N"; MAX_NESTING + 1].join("."));
+        assert_eq!(
+            lower(&source, str::to_owned),
+            Err("namespace declaration nesting limit")
+        );
     }
 
     #[test]

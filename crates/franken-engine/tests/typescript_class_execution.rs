@@ -84,6 +84,95 @@ fn generic_subclasses_keep_constructor_super_and_method_dispatch() {
 }
 
 #[test]
+fn nested_and_dotted_namespaces_merge_classes_and_capture_parent_bindings() {
+    assert_output(
+        r#"
+        const __franken_namespace_0 = 100;
+        namespace App {
+            const salt = 4;
+            export let base = 10;
+            export namespace Model {
+                export class Item<T> {
+                    constructor(public value: number) {}
+                    total(): number { return this.value + base + salt + bias; }
+                }
+                export function read(): number { return base + salt + bias; }
+            }
+        }
+        namespace App.Model { export let bias = 2; }
+        namespace Other.Model { export const value = __franken_namespace_0; }
+        const item = new App.Model.Item<string>(1);
+        console.log(item.total(), App.Model.read(), Other.Model.value);
+        App.base = 20;
+        App.Model.bias = 3;
+        console.log(item.total(), App.Model.read(), item instanceof App.Model.Item);
+        "#,
+        &["17 16 100", "28 27 true"],
+    );
+}
+
+#[test]
+fn nested_namespace_private_scopes_and_local_export_aliases_stay_distinct() {
+    assert_output(
+        r#"
+        const value = 7;
+        namespace Pack {
+            namespace Hidden { export const value = 1; }
+            export namespace Public { export const value = 2; }
+            export function first() { return [Hidden.value, Public.value].join(':'); }
+        }
+        namespace Pack {
+            namespace Hidden { export function read() { return value; } }
+            export function second() { return [Hidden.read(), Public.value].join(':'); }
+        }
+        Pack.Public = {value: 9};
+        console.log(Pack.first(), Pack.second(), typeof Pack.Hidden);
+        "#,
+        &["1:2 7:9 undefined"],
+    );
+}
+
+#[test]
+fn nested_namespaces_merge_into_existing_class_and_function_bindings() {
+    assert_output(
+        r#"
+        namespace Lib {
+            export class Codec { static decode(n: number): number { return n * 2; } }
+            export namespace Codec {
+                export const version = 'v1';
+                export function label(): string { return version; }
+            }
+            export function make(n: number): number { return n + 1; }
+            export namespace make { export const kind = 'factory'; }
+        }
+        console.log(Lib.Codec.decode(3), Lib.Codec.version, Lib.Codec.label(),
+                    Lib.make(4), Lib.make.kind);
+        "#,
+        &["6 v1 v1 5 factory"],
+    );
+}
+
+#[test]
+fn nested_namespace_objects_are_published_before_their_bodies_execute() {
+    assert_output(
+        r#"
+        const trace = [];
+        namespace Root {
+            export namespace Child {
+                trace.push(Root.Child === Child);
+                export const x = 1;
+            }
+            trace.push(Child.x);
+        }
+        trace.push(Root.Child.x);
+        namespace Root.Child { trace.push(x); export const y = 2; }
+        console.log(trace.join(','), Root.Child.y);
+        "#,
+        &["true,1,1,1 2"],
+    );
+}
+
+#[test]
 fn namespace_class_exports_keep_self_bindings_across_namespace_mutation() {
     assert_output(
         r#"

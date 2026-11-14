@@ -181,6 +181,13 @@ impl InterpreterCore {
             .checked_add(self.url_search_params.len())?
             .checked_add(self.child_process_streams.len())?
             .checked_add(self.function_prototypes.len())?;
+        let bound_owner = Self::bound_function_own_property_owner();
+        count = count.checked_add(
+            self.function_prototypes
+                .keys()
+                .filter(|(owner, _)| *owner == bound_owner)
+                .count(),
+        )?;
         for storage in self.weakmap_storage.values() {
             count = count
                 .checked_add(storage.entries.len())?
@@ -226,6 +233,12 @@ impl InterpreterCore {
         // Default .prototype objects are ordinary objects: without their
         // constructor property they do not retain the original function.
         for ((owner, id), object) in self.function_prototypes.iter() {
+            // A bound function keeps its target/this/arguments in a private
+            // heap state. Reaching that state keeps its own properties; the
+            // reverse edge below preserves identity through prototype links.
+            if *owner == bound_owner {
+                index.add(marker, *id, None, EdgeTarget::Object(*object));
+            }
             if let Some(carrier) = self
                 .gc_prototype_carrier(owner, *id)
                 .filter(|carrier| carrier.is_identity())
@@ -273,6 +286,9 @@ impl InterpreterCore {
                 }
             }
             for ((owner, id), object) in self.function_prototypes.iter() {
+                if *owner == Self::bound_function_own_property_owner() && marker.is_marked(*id) {
+                    marker.object(*object);
+                }
                 if marker.is_marked(object.0)
                     && let Some(carrier) = self
                         .gc_prototype_carrier(owner, *id)

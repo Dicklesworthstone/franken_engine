@@ -258,6 +258,7 @@ type AddressSet = HashSet<usize, BuildHasherDefault<AddressHasher>>;
 /// intrinsic. Its heap object is an outgoing edge of this carrier.
 #[derive(Clone, Copy)]
 enum PrototypeCarrier {
+    BoundFunction,
     ClosurePrototype,
     Closure,
     Promise,
@@ -269,6 +270,7 @@ enum PrototypeCarrier {
 impl PrototypeCarrier {
     fn is_marked(&self, marker: &GcMarker, id: u32) -> bool {
         let marks = match self {
+            Self::BoundFunction => &marker.objects,
             Self::ClosurePrototype | Self::Closure => &marker.closures,
             Self::Promise => &marker.promises,
             Self::Generator => &marker.generators,
@@ -280,6 +282,7 @@ impl PrototypeCarrier {
 
     fn mark(self, marker: &mut GcMarker, id: u32) {
         match self {
+            Self::BoundFunction => marker.object(ObjectId(id)),
             Self::ClosurePrototype | Self::Closure => marker.closure(id),
             Self::Promise => marker.promise(id),
             Self::Generator => marker.generator_id(id),
@@ -1801,6 +1804,9 @@ impl InterpreterCore {
     }
 
     fn gc_prototype_carrier(&self, owner: &ContentHash, id: u32) -> Option<PrototypeCarrier> {
+        if owner == &Self::bound_function_own_property_owner() {
+            return Some(PrototypeCarrier::BoundFunction);
+        }
         let owners = Self::exotic_object_own_property_owners();
         if owner == &owners[0] {
             return Some(PrototypeCarrier::Promise);
@@ -2730,6 +2736,318 @@ mod tests {
                 assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
             }
         }
+    }
+
+    #[test]
+    fn bound_function_weak_keys_release_private_state_and_keep_live_nested_bindings() {
+        for force_scanning in [false, true] {
+            let module = carrier_module(
+                "(() => { const captured = { answer: 30 }; \
+                 const receiver = { offset: 7 }; const argument = { amount: 5 }; \
+                 function target(value) { return captured.answer + this.offset + value.amount; } \
+                 const first = target.bind(receiver, argument); \
+                 const bound = first.bind({ offset: 100 }); \
+                 first.payload = { tag: 'first' }; bound.payload = { tag: 'bound' }; \
+                 return [bound, first, captured, receiver, argument]; })()",
+            );
+            let mut core = carrier_core();
+            let Value::Object(result) =
+                core.execute(&module).expect("create bound functions").value
+            else {
+                panic!("fixture returns its bound identity witnesses");
+            };
+            let values = core.read_array_like_values(result);
+            let mut graph = Vec::new();
+            let set = core.alloc_weak_collection("WeakSet").expect("weak owner");
+            let mut keys = Vec::new();
+            for value in &values[..2] {
+                let Value::BuiltinFunction(builtin) = value else {
+                    panic!("native bound callable");
+                };
+                assert_eq!(builtin.kind, BuiltinFunctionKind::BoundFunction);
+                let (target, receiver, arguments, state) =
+                    core.bound_function_parts(builtin).expect("bound state");
+                graph.push(state);
+                if let Value::Object(receiver) = receiver {
+                    graph.push(receiver);
+                }
+                for argument in arguments {
+                    if let Value::Object(argument) = argument {
+                        graph.push(argument);
+                    }
+                }
+                if let Value::BuiltinFunction(target) = target {
+                    graph.push(ObjectId(target.bound_object.expect("nested bound state")));
+                }
+                core.set_reg(0, value.clone());
+                core.weakset_method(
+                    Some(&module),
+                    "add",
+                    Value::Object(set),
+                    RegRange { start: 0, count: 1 },
+                )
+                .expect("weak bound membership");
+                let key = InterpreterCore::builtin_function_own_property_key(builtin)
+                    .expect("bound backing key");
+                let backing = core.function_prototypes[&key];
+                graph.push(backing);
+                if let Some(Value::Object(payload)) =
+                    core.heap[backing.0 as usize].properties.get("payload")
+                {
+                    graph.push(*payload);
+                }
+                keys.push(key);
+            }
+            graph.extend(values[2..].iter().map(|value| {
+                let Value::Object(object) = value else {
+                    panic!("captured payload object");
+                };
+                *object
+            }));
+            core.clear_current_register_frame();
+            core.set_reg(0, Value::Object(set));
+            core.set_reg(1, values[0].clone());
+            let memory_limit = core.config.max_total_memory_bytes;
+            if force_scanning {
+                core.config.max_total_memory_bytes = core.estimated_memory_bytes();
+            }
+            core.collect_garbage();
+            core.config.max_total_memory_bytes = memory_limit;
+            for object in &graph {
+                assert!(
+                    core.heap.get(object.0 as usize).is_some(),
+                    "live edge {object:?}"
+                );
+            }
+            assert_eq!(core.weakmap_storage[&set].entries.len(), 2);
+            assert_eq!(
+                core.invoke_inline_method_call(
+                    Some(&module),
+                    values[0].clone(),
+                    Value::Undefined,
+                    Vec::new(),
+                ),
+                Ok(Value::Int(42))
+            );
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+
+            core.clear_current_register_frame();
+            core.set_reg(0, Value::Object(set));
+            let seed = core
+                .capture_execution_seed()
+                .expect("snapshot before reclamation");
+            if force_scanning {
+                core.config.max_total_memory_bytes = core.estimated_memory_bytes();
+            }
+            core.collect_garbage();
+            core.config.max_total_memory_bytes = memory_limit;
+            assert!(core.weakmap_storage[&set].entries.is_empty());
+            for object in &graph {
+                assert!(
+                    core.heap.is_reclaimed(object.0 as usize),
+                    "dead edge {object:?}"
+                );
+            }
+            for key in &keys {
+                assert!(!core.function_prototypes.contains_key(key));
+            }
+            let snapshot = seed.0.state.borrow();
+            let ExecutionSeed::Materialized {
+                heap,
+                function_prototypes,
+                weakmap_storage,
+                ..
+            } = snapshot.as_ref()
+            else {
+                panic!("collection must preserve the pending snapshot");
+            };
+            assert_eq!(weakmap_storage[&set].entries.len(), 2);
+            for object in &graph {
+                assert!(heap.get(object.0 as usize).is_some());
+            }
+            for key in &keys {
+                assert!(function_prototypes.contains_key(key));
+            }
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn prototype_only_roots_preserve_bound_callable_identity_and_invocation() {
+        for force_scanning in [false, true] {
+            let module = carrier_module(
+                "(() => { const captured = { answer: 30 }; \
+                 function target(value) { return captured.answer + this.offset + value; } \
+                 const bound = target.bind({ offset: 7 }, 5); \
+                 bound.tag = { value: 9 }; \
+                 return [Object.create(bound), bound, captured]; })()",
+            );
+            let mut core = carrier_core();
+            let Value::Object(result) =
+                core.execute(&module).expect("create bound prototype").value
+            else {
+                panic!("fixture returns an array");
+            };
+            let values = core.read_array_like_values(result);
+            let (Value::Object(holder), Value::BuiltinFunction(bound), Value::Object(payload)) =
+                (&values[0], &values[1], &values[2])
+            else {
+                panic!("holder, bound callable and captured payload");
+            };
+            let (holder, payload) = (*holder, *payload);
+            let state = ObjectId(bound.bound_object.expect("bound private state"));
+            let backing = core.heap[holder.0 as usize]
+                .prototype
+                .expect("backing prototype");
+            core.clear_current_register_frame();
+            core.set_reg(0, Value::Object(holder));
+            let memory_limit = core.config.max_total_memory_bytes;
+            if force_scanning {
+                core.config.max_total_memory_bytes = core.estimated_memory_bytes();
+            }
+            core.collect_garbage();
+            core.config.max_total_memory_bytes = memory_limit;
+            for object in [state, backing, payload] {
+                assert!(core.heap.get(object.0 as usize).is_some());
+            }
+            let restored = core
+                .dispatch_builtin_hostcall(
+                    "builtin:ObjectGetPrototypeOf",
+                    RegRange { start: 0, count: 1 },
+                    Some(&module),
+                )
+                .expect("recover the callable from its strong prototype link");
+            assert_eq!(restored, values[1]);
+            assert_eq!(
+                core.invoke_inline_method_call(
+                    Some(&module),
+                    restored,
+                    Value::Undefined,
+                    Vec::new()
+                ),
+                Ok(Value::Int(42))
+            );
+            core.clear_current_register_frame();
+            core.collect_garbage();
+            for object in [holder, state, backing, payload] {
+                assert!(core.heap.is_reclaimed(object.0 as usize));
+            }
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn bound_function_backings_restore_with_execution_seeds() {
+        let module = carrier_module("Math.max.bind(null, 10)");
+        let mut core = carrier_core();
+        let bound = core.execute(&module).expect("bind native target").value;
+        let backing = core
+            .ensure_function_own_property_object(&module, &bound)
+            .expect("backing allocation")
+            .expect("bound backing");
+        core.set_object_property(backing, "tag".into(), Value::Int(42))
+            .expect("own property");
+        core.clear_current_register_frame();
+        core.set_reg(0, bound.clone());
+        let seed = core
+            .capture_execution_seed()
+            .expect("capture bound identity");
+        core.clear_current_register_frame();
+        core.collect_garbage();
+        assert!(core.heap.is_reclaimed(backing.0 as usize));
+        core.reset_execution_state_from_seed(&seed)
+            .expect("restore bound identity");
+        assert_eq!(
+            core.function_own_property_object(&module, &bound)
+                .expect("restored key"),
+            Some(backing)
+        );
+        assert_eq!(
+            core.heap[backing.0 as usize].properties.get("tag"),
+            Some(&Value::Int(42))
+        );
+        assert_eq!(
+            core.invoke_inline_method_call(
+                Some(&module),
+                bound,
+                Value::Undefined,
+                vec![Value::Int(5)]
+            ),
+            Ok(Value::Int(10))
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn bound_function_weak_membership_churn_reclaims_backings_and_captures() {
+        let module = carrier_module(
+            "let count = 0; const weak = new WeakSet(); \
+             const keep = ((value) => value + 1).bind(null); keep.payload = { answer: 40 }; \
+             for (let i = 0; i < 800; i++) { \
+               const callback = ((value) => value.answer).bind(null, { answer: i }); \
+               callback.extra = { iteration: i }; weak.add(callback); \
+               if (weak.has(callback) && callback() === i) count++; \
+             } count + keep(keep.payload.answer)",
+        );
+        let mut core = carrier_core();
+        core.config.max_heap_objects = 512;
+        core.set_gc_stress_interval(Some(64));
+        assert_eq!(
+            core.execute(&module)
+                .expect("bounded bound-function churn")
+                .value,
+            Value::Int(841)
+        );
+        core.collect_garbage();
+        assert!(core.gc_stats().reclaimed_objects >= 800);
+        let retained = core
+            .function_prototypes
+            .keys()
+            .filter(|(owner, _)| *owner == InterpreterCore::bound_function_own_property_owner())
+            .count();
+        assert!(retained <= 8, "{retained} bound backings retained");
+        assert!(
+            core.weakmap_storage
+                .values()
+                .all(|storage| storage.entries.len() <= 4)
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn noncanonical_builtin_metadata_retains_distinct_structural_identity() {
+        let canonical = BuiltinFunction::bound_to(BuiltinFunctionKind::BoundFunction, ObjectId(7));
+        let mut with_specifier = canonical.clone();
+        with_specifier.module_specifier = BuiltinModuleSpecifier::from_nonempty("custom-bound");
+        let mut with_iterator = canonical.clone();
+        with_iterator.iterator_handle = Some(11);
+        let keys = [&canonical, &with_specifier, &with_iterator]
+            .map(|builtin| InterpreterCore::builtin_function_own_property_key(builtin).unwrap());
+        assert_ne!(keys[0], keys[1]);
+        assert_ne!(keys[0], keys[2]);
+        assert_ne!(keys[1], keys[2]);
+        let core = carrier_core();
+        assert!(matches!(
+            core.gc_prototype_carrier(&keys[0].0, keys[0].1),
+            Some(PrototypeCarrier::BoundFunction)
+        ));
+        assert!(core.gc_prototype_carrier(&keys[1].0, keys[1].1).is_none());
+        assert!(core.gc_prototype_carrier(&keys[2].0, keys[2].1).is_none());
     }
 
     #[test]

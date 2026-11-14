@@ -11379,6 +11379,17 @@ impl InterpreterCore {
     pub(super) fn builtin_function_own_property_key(
         builtin: &BuiltinFunction,
     ) -> Result<(ContentHash, u32), InterpreterError> {
+        // A native bound function's identity is its unique private state
+        // object. Keep that handle in the registry key so the collector can
+        // trace both directions without permanently rooting the backing.
+        // Other builtin identities retain their full structural digest.
+        if builtin.kind == BuiltinFunctionKind::BoundFunction
+            && builtin.module_specifier.is_empty()
+            && builtin.iterator_handle.is_none()
+            && let Some(state) = builtin.bound_object
+        {
+            return Ok((Self::bound_function_own_property_owner(), state));
+        }
         let identity =
             serde_json::to_vec(builtin).map_err(|error| InterpreterError::TypeError {
                 expected: "serializable built-in function identity".to_string(),
@@ -11389,6 +11400,15 @@ impl InterpreterCore {
         digest.update(&identity);
         let base_owner = ContentHash::from_bytes(digest.finalize().into());
         Ok((Self::function_own_property_owner(5, &base_owner), 0))
+    }
+
+    pub(super) fn bound_function_own_property_owner() -> ContentHash {
+        static OWNER: OnceLock<ContentHash> = OnceLock::new();
+        *OWNER.get_or_init(|| {
+            let mut digest = Sha256::new();
+            digest.update(b"FrankenEngine.BoundFunctionOwnProperties.v1");
+            ContentHash::from_bytes(digest.finalize().into())
+        })
     }
 
     /// Owner id of the backing objects of one function kind (0 = IR3
@@ -11413,6 +11433,12 @@ impl InterpreterCore {
             .function_prototypes
             .iter()
             .find(|(_, object)| **object == backing)?;
+        if owner == &Self::bound_function_own_property_owner() {
+            return Some(Value::BuiltinFunction(BuiltinFunction::bound_to(
+                BuiltinFunctionKind::BoundFunction,
+                ObjectId(*id),
+            )));
+        }
         let value_of_kind = |ids: PrototypeOwnerIds| {
             (0u8..=4).find_map(|kind| {
                 (ids.own_property[usize::from(kind)] == *owner).then_some(match kind {

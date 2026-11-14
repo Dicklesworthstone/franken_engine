@@ -15585,6 +15585,9 @@ struct ReadablePumpReservation {
 struct ReadablePipeLink {
     destination: ObjectId,
     token: u32,
+    /// Captured once from the observable pipe option. Guest writes to the
+    /// options or stream mirrors cannot change this link's EOF behavior.
+    end_destination: bool,
     /// Only the authenticated destination's completed drain can release this
     /// obligation; public Writable property mirrors are not authoritative.
     awaiting_drain: bool,

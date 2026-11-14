@@ -631,6 +631,30 @@ impl InterpreterCore {
                     got: "missing argument".to_string(),
                 })?;
         let destination_id = self.writable_receiver_id(destination.clone())?;
+        // Only literal false suppresses automatic end. The option is an
+        // ordinary Get (including inherited accessors and Proxy traps), read
+        // once before registering listeners or emitting `pipe`. Falsy options
+        // use the default, and unrelated properties are never inspected.
+        let end_destination = match self.builtin_arg(args, 1)? {
+            Some(options) if options.is_truthy() => {
+                let option_register = args.start.checked_add(1).ok_or(
+                    InterpreterError::RegisterOutOfBounds {
+                        register: args.start,
+                        max: self.config.max_registers,
+                    },
+                )?;
+                let observation = self.begin_property_observation([option_register])?;
+                let outcome = self
+                    .get_v(module, &options, &RuntimePropertyKey::from("end"))
+                    .map(|end| !matches!(end, Value::Bool(false)));
+                self.finish_property_read_observation(observation, outcome)?
+            }
+            _ => true,
+        };
+
+        // The Get above may re-enter the runtime and end/destroy either
+        // stream or install a different link. All state checks and resource
+        // preflights below therefore use the state AFTER that observation.
         let destination_live = self
             .writable_streams
             .get(&destination_id)
@@ -642,47 +666,6 @@ impl InterpreterCore {
                 expected: "live Writable pipe destination".to_string(),
                 got: "ended or destroyed Writable".to_string(),
             });
-        }
-
-        if let Some(options) = self.builtin_arg(args, 1)? {
-            match options {
-                Value::Undefined => {}
-                Value::Object(options_id) => {
-                    let options = self.heap.get(options_id.0 as usize).ok_or_else(|| {
-                        InterpreterError::TypeError {
-                            expected: "live Readable.pipe options object".to_string(),
-                            got: "dangling object".to_string(),
-                        }
-                    })?;
-                    if options.properties.keys().any(|key| key != "end") {
-                        return Err(InterpreterError::TypeError {
-                            expected: "Readable.pipe options containing only end".to_string(),
-                            got: "unknown option is outside the bounded pipe subset".to_string(),
-                        });
-                    }
-                    match options.properties.get("end") {
-                        None | Some(Value::Bool(true)) => {}
-                        Some(Value::Bool(false)) => {
-                            return Err(InterpreterError::TypeError {
-                                expected: "Readable.pipe options with end=true".to_string(),
-                                got: "end=false is outside the bounded pipe subset".to_string(),
-                            });
-                        }
-                        Some(other) => {
-                            return Err(InterpreterError::TypeError {
-                                expected: "boolean Readable.pipe end option".to_string(),
-                                got: other.type_name().to_string(),
-                            });
-                        }
-                    }
-                }
-                other => {
-                    return Err(InterpreterError::TypeError {
-                        expected: "Readable.pipe options object".to_string(),
-                        got: other.type_name().to_string(),
-                    });
-                }
-            }
         }
 
         if self.readable_pipe_links.contains_key(&source_id) {
@@ -804,6 +787,19 @@ impl InterpreterCore {
                 && destination_label > winner
             {
                 winner = destination_label;
+            }
+            if let Some(context_label) = self.active_execution_context_label()
+                && context_label > winner
+            {
+                winner = context_label;
+            }
+            if let Some(option_label) = self.pending_hostcall_result_label.as_ref()
+                && option_label > winner
+            {
+                // Reading `end` selects a later lifecycle effect. Retain its
+                // shape, descriptor and callback provenance after the caller
+                // frame and the options object have disappeared.
+                winner = option_label;
             }
 
             let original_bytes = Self::estimate_readable_from_state_bytes(current);
@@ -956,6 +952,7 @@ impl InterpreterCore {
             ReadablePipeLink {
                 destination: destination_id,
                 token,
+                end_destination,
                 awaiting_drain: false,
             },
         );
@@ -1369,6 +1366,31 @@ impl InterpreterCore {
         else {
             return Ok(Value::Undefined);
         };
+        if !self.readable_pipe_links[&source].end_destination {
+            // EOF retires the edge even when it leaves the Writable open.
+            // Preflight provenance before detaching, then notify after all
+            // internal listeners are gone so `unpipe` can connect a successor.
+            let mut emission_label = self.writable_invocation_label(args)?;
+            let source_label = self.stream_state_label_with_temporary_budget(
+                source,
+                Self::estimate_label_bytes(&emission_label),
+            )?;
+            emission_label = emission_label.max(source_label);
+            let destination_label = self.stream_state_label_with_temporary_budget(
+                destination,
+                Self::estimate_label_bytes(&emission_label),
+            )?;
+            emission_label = emission_label.max(destination_label);
+            self.detach_readable_pipe(source, destination, token);
+            self.emit_event_listener_records(
+                module,
+                destination,
+                "unpipe",
+                vec![Value::Object(source)],
+                emission_label,
+            )?;
+            return Ok(Value::Undefined);
+        }
         self.detach_readable_pipe(source, destination, token);
         self.writable_end(module, Value::Object(destination), args)
     }

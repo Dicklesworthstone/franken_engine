@@ -2198,6 +2198,173 @@ fn native_pipe_removing_drain_listeners_cancels_resume_bd_305gi_2() {
 }
 
 #[test]
+fn native_pipe_end_false_reuses_destination_after_backpressure_bd_305gi_2() {
+    let source = r#"
+        const { Readable, Writable } = require('stream');
+        const first = Readable.from(['a', 'b']);
+        const second = Readable.from(['c', 'd']);
+        const chunks = [];
+        const sink = new Writable({
+          objectMode: true,
+          highWaterMark: 1,
+          write(chunk, encoding, done) { chunks.push(chunk); setImmediate(done); }
+        });
+        sink.on('unpipe', source => {
+          if (source === first) {
+            console.log('open:' + sink.writableEnded);
+            second.pipe(sink);
+          }
+        });
+        sink.on('finish', () => console.log(chunks.join(',')));
+        console.log(first.pipe(sink, { end: false }) === sink);
+    "#;
+    assert_eq!(eval_console(source), "true\nopen:false\na,b,c,d");
+}
+
+#[test]
+fn native_pipe_end_false_keeps_manual_end_and_tail_write_bd_305gi_2() {
+    let source = r#"
+        const { Readable, Writable } = require('stream');
+        const source = Readable.from(['body']);
+        const chunks = [];
+        const events = [];
+        const sink = new Writable({
+          objectMode: true,
+          write(chunk, encoding, done) { chunks.push(chunk); done(); }
+        });
+        const options = { end: false };
+        sink.on('unpipe', () => events.push('unpipe'));
+        sink.on('finish', () => {
+          console.log(events.join(','));
+          console.log(chunks.join(','));
+        });
+        source.pipe(sink, options);
+        options.end = true;
+        source.on('end', () => {
+          events.push('ended:' + sink.writableEnded);
+          sink.end('tail');
+        });
+    "#;
+    assert_eq!(eval_console(source), "unpipe,ended:false\nbody,tail");
+}
+
+#[test]
+fn native_pipe_observes_end_option_once_before_pipe_bd_305gi_2() {
+    for options in [
+        "Object.create({ get end() { events.push('get:end'); return false; } })",
+        "new Proxy({}, { get(target, key) { events.push('get:' + key); return false; } })",
+    ] {
+        let source = format!(
+            r#"
+                const {{ Readable, Writable }} = require('stream');
+                const events = [];
+                const source = Readable.from(['one']);
+                const sink = new Writable({{
+                  objectMode: true,
+                  write(chunk, encoding, done) {{ events.push('write:' + chunk); done(); }}
+                }});
+                const options = {options};
+                Object.defineProperty(options, 'ignored', {{
+                  get() {{ throw new Error('unrelated option was read'); }}
+                }});
+                sink.on('pipe', () => events.push('pipe'));
+                sink.on('unpipe', () => events.push('unpipe'));
+                sink.on('finish', () => console.log(events.join(',')));
+                source.pipe(sink, options);
+                source.on('end', () => {{
+                  events.push('ended:' + sink.writableEnded);
+                  sink.end();
+                }});
+            "#,
+        );
+        assert_eq!(
+            eval_console(&source),
+            "get:end,pipe,write:one,unpipe,ended:false",
+            "ordinary option lookup for {options}",
+        );
+    }
+}
+
+#[test]
+fn native_pipe_observes_end_option_strict_false_semantics_bd_305gi_2() {
+    for options in [
+        "undefined",
+        "null",
+        "0",
+        "true",
+        "'options'",
+        "{ end: undefined }",
+        "{ end: null }",
+        "{ end: 0 }",
+        "{ end: '' }",
+        "{ end: 'false' }",
+        "{ end: {}, extra: 1 }",
+    ] {
+        let source = format!(
+            r#"
+                const {{ Readable, Writable }} = require('stream');
+                const source = Readable.from(['one']);
+                const sink = new Writable({{ write(chunk, encoding, done) {{ done(); }} }});
+                source.pipe(sink, {options});
+                source.on('end', () => console.log(sink.writableEnded));
+                sink.on('finish', () => console.log('finished'));
+            "#,
+        );
+        assert_eq!(eval_console(&source), "true\nfinished", "options: {options}");
+    }
+}
+
+#[test]
+fn native_pipe_observes_end_option_throw_without_attaching_bd_305gi_2() {
+    let source = r#"
+        const { Readable, Writable } = require('stream');
+        const source = Readable.from(['one']);
+        const failure = new Error('option failure');
+        const chunks = [];
+        let pipes = 0;
+        const sink = new Writable({
+          write(chunk, encoding, done) { chunks.push(String(chunk)); done(); }
+        });
+        sink.on('pipe', () => { pipes++; });
+        sink.on('finish', () => console.log(pipes + ':' + chunks.join(',')));
+        try {
+          source.pipe(sink, { get end() { throw failure; } });
+        } catch (error) {
+          console.log(error === failure);
+        }
+        source.pipe(sink, { end: false });
+        source.on('end', () => sink.end());
+    "#;
+    assert_eq!(eval_console(source), "true\n1:one");
+}
+
+#[test]
+fn native_pipe_end_false_destroy_while_paused_leaves_sink_open_bd_305gi_2() {
+    let source = r#"
+        const { Readable, Writable } = require('stream');
+        const source = Readable.from([1, 2, 3]);
+        const chunks = [];
+        const sink = new Writable({
+          objectMode: true,
+          highWaterMark: 1,
+          write(chunk, encoding, done) {
+            chunks.push(chunk);
+            setImmediate(() => {
+              source.destroy();
+              done();
+              setImmediate(() => {
+                console.log(chunks.join(',') + ':' + sink.writableEnded);
+                sink.end();
+              });
+            });
+          }
+        });
+        source.pipe(sink, { end: false });
+    "#;
+    assert_eq!(eval_console(source), "1:false");
+}
+
+#[test]
 fn pipe_unpipe_and_event_emitter_inheritance() {
     assert_cases(&[
         EvalCase {

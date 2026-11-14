@@ -9250,6 +9250,7 @@ fn readable_pipe_link_is_authenticated_memory_exact_and_atomic_bd_7h43f() {
         Some(&ReadablePipeLink {
             destination,
             token: 0,
+            end_destination: true,
             awaiting_drain: false,
         })
     );
@@ -9608,6 +9609,187 @@ fn readable_pipe_link_is_authenticated_memory_exact_and_atomic_bd_7h43f() {
     assert_eq!(
         boundary.estimated_memory_bytes(),
         boundary.recompute_estimated_memory_bytes()
+    );
+}
+
+#[test]
+fn readable_pipe_end_false_observes_options_and_retires_authenticated_edge_bd_305gi_2() {
+    let module = test_module_with_functions(Vec::new(), Vec::new());
+    for inherited in [false, true] {
+        let mut core = test_interpreter();
+        let Value::Object(source) = core
+            .construct_stream_readable(RegRange { start: 0, count: 0 })
+            .expect("Readable source")
+        else {
+            panic!("Readable constructor must return an object");
+        };
+        let Value::Object(successor) = core
+            .construct_stream_readable(RegRange { start: 0, count: 0 })
+            .expect("Readable successor")
+        else {
+            panic!("Readable constructor must return an object");
+        };
+        let Value::Object(destination) = core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("Writable destination")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        let holder = core
+            .alloc_object_with_properties(&[("end", Value::Bool(false))])
+            .expect("end option");
+        let options = if inherited {
+            core.alloc_object_with_prototype(Some(holder))
+                .expect("inherited end option")
+        } else {
+            holder
+        };
+        core.set_own_runtime_property_label(
+            holder,
+            &RuntimePropertyKey::from("end"),
+            &Label::Secret,
+        )
+        .expect("classified option descriptor");
+        core.write_reg_with_label(0, Value::Object(destination), Label::Public)
+            .expect("destination argument");
+        core.write_reg_with_label(1, Value::Object(options), Label::Public)
+            .expect("public reference to classified options");
+        core.readable_pipe(
+            &module,
+            Value::Object(source),
+            RegRange { start: 0, count: 2 },
+        )
+        .expect("pipe without automatic destination end");
+        assert!(!core.readable_pipe_links[&source].end_destination);
+        assert_eq!(
+            core.readable_from_streams[&source].lifecycle_label,
+            Label::Secret,
+            "an observed own/inherited end option governs future stream effects"
+        );
+        assert_eq!(core.active_inline_callback_context_label, None);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+        let old_end = match &core.event_listener_records_for(source, "end")[0].listener {
+            Value::BuiltinFunction(builtin) => builtin.clone(),
+            other => panic!("pipe end listener must be a builtin, got {other:?}"),
+        };
+        core.set_object_property(holder, "end".to_string(), Value::Bool(true))
+            .expect("mutate the caller-owned option after registration");
+        core.readable_pipe_end(
+            &module,
+            Value::Object(source),
+            &old_end,
+            RegRange { start: 2, count: 0 },
+        )
+        .expect("EOF only releases this authenticated pipe");
+        assert!(!core.writable_streams[&destination].end_requested);
+        assert!(!core.writable_streams[&destination].destroy_requested);
+        assert!(core.readable_pipe_links.is_empty());
+        assert!(core.readable_pipe_sources.is_empty());
+        assert!(core.event_listener_records_for(source, "data").is_empty());
+        assert!(core.event_listener_records_for(source, "end").is_empty());
+        assert!(core.event_listener_records_for(destination, "drain").is_empty());
+
+        core.readable_pipe(
+            &module,
+            Value::Object(successor),
+            RegRange { start: 0, count: 1 },
+        )
+        .expect("the open destination accepts its next source");
+        assert!(core.readable_pipe_links[&successor].end_destination);
+        core.readable_pipe_end(
+            &module,
+            Value::Object(source),
+            &old_end,
+            RegRange { start: 2, count: 0 },
+        )
+        .expect("stale end-listener snapshot");
+        assert!(!core.writable_streams[&destination].end_requested);
+        assert_eq!(core.readable_pipe_sources[&destination], successor);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+}
+
+#[test]
+fn readable_pipe_end_false_preflights_eof_provenance_before_detach_bd_305gi_2() {
+    let module = test_module_with_functions(Vec::new(), Vec::new());
+    let mut core = test_interpreter();
+    let Value::Object(source) = core
+        .construct_stream_readable(RegRange { start: 0, count: 0 })
+        .expect("Readable source")
+    else {
+        panic!("Readable constructor must return an object");
+    };
+    let Value::Object(destination) = core
+        .construct_stream_writable(RegRange { start: 0, count: 0 })
+        .expect("Writable destination")
+    else {
+        panic!("Writable constructor must return an object");
+    };
+    let options = core
+        .alloc_object_with_properties(&[("end", Value::Bool(false))])
+        .expect("end option");
+    core.write_reg(0, Value::Object(destination))
+        .expect("destination argument");
+    core.write_reg(1, Value::Object(options))
+        .expect("options argument");
+    core.readable_pipe(
+        &module,
+        Value::Object(source),
+        RegRange { start: 0, count: 2 },
+    )
+    .expect("pipe registration");
+    core.readable_from_streams
+        .get_mut(&source)
+        .expect("live source")
+        .lifecycle_label = Label::Custom {
+        name: "classified-end-false-lifecycle".repeat(256),
+        level: 7,
+    };
+    core.sync_estimated_memory_bytes()
+        .expect("lifecycle label accounting");
+    let old_end = match &core.event_listener_records_for(source, "end")[0].listener {
+        Value::BuiltinFunction(builtin) => builtin.clone(),
+        other => panic!("pipe end listener must be a builtin, got {other:?}"),
+    };
+    let before = core.estimated_memory_bytes();
+    core.config.max_total_memory_bytes = before;
+    assert!(matches!(
+        core.readable_pipe_end(
+            &module,
+            Value::Object(source),
+            &old_end,
+            RegRange { start: 2, count: 0 },
+        ),
+        Err(InterpreterError::MemoryBudgetExceeded { .. })
+    ));
+    assert!(!core.writable_streams[&destination].end_requested);
+    assert!(core.readable_pipe_links.contains_key(&source));
+    assert_eq!(core.readable_pipe_sources[&destination], source);
+    assert_eq!(core.event_listener_records_for(source, "data").len(), 1);
+    assert_eq!(core.event_listener_records_for(source, "end").len(), 1);
+    assert_eq!(core.event_listener_records_for(destination, "drain").len(), 1);
+    assert_eq!(core.estimated_memory_bytes(), before);
+    assert_eq!(before, core.recompute_estimated_memory_bytes());
+
+    core.config.max_total_memory_bytes = u64::MAX;
+    core.readable_pipe_end(
+        &module,
+        Value::Object(source),
+        &old_end,
+        RegRange { start: 2, count: 0 },
+    )
+    .expect("EOF after admitting its provenance work");
+    assert!(!core.writable_streams[&destination].end_requested);
+    assert!(core.readable_pipe_links.is_empty());
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
     );
 }
 

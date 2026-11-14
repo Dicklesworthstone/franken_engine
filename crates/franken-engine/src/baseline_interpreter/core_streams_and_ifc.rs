@@ -236,6 +236,13 @@ impl InterpreterCore {
                 link.destination,
                 link.token,
             );
+            self.remove_readable_pipe_listener_records(
+                link.destination,
+                "drain",
+                BuiltinFunctionKind::StreamReadablePipeDrain,
+                source,
+                link.token,
+            );
         }
         debug_assert!(self.readable_pipe_sources.is_empty());
     }
@@ -253,6 +260,18 @@ impl InterpreterCore {
     pub(super) fn detach_current_readable_pipe(&mut self, source: ObjectId) {
         if let Some(link) = self.readable_pipe_links.get(&source).copied() {
             self.detach_readable_pipe(source, link.destination, link.token);
+        }
+    }
+
+    /// Removing an internal callback retires the entire authenticated edge.
+    /// Drain callbacks belong to the Writable rather than the Readable.
+    pub(super) fn detach_readable_pipe_listener(&mut self, target: ObjectId, listener: &Value) {
+        if matches!(listener, Value::BuiltinFunction(builtin)
+            if builtin.kind == BuiltinFunctionKind::StreamReadablePipeDrain)
+        {
+            self.detach_readable_pipes_to_destination(target);
+        } else {
+            self.detach_current_readable_pipe(target);
         }
     }
 
@@ -588,7 +607,7 @@ impl InterpreterCore {
     }
 
     /// Attach one engine-owned Writable to a Readable without exposing a
-    /// forgeable pipe-link object. Two destination-bound builtin listeners
+    /// forgeable pipe-link object. Data/end and drain builtin listeners
     /// reuse the ordinary EventEmitter table, so registration memory, IFC
     /// dispatch, re-entrant snapshots, and source-close cleanup all follow the
     /// existing audited paths.
@@ -699,7 +718,10 @@ impl InterpreterCore {
         let end_record_bytes = MEMORY_ESTIMATE_EVENT_LISTENER_BASE_BYTES
             .saturating_add(Self::estimate_string_bytes("end"))
             .saturating_add(pipe_listener_value_bytes);
-        let listener_values_bytes = pipe_listener_value_bytes.saturating_mul(2);
+        let drain_record_bytes = MEMORY_ESTIMATE_EVENT_LISTENER_BASE_BYTES
+            .saturating_add(Self::estimate_string_bytes("drain"))
+            .saturating_add(pipe_listener_value_bytes);
+        let listener_values_bytes = pipe_listener_value_bytes.saturating_mul(3);
         let data_scan_len = self
             .event_listeners
             .get(&source_id)
@@ -714,13 +736,23 @@ impl InterpreterCore {
             .map(Vec::len)
             .unwrap_or(0)
             .saturating_add(1);
-        // Reserve two full scans: synchronous postvalidation and eventual
-        // teardown. While the link is live, guest registration cannot grow
-        // either vector, so this is a stable upper bound rather than a promise
-        // that later cleanup might be unable to honor.
-        let pipe_scan_cost = u64::try_from(data_scan_len.saturating_add(end_scan_len))
-            .unwrap_or(u64::MAX)
-            .saturating_mul(2);
+        let drain_scan_len = self
+            .event_listeners
+            .get(&destination_id)
+            .and_then(|by_event| by_event.get(&RuntimePropertyKey::from("drain")))
+            .map(Vec::len)
+            .unwrap_or(0)
+            .saturating_add(1);
+        // Reserve synchronous postvalidation and eventual teardown scans.
+        // Source data/end registration stays bounded while linked. Later
+        // destination drain registrations precharge their added scan work.
+        let pipe_scan_cost = u64::try_from(
+            data_scan_len
+                .saturating_add(end_scan_len)
+                .saturating_add(drain_scan_len),
+        )
+        .unwrap_or(u64::MAX)
+        .saturating_mul(2);
         let instructions_before_pipe = self.instructions_executed;
         let instructions_after_pipe = instructions_before_pipe.saturating_add(pipe_scan_cost);
         if instructions_after_pipe > self.config.instruction_budget {
@@ -733,7 +765,15 @@ impl InterpreterCore {
         // Find the final provenance winner entirely through borrowed labels.
         // The aggregate physical-peak check must happen before cloning either
         // the attacker-sized Readable projection or a Custom label name.
-        let (projected, original_bytes, projected_bytes, pipe_label, data_listener, end_listener) = {
+        let (
+            projected,
+            original_bytes,
+            projected_bytes,
+            pipe_label,
+            data_listener,
+            end_listener,
+            drain_listener,
+        ) = {
             let Some(current) = self.readable_from_streams.get(&source_id) else {
                 return Err(InterpreterError::TypeError {
                     expected: "live Readable pipe source".to_string(),
@@ -777,6 +817,7 @@ impl InterpreterCore {
                 .saturating_add(pump_bytes)
                 .saturating_add(data_record_bytes)
                 .saturating_add(end_record_bytes)
+                .saturating_add(drain_record_bytes)
                 .saturating_add(MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_mul(2));
             let preclone_temporary = listener_values_bytes
                 .saturating_add(original_bytes)
@@ -803,6 +844,11 @@ impl InterpreterCore {
                 destination_id,
                 token,
             ));
+            let drain_listener = Value::BuiltinFunction(BuiltinFunction::readable_pipe_listener(
+                BuiltinFunctionKind::StreamReadablePipeDrain,
+                source_id,
+                token,
+            ));
             let final_label = winner.clone();
             let mut projected = self.try_clone_readable_state(current)?;
             drop(std::mem::replace(
@@ -821,6 +867,7 @@ impl InterpreterCore {
                 pipe_label,
                 data_listener,
                 end_listener,
+                drain_listener,
             )
         };
         self.instructions_executed = instructions_after_pipe;
@@ -874,11 +921,29 @@ impl InterpreterCore {
             self.instructions_executed = instructions_before_pipe;
             return result;
         }
+        if let Err(error) = self.insert_event_listener(
+            destination_id,
+            "drain",
+            EventListenerRecord {
+                listener: drain_listener.clone(),
+                once: false,
+            },
+            false,
+        ) {
+            self.rollback_inserted_event_listener(source_id, "end", false);
+            self.rollback_inserted_event_listener(source_id, "data", false);
+            self.restore_readable_pipe_state(source_id, original);
+            let result = self.readable_error_after_reservation(source_id, pump_reserved, error);
+            self.instructions_executed = instructions_before_pipe;
+            return result;
+        }
         drop(data_listener);
         drop(end_listener);
+        drop(drain_listener);
         if let Err(error) =
             self.apply_memory_component_delta(0, MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_mul(2))
         {
+            self.rollback_inserted_event_listener(destination_id, "drain", false);
             self.rollback_inserted_event_listener(source_id, "end", false);
             self.rollback_inserted_event_listener(source_id, "data", false);
             self.restore_readable_pipe_state(source_id, original);
@@ -891,6 +956,7 @@ impl InterpreterCore {
             ReadablePipeLink {
                 destination: destination_id,
                 token,
+                awaiting_drain: false,
             },
         );
         self.readable_pipe_sources.insert(destination_id, source_id);
@@ -902,6 +968,7 @@ impl InterpreterCore {
             pump_reserved,
         ) {
             self.remove_readable_pipe_link(source_id);
+            self.rollback_inserted_event_listener(destination_id, "drain", false);
             self.rollback_inserted_event_listener(source_id, "end", false);
             self.rollback_inserted_event_listener(source_id, "data", false);
             self.restore_readable_pipe_state(source_id, original);
@@ -946,6 +1013,13 @@ impl InterpreterCore {
                 BuiltinFunctionKind::StreamReadablePipeEnd,
                 destination_id,
                 token,
+            ) == 1
+            && self.matching_readable_pipe_listener_count(
+                destination_id,
+                "drain",
+                BuiltinFunctionKind::StreamReadablePipeDrain,
+                source_id,
+                token,
             ) == 1;
         if !link_remains_live {
             if self
@@ -956,7 +1030,7 @@ impl InterpreterCore {
                 self.detach_readable_pipe(source_id, destination_id, token);
             }
             return Err(InterpreterError::TypeError {
-                expected: "one live Readable.pipe listener pair after pipe event".to_string(),
+                expected: "one live Readable.pipe listener set after pipe event".to_string(),
                 got: "source, destination, or internal listener edge changed during pipe event"
                     .to_string(),
             });
@@ -967,7 +1041,7 @@ impl InterpreterCore {
     /// Detach exactly the currently authenticated pipe edge. Teardown happens
     /// before the destination's synchronous `unpipe` event so a re-entrant
     /// listener may safely establish a fresh edge; the retired token makes any
-    /// retained data/end builtin from the old edge a no-op (bd-fw7zd.10).
+    /// retained data/end/drain builtin from the old edge a no-op (bd-fw7zd.10).
     pub(super) fn readable_unpipe(
         &mut self,
         module: &Ir3Module,
@@ -1032,6 +1106,16 @@ impl InterpreterCore {
         destination: ObjectId,
         token: u32,
     ) {
+        // A write callback may unpipe and establish a replacement before an
+        // older invocation reports an error. Retiring its old token must not
+        // remove or pause the replacement edge.
+        if !self
+            .readable_pipe_links
+            .get(&source)
+            .is_some_and(|link| link.destination == destination && link.token == token)
+        {
+            return;
+        }
         self.remove_readable_pipe_link(source);
         self.remove_readable_pipe_listener_records(
             source,
@@ -1045,6 +1129,13 @@ impl InterpreterCore {
             "data",
             BuiltinFunctionKind::StreamReadablePipeData,
             destination,
+            token,
+        );
+        self.remove_readable_pipe_listener_records(
+            destination,
+            "drain",
+            BuiltinFunctionKind::StreamReadablePipeDrain,
+            source,
             token,
         );
         let paused = if let Some(state) = self.readable_from_streams.get_mut(&source)
@@ -1142,13 +1233,128 @@ impl InterpreterCore {
             }
         };
         if matches!(result, Value::Bool(false)) {
-            self.detach_readable_pipe(source, destination, token);
-            return Err(InterpreterError::TypeError {
-                expected: "Writable accepting pipe chunk without backpressure".to_string(),
-                got: "write returned false; drain/resume is not implemented".to_string(),
-            });
+            // write(false) accepted the chunk. Preserve the authenticated edge
+            // and pause until its destination actually drains. The write may
+            // have re-entered guest code and replaced or destroyed the pipe.
+            if let Some(link) = self.readable_pipe_links.get_mut(&source)
+                && link.destination == destination
+                && link.token == token
+                && self.writable_streams.get(&destination).is_some_and(|state| {
+                    state.need_drain
+                        && !state.destroy_requested
+                        && !state.end_requested
+                        && !state.finished
+                })
+                && let Some(state) = self.readable_from_streams.get_mut(&source)
+                && !state.destroy_requested
+            {
+                link.awaiting_drain = true;
+                state.flowing = false;
+                state.paused = true;
+                self.mirror_readable_bool(source, "readableFlowing", false);
+            }
         }
         Ok(result)
+    }
+
+    /// Resume only the still-live edge that acquired the backpressure
+    /// obligation. EventEmitter snapshots can retain this callback after
+    /// unpipe, and guest emit("drain") or public mirror writes cannot discharge
+    /// the destination's authoritative outstanding write state.
+    pub(super) fn readable_pipe_drain(
+        &mut self,
+        receiver: Value,
+        builtin: &BuiltinFunction,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let Value::Object(destination) = receiver else {
+            return Ok(Value::Undefined);
+        };
+        let (Some(source), Some(token)) = (builtin.bound_object, builtin.iterator_handle) else {
+            return Ok(Value::Undefined);
+        };
+        let source = ObjectId(source);
+        let authenticated = self.readable_pipe_links.get(&source).is_some_and(|link| {
+            link.destination == destination && link.token == token && link.awaiting_drain
+        }) && self.readable_pipe_sources.get(&destination) == Some(&source);
+        if !authenticated {
+            return Ok(Value::Undefined);
+        }
+        let source_live = self
+            .readable_from_streams
+            .get(&source)
+            .is_some_and(|state| !state.destroy_requested);
+        let destination_live = self.writable_streams.get(&destination).is_some_and(|state| {
+            !state.destroy_requested && !state.end_requested && !state.finished
+        });
+        if !source_live || !destination_live {
+            self.detach_readable_pipe(source, destination, token);
+            return Ok(Value::Undefined);
+        }
+        let destination_state = &self.writable_streams[&destination];
+        if destination_state.need_drain
+            || destination_state.buffered_length != 0
+            || !destination_state.writes.is_empty()
+        {
+            return Ok(Value::Undefined);
+        }
+
+        // Draining is a control dependency of the source's later emissions.
+        // Carry both stream labels and the event's context through the resume,
+        // preflighting the label copy and successor pump before changing flow.
+        let mut label = self.writable_invocation_label(args)?;
+        label = self.join_owned_label_with_temporary_budget(
+            label,
+            &self.readable_from_streams[&source].lifecycle_label,
+        )?;
+        label = self.join_owned_label_with_temporary_budget(
+            label,
+            &self.writable_streams[&destination].lifecycle_label,
+        )?;
+        let previous_label_bytes =
+            Self::estimate_label_bytes(&self.readable_from_streams[&source].lifecycle_label);
+        let next_label_bytes = Self::estimate_label_bytes(&label);
+        let pump_bytes = if self.has_pending_readable_pump(source)
+            || self.readable_pump_reservations.contains_key(&source)
+        {
+            0
+        } else {
+            self.readable_pump_retained_bytes()
+        };
+        self.check_temporary_memory_budget(next_label_bytes.saturating_add(pump_bytes))?;
+        let reserved = self.reserve_readable_pump(source)?;
+        if let Err(error) = self.apply_memory_component_delta(previous_label_bytes, next_label_bytes) {
+            if reserved {
+                self.release_readable_pump_reservation(source);
+            }
+            return Err(error);
+        }
+        let previous_label = std::mem::replace(
+            &mut self
+                .readable_from_streams
+                .get_mut(&source)
+                .expect("authenticated source remains live without guest re-entry")
+                .lifecycle_label,
+            label,
+        );
+        if let Err(error) =
+            self.set_readable_flow_and_schedule_with_reservation(source, true, false, reserved)
+        {
+            self.readable_from_streams
+                .get_mut(&source)
+                .expect("failed scheduling preserves its source")
+                .lifecycle_label = previous_label;
+            self.estimated_memory_bytes = self
+                .estimated_memory_bytes
+                .saturating_sub(next_label_bytes)
+                .saturating_add(previous_label_bytes);
+            return Err(error);
+        }
+        self.readable_pipe_links
+            .get_mut(&source)
+            .expect("resume cannot re-enter guest code")
+            .awaiting_drain = false;
+        Ok(Value::Undefined)
     }
 
     pub(super) fn readable_pipe_end(
@@ -3880,6 +4086,8 @@ impl InterpreterCore {
 
                 if !snapshot.buffer.is_empty() {
                     let mut projected = snapshot;
+                    let projection_temporary_bytes =
+                        Self::estimate_readable_from_state_bytes(&projected);
                     let chunk = projected
                         .buffer
                         .pop_front()
@@ -3910,6 +4118,31 @@ impl InterpreterCore {
                             return Err(error);
                         }
                     };
+                    // A chunk may have been prefetched before a classified
+                    // drain resumed this source. Its emission depends on the
+                    // latest lifecycle label even when its payload is Public.
+                    // Reuse the owned chunk label when it already dominates;
+                    // otherwise account the full projection plus the new copy
+                    // before committing either the queue or its emission.
+                    let emission_label = if chunk.label >= projected.lifecycle_label {
+                        chunk.label
+                    } else {
+                        match self.clone_dominant_label_with_temporary_budget(
+                            &chunk.label,
+                            &projected.lifecycle_label,
+                            projection_temporary_bytes,
+                        ) {
+                            Ok(label) => label,
+                            Err(error) => {
+                                if pump_reserved {
+                                    self.release_readable_pump_reservation(object_id);
+                                }
+                                self.rollback_heap_to_len(allocation_checkpoint.0);
+                                self.estimated_memory_bytes = allocation_checkpoint.1;
+                                return Err(error);
+                            }
+                        }
+                    };
                     if let Err(error) = self.commit_readable_state(object_id, projected) {
                         if pump_reserved {
                             self.release_readable_pump_reservation(object_id);
@@ -3923,7 +4156,7 @@ impl InterpreterCore {
                         object_id,
                         "data",
                         vec![emitted_value],
-                        chunk.label,
+                        emission_label,
                     );
                     self.finish_readable_pump_after_emission(object_id, pump_reserved, emission)?;
                     return Ok(());

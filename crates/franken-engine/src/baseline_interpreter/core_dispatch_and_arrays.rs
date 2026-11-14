@@ -998,6 +998,11 @@ impl InterpreterCore {
                 builtin,
                 args,
             ),
+            BuiltinFunctionKind::StreamReadablePipeDrain => self.readable_pipe_drain(
+                receiver.unwrap_or(Value::Undefined),
+                builtin,
+                args,
+            ),
             BuiltinFunctionKind::StreamReadablePipeEnd => self.readable_pipe_end(
                 module,
                 receiver.unwrap_or(Value::Undefined),
@@ -3810,7 +3815,7 @@ impl InterpreterCore {
                         self.remove_event_listener(target_id, &event, &listener)
                     {
                     if Self::is_internal_readable_pipe_listener(&removed.listener) {
-                        self.detach_current_readable_pipe(target_id);
+                        self.detach_readable_pipe_listener(target_id, &removed.listener);
                     }
                     let _ = self.emit_event_listener_records(
                         module,
@@ -3835,6 +3840,9 @@ impl InterpreterCore {
                 let invalidates_pipe = event
                     .as_ref()
                     .is_none_or(|event| matches!(event.as_str(), Some("data" | "end")));
+                let invalidates_pipe_drain = event
+                    .as_ref()
+                    .is_none_or(|event| event.as_str() == Some("drain"));
                 // bd-asw4m.6: Node emits a `removeListener` meta-event for every
                 // listener dropped by removeAllListeners, but ONLY when a
                 // `removeListener` handler is registered — otherwise it takes the
@@ -3889,6 +3897,9 @@ impl InterpreterCore {
                 }
                 if invalidates_pipe {
                     self.detach_current_readable_pipe(target_id);
+                }
+                if invalidates_pipe_drain {
+                    self.detach_readable_pipes_to_destination(target_id);
                 }
                 Ok(Value::Object(target_id))
             }

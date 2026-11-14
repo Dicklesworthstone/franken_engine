@@ -9250,6 +9250,7 @@ fn readable_pipe_link_is_authenticated_memory_exact_and_atomic_bd_7h43f() {
         Some(&ReadablePipeLink {
             destination,
             token: 0,
+            awaiting_drain: false,
         })
     );
     assert_eq!(
@@ -9258,6 +9259,16 @@ fn readable_pipe_link_is_authenticated_memory_exact_and_atomic_bd_7h43f() {
     );
     assert_eq!(accepted.event_listener_records_for(source, "data").len(), 1);
     assert_eq!(accepted.event_listener_records_for(source, "end").len(), 1);
+    assert_eq!(
+        accepted.event_listener_records_for(destination, "drain").len(),
+        1
+    );
+    assert!(
+        accepted
+            .guest_event_listener_records_for(destination, "drain")
+            .is_empty(),
+        "the destination cannot export its source-bound drain capability"
+    );
     assert_eq!(
         accepted.readable_from_streams[&source].lifecycle_label,
         Label::Secret,
@@ -9274,9 +9285,27 @@ fn readable_pipe_link_is_authenticated_memory_exact_and_atomic_bd_7h43f() {
         Value::BuiltinFunction(builtin) => builtin.clone(),
         other => panic!("pipe data listener must be a builtin, got {other:?}"),
     };
+    let drain_builtin = match &accepted.event_listener_records_for(destination, "drain")[0].listener {
+        Value::BuiltinFunction(builtin) => builtin.clone(),
+        other => panic!("pipe drain listener must be a builtin, got {other:?}"),
+    };
     accepted.clear_readable_pipe_links();
     assert!(accepted.readable_pipe_links.is_empty());
     assert!(accepted.readable_pipe_sources.is_empty());
+    assert!(
+        accepted
+            .event_listener_records_for(destination, "drain")
+            .is_empty()
+    );
+    assert_eq!(
+        accepted.readable_pipe_drain(
+            Value::Object(destination),
+            &drain_builtin,
+            RegRange { start: 1, count: 0 },
+        ),
+        Ok(Value::Undefined),
+        "a retired drain callback cannot reactivate its source"
+    );
     assert!(
         accepted
             .event_listener_records_for(source, "data")
@@ -9297,6 +9326,31 @@ fn readable_pipe_link_is_authenticated_memory_exact_and_atomic_bd_7h43f() {
         Ok(Value::Undefined),
         "a removed callback from an in-flight EventEmitter snapshot is a no-op"
     );
+    assert_eq!(
+        accepted.estimated_memory_bytes(),
+        accepted.recompute_estimated_memory_bytes()
+    );
+
+    accepted
+        .readable_pipe(
+            &module,
+            Value::Object(source),
+            RegRange { start: 0, count: 1 },
+        )
+        .expect("replacement pipe after retiring the first token");
+    accepted.detach_readable_pipe(source, destination, 0);
+    assert_eq!(
+        accepted.readable_pipe_links[&source].token,
+        1,
+        "an old invocation's cleanup must not detach a re-entrant replacement"
+    );
+    assert!(accepted.readable_from_streams[&source].flowing);
+    assert_eq!(accepted.event_listener_records_for(source, "data").len(), 1);
+    assert_eq!(
+        accepted.event_listener_records_for(destination, "drain").len(),
+        1
+    );
+    accepted.clear_readable_pipe_links();
     assert_eq!(
         accepted.estimated_memory_bytes(),
         accepted.recompute_estimated_memory_bytes()
@@ -9419,7 +9473,7 @@ fn readable_pipe_link_is_authenticated_memory_exact_and_atomic_bd_7h43f() {
 
     let (mut listener_tight, tight_source, _) = make_streams();
     let tight_baseline = listener_tight.estimated_memory_bytes();
-    let listener_value_bytes = InterpreterCore::estimate_string_bytes("").saturating_mul(2);
+    let listener_value_bytes = InterpreterCore::estimate_string_bytes("").saturating_mul(3);
     listener_tight.config.max_total_memory_bytes = tight_baseline
         .saturating_add(listener_value_bytes)
         .saturating_sub(1);
@@ -9438,7 +9492,7 @@ fn readable_pipe_link_is_authenticated_memory_exact_and_atomic_bd_7h43f() {
 
     let (mut instruction_tight, instruction_source, _) = make_streams();
     let instructions_before = instruction_tight.instructions_executed;
-    instruction_tight.config.instruction_budget = instructions_before.saturating_add(3);
+    instruction_tight.config.instruction_budget = instructions_before.saturating_add(5);
     assert!(matches!(
         instruction_tight.readable_pipe(
             &module,
@@ -9558,7 +9612,7 @@ fn readable_pipe_link_is_authenticated_memory_exact_and_atomic_bd_7h43f() {
 }
 
 #[test]
-fn readable_pipe_backpressure_detaches_and_pauses_bd_7h43f() {
+fn readable_pipe_backpressure_waits_for_authenticated_drain_bd_305gi_2() {
     let module = test_module_with_functions(Vec::new(), Vec::new());
     let mut core = test_interpreter();
     let Value::Object(source) = core
@@ -9595,21 +9649,352 @@ fn readable_pipe_backpressure_detaches_and_pauses_bd_7h43f() {
         Value::BuiltinFunction(builtin) => builtin.clone(),
         other => panic!("pipe data listener must be a builtin, got {other:?}"),
     };
+    let drain_builtin = match &core.event_listener_records_for(destination, "drain")[0].listener {
+        Value::BuiltinFunction(builtin) => builtin.clone(),
+        other => panic!("pipe drain listener must be a builtin, got {other:?}"),
+    };
 
-    let error = core
-        .readable_pipe_data(
+    assert_eq!(
+        core.readable_pipe_data(
             &module,
             Value::Object(source),
             &data_builtin,
             RegRange { start: 1, count: 1 },
-        )
-        .expect_err("write(false) must fail closed until drain is modeled");
-    assert!(matches!(error, InterpreterError::TypeError { .. }));
-    assert!(core.readable_pipe_links.is_empty());
-    assert!(core.event_listener_records_for(source, "data").is_empty());
-    assert!(core.event_listener_records_for(source, "end").is_empty());
+        ),
+        Ok(Value::Bool(false)),
+        "write(false) accepts the chunk and waits for drain"
+    );
+    assert!(core.readable_pipe_links[&source].awaiting_drain);
+    assert_eq!(core.writable_streams[&destination].writes.len(), 1);
+    assert_eq!(core.event_listener_records_for(source, "data").len(), 1);
+    assert_eq!(core.event_listener_records_for(source, "end").len(), 1);
     assert!(!core.readable_from_streams[&source].flowing);
     assert!(core.readable_from_streams[&source].paused);
+
+    // A synthetic event and a forged public property cannot discharge a
+    // write that is still retained by the authoritative Writable queue.
+    core.mirror_writable_bool(destination, "writableNeedDrain", false);
+    assert_eq!(
+        core.readable_pipe_drain(
+            Value::Object(destination),
+            &drain_builtin,
+            RegRange { start: 2, count: 0 },
+        ),
+        Ok(Value::Undefined)
+    );
+    assert!(core.readable_pipe_links[&source].awaiting_drain);
+    assert!(!core.readable_from_streams[&source].flowing);
+
+    {
+        let state = core
+            .writable_streams
+            .get_mut(&destination)
+            .expect("live destination");
+        state.writes[0].status = WritableWriteStatus::Active(7);
+        state.lifecycle_label = Label::Secret;
+    }
+    core.next_writable_completion_token = 8;
+    core.sync_estimated_memory_bytes()
+        .expect("completion fixture accounting");
+    let completion = BuiltinFunction::writable_completion(
+        BuiltinFunctionKind::StreamWritableWriteDone,
+        destination,
+        7,
+    );
+    core.writable_write_done(&module, &completion, RegRange { start: 2, count: 0 })
+        .expect("complete the accepted write");
+    core.drive_writable_tick(destination, Some(&module))
+        .expect("release the completed write before drain");
+    assert!(core.writable_streams[&destination].writes.is_empty());
+    assert!(core.readable_pipe_links[&source].awaiting_drain);
+    assert!(!core.readable_from_streams[&source].flowing);
+    core.drive_writable_tick(destination, Some(&module))
+        .expect("native drain emission resumes the source");
+    assert!(!core.readable_pipe_links[&source].awaiting_drain);
+    assert!(core.readable_from_streams[&source].flowing);
+    assert!(!core.readable_from_streams[&source].paused);
+    assert_eq!(
+        core.readable_from_streams[&source].lifecycle_label,
+        Label::Secret,
+        "destination completion controls subsequent source emissions"
+    );
+    assert_eq!(
+        core.pending_readable_from_pumps.len(),
+        1,
+        "resume must reuse the already pending source pump"
+    );
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+
+    assert_eq!(
+        core.readable_pipe_data(
+            &module,
+            Value::Object(source),
+            &data_builtin,
+            RegRange { start: 1, count: 1 },
+        ),
+        Ok(Value::Bool(false))
+    );
+    core.readable_unpipe(
+        &module,
+        Value::Object(source),
+        RegRange { start: 0, count: 1 },
+    )
+    .expect("unpipe while waiting for the next drain");
+    assert!(core.readable_pipe_links.is_empty());
+    assert!(core.readable_pipe_sources.is_empty());
+    assert!(core.event_listener_records_for(source, "data").is_empty());
+    assert!(core.event_listener_records_for(source, "end").is_empty());
+    assert!(
+        core.event_listener_records_for(destination, "drain")
+            .is_empty()
+    );
+    core.readable_pipe_drain(
+        Value::Object(destination),
+        &drain_builtin,
+        RegRange { start: 2, count: 0 },
+    )
+    .expect("stale drain snapshot after unpipe");
+    assert!(!core.readable_from_streams[&source].flowing);
+    assert!(core.readable_from_streams[&source].paused);
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+}
+
+#[test]
+fn readable_pipe_drain_resume_refuses_memory_atomically_bd_305gi_2() {
+    let module = test_module_with_functions(Vec::new(), Vec::new());
+    let mut core = test_interpreter();
+    let Value::Object(source) = core
+        .construct_stream_readable(RegRange { start: 0, count: 0 })
+        .expect("Readable")
+    else {
+        panic!("Readable constructor must return an object");
+    };
+    let Value::Object(destination) = core
+        .construct_stream_writable(RegRange { start: 0, count: 0 })
+        .expect("Writable")
+    else {
+        panic!("Writable constructor must return an object");
+    };
+    core.write_reg(0, Value::Object(destination))
+        .expect("destination register");
+    core.readable_pipe(
+        &module,
+        Value::Object(source),
+        RegRange { start: 0, count: 1 },
+    )
+    .expect("pipe");
+    let drain_builtin = match &core.event_listener_records_for(destination, "drain")[0].listener {
+        Value::BuiltinFunction(builtin) => builtin.clone(),
+        other => panic!("pipe drain listener must be a builtin, got {other:?}"),
+    };
+
+    // Arrange the boundary immediately after the Writable has removed its
+    // completed records and cleared need_drain, before its drain callback.
+    core.readable_pipe_links
+        .get_mut(&source)
+        .expect("pipe edge")
+        .awaiting_drain = true;
+    let state = core.readable_from_streams.get_mut(&source).expect("source");
+    state.flowing = false;
+    state.paused = true;
+    core.mirror_readable_bool(source, "readableFlowing", false);
+    let completion_label = Label::Custom {
+        name: "drain-completion-provenance".repeat(512),
+        level: 7,
+    };
+    core.writable_streams
+        .get_mut(&destination)
+        .expect("destination")
+        .lifecycle_label = completion_label.clone();
+    core.sync_estimated_memory_bytes()
+        .expect("drain boundary accounting");
+    let before = core.estimated_memory_bytes();
+    let source_before = core.readable_from_streams[&source].clone();
+    let pumps_before = core.pending_readable_from_pumps.len();
+    core.config.max_total_memory_bytes = before;
+    assert!(matches!(
+        core.readable_pipe_drain(
+            Value::Object(destination),
+            &drain_builtin,
+            RegRange { start: 1, count: 0 },
+        ),
+        Err(InterpreterError::MemoryBudgetExceeded { .. })
+    ));
+    assert_eq!(core.readable_from_streams[&source], source_before);
+    assert!(core.readable_pipe_links[&source].awaiting_drain);
+    assert_eq!(core.pending_readable_from_pumps.len(), pumps_before);
+    assert!(core.readable_pump_reservations.is_empty());
+    assert_eq!(core.estimated_memory_bytes(), before);
+    assert_eq!(before, core.recompute_estimated_memory_bytes());
+
+    core.config.max_total_memory_bytes = u64::MAX;
+    core.readable_pipe_drain(
+        Value::Object(destination),
+        &drain_builtin,
+        RegRange { start: 1, count: 0 },
+    )
+    .expect("retry with room for the classified resume");
+    assert!(core.readable_from_streams[&source].flowing);
+    assert!(!core.readable_pipe_links[&source].awaiting_drain);
+    assert_eq!(
+        core.readable_from_streams[&source].lifecycle_label,
+        completion_label
+    );
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+}
+
+#[test]
+fn readable_pipe_buffered_chunk_observes_resume_provenance_bd_305gi_2() {
+    let module = test_module_with_functions(Vec::new(), Vec::new());
+    let mut core = test_interpreter();
+    let Value::Object(source) = core
+        .construct_stream_readable(RegRange { start: 0, count: 0 })
+        .expect("Readable")
+    else {
+        panic!("Readable constructor must return an object");
+    };
+    let Value::Object(destination) = core
+        .construct_stream_writable(RegRange { start: 0, count: 0 })
+        .expect("Writable")
+    else {
+        panic!("Writable constructor must return an object");
+    };
+    let completion_label = Label::Custom {
+        name: "classified-drain-before-repipe".repeat(512),
+        level: 7,
+    };
+    {
+        // Model a Public chunk prefetched before drain strengthened the
+        // source's lifecycle. A fresh destination must not erase that control
+        // dependency when the old pipe is replaced.
+        let state = core.readable_from_streams.get_mut(&source).expect("source");
+        state.object_mode = true;
+        state.buffer.push_back(ReadableBufferedChunk {
+            value: Value::str("queued"),
+            label: Label::Public,
+            units: 1,
+        });
+        state.buffered_length = 1;
+        state.lifecycle_label = completion_label.clone();
+    }
+    core.writable_streams
+        .get_mut(&destination)
+        .expect("destination")
+        .cork_depth = 1;
+    core.write_reg(0, Value::Object(destination))
+        .expect("destination register");
+    core.sync_estimated_memory_bytes()
+        .expect("prefetched chunk accounting");
+    core.readable_pipe(
+        &module,
+        Value::Object(source),
+        RegRange { start: 0, count: 1 },
+    )
+    .expect("pipe the classified source into a fresh Public destination");
+    let before = core.estimated_memory_bytes();
+    let source_before = core.readable_from_streams[&source].clone();
+    let projection_bytes = InterpreterCore::estimate_readable_from_state_bytes(
+        &core.readable_from_streams[&source],
+    );
+    let label_bytes = InterpreterCore::estimate_label_bytes(&completion_label);
+    core.config.max_total_memory_bytes = before
+        .saturating_add(projection_bytes)
+        .saturating_add(label_bytes)
+        .saturating_sub(1);
+    assert!(matches!(
+        core.drive_readable_from_pump(source, Some(&module)),
+        Err(InterpreterError::MemoryBudgetExceeded { .. })
+    ));
+    assert_eq!(core.readable_from_streams[&source], source_before);
+    assert!(core.writable_streams[&destination].writes.is_empty());
+    assert!(core.readable_pump_reservations.is_empty());
+    assert_eq!(core.estimated_memory_bytes(), before);
+    assert_eq!(before, core.recompute_estimated_memory_bytes());
+
+    core.config.max_total_memory_bytes = u64::MAX;
+    core.drive_readable_from_pump(source, Some(&module))
+        .expect("forward buffered chunk with the source's resumed label");
+    assert!(core.readable_from_streams[&source].buffer.is_empty());
+    assert_eq!(core.writable_streams[&destination].writes.len(), 1);
+    assert_eq!(
+        core.writable_streams[&destination].writes[0].label,
+        completion_label,
+        "the EventEmitter data argument must carry current lifecycle provenance"
+    );
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+}
+
+#[test]
+fn readable_pipe_drain_registration_precharges_cleanup_bd_305gi_2() {
+    let module = test_module_with_functions(Vec::new(), Vec::new());
+    let mut core = test_interpreter();
+    let Value::Object(source) = core
+        .construct_stream_readable(RegRange { start: 0, count: 0 })
+        .expect("Readable")
+    else {
+        panic!("Readable constructor must return an object");
+    };
+    let Value::Object(destination) = core
+        .construct_stream_writable(RegRange { start: 0, count: 0 })
+        .expect("Writable")
+    else {
+        panic!("Writable constructor must return an object");
+    };
+    core.write_reg(0, Value::Object(destination))
+        .expect("destination register");
+    core.readable_pipe(
+        &module,
+        Value::Object(source),
+        RegRange { start: 0, count: 1 },
+    )
+    .expect("pipe");
+    let guest = Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::ArrayIsArray));
+    let instructions = core.instructions_executed;
+    let bytes = core.estimated_memory_bytes();
+    core.config.instruction_budget = instructions.saturating_add(1);
+    assert!(matches!(
+        core.insert_event_listener(
+            destination,
+            "drain",
+            EventListenerRecord {
+                listener: guest.clone(),
+                once: false,
+            },
+            false,
+        ),
+        Err(InterpreterError::BudgetExhausted { .. })
+    ));
+    assert_eq!(core.instructions_executed, instructions);
+    assert_eq!(core.estimated_memory_bytes(), bytes);
+    assert_eq!(core.event_listener_records_for(destination, "drain").len(), 1);
+    core.config.instruction_budget = instructions.saturating_add(2);
+    core.insert_event_listener(
+        destination,
+        "drain",
+        EventListenerRecord {
+            listener: guest.clone(),
+            once: false,
+        },
+        false,
+    )
+    .expect("exact additional scan budget");
+    assert_eq!(core.instructions_executed, instructions + 2);
+    core.detach_readable_pipe(source, destination, 0);
+    let remaining = core.event_listener_records_for(destination, "drain");
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].listener, guest);
     assert_eq!(
         core.estimated_memory_bytes(),
         core.recompute_estimated_memory_bytes()

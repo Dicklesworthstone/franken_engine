@@ -9809,8 +9809,26 @@ impl InterpreterCore {
         prepend: bool,
     ) -> Result<(), InterpreterError> {
         let event = event.into();
+        // An active pipe's drain vector can grow through guest registration.
+        // Precharge the added postvalidation and teardown scan work before
+        // publishing the record, so pipe cleanup never needs a fallible charge.
+        let pipe_scan_cost = if event.as_str() == Some("drain")
+            && self.readable_pipe_sources.contains_key(&target_id)
+        {
+            2
+        } else {
+            0
+        };
+        let after_scans = self.instructions_executed.saturating_add(pipe_scan_cost);
+        if pipe_scan_cost != 0 && after_scans > self.config.instruction_budget {
+            return Err(InterpreterError::BudgetExhausted {
+                executed: self.instructions_executed,
+                budget: self.config.instruction_budget,
+            });
+        }
         let added_bytes = Self::estimate_event_listener_record_bytes(&event, &record);
         self.apply_memory_component_delta(0, added_bytes)?;
+        self.instructions_executed = after_scans;
         let listeners = self
             .event_listeners
             .entry(target_id)
@@ -10039,6 +10057,7 @@ impl InterpreterCore {
             Value::BuiltinFunction(BuiltinFunction {
                 kind: BuiltinFunctionKind::StreamReadablePipeData
                     | BuiltinFunctionKind::StreamReadablePipeEnd
+                    | BuiltinFunctionKind::StreamReadablePipeDrain
                     | BuiltinFunctionKind::StreamPipelineFinish
                     | BuiltinFunctionKind::StreamPipelineError,
                 ..
@@ -10188,7 +10207,7 @@ impl InterpreterCore {
                 continue;
             };
             if Self::is_internal_readable_pipe_listener(&removed.listener) {
-                self.detach_current_readable_pipe(target_id);
+                self.detach_readable_pipe_listener(target_id, &removed.listener);
                 continue;
             }
             self.emit_event_listener_records(
@@ -10223,7 +10242,8 @@ impl InterpreterCore {
 
     /// Teardown for one authenticated internal pipe callback.
     /// `readable_pipe` reserves the exact upper bound for postvalidation plus
-    /// both eventual listener scans before exposing the link to guest code.
+    /// all eventual listener scans before exposing the link to guest code.
+    /// Later drain registrations precharge their added work at insertion.
     pub(super) fn remove_readable_pipe_listener_records(
         &mut self,
         target_id: ObjectId,

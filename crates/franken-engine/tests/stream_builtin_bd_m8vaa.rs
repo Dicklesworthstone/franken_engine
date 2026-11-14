@@ -2061,6 +2061,142 @@ fn readable_pipe_returns_destination_and_preserves_lifecycle_order_bd_7h43f() {
     ]);
 }
 
+// Direct destructuring of require('stream') intentionally exercises the native
+// facade, including its authenticated pipe edge, rather than the JS fallback.
+#[test]
+fn native_pipe_resumes_after_async_destination_drain_bd_305gi_2() {
+    let source = r#"
+        const { Readable, Writable } = require('stream');
+        const source = Readable.from([1, 2, 3]);
+        const events = [];
+        const sink = new Writable({
+          objectMode: true,
+          highWaterMark: 1,
+          write(chunk, encoding, done) {
+            events.push('write:' + chunk);
+            setImmediate(() => {
+              events.push('paused:' + source.readableFlowing);
+              events.push('done:' + chunk);
+              done();
+            });
+          }
+        });
+        sink.on('finish', () => console.log(events.join(',')));
+        source.pipe(sink);
+    "#;
+    assert_eq!(
+        eval_console(source),
+        "write:1,paused:false,done:1,write:2,paused:false,done:2,write:3,paused:false,done:3"
+    );
+}
+
+#[test]
+fn native_pipe_zero_high_water_mark_preserves_all_chunks_bd_305gi_2() {
+    let source = r#"
+        const { Readable, Writable } = require('stream');
+        const chunks = [];
+        const source = Readable.from(['a', 'b', 'c', 'd']);
+        const sink = new Writable({
+          objectMode: true,
+          highWaterMark: 0,
+          write(chunk, encoding, done) { chunks.push(chunk); done(); }
+        });
+        sink.on('finish', () => console.log(chunks.join(',')));
+        console.log(source.pipe(sink) === sink);
+    "#;
+    assert_eq!(eval_console(source), "true\na,b,c,d");
+}
+
+#[test]
+fn native_pipe_synthetic_drain_cannot_release_pending_write_bd_305gi_2() {
+    let source = r#"
+        const { Readable, Writable } = require('stream');
+        const source = Readable.from([1, 2]);
+        const observations = [];
+        const sink = new Writable({
+          objectMode: true,
+          highWaterMark: 1,
+          write(chunk, encoding, done) {
+            setImmediate(() => {
+              sink.writableNeedDrain = false;
+              sink.emit('drain');
+              observations.push(chunk + ':' + source.readableFlowing);
+              done();
+            });
+          }
+        });
+        sink.on('finish', () => console.log(observations.join(',')));
+        source.pipe(sink);
+    "#;
+    assert_eq!(eval_console(source), "1:false,2:false");
+}
+
+#[test]
+fn native_pipe_replacement_during_drain_ignores_stale_callback_bd_305gi_2() {
+    let source = r#"
+        const { Readable, Writable } = require('stream');
+        const source = Readable.from([1, 2, 3]);
+        const firstChunks = [];
+        const secondChunks = [];
+        const first = new Writable({
+          objectMode: true,
+          highWaterMark: 1,
+          write(chunk, encoding, done) {
+            firstChunks.push(chunk);
+            setImmediate(done);
+          }
+        });
+        const second = new Writable({
+          objectMode: true,
+          highWaterMark: 1,
+          write(chunk, encoding, done) {
+            secondChunks.push(chunk);
+            setImmediate(done);
+          }
+        });
+        first.once('drain', () => {
+          source.unpipe(first);
+          source.pipe(second);
+          first.end();
+        });
+        second.on('finish', () => {
+          console.log(firstChunks.join(',') + '|' + secondChunks.join(','));
+        });
+        source.pipe(first);
+    "#;
+    assert_eq!(eval_console(source), "1|2,3");
+}
+
+#[test]
+fn native_pipe_removing_drain_listeners_cancels_resume_bd_305gi_2() {
+    for observe_removal in [false, true] {
+        let source = format!(
+            r#"
+                const {{ Readable, Writable }} = require('stream');
+                const source = Readable.from([1, 2, 3]);
+                const chunks = [];
+                const sink = new Writable({{
+                  objectMode: true,
+                  highWaterMark: 1,
+                  write(chunk, encoding, done) {{
+                    chunks.push(chunk);
+                    setImmediate(() => {{
+                      sink.removeAllListeners('drain');
+                      done();
+                      setImmediate(() => {{
+                        console.log(chunks.join(',') + ':' + source.readableFlowing);
+                      }});
+                    }});
+                  }}
+                }});
+                if ({observe_removal}) sink.on('removeListener', () => {{}});
+                source.pipe(sink);
+            "#
+        );
+        assert_eq!(eval_console(&source), "1:false");
+    }
+}
+
 #[test]
 fn pipe_unpipe_and_event_emitter_inheritance() {
     assert_cases(&[

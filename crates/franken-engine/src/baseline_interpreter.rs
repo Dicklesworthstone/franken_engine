@@ -3946,6 +3946,10 @@ pub enum BuiltinFunctionKind {
     /// The defining module's synchronous URL metadata resolver. Append only:
     /// builtin ordinals participate in deterministic register hashing.
     ImportMetaResolve,
+    /// Source-bound listener that resumes an authenticated native pipe after
+    /// its Writable has discharged the outstanding backpressure obligation.
+    /// Append only: builtin ordinals participate in deterministic hashing.
+    StreamReadablePipeDrain,
 }
 
 /// Annex B B.2.2.2-14: each String HTML method's tag and attribute name.
@@ -4295,19 +4299,20 @@ impl BuiltinFunction {
 
     fn readable_pipe_listener(
         kind: BuiltinFunctionKind,
-        destination: ObjectId,
+        peer: ObjectId,
         token: u32,
     ) -> Self {
         debug_assert!(matches!(
             kind,
             BuiltinFunctionKind::StreamReadablePipeData
                 | BuiltinFunctionKind::StreamReadablePipeEnd
+                | BuiltinFunctionKind::StreamReadablePipeDrain
         ));
         Self {
             kind,
             module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: Some(token),
-            bound_object: Some(destination.0),
+            bound_object: Some(peer.0),
         }
     }
 
@@ -5572,6 +5577,7 @@ impl BuiltinFunction {
             BuiltinFunctionKind::StreamReadableUnpipe => "unpipe",
             BuiltinFunctionKind::StreamReadablePipeData => "ondata",
             BuiltinFunctionKind::StreamReadablePipeEnd => "onend",
+            BuiltinFunctionKind::StreamReadablePipeDrain => "ondrain",
             BuiltinFunctionKind::StreamReadableSetEncoding => "setEncoding",
             BuiltinFunctionKind::StreamReadableDestroy => "destroy",
             BuiltinFunctionKind::StreamWritableWrite => "write",
@@ -15579,6 +15585,9 @@ struct ReadablePumpReservation {
 struct ReadablePipeLink {
     destination: ObjectId,
     token: u32,
+    /// Only the authenticated destination's completed drain can release this
+    /// obligation; public Writable property mirrors are not authoritative.
+    awaiting_drain: bool,
 }
 
 /// Completion state for one engine-owned Writable write record. The token is

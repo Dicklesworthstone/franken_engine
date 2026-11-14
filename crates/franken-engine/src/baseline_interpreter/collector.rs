@@ -2275,6 +2275,7 @@ impl InterpreterCore {
             let ReadablePipeLink {
                 destination,
                 token: _,
+                awaiting_drain: _,
             } = link;
             m.object(*source);
             m.object(*destination);

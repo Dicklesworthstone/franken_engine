@@ -28,7 +28,8 @@ use crate::jsx_tsx_parser::{
 use crate::parser::{CanonicalEs2020Parser, Es2020Parser, ParseErrorCode};
 use crate::react_jsx_lowering::{
     BuildMode, CallConvention, ElementType, LoweredChild, LoweredElement, LoweredPropValue,
-    PropsEntry, ReactLoweringConfig, ReactLoweringResult, SourceLocation, lower_parse_result,
+    LoweringDiagnostic, PropsEntry, ReactLoweringConfig, ReactLoweringResult, SourceLocation,
+    lower_parse_result,
 };
 use crate::security_epoch::SecurityEpoch;
 use crate::ts_normalization::{
@@ -114,6 +115,10 @@ pub struct ReactModuleCompileResult {
     pub metadata: ReactCompileMetadata,
     /// Number of emitted JSX elements and fragments, including nested ones.
     pub jsx_elements: usize,
+    /// Lowering diagnostics from every JSX root, including expression containers.
+    /// Spans refer to the original module when its location can be established.
+    #[serde(default)]
+    pub diagnostics: Vec<LoweringDiagnostic>,
 }
 
 /// Metadata about the compilation process.
@@ -474,6 +479,7 @@ pub fn compile_react_module(
         source_map,
         metadata,
         jsx_elements: emitter.jsx_elements,
+        diagnostics: emitter.diagnostics,
     })
 }
 
@@ -492,6 +498,7 @@ pub fn generate_module_compilation_evidence(
         "output_hash": output_hash,
         "source_map_hash": result.source_map.as_ref().map(|map| ContentHash::compute(map.as_bytes())),
         "jsx_elements": result.jsx_elements,
+        "diagnostics": result.diagnostics,
         "feature_families": result.metadata.feature_families,
         "transform_counts": result.metadata.transform_counts,
     });
@@ -641,6 +648,7 @@ struct JavaScriptEmitter<'a> {
     feature_families: BTreeSet<String>,
     transform_counts: BTreeMap<String, u32>,
     jsx_elements: usize,
+    diagnostics: Vec<LoweringDiagnostic>,
 }
 
 impl<'a> JavaScriptEmitter<'a> {
@@ -667,6 +675,7 @@ impl<'a> JavaScriptEmitter<'a> {
             feature_families: BTreeSet::new(),
             transform_counts: BTreeMap::new(),
             jsx_elements: 0,
+            diagnostics: Vec::new(),
         }
     }
 
@@ -691,6 +700,10 @@ impl<'a> JavaScriptEmitter<'a> {
             .extend(extract_feature_families(parsed));
         for (family, count) in count_transforms(&lowered) {
             *self.transform_counts.entry(family).or_default() += count;
+        }
+        for mut diagnostic in lowered.diagnostics {
+            diagnostic.span = diagnostic.span.and_then(|span| self.diagnostic_span(span));
+            self.diagnostics.push(diagnostic);
         }
         self.element(&lowered.element)
     }
@@ -884,13 +897,59 @@ impl<'a> JavaScriptEmitter<'a> {
                         });
                 }
                 self.expression_depth += 1;
+                let diagnostics_start = self.diagnostics.len();
                 let emitted = self.lower_and_emit(&parsed);
+                if self.locations.is_some() && expression_offset.is_none() {
+                    // Without an enclosing expression span, matching text in
+                    // the parent JSX is not evidence of this child's origin.
+                    for diagnostic in &mut self.diagnostics[diagnostics_start..] {
+                        diagnostic.span = None;
+                    }
+                }
                 self.expression_depth -= 1;
                 self.source_offset = previous_offset;
                 self.original_offset = previous_original;
                 emitted
             });
         javascript_expression(&transformed?.code)
+    }
+
+    fn diagnostic_span(&self, span: SourceSpan) -> Option<SourceSpan> {
+        let Some(locations) = self.locations else {
+            return Some(span);
+        };
+        let relative_start = usize::try_from(span.start_offset).ok()?;
+        let relative_end = usize::try_from(span.end_offset).ok()?;
+        let length = relative_end.checked_sub(relative_start)?;
+        let normalized_start = self.source_offset.checked_add(relative_start)?;
+        let normalized_end = self.source_offset.checked_add(relative_end)?;
+        let start = self
+            .original_offset
+            .and_then(|offset| offset.checked_add(relative_start))
+            .or_else(|| locations.range_origin(normalized_start..normalized_end))?;
+        let end = start.checked_add(length)?;
+        // Type erasure must not turn a location guess into a diagnostic claim.
+        if locations.original.get(start..end)?
+            != locations.normalized.get(normalized_start..normalized_end)?
+        {
+            return None;
+        }
+        let start_line = locations.original_lines.partition_point(|offset| *offset <= start) - 1;
+        let end_line = locations.original_lines.partition_point(|offset| *offset <= end) - 1;
+        let start_column = locations.original[locations.original_lines[start_line]..start]
+            .chars()
+            .count();
+        let end_column = locations.original[locations.original_lines[end_line]..end]
+            .chars()
+            .count();
+        Some(SourceSpan::new(
+            start as u64,
+            end as u64,
+            start_line as u64 + 1,
+            start_column as u64 + 1,
+            end_line as u64 + 1,
+            end_column as u64 + 1,
+        ))
     }
 
     fn element_source_location(&self, element: &LoweredElement) -> Option<SourceLocation> {
@@ -1831,6 +1890,76 @@ export default class extends class {} { render() { return <footer/>; } }
         assert!(
             decoded_mappings(map).contains(&(position.0, position.1, Some((5, 9)))),
             "{map}"
+        );
+    }
+
+    #[test]
+    fn module_diagnostics_preserve_nested_warnings_and_original_tsx_spans() {
+        use crate::react_jsx_lowering::LoweringDiagnosticCode;
+
+        let source = "interface Props { label: string; }\nexport function App(props: Props) {\n  return <main>{[1].map(n => <i key=\"first\" key=\"last\">{props.label}</i>)}</main>;\n}\n";
+        let result = compile_react_module(
+            source,
+            ReactInputLanguage::Tsx,
+            &ReactCompileConfig::default(),
+        )
+        .expect("complete typed module with a nested JSX warning");
+        let duplicate = result
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == LoweringDiagnosticCode::DuplicateKey)
+            .expect("nested duplicate-key warning must survive module compilation");
+        let span = duplicate.span.expect("original JSX location is recoverable");
+        assert_eq!(
+            &source[span.start_offset as usize..span.end_offset as usize],
+            "key=\"last\""
+        );
+        assert_eq!(span.start_line, 3);
+        assert_eq!(span.end_line, 3);
+    }
+
+    #[test]
+    fn module_diagnostics_do_not_borrow_an_unknown_expression_origin() {
+        let source = "<b key=\"first\" key=\"last\"/>";
+        let locations = OriginalLocations::new(source, source);
+        let config = ReactCompileConfig::default();
+        let mut emitter = JavaScriptEmitter::new(
+            source,
+            &config.lowering_config,
+            &config.parser_config,
+            Some(&locations),
+        );
+        emitter.original_offset = Some(0);
+        emitter
+            .expression("<i key=\"first\" key=\"last\"/>", None)
+            .expect("the child is valid but has no known source location");
+        assert!(!emitter.diagnostics.is_empty());
+        assert!(
+            emitter
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.span.is_none())
+        );
+    }
+
+    #[test]
+    fn module_evidence_binds_diagnostics() {
+        let source = "export default <div key=\"a\" key=\"b\"/>;";
+        let config = ReactCompileConfig::default();
+        let mut result = compile_react_module(source, ReactInputLanguage::Jsx, &config)
+            .expect("duplicate keys produce a warning, not a compile failure");
+        assert!(!result.diagnostics.is_empty());
+        let original =
+            generate_module_compilation_evidence(&result, &config, ReactInputLanguage::Jsx)
+                .unwrap();
+        result.diagnostics.clear();
+        let changed =
+            generate_module_compilation_evidence(&result, &config, ReactInputLanguage::Jsx)
+                .unwrap();
+        assert_eq!(original.output_spec.code_hash, changed.output_spec.code_hash);
+        assert_ne!(
+            original.compile_receipt.process_hash,
+            changed.compile_receipt.process_hash
         );
     }
 

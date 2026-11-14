@@ -5,6 +5,13 @@ on:
     branches: [main]
     paths:
       - 'crates/franken-core/**'
+      - 'crates/franken-engine/src/bin/frankenctl.rs'
+      - 'crates/franken-engine/src/react_compilation_pipeline.rs'
+      - 'crates/franken-engine/src/react_client_build.rs'
+      - 'crates/franken-engine/src/jsx_tsx_parser.rs'
+      - 'crates/franken-engine/tests/frankenctl_cli.rs'
+      - 'crates/franken-engine/Cargo.toml'
+      - 'rust-toolchain.toml'
       - 'crates/franken-engine/src/checkpoint.rs'
       - 'crates/franken-engine/src/execution_orchestrator.rs'
       - 'crates/franken-engine/src/containment_executor.rs'
@@ -617,3 +624,80 @@ jobs:
           done
           git diff --exit-code || status=1
           exit "$status"
+
+  react:
+    name: Native React compilation and CLI regressions
+    if: github.event_name != 'workflow_dispatch' || inputs.scope != 'buffer'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      RUSTUP_TOOLCHAIN: nightly-2026-09-21
+      CARGO_BUILD_JOBS: '1'
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_TERM_COLOR: never
+    steps:
+      - name: Check out the exact source using the runner's Git
+        run: |
+          set -euo pipefail
+          test -z "$(find . -mindepth 1 -maxdepth 1 -print -quit)"
+          git init --initial-branch=main .
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          GIT_TERMINAL_PROMPT=0 git -c http.userAgent='franken_engine-agent (+https://github.com/Dicklesworthstone/franken_engine)' fetch --no-tags --depth=1 origin "$GITHUB_SHA"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Bound compiler memory on the hosted runner
+        run: |
+          set -euo pipefail
+          sudo fallocate -l 16G /mnt/franken-react-swapfile
+          sudo chmod 600 /mnt/franken-react-swapfile
+          sudo mkswap /mnt/franken-react-swapfile
+          sudo swapon /mnt/franken-react-swapfile
+      - name: Install pinned Rust
+        run: |
+          set -euo pipefail
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component clippy --component rustfmt
+          rustc --version --verbose
+          cargo --version
+      - name: Check React and CLI formatting
+        run: |
+          rustfmt --edition 2024 --check --config skip_children=true \
+            crates/franken-engine/src/bin/frankenctl.rs \
+            crates/franken-engine/src/react_compilation_pipeline.rs \
+            crates/franken-engine/src/react_client_build.rs \
+            crates/franken-engine/src/jsx_tsx_parser.rs \
+            crates/franken-engine/tests/frankenctl_cli.rs
+      - name: Check the production React library and CLI targets
+        if: always()
+        run: |
+          cargo check --locked -j1 -p frankenengine-engine --no-default-features \
+            --lib --bin frankenctl --test frankenctl_cli
+      - name: Lint the production React library and CLI targets
+        if: always()
+        run: |
+          cargo clippy --locked -j1 -p frankenengine-engine --no-default-features \
+            --lib --bin frankenctl --test frankenctl_cli -- -D warnings
+      - name: Execute React compilation pipeline tests
+        if: always()
+        run: |
+          cargo test --locked -j1 -p frankenengine-engine --no-default-features --lib \
+            react_compilation_pipeline -- --nocapture --test-threads=1
+      - name: Execute JSX and TSX parser tests
+        if: always()
+        run: |
+          cargo test --locked -j1 -p frankenengine-engine --no-default-features --lib \
+            jsx_tsx_parser -- --nocapture --test-threads=1
+      - name: Execute React client build tests
+        if: always()
+        run: |
+          cargo test --locked -j1 -p frankenengine-engine --no-default-features --lib \
+            react_client_build -- --nocapture --test-threads=1
+      - name: Execute React CLI end-to-end regressions
+        if: always()
+        run: |
+          cargo test --locked -j1 -p frankenengine-engine --no-default-features \
+            --test frankenctl_cli react -- --nocapture --test-threads=1
+      - name: Verify validation did not alter tracked source
+        if: always()
+        run: git diff --exit-code

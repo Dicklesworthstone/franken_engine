@@ -5346,3 +5346,314 @@ fn frankenctl_benchmark_verify_incomplete_bundle_fails_with_runtime_remediation(
 
     let _ = fs::remove_dir_all(bundle_dir);
 }
+
+
+// These tests exercise the public CLI with complete source files. The tiny
+// classic factory below observes emitted call semantics; it is not a React
+// renderer and does not establish browser, SSR or hydration compatibility.
+mod react_module_cli {
+    use std::fs;
+    use std::path::Path;
+    use std::process::{Command, Output};
+
+    use frankenengine_engine::ast::ParseGoal;
+    use frankenengine_engine::execution_orchestrator::LabFixtureExecutionOrchestratorExt as _;
+    use frankenengine_engine::execution_orchestrator::{
+        ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig,
+    };
+    use frankenengine_engine::hash_tiers::ContentHash;
+    use frankenengine_engine::parser::{CanonicalEs2020Parser, Es2020Parser};
+    use serde_json::{Value, json};
+
+    fn compile(input: &Path, source_form: &str, runtime: Option<&str>) -> Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_frankenctl"));
+        command
+            .args(["react", "compile", "--input"])
+            .arg(input)
+            .args(["--source-form", source_form, "--sourcemap"]);
+        if let Some(runtime) = runtime {
+            command.args(["--runtime", runtime]);
+        }
+        command
+            .output()
+            .expect("execute public React compile command")
+    }
+
+    fn successful_report(output: &Output) -> Value {
+        assert!(
+            output.status.success(),
+            "command failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).expect("CLI emits a JSON report")
+    }
+
+    fn assert_compilation_identity(report: &Value, input: &Path, source: &str) {
+        let compilation = &report["compilation"];
+        let code = compilation["generated_code"]
+            .as_str()
+            .expect("generated code");
+        let source_hash = ContentHash::compute(source.as_bytes()).to_hex();
+        let code_hash = ContentHash::compute(code.as_bytes()).to_hex();
+        assert_eq!(compilation["input_hash"], source_hash);
+        assert_eq!(compilation["receipt"]["input_hash"], source_hash);
+        assert_eq!(compilation["generated_code_hash"], code_hash);
+        assert_eq!(compilation["receipt"]["output_hash"], code_hash);
+        assert_eq!(
+            compilation["config_hash"],
+            compilation["receipt"]["config_hash"]
+        );
+        let map: Value = serde_json::from_str(
+            compilation["source_map"]
+                .as_str()
+                .expect("requested source map"),
+        )
+        .expect("source-map JSON");
+        assert_eq!(map["version"], 3);
+        assert_eq!(map["sources"][0], input.display().to_string());
+        assert_eq!(map["sourcesContent"][0], source);
+        CanonicalEs2020Parser
+            .parse(code, ParseGoal::Module)
+            .expect("delivered code is a valid ECMAScript module");
+    }
+
+    fn execute_emitted_module(root: &Path, generated: &str) -> Vec<String> {
+        let entry = root.join("compiled.mjs");
+        fs::write(&entry, generated).expect("write delivered module");
+        let package = ExtensionPackage {
+            extension_id: "react-module-cli-execution".to_string(),
+            source: generated.to_string(),
+            source_file: Some(entry.display().to_string()),
+            module_root: Some(root.display().to_string()),
+            capabilities: vec!["builtin".to_string(), "module_load".to_string()],
+            version: "1.0.0".to_string(),
+            metadata: Default::default(),
+        };
+        ExecutionOrchestrator::new(OrchestratorConfig {
+            parse_goal: ParseGoal::Module,
+            ..Default::default()
+        })
+        .execute(&package)
+        .unwrap_or_else(|error| {
+            panic!("CLI-emitted JavaScript did not execute: {error}\n{generated}")
+        })
+        .console_output
+        .into_iter()
+        .map(|line| line.message)
+        .collect()
+    }
+
+    #[test]
+    fn jsx_module_preserves_imports_exports_directives_and_executes_in_source_order() {
+        let root = tempfile::tempdir().expect("module fixture");
+        let input = root.path().join("Card.jsx");
+        let source = r#""use client";
+import { suffix } from "./suffix.mjs";
+const calls = [];
+const React = {
+    createElement(type, props, ...children) {
+        calls.push(type);
+        return {type, props, children};
+    }
+};
+export function Card(label) {
+    return <article title={label}><b>{label + suffix}</b></article>;
+}
+export default Card;
+console.log(JSON.stringify(Card("ready")));
+console.log(calls.join(","));
+"#;
+        fs::write(&input, source).expect("write complete JSX module");
+        fs::write(root.path().join("suffix.mjs"), "export const suffix = '!';\n")
+            .expect("write local dependency");
+
+        let report = successful_report(&compile(&input, "jsx", Some("classic")));
+        assert_compilation_identity(&report, &input, source);
+        let code = report["compilation"]["generated_code"].as_str().unwrap();
+        assert!(code.starts_with("\"use client\";"));
+        assert!(code.contains("export default Card"));
+        let lines = execute_emitted_module(root.path(), code);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(
+            serde_json::from_str::<Value>(&lines[0]).unwrap(),
+            json!({
+                "type": "article",
+                "props": {"title": "ready"},
+                "children": [{
+                    "type": "b",
+                    "props": null,
+                    "children": ["ready!"]
+                }]
+            })
+        );
+        assert_eq!(lines[1], "b,article");
+    }
+
+    #[test]
+    fn tsx_module_erases_types_and_keeps_runtime_and_original_file_identity() {
+        let root = tempfile::tempdir().expect("module fixture");
+        let input = root.path().join("TypedCard.tsx");
+        let source = r#""use client";
+import { label } from "./labels.mjs";
+type Props = { value: string };
+export default function Card(props: Props) {
+    return <section>{label + props.value}</section>;
+}
+"#;
+        fs::write(&input, source).expect("write complete TSX module");
+
+        let first = successful_report(&compile(&input, "tsx", Some("jsx-dev")));
+        assert_compilation_identity(&first, &input, source);
+        let code = first["compilation"]["generated_code"].as_str().unwrap();
+        assert!(code.starts_with("\"use client\";"));
+        assert!(code.contains("jsxDEV"));
+        assert!(code.contains("react/jsx-dev-runtime"));
+        assert!(code.contains("./labels.mjs"));
+        assert!(code.contains("export default function Card"));
+        assert!(!code.contains("type Props"));
+        assert!(!code.contains("props: Props"));
+        assert_eq!(
+            first,
+            successful_report(&compile(&input, "tsx", Some("jsx-dev"))),
+            "identical file bytes and options must produce identical receipts and maps"
+        );
+    }
+
+    #[test]
+    fn type_only_tsx_file_is_an_empty_executable_module() {
+        let root = tempfile::tempdir().expect("module fixture");
+        let input = root.path().join("types.tsx");
+        let source = "export interface Props { title: string }\n";
+        fs::write(&input, source).expect("write type-only module");
+
+        let report = successful_report(&compile(&input, "tsx", Some("automatic")));
+        assert_compilation_identity(&report, &input, source);
+        let code = report["compilation"]["generated_code"].as_str().unwrap();
+        assert!(!code.contains("interface"));
+        assert!(!code.contains("react/jsx-runtime"));
+        assert!(execute_emitted_module(root.path(), code).is_empty());
+    }
+
+    #[test]
+    fn malformed_module_is_refused_before_an_existing_report_is_touched() {
+        let root = tempfile::tempdir().expect("module fixture");
+        let input = root.path().join("Broken.jsx");
+        let report = root.path().join("compile.json");
+        let previous = b"previous report must survive";
+        fs::write(&report, previous).expect("existing report");
+        for source in [
+            "export const = <div/>;",
+            "export default <div></span>;",
+            "export default <div>{value +}</div>;",
+        ] {
+            fs::write(&input, source).expect("malformed module fixture");
+            let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+                .args(["react", "compile", "--input"])
+                .arg(&input)
+                .args(["--source-form", "jsx", "--runtime", "automatic", "--out"])
+                .arg(&report)
+                .output()
+                .expect("execute malformed compile");
+            assert!(!output.status.success(), "{source}");
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains("react compile failed"),
+                "unexpected refusal for {source}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(fs::read(&report).unwrap().as_slice(), previous);
+        }
+    }
+
+    #[test]
+    fn explicit_fragment_form_retains_its_expression_boundary() {
+        let root = tempfile::tempdir().expect("fragment fixture");
+        let input = root.path().join("fragment.jsx");
+        let source = "<><span>one</span><span>two</span></>";
+        fs::write(&input, source).expect("fragment source");
+        let report = successful_report(&compile(&input, "jsx-fragment", None));
+        assert_compilation_identity(&report, &input, source);
+        assert!(
+            report["compilation"]["generated_code"]
+                .as_str()
+                .unwrap()
+                .contains("Fragment")
+        );
+
+        fs::write(&input, "export default <span>whole module</span>;")
+            .expect("module supplied to fragment API");
+        assert!(
+            !compile(&input, "jsx-fragment", None).status.success(),
+            "fragment mode must not silently accept a complete module"
+        );
+    }
+
+    #[test]
+    fn doctor_accepts_complete_jsx_tsx_and_type_only_source_files() {
+        let root = tempfile::tempdir().expect("doctor fixture");
+        for (name, source) in [
+            (
+                "App.jsx",
+                "import { label } from './labels.js'; export function App() { return <div>{label}</div>; }\n",
+            ),
+            (
+                "Card.tsx",
+                "type Props = { title: string };\nexport default function Card(props: Props) {\n    return <b>{props.title}</b>;\n}\n",
+            ),
+            ("labels.js", "export const label = 'ready';\n"),
+            ("types.ts", "export interface Props { title: string }\n"),
+        ] {
+            fs::write(root.path().join(name), source).expect("doctor source file");
+        }
+        let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+            .args(["react", "doctor", "--input"])
+            .arg(root.path())
+            .output()
+            .expect("execute public React doctor");
+        let report = successful_report(&output);
+        assert_eq!(report["blocked"], false);
+        assert_eq!(report["ready"], true);
+        assert_eq!(report["entries_analyzed"], 0);
+        assert_eq!(report["support_repro_index"]["entry_count"], 0);
+    }
+
+    #[test]
+    fn doctor_retains_lowering_warnings_inside_module_expression_containers() {
+        let root = tempfile::tempdir().expect("doctor fixture");
+        let input = root.path().join("DuplicateKey.jsx");
+        fs::write(
+            &input,
+            "export function App() { return <section>{[1].map(value => <span key=\"first\" key=\"last\">{value}</span>)}</section>; }\n",
+        )
+        .expect("module with nested JSX warning");
+        let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+            .args(["react", "doctor", "--input"])
+            .arg(&input)
+            .args(["--min-severity", "warning"])
+            .output()
+            .expect("execute doctor warning case");
+        let report: Value =
+            serde_json::from_slice(&output.stdout).expect("doctor emits its diagnostic report");
+        let entries = report["support_repro_index"]["entries"]
+            .as_array()
+            .expect("diagnostic entries");
+        assert!(
+            entries.iter().any(|entry| {
+                entry["severity"] == "warning"
+                    && entry["tags"]
+                        .as_array()
+                        .is_some_and(|tags| tags.iter().any(|tag| tag == "FE-RJL-0010"))
+            }),
+            "the module compiler must retain duplicate-key lowering warnings: {report}"
+        );
+        assert!(
+            entries
+                .iter()
+                .all(|entry| !entry["entry_id"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("ast-compile-error")),
+            "a valid module with a lowering warning is not a compile error: {report}"
+        );
+    }
+}

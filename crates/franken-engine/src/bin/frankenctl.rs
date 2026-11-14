@@ -92,9 +92,9 @@ use frankenengine_engine::react_client_build::{
     ReactClientBuild, ReactClientBuildConfig, build_react_client,
 };
 use frankenengine_engine::react_compilation_pipeline::{
-    ReactCompileConfig, ReactCompileEvidence, ReactCompileResult,
-    ReactInputLanguage as ReactPipelineInputLanguage, compile_react_source,
-    generate_compilation_evidence,
+    ReactCompileConfig, ReactCompileEvidence, ReactCompileMetadata,
+    ReactInputLanguage as ReactPipelineInputLanguage, compile_react_module, compile_react_source,
+    generate_compilation_evidence, generate_module_compilation_evidence,
 };
 use frankenengine_engine::react_doctor_preflight::{
     DoctorConfig as ReactDoctorConfig, DoctorReport as ReactDoctorReport,
@@ -12618,26 +12618,45 @@ fn execute_react_compile(args: ReactCompileArgs) -> Result<i32, String> {
     );
     if output.shipped {
         let language = react_pipeline_language(args.source_form)?;
-        let config = react_compile_config(
+        let mut config = react_compile_config(
             args.source_form,
             args.runtime_mode,
             args.build_mode,
             args.sourcemap,
         );
-        let result = compile_react_source(&source, language, &config).map_err(|error| {
-            format!(
-                "react compile failed for `{}`: {error}",
-                args.input.display()
-            )
-        })?;
-        let evidence = generate_compilation_evidence(&result, &config, language)
-            .map_err(|error| format!("react compile evidence generation failed: {error}"))?;
-        output.compilation = Some(build_react_cli_compilation_output(
-            &result,
-            &evidence,
-            language,
-            args.runtime_mode,
-        ));
+        config.lowering_config.source_file = Some(args.input.display().to_string());
+        output.compilation = Some(match args.source_form {
+            ReactSourceForm::JsxFragment => {
+                let result = compile_react_source(&source, language, &config).map_err(|error| {
+                    format!("react compile failed for `{}`: {error}", args.input.display())
+                })?;
+                let evidence = generate_compilation_evidence(&result, &config, language)
+                    .map_err(|error| format!("react compile evidence generation failed: {error}"))?;
+                build_react_cli_compilation_output(
+                    &result.generated_code,
+                    result.source_map.as_deref(),
+                    &result.metadata,
+                    &evidence,
+                    language,
+                    args.runtime_mode,
+                )
+            }
+            ReactSourceForm::Jsx | ReactSourceForm::Tsx => {
+                let result = compile_react_module(&source, language, &config).map_err(|error| {
+                    format!("react compile failed for `{}`: {error}", args.input.display())
+                })?;
+                let evidence = generate_module_compilation_evidence(&result, &config, language)
+                    .map_err(|error| format!("react compile evidence generation failed: {error}"))?;
+                build_react_cli_compilation_output(
+                    &result.generated_code,
+                    result.source_map.as_deref(),
+                    &result.metadata,
+                    &evidence,
+                    language,
+                    args.runtime_mode,
+                )
+            }
+        });
     }
 
     if let Some(path) = &args.out {
@@ -13111,9 +13130,9 @@ fn analyze_react_doctor_input_path(
         );
         config.lowering_config.source_file = Some(file_path.display().to_string());
 
-        match compile_react_source(&source, language, &config) {
+        match compile_react_module(&source, language, &config) {
             Ok(compiled) => {
-                for (diag_idx, diag) in compiled.lowering_result.diagnostics.iter().enumerate() {
+                for (diag_idx, diag) in compiled.diagnostics.iter().enumerate() {
                     let severity = match diag.severity {
                         LoweringDiagnosticSeverity::Info => continue,
                         LoweringDiagnosticSeverity::Warning => ReactMismatchSeverity::Warning,
@@ -14094,7 +14113,9 @@ fn react_compile_config(
 }
 
 fn build_react_cli_compilation_output(
-    result: &ReactCompileResult,
+    generated_code: &str,
+    source_map: Option<&str>,
+    metadata: &ReactCompileMetadata,
     evidence: &ReactCompileEvidence,
     language: ReactPipelineInputLanguage,
     runtime_mode: Option<ReactRuntimeMode>,
@@ -14104,13 +14125,13 @@ fn build_react_cli_compilation_output(
         runtime_mode: runtime_mode
             .map(|mode| mode.as_str().to_string())
             .unwrap_or_else(|| "automatic".to_string()),
-        generated_code: result.generated_code.clone(),
-        source_map: result.source_map.clone(),
+        generated_code: generated_code.to_string(),
+        source_map: source_map.map(str::to_string),
         input_hash: evidence.input_spec.source_hash.to_hex(),
         generated_code_hash: evidence.output_spec.code_hash.to_hex(),
-        config_hash: result.metadata.config_hash.to_hex(),
-        feature_families: result.metadata.feature_families.clone(),
-        transform_counts: result.metadata.transform_counts.clone(),
+        config_hash: metadata.config_hash.to_hex(),
+        feature_families: metadata.feature_families.clone(),
+        transform_counts: metadata.transform_counts.clone(),
         receipt: ReactCliCompilationReceiptOutput {
             schema_version: evidence.compile_receipt.schema_version.clone(),
             component: evidence.compile_receipt.component.clone(),
@@ -15525,6 +15546,8 @@ fn react_compile_usage() -> String {
         "behavior:",
         "  emits a deterministic react-cli report tied to the embedded React capability contract",
         "  and includes generated code, optional V3 source maps, and receipt metadata.",
+        "  jsx/tsx compile complete modules, preserving imports, exports and directive prologues.",
+        "  jsx-fragment accepts a single JSX expression and does not accept --runtime.",
     ]
     .join("\n")
 }

@@ -784,9 +784,9 @@ frankenctl react  tsx        ─┼─ × ─ ───┤              ─┼�
                   jsx-frag    ┘         └─ automatic   ─┘    └─ hydration
 ```
 
-- **`frankenctl react compile`** lowers a single source file under a chosen `--source-form` and `--runtime`. `jsx-fragment` is a degenerate form (no runtime required).
+- **`frankenctl react compile`** lowers a complete JS/JSX or TS/TSX module under `--source-form jsx|tsx`, preserving imports, exports, and directive prologues while erasing TypeScript types. Choose `--runtime classic|automatic|jsx-dev`; `--sourcemap` retains the input filename and original source. The explicit `jsx-fragment` form accepts one JSX expression and needs no runtime option.
 - **`frankenctl react build --target client`** offers a bounded ES-module client-build preview. It compiles complete local JS/JSX/TS/TSX modules, follows static imports and re-exports, preserves module boundaries and live bindings, and emits JavaScript assets with source maps. `ssr` and `hydration` remain unsupported and return exit 25.
-- **`frankenctl react doctor`** consumes a React component catalog and emits operator artifacts (`--summary`, `--current-epoch`, `--min-severity`, `--target` filters, `--include-resolved`).
+- **`frankenctl react doctor`** compiles actual source files with `--input <file|directory>` to report syntax errors and JSX lowering warnings, including warnings inside component functions. It also accepts an existing mismatch catalog with `--catalog` and supports severity and target filters.
 - **`frankenctl react contract`** emits the React compile/build contract artifact for downstream consumption.
 
 The client preview accepts an explicit source root and runtime-provider map:
@@ -832,7 +832,9 @@ the preview is not an npm bundler or a claim of SSR/hydration support.
 
 ### React doctor diagnostics
 
-`frankenctl react doctor` is the operator's tool for catalog-level triage. It reads a React component catalog (typically the output of a build run), classifies issues by severity, and filters by target (`--target ssr|client|hydration`) and minimum severity. It surfaces unresolved issues by default; `--include-resolved` widens to historical state for audit. The output is a structured report consumable by `/dp/frankentui` operator views.
+`frankenctl react doctor --input ./app` compiles complete source modules through the same native module compiler as `react compile`. It reports malformed surrounding JavaScript and retains JSX lowering warnings, including nested expression containers; ordinary JavaScript and type-only TypeScript files are valid inputs. The existing source-pattern checks also flag potential SSR and hydration hazards. These diagnostics do not execute a renderer or establish SSR/hydration parity.
+
+`--catalog <path>` reads an existing mismatch catalog. `--min-severity` and `--target nodejs|bun|deno|v8_reference` filter the report; `--include-resolved` includes historical entries. The structured output remains consumable by `/dp/frankentui` operator views.
 
 ---
 

@@ -371,6 +371,40 @@ test('path metadata validates synchronously before scheduling and snapshots norm
   while (jobs.length) jobs.shift()();
   assert.deepEqual(effects, [['utimes', 'file', '-2.5', '1.25'], ['chmod', 'file', 0o640]]);
 });
+test('path truncate callback matches Node lengths, defaults and deferred completion', async () => {
+  await both(async (api, {file}) => {
+    const states = [];
+    for (const length of [4, 8, -1, -0, -9007199254740991]) {
+      const result = await invoke(api, 'truncate', file, length);
+      states.push([result, fs.readFileSync(file).toString('hex')]);
+    }
+    fs.writeFileSync(file, 'default');
+    await invoke(api, 'truncate', file);
+    states.push(fs.statSync(file).size);
+    return states;
+  });
+});
+test('invalid path truncate callback lengths fail synchronously without queueing work', () => {
+  const effects = [], jobs = [];
+  const {api} = candidate({ truncateSync(...args) { effects.push(args); } },
+    { queueMicrotask: job => jobs.push(job) });
+  for (const [length, code] of [
+    ...[null, '2', {}, 2n].map(value => [value, 'ERR_INVALID_ARG_TYPE']),
+    ...[NaN, Infinity, -Infinity, 1.5, -1.5, 9007199254740992, -9007199254740992]
+      .map(value => [value, 'ERR_OUT_OF_RANGE']),
+  ]) {
+    assert.throws(() => fs.truncate('file', length, () => {}), {code});
+    assert.throws(() => api.truncate('file', length, () => {}), {code});
+    assert.equal(jobs.length, 0);
+    assert.deepEqual(effects, []);
+  }
+  const done = error => assert.equal(error, null);
+  api.truncate('file', done);
+  api.truncate('file', -0, done);
+  api.truncate('file', -7, done);
+  while (jobs.length) jobs.shift()();
+  assert.deepEqual(effects, [['file', 0], ['file', 0], ['file', 0]]);
+});
 test('later option mutation cannot upgrade a queued removal to recursive deletion', async () => {
   const jobs=[],received=[];const {api}=candidate({rmSync(path,settings){received.push([path,settings.recursive,settings.force]);}},
     {queueMicrotask:fn=>jobs.push(fn)});

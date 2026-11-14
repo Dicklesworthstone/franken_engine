@@ -122,7 +122,7 @@
     return __franken_fs_write('\0fsop:symlink', target, path, type);
   }
   function truncateSync(path, length) {
-    return __franken_fs_write('\0fsop:truncate', path, length);
+    return __franken_fs_write('\0fsop:truncate', path, descriptorLength(length));
   }
   function mkdtempSync(prefix, options) {
     return __franken_fs_write('\0fsop:mkdtemp', prefix, options);

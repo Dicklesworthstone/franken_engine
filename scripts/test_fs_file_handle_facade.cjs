@@ -28,6 +28,7 @@ function fixture(hook = () => {}, globals = {}) {
       case 'fsync': return fs.fsyncSync(...args);
       case 'fdatasync': return fs.fdatasyncSync(...args);
       case 'ftruncate': return fs.ftruncateSync(...args);
+      case 'truncate': return fs.truncateSync(...args);
       case 'fchmod': return fs.fchmodSync(...args);
       case 'chmod': return fs.chmodSync(...args);
       // The intrinsic receives already-normalized seconds. Node's public API
@@ -164,6 +165,43 @@ test('negative zero is canonical before unsigned descriptor arguments cross the 
   await handle.chmod('600');
   assert.equal((await handle.stat()).size, 0);
   await handle.close();
+});
+
+test('path truncate sync and promises match Node for shrinking, extension and zero defaults', async () => {
+  async function exercise(api, file) {
+    fs.writeFileSync(file, 'abcdef');
+    const states = [];
+    for (const length of [4, 8, -1, undefined, -0, -9007199254740991]) {
+      assert.equal(api.truncateSync(file, length), undefined);
+      states.push(fs.readFileSync(file).toString('hex'));
+    }
+    fs.writeFileSync(file, 'promise');
+    assert.equal(await api.promises.truncate(file, 3), undefined);
+    states.push(fs.readFileSync(file, 'utf8'));
+    assert.equal(await api.promises.truncate(file), undefined);
+    states.push(fs.statSync(file).size);
+    return states;
+  }
+  const { facade, file, calls } = fixture();
+  assert.deepEqual(await exercise(facade, file), await exercise(fs, file + '-node'));
+  assert.deepEqual(calls.map(call => call.args[1]), [4, 8, 0, 0, 0, 0, 3, 0]);
+  assert(calls.every(call => call.operation === 'truncate' && call.authority === 'fs_write'));
+});
+
+test('invalid path truncate lengths reject before any host call or file mutation', async () => {
+  const { facade, calls, file } = fixture();
+  fs.writeFileSync(file, 'must remain intact');
+  for (const [length, code] of [
+    ...[null, '2', 'bad', true, {}, 2n].map(value => [value, 'ERR_INVALID_ARG_TYPE']),
+    ...[NaN, Infinity, -Infinity, 1.5, -1.5, 9007199254740992, -9007199254740992]
+      .map(value => [value, 'ERR_OUT_OF_RANGE']),
+  ]) {
+    assert.throws(() => fs.truncateSync(file, length), { code });
+    assert.throws(() => facade.truncateSync(file, length), { code });
+    await assert.rejects(facade.promises.truncate(file, length), { code });
+    assert.equal(calls.length, 0);
+    assert.equal(fs.readFileSync(file, 'utf8'), 'must remain intact');
+  }
 });
 
 test('string encodings, byte counts, buffer identity and sync use descriptors', async () => {

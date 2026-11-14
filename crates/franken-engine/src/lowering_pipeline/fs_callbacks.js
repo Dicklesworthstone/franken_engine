@@ -217,7 +217,12 @@
   optional('access', fs.accessSync, voidResult);
   optional('rmdir', fs.rmdirSync, voidResult, ['recursive', 'maxRetries', 'retryDelay']);
   optional('rm', fs.rmSync, voidResult, ['recursive', 'force', 'maxRetries', 'retryDelay']);
-  optional('truncate', fs.truncateSync, voidResult);
+  const truncateSync = fs.truncateSync;
+  install('truncate', function (path, length, cb) {
+    if (typeof length === 'function') { cb = length; length = undefined; }
+    callback(cb); path = pathValue(path); length = descriptorLength(length);
+    run(function () { return truncateSync(path, length); }, cb, voidResult);
+  });
   one('unlink', fs.unlinkSync, voidResult);
   two('rename', fs.renameSync, true);
   const chmodSync = fs.chmodSync;
@@ -286,13 +291,15 @@
   });
   install('ftruncate', function (descriptor, length, cb) {
     if (typeof length === 'function') { cb = length; length = undefined; }
-    callback(cb); fd(descriptor);
-    if (length === undefined) length = 0;
-    if (typeof length !== 'number') throw invalid('len');
-    if (length % 1 !== 0 || length < -9007199254740991 || length > 9007199254740991) throw range('len');
-    if (length <= 0) length = 0;
+    callback(cb); fd(descriptor); length = descriptorLength(length);
     run(function () { return ftruncateSync(descriptor, length); }, cb, voidResult);
   });
+  function descriptorLength(length) {
+    if (length === undefined) return 0;
+    if (typeof length !== 'number') throw invalid('len');
+    if (length % 1 !== 0 || length < -9007199254740991 || length > 9007199254740991) throw range('len');
+    return length <= 0 ? 0 : length;
+  }
   function descriptorMode(mode) {
     if (typeof mode === 'string') {
       let parsed = 0, i = 0;

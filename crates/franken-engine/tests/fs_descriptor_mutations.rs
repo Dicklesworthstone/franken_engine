@@ -101,6 +101,106 @@ fn mutations(entries: &[(HostIoRequest, HostIoOutcome)]) -> Vec<FsOperation> {
 }
 
 #[test]
+fn path_truncate_validates_direct_and_deferred_calls_before_recording_destructive_effects() {
+    let source = r#"
+import { truncateSync, statSync, readFileSync } from 'node:fs';
+const fs = require('fs');
+let rejected = 0;
+for (const length of [null, '2', true, {}, 2n]) {
+  try { truncateSync('direct.txt', length); }
+  catch (error) { if (error.code !== 'ERR_INVALID_ARG_TYPE') throw error; rejected += 1; }
+}
+for (const length of [NaN, Infinity, -Infinity, 1.5, -1.5, 9007199254740992, -9007199254740992]) {
+  try { truncateSync('direct.txt', length); }
+  catch (error) { if (error.code !== 'ERR_OUT_OF_RANGE') throw error; rejected += 1; }
+}
+console.log('UNCHANGED', rejected, statSync('direct.txt').size, readFileSync('direct.txt', 'utf8'));
+truncateSync('direct.txt', 4);
+truncateSync('direct.txt', 8);
+console.log('EXTEND', readFileSync('direct.txt').toString('hex'));
+truncateSync('default.txt');
+truncateSync('zero.txt', -0);
+console.log('DEFAULT', statSync('default.txt').size, statSync('zero.txt').size);
+let invalidCallbacks = 0;
+try { fs.truncate('callback.txt', 1.5, function () { invalidCallbacks += 1; }); }
+catch (error) { console.log('CALLBACK_INVALID', error.code, statSync('callback.txt').size); }
+let returned = false;
+fs.truncate('callback.txt', -7, function (error) {
+  if (error) throw error;
+  console.log('CALLBACK', returned, invalidCallbacks, fs.statSync('callback.txt').size);
+});
+fs.promises.truncate('promise.txt', '2').then(function () {
+  throw new Error('invalid promise truncate resolved');
+}, function (error) {
+  console.log('PROMISE_INVALID', returned, error.code, fs.statSync('promise.txt').size);
+  return fs.promises.truncate('promise.txt', 3);
+}).then(function () {
+  console.log('PROMISE', fs.readFileSync('promise.txt', 'utf8'));
+});
+returned = true;
+"#;
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let root = tempfile::tempdir().expect("sandbox");
+        for path in [
+            "direct.txt",
+            "default.txt",
+            "zero.txt",
+            "callback.txt",
+            "promise.txt",
+        ] {
+            std::fs::write(root.path().join(path), b"abcdef").unwrap();
+        }
+        let (mut output, entries) = run(source, root.path(), lane);
+        // The two deferred APIs need not complete in the same order. Each
+        // asserts its own completion timing and the file state it observes.
+        output.sort();
+        assert_eq!(
+            output,
+            [
+                "CALLBACK true 0 0",
+                "CALLBACK_INVALID ERR_OUT_OF_RANGE 6",
+                "DEFAULT 0 0",
+                "EXTEND 6162636400000000",
+                "PROMISE abc",
+                "PROMISE_INVALID true ERR_INVALID_ARG_TYPE 6",
+                "UNCHANGED 12 6 abcdef",
+            ]
+        );
+        let mut lengths: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for (request, outcome) in entries {
+            let HostIoRequest::FsMeta {
+                operation: FsOperation::Truncate,
+                path,
+                arguments,
+                data,
+            } = request
+            else {
+                continue;
+            };
+            assert_eq!(arguments.len(), 1, "even default lengths must be explicit");
+            assert!(data.is_empty());
+            assert_eq!(
+                outcome,
+                Ok(HostIoResponse::FsMeta {
+                    result: FsMetaResult::Unit
+                })
+            );
+            lengths.entry(path).or_default().extend(arguments);
+        }
+        assert_eq!(lengths["direct.txt"], ["4", "8"]);
+        assert_eq!(lengths["default.txt"], ["0"]);
+        assert_eq!(lengths["zero.txt"], ["0"]);
+        assert_eq!(lengths["callback.txt"], ["0"]);
+        assert_eq!(lengths["promise.txt"], ["3"]);
+        assert_eq!(lengths.values().map(Vec::len).sum::<usize>(), 6);
+        assert_eq!(
+            std::fs::read(root.path().join("direct.txt")).unwrap(),
+            b"abcd\0\0\0\0"
+        );
+    }
+}
+
+#[test]
 fn path_metadata_normalizes_direct_calls_callbacks_and_promises_before_recording() {
     use std::os::unix::fs::MetadataExt;
 

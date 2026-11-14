@@ -818,6 +818,135 @@ fn exclusive_and_sync_opens_preserve_symlink_containment() {
     provider.close_fd(fd).unwrap();
 }
 
+fn path_truncate_request(path: &str, arguments: &[&str]) -> HostIoRequest {
+    HostIoRequest::FsMeta {
+        operation: FsOperation::Truncate,
+        path: path.to_string(),
+        arguments: arguments.iter().map(|value| (*value).to_string()).collect(),
+        data: Vec::new(),
+    }
+}
+
+#[test]
+fn path_truncate_validates_wire_length_and_byte_cap_before_opening_or_changing_a_file() {
+    let (root, _default_provider) = sandbox();
+    let provider = SandboxedHostIo::with_root_and_limit(&root, 8).unwrap();
+    let path = root.join("bounded-path.txt");
+    std::fs::write(&path, b"abcdef").unwrap();
+    let before = std::fs::metadata(&path).unwrap().modified().unwrap();
+    // The public API supplies omitted/undefined as "0". An absent provider
+    // argument is malformed wire data, not authorization to erase the file.
+    let invalid: &[&[&str]] = &[
+        &[],
+        &[""],
+        &["NaN"],
+        &["inf"],
+        &["-inf"],
+        &["1.5"],
+        &["-1"],
+        &["-0"],
+        &["not-a-number"],
+        &["18446744073709551616"],
+    ];
+    for arguments in invalid {
+        let request = path_truncate_request("bounded-path.txt", arguments);
+        assert_eq!(
+            provider.perform(&request, &[HostIoCapability::FsRead]),
+            Err(HostIoError::CapabilityMissing {
+                capability: HostIoCapability::FsWrite
+            })
+        );
+        assert!(matches!(
+            provider.perform(&request, &[HostIoCapability::FsWrite]),
+            Err(HostIoError::Fs { code, .. }) if code == "EINVAL"
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), b"abcdef");
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            before
+        );
+    }
+    for length in [9, u64::MAX] {
+        for target in ["bounded-path.txt", "not-opened.txt"] {
+            let request = path_truncate_request(target, &[&length.to_string()]);
+            assert_eq!(
+                provider.perform(&request, &[HostIoCapability::FsRead]),
+                Err(HostIoError::CapabilityMissing {
+                    capability: HostIoCapability::FsWrite
+                })
+            );
+            assert!(
+                matches!(
+                    provider.perform(&request, &[HostIoCapability::FsWrite]),
+                    Err(HostIoError::Io { detail }) if detail.contains("8-byte cap")
+                ),
+                "the byte cap must be enforced before target lookup/open"
+            );
+        }
+        assert_eq!(std::fs::read(&path).unwrap(), b"abcdef");
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            before
+        );
+        assert!(!root.join("not-opened.txt").exists());
+    }
+    for (length, expected) in [("8", b"abcdef\0\0".as_slice()), ("0", b"".as_slice())] {
+        assert_eq!(
+            provider.perform(
+                &path_truncate_request("bounded-path.txt", &[length]),
+                &[HostIoCapability::FsWrite]
+            ),
+            Ok(HostIoResponse::FsMeta {
+                result: FsMetaResult::Unit
+            })
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), expected);
+    }
+}
+
+#[test]
+fn path_truncate_replays_exact_lengths_and_resource_refusals_without_touching_later_data() {
+    let (root, _default_provider) = sandbox();
+    let provider = SandboxedHostIo::with_root_and_limit(&root, 8).unwrap();
+    let path = root.join("replayed-truncate.txt");
+    std::fs::write(&path, b"abcdef").unwrap();
+    let requests = [
+        path_truncate_request("replayed-truncate.txt", &["4"]),
+        path_truncate_request("replayed-truncate.txt", &["9"]),
+    ];
+    let recorder = InMemoryHostIoTranscript::recording();
+    recorder.begin_execution().unwrap();
+    for request in &requests {
+        let outcome = provider.perform(request, &[HostIoCapability::FsWrite]);
+        recorder.record(request, &outcome);
+    }
+    let entries = recorder.finish_execution().unwrap();
+    assert_eq!(
+        entries[0].1,
+        Ok(HostIoResponse::FsMeta {
+            result: FsMetaResult::Unit
+        })
+    );
+    assert!(matches!(&entries[1].1, Err(HostIoError::Io { .. })));
+    assert_eq!(std::fs::read(&path).unwrap(), b"abcd");
+    std::fs::write(&path, b"new data").unwrap();
+    let encoded = serde_json::to_string(&entries).unwrap();
+    let replay = InMemoryHostIoTranscript::replaying(serde_json::from_str(&encoded).unwrap());
+    replay.begin_execution().unwrap();
+    for (request, outcome) in &entries {
+        assert_eq!(replay.replay(request), Some(outcome.clone()));
+    }
+    assert_eq!(replay.finish_execution().unwrap(), entries);
+    assert_eq!(std::fs::read(&path).unwrap(), b"new data");
+    let diverged = InMemoryHostIoTranscript::replaying(entries);
+    diverged.begin_execution().unwrap();
+    assert!(matches!(
+        diverged.replay(&path_truncate_request("replayed-truncate.txt", &["3"])),
+        Some(Err(HostIoError::SandboxViolation { .. }))
+    ));
+    assert!(diverged.finish_execution().is_err());
+}
+
 fn path_timestamp_request(path: &str, arguments: &[&str]) -> HostIoRequest {
     HostIoRequest::FsMeta {
         operation: FsOperation::Utimes,

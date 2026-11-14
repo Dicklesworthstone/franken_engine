@@ -2592,10 +2592,23 @@ impl SandboxedHostIo {
                 }
             }
             FsOperation::Truncate => {
+                // The guest bridge supplies the default as an explicit zero.
+                // Missing or malformed wire values must never erase a file.
                 let length = arguments
                     .first()
                     .and_then(|value| value.parse::<u64>().ok())
-                    .unwrap_or(0);
+                    .ok_or_else(|| HostIoError::Fs {
+                        code: "EINVAL".to_string(),
+                        detail: "truncate requires an unsigned integer length".to_string(),
+                    })?;
+                if length > self.max_bytes {
+                    return Err(HostIoError::Io {
+                        detail: format!(
+                            "truncate length {length} exceeds the {}-byte cap",
+                            self.max_bytes
+                        ),
+                    });
+                }
                 #[cfg(not(unix))]
                 {
                     let _ = length;

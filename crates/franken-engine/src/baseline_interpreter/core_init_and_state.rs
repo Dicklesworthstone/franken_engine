@@ -2800,6 +2800,38 @@ impl InterpreterCore {
             .is_some_and(|value| matches!(value, Value::Bool(true)))
     }
 
+    /// A missing length is zero; only safe integer Numbers are accepted.
+    /// Normalize before recording so malformed arguments can never become a
+    /// destructive zero-length truncation at the string-based host boundary.
+    fn fs_length_argument(&mut self, value: Option<&Value>) -> Result<String, InterpreterError> {
+        let number = match value {
+            None | Some(Value::Undefined) => 0.0,
+            Some(Value::Int(number)) => *number as f64,
+            Some(Value::Float(number)) => number.inner(),
+            _ => {
+                return Err(self.throw_buffer_node_error(
+                    "TypeError",
+                    "ERR_INVALID_ARG_TYPE",
+                    "File length must be a number".to_string(),
+                ));
+            }
+        };
+        if !number.is_finite() || number.fract() != 0.0 || number.abs() > MAX_SAFE_INTEGER as f64 {
+            return Err(self.throw_buffer_node_error(
+                "RangeError",
+                "ERR_OUT_OF_RANGE",
+                "File length is out of range".to_string(),
+            ));
+        }
+        // Node clamps negative safe integers to zero, including -0. The
+        // provider receives an explicit, canonical unsigned decimal length.
+        Ok(if number <= 0.0 {
+            "0".to_string()
+        } else {
+            (number as u64).to_string()
+        })
+    }
+
     /// Directly lowered fs calls and module-facade calls share the same wire
     /// representation: decimal uint32 permission bits, including canonical +0.
     fn fs_mode_argument(&mut self, value: Option<&Value>) -> Result<String, InterpreterError> {
@@ -2901,9 +2933,7 @@ impl InterpreterCore {
             FsOperation::Symlink | FsOperation::Rename | FsOperation::CopyFile => {
                 vec![self.fs_path_argument(args.get(1))?]
             }
-            FsOperation::Truncate => args
-                .get(1)
-                .map_or_else(Vec::new, |value| vec![self.fs_value_argument(value)]),
+            FsOperation::Truncate => vec![self.fs_length_argument(args.get(1))?],
             FsOperation::Chmod => vec![self.fs_mode_argument(args.get(1))?],
             FsOperation::Utimes => vec![
                 format!(
@@ -2946,11 +2976,9 @@ impl InterpreterCore {
                         .map_or_else(String::new, |value| self.fs_value_argument(value))
                 )];
                 match operation {
-                    FsOperation::Ftruncate => arguments.push(format!(
-                        "length={}",
-                        args.get(1)
-                            .map_or_else(String::new, |value| self.fs_value_argument(value))
-                    )),
+                    FsOperation::Ftruncate => {
+                        arguments.push(format!("length={}", self.fs_length_argument(args.get(1))?))
+                    }
                     FsOperation::Fchmod => {
                         arguments.push(format!("mode={}", self.fs_mode_argument(args.get(1))?));
                     }

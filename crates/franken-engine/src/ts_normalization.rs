@@ -3267,22 +3267,22 @@ namespace Demo {
     }
 
     #[test]
-    fn rejects_unsupported_namespace_export_class_forms() {
+    fn lowers_namespace_export_class_forms() {
         let source = "namespace Demo { export class Worker {} }";
-        let error = normalize_typescript_to_es2020(
+        let output = normalize_typescript_to_es2020(
             source,
             &TsNormalizationConfig::default(),
             "trace",
             "decision",
             "policy",
         )
-        .expect_err("unsupported namespace class export should fail");
+        .expect("namespace class exports should lower");
 
-        assert_eq!(
-            error,
-            TsNormalizationError::UnsupportedSyntax {
-                feature: "unsupported namespace export form",
-            }
+        assert!(output.normalized_source.contains("class Worker {}"));
+        assert!(
+            output
+                .normalized_source
+                .contains("__franken_namespace_0.Worker = Worker;")
         );
     }
 

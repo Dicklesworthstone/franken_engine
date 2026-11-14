@@ -19,27 +19,7 @@ pub(super) fn rewrite(
     replacements: &BTreeMap<String, String>,
     ignored_bindings: &BTreeSet<usize>,
 ) -> Result<Vec<Edit>, &'static str> {
-    let mut resolver = Resolver {
-        source,
-        tokens: &lexed.tokens,
-        pairs: &lexed.pairs,
-        ignored_bindings,
-        cursor: 0,
-        depth: 0,
-        scopes: vec![Scope {
-            parent: None,
-            var_scope: 0,
-            names: BTreeSet::new(),
-            allow_await: false,
-            allow_yield: false,
-            return_allowed: false,
-            break_allowed: false,
-            continue_allowed: false,
-            control_boundary: true,
-            labels: BTreeMap::new(),
-        }],
-        references: Vec::new(),
-    };
+    let mut resolver = Resolver::new(source, lexed, ignored_bindings);
     while resolver.cursor < resolver.tokens.len() {
         resolver.statement(0)?;
     }
@@ -83,6 +63,21 @@ pub(super) fn rewrite(
     Ok(edits)
 }
 
+/// Locate an exported class with the same grammar used to resolve its names.
+/// A heritage expression may itself contain classes, functions or object
+/// literals, so its first opening brace need not be the declaration body.
+pub(super) fn class_declaration_end(
+    source: &str,
+    lexed: &Lexed,
+    start: usize,
+) -> Result<usize, &'static str> {
+    let ignored_bindings = BTreeSet::new();
+    let mut resolver = Resolver::new(source, lexed, &ignored_bindings);
+    resolver.cursor = start;
+    resolver.class(0, true)?;
+    Ok(resolver.cursor)
+}
+
 struct Scope {
     parent: Option<usize>,
     var_scope: usize,
@@ -113,7 +108,31 @@ struct Resolver<'a> {
     references: Vec<Reference>,
 }
 
-impl Resolver<'_> {
+impl<'a> Resolver<'a> {
+    fn new(source: &'a str, lexed: &'a Lexed, ignored_bindings: &'a BTreeSet<usize>) -> Self {
+        Self {
+            source,
+            tokens: &lexed.tokens,
+            pairs: &lexed.pairs,
+            ignored_bindings,
+            cursor: 0,
+            depth: 0,
+            scopes: vec![Scope {
+                parent: None,
+                var_scope: 0,
+                names: BTreeSet::new(),
+                allow_await: false,
+                allow_yield: false,
+                return_allowed: false,
+                break_allowed: false,
+                continue_allowed: false,
+                control_boundary: true,
+                labels: BTreeMap::new(),
+            }],
+            references: Vec::new(),
+        }
+    }
+
     fn text(&self, index: usize) -> &str {
         self.tokens
             .get(index)

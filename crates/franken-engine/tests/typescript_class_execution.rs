@@ -84,6 +84,96 @@ fn generic_subclasses_keep_constructor_super_and_method_dispatch() {
 }
 
 #[test]
+fn namespace_class_exports_keep_self_bindings_across_namespace_mutation() {
+    assert_output(
+        r#"
+        namespace Tasks {
+            export class Task<T> {
+                constructor(public value: T) {}
+                static original() { return Task; }
+                read(): T { return this.value; }
+            }
+            export function make(value: number) { return new Task(value); }
+        }
+        const Original = Tasks.Task;
+        Tasks.Task = class Replacement {};
+        console.log(Original.original() === Original,
+            Tasks.make(7) instanceof Original, Tasks.make(7).read());
+        "#,
+        &["true true 7"],
+    );
+}
+
+#[test]
+fn namespace_classes_use_merged_exports_for_heritage_and_free_references() {
+    assert_output(
+        r#"
+        namespace Model {
+            export let offset = 2;
+            export class Base<T> {
+                constructor(public value: T) {}
+                read(): T { return this.value; }
+            }
+        }
+        namespace Model {
+            export class Derived extends Base<number> implements Readable<number> {
+                read(): number { return super.read() + offset; }
+                withDefault(offset: number = 10) { return this.value + offset; }
+            }
+        }
+        const item = new Model.Derived(4);
+        console.log(item.read(), item.withDefault(), item instanceof Model.Base);
+        Model.offset = 5;
+        console.log(item.read());
+        "#,
+        &["6 14 true", "9"],
+    );
+}
+
+#[test]
+fn namespace_class_evaluation_precedes_export_publication() {
+    assert_output(
+        r#"
+        const seen = [];
+        namespace Model {
+            export const name = 'read';
+            function base() { seen.push('base'); return class { value() { return 3; } }; }
+            function key() { seen.push('key'); return name; }
+            function field() { seen.push('field'); return typeof Model.Derived; }
+            export class Derived extends base() {
+                [key()]() { return super.value(); }
+                static beforePublication = field();
+                static self = Derived;
+            }
+            seen.push(Model.Derived === Derived ? 'published' : 'missing');
+        }
+        console.log(seen.join(','), Model.Derived.beforePublication,
+            Model.Derived.self === Model.Derived, new Model.Derived().read());
+        "#,
+        &["base,key,field,published undefined true 3"],
+    );
+}
+
+#[test]
+fn namespace_class_declarations_preserve_temporal_dead_zones_and_private_members() {
+    assert_output(
+        r#"
+        namespace Model {
+            export let before = '';
+            try { Hidden; } catch (error) { before = error.name; }
+            class Hidden { read() { return 8; } }
+            export class Visible extends Hidden {
+                #value = 4;
+                read() { return super.read() + this.#value; }
+            }
+        }
+        console.log(Model.before, new Model.Visible().read(), typeof Model.Hidden);
+        "#,
+        &["ReferenceError 12 undefined"],
+    );
+}
+
+#[test]
 fn generic_mixin_heritage_evaluates_the_factory_once() {
     assert_output(
         r#"

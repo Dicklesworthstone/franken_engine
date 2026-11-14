@@ -2643,22 +2643,29 @@ namespace Demo {
     }
 
     #[test]
-    fn rejects_unsupported_namespace_export_class_forms() {
-        let source = "namespace Demo { export class Worker {} }";
-        let error = normalize_typescript_to_es2020(
-            source,
-            &TsNormalizationConfig::default(),
-            "trace",
-            "decision",
-            "policy",
-        )
-        .expect_err("unsupported namespace class export should fail");
-
-        assert_eq!(
-            error,
-            TsNormalizationError::UnsupportedSyntax {
-                feature: "unsupported namespace export form",
+    fn namespace_exported_classes_execute_with_local_and_merged_bindings() {
+        assert_normalized_output(
+            r#"
+            namespace Demo {
+                export const offset = 2;
+                export class Worker<T> {
+                    constructor(public value: T) {}
+                    static self() { return Worker; }
+                    read(): T { return this.value; }
+                }
+                export function make(value: number) { return new Worker(value); }
             }
+            namespace Demo {
+                export class Child extends Worker<number> {
+                    read(): number { return super.read() + offset; }
+                }
+            }
+            const original = Demo.Worker;
+            Demo.Worker = class Other {};
+            console.log(Demo.make(3).read(), original.self() === original,
+                new Demo.Child(5).read(), new Demo.Child(1) instanceof original);
+            "#,
+            &["3 true 7 true"],
         );
     }
 

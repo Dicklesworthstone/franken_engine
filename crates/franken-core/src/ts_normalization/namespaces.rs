@@ -453,7 +453,9 @@ enum Export {
         end: usize,
         declarations: Vec<Variable>,
     },
-    Function {
+    /// Functions and classes keep a local declaration binding; publication
+    /// happens only after the declaration itself has completed successfully.
+    Declaration {
         start: usize,
         keyword_end: usize,
         end: usize,
@@ -600,6 +602,26 @@ fn body(source: &str, erase_types: fn(&str) -> String) -> Result<Body, &'static 
                 cursor = end;
                 continue;
             }
+            if next == "class" {
+                let name = cursor + 2;
+                if lexed
+                    .tokens
+                    .get(name)
+                    .is_none_or(|token| token.kind != TokenKind::Word)
+                    || matches!(text(&lexed, name), "extends" | "implements")
+                {
+                    return Err(INVALID_EXPORT);
+                }
+                let end = bindings::class_declaration_end(&source, &lexed, cursor + 1)?;
+                exports.push(Export::Declaration {
+                    start: lexed.tokens[cursor].start,
+                    keyword_end: lexed.tokens[cursor].end,
+                    end: lexed.tokens[end - 1].end,
+                    name: lexed.tokens[name].text.clone(),
+                });
+                cursor = end;
+                continue;
+            }
             let mut function = cursor + 1;
             if text(&lexed, function) == "async" {
                 function += 1;
@@ -625,7 +647,7 @@ fn body(source: &str, erase_types: fn(&str) -> String) -> Result<Body, &'static 
                 return Err(INVALID_EXPORT);
             }
             let end = lexed.pairs[open].ok_or(INVALID_EXPORT)? + 1;
-            exports.push(Export::Function {
+            exports.push(Export::Declaration {
                 start: lexed.tokens[cursor].start,
                 keyword_end: lexed.tokens[cursor].end,
                 end: lexed.tokens[end - 1].end,
@@ -691,7 +713,7 @@ fn render_body(
             Export::Variables { declarations, .. } => {
                 declarations.iter().map(|item| item.token).collect()
             }
-            Export::Function { .. } => Vec::new(),
+            Export::Declaration { .. } => Vec::new(),
         })
         .collect::<BTreeSet<_>>();
     let references = bindings::rewrite(&body.source, &body.lexed, &replacements, &ignored)?;
@@ -727,7 +749,7 @@ fn render_body(
                     replacement,
                 });
             }
-            Export::Function {
+            Export::Declaration {
                 start,
                 keyword_end,
                 end,
@@ -754,7 +776,7 @@ fn render_body(
 ///
 /// A new function activation at each declaration site preserves private
 /// locals and evaluation order. Only exported variable references become
-/// namespace properties; local function declarations retain their bindings.
+/// namespace properties; function and class declarations retain their bindings.
 pub fn lower(source: &str, erase_types: fn(&str) -> String) -> Result<String, &'static str> {
     if !source.contains("namespace") {
         return Ok(source.to_owned());
@@ -847,7 +869,7 @@ pub fn lower(source: &str, erase_types: fn(&str) -> String) -> Result<String, &'
                 Export::Variables { declarations, .. } => {
                     members.extend(declarations.iter().map(|item| item.name.clone()))
                 }
-                Export::Function { name, .. } => {
+                Export::Declaration { name, .. } => {
                     members.insert(name.clone());
                 }
             }
@@ -934,6 +956,46 @@ mod tests {
         assert!(actual.contains("return self;"));
         assert!(actual.contains("return __franken_namespace_0.later();"));
         assert!(actual.contains("__franken_namespace_0.self = self;"));
+    }
+
+    #[test]
+    fn classes_keep_local_names_and_publish_after_their_complete_declarations() {
+        let actual = lower(
+            "namespace N { export const value = 3; export class C { static self() { return C; } read() { return value; } } observe(C); } namespace N { export class D extends C { read() { return super.read() + value; } } }",
+            str::to_owned,
+        )
+        .unwrap();
+        assert!(actual.contains("class C { static self() { return C; }"));
+        assert!(actual.contains("return __franken_namespace_0.value;"));
+        assert!(actual.contains("__franken_namespace_0.C = C; observe(C);"));
+        assert!(actual.contains("class D extends __franken_namespace_1.C"));
+        assert!(actual.contains("return super.read() + __franken_namespace_1.value;"));
+        assert!(actual.contains("__franken_namespace_1.D = D;"));
+    }
+
+    #[test]
+    fn class_heritage_braces_and_literal_text_are_not_declaration_boundaries() {
+        let actual = lower(
+            "namespace N { export class C extends (class { read() { return 'export class Wrong {}'; } }) { ['{']() { return C; } } step(); }",
+            str::to_owned,
+        )
+        .unwrap();
+        assert!(actual.contains("return 'export class Wrong {}';"));
+        assert!(actual.contains("['{']() { return C; } } __franken_namespace_0.C = C; step();"));
+        assert_eq!(actual.matches("__franken_namespace_0.C = C;").count(), 1);
+    }
+
+    #[test]
+    fn class_exports_require_named_valid_declarations() {
+        for source in [
+            "namespace N { export class {} }",
+            "namespace N { export class extends Base {} }",
+            "namespace N { export default class C {} }",
+            "namespace N { export class C extends (Base, ) {} }",
+            "namespace N { export class C { method() { return; extra extra; } } }",
+        ] {
+            assert!(lower(source, str::to_owned).is_err(), "{source}");
+        }
     }
 
     #[test]

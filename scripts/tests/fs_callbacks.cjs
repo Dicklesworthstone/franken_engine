@@ -12,7 +12,7 @@ const { spawnSync } = require('node:child_process');
 const sourcePath = process.env.FRANKEN_FS_CALLBACK_SOURCE || path.join(__dirname,
   '../../crates/franken-engine/src/lowering_pipeline/fs_callbacks.js');
 const source = fs.readFileSync(sourcePath, 'utf8');
-const names = ['stat','lstat','readdir','mkdir','mkdtemp','realpath','readlink','access','rmdir','rm',
+const names = ['stat','lstat','fstat','readdir','mkdir','mkdtemp','realpath','readlink','access','rmdir','rm',
   'truncate','unlink','rename','chmod','utimes','copyFile','symlink','exists','open','close','fsync',
   'read','write','readv','writev','cp'];
 function candidate(overrides = {}, globals = {}) {
@@ -61,6 +61,47 @@ test('metadata discovery, aliases, views and BigInt stats', async () => {
     await invoke(api, 'access', file);
     return [s.size,l.isFile(),typeof b.size,list.map(x=>[x.name,x.isFile()]),path.basename(real)];
   });
+});
+test('fstat follows the descriptor after rename and unlink and reports closed fd errors once', async () => {
+  await both(async (api, {file}) => {
+    const descriptor = fs.openSync(file, 'r');
+    const expected = fs.fstatSync(descriptor);
+    fs.renameSync(file, file + '-moved');
+    fs.writeFileSync(file, 'replacement');
+    const [number] = await invoke(api, 'fstat', descriptor);
+    fs.unlinkSync(file + '-moved');
+    const [bigint] = await invoke(api, 'fstat', descriptor, { bigint: true });
+    const matches = number.size === expected.size && number.mode === expected.mode &&
+      number.mtime.getTime() === expected.mtime.getTime();
+    fs.closeSync(descriptor);
+    await assert.rejects(invoke(api, 'fstat', descriptor), { code: 'EBADF' });
+    return [matches, number.isFile(), typeof bigint.size, bigint.size.toString()];
+  });
+});
+test('fstat snapshots options and validates fd and callback before scheduling', async () => {
+  const effects = [], jobs = [];
+  const { api } = candidate({ fstatSync(fd, settings) {
+    effects.push([fd, settings.bigint]); return { size: settings.bigint ? 7n : 7 };
+  } }, { queueMicrotask: job => jobs.push(job) });
+  let reads = 0, deliveries = 0;
+  const settings = { get bigint() { reads += 1; return true; } };
+  assert.equal(api.fstat(3, settings, (error, value) => {
+    assert.equal(error, null); assert.equal(value.size, 7n); deliveries += 1;
+  }), undefined);
+  assert.equal(reads, 1);
+  Object.defineProperty(settings, 'bigint', { value: false });
+  assert.equal(effects.length, 0); assert.equal(deliveries, 0);
+  assert.equal(jobs.length, 1); jobs.shift()();
+  assert.deepEqual(effects, [[3, true]]); assert.equal(deliveries, 1);
+  for (const descriptor of [undefined, null, '3', 3n, {}]) {
+    assert.throws(() => api.fstat(descriptor, () => {}), { code: 'ERR_INVALID_ARG_TYPE' });
+  }
+  for (const descriptor of [-1, NaN, 1.5, Infinity, 2147483648]) {
+    assert.throws(() => api.fstat(descriptor, () => {}), { code: 'ERR_OUT_OF_RANGE' });
+  }
+  assert.throws(() => api.fstat(3, {}), { code: 'ERR_INVALID_ARG_TYPE' });
+  assert.throws(() => api.fstat(3, null, () => {}), { name: 'TypeError' });
+  assert.equal(jobs.length, 0); assert.equal(effects.length, 1);
 });
 test('mkdir returns first created directory and undefined once it exists', async () => {
   await both(async (api, {root}) => {

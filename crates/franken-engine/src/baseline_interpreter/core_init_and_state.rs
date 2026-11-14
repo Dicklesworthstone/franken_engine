@@ -2841,11 +2841,13 @@ impl InterpreterCore {
                 args.get(1)
                     .map_or_else(|| "r".to_string(), |value| self.fs_value_argument(value))
             )],
-            FsOperation::WriteFd | FsOperation::Fsync | FsOperation::CloseFd => vec![format!(
-                "fd={}",
-                args.first()
-                    .map_or_else(String::new, |value| self.fs_value_argument(value))
-            )],
+            FsOperation::WriteFd | FsOperation::Fsync | FsOperation::CloseFd | FsOperation::Fstat => {
+                vec![format!(
+                    "fd={}",
+                    args.first()
+                        .map_or_else(String::new, |value| self.fs_value_argument(value))
+                )]
+            }
             FsOperation::ReadFd => {
                 // readSync(fd, buffer, offset, length, position): length
                 // defaults to the target buffer's element length; position
@@ -2918,6 +2920,7 @@ impl InterpreterCore {
     pub(super) fn fs_metadata_value(
         &mut self,
         metadata: FsMetadata,
+        bigint: bool,
     ) -> Result<Value, InterpreterError> {
         let modified = self.alloc_fs_date(metadata.modified_millis)?;
         let object_id = self.alloc_object_with_prototype(None)?;
@@ -2925,12 +2928,29 @@ impl InterpreterCore {
         self.set_object_property(
             object_id,
             "size".to_string(),
-            Value::Int(i64::try_from(metadata.size).unwrap_or(i64::MAX)),
+            if bigint {
+                Value::BigInt(Arc::from(metadata.size.to_string()))
+            } else {
+                Value::Int(i64::try_from(metadata.size).unwrap_or(i64::MAX))
+            },
         )?;
         self.set_object_property(
             object_id,
             "mode".to_string(),
-            Value::Int(i64::from(metadata.mode)),
+            if bigint {
+                Value::BigInt(Arc::from(metadata.mode.to_string()))
+            } else {
+                Value::Int(i64::from(metadata.mode))
+            },
+        )?;
+        self.set_object_property(
+            object_id,
+            "mtimeMs".to_string(),
+            if bigint {
+                Value::BigInt(Arc::from(metadata.modified_millis.to_string()))
+            } else {
+                Value::Int(metadata.modified_millis)
+            },
         )?;
         self.set_object_property(object_id, "mtime".to_string(), modified)?;
         self.set_object_property(
@@ -2995,7 +3015,7 @@ impl InterpreterCore {
                 }
                 Ok(Value::Object(self.alloc_array_from_values(&values)?))
             }
-            FsMetaResult::Metadata(metadata) => self.fs_metadata_value(metadata),
+            FsMetaResult::Metadata(metadata) => self.fs_metadata_value(metadata, false),
             // fd reads are consumed by the ReadFd conversion arm (positional
             // Buffer mutation + count); a stray Bytes result surfaced here
             // still materializes as a real Buffer rather than vanishing.
@@ -3182,7 +3202,11 @@ impl InterpreterCore {
         });
         let path = if matches!(
             operation,
-            FsOperation::ReadFd | FsOperation::WriteFd | FsOperation::Fsync | FsOperation::CloseFd
+            FsOperation::ReadFd
+                | FsOperation::WriteFd
+                | FsOperation::Fsync
+                | FsOperation::CloseFd
+                | FsOperation::Fstat
         ) {
             logical_args
                 .first()
@@ -3410,6 +3434,13 @@ impl InterpreterCore {
                     }
                     Value::Int(i64::try_from(bytes.len()).unwrap_or(i64::MAX))
                 }
+                _ => Value::Undefined,
+            },
+            FsOperation::Fstat => match result.downcast::<FsMetaResult>() {
+                Ok(FsMetaResult::Metadata(metadata)) => self.fs_metadata_value(
+                    metadata,
+                    self.fs_option_is_true(second_arg_value.as_ref(), "bigint"),
+                )?,
                 _ => Value::Undefined,
             },
             _ => match result.downcast::<FsMetaResult>() {

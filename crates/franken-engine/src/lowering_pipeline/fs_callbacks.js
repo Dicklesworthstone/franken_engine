@@ -221,6 +221,15 @@
     callback(cb); fd(descriptor);
     run(function () { return fsyncSync(descriptor); }, cb, voidResult);
   });
+  const fstatSync = fs.fstatSync;
+  install('fstat', function (descriptor, settings, cb) {
+    if (typeof settings === 'function') { cb = settings; settings = undefined; }
+    callback(cb); fd(descriptor);
+    // Snapshot the one supported option before scheduling, including accessors
+    // on primitive wrappers. Like fstatSync, null fails before any fd effect.
+    const bigint = settings === undefined ? false : settings.bigint === true;
+    run(function () { return fstatSync(descriptor, { bigint: bigint }); }, cb, valueResult);
+  });
 
   function view(value) {
     if (!isView(value)) throw invalid('buffer');

@@ -16,7 +16,10 @@
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use frankenengine_extension_host::host_io::{HostIoError, SandboxedHostIo};
+use frankenengine_extension_host::host_io::{
+    FsMetaResult, FsOperation, HostIoCapability, HostIoError, HostIoProvider, HostIoRecorder,
+    HostIoRequest, HostIoResponse, InMemoryHostIoTranscript, SandboxedHostIo,
+};
 
 fn sandbox() -> (PathBuf, SandboxedHostIo) {
     let mut root = std::env::temp_dir();
@@ -174,4 +177,104 @@ fn open_fd_stays_inside_the_sandbox_bd_zco6t() {
         !matches!(&err, HostIoError::Fs { code, .. } if code == "EBADF"),
         "an escape must be refused by containment, not fd bookkeeping: {err:?}"
     );
+}
+
+#[test]
+fn fstat_observes_the_held_file_after_rename_replacement_and_unlink() {
+    let (root, provider) = sandbox();
+    std::fs::write(root.join("original.txt"), b"abcdef").expect("seed file");
+    let fd = provider.open_fd("original.txt", "r+").expect("open file");
+    assert_eq!(provider.read_fd(fd, 2, None).unwrap(), b"ab");
+    let initial = provider.stat_fd(fd).expect("fstat before rename");
+    assert_eq!(initial.size, 6);
+    assert!(initial.is_file);
+    assert!(!initial.is_directory);
+    assert!(!initial.is_symbolic_link);
+
+    std::fs::rename(root.join("original.txt"), root.join("renamed.txt")).unwrap();
+    std::fs::write(root.join("original.txt"), b"a replacement with another size").unwrap();
+    assert_eq!(provider.stat_fd(fd).unwrap(), initial);
+    // Remove only this test's renamed fixture. The descriptor must remain
+    // usable; resolving either its old or current pathname is incorrect.
+    std::fs::remove_file(root.join("renamed.txt")).unwrap();
+    assert_eq!(provider.stat_fd(fd).unwrap(), initial);
+    assert_eq!(provider.read_fd(fd, 2, None).unwrap(), b"cd");
+    provider.write_fd_at(fd, b"!", Some(6)).unwrap();
+    assert_eq!(provider.stat_fd(fd).unwrap().size, 7);
+    assert_eq!(provider.read_fd(fd, 2, None).unwrap(), b"ef");
+    provider.close_fd(fd).unwrap();
+    assert!(matches!(provider.stat_fd(fd), Err(HostIoError::Fs { code, .. }) if code == "EBADF"));
+    let replacement = provider.open_fd("original.txt", "r").unwrap();
+    assert_ne!(replacement, fd);
+    assert!(matches!(provider.stat_fd(fd), Err(HostIoError::Fs { code, .. }) if code == "EBADF"));
+    provider.close_fd(replacement).unwrap();
+}
+
+#[test]
+fn fstat_supports_read_only_and_write_only_descriptors_without_changing_modes() {
+    let (root, provider) = sandbox();
+    std::fs::write(root.join("read.txt"), b"read only").unwrap();
+    let read_only = provider.open_fd("read.txt", "r").unwrap();
+    assert_eq!(provider.stat_fd(read_only).unwrap().size, 9);
+    assert!(matches!(provider.write_fd(read_only, b"x"), Err(HostIoError::Fs { code, .. }) if code == "EBADF"));
+    let write_only = provider.open_fd("write.txt", "w").unwrap();
+    provider.write_fd(write_only, b"write only").unwrap();
+    assert_eq!(provider.stat_fd(write_only).unwrap().size, 10);
+    assert!(matches!(provider.read_fd(write_only, 1, None), Err(HostIoError::Fs { code, .. }) if code == "EBADF"));
+    provider.close_fd(read_only).unwrap();
+    provider.close_fd(write_only).unwrap();
+}
+
+#[test]
+fn fstat_requires_read_authority_and_replays_exact_descriptor_metadata() {
+    let (_root, provider) = sandbox();
+    let fd = provider.open_fd("recorded.txt", "w").unwrap();
+    provider.write_fd(fd, b"recorded").unwrap();
+    let request = HostIoRequest::FsMeta {
+        operation: FsOperation::Fstat,
+        // A descriptor request never resolves its diagnostic path field.
+        path: "../must-not-be-resolved".into(),
+        arguments: vec![format!("fd={fd}")],
+        data: Vec::new(),
+    };
+    assert_eq!(FsOperation::parse_name("fstat"), Some(FsOperation::Fstat));
+    assert_eq!(FsOperation::Fstat.as_str(), "fstat");
+    assert_eq!(request.required_capability(), HostIoCapability::FsRead);
+    assert_eq!(
+        provider.perform(&request, &[HostIoCapability::FsWrite]),
+        Err(HostIoError::CapabilityMissing { capability: HostIoCapability::FsRead })
+    );
+    let outcome = provider.perform(&request, &[HostIoCapability::FsRead]);
+    assert!(matches!(&outcome, Ok(HostIoResponse::FsMeta { result: FsMetaResult::Metadata(metadata) }) if metadata.size == 8));
+    let recorder = InMemoryHostIoTranscript::recording();
+    recorder.begin_execution().unwrap();
+    recorder.record(&request, &outcome);
+    let entries = recorder.finish_execution().unwrap();
+    // Round-trip the same typed request/outcome used by the effect ledger;
+    // replay must work after the live descriptor is closed.
+    let encoded = serde_json::to_string(&entries).unwrap();
+    assert!(encoded.contains("fstat"));
+    let decoded = serde_json::from_str(&encoded).unwrap();
+    let replay = InMemoryHostIoTranscript::replaying(decoded);
+    provider.close_fd(fd).unwrap();
+    replay.begin_execution().unwrap();
+    assert_eq!(replay.replay(&request), Some(outcome));
+    assert_eq!(replay.finish_execution().unwrap(), entries);
+}
+
+#[test]
+fn fstat_rejects_missing_malformed_unknown_and_closed_descriptors() {
+    let (_root, provider) = sandbox();
+    for argument in [None, Some("fd=-1"), Some("fd=1.5"), Some("fd=not-a-number"), Some("fd=0"), Some("fd=18446744073709551615")] {
+        let request = HostIoRequest::FsMeta {
+            operation: FsOperation::Fstat,
+            path: "ignored.txt".into(),
+            arguments: argument.into_iter().map(str::to_string).collect(),
+            data: Vec::new(),
+        };
+        assert!(matches!(provider.perform(&request, &[HostIoCapability::FsRead]), Err(HostIoError::Fs { code, .. }) if code == "EBADF"));
+    }
+    let fd = provider.open_fd("closed.txt", "w").unwrap();
+    provider.close_fd(fd).unwrap();
+    assert!(matches!(provider.stat_fd(fd), Err(HostIoError::Fs { code, .. }) if code == "EBADF"));
 }

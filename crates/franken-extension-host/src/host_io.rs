@@ -85,6 +85,9 @@ pub enum FsOperation {
     Fsync,
     /// `fs.closeSync(fd)` (bd-zco6t).
     CloseFd,
+    /// Read metadata from an already-owned descriptor, without resolving its
+    /// former pathname or changing its cursor.
+    Fstat,
 }
 
 impl FsOperation {
@@ -99,6 +102,7 @@ impl FsOperation {
             | Self::ReadLink
             | Self::Access
             | Self::ReadFd
+            | Self::Fstat
             | Self::Realpath => HostIoCapability::FsRead,
             Self::Write
             | Self::Append
@@ -149,6 +153,7 @@ impl FsOperation {
             Self::ReadFd => "read_fd",
             Self::Fsync => "fsync",
             Self::CloseFd => "close_fd",
+            Self::Fstat => "fstat",
         }
     }
 
@@ -181,6 +186,7 @@ impl FsOperation {
             "read_fd" => Self::ReadFd,
             "fsync" => Self::Fsync,
             "close_fd" => Self::CloseFd,
+            "fstat" => Self::Fstat,
             _ => return None,
         })
     }
@@ -1947,6 +1953,30 @@ impl SandboxedHostIo {
         })
     }
 
+    /// Read the metadata of the exact file admitted by [`Self::open_fd`].
+    /// Renaming, replacing or unlinking its pathname cannot redirect this
+    /// operation. Metadata is available on read-only and write-only handles,
+    /// and the table lock serializes this observation with close and writes.
+    ///
+    /// # Errors
+    /// `EBADF` for an unknown or closed guest descriptor; host stat failures
+    /// retain their typed filesystem error.
+    pub fn stat_fd(&self, fd: u64) -> Result<FsMetadata, HostIoError> {
+        #[cfg(not(unix))]
+        {
+            let _ = fd;
+            Err(Self::fs_not_implemented("fstat"))
+        }
+        #[cfg(unix)]
+        {
+            self.with_fd_entry(fd, |entry| {
+                let stat = rustix::fs::fstat(&entry.file)
+                    .map_err(|err| Self::rustix_fs_error("fstat", &entry.guest_path, err))?;
+                Ok(Self::stat_metadata_result(&stat))
+            })
+        }
+    }
+
     /// Node `fs.closeSync(fd)` substrate (bd-zco6t): drop the entry (closing
     /// the descriptor). The numeric fd is never reissued by this provider, so
     /// a stale guest fd stays `EBADF` forever instead of aliasing a newer
@@ -2029,6 +2059,9 @@ impl SandboxedHostIo {
             FsOperation::Fsync => {
                 self.fsync_fd(Self::fs_fd_argument(arguments)?)?;
                 FsMetaResult::Unit
+            }
+            FsOperation::Fstat => {
+                FsMetaResult::Metadata(self.stat_fd(Self::fs_fd_argument(arguments)?)?)
             }
             FsOperation::CloseFd => {
                 self.close_fd(Self::fs_fd_argument(arguments)?)?;

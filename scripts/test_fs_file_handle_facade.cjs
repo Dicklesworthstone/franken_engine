@@ -27,6 +27,7 @@ function fixture(hook = () => {}, globals = {}) {
       case 'read_fd': return fs.readSync(...args);
       case 'write_fd': return fs.writeSync(...args);
       case 'stat': return fs.statSync(...args);
+      case 'fstat': return fs.fstatSync(...args);
       case 'mkdir': return fs.mkdirSync(...args);
       default: throw new Error(`unexpected native operation: ${operation}`);
     }
@@ -145,11 +146,84 @@ test('close is idempotent and later operations cannot use a stale fd', async () 
   assert.equal(handle.close(), closing);
   assert.equal(await closing, undefined);
   assert.equal(await handle.close(), undefined);
-  for (const pending of [handle.read(), handle.write('late'), handle.sync()]) {
+  for (const pending of [handle.read(), handle.write('late'), handle.sync(), handle.stat()]) {
     await assert.rejects(pending, { code: 'EBADF' });
   }
   assert.equal(calls.filter(call => call.operation === 'close_fd').length, 1);
   assert.equal(calls.filter(call => /^(read|write)_fd$/.test(call.operation)).length, 0);
+});
+
+test('descriptor stats survive rename, replacement and unlink without moving the cursor', async () => {
+  const { facade, calls, file } = fixture();
+  fs.writeFileSync(file, 'abcdef');
+  const handle = await facade.promises.open(file, 'r+');
+  const descriptor = handle.fd;
+  assert.equal((await handle.read(Buffer.alloc(2))).buffer.toString(), 'ab');
+  const expected = fs.fstatSync(descriptor);
+  const pick = value => [value.size, value.mode, value.mtime.getTime(),
+    value.isFile(), value.isDirectory(), value.isSymbolicLink()];
+  fs.renameSync(file, file + '-moved');
+  fs.writeFileSync(file, 'replacement data with another size');
+  assert.deepEqual(pick(facade.fstatSync(descriptor)), pick(expected));
+  fs.unlinkSync(file + '-moved');
+  // Public properties cannot change the privately owned file identity.
+  Object.defineProperty(handle, 'fd', { value: descriptor + 100 });
+  facade.fstatSync = () => { throw new Error('guest replacement called'); };
+  assert.deepEqual(pick(await handle.stat()), pick(expected));
+  assert.equal((await handle.read(Buffer.alloc(2))).buffer.toString(), 'cd');
+  await handle.write('!', 6);
+  assert.equal((await handle.stat()).size, 7);
+  assert.equal((await handle.read(Buffer.alloc(2))).buffer.toString(), 'ef');
+  await handle.close();
+  assert.deepEqual(calls.filter(call => call.operation === 'fstat').map(call =>
+    [call.authority, call.args[0]]), Array(3).fill(['fs_read', descriptor]));
+  assert.equal(calls.filter(call => call.operation === 'open').length, 1);
+});
+
+test('fstat validates before host entry and observes bigint exactly once', async () => {
+  const { facade, calls, file } = fixture();
+  const handle = await facade.promises.open(file, 'w');
+  await handle.write('1234');
+  for (const descriptor of [undefined, null, '3', 3n, {}]) {
+    assert.throws(() => facade.fstatSync(descriptor), { code: 'ERR_INVALID_ARG_TYPE' });
+  }
+  for (const descriptor of [-1, NaN, 1.5, Infinity, 2147483648]) {
+    assert.throws(() => facade.fstatSync(descriptor), { code: 'ERR_OUT_OF_RANGE' });
+  }
+  assert.throws(() => facade.fstatSync(handle.fd, null), { name: 'TypeError' });
+  assert.equal(calls.filter(call => call.operation === 'fstat').length, 0);
+  let reads = 0;
+  const stats = await handle.stat({ get bigint() { reads += 1; return true; } });
+  assert.equal(reads, 1);
+  assert.equal(stats.size, 4n);
+  assert.equal(typeof stats.mode, 'bigint');
+  assert.equal(stats.isFile(), true);
+  assert.equal(typeof (await handle.stat({ bigint: 1 })).size, 'number');
+  const descriptor = handle.fd;
+  await handle.close();
+  assert.throws(() => facade.fstatSync(descriptor), { code: 'EBADF' });
+  await assert.rejects(handle.stat(), { code: 'EBADF', syscall: 'fstat' });
+});
+
+test('FileHandle stat retains ownership through a reentrant option getter and exceptional exit', async () => {
+  for (const fails of [false, true]) {
+    const { facade, calls, file } = fixture();
+    const handle = await facade.promises.open(file, 'w');
+    let closing;
+    const sentinel = new Error('stat option failed');
+    const result = handle.stat({ get bigint() {
+      closing = handle.close();
+      assert.equal(calls.filter(call => call.operation === 'close_fd').length, 0);
+      if (fails) throw sentinel;
+      return true;
+    } });
+    if (fails) await assert.rejects(result, error => error === sentinel);
+    else assert.equal((await result).size, 0n);
+    await closing;
+    assert.deepEqual(calls.map(call => call.operation),
+      fails ? ['open', 'close_fd'] : ['open', 'fstat', 'close_fd']);
+    await assert.rejects(handle.stat(), { code: 'EBADF' });
+  }
 });
 
 test('reentrant close waits for the active operation, including option getters', async () => {

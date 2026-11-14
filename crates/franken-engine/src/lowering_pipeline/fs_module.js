@@ -56,6 +56,19 @@
   function lstatSync(path, options) {
     return __franken_fs_read('\0fsop:lstat', path, options);
   }
+  function fstatSync(fd, options) {
+    if (typeof fd !== 'number') { throw argumentError('fd'); }
+    if (fd % 1 !== 0 || fd < 0 || fd > 2147483647) {
+      var error = new RangeError('File descriptor is out of range');
+      error.code = 'ERR_OUT_OF_RANGE';
+      throw error;
+    }
+    // Observe the option once, before host entry. In particular an accessor
+    // may close its owning FileHandle; perform() keeps that fd alive until
+    // the active stat completes. Only literal true selects BigInt stats.
+    var bigint = options === undefined ? false : options.bigint === true;
+    return __franken_fs_read('\0fsop:fstat', fd, { bigint: bigint });
+  }
   function readdirSync(path, options) {
     return __franken_fs_read('\0fsop:readdir', path, options);
   }
@@ -431,8 +444,8 @@
   // Descriptor ownership stays in this closure, never in a guest-writable fd
   // property. These methods use the existing synchronous descriptor effects
   // with Promise completion, not an off-thread I/O backend. Buffer/string I/O
-  // and iterable writes are supported. Read streams below share this owner;
-  // stat-on-fd and automatic finalization are not implemented here.
+  // and iterable writes are supported. Read streams and descriptor metadata
+  // share this owner; automatic finalization is not implemented here.
   function fileHandle(descriptor) {
     var closing = false;
     var active = 0;
@@ -608,6 +621,9 @@
       },
       sync: function () {
         return perform('fsync', function (fd) { fsyncSync(fd); });
+      },
+      stat: function (options) {
+        return perform('fstat', function (fd) { return fstatSync(fd, options); });
       },
       readFile: function (options) {
         return perform('readFile', function (fd) { return readContents(fd, options); });
@@ -1268,7 +1284,8 @@
   };
   return {
     readFileSync: readFileSync, writeFileSync: writeFileSync, appendFileSync: appendFileSync,
-    existsSync: existsSync, statSync: statSync, lstatSync: lstatSync, readdirSync: readdirSync,
+    existsSync: existsSync, statSync: statSync, lstatSync: lstatSync, fstatSync: fstatSync,
+    readdirSync: readdirSync,
     mkdirSync: mkdirSync, unlinkSync: unlinkSync, rmdirSync: rmdirSync, rmSync: rmSync,
     renameSync: renameSync, copyFileSync: copyFileSync, accessSync: accessSync,
     chmodSync: chmodSync, utimesSync: utimesSync, realpathSync: realpathSync,

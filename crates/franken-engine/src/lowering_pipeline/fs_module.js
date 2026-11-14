@@ -99,9 +99,11 @@
     return __franken_fs_read('\0fsop:access', path, mode);
   }
   function chmodSync(path, mode) {
-    return __franken_fs_write('\0fsop:chmod', path, mode);
+    return __franken_fs_write('\0fsop:chmod', path, descriptorMode(mode));
   }
   function utimesSync(path, atime, mtime) {
+    atime = descriptorTime(atime, 'atime');
+    mtime = descriptorTime(mtime, 'mtime');
     return __franken_fs_write('\0fsop:utimes', path, atime, mtime);
   }
   function realpathSync(path, options) {
@@ -136,7 +138,7 @@
       error.code = 'ERR_OUT_OF_RANGE';
       throw error;
     }
-    return length < 0 ? 0 : length;
+    return length <= 0 ? 0 : length;
   }
   function descriptorMode(mode) {
     if (typeof mode === 'string') {
@@ -159,7 +161,7 @@
       error.code = 'ERR_OUT_OF_RANGE';
       throw error;
     }
-    return mode;
+    return mode === 0 ? 0 : mode;
   }
   function descriptorTime(value, name) {
     var seconds;
@@ -175,7 +177,10 @@
     if (seconds !== seconds || seconds === 1 / 0 || seconds === -1 / 0) {
       throw argumentError(name);
     }
-    return seconds;
+    // Preserve the normalized signed seconds across the native bridge. A
+    // negative number means "now" only at the public API; a negative Date or
+    // numeric string still represents a real time before the Unix epoch.
+    return '' + seconds;
   }
   function ftruncateSync(fd, length) {
     validateDescriptor(fd);

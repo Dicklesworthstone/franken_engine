@@ -101,6 +101,161 @@ fn mutations(entries: &[(HostIoRequest, HostIoOutcome)]) -> Vec<FsOperation> {
 }
 
 #[test]
+fn path_metadata_normalizes_direct_calls_callbacks_and_promises_before_recording() {
+    use std::os::unix::fs::MetadataExt;
+
+    let source = r#"
+import { chmodSync, utimesSync, statSync } from 'node:fs';
+const fs = require('fs');
+const beforeEpoch = new Date(-2500);
+beforeEpoch.getTime = function () { throw new Error('public Date hook'); };
+chmodSync('direct.txt', '640');
+utimesSync('direct.txt', beforeEpoch, '1234.5');
+console.log('DIRECT', statSync('direct.txt').mode & 511, statSync('direct.txt').mtimeMs);
+try { chmodSync('direct.txt', '8'); } catch (error) { console.log('MODE', error.name, error.code); }
+try { utimesSync('direct.txt', 1, NaN); } catch (error) { console.log('TIME', error.name, error.code); }
+let returned = false;
+const queuedDate = new Date(-1250);
+fs.utimes('callback.txt', queuedDate, '2.75', function (error) {
+  if (error) throw error;
+  console.log('CALLBACK', returned, fs.statSync('callback.txt').mtimeMs);
+});
+queuedDate.setTime(0);
+returned = true;
+fs.promises.chmod('promise.txt', '600').then(function () {
+  return fs.promises.utimes('promise.txt', new Date(-1750), 3.25);
+}).then(function () {
+  const stats = fs.statSync('promise.txt');
+  console.log('PROMISE', stats.mode & 511, stats.mtimeMs);
+});
+"#;
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let root = tempfile::tempdir().expect("sandbox");
+        for path in ["direct.txt", "callback.txt", "promise.txt"] {
+            std::fs::write(root.path().join(path), b"metadata").unwrap();
+        }
+        let (output, entries) = run(source, root.path(), lane);
+        assert_eq!(
+            output,
+            [
+                "DIRECT 416 1234500",
+                "MODE TypeError ERR_INVALID_ARG_VALUE",
+                "TIME TypeError ERR_INVALID_ARG_TYPE",
+                "CALLBACK true 2750",
+                "PROMISE 384 3250",
+            ]
+        );
+        let mut changed = BTreeMap::new();
+        for (request, outcome) in &entries {
+            let HostIoRequest::FsMeta {
+                operation,
+                path,
+                arguments,
+                data,
+            } = request
+            else {
+                continue;
+            };
+            if !matches!(operation, FsOperation::Chmod | FsOperation::Utimes) {
+                continue;
+            }
+            assert_eq!(request.required_capability(), HostIoCapability::FsWrite);
+            assert!(data.is_empty());
+            assert_eq!(
+                outcome,
+                &Ok(HostIoResponse::FsMeta {
+                    result: FsMetaResult::Unit
+                })
+            );
+            changed.insert((path.as_str(), operation.as_str()), arguments.clone());
+        }
+        assert_eq!(
+            changed.len(),
+            5,
+            "invalid arguments must not dispatch a host effect"
+        );
+        assert_eq!(changed[&("direct.txt", "chmod")], ["416"]);
+        assert_eq!(changed[&("promise.txt", "chmod")], ["384"]);
+        for (path, accessed, modified, arguments) in [
+            (
+                "direct.txt",
+                (-3, 500_000_000),
+                (1234, 500_000_000),
+                ["atime=-2.5", "mtime=1234.5"],
+            ),
+            (
+                "callback.txt",
+                (-2, 750_000_000),
+                (2, 750_000_000),
+                ["atime=-1.25", "mtime=2.75"],
+            ),
+            (
+                "promise.txt",
+                (-2, 250_000_000),
+                (3, 250_000_000),
+                ["atime=-1.75", "mtime=3.25"],
+            ),
+        ] {
+            assert_eq!(changed[&(path, "utimes")], arguments);
+            let metadata = std::fs::metadata(root.path().join(path)).unwrap();
+            assert_eq!((metadata.atime(), metadata.atime_nsec()), accessed);
+            assert_eq!((metadata.mtime(), metadata.mtime_nsec()), modified);
+        }
+    }
+}
+
+#[test]
+fn direct_timestamp_now_and_descriptor_negative_zero_have_canonical_effect_arguments() {
+    let source = r#"
+import { utimesSync, statSync } from 'node:fs';
+const fs = require('fs');
+utimesSync('clock.txt', -1, -2);
+console.log('NOW', statSync('clock.txt').mtimeMs > 0);
+fs.promises.open('zero.txt', 'w+').then(function (handle) {
+  return handle.truncate(-0).then(function () {
+    return handle.chmod(-0);
+  }).then(function () {
+    return handle.chmod('600');
+  }).then(function () {
+    return handle.stat();
+  }).then(function (stats) {
+    console.log('ZERO', stats.size, stats.mode & 511);
+    return handle.close();
+  });
+});
+"#;
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let root = tempfile::tempdir().expect("sandbox");
+        std::fs::write(root.path().join("clock.txt"), b"clock").unwrap();
+        let (output, entries) = run(source, root.path(), lane);
+        assert_eq!(output, ["NOW true", "ZERO 0 384"]);
+        let mut observed = Vec::new();
+        for (request, _) in entries {
+            let HostIoRequest::FsMeta {
+                operation,
+                arguments,
+                ..
+            } = request
+            else {
+                continue;
+            };
+            match operation {
+                FsOperation::Utimes => {
+                    assert_eq!(arguments.len(), 2);
+                    for (argument, name) in arguments.iter().zip(["atime=", "mtime="]) {
+                        let seconds = argument.strip_prefix(name).unwrap().parse::<f64>().unwrap();
+                        assert!(seconds > 0.0 && seconds.is_finite());
+                    }
+                }
+                FsOperation::Ftruncate | FsOperation::Fchmod => observed.push(arguments[1].clone()),
+                _ => {}
+            }
+        }
+        assert_eq!(observed, ["length=0", "mode=0", "mode=384"]);
+    }
+}
+
+#[test]
 fn sync_and_callback_exports_mutate_the_held_file_and_preserve_cursor() {
     let source = r#"
 import { openSync, closeSync, readSync, fstatSync, renameSync, writeFileSync,

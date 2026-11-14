@@ -334,6 +334,43 @@ test('metadata options, Buffer paths, URL paths and times are fixed at call time
     return [typeof s.size,t.size,fs.statSync(file).mtimeMs];
   });
 });
+test('path metadata callbacks preserve pre-epoch Dates and parse octal modes like Node', async () => {
+  await both(async (api, {file}) => {
+    await invoke(api, 'chmod', file, '640');
+    const atime = new Date(-2500), mtime = new Date(3250);
+    atime.getTime = atime.valueOf = () => { throw new Error('public Date hook'); };
+    const done = invoke(api, 'utimes', file, atime, mtime);
+    atime.setTime(0); mtime.setTime(0);
+    await done;
+    const first = fs.statSync(file);
+    await invoke(api, 'utimes', file, '-1.25', '0x10');
+    const second = fs.statSync(file);
+    return [first.mode & 0o777, first.atimeMs, first.mtimeMs,
+      second.atimeMs, second.mtimeMs];
+  });
+});
+test('path metadata validates synchronously before scheduling and snapshots normalized seconds', () => {
+  const jobs = [], effects = [];
+  const {api} = candidate({
+    chmodSync(...args) { effects.push(['chmod', ...args]); },
+    utimesSync(...args) { effects.push(['utimes', ...args]); },
+  }, {queueMicrotask: job => jobs.push(job)});
+  for (const [name, args, code] of [
+    ['chmod', ['file', '8'], 'ERR_INVALID_ARG_VALUE'],
+    ['chmod', ['file', -1], 'ERR_OUT_OF_RANGE'],
+    ['chmod', ['file', {}], 'ERR_INVALID_ARG_TYPE'],
+    ['utimes', ['file', 1, NaN], 'ERR_INVALID_ARG_TYPE'],
+    ['utimes', ['file', {}, 1], 'ERR_INVALID_ARG_TYPE'],
+  ]) assert.throws(() => api[name](...args, () => {}), {code});
+  assert.equal(jobs.length, 0);
+  assert.deepEqual(effects, []);
+  const atime = new Date(-2500);
+  api.utimes('file', atime, '1.25', error => assert.equal(error, null));
+  api.chmod('file', '640', error => assert.equal(error, null));
+  atime.setTime(0);
+  while (jobs.length) jobs.shift()();
+  assert.deepEqual(effects, [['utimes', 'file', '-2.5', '1.25'], ['chmod', 'file', 0o640]]);
+});
 test('later option mutation cannot upgrade a queued removal to recursive deletion', async () => {
   const jobs=[],received=[];const {api}=candidate({rmSync(path,settings){received.push([path,settings.recursive,settings.force]);}},
     {queueMicrotask:fn=>jobs.push(fn)});

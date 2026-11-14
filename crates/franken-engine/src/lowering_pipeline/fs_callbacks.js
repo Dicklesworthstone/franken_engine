@@ -117,10 +117,6 @@
     }
     return result;
   }
-  function timeValue(value) {
-    if (value !== null && typeof value === 'object') return apply(dateTime, value, []) / 1000;
-    return value;
-  }
   function install(name, fn) {
     const descriptor = create(null);
     descriptor.value = fn; descriptor.enumerable = true;
@@ -151,7 +147,7 @@
   function three(name, method) {
     install(name, function (first, second, third, cb) {
       callback(cb); first = pathValue(first);
-      second = timeValue(second); third = timeValue(third);
+      second = descriptorTime(second, 'atime'); third = descriptorTime(third, 'mtime');
       run(function () { return method(first, second, third); }, cb, voidResult);
     });
   }
@@ -168,7 +164,11 @@
   optional('truncate', fs.truncateSync, voidResult);
   one('unlink', fs.unlinkSync, voidResult);
   two('rename', fs.renameSync, true);
-  two('chmod', fs.chmodSync);
+  const chmodSync = fs.chmodSync;
+  install('chmod', function (path, mode, cb) {
+    callback(cb); path = pathValue(path); mode = descriptorMode(mode);
+    run(function () { return chmodSync(path, mode); }, cb, voidResult);
+  });
   three('utimes', fs.utimesSync);
   const copyFileSync = fs.copyFileSync, symlinkSync = fs.symlinkSync;
   install('copyFile', function (source, destination, mode, cb) {
@@ -234,11 +234,10 @@
     if (length === undefined) length = 0;
     if (typeof length !== 'number') throw invalid('len');
     if (length % 1 !== 0 || length < -9007199254740991 || length > 9007199254740991) throw range('len');
-    if (length < 0) length = 0;
+    if (length <= 0) length = 0;
     run(function () { return ftruncateSync(descriptor, length); }, cb, voidResult);
   });
-  install('fchmod', function (descriptor, mode, cb) {
-    callback(cb); fd(descriptor);
+  function descriptorMode(mode) {
     if (typeof mode === 'string') {
       let parsed = 0, i = 0;
       for (; i < mode.length; i++) {
@@ -252,6 +251,10 @@
       mode = parsed;
     }
     integer(mode, 'mode', 4294967295);
+    return mode === 0 ? 0 : mode;
+  }
+  install('fchmod', function (descriptor, mode, cb) {
+    callback(cb); fd(descriptor); mode = descriptorMode(mode);
     run(function () { return fchmodSync(descriptor, mode); }, cb, voidResult);
   });
   function descriptorTime(value, name) {

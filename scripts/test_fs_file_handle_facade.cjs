@@ -27,9 +27,11 @@ function fixture(hook = () => {}, globals = {}) {
       case 'fdatasync': return fs.fdatasyncSync(...args);
       case 'ftruncate': return fs.ftruncateSync(...args);
       case 'fchmod': return fs.fchmodSync(...args);
+      case 'chmod': return fs.chmodSync(...args);
       // The intrinsic receives already-normalized seconds. Node's public API
       // would otherwise reinterpret a pre-epoch number as a request for now.
       case 'futimes': return fs.futimesSync(args[0], String(args[1]), String(args[2]));
+      case 'utimes': return fs.utimesSync(args[0], String(args[1]), String(args[2]));
       case 'read_fd': return fs.readSync(...args);
       case 'write_fd': return fs.writeSync(...args);
       case 'stat': return fs.statSync(...args);
@@ -54,6 +56,93 @@ test('constructing the module has no host effects', () => {
   const { facade, calls } = fixture();
   assert.equal(typeof facade.promises.open, 'function');
   assert.deepEqual(calls, []);
+});
+
+test('path metadata shares Node octal modes and signed timestamp seconds with descriptors', async () => {
+  async function exercise(api, file) {
+    fs.writeFileSync(file, 'metadata');
+    const observations = [];
+    for (const mode of ['0644', '600', 0o640]) {
+      assert.equal(api.chmodSync(file, mode), undefined);
+      observations.push(fs.statSync(file).mode & 0o777);
+    }
+    for (const [atime, mtime] of [[1.25, 2.5], [new Date(-2500), '-1.25'],
+      ['0x10', '1e3'], [vm.runInNewContext('new Date(3250)'), ' ']]) {
+      assert.equal(api.utimesSync(file, atime, mtime), undefined);
+      const stats = fs.statSync(file);
+      observations.push([stats.atimeMs, stats.mtimeMs]);
+    }
+    assert.equal(await api.promises.chmod(file, '640'), undefined);
+    assert.equal(await api.promises.utimes(file, new Date(-1500), '2.75'), undefined);
+    const final = fs.statSync(file);
+    observations.push([final.mode & 0o777, final.atimeMs, final.mtimeMs]);
+    return observations;
+  }
+  const { facade, calls, file } = fixture();
+  assert.deepEqual(await exercise(facade, file), await exercise(fs, file + '-node'));
+  assert(calls.every(call => call.authority === 'fs_write'));
+  assert.deepEqual(calls.filter(call => call.operation === 'chmod').map(call => call.args[1]),
+    [0o644, 0o600, 0o640, 0o640]);
+  assert.deepEqual(calls.filter(call => call.operation === 'utimes').map(call => call.args.slice(1)),
+    [['1.25', '2.5'], ['-2.5', '-1.25'], ['16', '1000'], ['3.25', '0'], ['-1.5', '2.75']]);
+});
+
+test('path metadata validates both operands before host entry and retains intrinsic Date identity', async () => {
+  const { facade, calls, file, context } = fixture();
+  fs.writeFileSync(file, 'untouched');
+  for (const mode of ['', '8', '0o600', '600tail', ' 600 ']) {
+    assert.throws(() => facade.chmodSync(file, mode), { code: 'ERR_INVALID_ARG_VALUE' });
+  }
+  for (const mode of [NaN, Infinity, -1, 1.5, 4294967296]) {
+    assert.throws(() => facade.chmodSync(file, mode), { code: 'ERR_OUT_OF_RANGE' });
+  }
+  for (const mode of [undefined, null, true, {}, 1n]) {
+    assert.throws(() => facade.chmodSync(file, mode), { code: 'ERR_INVALID_ARG_TYPE' });
+  }
+  for (const time of [NaN, Infinity, -Infinity, null, undefined, true, {}, 1n, 'bad', new Date(NaN)]) {
+    assert.throws(() => facade.utimesSync(file, time, 1), { code: 'ERR_INVALID_ARG_TYPE' });
+    assert.throws(() => facade.utimesSync(file, 1, time), { code: 'ERR_INVALID_ARG_TYPE' });
+  }
+  await assert.rejects(facade.promises.utimes(file, 1, NaN), { code: 'ERR_INVALID_ARG_TYPE' });
+  assert.equal(calls.length, 0);
+  const date = new Date(-2500);
+  date.getTime = date.valueOf = () => { throw new Error('public Date hook'); };
+  vm.runInNewContext('Date.prototype.getTime = function () { throw new Error("replaced"); }; Date.now = function () { throw new Error("replaced"); };', context);
+  facade.utimesSync(file, date, '-1.25');
+  const stats = fs.statSync(file);
+  assert.equal(stats.atimeMs, -2500);
+  assert.equal(stats.mtimeMs, -1250);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'untouched');
+});
+
+test('negative numeric times snapshot now while negative Date and string times remain before epoch', () => {
+  class FixedDate extends Date { static now() { return 123456; } }
+  const { facade, calls, file } = fixture(() => {}, { Date: FixedDate });
+  fs.writeFileSync(file, 'time');
+  facade.utimesSync(file, -1, -2);
+  const fd = fs.openSync(file, 'r+');
+  facade.futimesSync(fd, new Date(-1250), '-2.5');
+  fs.closeSync(fd);
+  assert.deepEqual(calls.map(call => call.args.slice(1)),
+    [['123.456', '123.456'], ['-1.25', '-2.5']]);
+  const stats = fs.statSync(file);
+  assert.equal(stats.atimeMs, -1250);
+  assert.equal(stats.mtimeMs, -2500);
+});
+
+test('negative zero is canonical before unsigned descriptor arguments cross the host boundary', async () => {
+  const { facade, calls, file } = fixture();
+  const handle = await facade.promises.open(file, 'w+');
+  await handle.write('abc');
+  await handle.truncate(-0);
+  await handle.chmod(-0);
+  for (const call of calls.filter(call => ['ftruncate', 'fchmod'].includes(call.operation))) {
+    assert.equal(Object.is(call.args[1], -0), false);
+    assert.equal(call.args[1], 0);
+  }
+  await handle.chmod('600');
+  assert.equal((await handle.stat()).size, 0);
+  await handle.close();
 });
 
 test('string encodings, byte counts, buffer identity and sync use descriptors', async () => {

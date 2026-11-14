@@ -2052,10 +2052,19 @@ impl SandboxedHostIo {
         }
     }
 
-    fn fd_timestamp(seconds: f64) -> Result<std::time::SystemTime, HostIoError> {
+    fn fs_timestamp_argument(arguments: &[String], name: &str) -> Result<f64, HostIoError> {
+        Self::fs_argument(arguments, name)
+            .and_then(|value| value.parse::<f64>().ok())
+            .ok_or_else(|| HostIoError::Fs {
+                code: "EINVAL".to_string(),
+                detail: format!("filesystem {name} requires a timestamp in seconds"),
+            })
+    }
+
+    fn fs_timestamp(seconds: f64) -> Result<std::time::SystemTime, HostIoError> {
         let invalid = || HostIoError::Fs {
             code: "EINVAL".to_string(),
-            detail: "futimes requires finite, representable timestamps in seconds".to_string(),
+            detail: "filesystem times must be finite, representable seconds".to_string(),
         };
         let duration = Duration::try_from_secs_f64(seconds.abs()).map_err(|_| invalid())?;
         if seconds < 0.0 {
@@ -2074,8 +2083,8 @@ impl SandboxedHostIo {
     /// Invalid timestamps, unknown descriptors and filesystem failures retain
     /// their typed error. Both timestamps are validated before either changes.
     pub fn utimes_fd(&self, fd: u64, atime: f64, mtime: f64) -> Result<(), HostIoError> {
-        let accessed = Self::fd_timestamp(atime)?;
-        let modified = Self::fd_timestamp(mtime)?;
+        let accessed = Self::fs_timestamp(atime)?;
+        let modified = Self::fs_timestamp(mtime)?;
         self.with_fd_entry(fd, |entry| {
             entry
                 .file
@@ -2223,18 +2232,10 @@ impl SandboxedHostIo {
                 FsMetaResult::Unit
             }
             FsOperation::Futimes => {
-                let timestamp = |name| {
-                    Self::fs_argument(arguments, name)
-                        .and_then(|value| value.parse::<f64>().ok())
-                        .ok_or_else(|| HostIoError::Fs {
-                            code: "EINVAL".to_string(),
-                            detail: format!("futimes requires a numeric {name} timestamp"),
-                        })
-                };
                 self.utimes_fd(
                     Self::fs_fd_argument(arguments)?,
-                    timestamp("atime")?,
-                    timestamp("mtime")?,
+                    Self::fs_timestamp_argument(arguments, "atime")?,
+                    Self::fs_timestamp_argument(arguments, "mtime")?,
                 )?;
                 FsMetaResult::Unit
             }
@@ -2644,11 +2645,12 @@ impl SandboxedHostIo {
                     )?;
                     // `RawMode` is u16 on Apple platforms and u32 elsewhere.
                     #[allow(clippy::useless_conversion, clippy::unnecessary_fallible_conversions)]
-                    let raw_mode =
-                        rustix::fs::RawMode::try_from(mode).map_err(|_| HostIoError::Fs {
+                    let raw_mode = rustix::fs::RawMode::try_from(mode & 0o7777).map_err(|_| {
+                        HostIoError::Fs {
                             code: "EINVAL".to_string(),
                             detail: format!("chmod mode out of range: {raw}"),
-                        })?;
+                        }
+                    })?;
                     rustix::fs::fchmod(&file, rustix::fs::Mode::from_raw_mode(raw_mode))
                         .map_err(|err| Self::rustix_fs_error("chmod", raw, err))?;
                 }
@@ -2660,23 +2662,15 @@ impl SandboxedHostIo {
                 FsMetaResult::Unit
             }
             FsOperation::Utimes => {
-                let modified_millis = arguments
-                    .get(1)
-                    .or_else(|| arguments.first())
-                    .and_then(|value| value.parse::<u64>().ok())
-                    .ok_or_else(|| HostIoError::Fs {
-                        code: "EINVAL".to_string(),
-                        detail: format!("utimes requires numeric millisecond timestamps: {raw}"),
-                    })?;
-                let modified = std::time::UNIX_EPOCH
-                    .checked_add(std::time::Duration::from_millis(modified_millis))
-                    .ok_or_else(|| HostIoError::Fs {
-                        code: "EINVAL".to_string(),
-                        detail: format!("utimes timestamp is out of range: {modified_millis}"),
-                    })?;
+                // Both path and fd effects record explicit signed seconds.
+                // Validate the pair before opening or changing either field.
+                let accessed =
+                    Self::fs_timestamp(Self::fs_timestamp_argument(arguments, "atime")?)?;
+                let modified =
+                    Self::fs_timestamp(Self::fs_timestamp_argument(arguments, "mtime")?)?;
                 #[cfg(not(unix))]
                 {
-                    let _ = modified;
+                    let _ = (accessed, modified);
                     return Err(Self::fs_not_implemented("utimes"));
                 }
                 #[cfg(unix)]
@@ -2684,12 +2678,16 @@ impl SandboxedHostIo {
                     let target = self.mutation_target(raw, false)?;
                     let file = Self::open_mutation_file(
                         &target,
-                        rustix::fs::OFlags::WRONLY,
+                        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NONBLOCK,
                         raw,
                         "open for utimes",
                     )?;
-                    file.set_times(std::fs::FileTimes::new().set_modified(modified))
-                        .map_err(|err| Self::fs_error("utimes", raw, err))?;
+                    file.set_times(
+                        std::fs::FileTimes::new()
+                            .set_accessed(accessed)
+                            .set_modified(modified),
+                    )
+                    .map_err(|err| Self::fs_error("utimes", raw, err))?;
                     FsMetaResult::Unit
                 }
             }

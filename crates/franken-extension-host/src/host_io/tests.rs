@@ -758,7 +758,12 @@ impl MutationRaceCase {
             Self::RemoveDir => fs_meta(FsOperation::RemoveDir, "slot/empty-dir", &[], &[]),
             Self::Truncate => fs_meta(FsOperation::Truncate, "slot/file.txt", &["2"], &[]),
             Self::Chmod => fs_meta(FsOperation::Chmod, "slot/file.txt", &["416"], &[]),
-            Self::Utimes => fs_meta(FsOperation::Utimes, "slot/file.txt", &["1000"], &[]),
+            Self::Utimes => fs_meta(
+                FsOperation::Utimes,
+                "slot/file.txt",
+                &["atime=2.5", "mtime=1.25"],
+                &[],
+            ),
             Self::Mkdtemp => fs_meta(FsOperation::Mkdtemp, "slot/tmp-", &[], &[]),
         }
     }
@@ -837,7 +842,10 @@ impl MutationRaceCase {
             }
             Self::Utimes => {
                 let metadata = std::fs::metadata(anchored.join("file.txt")).unwrap();
+                assert_eq!(metadata.atime(), 2);
+                assert_eq!(metadata.atime_nsec(), 500_000_000);
                 assert_eq!(metadata.mtime(), 1);
+                assert_eq!(metadata.mtime_nsec(), 250_000_000);
             }
             Self::Mkdtemp => assert!(anchored.join("tmp-000000").is_dir()),
         }

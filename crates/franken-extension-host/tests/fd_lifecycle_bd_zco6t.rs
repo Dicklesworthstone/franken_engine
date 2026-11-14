@@ -817,3 +817,179 @@ fn exclusive_and_sync_opens_preserve_symlink_containment() {
     assert_eq!(fd, 3, "refused opens must not consume descriptor ownership");
     provider.close_fd(fd).unwrap();
 }
+
+fn path_timestamp_request(path: &str, arguments: &[&str]) -> HostIoRequest {
+    HostIoRequest::FsMeta {
+        operation: FsOperation::Utimes,
+        path: path.to_string(),
+        arguments: arguments.iter().map(|value| (*value).to_string()).collect(),
+        data: Vec::new(),
+    }
+}
+
+#[test]
+fn path_and_descriptor_timestamps_share_signed_seconds_and_both_metadata_fields() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let (root, provider) = sandbox();
+    std::fs::write(root.join("path-times.txt"), b"path").unwrap();
+    std::fs::write(root.join("fd-times.txt"), b"held").unwrap();
+    let fd = provider.open_fd("fd-times.txt", "r").unwrap();
+    let descriptor = fd.to_string();
+    let cases = [
+        (
+            ["atime=-2.5", "mtime=1.25"],
+            (-3, 500_000_000),
+            (1, 250_000_000),
+        ),
+        (
+            ["atime=1234.25", "mtime=2500.75"],
+            (1234, 250_000_000),
+            (2500, 750_000_000),
+        ),
+        (["atime=0", "mtime=-0.5"], (0, 0), (-1, 500_000_000)),
+    ];
+    for (arguments, accessed, modified) in cases {
+        for request in [
+            path_timestamp_request("path-times.txt", &arguments),
+            descriptor_mutation_request(FsOperation::Futimes, Some(&descriptor), &arguments),
+        ] {
+            assert_eq!(
+                provider.perform(&request, &[HostIoCapability::FsWrite]),
+                Ok(HostIoResponse::FsMeta {
+                    result: FsMetaResult::Unit
+                })
+            );
+        }
+        for path in ["path-times.txt", "fd-times.txt"] {
+            let metadata = std::fs::metadata(root.join(path)).unwrap();
+            assert_eq!((metadata.atime(), metadata.atime_nsec()), accessed);
+            assert_eq!((metadata.mtime(), metadata.mtime_nsec()), modified);
+            assert_eq!(metadata.len(), 4);
+        }
+    }
+    provider.close_fd(fd).unwrap();
+
+    // Timestamp changes need no writable data descriptor and also apply to
+    // directories. The path operation still opens beneath the sandbox root.
+    std::fs::set_permissions(
+        root.join("path-times.txt"),
+        std::fs::Permissions::from_mode(0o400),
+    )
+    .unwrap();
+    std::fs::create_dir(root.join("directory-times")).unwrap();
+    for path in ["path-times.txt", "directory-times"] {
+        provider
+            .perform(
+                &path_timestamp_request(path, &["atime=3.25", "mtime=4.5"]),
+                &[HostIoCapability::FsWrite],
+            )
+            .unwrap();
+        let metadata = std::fs::metadata(root.join(path)).unwrap();
+        assert_eq!((metadata.atime(), metadata.atime_nsec()), (3, 250_000_000));
+        assert_eq!((metadata.mtime(), metadata.mtime_nsec()), (4, 500_000_000));
+    }
+}
+
+#[test]
+fn path_timestamp_validation_is_atomic_and_write_authority_is_checked_first() {
+    use std::os::unix::fs::MetadataExt;
+
+    let (root, provider) = sandbox();
+    let path = root.join("atomic-times.txt");
+    std::fs::write(&path, b"unchanged").unwrap();
+    let request = path_timestamp_request("atomic-times.txt", &["atime=-1.25", "mtime=2.5"]);
+    let snapshot = || {
+        let metadata = std::fs::metadata(&path).unwrap();
+        (
+            metadata.atime(),
+            metadata.atime_nsec(),
+            metadata.mtime(),
+            metadata.mtime_nsec(),
+            metadata.len(),
+        )
+    };
+    let before = snapshot();
+    assert_eq!(
+        provider.perform(&request, &[HostIoCapability::FsRead]),
+        Err(HostIoError::CapabilityMissing {
+            capability: HostIoCapability::FsWrite
+        })
+    );
+    let invalid: &[&[&str]] = &[
+        &[],
+        &["atime=1"],
+        &["mtime=2"],
+        &["1000", "2000"],
+        &["atime=NaN", "mtime=2"],
+        &["atime=1", "mtime=NaN"],
+        &["atime=inf", "mtime=2"],
+        &["atime=1", "mtime=-inf"],
+        &["atime=1", "mtime=1e30"],
+        &["atime=bad", "mtime=2"],
+    ];
+    for arguments in invalid {
+        let request = path_timestamp_request("atomic-times.txt", arguments);
+        assert_eq!(
+            provider.perform(&request, &[HostIoCapability::FsRead]),
+            Err(HostIoError::CapabilityMissing {
+                capability: HostIoCapability::FsWrite
+            })
+        );
+        let result = provider.perform(&request, &[HostIoCapability::FsWrite]);
+        assert!(
+            matches!(&result, Err(HostIoError::Fs { code, .. }) if code == "EINVAL"),
+            "{request:?}: {result:?}"
+        );
+        assert_eq!(
+            snapshot(),
+            before,
+            "invalid second field cannot change the first"
+        );
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), b"unchanged");
+}
+
+#[test]
+fn path_timestamp_transcripts_preserve_both_fields_without_repeating_the_mutation() {
+    use std::os::unix::fs::MetadataExt;
+
+    let (root, provider) = sandbox();
+    let path = root.join("replayed-times.txt");
+    std::fs::write(&path, b"recorded").unwrap();
+    let request = path_timestamp_request("replayed-times.txt", &["atime=-1.25", "mtime=2.5"]);
+    let recorder = InMemoryHostIoTranscript::recording();
+    recorder.begin_execution().unwrap();
+    let outcome = provider.perform(&request, &[HostIoCapability::FsWrite]);
+    assert_eq!(
+        outcome,
+        Ok(HostIoResponse::FsMeta {
+            result: FsMetaResult::Unit
+        })
+    );
+    recorder.record(&request, &outcome);
+    let entries = recorder.finish_execution().unwrap();
+    let encoded = serde_json::to_string(&entries).unwrap();
+    let replay = InMemoryHostIoTranscript::replaying(serde_json::from_str(&encoded).unwrap());
+    provider
+        .perform(
+            &path_timestamp_request("replayed-times.txt", &["atime=7.25", "mtime=8.5"]),
+            &[HostIoCapability::FsWrite],
+        )
+        .unwrap();
+    replay.begin_execution().unwrap();
+    assert_eq!(replay.replay(&request), Some(outcome));
+    assert_eq!(replay.finish_execution().unwrap(), entries);
+    let metadata = std::fs::metadata(&path).unwrap();
+    assert_eq!((metadata.atime(), metadata.atime_nsec()), (7, 250_000_000));
+    assert_eq!((metadata.mtime(), metadata.mtime_nsec()), (8, 500_000_000));
+    for arguments in [["atime=-1", "mtime=2.5"], ["atime=-1.25", "mtime=2"]] {
+        let diverged = InMemoryHostIoTranscript::replaying(entries.clone());
+        diverged.begin_execution().unwrap();
+        assert!(matches!(
+            diverged.replay(&path_timestamp_request("replayed-times.txt", &arguments)),
+            Some(Err(HostIoError::SandboxViolation { .. }))
+        ));
+        assert!(diverged.finish_execution().is_err());
+    }
+}

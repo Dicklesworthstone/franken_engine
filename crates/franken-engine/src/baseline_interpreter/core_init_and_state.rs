@@ -2800,8 +2800,85 @@ impl InterpreterCore {
             .is_some_and(|value| matches!(value, Value::Bool(true)))
     }
 
+    /// Directly lowered fs calls and module-facade calls share the same wire
+    /// representation: decimal uint32 permission bits, including canonical +0.
+    fn fs_mode_argument(&mut self, value: Option<&Value>) -> Result<String, InterpreterError> {
+        let number = match value {
+            Some(Value::Str(text)) => {
+                if text.is_empty() || !text.bytes().all(|byte| matches!(byte, b'0'..=b'7')) {
+                    return Err(self.throw_buffer_node_error(
+                        "TypeError",
+                        "ERR_INVALID_ARG_VALUE",
+                        "Invalid octal mode".to_string(),
+                    ));
+                }
+                u32::from_str_radix(text, 8).map_or(f64::INFINITY, f64::from)
+            }
+            Some(Value::Int(number)) => *number as f64,
+            Some(Value::Float(number)) => number.inner(),
+            _ => {
+                return Err(self.throw_buffer_node_error(
+                    "TypeError",
+                    "ERR_INVALID_ARG_TYPE",
+                    "File mode must be a number or an octal string".to_string(),
+                ));
+            }
+        };
+        if !number.is_finite()
+            || number.fract() != 0.0
+            || !(0.0..=u32::MAX as f64).contains(&number)
+        {
+            return Err(self.throw_buffer_node_error(
+                "RangeError",
+                "ERR_OUT_OF_RANGE",
+                "File mode is out of range".to_string(),
+            ));
+        }
+        Ok((number as u32).to_string())
+    }
+
+    /// Canonical signed seconds. Raw Date objects carry milliseconds; strings
+    /// are already absolute times. Only a negative Number asks for the virtual
+    /// current time, which must be snapshotted before the effect is recorded.
+    fn fs_timestamp_argument(
+        &mut self,
+        value: Option<&Value>,
+        name: &str,
+    ) -> Result<String, InterpreterError> {
+        let (seconds, numeric) = match value {
+            Some(Value::Int(number)) => (*number as f64, true),
+            Some(Value::Float(number)) => (number.inner(), true),
+            Some(Value::Str(text)) => (primitive_conversion::string_number(text), false),
+            Some(Value::Object(object_id)) => (
+                self.heap
+                    .get(object_id.0 as usize)
+                    .and_then(HeapObject::date_time)
+                    .map_or(f64::NAN, |millis| millis / 1000.0),
+                false,
+            ),
+            _ => (f64::NAN, false),
+        };
+        if !seconds.is_finite() {
+            return Err(self.throw_buffer_node_error(
+                "TypeError",
+                "ERR_INVALID_ARG_TYPE",
+                format!("File {name} must be a finite time in seconds or a valid Date"),
+            ));
+        }
+        let seconds = if numeric && seconds < 0.0 {
+            self.virtual_wall_clock_ms() / 1000.0
+        } else {
+            seconds
+        };
+        Ok(if seconds == 0.0 {
+            "0".to_string()
+        } else {
+            seconds.to_string()
+        })
+    }
+
     pub(super) fn fs_operation_arguments(
-        &self,
+        &mut self,
         operation: FsOperation,
         args: &[Value],
     ) -> Result<Vec<String>, InterpreterError> {
@@ -2824,15 +2901,20 @@ impl InterpreterCore {
             FsOperation::Symlink | FsOperation::Rename | FsOperation::CopyFile => {
                 vec![self.fs_path_argument(args.get(1))?]
             }
-            FsOperation::Truncate | FsOperation::Chmod => args
+            FsOperation::Truncate => args
                 .get(1)
                 .map_or_else(Vec::new, |value| vec![self.fs_value_argument(value)]),
-            FsOperation::Utimes => args
-                .iter()
-                .skip(1)
-                .take(2)
-                .map(|value| self.fs_value_argument(value))
-                .collect(),
+            FsOperation::Chmod => vec![self.fs_mode_argument(args.get(1))?],
+            FsOperation::Utimes => vec![
+                format!(
+                    "atime={}",
+                    self.fs_timestamp_argument(args.get(1), "atime")?
+                ),
+                format!(
+                    "mtime={}",
+                    self.fs_timestamp_argument(args.get(2), "mtime")?
+                ),
+            ],
             // Numeric fd lifecycle (bd-zco6t). Open's arg0 is the path (kept
             // as the effect path); every other fd op identifies its target by
             // the `fd=` argument, never a path.
@@ -2855,25 +2937,33 @@ impl InterpreterCore {
                 )]
             }
             FsOperation::Ftruncate | FsOperation::Fchmod | FsOperation::Futimes => {
-                // These facade methods validate and snapshot primitive arguments
-                // before crossing this seam. Keep the actual operation and each
-                // normalized value in the replayable, capability-checked request.
+                // Keep the concrete operation and normalized arguments in the
+                // replayable, capability-checked request. The same timestamp
+                // conversion serves direct calls and facade snapshots.
                 let mut arguments = vec![format!(
                     "fd={}",
                     args.first()
                         .map_or_else(String::new, |value| self.fs_value_argument(value))
                 )];
-                let names: &[&str] = match operation {
-                    FsOperation::Ftruncate => &["length"],
-                    FsOperation::Fchmod => &["mode"],
-                    _ => &["atime", "mtime"],
-                };
-                for (index, name) in names.iter().enumerate() {
-                    arguments.push(format!(
-                        "{name}={}",
-                        args.get(index + 1)
+                match operation {
+                    FsOperation::Ftruncate => arguments.push(format!(
+                        "length={}",
+                        args.get(1)
                             .map_or_else(String::new, |value| self.fs_value_argument(value))
-                    ));
+                    )),
+                    FsOperation::Fchmod => {
+                        arguments.push(format!("mode={}", self.fs_mode_argument(args.get(1))?));
+                    }
+                    _ => {
+                        arguments.push(format!(
+                            "atime={}",
+                            self.fs_timestamp_argument(args.get(1), "atime")?
+                        ));
+                        arguments.push(format!(
+                            "mtime={}",
+                            self.fs_timestamp_argument(args.get(2), "mtime")?
+                        ));
+                    }
                 }
                 arguments
             }
@@ -3289,7 +3379,15 @@ impl InterpreterCore {
         } else {
             None
         };
-        let operation_arguments = self.fs_operation_arguments(operation, logical_args)?;
+        let operation_arguments = match self.fs_operation_arguments(operation, logical_args) {
+            Ok(arguments) => arguments,
+            Err(error) => {
+                if matches!(error, InterpreterError::UncaughtException { .. }) {
+                    self.join_pending_exception_label(&args_label)?;
+                }
+                return Err(error);
+            }
+        };
         let content = if matches!(
             operation,
             FsOperation::Write | FsOperation::Append | FsOperation::WriteFd

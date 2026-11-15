@@ -5310,11 +5310,12 @@ impl InterpreterCore {
                 auth_tag.as_ref().map_or(0, |tag| tag.capacity())
             }
             CryptoObjectState::HashFinalized { .. } | CryptoObjectState::HmacFinalized { .. } => 0,
-            CryptoObjectState::KeyPairActive {
+            CryptoObjectState::PrivateKey {
                 private_key,
                 public_key,
                 ..
-            } => private_key.capacity().saturating_add(public_key.len()),
+            } => private_key.capacity().saturating_add(public_key.capacity()),
+            CryptoObjectState::PublicKey { public_key, .. } => public_key.capacity(),
         };
         CRYPTO_STATE_BASE_BYTES
             .saturating_add(MEMORY_ESTIMATE_MAP_ENTRY_BYTES)

@@ -4845,7 +4845,7 @@ fn ed25519_detached_sign_verify_accept_tamper_and_length_bd_53l89() {
     let public_key = signing_key.verifying_key().to_bytes();
     let message = b"franken engine signs";
 
-    let signature = InterpreterCore::ed25519_sign_detached(seed, message);
+    let signature = InterpreterCore::ed25519_sign_detached(&seed, message);
     assert_eq!(signature.len(), 64);
     assert!(
         InterpreterCore::ed25519_verify_detached(public_key, message, &signature)
@@ -4869,8 +4869,550 @@ fn ed25519_detached_sign_verify_accept_tamper_and_length_bd_53l89() {
     // Determinism under the contract's scripted-entropy regime: same seed,
     // same message, identical signature bytes.
     assert_eq!(
-        InterpreterCore::ed25519_sign_detached(seed, message),
+        InterpreterCore::ed25519_sign_detached(&seed, message),
         signature
+    );
+}
+
+fn crypto_test_ed25519_material_bd_53l89() -> (Zeroizing<Vec<u8>>, Vec<u8>) {
+    let seed = [0x42u8; 32];
+    let public_key = ed25519_dalek::SigningKey::from_bytes(&seed)
+        .verifying_key()
+        .to_bytes()
+        .to_vec();
+    (Zeroizing::new(seed.to_vec()), public_key)
+}
+
+fn crypto_test_key_allocation_core_bd_53l89() -> InterpreterCore {
+    let mut core = quickjs_test_core();
+    core.crypto_alloc_object(CryptoObjectState::HashFinalized {
+        lifecycle_label: Label::Public,
+    })
+    .expect("allocate unrelated crypto state");
+    core.replace_pending_hostcall_result_label(Some(Label::Internal))
+        .expect("seed preexisting result provenance");
+    core.sync_estimated_memory_bytes()
+        .expect("key allocation fixture accounting");
+    core
+}
+
+#[test]
+fn crypto_key_pair_allocates_distinct_authenticated_keys_bd_53l89() {
+    let mut core = quickjs_test_core();
+    let (private_key, public_key) = crypto_test_ed25519_material_bd_53l89();
+    let Value::Object(pair) = core
+        .crypto_alloc_key_pair(
+            CryptoKeyPairAlgorithm::Ed25519,
+            private_key.clone(),
+            public_key.clone(),
+            Label::Secret,
+        )
+        .expect("allocate separate signing and verification handles")
+    else {
+        panic!("key generation must return an ordinary pair object");
+    };
+    let properties = &core.heap[pair.0 as usize].properties;
+    assert_eq!(
+        properties.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["publicKey", "privateKey"]
+    );
+    let Value::Object(public) = properties
+        .get("publicKey")
+        .cloned()
+        .expect("public key property")
+    else {
+        panic!("publicKey must be an object");
+    };
+    let Value::Object(private) = properties
+        .get("privateKey")
+        .cloned()
+        .expect("private key property")
+    else {
+        panic!("privateKey must be an object");
+    };
+    assert_ne!(public, private);
+    assert_ne!(pair, public);
+    assert_ne!(pair, private);
+    assert!(!core.crypto_objects.contains_key(&pair));
+    assert_eq!(core.crypto_objects.len(), 2);
+    assert_eq!(
+        core.crypto_objects.get(&public),
+        Some(&CryptoObjectState::PublicKey {
+            algorithm: CryptoKeyPairAlgorithm::Ed25519,
+            public_key: public_key.clone(),
+            lifecycle_label: Label::Secret,
+        })
+    );
+    assert_eq!(
+        core.crypto_key_pair_private(&Value::Object(private)),
+        Ok((
+            CryptoKeyPairAlgorithm::Ed25519,
+            private_key,
+            Label::Secret,
+        ))
+    );
+    for handle in [private, public] {
+        assert_eq!(
+            core.crypto_key_pair_public(&Value::Object(handle)),
+            Ok((
+                CryptoKeyPairAlgorithm::Ed25519,
+                public_key.clone(),
+                Label::Secret,
+            ))
+        );
+    }
+    let forged = core
+        .alloc_object_with_properties(&[
+            ("type", Value::str("private")),
+            ("asymmetricKeyType", Value::str("ed25519")),
+            ("privateKey", Value::Object(private)),
+        ])
+        .expect("allocate guest-controlled key lookalike");
+    for unauthorized in [
+        Value::Object(public),
+        Value::Object(pair),
+        Value::Object(forged),
+        Value::Null,
+    ] {
+        assert!(matches!(
+            core.crypto_key_pair_private(&unauthorized),
+            Err(InterpreterError::TypeError { .. })
+        ));
+    }
+    for unauthorized in [Value::Object(pair), Value::Object(forged)] {
+        assert!(matches!(
+            core.crypto_key_pair_public(&unauthorized),
+            Err(InterpreterError::TypeError { .. })
+        ));
+    }
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+}
+
+#[test]
+fn crypto_key_pair_heap_refusal_is_atomic_bd_53l89() {
+    // Every partial object-count allowance must leave the prior realm intact.
+    for available_slots in 0..3 {
+        let mut core = crypto_test_key_allocation_core_bd_53l89();
+        let heap_before = core.heap.len();
+        let state_before = core.crypto_objects.clone();
+        let memory_before = core.estimated_memory_bytes();
+        let label_before = core.pending_hostcall_result_label.clone();
+        core.config.max_heap_objects = core.heap_object_count_u32() + available_slots;
+        let (private_key, public_key) = crypto_test_ed25519_material_bd_53l89();
+        assert!(matches!(
+            core.crypto_alloc_key_pair(
+                CryptoKeyPairAlgorithm::Ed25519,
+                private_key,
+                public_key,
+                Label::Secret,
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.heap.len(), heap_before);
+        assert_eq!(core.crypto_objects, state_before);
+        assert_eq!(core.pending_hostcall_result_label, label_before);
+        assert_eq!(core.estimated_memory_bytes(), memory_before);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+}
+
+#[test]
+fn crypto_key_pair_memory_refusal_is_atomic_bd_53l89() {
+    let mut successful = crypto_test_key_allocation_core_bd_53l89();
+    let baseline = successful.estimated_memory_bytes();
+    let (private_key, public_key) = crypto_test_ed25519_material_bd_53l89();
+    successful
+        .crypto_alloc_key_pair(
+            CryptoKeyPairAlgorithm::Ed25519,
+            private_key,
+            public_key,
+            Label::Secret,
+        )
+        .expect("measure a complete key-pair allocation");
+    let retained_bytes = successful.estimated_memory_bytes() - baseline;
+    assert!(retained_bytes > 0);
+    assert_eq!(
+        successful.estimated_memory_bytes(),
+        successful.recompute_estimated_memory_bytes()
+    );
+
+    for headroom in [0, retained_bytes / 2, retained_bytes - 1] {
+        let mut core = crypto_test_key_allocation_core_bd_53l89();
+        let heap_before = core.heap.len();
+        let state_before = core.crypto_objects.clone();
+        let memory_before = core.estimated_memory_bytes();
+        let label_before = core.pending_hostcall_result_label.clone();
+        let previous_limit = core.config.max_total_memory_bytes;
+        core.config.max_total_memory_bytes = memory_before + headroom;
+        let (private_key, public_key) = crypto_test_ed25519_material_bd_53l89();
+        assert!(matches!(
+            core.crypto_alloc_key_pair(
+                CryptoKeyPairAlgorithm::Ed25519,
+                private_key,
+                public_key,
+                Label::Secret,
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.heap.len(), heap_before);
+        assert_eq!(core.crypto_objects, state_before);
+        assert_eq!(core.pending_hostcall_result_label, label_before);
+        assert_eq!(core.estimated_memory_bytes(), memory_before);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        core.config.max_total_memory_bytes = previous_limit;
+        let (private_key, public_key) = crypto_test_ed25519_material_bd_53l89();
+        core.crypto_alloc_key_pair(
+            CryptoKeyPairAlgorithm::Ed25519,
+            private_key,
+            public_key,
+            Label::Secret,
+        )
+        .expect("allocation must recover after budget refusal");
+        assert_eq!(core.crypto_objects.len(), state_before.len() + 2);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+}
+
+#[test]
+fn crypto_public_key_root_does_not_retain_private_key_bd_53l89() {
+    let mut core = quickjs_test_core();
+    let (private_key, public_key) = crypto_test_ed25519_material_bd_53l89();
+    let Value::Object(pair) = core
+        .crypto_alloc_key_pair(
+            CryptoKeyPairAlgorithm::Ed25519,
+            private_key,
+            public_key.clone(),
+            Label::Secret,
+        )
+        .expect("allocate collectible key pair")
+    else {
+        panic!("key generation must return a pair object");
+    };
+    let Value::Object(public) = core.heap[pair.0 as usize]
+        .properties
+        .get("publicKey")
+        .cloned()
+        .expect("public key property")
+    else {
+        panic!("publicKey must be an object");
+    };
+    let Value::Object(private) = core.heap[pair.0 as usize]
+        .properties
+        .get("privateKey")
+        .cloned()
+        .expect("private key property")
+    else {
+        panic!("privateKey must be an object");
+    };
+    core.clear_pending_hostcall_result_label();
+    core.write_reg_with_label(0, Value::Object(public), Label::Secret)
+        .expect("retain only the public key");
+    core.gc_safe_point();
+
+    assert!(core.heap.is_reclaimed(pair.0 as usize));
+    assert!(core.heap.is_reclaimed(private.0 as usize));
+    assert!(!core.heap.is_reclaimed(public.0 as usize));
+    assert!(!core.crypto_objects.contains_key(&private));
+    assert_eq!(core.crypto_objects.len(), 1);
+    assert_eq!(
+        core.crypto_key_pair_public(&Value::Object(public)),
+        Ok((
+            CryptoKeyPairAlgorithm::Ed25519,
+            public_key,
+            Label::Secret,
+        ))
+    );
+    assert!(matches!(
+        core.crypto_key_pair_private(&Value::Object(private)),
+        Err(InterpreterError::TypeError { .. })
+    ));
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+
+    core.clear_current_register_frame();
+    core.gc_safe_point();
+    assert!(core.heap.is_reclaimed(public.0 as usize));
+    assert!(core.crypto_objects.is_empty());
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+}
+
+#[test]
+fn crypto_key_objects_route_real_signing_and_verification_bd_53l89() {
+    fn allocate_pair(
+        core: &mut InterpreterCore,
+        algorithm: CryptoKeyPairAlgorithm,
+        seed_byte: u8,
+    ) -> (Value, Value, Value) {
+        let seed = [seed_byte; 32];
+        let public_key = match algorithm {
+            CryptoKeyPairAlgorithm::Ed25519 => ed25519_dalek::SigningKey::from_bytes(&seed)
+                .verifying_key()
+                .to_bytes()
+                .to_vec(),
+            CryptoKeyPairAlgorithm::EcP256 => p256::ecdsa::SigningKey::from_slice(&seed)
+                .expect("fixture scalar is in the P-256 field")
+                .verifying_key()
+                .to_encoded_point(false)
+                .as_bytes()
+                .to_vec(),
+        };
+        let Value::Object(pair) = core
+            .crypto_alloc_key_pair(
+                algorithm,
+                Zeroizing::new(seed.to_vec()),
+                public_key,
+                Label::Secret,
+            )
+            .expect("allocate real asymmetric key material")
+        else {
+            panic!("key allocation must return a pair object");
+        };
+        let properties = &core.heap[pair.0 as usize].properties;
+        let public = properties.get("publicKey").expect("public key").clone();
+        let private = properties.get("privateKey").expect("private key").clone();
+        core.clear_pending_hostcall_result_label();
+        (Value::Object(pair), public, private)
+    }
+
+    for algorithm in [
+        CryptoKeyPairAlgorithm::Ed25519,
+        CryptoKeyPairAlgorithm::EcP256,
+    ] {
+        let mut core = quickjs_test_core();
+        let (pair, public, private) = allocate_pair(&mut core, algorithm, 0x42);
+        let (_, foreign_public, _) = allocate_pair(&mut core, algorithm, 0x24);
+        let algorithm_value = match algorithm {
+            CryptoKeyPairAlgorithm::Ed25519 => Value::Null,
+            CryptoKeyPairAlgorithm::EcP256 => Value::str("sha256"),
+        };
+        core.write_reg(0, algorithm_value)
+            .expect("seed digest selection");
+        core.write_reg(1, Value::str("authenticated key object message"))
+            .expect("seed message");
+        core.write_reg(2, private.clone())
+            .expect("seed signing key");
+        let signature = core
+            .crypto_sign_sync(RegRange { start: 0, count: 3 })
+            .expect("real signing with the private key");
+        assert_eq!(core.pending_hostcall_result_label, Some(Label::Secret));
+        core.clear_pending_hostcall_result_label();
+        core.write_reg(3, signature.clone())
+            .expect("seed signature");
+
+        for verifier in [public.clone(), private.clone()] {
+            core.write_reg(2, verifier).expect("seed verifier key");
+            assert_eq!(
+                core.crypto_verify_sync(RegRange { start: 0, count: 4 }),
+                Ok(Value::Bool(true)),
+                "{algorithm:?} accepts its public key and private key for verification"
+            );
+            assert_eq!(core.pending_hostcall_result_label, Some(Label::Secret));
+            core.clear_pending_hostcall_result_label();
+        }
+
+        core.write_reg(2, public.clone())
+            .expect("restore matching public key");
+        core.write_reg(1, Value::str("authenticated key object messagE"))
+            .expect("tamper with the message");
+        assert_eq!(
+            core.crypto_verify_sync(RegRange { start: 0, count: 4 }),
+            Ok(Value::Bool(false)),
+            "{algorithm:?} must reject the tampered message"
+        );
+        core.clear_pending_hostcall_result_label();
+
+        core.write_reg(1, Value::str("authenticated key object message"))
+            .expect("restore original message");
+        core.write_reg(2, foreign_public)
+            .expect("substitute unrelated public key");
+        assert_eq!(
+            core.crypto_verify_sync(RegRange { start: 0, count: 4 }),
+            Ok(Value::Bool(false)),
+            "{algorithm:?} must reject a signature under a different public key"
+        );
+        core.clear_pending_hostcall_result_label();
+
+        // Each 4 KiB input fits this allowance by itself; their simultaneous
+        // verification copies must be admitted together before crypto work.
+        let oversized = core
+            .alloc_buffer_from_bytes(&[0x61; 4096])
+            .expect("allocate aggregate-admission fixture");
+        core.write_reg(1, Value::Object(oversized))
+            .expect("seed large message");
+        core.write_reg(2, public.clone())
+            .expect("restore authenticated verifier");
+        core.write_reg(3, Value::Object(oversized))
+            .expect("seed independently fitting signature input");
+        let previous_limit = core.config.max_total_memory_bytes;
+        let memory_before = core.estimated_memory_bytes();
+        let heap_before = core.heap.len();
+        let state_before = core.crypto_objects.clone();
+        let work_before = core.instructions_executed;
+        core.config.max_total_memory_bytes = memory_before + 6144;
+        core.check_temporary_memory_budget(4096)
+            .expect("each individual input fits");
+        assert!(matches!(
+            core.crypto_verify_sync(RegRange { start: 0, count: 4 }),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.instructions_executed, work_before);
+        assert_eq!(core.heap.len(), heap_before);
+        assert_eq!(core.crypto_objects, state_before);
+        assert_eq!(core.estimated_memory_bytes(), memory_before);
+        core.config.max_total_memory_bytes = previous_limit;
+        core.clear_pending_hostcall_result_label();
+        core.write_reg(1, Value::str("authenticated key object message"))
+            .expect("restore message after budget refusal");
+        core.write_reg(3, signature.clone())
+            .expect("restore signature after budget refusal");
+        assert_eq!(
+            core.crypto_verify_sync(RegRange { start: 0, count: 4 }),
+            Ok(Value::Bool(true)),
+            "{algorithm:?} key remains usable after aggregate budget refusal"
+        );
+        core.clear_pending_hostcall_result_label();
+
+        let forged = core
+            .alloc_object_with_properties(&[
+                ("type", Value::str("private")),
+                ("privateKey", private.clone()),
+            ])
+            .expect("allocate a guest-controlled signing lookalike");
+        for unauthorized in [public.clone(), pair, Value::Object(forged)] {
+            core.write_reg(2, unauthorized)
+                .expect("seed unauthorized signing receiver");
+            assert!(matches!(
+                core.crypto_sign_sync(RegRange { start: 0, count: 3 }),
+                Err(InterpreterError::TypeError { .. })
+            ));
+            core.clear_pending_hostcall_result_label();
+
+            core.write_reg(2, private.clone())
+                .expect("restore authentic private key after refusal");
+            let recovered_signature = core
+                .crypto_sign_sync(RegRange { start: 0, count: 3 })
+                .expect("receiver refusal must not consume the private key");
+            core.clear_pending_hostcall_result_label();
+            assert_eq!(
+                core.crypto_input_bytes(&recovered_signature, None)
+                    .expect("read repeated deterministic signature"),
+                core.crypto_input_bytes(&signature, None)
+                    .expect("read original deterministic signature"),
+                "{algorithm:?} must retain its original signing material after refusal"
+            );
+            core.write_reg(2, public.clone())
+                .expect("verify the recovered signature");
+            core.write_reg(3, recovered_signature)
+                .expect("seed recovered signature");
+            assert_eq!(
+                core.crypto_verify_sync(RegRange { start: 0, count: 4 }),
+                Ok(Value::Bool(true))
+            );
+            core.clear_pending_hostcall_result_label();
+        }
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+}
+
+#[test]
+fn crypto_key_generation_preserves_option_shape_provenance_bd_53l89() {
+    #[derive(Debug, Default)]
+    struct SeedProvider {
+        requests: Mutex<Vec<u64>>,
+    }
+
+    impl HostIoProvider for SeedProvider {
+        fn name(&self) -> &str {
+            "key-generation-shape-provenance-seed"
+        }
+
+        fn perform(
+            &self,
+            request: &frankenengine_extension_host::host_io::HostIoRequest,
+            granted: &[frankenengine_extension_host::host_io::HostIoCapability],
+        ) -> HostIoOutcome {
+            use frankenengine_extension_host::host_io::{
+                HostIoCapability, HostIoRequest, HostIoResponse,
+            };
+            assert_eq!(granted, &[HostIoCapability::RandomRead]);
+            let HostIoRequest::RandomRead { byte_len } = request else {
+                panic!("key generation may request only entropy");
+            };
+            assert_eq!(*byte_len, 32);
+            self.requests
+                .lock()
+                .expect("record entropy request")
+                .push(*byte_len);
+            Ok(HostIoResponse::RandomRead {
+                bytes: vec![0x42; 32],
+            })
+        }
+    }
+
+    let mut core = quickjs_test_core();
+    let provider = Arc::new(SeedProvider::default());
+    core.host_io = Some(provider.clone());
+    core.config
+        .granted_capabilities
+        .insert(RuntimeCapability::RandomRead);
+    let options = core
+        .alloc_object_with_properties(&[])
+        .expect("allocate empty generation options");
+    // Only the object's shape is classified. Neither argument register nor
+    // any stored option value carries the TopSecret selection provenance.
+    core.object_mutation_labels.insert(options, Label::TopSecret);
+    core.sync_estimated_memory_bytes()
+        .expect("account for classified option shape");
+    core.write_reg_with_label(0, Value::str("ed25519"), Label::Public)
+        .expect("seed public algorithm argument");
+    core.write_reg_with_label(1, Value::Object(options), Label::Public)
+        .expect("seed public alias of classified options");
+    assert_eq!(core.get_register_label(1), Ok(&Label::Public));
+    let Value::Object(pair) = core
+        .crypto_generate_key_pair_sync(RegRange { start: 0, count: 2 }, None)
+        .expect("generate keys after observing option shape")
+    else {
+        panic!("generation must return a key pair object");
+    };
+    for property in ["publicKey", "privateKey"] {
+        let Some(Value::Object(key)) = core.heap[pair.0 as usize].properties.get(property) else {
+            panic!("{property} must hold an authenticated key object");
+        };
+        assert_eq!(
+            core.crypto_objects[key].lifecycle_label(),
+            &Label::TopSecret,
+            "{property} state must preserve observations, not only the entropy floor"
+        );
+    }
+    assert_eq!(core.pending_hostcall_result_label, Some(Label::TopSecret));
+    assert_eq!(
+        provider.requests.lock().expect("read entropy requests").as_slice(),
+        &[32]
+    );
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
     );
 }
 

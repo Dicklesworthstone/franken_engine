@@ -135,7 +135,16 @@ jobs:
             --test ir_contract_enrichment_integration \
             --test module_namespace_to_string_tag_bd_9vouw_399 \
             --test object_json_globals_bd9a8cz2 \
+            --test crypto_builtin_bd_2z157 \
             -- --nocapture --test-threads=1
+
+      - name: Verify asymmetric key authority, reclamation, and allocation rollback
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --no-default-features -p frankenengine-engine --lib \
+            bd_53l89 -- --nocapture --test-threads=1
 
       - name: Verify IR schema and global declaration invariants
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}

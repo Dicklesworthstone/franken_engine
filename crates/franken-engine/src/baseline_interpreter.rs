@@ -877,9 +877,14 @@ enum CryptoObjectState {
         auth_tag: Option<Zeroizing<Vec<u8>>>,
         lifecycle_label: Label,
     },
-    KeyPairActive {
+    PrivateKey {
         algorithm: CryptoKeyPairAlgorithm,
         private_key: Zeroizing<Vec<u8>>,
+        public_key: Vec<u8>,
+        lifecycle_label: Label,
+    },
+    PublicKey {
+        algorithm: CryptoKeyPairAlgorithm,
         public_key: Vec<u8>,
         lifecycle_label: Label,
     },
@@ -910,7 +915,10 @@ impl CryptoObjectState {
             | Self::CipherFinalized {
                 lifecycle_label, ..
             }
-            | Self::KeyPairActive {
+            | Self::PrivateKey {
+                lifecycle_label, ..
+            }
+            | Self::PublicKey {
                 lifecycle_label, ..
             } => lifecycle_label,
         }
@@ -949,11 +957,9 @@ impl CryptoObjectState {
                 }
                 _ => false,
             },
-            // bd-53l89 slice 1: a generated key pair exposes no lifecycle
-            // methods yet; sign/verify dispatch arrives with its own slice and
-            // will extend this arm. Until then every lifecycle capability is
-            // refused, so the handle is inert by construction.
-            Self::KeyPairActive { .. } => false,
+            // Asymmetric keys are consumed by module-level sign/verify. They
+            // never acquire the hash/HMAC/cipher lifecycle through properties.
+            Self::PrivateKey { .. } | Self::PublicKey { .. } => false,
         }
     }
 }
@@ -17093,7 +17099,7 @@ impl Drop for InterpreterCore {
 /// Resolved public-facing parts of a live key-pair handle: the algorithm,
 /// the private material, the public material, and the IFC label carried by
 /// the key at derivation time.
-type CryptoKeyPairParts = (CryptoKeyPairAlgorithm, Zeroizing<Vec<u8>>, Vec<u8>, Label);
+type CryptoPublicKeyParts = (CryptoKeyPairAlgorithm, Vec<u8>, Label);
 
 mod core_compact_and_promises;
 mod core_dispatch_and_arrays;

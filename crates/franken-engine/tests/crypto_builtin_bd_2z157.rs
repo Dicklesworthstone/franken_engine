@@ -1412,8 +1412,10 @@ fn computed_escaped_and_excluded_fluent_crypto_objects_cannot_dynamic_dispatch()
 fn generate_key_pair_sync_ed25519_consumes_one_typed_entropy_effect_bd_53l89() {
     let source = r#"
         const crypto = require('crypto');
-        const pair = crypto.generateKeyPairSync('ed25519');
-        if (!pair) { throw new Error('generateKeyPairSync returned a falsy handle'); }
+        const pair = crypto.generateKeyPairSync('ed25519', {});
+        if (!pair.publicKey || !pair.privateKey || pair.publicKey === pair.privateKey) {
+            throw new Error('generateKeyPairSync must return separate public and private keys');
+        }
     "#;
     let provider = Arc::new(ScriptedRandomHostIo::bytes([vec![0x42; 32]]));
     let recorder = Arc::new(InMemoryHostIoTranscript::recording());
@@ -1453,18 +1455,172 @@ fn ed25519_generation_is_deterministic_under_identical_entropy_bd_53l89() {
 }
 
 #[test]
-fn generate_key_pair_sync_rejects_unknown_algorithms_and_options_bd_53l89() {
+fn generate_key_pair_sync_rejects_unknown_algorithms_and_invalid_options_bd_53l89() {
     let unknown = eval_crypto_error("require('crypto').generateKeyPairSync('rsa');");
     assert!(
         unknown.contains("Unknown key pair algorithm"),
         "unknown curve must raise the typed argument error, got {unknown:?}"
     );
 
-    let options = eval_crypto_error("require('crypto').generateKeyPairSync('ed25519', {});");
+    let options = eval_crypto_error("require('crypto').generateKeyPairSync('ed25519', null);");
     assert!(
-        options.contains("options are not supported"),
-        "non-undefined options must be refused in this slice, got {options:?}"
+        options.contains("options argument must be an object"),
+        "non-object options must be refused, got {options:?}"
     );
+}
+
+#[test]
+fn standard_ec_key_pair_options_and_separate_handles_execute_bd_53l89() {
+    let source = r#"
+        const crypto = require('crypto');
+        const { publicKey, privateKey } = crypto.generateKeyPairSync('ec', {
+            namedCurve: 'prime256v1',
+            paramEncoding: 'named',
+            publicKeyEncoding: null,
+            privateKeyEncoding: undefined
+        });
+        const data = Buffer.from('P-256 key objects');
+        const signature = crypto.sign('sha256', data, privateKey);
+        crypto.verify('sha256', data, publicKey, signature);
+        crypto.verify('sha256', data, privateKey, signature);
+        console.log('key-objects-ok');
+    "#;
+    // Zero and all-ones scalars are outside [1, n-1]. All three attempts
+    // must go through the same ordered, typed entropy journal.
+    let provider = Arc::new(ScriptedRandomHostIo::bytes([
+        vec![0; 32],
+        vec![0xff; 32],
+        vec![0x42; 32],
+    ]));
+    let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+    let result = execute_crypto(source, provider.clone(), recorder.clone());
+    assert_eq!(orchestrated_console(&result), "key-objects-ok");
+    assert_eq!(provider.calls.load(Ordering::Acquire), 3);
+    assert_eq!(result.host_effect_transcript, recorder.recorded_entries());
+    assert_eq!(
+        result
+            .host_effect_transcript
+            .iter()
+            .map(|(request, _)| request.clone())
+            .collect::<Vec<_>>(),
+        vec![HostIoRequest::RandomRead { byte_len: 32 }; 3]
+    );
+}
+
+#[test]
+fn key_generation_observes_inherited_and_proxy_options_before_entropy_bd_53l89() {
+    let source = r#"
+        const crypto = require('crypto');
+        const visits = [];
+        const inherited = {
+            get publicKeyEncoding() { visits.push('public'); return null; },
+            get privateKeyEncoding() { visits.push('private'); return undefined; },
+            get namedCurve() { visits.push('curve'); return 'prime256v1'; },
+            get paramEncoding() { visits.push('parameters'); return null; }
+        };
+        const options = new Proxy(Object.create(inherited), {
+            get(target, key, receiver) {
+                visits.push('get:' + key);
+                return Reflect.get(target, key, receiver);
+            }
+        });
+        const pair = crypto.generateKeyPairSync('ec', options);
+        if (visits.join(',') !==
+            'get:publicKeyEncoding,public,get:privateKeyEncoding,private,get:namedCurve,curve,get:paramEncoding,parameters') {
+            throw new Error('incorrect key-generation option observation order');
+        }
+        const signature = crypto.sign('sha256', Buffer.from('options'), pair.privateKey);
+        crypto.verify('sha256', Buffer.from('options'), pair.publicKey, signature);
+    "#;
+    let provider = Arc::new(ScriptedRandomHostIo::bytes([vec![0x42; 32]]));
+    let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+    let result = execute_crypto(source, provider.clone(), recorder);
+    assert_eq!(provider.calls.load(Ordering::Acquire), 1);
+    assert_eq!(result.host_effect_transcript.len(), 1);
+}
+
+#[test]
+fn invalid_key_options_and_throwing_getters_do_not_consume_entropy_bd_53l89() {
+    for (expression, expected) in [
+        ("crypto.generateKeyPairSync('ed25519', null)", "options argument"),
+        ("crypto.generateKeyPairSync('ed25519', [])", "options argument"),
+        ("crypto.generateKeyPairSync('ec', {})", "namedCurve"),
+        (
+            "crypto.generateKeyPairSync('ec', { namedCurve: 'P-384' })",
+            "P-256 named curve",
+        ),
+        (
+            "crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1', paramEncoding: 'explicit' })",
+            "named EC parameters",
+        ),
+        (
+            "crypto.generateKeyPairSync('ed25519', { privateKeyEncoding: { type: 'pkcs8', format: 'pem' } })",
+            "export is not permitted",
+        ),
+        (
+            "crypto.generateKeyPairSync('ed25519', { get privateKeyEncoding() { throw new Error('option-getter-marker'); } })",
+            "option-getter-marker",
+        ),
+    ] {
+        let provider = Arc::new(ScriptedRandomHostIo::never());
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+        let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+        orchestrator.set_host_io(provider.clone(), Some(recorder.clone()));
+        let source = format!("const crypto = require('crypto'); {expression};");
+        let error = orchestrator
+            .execute(&crypto_package(&source, true))
+            .expect_err("invalid options must fail before drawing entropy");
+        assert!(
+            error.primary_error().to_string().contains(expected),
+            "{expression}: expected {expected:?}, got {error:?}"
+        );
+        assert_eq!(provider.calls.load(Ordering::Acquire), 0);
+        assert!(recorder.recorded_entries().is_empty());
+    }
+}
+
+#[test]
+fn public_keys_and_result_containers_cannot_acquire_signing_authority_bd_53l89() {
+    for receiver in [
+        "pair.publicKey",
+        "pair",
+        "{ type: 'private', privateKey: pair.privateKey }",
+    ] {
+        let error = eval_crypto_error(&format!(
+            "const crypto = require('crypto'); \
+             const pair = crypto.generateKeyPairSync('ed25519'); \
+             crypto.sign(null, Buffer.from('x'), {receiver});"
+        ));
+        assert!(
+            error.contains("private key handle"),
+            "{receiver} must not acquire signing authority: {error}"
+        );
+    }
+}
+
+#[test]
+fn separate_key_handles_replay_without_live_entropy_bd_53l89() {
+    let source = r#"
+        const crypto = require('crypto');
+        const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519', {});
+        const signature = crypto.sign(null, Buffer.from('replayed key lifecycle'), privateKey);
+        crypto.verify(null, Buffer.from('replayed key lifecycle'), publicKey, signature);
+    "#;
+    let provider = Arc::new(ScriptedRandomHostIo::bytes([vec![0x42; 32]]));
+    let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+    let recorded = execute_crypto(source, provider.clone(), recorder);
+    assert_eq!(provider.calls.load(Ordering::Acquire), 1);
+
+    let replay = Arc::new(InMemoryHostIoTranscript::replaying(
+        recorded.host_effect_transcript.clone(),
+    ));
+    let never = Arc::new(ScriptedRandomHostIo::never());
+    let replayed = execute_crypto(source, never.clone(), replay.clone());
+    assert_eq!(never.calls.load(Ordering::Acquire), 0);
+    assert_eq!(replayed.host_effect_transcript, recorded.host_effect_transcript);
+    replay
+        .finish_execution()
+        .expect("the key lifecycle consumes exactly its recorded entropy");
 }
 
 /// Evaluate one crypto source with a never-serving random provider and return
@@ -1498,9 +1654,10 @@ fn ed25519_sign_verify_roundtrip_executes_both_paths_bd_53l89() {
         const pair = crypto.generateKeyPairSync('ed25519');
         const message = Buffer.from('franken engine signs');
         const tamperedMessage = Buffer.from('franken engine signS');
-        const signature = crypto.sign(null, message, pair);
-        crypto.verify(null, message, pair, signature);
-        crypto.verify(null, tamperedMessage, pair, signature);
+        const signature = crypto.sign(null, message, pair.privateKey);
+        crypto.verify(null, message, pair.publicKey, signature);
+        crypto.verify(null, message, pair.privateKey, signature);
+        crypto.verify(null, tamperedMessage, pair.publicKey, signature);
         console.log('roundtrip-ok');
     "#;
     let provider = Arc::new(ScriptedRandomHostIo::bytes([vec![0x42; 32]]));
@@ -1516,7 +1673,7 @@ fn ed25519_signature_is_never_public_bd_53l89() {
     // (Internal clearance) must refuse it at lowering time.
     let source = "const crypto=require('crypto'); \
         const pair=crypto.generateKeyPairSync('ed25519'); \
-        const signature=crypto.sign(null, Buffer.from('x'), pair); \
+        const signature=crypto.sign(null, Buffer.from('x'), pair.privateKey); \
         console.log(signature);";
     let provider = Arc::new(ScriptedRandomHostIo::never());
     let recorder = Arc::new(InMemoryHostIoTranscript::recording());
@@ -1545,7 +1702,7 @@ fn ed25519_signature_is_never_public_bd_53l89() {
 #[test]
 fn ed25519_sign_rejects_non_null_algorithm_and_foreign_keys_bd_53l89() {
     let algorithm_error = eval_crypto_error(
-        "const pair = require('crypto').generateKeyPairSync('ed25519'); require('crypto').sign('sha256', Buffer.from('x'), pair);",
+        "const pair = require('crypto').generateKeyPairSync('ed25519'); require('crypto').sign('sha256', Buffer.from('x'), pair.privateKey);",
     );
     assert!(
         algorithm_error.contains("null algorithm for Ed25519 sign"),
@@ -1554,7 +1711,7 @@ fn ed25519_sign_rejects_non_null_algorithm_and_foreign_keys_bd_53l89() {
 
     let foreign_key = eval_crypto_error("require('crypto').sign(null, Buffer.from('x'), {});");
     assert!(
-        foreign_key.contains("key pair handle"),
+        foreign_key.contains("private key handle"),
         "a non-handle key argument must raise the handle type error, got {foreign_key:?}"
     );
 }

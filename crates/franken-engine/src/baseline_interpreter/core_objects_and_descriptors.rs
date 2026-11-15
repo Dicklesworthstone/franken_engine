@@ -4567,7 +4567,8 @@ impl InterpreterCore {
             | CryptoObjectState::CipherActive { .. }
             | CryptoObjectState::CipherFinalized { .. }
             // bd-53l89: key pair handles expose no digest/final lifecycle.
-            | CryptoObjectState::KeyPairActive { .. } => 0,
+            | CryptoObjectState::PrivateKey { .. }
+            | CryptoObjectState::PublicKey { .. } => 0,
         };
         let candidate_state_bound = CRYPTO_STATE_BASE_BYTES
             .saturating_add(MEMORY_ESTIMATE_MAP_ENTRY_BYTES)
@@ -4637,8 +4638,8 @@ impl InterpreterCore {
                 });
             }
             // bd-53l89: digest/final is not a key pair operation; the
-            // lifecycle gate already refuses these tags for KeyPairActive.
-            CryptoObjectState::KeyPairActive { .. } => {
+            // lifecycle gate already refuses these tags for asymmetric keys.
+            CryptoObjectState::PrivateKey { .. } | CryptoObjectState::PublicKey { .. } => {
                 return Err(InterpreterError::TypeError {
                     expected: "hash or HMAC receiver".to_string(),
                     got: "key pair receiver".to_string(),
@@ -5605,30 +5606,74 @@ impl InterpreterCore {
         }
     }
 
-    /// bd-53l89 slice 1 (contract:
-    /// docs/CRYPTO_ASYMMETRIC_KEY_LIFECYCLE_CONTRACT_V1.md §1,2,3,7,9).
-    /// Entropy enters exclusively through the audited RandomRead host effect;
-    /// the private seed lives only in Zeroizing storage inside
-    /// `crypto_objects`; the returned JS value is an inert ObjectId handle.
+    /// Generate authenticated keys with journaled entropy. Option getters run
+    /// in their caller's context before any entropy is consumed.
     pub(super) fn crypto_generate_key_pair_sync(
         &mut self,
         args: RegRange,
+        module: Option<&Ir3Module>,
     ) -> Result<Value, InterpreterError> {
-        let invocation_label = self.crypto_invocation_label(args)?;
+        let end =
+            args.start
+                .checked_add(args.count)
+                .ok_or(InterpreterError::RegisterOutOfBounds {
+                    register: args.start,
+                    max: self.config.max_registers,
+                })?;
+        let observation = self.begin_property_observation(args.start..end)?;
+        let outcome = self.crypto_generate_key_pair_observed(args, module);
+        self.finish_property_read_observation(observation, outcome)
+    }
+
+    pub(super) fn crypto_generate_key_pair_observed(
+        &mut self,
+        args: RegRange,
+        module: Option<&Ir3Module>,
+    ) -> Result<Value, InterpreterError> {
+        let mut invocation_label = self.crypto_invocation_label(args)?;
         let algorithm_name = self.crypto_required_string_arg(args, 0, "key pair algorithm")?;
-        if args.count > 2 {
-            return Err(InterpreterError::TypeError {
-                expected: "generateKeyPairSync(algorithm[, options])".to_string(),
-                got: format!("{} argument(s)", args.count),
-            });
-        }
-        if let Some(options) = self.builtin_arg(args, 1)? {
-            if !matches!(options, Value::Undefined) {
+        let options = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+        let options_id = match &options {
+            Value::Undefined => None,
+            Value::Object(object_id)
+                if !matches!(
+                    self.array_is_array_value(Some(options.clone()))?,
+                    Value::Bool(true)
+                ) =>
+            {
+                Some(*object_id)
+            }
+            _ => {
+                return Err(self.crypto_throw_node_error(
+                    "TypeError",
+                    "ERR_INVALID_ARG_TYPE",
+                    "The options argument must be an object".to_string(),
+                    &invocation_label,
+                ));
+            }
+        };
+
+        // Node observes both encoding properties before validating either
+        // encoding or reading the curve. Null, like undefined, requests key
+        // objects. Serialized export is a separate, currently denied boundary.
+        let public_encoding =
+            self.crypto_key_generation_option(module, options_id, "publicKeyEncoding")?;
+        let private_encoding =
+            self.crypto_key_generation_option(module, options_id, "privateKeyEncoding")?;
+        for (key, encoding) in [
+            ("publicKeyEncoding", public_encoding),
+            ("privateKeyEncoding", private_encoding),
+        ] {
+            if !matches!(encoding, Value::Undefined | Value::Null) {
+                let code = if matches!(encoding, Value::Object(_)) {
+                    "ERR_CRYPTO_UNSUPPORTED_OPERATION"
+                } else {
+                    "ERR_INVALID_ARG_VALUE"
+                };
                 return Err(self.crypto_throw_node_error(
                     "Error",
-                    "ERR_INVALID_ARG_VALUE",
-                    "generateKeyPairSync options are not supported in this engine slice"
-                        .to_string(),
+                    code,
+                    format!("{key} export is not permitted during key generation"),
                     &invocation_label,
                 ));
             }
@@ -5644,6 +5689,57 @@ impl InterpreterCore {
                 &invocation_label,
             ));
         };
+        if algorithm == CryptoKeyPairAlgorithm::EcP256 {
+            let curve = self.crypto_key_generation_option(module, options_id, "namedCurve")?;
+            let curve_supported = match &curve {
+                // Retain the explicit engine curve aliases; the standard
+                // Node "ec" entry requires its namedCurve option.
+                Value::Undefined => algorithm_name != "ec",
+                Value::Str(name) => {
+                    matches!(name.as_str(), Some("prime256v1" | "secp256r1" | "P-256"))
+                }
+                _ => false,
+            };
+            if !curve_supported {
+                let (code, message) = if matches!(curve, Value::Str(_)) {
+                    (
+                        "ERR_INVALID_ARG_VALUE",
+                        "Only the P-256 named curve is supported",
+                    )
+                } else {
+                    (
+                        "ERR_INVALID_ARG_TYPE",
+                        "The options.namedCurve property must be a string",
+                    )
+                };
+                return Err(self.crypto_throw_node_error(
+                    "TypeError",
+                    code,
+                    message.to_string(),
+                    &invocation_label,
+                ));
+            }
+            let encoding =
+                self.crypto_key_generation_option(module, options_id, "paramEncoding")?;
+            if !matches!(encoding, Value::Undefined | Value::Null)
+                && !matches!(&encoding, Value::Str(name) if name.as_str() == Some("named"))
+            {
+                return Err(self.crypto_throw_node_error(
+                    "TypeError",
+                    "ERR_INVALID_ARG_VALUE",
+                    "Only named EC parameters are supported".to_string(),
+                    &invocation_label,
+                ));
+            }
+        }
+        // Include getter results, inherited-property selection and Proxy
+        // shape provenance retained by the observation scope, not just the
+        // last property's value label.
+        invocation_label = invocation_label.join(&self.json_parse_context_label()?);
+        // Preserve entropy provenance in the authenticated state as well as
+        // in the caller's result register. No public-key declassification is
+        // introduced by merely separating the two handles.
+        invocation_label = invocation_label.join(&Label::Secret);
         self.require_random_read_capability()?;
         match algorithm {
             CryptoKeyPairAlgorithm::Ed25519 => {
@@ -5652,41 +5748,27 @@ impl InterpreterCore {
                     Ok(bytes) => Zeroizing::new(bytes),
                     Err(()) => return self.crypto_random_failure(invocation_label, None),
                 };
-                let Ok(seed_bytes) = <[u8; 32]>::try_from(seed.as_slice()) else {
+                let Ok(seed_bytes) = <&[u8; 32]>::try_from(seed.as_slice()) else {
                     return self.crypto_random_failure(invocation_label, None);
                 };
-                let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed_bytes);
+                let signing_key = ed25519_dalek::SigningKey::from_bytes(seed_bytes);
                 let public_key = signing_key.verifying_key().to_bytes().to_vec();
-                self.crypto_alloc_object(CryptoObjectState::KeyPairActive {
-                    algorithm,
-                    private_key: Zeroizing::new(signing_key.to_bytes().to_vec()),
-                    public_key,
-                    lifecycle_label: invocation_label,
-                })
+                self.crypto_alloc_key_pair(algorithm, seed, public_key, invocation_label)
             }
             CryptoKeyPairAlgorithm::EcP256 => {
-                // Contract §2: each attempt draws exactly 32 provider bytes;
-                // scalars outside [1, n-1] are rejected and redrawn, every
-                // draw journaled in order. The bound is astronomically
-                // unreachable (rejection ~2^-32) and fails closed.
+                // Each attempt consumes exactly 32 journaled provider bytes.
+                // Reject scalars outside [1, n-1]; never reduce a biased draw.
                 const P256_SCALAR_MAX_DRAWS: u64 = 64;
-                let mut draws = 0_u64;
-                loop {
-                    draws += 1;
-                    if draws > P256_SCALAR_MAX_DRAWS {
-                        return Err(InterpreterError::InternalError {
-                            details: "P-256 scalar redraw bound exhausted".to_string(),
-                        });
-                    }
+                for _ in 0..P256_SCALAR_MAX_DRAWS {
                     self.charge_crypto_work(Self::crypto_byte_work(32))?;
                     let candidate = match self.perform_random_read_effect(32) {
                         Ok(bytes) => Zeroizing::new(bytes),
                         Err(()) => return self.crypto_random_failure(invocation_label, None),
                     };
-                    let Ok(scalar_bytes) = <[u8; 32]>::try_from(candidate.as_slice()) else {
+                    if candidate.len() != 32 {
                         return self.crypto_random_failure(invocation_label, None);
-                    };
-                    let Ok(signing_key) = p256::ecdsa::SigningKey::from_slice(&scalar_bytes) else {
+                    }
+                    let Ok(signing_key) = p256::ecdsa::SigningKey::from_slice(&candidate) else {
                         continue;
                     };
                     let public_key = signing_key
@@ -5695,13 +5777,16 @@ impl InterpreterCore {
                         .as_bytes()
                         .to_vec();
                     self.charge_crypto_work(Self::crypto_byte_work(96))?;
-                    return self.crypto_alloc_object(CryptoObjectState::KeyPairActive {
+                    return self.crypto_alloc_key_pair(
                         algorithm,
-                        private_key: Zeroizing::new(signing_key.to_bytes().as_slice().to_vec()),
+                        candidate,
                         public_key,
-                        lifecycle_label: invocation_label,
-                    });
+                        invocation_label,
+                    );
                 }
+                Err(InterpreterError::InternalError {
+                    details: "P-256 scalar redraw bound exhausted".to_string(),
+                })
             }
         }
     }
@@ -5709,9 +5794,99 @@ impl InterpreterCore {
     pub(super) fn crypto_key_pair_algorithm(name: &str) -> Option<CryptoKeyPairAlgorithm> {
         match name {
             "ed25519" | "ed25519-dalek" => Some(CryptoKeyPairAlgorithm::Ed25519),
-            "p256" | "prime256v1" | "secp256r1" => Some(CryptoKeyPairAlgorithm::EcP256),
+            "ec" | "p256" | "prime256v1" | "secp256r1" => Some(CryptoKeyPairAlgorithm::EcP256),
             _ => None,
         }
+    }
+
+    pub(super) fn crypto_key_generation_option(
+        &mut self,
+        module: Option<&Ir3Module>,
+        options: Option<ObjectId>,
+        key: &str,
+    ) -> Result<Value, InterpreterError> {
+        match options {
+            Some(object_id) => self.iterator_protocol_property(
+                module,
+                object_id,
+                &RuntimePropertyKey::String(JsString::from(key)),
+                Value::Object(object_id),
+            ),
+            None => Ok(Value::Undefined),
+        }
+    }
+
+    /// Publish both keys and their ordinary result object atomically. Public
+    /// state owns no private bytes or heap link to a private key, so retaining
+    /// a public key never retains signing authority.
+    pub(super) fn crypto_alloc_key_pair(
+        &mut self,
+        algorithm: CryptoKeyPairAlgorithm,
+        private_key: Zeroizing<Vec<u8>>,
+        public_key: Vec<u8>,
+        lifecycle_label: Label,
+    ) -> Result<Value, InterpreterError> {
+        let label_bytes = Self::estimate_label_bytes(&lifecycle_label);
+        self.check_temporary_memory_budget(
+            CRYPTO_STATE_BASE_BYTES
+                .saturating_mul(2)
+                .saturating_add(MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_mul(4))
+                .saturating_add(MEMORY_ESTIMATE_HEAP_OBJECT_BASE_BYTES.saturating_mul(3))
+                .saturating_add(u64::try_from(private_key.capacity()).unwrap_or(u64::MAX))
+                .saturating_add(u64::try_from(public_key.capacity()).unwrap_or(u64::MAX))
+                .saturating_add(u64::try_from(public_key.len()).unwrap_or(u64::MAX))
+                .saturating_add(label_bytes.saturating_mul(4))
+                .saturating_add(Self::estimate_property_entry_bytes(
+                    "publicKey",
+                    &Value::Undefined,
+                ))
+                .saturating_add(Self::estimate_property_entry_bytes(
+                    "privateKey",
+                    &Value::Undefined,
+                )),
+        )?;
+        let previous_heap_len = self.heap.len();
+        let previous_estimated_bytes = self.estimated_memory_bytes;
+        let outcome = (|| {
+            let public_state = CryptoObjectState::PublicKey {
+                algorithm,
+                public_key: public_key.clone(),
+                lifecycle_label: lifecycle_label.clone(),
+            };
+            let private_state = CryptoObjectState::PrivateKey {
+                algorithm,
+                private_key,
+                public_key,
+                lifecycle_label: lifecycle_label.clone(),
+            };
+            let public_id = self.alloc_object_with_properties(&[])?;
+            self.apply_memory_component_delta(
+                0,
+                Self::estimate_crypto_object_state_bytes(&public_state),
+            )?;
+            self.crypto_objects.insert(public_id, public_state);
+            let private_id = self.alloc_object_with_properties(&[])?;
+            self.apply_memory_component_delta(
+                0,
+                Self::estimate_crypto_object_state_bytes(&private_state),
+            )?;
+            self.crypto_objects.insert(private_id, private_state);
+            let pair = self.alloc_object_with_properties(&[
+                ("publicKey", Value::Object(public_id)),
+                ("privateKey", Value::Object(private_id)),
+            ])?;
+            // Publish once. Until here even partial allocation failures leave
+            // the caller's pre-existing result provenance unchanged.
+            self.replace_pending_hostcall_result_label(Some(lifecycle_label))?;
+            Ok(Value::Object(pair))
+        })();
+        if outcome.is_err() {
+            self.crypto_objects
+                .retain(|id, _| id.0 < previous_heap_len as u32);
+            self.rollback_heap_to_len(previous_heap_len);
+            self.estimated_memory_bytes = previous_estimated_bytes;
+        }
+        outcome
     }
 
     pub(super) fn crypto_sign_sync(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
@@ -5726,23 +5901,23 @@ impl InterpreterCore {
         let data_value = self.crypto_required_arg(args, 1, "message")?;
         let key_value = self.crypto_required_arg(args, 2, "key handle")?;
         let (algorithm, private_key, lifecycle_label) = self.crypto_key_pair_private(&key_value)?;
-        let message = self.crypto_input_bytes(&data_value, None)?;
-        let data_register = RegRange {
-            start: args.start.saturating_add(1),
-            count: 1,
-        };
-        let message_label = self.join_arg_range_label(data_register)?;
+        let key_scratch_bytes = u64::try_from(private_key.capacity())
+            .unwrap_or(u64::MAX)
+            .saturating_add(Self::estimate_label_bytes(&lifecycle_label))
+            .saturating_add(Self::estimate_label_bytes(&invocation_label));
         self.check_temporary_memory_budget(
-            u64::try_from(message.len())
-                .unwrap_or(u64::MAX)
+            key_scratch_bytes
+                .saturating_add(self.crypto_input_allocation_bound(&data_value, None)?)
                 .saturating_add(160)
-                .saturating_add(Self::estimate_label_bytes(&lifecycle_label)),
+                .saturating_add(Self::estimate_label_bytes(&lifecycle_label))
+                .saturating_add(Self::estimate_label_bytes(&invocation_label)),
         )?;
+        let message = Zeroizing::new(self.crypto_input_bytes(&data_value, None)?);
         let signature: Vec<u8> = match algorithm {
             CryptoKeyPairAlgorithm::Ed25519 => {
                 Self::require_null_ed25519_algorithm(algorithm_arg, "sign", &invocation_label)?;
                 self.charge_crypto_work(Self::crypto_byte_work(message.len().saturating_add(64)))?;
-                let Ok(seed_bytes) = <[u8; 32]>::try_from(private_key.as_slice()) else {
+                let Ok(seed_bytes) = <&[u8; 32]>::try_from(private_key.as_slice()) else {
                     return Err(InterpreterError::InternalError {
                         details: "ed25519 signing seed must be exactly 32 bytes".to_string(),
                     });
@@ -5752,7 +5927,7 @@ impl InterpreterCore {
             CryptoKeyPairAlgorithm::EcP256 => {
                 self.require_sha256_p256_algorithm(algorithm_arg, &invocation_label)?;
                 self.charge_crypto_work(Self::crypto_byte_work(message.len().saturating_add(144)))?;
-                let Ok(scalar_bytes) = <[u8; 32]>::try_from(private_key.as_slice()) else {
+                let Ok(scalar_bytes) = <&[u8; 32]>::try_from(private_key.as_slice()) else {
                     return Err(InterpreterError::InternalError {
                         details: "P-256 signing scalar must be exactly 32 bytes".to_string(),
                     });
@@ -5760,13 +5935,15 @@ impl InterpreterCore {
                 Self::p256_sign_detached_der(scalar_bytes, &message)
             }
         };
-        let result_label = lifecycle_label.join(&message_label);
+        let result_label = invocation_label.join(&lifecycle_label);
         self.crypto_output_value_with_temporary_budget(
             &signature,
             None,
             &result_label,
             true,
-            u64::try_from(message.len()).unwrap_or(u64::MAX),
+            key_scratch_bytes
+                .saturating_add(u64::try_from(message.capacity()).unwrap_or(u64::MAX))
+                .saturating_add(Self::estimate_label_bytes(&result_label)),
         )
     }
 
@@ -5788,16 +5965,23 @@ impl InterpreterCore {
         let data_value = self.crypto_required_arg(args, 1, "message")?;
         let key_value = self.crypto_required_arg(args, 2, "key handle")?;
         let signature_value = self.crypto_required_arg(args, 3, "signature")?;
-        let (algorithm, _private, public_key, _lifecycle) =
-            self.crypto_key_pair_parts(&key_value)?;
-        let message = self.crypto_input_bytes(&data_value, None)?;
-        let signature = self.crypto_input_bytes(&signature_value, None)?;
+        let (algorithm, public_key, lifecycle_label) = self.crypto_key_pair_public(&key_value)?;
+        let input_scratch_bytes = u64::try_from(public_key.capacity())
+            .unwrap_or(u64::MAX)
+            .saturating_add(Self::estimate_label_bytes(&lifecycle_label))
+            .saturating_add(Self::estimate_label_bytes(&invocation_label))
+            .saturating_add(self.crypto_input_allocation_bound(&data_value, None)?)
+            .saturating_add(self.crypto_input_allocation_bound(&signature_value, None)?);
+        // Both inputs stay live during verification. Admit their combined
+        // footprint before materializing the first attacker-controlled byte.
         self.check_temporary_memory_budget(
-            u64::try_from(message.len())
-                .unwrap_or(u64::MAX)
-                .saturating_add(u64::try_from(signature.len()).unwrap_or(u64::MAX))
-                .saturating_add(96),
+            input_scratch_bytes
+                .saturating_add(96)
+                .saturating_add(Self::estimate_label_bytes(&lifecycle_label))
+                .saturating_add(Self::estimate_label_bytes(&invocation_label)),
         )?;
+        let message = Zeroizing::new(self.crypto_input_bytes(&data_value, None)?);
+        let signature = Zeroizing::new(self.crypto_input_bytes(&signature_value, None)?);
         self.charge_crypto_work(Self::crypto_byte_work(
             message.len().saturating_add(signature.len()),
         ))?;
@@ -5812,7 +5996,7 @@ impl InterpreterCore {
                 match Self::ed25519_verify_detached(public_key_bytes, &message, &signature) {
                     Ok(verified) => verified,
                     Err("ERR_CRYPTO_INVALID_SIGNATURE_LENGTH") => {
-                        return Err(self.crypto_throw_node_error(
+                        return Err(self.crypto_throw_node_error_with_temporary_budget(
                             "RangeError",
                             "ERR_CRYPTO_INVALID_SIGNATURE_LENGTH",
                             format!(
@@ -5820,6 +6004,7 @@ impl InterpreterCore {
                                 signature.len()
                             ),
                             &invocation_label,
+                            input_scratch_bytes,
                         ));
                     }
                     Err(other) => {
@@ -5834,11 +6019,12 @@ impl InterpreterCore {
                 match Self::p256_verify_detached_der(&public_key, &message, &signature) {
                     Ok(verified) => verified,
                     Err("ERR_CRYPTO_INVALID_SIGNATURE") => {
-                        return Err(self.crypto_throw_node_error(
+                        return Err(self.crypto_throw_node_error_with_temporary_budget(
                             "RangeError",
                             "ERR_CRYPTO_INVALID_SIGNATURE",
                             "Invalid ECDSA signature encoding".to_string(),
                             &invocation_label,
+                            input_scratch_bytes,
                         ));
                     }
                     Err(other) => {
@@ -5849,6 +6035,7 @@ impl InterpreterCore {
                 }
             }
         };
+        self.replace_pending_hostcall_result_label(Some(invocation_label.join(&lifecycle_label)))?;
         Ok(Value::Bool(verified))
     }
 
@@ -5886,66 +6073,82 @@ impl InterpreterCore {
         }
     }
 
-    /// Resolve a live KeyPairActive handle to its signing-private parts
-    /// (contract §1: ObjectId membership is the authority; §3: the private
-    /// clone stays inside Zeroizing).
+    /// Resolve an authenticated private key to its signing material. Public
+    /// keys, the result container, and guest-controlled lookalikes cannot sign.
     pub(super) fn crypto_key_pair_private(
         &self,
         value: &Value,
     ) -> Result<(CryptoKeyPairAlgorithm, Zeroizing<Vec<u8>>, Label), InterpreterError> {
         let Value::Object(object_id) = value else {
             return Err(InterpreterError::TypeError {
-                expected: "key pair handle".to_string(),
+                expected: "private key handle".to_string(),
                 got: value.type_name().to_string(),
             });
         };
         match self.crypto_objects.get(object_id) {
-            Some(CryptoObjectState::KeyPairActive {
+            Some(CryptoObjectState::PrivateKey {
                 algorithm,
                 private_key,
                 lifecycle_label,
                 ..
-            }) => Ok((*algorithm, private_key.clone(), lifecycle_label.clone())),
+            }) => {
+                self.check_temporary_memory_budget(
+                    u64::try_from(private_key.len())
+                        .unwrap_or(u64::MAX)
+                        .saturating_add(Self::estimate_label_bytes(lifecycle_label)),
+                )?;
+                Ok((*algorithm, private_key.clone(), lifecycle_label.clone()))
+            }
             Some(_) => Err(InterpreterError::TypeError {
-                expected: "key pair handle".to_string(),
-                got: "non-key-pair crypto object".to_string(),
+                expected: "private key handle".to_string(),
+                got: "crypto object without signing authority".to_string(),
             }),
             None => Err(InterpreterError::TypeError {
-                expected: "key pair handle".to_string(),
+                expected: "private key handle".to_string(),
                 got: "detached or forged receiver".to_string(),
             }),
         }
     }
 
-    /// Resolve a live KeyPairActive handle to all four public-facing parts.
-    pub(super) fn crypto_key_pair_parts(
+    /// Verification consumes only public material, even when given a private
+    /// key. It never clones the private bytes or acquires signing authority.
+    pub(super) fn crypto_key_pair_public(
         &self,
         value: &Value,
-    ) -> Result<CryptoKeyPairParts, InterpreterError> {
+    ) -> Result<CryptoPublicKeyParts, InterpreterError> {
         let Value::Object(object_id) = value else {
             return Err(InterpreterError::TypeError {
-                expected: "key pair handle".to_string(),
+                expected: "public or private key handle".to_string(),
                 got: value.type_name().to_string(),
             });
         };
         match self.crypto_objects.get(object_id) {
-            Some(CryptoObjectState::KeyPairActive {
-                algorithm,
-                private_key,
-                public_key,
-                lifecycle_label,
-            }) => Ok((
-                *algorithm,
-                private_key.clone(),
-                public_key.clone(),
-                lifecycle_label.clone(),
-            )),
+            Some(
+                CryptoObjectState::PrivateKey {
+                    algorithm,
+                    public_key,
+                    lifecycle_label,
+                    ..
+                }
+                | CryptoObjectState::PublicKey {
+                    algorithm,
+                    public_key,
+                    lifecycle_label,
+                },
+            ) => {
+                self.check_temporary_memory_budget(
+                    u64::try_from(public_key.len())
+                        .unwrap_or(u64::MAX)
+                        .saturating_add(Self::estimate_label_bytes(lifecycle_label)),
+                )?;
+                Ok((*algorithm, public_key.clone(), lifecycle_label.clone()))
+            }
             Some(_) => Err(InterpreterError::TypeError {
-                expected: "key pair handle".to_string(),
-                got: "non-key-pair crypto object".to_string(),
+                expected: "public or private key handle".to_string(),
+                got: "non-key crypto object".to_string(),
             }),
             None => Err(InterpreterError::TypeError {
-                expected: "key pair handle".to_string(),
+                expected: "public or private key handle".to_string(),
                 got: "detached or forged receiver".to_string(),
             }),
         }
@@ -6095,8 +6298,8 @@ impl InterpreterCore {
 
     /// bd-53l89 slice 2: pure Ed25519 detached signing over the stored seed
     /// (contract §2/§6 — deterministic Ed25519 nonce, no extra entropy).
-    pub(super) fn ed25519_sign_detached(seed: [u8; 32], message: &[u8]) -> [u8; 64] {
-        ed25519_dalek::SigningKey::from_bytes(&seed)
+    pub(super) fn ed25519_sign_detached(seed: &[u8; 32], message: &[u8]) -> [u8; 64] {
+        ed25519_dalek::SigningKey::from_bytes(seed)
             .sign(message)
             .to_bytes()
     }
@@ -6122,9 +6325,9 @@ impl InterpreterCore {
     /// bd-53l89 slice 3: pure P-256 ECDSA signing with RFC 6979 deterministic
     /// nonces (SHA-256), returning the DER encoding Node emits. The scalar is
     /// validated at generation, so construction cannot fail here.
-    pub(super) fn p256_sign_detached_der(scalar: [u8; 32], message: &[u8]) -> Vec<u8> {
+    pub(super) fn p256_sign_detached_der(scalar: &[u8; 32], message: &[u8]) -> Vec<u8> {
         use p256::ecdsa::signature::Signer as _;
-        let signing_key = p256::ecdsa::SigningKey::from_slice(&scalar)
+        let signing_key = p256::ecdsa::SigningKey::from_slice(scalar)
             .expect("P-256 scalar validated during generation");
         let signature: p256::ecdsa::Signature = signing_key.sign(message);
         signature.to_der().as_bytes().to_vec()
@@ -7018,10 +7221,8 @@ impl InterpreterCore {
                 | CryptoObjectState::CipherFinalized { .. } => {
                     BuiltinFunctionKind::CryptoCipherUpdate
                 }
-                // bd-53l89: a key pair handle has no update lifecycle; the
-                // typed refusal below keeps the match total without granting
-                // any operation.
-                CryptoObjectState::KeyPairActive { .. } => {
+                // Asymmetric keys never have a hash/HMAC/cipher lifecycle.
+                CryptoObjectState::PrivateKey { .. } | CryptoObjectState::PublicKey { .. } => {
                     return Err(InterpreterError::TypeError {
                         expected: "hash, HMAC, or cipher receiver".to_string(),
                         got: "key pair receiver".to_string(),
@@ -9362,7 +9563,7 @@ impl InterpreterCore {
             "builtin:CryptoRandomUUID" => self.crypto_random_uuid(args),
             "builtin:CryptoRandomInt" => self.crypto_random_int(args),
             "builtin:CryptoRandomFillSync" => self.crypto_random_fill_sync(args),
-            "builtin:CryptoGenerateKeyPairSync" => self.crypto_generate_key_pair_sync(args),
+            "builtin:CryptoGenerateKeyPairSync" => self.crypto_generate_key_pair_sync(args, module),
             "builtin:CryptoSign" => self.crypto_sign_sync(args),
             "builtin:CryptoVerify" => self.crypto_verify_sync(args),
             "builtin:CryptoObjectUpdate"

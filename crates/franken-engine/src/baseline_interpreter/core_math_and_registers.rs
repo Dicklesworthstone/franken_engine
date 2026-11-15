@@ -11510,6 +11510,15 @@ impl InterpreterCore {
             }
         }
         if let Value::BuiltinFunction(builtin) = function
+            && builtin.kind == BuiltinFunctionKind::RequireResolve
+        {
+            self.set_object_property(
+                backing,
+                "paths".to_string(),
+                Value::BuiltinFunction(BuiltinFunction::require_resolve_paths(builtin)),
+            )?;
+        }
+        if let Value::BuiltinFunction(builtin) = function
             && builtin.kind == BuiltinFunctionKind::GeneratedFunction
         {
             let prototype = self.ensure_generated_function_prototype(builtin)?;

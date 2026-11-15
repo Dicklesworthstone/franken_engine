@@ -1798,6 +1798,52 @@ pub trait ModuleResolver {
         ))
     }
 
+    /// Resolve CommonJS filename metadata from explicit lookup directories.
+    /// The original referrer remains the authority; directories are search
+    /// hints, never replacement module identities. An opaque resolver must
+    /// admit this contract explicitly instead of silently ignoring the hints
+    /// or falling back to ambient filesystem access.
+    fn resolve_require_metadata_from_paths(
+        &self,
+        request: &ModuleRequest,
+        _paths: &[String],
+        context: &ResolutionContext,
+        _policy: &dyn ModulePolicyHook,
+    ) -> ResolutionResult<MetadataResolutionOutcome> {
+        Err(Box::new(
+            ResolutionError::new(
+                ResolutionErrorCode::UnsupportedSpecifier,
+                "module resolver does not admit explicit CommonJS search directories",
+                context,
+            )
+            .with_resolution_attempt(request.specifier.clone(), None, None, Vec::new()),
+        ))
+    }
+
+    /// Return the captured caller's admitted lookup directories without
+    /// loading source. A builtin has no lookup directories. Implementations
+    /// must exclude unadmitted host and process-global directories and
+    /// authorize disclosure through the metadata policy.
+    fn require_lookup_paths(
+        &self,
+        request: &ModuleRequest,
+        context: &ResolutionContext,
+        policy: &dyn ModulePolicyHook,
+    ) -> ResolutionResult<Option<Vec<String>>> {
+        if node_builtin_specifier(&request.specifier).is_some() {
+            self.resolve_metadata(request, context, policy)?;
+            return Ok(None);
+        }
+        Err(Box::new(
+            ResolutionError::new(
+                ResolutionErrorCode::UnsupportedSpecifier,
+                "module resolver does not provide CommonJS search-directory metadata",
+                context,
+            )
+            .with_resolution_attempt(request.specifier.clone(), None, None, Vec::new()),
+        ))
+    }
+
     fn resolve_chain(
         &self,
         entry_request: &ModuleRequest,
@@ -1932,6 +1978,32 @@ impl ExecutionModuleResolver {
         context: &ResolutionContext,
     ) -> ResolutionResult<MetadataResolutionOutcome> {
         self.resolver.resolve_metadata(
+            request,
+            context,
+            &ExecutionModulePolicy(self.policy.as_ref()),
+        )
+    }
+
+    pub fn resolve_require_metadata_from_paths(
+        &self,
+        request: &ModuleRequest,
+        paths: &[String],
+        context: &ResolutionContext,
+    ) -> ResolutionResult<MetadataResolutionOutcome> {
+        self.resolver.resolve_require_metadata_from_paths(
+            request,
+            paths,
+            context,
+            &ExecutionModulePolicy(self.policy.as_ref()),
+        )
+    }
+
+    pub fn require_lookup_paths(
+        &self,
+        request: &ModuleRequest,
+        context: &ResolutionContext,
+    ) -> ResolutionResult<Option<Vec<String>>> {
+        self.resolver.require_lookup_paths(
             request,
             context,
             &ExecutionModulePolicy(self.policy.as_ref()),
@@ -2726,6 +2798,75 @@ impl DeterministicModuleResolver {
         Ok(parent_directory(&normalized))
     }
 
+    fn commonjs_search_directories(
+        &self,
+        request: &ModuleRequest,
+        paths: Option<&[String]>,
+        context: &ResolutionContext,
+    ) -> ResolutionResult<Vec<String>> {
+        let failed = |message: &str| {
+            Box::new(
+                ResolutionError::new(
+                    ResolutionErrorCode::UnsupportedSpecifier,
+                    message,
+                    context,
+                )
+                .with_resolution_attempt(request.specifier.clone(), None, None, Vec::new()),
+            )
+        };
+        if request.style != ImportStyle::Require || !request.import_attributes.is_empty() {
+            return Err(failed(
+                "CommonJS search directories require an attribute-free require request",
+            ));
+        }
+        let referrer = request
+            .referrer
+            .as_deref()
+            .ok_or_else(|| failed("CommonJS search directories require a registered caller"))?;
+        // Validate the original caller even when paths is empty. A directory
+        // does not substitute for its registered authority.
+        let caller_directory = self.referrer_directory(referrer, context)?;
+        let roots: Vec<String> = match paths {
+            Some(paths) => paths
+                .iter()
+                .map(|path| normalize_absolute_path(&join_paths(&self.root_dir, path)))
+                .collect(),
+            None => vec![caller_directory],
+        };
+        let relative = is_commonjs_relative_specifier(&request.specifier);
+        let mut directories = Vec::new();
+        let mut seen = BTreeSet::new();
+        for root in roots {
+            if !is_within_workspace_root(&self.root_dir, &root) {
+                return Err(failed("CommonJS search directory escapes the resolver root"));
+            }
+            if relative {
+                if seen.insert(root.clone()) {
+                    directories.push(root);
+                }
+                continue;
+            }
+            let mut directory = root;
+            loop {
+                if directory.rsplit('/').next() != Some("node_modules") {
+                    let candidate = join_paths(&directory, "node_modules");
+                    if seen.insert(candidate.clone()) {
+                        directories.push(candidate);
+                    }
+                }
+                if directory == self.root_dir {
+                    break;
+                }
+                let parent = parent_directory(&directory);
+                if parent == directory || !is_within_workspace_root(&self.root_dir, &parent) {
+                    break;
+                }
+                directory = parent;
+            }
+        }
+        Ok(directories)
+    }
+
     fn lookup_workspace_candidate<'a>(
         &'a self,
         resolved_base: &str,
@@ -3166,6 +3307,135 @@ impl ModuleResolver for DeterministicModuleResolver {
         })
     }
 
+    fn resolve_require_metadata_from_paths(
+        &self,
+        request: &ModuleRequest,
+        paths: &[String],
+        context: &ResolutionContext,
+        policy: &dyn ModulePolicyHook,
+    ) -> ResolutionResult<MetadataResolutionOutcome> {
+        if node_builtin_specifier(&request.specifier).is_some() {
+            return self.resolve_metadata(request, context, policy);
+        }
+        let directories = self.commonjs_search_directories(request, Some(paths), context)?;
+        if request.specifier.is_empty() {
+            return Err(Box::new(
+                ResolutionError::new(
+                    ResolutionErrorCode::ModuleNotFound,
+                    "an empty CommonJS request cannot select a search directory",
+                    context,
+                )
+                .with_resolution_attempt(String::new(), None, None, Vec::new()),
+            ));
+        }
+        // Absolute requests and private imports retain their original owner.
+        if request.specifier.starts_with('/') || request.specifier.starts_with('#') {
+            return self.resolve_metadata(request, context, policy);
+        }
+        let mut probe_sequence = Vec::new();
+        for directory in directories {
+            let candidate = normalize_absolute_path(&join_paths(&directory, &request.specifier));
+            if !is_within_workspace_root(&self.root_dir, &candidate) {
+                return Err(Box::new(
+                    ResolutionError::new(
+                        ResolutionErrorCode::UnsupportedSpecifier,
+                        "CommonJS search target escapes the resolver root",
+                        context,
+                    )
+                    .with_resolution_attempt(
+                        request.specifier.clone(),
+                        Some(candidate),
+                        None,
+                        probe_sequence,
+                    ),
+                ));
+            }
+            let (probes, selected) = self.lookup_workspace_candidate(
+                &candidate,
+                ImportStyle::Require,
+                request.compatibility_mode,
+                true,
+            );
+            probe_sequence.extend(probes);
+            let Some((canonical_specifier, record)) = selected else {
+                continue;
+            };
+            let metadata = ModuleMetadata {
+                id: record.id.clone(),
+                required_capabilities: BTreeSet::from([RuntimeCapability::ModuleLoad]),
+                provenance: record.provenance.clone(),
+                target: ModuleMetadataTarget::Filename,
+            };
+            policy
+                .authorize_metadata(request, &metadata, context)
+                .map_err(|error| {
+                    Box::new((*error).into_policy_denial().with_resolution_attempt(
+                        request.specifier.clone(),
+                        Some(canonical_specifier.clone()),
+                        Some(metadata.provenance.kind),
+                        probe_sequence.clone(),
+                    ))
+                })?;
+            return Ok(MetadataResolutionOutcome {
+                module: ResolvedModuleMetadata {
+                    request_specifier: request.specifier.clone(),
+                    canonical_specifier,
+                    metadata,
+                    probe_sequence,
+                },
+                event: success_event(context),
+            });
+        }
+        Err(Box::new(
+            ResolutionError::new(
+                ResolutionErrorCode::ModuleNotFound,
+                "module not found in the admitted CommonJS search directories",
+                context,
+            )
+            .with_resolution_attempt(
+                request.specifier.clone(),
+                None,
+                Some(ModuleSourceKind::Workspace),
+                probe_sequence,
+            ),
+        ))
+    }
+
+    fn require_lookup_paths(
+        &self,
+        request: &ModuleRequest,
+        context: &ResolutionContext,
+        policy: &dyn ModulePolicyHook,
+    ) -> ResolutionResult<Option<Vec<String>>> {
+        if node_builtin_specifier(&request.specifier).is_some() {
+            self.resolve_metadata(request, context, policy)?;
+            return Ok(None);
+        }
+        let directories = self.commonjs_search_directories(request, None, context)?;
+        for directory in &directories {
+            let metadata = ModuleMetadata {
+                id: directory.clone(),
+                required_capabilities: BTreeSet::from([RuntimeCapability::ModuleLoad]),
+                provenance: ModuleProvenance {
+                    kind: ModuleSourceKind::Workspace,
+                    origin: directory.clone(),
+                },
+                target: ModuleMetadataTarget::Filename,
+            };
+            policy
+                .authorize_metadata(request, &metadata, context)
+                .map_err(|error| {
+                    Box::new((*error).into_policy_denial().with_resolution_attempt(
+                        request.specifier.clone(),
+                        Some(directory.clone()),
+                        Some(ModuleSourceKind::Workspace),
+                        directories.clone(),
+                    ))
+                })?;
+        }
+        Ok(Some(directories))
+    }
+
     fn resolve_chain(
         &self,
         entry_request: &ModuleRequest,
@@ -3439,6 +3709,13 @@ fn apply_wildcard_capture(template: &str, capture: &str) -> String {
 
 fn pattern_specificity(pattern: &str) -> usize {
     pattern.chars().filter(|ch| *ch != '*').count()
+}
+
+pub(crate) fn is_commonjs_relative_specifier(specifier: &str) -> bool {
+    matches!(specifier, "." | "..")
+        || specifier.starts_with("./")
+        || specifier.starts_with("../")
+        || (cfg!(windows) && (specifier.starts_with(".\\") || specifier.starts_with("..\\")))
 }
 
 fn normalize_absolute_path(path: &str) -> String {
@@ -7747,5 +8024,164 @@ mod tests {
             .expect_err("descriptor deny-list should fail closed");
         assert_eq!(err.code, HostApiErrorCode::PolicyDenied);
         assert!(err.message.contains(&descriptor.descriptor_id));
+    }
+}
+
+#[cfg(test)]
+mod commonjs_search_paths_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    fn resolver() -> DeterministicModuleResolver {
+        let mut resolver = DeterministicModuleResolver::new("/sandbox");
+        for path in [
+            "app/node_modules/owner/entry.cjs",
+            "first/node_modules/pick/index.js",
+            "second/node_modules/pick/index.js",
+            "first/hit.js",
+            "first/node_modules/index.js",
+        ] {
+            resolver
+                .register_workspace_module(
+                    path,
+                    ModuleDefinition::new(ModuleSyntax::CommonJs, "not parsed by metadata lookup")
+                        .require_capability(RuntimeCapability::ModuleLoad),
+                )
+                .unwrap();
+        }
+        resolver
+    }
+
+    fn request(specifier: &str) -> ModuleRequest {
+        ModuleRequest::new(specifier, ImportStyle::Require)
+            .with_referrer("/sandbox/app/node_modules/owner/entry.cjs")
+            .with_compatibility_mode(CompatibilityMode::NodeCompat)
+    }
+
+    fn context() -> ResolutionContext {
+        ResolutionContext::new("search-trace", "search-decision", "search-policy")
+    }
+
+    #[test]
+    fn explicit_search_roots_preserve_order_and_never_hash_or_load_source() {
+        let resolver = resolver();
+        for (roots, expected) in [
+            (vec!["first".to_string(), "second".to_string()], "/sandbox/first/node_modules/pick/index.js"),
+            (vec!["/sandbox/second".to_string(), "first".to_string()], "/sandbox/second/node_modules/pick/index.js"),
+        ] {
+            let outcome = resolver
+                .resolve_require_metadata_from_paths(&request("pick"), &roots, &context(), &AllowAllPolicy)
+                .unwrap();
+            assert_eq!(outcome.module.metadata.id, expected);
+            assert_eq!(outcome.module.metadata.target, ModuleMetadataTarget::Filename);
+            assert_eq!(
+                outcome.module.metadata.required_capabilities,
+                BTreeSet::from([RuntimeCapability::ModuleLoad]),
+            );
+            assert_eq!(outcome.module.request_specifier, "pick");
+        }
+        let outcome = resolver
+            .resolve_require_metadata_from_paths(
+                &request("./hit"),
+                &["missing".to_string(), "first".to_string()],
+                &context(),
+                &AllowAllPolicy,
+            )
+            .unwrap();
+        assert_eq!(outcome.module.metadata.id, "/sandbox/first/hit.js");
+        assert!(outcome.module.probe_sequence.iter().any(|path| path.starts_with("/sandbox/missing/")));
+    }
+
+    #[test]
+    fn lookup_directories_skip_nested_node_modules_and_stop_at_the_admitted_root() {
+        let resolver = resolver();
+        assert_eq!(
+            resolver.require_lookup_paths(&request("pick"), &context(), &AllowAllPolicy).unwrap(),
+            Some(vec![
+                "/sandbox/app/node_modules/owner/node_modules".to_string(),
+                "/sandbox/app/node_modules".to_string(),
+                "/sandbox/node_modules".to_string(),
+            ]),
+        );
+        assert_eq!(
+            resolver.require_lookup_paths(&request("../hit"), &context(), &AllowAllPolicy).unwrap(),
+            Some(vec!["/sandbox/app/node_modules/owner".to_string()]),
+        );
+    }
+
+    #[test]
+    fn empty_roots_empty_requests_and_forged_callers_cannot_select_registered_directories() {
+        let resolver = resolver();
+        for (request, roots, expected) in [
+            (request("pick"), Vec::new(), ResolutionErrorCode::ModuleNotFound),
+            (request(""), vec!["first".to_string()], ResolutionErrorCode::ModuleNotFound),
+            (request("pick"), vec!["../outside".to_string()], ResolutionErrorCode::UnsupportedSpecifier),
+            (
+                request("pick").with_referrer("/sandbox/forged.cjs"),
+                vec!["first".to_string()],
+                ResolutionErrorCode::InvalidReferrer,
+            ),
+            (
+                request("pick").with_referrer("/outside/entry.cjs"),
+                Vec::new(),
+                ResolutionErrorCode::InvalidReferrer,
+            ),
+        ] {
+            let error = resolver
+                .resolve_require_metadata_from_paths(&request, &roots, &context(), &AllowAllPolicy)
+                .unwrap_err();
+            assert_eq!(error.code, expected);
+        }
+        let error = resolver
+            .require_lookup_paths(
+                &request("pick").with_referrer("/sandbox/forged.cjs"),
+                &context(),
+                &AllowAllPolicy,
+            )
+            .unwrap_err();
+        assert_eq!(error.code, ResolutionErrorCode::InvalidReferrer);
+    }
+
+    #[derive(Default)]
+    struct OriginalCallerPolicy(Mutex<Vec<ModuleRequest>>);
+
+    impl ModulePolicyHook for OriginalCallerPolicy {
+        fn authorize(
+            &self,
+            _request: &ModuleRequest,
+            _record: &ModuleRecord,
+            _context: &ResolutionContext,
+        ) -> ResolutionResult<()> {
+            panic!("search metadata must never request executable module authority")
+        }
+
+        fn authorize_metadata(
+            &self,
+            request: &ModuleRequest,
+            _metadata: &ModuleMetadata,
+            _context: &ResolutionContext,
+        ) -> ResolutionResult<()> {
+            self.0.lock().unwrap().push(request.clone());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn search_hints_never_replace_the_request_seen_by_policy() {
+        let resolver = resolver();
+        let policy = OriginalCallerPolicy::default();
+        let request = request("pick");
+        resolver
+            .resolve_require_metadata_from_paths(
+                &request,
+                &["first".to_string()],
+                &context(),
+                &policy,
+            )
+            .unwrap();
+        resolver.require_lookup_paths(&request, &context(), &policy).unwrap();
+        let observed = policy.0.lock().unwrap();
+        assert_eq!(observed.len(), 4);
+        assert!(observed.iter().all(|actual| actual == &request));
     }
 }

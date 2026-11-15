@@ -7859,3 +7859,553 @@ fn delivered_native_imports_never_fall_back_after_resolver_refusal() {
         }
     }
 }
+
+fn write_require_search_fixture(root: &std::path::Path, relative: &str, bytes: &[u8]) {
+    let path = root.join(relative);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, bytes).unwrap();
+}
+
+#[test]
+fn ordinary_require_resolve_search_paths_preserve_package_selection_and_metadata_only_effects() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    for (path, content) in [
+        (
+            "app/package.json",
+            r##"{"name":"application","exports":"./self.cjs","imports":{"#asset":"./private.cjs"}}"##,
+        ),
+        (
+            "app/first/node_modules/pick/package.json",
+            r#"{"exports":{".":{"import":"./wrong.mjs","require":"./selected.cjs"},"./missing":"./absent.cjs"}}"#,
+        ),
+        (
+            "app/second/node_modules/pick/package.json",
+            r#"{"main":"index.js"}"#,
+        ),
+        ("app/first/node_modules/pick/selected.cjs", "throw new Error('not evaluated');"),
+        ("app/second/node_modules/pick/index.js", "throw new Error('not evaluated');"),
+        ("app/second/node_modules/pick/missing.js", "throw new Error('must not fall through');"),
+        ("app/second/asset.json", "invalid JSON must not be parsed"),
+        ("app/first/asset.json", "invalid JSON must not be parsed"),
+        ("app/self.cjs", "throw new Error('self is metadata only');"),
+        ("app/private.cjs", "throw new Error('private is metadata only');"),
+        ("app/first/dir/index.js", "throw new Error('directory is metadata only');"),
+    ] {
+        write_require_search_fixture(root, path, content.as_bytes());
+    }
+    write_require_search_fixture(root, "app/first/binary.node", &[0xff, 0x00, 0xfe]);
+    let source = r#"
+const resolve = require.resolve;
+const first = __dirname + '/first';
+const second = __dirname + '/second';
+console.log(resolve.length, resolve.paths.length, resolve.paths.name);
+console.log(resolve('pick', { paths: [first, second] }).endsWith('/first/node_modules/pick/selected.cjs'));
+console.log(resolve('pick', { paths: [second, first] }).endsWith('/second/node_modules/pick/index.js'));
+console.log(resolve('./asset', { paths: [second, first] }).endsWith('/second/asset.json'));
+console.log(resolve('./binary.node', { paths: [first] }).endsWith('/first/binary.node'));
+console.log(resolve('.', { paths: [first + '/dir'] }).endsWith('/first/dir/index.js'));
+console.log(resolve('application', { paths: [] }).endsWith('/app/self.cjs'));
+console.log(resolve('#asset', { paths: [second] }).endsWith('/app/private.cjs'));
+console.log(resolve.paths('./asset').join('|') === __dirname);
+console.log(resolve.paths('missing').join('|') === __dirname + '/node_modules|' + __dirname.slice(0, -4) + '/node_modules');
+console.log(resolve.paths('fs') === null, resolve.paths('node:path') === null);
+for (const paths of [[], [first + '/absent']]) {
+  try { resolve('./asset', { paths }); } catch (error) { console.log(error.code); }
+}
+try { resolve('pick/missing', { paths: [first, second] }); } catch (error) { console.log(error.code); }
+try { resolve('pick/hidden', { paths: [first, second] }); } catch (error) { console.log(error.code); }
+"#;
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let mut execution = package();
+        execution.source = source.to_string();
+        execution.source_file = Some(root.join("app/entry.cjs").display().to_string());
+        execution.module_root = Some(root.display().to_string());
+        let result = orchestrator(lane, ModuleSyntax::CommonJs)
+            .execute(&execution)
+            .expect("explicit roots resolve filename metadata without loading the selected source");
+        assert_eq!(
+            lines(&result),
+            [
+                "2 1 paths",
+                "true",
+                "true",
+                "true",
+                "true",
+                "true",
+                "true",
+                "true",
+                "true",
+                "true",
+                "true true",
+                "MODULE_NOT_FOUND",
+                "MODULE_NOT_FOUND",
+                "MODULE_NOT_FOUND",
+                "ERR_PACKAGE_PATH_NOT_EXPORTED",
+            ],
+            "{lane:?}"
+        );
+    }
+}
+
+#[test]
+fn ordinary_require_resolve_observes_options_and_relative_paths_in_node_order() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    write_require_search_fixture(root, "hit.js", b"throw new Error('metadata only');");
+    write_require_search_fixture(root, "node_modules/pick/index.js", b"not valid JavaScript");
+    let source = r#"
+const resolve = require.resolve;
+const trace = [];
+const roots = new Proxy([__dirname, 17], {
+  get(target, key) { trace.push('array:' + key); return Reflect.get(target, key); }
+});
+const options = { get paths() { trace.push('paths'); return roots; } };
+console.log(resolve('./hit', options).endsWith('/hit.js'));
+console.log(trace.join('|'));
+trace.length = 0;
+try { resolve('pick', options); } catch (error) { console.log(error.code); }
+console.log(trace.join('|'));
+let calls = 0;
+try { resolve('./hit', { get paths() { calls++; return null; } }); }
+catch (error) { console.log(error.code, calls); }
+const sentinel = {};
+try { resolve('./hit', { get paths() { throw sentinel; } }); }
+catch (error) { console.log(error === sentinel); }
+const later = { toString() { trace.push('coerce'); return 'ignored'; } };
+trace.length = 0;
+console.log(resolve('./hit', { paths: [__dirname, later] }).endsWith('/hit.js'), trace.join('|'));
+const hostile = { get paths() { throw sentinel; } };
+console.log(resolve('path', hostile), resolve('node:path', hostile));
+function ignored() {}
+Object.defineProperty(ignored, 'paths', { get() { throw sentinel; } });
+console.log(resolve('./hit', ignored).endsWith('/hit.js'));
+const revoked = Proxy.revocable([], {});
+revoked.revoke();
+try { resolve('./hit', { paths: revoked.proxy }); } catch (error) { console.log(error instanceof TypeError); }
+try { resolve(17); } catch (error) { console.log(error.code); }
+try { resolve.paths(17); } catch (error) { console.log(error.code); }
+let switched = 0;
+try { resolve('./hit', { get paths() { switched++; return switched === 1 ? [] : undefined; } }); }
+catch (error) { console.log(error.code, switched); }
+"#;
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let mut execution = package();
+        execution.source = source.to_string();
+        execution.source_file = Some(root.join("entry.cjs").display().to_string());
+        execution.module_root = Some(root.display().to_string());
+        let result = orchestrator(lane, ModuleSyntax::CommonJs)
+            .execute(&execution)
+            .expect("observable search-path reads and failures follow the native call boundary");
+        assert_eq!(
+            lines(&result),
+            [
+                "true",
+                "paths|paths|array:length|array:length|array:0|array:1|array:length|array:0",
+                "ERR_INVALID_ARG_TYPE",
+                "paths|paths|array:length|paths|array:0|paths|array:length|paths|array:1",
+                "ERR_INVALID_ARG_VALUE 3",
+                "true",
+                "true coerce",
+                "path node:path",
+                "true",
+                "true",
+                "ERR_INVALID_ARG_TYPE",
+                "ERR_INVALID_ARG_TYPE",
+                "MODULE_NOT_FOUND 2",
+            ],
+            "{lane:?}"
+        );
+    }
+}
+
+#[test]
+fn ordinary_require_resolve_paths_is_a_mutable_own_property_with_captured_origin() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    write_require_search_fixture(
+        root,
+        "nested/loader.cjs",
+        b"exports.resolve = require.resolve; exports.paths = require.resolve.paths;",
+    );
+    let source = r#"
+console.log(Object.keys(require.resolve).includes('paths'));
+console.log(Object.getOwnPropertyNames(require.resolve).join('|') === 'length|name|paths');
+const loader = require('./nested/loader.cjs');
+const paths = loader.paths;
+console.log(paths.call({ filename: '/outside/forged.cjs' }, './x')[0] === __dirname + '/nested');
+const resolve = loader.resolve;
+const descriptor = Object.getOwnPropertyDescriptor(resolve, 'paths');
+console.log(descriptor.value === paths, descriptor.writable, descriptor.enumerable, descriptor.configurable);
+console.log(Object.keys(resolve).includes('paths'));
+resolve.paths = function() { return 42; };
+console.log(resolve.paths(), paths('./x')[0] === __dirname + '/nested');
+delete resolve.paths;
+console.log(resolve.paths === undefined, !Object.prototype.hasOwnProperty.call(resolve, 'paths'));
+Object.defineProperty(resolve, 'paths', { get() { return paths; }, configurable: true });
+console.log(resolve.paths === paths);
+"#;
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let mut execution = package();
+        execution.source = source.to_string();
+        execution.source_file = Some(root.join("entry.cjs").display().to_string());
+        execution.module_root = Some(root.display().to_string());
+        let result = orchestrator(lane, ModuleSyntax::CommonJs)
+            .execute(&execution)
+            .expect("lookup-path function identity and own-property semantics are observable");
+        assert_eq!(
+            lines(&result),
+            [
+                "true",
+                "true",
+                "true",
+                "true true true true",
+                "true",
+                "42 true",
+                "true true",
+                "true",
+            ],
+            "{lane:?}"
+        );
+    }
+}
+
+#[test]
+fn ordinary_require_resolve_explicit_paths_refuse_root_escape_without_guest_catch() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("root");
+    std::fs::create_dir(&root).unwrap();
+    write_require_search_fixture(directory.path(), "outside/hit.js", b"throw new Error('outside');");
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let mut execution = package();
+        execution.source = r#"
+try { require.resolve('./hit', { paths: [__dirname + '/../outside'] }); }
+catch (error) { console.log('authority refusal was caught'); }
+console.log('escaped');
+"#
+        .to_string();
+        execution.source_file = Some(root.join("entry.cjs").display().to_string());
+        execution.module_root = Some(root.display().to_string());
+        let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
+        let error = engine.execute(&execution).expect_err("search roots cannot widen module authority");
+        assert!(error.to_string().contains("CommonJS search path"), "{lane:?}: {error}");
+        assert!(engine.last_failed_console_output().is_empty());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn ordinary_require_resolve_explicit_paths_refuse_symlink_escape() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("root");
+    std::fs::create_dir(&root).unwrap();
+    write_require_search_fixture(directory.path(), "outside/hit.js", b"throw new Error('outside');");
+    std::os::unix::fs::symlink(directory.path().join("outside"), root.join("linked")).unwrap();
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let mut execution = package();
+        execution.source = "require.resolve('./hit', { paths: [__dirname + '/linked'] });".to_string();
+        execution.source_file = Some(root.join("entry.cjs").display().to_string());
+        execution.module_root = Some(root.display().to_string());
+        let error = orchestrator(lane, ModuleSyntax::CommonJs)
+            .execute(&execution)
+            .expect_err("existing ancestors of a search root must remain contained");
+        assert!(error.to_string().contains("CommonJS search path"), "{lane:?}: {error}");
+    }
+}
+
+fn require_search_registry(source: &str) -> DeterministicModuleResolver {
+    let mut resolver = DeterministicModuleResolver::new(ROOT);
+    for (name, source) in [
+        ("entry.cjs", source),
+        (
+            "nested/loader.cjs",
+            "exports.resolve = require.resolve; exports.paths = require.resolve.paths;",
+        ),
+        ("alternate/node_modules/pick/index.js", "throw new Error('must not execute');"),
+        ("alternate/hit.js", "not valid JavaScript; metadata must not parse it"),
+    ] {
+        resolver
+            .register_workspace_module(name, definition(ModuleSyntax::CommonJs, source))
+            .unwrap();
+    }
+    resolver
+}
+
+fn require_search_entry(resolver: &dyn ModuleResolver) -> ResolutionOutcome {
+    resolver
+        .resolve(
+            &ModuleRequest::new(format!("{ROOT}/entry.cjs"), ImportStyle::Require)
+                .with_compatibility_mode(CompatibilityMode::NodeCompat),
+            &ResolutionContext::new("search-admission", "search-decision", "search-policy"),
+            &AllowAllPolicy,
+        )
+        .unwrap()
+}
+
+#[test]
+fn delivered_require_resolve_search_paths_use_registered_routes_and_original_authority() {
+    let source_text = format!(
+        r#"
+const loader = require('./nested/loader.cjs');
+const resolve = loader.resolve;
+const paths = loader.paths;
+console.log(resolve.call({{ filename: '/forged.cjs' }}, 'pick', {{ paths: ['{ROOT}/alternate'] }}));
+console.log(resolve('./hit', {{ paths: ['{ROOT}/missing', '{ROOT}/alternate'] }}));
+console.log(paths.call({{ filename: '/forged.cjs' }}, './hit').join('|'));
+console.log(paths('pick').join('|'));
+"#
+    );
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(require_search_registry(&source_text));
+        let source = require_search_entry(resolver.as_ref());
+        let policy = Arc::new(RecordingPolicy::default());
+        let installed =
+            ExecutionModuleResolver::new(&source.module.record.id, resolver, policy.clone());
+        let result = orchestrator(lane, ModuleSyntax::CommonJs)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("registered explicit roots provide metadata without ambient fallback");
+        assert_eq!(
+            lines(&result),
+            [
+                format!("{ROOT}/alternate/node_modules/pick/index.js"),
+                format!("{ROOT}/alternate/hit.js"),
+                format!("{ROOT}/nested"),
+                format!("{ROOT}/nested/node_modules|{ROOT}/node_modules"),
+            ],
+            "{lane:?}"
+        );
+        let calls = policy.requests.lock().unwrap();
+        for (request, _) in calls.iter().filter(|(request, _)| {
+            matches!(request.specifier.as_str(), "pick" | "./hit")
+        }) {
+            assert_eq!(request.referrer.as_deref(), Some(format!("{ROOT}/nested/loader.cjs").as_str()));
+            assert_eq!(request.style, ImportStyle::Require);
+        }
+    }
+}
+
+#[test]
+fn delivered_require_resolve_search_paths_reauthorize_and_do_not_disguise_policy_denials() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for operation in [
+            format!("require.resolve('pick', {{ paths: ['{ROOT}/alternate'] }})"),
+            "require.resolve.paths('./hit')".to_string(),
+        ] {
+            let specifier = if operation.contains("'pick'") { "pick" } else { "./hit" };
+            let resolver = Arc::new(require_search_registry(&format!(
+                "console.log('before'); try {{ {operation}; }}                  catch (error) {{ console.log('authority denial caught'); }} console.log('after');"
+            )));
+            let source = require_search_entry(resolver.as_ref());
+            let policy = Arc::new(RecordingPolicy {
+                denied: Some((specifier.to_string(), 1)),
+                denial_code: Some(ResolutionErrorCode::ModuleNotFound),
+                ..RecordingPolicy::default()
+            });
+            let installed =
+                ExecutionModuleResolver::new(&source.module.record.id, resolver, policy.clone());
+            let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
+            let error = engine
+                .execute_resolved_entry_with_resolver(&package(), &source, installed)
+                .expect_err("metadata policy denial cannot become catchable module absence");
+            assert!(error.to_string().contains("refused"), "{lane:?}: {error}");
+            assert_eq!(
+                engine.last_failed_console_output().iter().map(|line| line.message.as_str()).collect::<Vec<_>>(),
+                ["before"],
+            );
+            let calls = policy.requests.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].0.referrer.as_deref(), Some(format!("{ROOT}/entry.cjs").as_str()));
+        }
+    }
+}
+
+#[test]
+fn delivered_require_resolve_search_hints_are_opt_in_for_external_resolvers() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for operation in [
+            format!("require.resolve('./dep.cjs', {{ paths: ['{ROOT}'] }})"),
+            "require.resolve.paths('./dep.cjs')".to_string(),
+        ] {
+            let resolver = Arc::new(OpaqueResolver::new(vec![
+                (
+                    "entry.cjs",
+                    definition(ModuleSyntax::CommonJs, &format!(
+                        "console.log(require.resolve('./dep.cjs').endsWith('/dep.cjs'));                                                    try {{ {operation}; }} catch (error) {{ console.log('caught'); }}"
+                    )),
+                ),
+                ("dep.cjs", definition(ModuleSyntax::CommonJs, "throw new Error('metadata only');")),
+            ]));
+            let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+            let installed = ExecutionModuleResolver::new(
+                &source.module.record.id,
+                resolver.clone(),
+                Arc::new(AllowAllPolicy),
+            );
+            let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
+            let error = engine
+                .execute_resolved_entry_with_resolver(&package(), &source, installed)
+                .expect_err("a pre-existing resolver must explicitly admit new lookup semantics");
+            assert!(error.to_string().contains("refused"), "{lane:?}: {error}");
+            assert_eq!(
+                engine.last_failed_console_output().iter().map(|line| line.message.as_str()).collect::<Vec<_>>(),
+                ["true"],
+            );
+            assert_eq!(resolver.metadata_requests.lock().unwrap().len(), 1);
+        }
+    }
+}
+
+struct MissingSearchMetadataAuthority(DeterministicModuleResolver);
+
+impl ModuleResolver for MissingSearchMetadataAuthority {
+    fn resolve(
+        &self,
+        request: &ModuleRequest,
+        context: &ResolutionContext,
+        policy: &dyn ModulePolicyHook,
+    ) -> ResolutionResult<ResolutionOutcome> {
+        self.0.resolve(request, context, policy)
+    }
+
+    fn resolve_require_metadata_from_paths(
+        &self,
+        request: &ModuleRequest,
+        paths: &[String],
+        context: &ResolutionContext,
+        policy: &dyn ModulePolicyHook,
+    ) -> ResolutionResult<MetadataResolutionOutcome> {
+        let mut outcome = self.0.resolve_require_metadata_from_paths(request, paths, context, policy)?;
+        outcome.module.metadata.required_capabilities.clear();
+        Ok(outcome)
+    }
+
+    fn resolve_chain(
+        &self,
+        request: &ModuleRequest,
+        context: &ResolutionContext,
+        policy: &dyn ModulePolicyHook,
+    ) -> ResolutionResult<Vec<ResolutionOutcome>> {
+        self.0.resolve_chain(request, context, policy)
+    }
+}
+
+#[test]
+fn delivered_require_resolve_search_paths_validate_returned_metadata_authority() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(MissingSearchMetadataAuthority(require_search_registry(&format!(
+            "try {{ require.resolve('pick', {{ paths: ['{ROOT}/alternate'] }}); }}              catch (error) {{ console.log('forged authority caught'); }}"
+        ))));
+        let source = require_search_entry(resolver.as_ref());
+        let installed =
+            ExecutionModuleResolver::new(&source.module.record.id, resolver, Arc::new(AllowAllPolicy));
+        let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
+        let error = engine
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect_err("new metadata lookup cannot bypass the runtime authority validator");
+        assert!(error.to_string().contains("inconsistent identity or resolution authority"), "{error}");
+        assert!(engine.last_failed_console_output().is_empty());
+    }
+}
+
+#[test]
+fn delivered_builtin_require_resolve_paths_preserves_metadata_policy() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![(
+                "entry.cjs",
+                definition(
+                    ModuleSyntax::CommonJs,
+                    r#"
+console.log(require.resolve.paths('fs') === null);
+try { require.resolve.paths('fs'); } catch (error) { console.log('metadata denial caught'); }
+"#,
+                ),
+            )])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let policy = Arc::new(RecordingPolicy {
+            denied: Some(("fs".to_string(), 2)),
+            denial_code: Some(ResolutionErrorCode::ModuleNotFound),
+            ..RecordingPolicy::default()
+        });
+        let installed =
+            ExecutionModuleResolver::new(&source.module.record.id, resolver.clone(), policy);
+        let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
+        let error = engine
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect_err("builtin lookup metadata must reauthorize through the installed resolver");
+        assert!(error.to_string().contains("refused"), "{lane:?}: {error}");
+        assert_eq!(
+            engine
+                .last_failed_console_output()
+                .iter()
+                .map(|line| line.message.as_str())
+                .collect::<Vec<_>>(),
+            ["true"],
+        );
+        assert_eq!(resolver.metadata_requests.lock().unwrap().len(), 2);
+    }
+}
+
+#[test]
+fn delivered_require_resolve_search_expansion_refuses_before_allocating_ancestor_lists() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(require_search_registry(
+            r#"
+console.log('before');
+try { require.resolve('pick', { paths: [__dirname + '/' + 'segment/'.repeat(1500)] }); }
+catch (error) { console.log('resource refusal caught'); }
+console.log('after');
+"#,
+        ));
+        let source = require_search_entry(resolver.as_ref());
+        let policy = Arc::new(RecordingPolicy::default());
+        let installed =
+            ExecutionModuleResolver::new(&source.module.record.id, resolver, policy.clone());
+        let mut runtime = RuntimeConfig::default();
+        runtime.execution.max_total_memory_bytes = Some(8 * 1024 * 1024);
+        let mut engine = ExecutionOrchestrator::try_new_lab_with_runtime_config(
+            OrchestratorConfig {
+                force_lane: Some(lane),
+                parse_goal: ParseGoal::Script,
+                commonjs_entry: true,
+                policy_id: "search-budget-policy".to_string(),
+                ..OrchestratorConfig::default()
+            },
+            runtime,
+        )
+        .unwrap();
+        let error = engine
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect_err("quadratic ancestor expansion must be refused before entering the resolver");
+        assert!(
+            matches!(
+                error.primary_error(),
+                OrchestratorError::Interpreter(InterpreterError::MemoryBudgetExceeded { .. })
+            ),
+            "{lane:?}: {error}"
+        );
+        assert_eq!(
+            engine
+                .last_failed_console_output()
+                .iter()
+                .map(|line| line.message.as_str())
+                .collect::<Vec<_>>(),
+            ["before"],
+        );
+        assert!(policy.requests.lock().unwrap().is_empty());
+
+        // The same orchestrator remains usable after the resource refusal.
+        let resolver = Arc::new(require_search_registry(&format!(
+            "console.log(require.resolve('pick', {{ paths: ['{ROOT}/alternate'] }}).endsWith('/pick/index.js'));"
+        )));
+        let source = require_search_entry(resolver.as_ref());
+        let installed =
+            ExecutionModuleResolver::new(&source.module.record.id, resolver, Arc::new(AllowAllPolicy));
+        let recovered = engine
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("a failed lookup must not retain expansion scratch in the next run");
+        assert_eq!(lines(&recovered), ["true"]);
+    }
+}

@@ -1,5 +1,11 @@
 use super::*;
 
+enum RequireResolveSearchPaths {
+    Default,
+    Directories(Vec<String>),
+    Relative(Value),
+}
+
 impl InterpreterCore {
     #[inline]
     pub(super) fn execute_compact_tier1_instruction(
@@ -10663,6 +10669,11 @@ impl InterpreterCore {
                 Value::BuiltinFunction(BuiltinFunction::require_resolve(builtin))
             }
             Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::RequireResolve && name == "paths" =>
+            {
+                self.require_resolve_paths_property(module, builtin)?
+            }
+            Value::BuiltinFunction(builtin)
                 if Self::builtin_function_property_object(builtin).is_some() =>
             {
                 let property_object =
@@ -12569,31 +12580,370 @@ impl InterpreterCore {
     /// Error (bd-9vouw.188). Packages probe optional dependencies with it
     /// (`try { require.resolve('x') } catch {}`); it was undefined. The
     /// `options` argument and `require.resolve.paths` are not supported.
-    pub(super) fn require_resolve(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
-        let request = if args.count > 0 {
-            self.read_reg(args.start)?
+    /// The own property is materialized once so mutation, deletion and
+    /// reflection agree with ordinary reads. Its callable keeps the resolver's
+    /// original module authority even when detached or called with another this.
+    pub(super) fn require_resolve_paths_property(
+        &mut self,
+        module: &Ir3Module,
+        resolve: &BuiltinFunction,
+    ) -> Result<Value, InterpreterError> {
+        let function = Value::BuiltinFunction(resolve.clone());
+        let backing = self
+            .ensure_function_own_property_object(module, &function)?
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: "require.resolve has no function property backing".to_string(),
+            })?;
+        self.proxy_aware_get_runtime_property(
+            Some(module),
+            backing,
+            &RuntimePropertyKey::from("paths"),
+            function,
+            0,
+        )
+    }
+
+    fn require_resolve_get(
+        &mut self,
+        module: &Ir3Module,
+        value: &Value,
+        key: RuntimePropertyKey,
+    ) -> Result<Value, InterpreterError> {
+        let value = self.get_v(module, value, &key)?;
+        self.observe_scoped_callback_result()?;
+        Ok(value)
+    }
+
+    /// Node's path loops compare their index with each newly read length.
+    /// This deliberately does not snapshot the length or apply ToLength.
+    fn require_resolve_path_index_in_bounds(
+        &mut self,
+        module: &Ir3Module,
+        paths: &Value,
+        index: u64,
+    ) -> Result<bool, InterpreterError> {
+        self.json_charge_work()?;
+        let length = self.require_resolve_get(
+            module,
+            paths,
+            RuntimePropertyKey::from("length"),
+        )?;
+        let primitive = self.coerce_runtime_primitive(Some(module), length, false)?;
+        self.observe_scoped_callback_result()?;
+        let length = if let Value::BigInt(digits) = &primitive {
+            digits.parse::<f64>().unwrap_or_else(|_| {
+                if digits.starts_with('-') {
+                    f64::NEG_INFINITY
+                } else {
+                    f64::INFINITY
+                }
+            })
         } else {
-            Value::Undefined
+            Self::coerce_to_float(&primitive).ok_or_else(|| InterpreterError::TypeError {
+                expected: "numeric search-path length".to_string(),
+                got: primitive.type_name().to_string(),
+            })?
         };
-        let Value::Str(request) = request else {
-            return Err(InterpreterError::RequireSpecifierNotString {
-                got: request.type_name().to_string(),
-            });
+        Ok((index as f64) < length)
+    }
+
+    fn require_resolve_path_string(
+        &mut self,
+        value: Value,
+        scratch: &mut u64,
+    ) -> Result<String, InterpreterError> {
+        let Value::Str(path) = value else {
+            return Err(self.throw_path_arg_type_error("paths[i]", "string", &value));
         };
-        let specifier = Self::utf8_module_specifier(&request)?;
+        let path = Self::utf8_module_specifier(&path)?;
+        let bytes = Self::estimate_string_bytes(path)
+            .saturating_add(std::mem::size_of::<String>() as u64);
+        self.json_reserve_temporary(bytes)?;
+        *scratch = scratch.saturating_add(bytes);
+        Ok(path.to_string())
+    }
+
+    fn require_resolve_search_paths(
+        &mut self,
+        module: &Ir3Module,
+        options: Value,
+        relative: bool,
+        scratch: &mut u64,
+    ) -> Result<RequireResolveSearchPaths, InterpreterError> {
+        // Node ignores primitive and callable options. Getter results are
+        // native temporaries across subsequent arbitrary guest callbacks.
+        if !options.is_object_like() || options.is_callable() {
+            return Ok(RequireResolveSearchPaths::Default);
+        }
+        self.gc_nested_request = None;
+        let first = self.require_resolve_get(
+            module,
+            &options,
+            RuntimePropertyKey::from("paths"),
+        )?;
+        let is_array = match first {
+            Value::Object(object) => self.generic_is_array(object)?,
+            _ => false,
+        };
+        if !is_array {
+            let second = self.require_resolve_get(
+                module,
+                &options,
+                RuntimePropertyKey::from("paths"),
+            )?;
+            if matches!(second, Value::Undefined) {
+                return Ok(RequireResolveSearchPaths::Default);
+            }
+            let invalid = self.require_resolve_get(
+                module,
+                &options,
+                RuntimePropertyKey::from("paths"),
+            )?;
+            return Err(self.throw_buffer_node_error(
+                "TypeError",
+                "ERR_INVALID_ARG_VALUE",
+                format!(
+                    "The argument 'options.paths' is invalid. Received {}",
+                    invalid.type_name()
+                ),
+            ));
+        }
+        if relative {
+            let paths = self.require_resolve_get(
+                module,
+                &options,
+                RuntimePropertyKey::from("paths"),
+            )?;
+            return Ok(RequireResolveSearchPaths::Relative(paths));
+        }
+        let mut directories = Vec::new();
+        let mut index = 0;
+        loop {
+            let paths = self.require_resolve_get(
+                module,
+                &options,
+                RuntimePropertyKey::from("paths"),
+            )?;
+            if !self.require_resolve_path_index_in_bounds(module, &paths, index)? {
+                break;
+            }
+            let paths = self.require_resolve_get(
+                module,
+                &options,
+                RuntimePropertyKey::from("paths"),
+            )?;
+            let path = self.require_resolve_get(
+                module,
+                &paths,
+                RuntimePropertyKey::from(index.to_string().as_str()),
+            )?;
+            directories.push(self.require_resolve_path_string(path, scratch)?);
+            index += 1;
+        }
+        Ok(RequireResolveSearchPaths::Directories(directories))
+    }
+
+    /// Observe Array.prototype.join(paths, "\\0") without retaining a cache
+    /// key: the native loader reauthorizes every lookup and owns no Node path
+    /// cache. Generic Get/ToLength/ToString preserve proxies and conversion
+    /// callbacks; reading a guest-owned "join" property would be incorrect.
+    fn require_resolve_observe_join(
+        &mut self,
+        module: &Ir3Module,
+        paths: &Value,
+    ) -> Result<(), InterpreterError> {
+        let length = self.require_resolve_get(module, paths, RuntimePropertyKey::from("length"))?;
+        let primitive = self.coerce_runtime_primitive(Some(module), length, false)?;
+        self.observe_scoped_callback_result()?;
+        let number = Self::coerce_to_float(&primitive).ok_or_else(|| InterpreterError::TypeError {
+            expected: "array length convertible to a number".to_string(),
+            got: primitive.type_name().to_string(),
+        })?;
+        let length = if number.is_nan() {
+            0
+        } else {
+            number.trunc().clamp(0.0, 9_007_199_254_740_991.0) as u64
+        };
+        for index in 0..length {
+            self.json_charge_work()?;
+            let value = self.require_resolve_get(
+                module,
+                paths,
+                RuntimePropertyKey::from(index.to_string().as_str()),
+            )?;
+            if value.is_nullish() {
+                continue;
+            }
+            let primitive = self.coerce_runtime_primitive(Some(module), value, true)?;
+            self.observe_scoped_callback_result()?;
+            if matches!(primitive, Value::Symbol(_)) {
+                return Err(Self::symbol_to_string_error());
+            }
+        }
+        Ok(())
+    }
+
+    /// A relative request first observes the intrinsic join used by Node's
+    /// lookup key, then probes lazily. In particular a successful early root
+    /// does not validate or reread later roots.
+    fn require_resolve_relative_paths(
+        &mut self,
+        module: &Ir3Module,
+        specifier: &str,
+        paths: Value,
+        scratch: &mut u64,
+    ) -> Result<Value, InterpreterError> {
+        let missing = || InterpreterError::ModuleResolutionFailed {
+            specifier: specifier.to_string(),
+            reason: ModuleResolutionFailureReason::ModuleNotFound,
+        };
+        if !paths.is_truthy() {
+            return Err(missing());
+        }
+        let length = self.require_resolve_get(
+            module,
+            &paths,
+            RuntimePropertyKey::from("length"),
+        )?;
+        if matches!(length, Value::Int(0))
+            || matches!(length, Value::Float(number) if number.inner() == 0.0)
+        {
+            return Err(missing());
+        }
+        self.require_resolve_observe_join(module, &paths)?;
+        let mut index = 0;
+        while self.require_resolve_path_index_in_bounds(module, &paths, index)? {
+            let path = self.require_resolve_get(
+                module,
+                &paths,
+                RuntimePropertyKey::from(index.to_string().as_str()),
+            )?;
+            let path = self.require_resolve_path_string(path, scratch)?;
+            match self.require_resolve_filename(specifier, Some(std::slice::from_ref(&path))) {
+                Err(InterpreterError::ModuleResolutionFailed {
+                    reason: ModuleResolutionFailureReason::ModuleNotFound,
+                    ..
+                }) => {}
+                outcome => return outcome,
+            }
+            index += 1;
+        }
+        Err(missing())
+    }
+
+    /// Ancestor expansion retains normalized roots, deduplication keys and
+    /// candidate probes simultaneously. Its peak is quadratic in path depth,
+    /// so admit the complete aggregate before any resolver constructs it.
+    /// The reservation also spans a policy callback and result materialization.
+    fn reserve_require_search_expansion(
+        &mut self,
+        specifier: &str,
+        paths: Option<&[String]>,
+    ) -> Result<u64, InterpreterError> {
+        if node_builtin_specifier(specifier).is_some() {
+            return Ok(0);
+        }
+        let path_depth = |path: &str| {
+            path.bytes()
+                .filter(|byte| matches!(*byte, b'/' | b'\\'))
+                .count() as u64
+                + 1
+        };
+        let mut base_bytes = 0_u64;
+        let mut base_depth = 0_u64;
+        for base in [
+            self.current_module_specifier.as_deref(),
+            self.module_resolver
+                .as_ref()
+                .map(|installed| installed.resolver.entry_referrer()),
+            self.config.module_root.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            base_bytes = base_bytes.max(base.len() as u64);
+            base_depth = base_depth.max(path_depth(base));
+        }
+        if let Some(root) = self.config.canonical_module_root.as_ref() {
+            base_bytes = base_bytes.max((root.as_os_str().len() as u64).saturating_mul(3));
+            base_depth = base_depth.max(root.components().count() as u64);
+        }
+        let relative = crate::module_resolver::is_commonjs_relative_specifier(specifier);
+        let specifier_depth = path_depth(specifier);
+        let estimate = |path: &str| {
+            let depth = base_depth
+                .saturating_add(path_depth(path))
+                .saturating_add(1);
+            let directories = if relative { 1 } else { depth };
+            // Containment may walk every missing ancestor for each directory.
+            // A relative request has one output root but still pays that walk.
+            let candidate_depth = depth.saturating_add(specifier_depth);
+            let candidate_bytes = base_bytes
+                .saturating_add(path.len() as u64)
+                .saturating_add(specifier.len() as u64)
+                .saturating_add(64)
+                .saturating_add(std::mem::size_of::<String>() as u64);
+            // Two retained directory copies plus normalization, candidate
+            // probes, metadata/error copies and their collection entries.
+            (
+                directories.saturating_mul(candidate_bytes).saturating_mul(16),
+                directories
+                    .saturating_mul(candidate_depth)
+                    .saturating_mul(16),
+            )
+        };
+        // The original caller's scope remains relevant for self references
+        // and private imports even when the explicit list is empty.
+        let (mut bytes, mut work) = estimate("");
+        if let Some(paths) = paths {
+            for path in paths {
+                let (path_bytes, path_work) = estimate(path);
+                bytes = bytes.saturating_add(path_bytes);
+                work = work.saturating_add(path_work);
+            }
+        }
+        self.json_reserve_temporary(bytes)?;
+        let outcome = (|| {
+            for _ in 0..work {
+                self.json_charge_work()?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = outcome {
+            self.json_release_temporary(bytes);
+            return Err(error);
+        }
+        Ok(bytes)
+    }
+
+    fn require_resolve_filename(
+        &mut self,
+        specifier: &str,
+        paths: Option<&[String]>,
+    ) -> Result<Value, InterpreterError> {
+        let Some(paths) = paths else {
+            // Preserve the original metadata contract for existing adapters.
+            return self.require_resolve_filename_inner(specifier, None);
+        };
+        let reserved = self.reserve_require_search_expansion(specifier, Some(paths))?;
+        let outcome = self.require_resolve_filename_inner(specifier, Some(paths));
+        self.json_release_temporary(reserved);
+        outcome
+    }
+
+    /// A metadata-only lookup: no source read, parse, evaluation or cache
+    /// insertion. Search hints never replace the captured requesting module.
+    fn require_resolve_filename_inner(
+        &mut self,
+        specifier: &str,
+        paths: Option<&[String]>,
+    ) -> Result<Value, InterpreterError> {
         if self.module_resolver.is_some() {
-            let resolved =
-                match self.resolve_installed_module_metadata(specifier, ImportStyle::Require) {
-                    Ok(resolved) => resolved,
-                    Err(InterpreterError::ModuleResolutionFailed { reason, .. }) => {
-                        return Err(self.throw_module_resolution_failure(
-                            request.as_ref(),
-                            &reason,
-                            ImportStyle::Require,
-                        ));
-                    }
-                    Err(error) => return Err(error),
-                };
+            let resolved = self.resolve_installed_module_metadata_from_paths(
+                specifier,
+                ImportStyle::Require,
+                paths,
+            )?;
             let metadata = &resolved.module.metadata;
             if metadata.provenance.kind == ModuleSourceKind::BuiltIn {
                 let canonical = metadata.provenance.origin.as_str();
@@ -12609,21 +12959,121 @@ impl InterpreterCore {
             return Ok(Value::str(filename));
         }
         if node_builtin_specifier(specifier).is_some() {
-            return Ok(Value::Str(request));
+            return Ok(Value::str(specifier));
         }
         if is_node_core_module_specifier(specifier) {
-            return Err(self.throw_module_resolution_failure(
-                request.as_ref(),
-                &ModuleResolutionFailureReason::ModuleNotFound,
-                ImportStyle::Require,
-            ));
+            return Err(InterpreterError::ModuleResolutionFailed {
+                specifier: specifier.to_string(),
+                reason: ModuleResolutionFailureReason::ModuleNotFound,
+            });
         }
-        match self.resolve_require_specifier(specifier) {
-            Ok(resolved) => Ok(Value::str(resolved)),
-            Err(InterpreterError::ModuleResolutionFailed { reason, .. }) => Err(self
-                .throw_module_resolution_failure(request.as_ref(), &reason, ImportStyle::Require)),
-            Err(error) => Err(error),
-        }
+        let resolved = match paths {
+            Some(paths) => self.resolve_require_specifier_from_paths(specifier, paths),
+            None => self.resolve_require_specifier(specifier),
+        }?;
+        Ok(Value::str(resolved))
+    }
+
+    pub(super) fn require_resolve(
+        &mut self,
+        module: &Ir3Module,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let end = args.start.checked_add(args.count).ok_or(
+            InterpreterError::RegisterOutOfBounds {
+                register: args.start,
+                max: self.config.max_registers,
+            },
+        )?;
+        let observation = self.begin_property_observation(args.start..end)?;
+        let mut scratch = 0;
+        let outcome = (|| {
+            let request = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+            let Value::Str(request) = request else {
+                return Err(self.throw_path_arg_type_error("request", "string", &request));
+            };
+            let specifier = Self::utf8_module_specifier(&request)?;
+            let outcome = if node_builtin_specifier(specifier).is_some() {
+                // Core requests do not inspect options, including hostile getters.
+                self.require_resolve_filename(specifier, None)
+            } else {
+                let options = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+                match self.require_resolve_search_paths(
+                    module,
+                    options,
+                    crate::module_resolver::is_commonjs_relative_specifier(specifier),
+                    &mut scratch,
+                )? {
+                    RequireResolveSearchPaths::Default => {
+                        self.require_resolve_filename(specifier, None)
+                    }
+                    RequireResolveSearchPaths::Directories(paths) => {
+                        self.require_resolve_filename(specifier, Some(&paths))
+                    }
+                    RequireResolveSearchPaths::Relative(paths) => {
+                        self.require_resolve_relative_paths(module, specifier, paths, &mut scratch)
+                    }
+                }
+            };
+            match outcome {
+                Err(InterpreterError::ModuleResolutionFailed { reason, .. }) => Err(self
+                    .throw_module_resolution_failure(request.as_ref(), &reason, ImportStyle::Require)),
+                outcome => outcome,
+            }
+        })();
+        self.json_release_temporary(scratch);
+        self.finish_property_read_observation(observation, outcome)
+    }
+
+    pub(super) fn require_resolve_paths(
+        &mut self,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let request = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let Value::Str(request) = request else {
+            return Err(self.throw_path_arg_type_error("request", "string", &request));
+        };
+        let specifier = Self::utf8_module_specifier(&request)?;
+        let reserved = self.reserve_require_search_expansion(specifier, None)?;
+        let outcome = (|| {
+            let paths = if let Some(installed) = self.module_resolver.as_ref() {
+                let request = ModuleRequest::new(specifier, ImportStyle::Require)
+                    .with_referrer(
+                        self.current_module_specifier
+                            .as_deref()
+                            .unwrap_or_else(|| installed.resolver.entry_referrer()),
+                    )
+                    .with_compatibility_mode(CompatibilityMode::NodeCompat);
+                installed
+                    .resolver
+                    .require_lookup_paths(&request, &installed.context)
+                    .map_err(|error| InterpreterError::ModuleLoweringFailed {
+                        specifier: specifier.to_string(),
+                        error: format!("closed-world module lookup paths refused: {error}"),
+                    })?
+            } else if node_builtin_specifier(specifier).is_some() {
+                None
+            } else {
+                Some(self.require_lookup_directories(specifier)?)
+            };
+            let Some(paths) = paths else {
+                return Ok(Value::Null);
+            };
+            let bytes = paths.iter().fold(0_u64, |bytes, path| {
+                bytes
+                    .saturating_add(Self::estimate_string_bytes(path))
+                    .saturating_add(std::mem::size_of::<Value>() as u64)
+            });
+            self.json_reserve_temporary(bytes)?;
+            let outcome = (|| {
+                let values = paths.into_iter().map(Value::str).collect::<Vec<_>>();
+                Ok(Value::Object(self.alloc_array_from_values(&values)?))
+            })();
+            self.json_release_temporary(bytes);
+            outcome
+        })();
+        self.json_release_temporary(reserved);
+        outcome
     }
 
     /// Synchronous URL resolution is metadata only. The callable has already
@@ -13099,5 +13549,101 @@ impl InterpreterCore {
         self.pending_dynamic_imports
             .insert(sequence, Arc::new(task));
         Ok(Value::Promise(promise.0))
+    }
+}
+
+#[cfg(test)]
+mod require_search_expansion_budget_tests {
+    use super::*;
+
+    fn core() -> InterpreterCore {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.max_total_memory_bytes = 8 * 1024 * 1024;
+        config.module_root = Some("/sandbox".to_string());
+        let mut core = InterpreterCore::new(config, "require-search-budget");
+        core.current_module_specifier = Some("/sandbox/entry.cjs".to_string());
+        core
+    }
+
+    #[test]
+    fn search_expansion_admission_covers_all_roots_and_keeps_a_live_peak_reservation() {
+        let mut core = core();
+        let before = core.json_parse_temporary_bytes;
+        let first = core
+            .reserve_require_search_expansion("pick", Some(&["first".to_string()]))
+            .unwrap();
+        assert!(first > 0);
+        assert_eq!(core.json_parse_temporary_bytes, before + first);
+        core.json_release_temporary(first);
+        let both = core
+            .reserve_require_search_expansion(
+                "pick",
+                Some(&["first".to_string(), "second".to_string()]),
+            )
+            .unwrap();
+        assert!(both > first);
+        core.json_release_temporary(both);
+        assert_eq!(core.json_parse_temporary_bytes, before);
+    }
+
+    #[test]
+    fn deep_expansion_refusal_and_work_exhaustion_release_native_scratch() {
+        let mut core = core();
+        let before = core.json_parse_temporary_bytes;
+        let deep = format!("/sandbox/{}", "segment/".repeat(1500));
+        let error = core
+            .reserve_require_search_expansion("pick", Some(&[deep]))
+            .unwrap_err();
+        assert!(matches!(error, InterpreterError::MemoryBudgetExceeded { .. }));
+        assert_eq!(core.json_parse_temporary_bytes, before);
+        core.config.instruction_budget = 0;
+        let error = core
+            .reserve_require_search_expansion("pick", Some(&["first".to_string()]))
+            .unwrap_err();
+        assert!(matches!(error, InterpreterError::BudgetExhausted { .. }));
+        assert_eq!(core.json_parse_temporary_bytes, before);
+        core.config.instruction_budget = 100_000;
+        let reserved = core
+            .reserve_require_search_expansion("pick", Some(&["first".to_string()]))
+            .unwrap();
+        core.json_release_temporary(reserved);
+        assert_eq!(core.json_parse_temporary_bytes, before);
+    }
+
+    #[test]
+    fn relative_search_roots_and_request_ancestors_consume_work_budget() {
+        let deep = "segment/".repeat(200);
+        for (specifier, root) in [
+            ("./pick".to_string(), format!("/sandbox/{deep}")),
+            (format!("./{deep}pick"), "/sandbox".to_string()),
+        ] {
+            let mut core = core();
+            core.config.instruction_budget = 1_000;
+            let before = core.json_parse_temporary_bytes;
+            let shallow = core
+                .reserve_require_search_expansion("./pick", Some(&["/sandbox".to_string()]))
+                .unwrap();
+            core.json_release_temporary(shallow);
+            let error = core
+                .reserve_require_search_expansion(&specifier, Some(&[root]))
+                .unwrap_err();
+            assert!(matches!(error, InterpreterError::BudgetExhausted { .. }));
+            assert_eq!(core.json_parse_temporary_bytes, before);
+        }
+    }
+
+    #[test]
+    fn captured_lookup_directory_expansion_is_admitted_before_enumeration() {
+        let mut core = core();
+        core.current_module_specifier = Some(format!("/sandbox/{}entry.cjs", "segment/".repeat(1500)));
+        let before = core.json_parse_temporary_bytes;
+        let error = core
+            .reserve_require_search_expansion("pick", None)
+            .unwrap_err();
+        assert!(matches!(error, InterpreterError::MemoryBudgetExceeded { .. }));
+        assert_eq!(core.json_parse_temporary_bytes, before);
+        // A builtin has no directory expansion; its metadata policy still
+        // runs in the caller, independently of this scratch reservation.
+        assert_eq!(core.reserve_require_search_expansion("node:fs", None).unwrap(), 0);
     }
 }

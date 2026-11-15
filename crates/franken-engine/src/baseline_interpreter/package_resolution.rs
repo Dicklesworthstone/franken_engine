@@ -834,6 +834,207 @@ impl InterpreterCore {
         })
     }
 
+    /// Normalize a caller-selected search directory without granting it a
+    /// new filesystem root. Check the nearest existing ancestor as well as the
+    /// lexical path, including when the directory itself does not exist.
+    fn contained_require_search_base(
+        &self,
+        specifier: &str,
+        root: &Path,
+        path: &Path,
+    ) -> Result<PathBuf, InterpreterError> {
+        let refuse = || InterpreterError::ModuleLoweringFailed {
+            specifier: specifier.to_string(),
+            error: "CommonJS search path escapes or cannot authenticate the module root".to_string(),
+        };
+        let joined = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            root.join(path)
+        };
+        let mut normalized = PathBuf::new();
+        for component in joined.components() {
+            match component {
+                std::path::Component::CurDir => {}
+                std::path::Component::ParentDir => {
+                    normalized.pop();
+                }
+                component => normalized.push(component.as_os_str()),
+            }
+        }
+        if !normalized.starts_with(root) {
+            return Err(refuse());
+        }
+        let mut ancestor = normalized.as_path();
+        loop {
+            match std::fs::symlink_metadata(ancestor) {
+                Ok(_) => {
+                    let canonical = ancestor.canonicalize().map_err(|_| refuse())?;
+                    if !canonical.starts_with(root) {
+                        return Err(refuse());
+                    }
+                    break;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    ancestor = ancestor.parent().ok_or_else(refuse)?;
+                }
+                Err(_) => return Err(refuse()),
+            }
+        }
+        Ok(normalized)
+    }
+
+    fn commonjs_lookup_start(
+        &self,
+        specifier: &str,
+    ) -> Result<(PathBuf, PathBuf), InterpreterError> {
+        let root = self.canonical_module_root_path().ok_or_else(|| {
+            InterpreterError::ModuleLoweringFailed {
+                specifier: specifier.to_string(),
+                error: "CommonJS search paths require an authenticated module root".to_string(),
+            }
+        })?;
+        let directory = self
+            .current_module_specifier
+            .as_deref()
+            .and_then(|caller| Path::new(caller).parent())
+            .unwrap_or(&root);
+        let start = self.contained_require_search_base(specifier, &root, directory)?;
+        Ok((root, start))
+    }
+
+    fn commonjs_node_module_directories(start: &Path, root: &Path) -> Vec<PathBuf> {
+        start
+            .ancestors()
+            .take_while(|directory| directory.starts_with(root))
+            .filter(|directory| directory.file_name().is_none_or(|name| name != "node_modules"))
+            .map(|directory| directory.join("node_modules"))
+            .collect()
+    }
+
+    pub(super) fn require_lookup_directories(
+        &self,
+        specifier: &str,
+    ) -> Result<Vec<String>, InterpreterError> {
+        let (root, start) = self.commonjs_lookup_start(specifier)?;
+        let directories = if crate::module_resolver::is_commonjs_relative_specifier(specifier) {
+            vec![start]
+        } else {
+            Self::commonjs_node_module_directories(&start, &root)
+        };
+        // Ambient NODE_PATH, home directories and installation-wide modules
+        // have not been admitted to this execution's authority.
+        Ok(directories
+            .into_iter()
+            .map(|directory| directory.display().to_string())
+            .collect())
+    }
+
+    pub(super) fn resolve_require_specifier_from_paths(
+        &self,
+        specifier: &str,
+        paths: &[String],
+    ) -> Result<String, InterpreterError> {
+        let failed = |reason| InterpreterError::ModuleResolutionFailed {
+            specifier: specifier.to_string(),
+            reason,
+        };
+        let (root, caller) = self.commonjs_lookup_start(specifier)?;
+        let relative = crate::module_resolver::is_commonjs_relative_specifier(specifier);
+        let mut directories = Vec::new();
+        let mut seen = BTreeSet::new();
+        for path in paths {
+            let start = self.contained_require_search_base(specifier, &root, Path::new(path))?;
+            let expanded = if relative {
+                vec![start]
+            } else {
+                Self::commonjs_node_module_directories(&start, &root)
+            };
+            for directory in expanded {
+                if seen.insert(directory.clone()) {
+                    directories.push(directory);
+                }
+            }
+        }
+        // Private imports and self references belong to the original caller.
+        // Absolute requests retain the loader's existing absolute-path policy.
+        if specifier.starts_with('#') || Path::new(specifier).is_absolute() {
+            return self.resolve_require_specifier(specifier);
+        }
+        let conditions = self.effective_module_conditions(specifier, REQUIRE_EXPORT_CONDITIONS)?;
+        let package = if relative {
+            None
+        } else {
+            Some(split_package_specifier(specifier).ok_or_else(|| {
+                failed(ModuleResolutionFailureReason::MalformedSpecifier)
+            })?)
+        };
+        if let Some((name, subpath)) = package
+            && let Some((scope, manifest)) =
+                self.require_package_scope(specifier, &caller, &root)?
+            && manifest.name.as_ref().and_then(serde_json::Value::as_str) == Some(name)
+            && let Some(exports) = manifest.exports.as_ref()
+        {
+            let target =
+                resolve_package_exports(&scope, &format!(".{subpath}"), exports, &conditions)
+                    .map_err(|reason| {
+                        failed(ModuleResolutionFailureReason::Other(format!(
+                            "package `{name}` {reason}"
+                        )))
+                    })?;
+            if !target.is_file() {
+                return Err(failed(ModuleResolutionFailureReason::ModuleNotFound));
+            }
+            self.contained_require_search_base(specifier, &root, &target)?;
+            let canonical = self.canonicalize_module_candidate(specifier, &target)?;
+            return Ok(self.module_key_for_canonical_path(&canonical));
+        }
+        for directory in directories {
+            self.contained_require_search_base(specifier, &root, &directory)?;
+            if let Some((name, subpath)) = package {
+                let package_directory = directory.join(name);
+                let manifest =
+                    self.read_contained_package_manifest(specifier, &package_directory)?;
+                if let Some(exports) = manifest
+                    .as_ref()
+                    .and_then(|manifest| manifest.exports.as_ref())
+                {
+                    let target = resolve_package_exports(
+                        &package_directory,
+                        &format!(".{subpath}"),
+                        exports,
+                        &conditions,
+                    )
+                    .map_err(|reason| {
+                        failed(ModuleResolutionFailureReason::Other(format!(
+                            "package `{name}` {reason}"
+                        )))
+                    })?;
+                    // A selected exports entry owns the answer even if missing;
+                    // another installation cannot replace the selected package.
+                    if !target.is_file() {
+                        return Err(failed(ModuleResolutionFailureReason::ModuleNotFound));
+                    }
+                    self.contained_require_search_base(specifier, &root, &target)?;
+                    let canonical = self.canonicalize_module_candidate(specifier, &target)?;
+                    return Ok(self.module_key_for_canonical_path(&canonical));
+                }
+            }
+            let candidate = self.contained_require_search_base(
+                specifier,
+                &root,
+                &directory.join(specifier),
+            )?;
+            let force_directory = matches!(specifier, "." | "..") || specifier.ends_with('/');
+            if let Some(target) = self.resolve_require_candidate(&candidate, force_directory)? {
+                self.contained_require_search_base(specifier, &root, &target)?;
+                let canonical = self.canonicalize_module_candidate(specifier, &target)?;
+                return Ok(self.module_key_for_canonical_path(&canonical));
+            }
+        }
+        Err(failed(ModuleResolutionFailureReason::ModuleNotFound))
+    }
+
     /// Resolve a bare `require` specifier the way Node does for CommonJS:
     /// core modules first, then each `node_modules` directory from the
     /// requiring module's directory up to the module root, reading the

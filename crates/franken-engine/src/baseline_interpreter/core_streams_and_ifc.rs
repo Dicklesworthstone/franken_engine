@@ -11152,6 +11152,15 @@ impl InterpreterCore {
         specifier: &str,
         style: ImportStyle,
     ) -> Result<MetadataResolutionOutcome, InterpreterError> {
+        self.resolve_installed_module_metadata_from_paths(specifier, style, None)
+    }
+
+    pub(super) fn resolve_installed_module_metadata_from_paths(
+        &self,
+        specifier: &str,
+        style: ImportStyle,
+        paths: Option<&[String]>,
+    ) -> Result<MetadataResolutionOutcome, InterpreterError> {
         let installed =
             self.module_resolver
                 .as_ref()
@@ -11175,23 +11184,29 @@ impl InterpreterCore {
                     .unwrap_or_else(|| installed.resolver.entry_referrer()),
             )
             .with_compatibility_mode(CompatibilityMode::NodeCompat);
-        let resolved = installed
-            .resolver
-            .resolve_metadata(&request, &installed.context)
-            .map_err(|error| {
-                if let Some(reason) = ModuleResolutionFailureReason::from_captured_code(error.code)
-                {
-                    InterpreterError::ModuleResolutionFailed {
-                        specifier: specifier.to_string(),
-                        reason,
-                    }
-                } else {
-                    InterpreterError::ModuleLoweringFailed {
-                        specifier: specifier.to_string(),
-                        error: format!("closed-world module resolution refused: {error}"),
-                    }
+        let resolved = match paths {
+            Some(paths) => installed.resolver.resolve_require_metadata_from_paths(
+                &request,
+                paths,
+                &installed.context,
+            ),
+            None => installed
+                .resolver
+                .resolve_metadata(&request, &installed.context),
+        }
+        .map_err(|error| {
+            if let Some(reason) = ModuleResolutionFailureReason::from_captured_code(error.code) {
+                InterpreterError::ModuleResolutionFailed {
+                    specifier: specifier.to_string(),
+                    reason,
                 }
-            })?;
+            } else {
+                InterpreterError::ModuleLoweringFailed {
+                    specifier: specifier.to_string(),
+                    error: format!("closed-world module resolution refused: {error}"),
+                }
+            }
+        })?;
         let metadata = &resolved.module.metadata;
         let metadata_bytes = [
             metadata.id.as_str(),

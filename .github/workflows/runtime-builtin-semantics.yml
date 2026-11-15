@@ -102,6 +102,16 @@ jobs:
           set -euo pipefail
           rustfmt --edition 2024 --config skip_children=true --check \
             crates/franken-engine/src/baseline_interpreter.rs \
+            crates/franken-engine/src/baseline_interpreter/core_math_and_registers.rs \
+            crates/franken-engine/src/baseline_interpreter/core_objects_and_descriptors.rs \
+            crates/franken-engine/src/baseline_interpreter/core_dispatch_and_arrays.rs \
+            crates/franken-engine/src/baseline_interpreter/core_compact_and_promises.rs \
+            crates/franken-engine/src/baseline_interpreter/core_streams_and_ifc.rs \
+            crates/franken-engine/src/baseline_interpreter/package_resolution.rs \
+            crates/franken-engine/src/baseline_interpreter/tests_core_suite.rs \
+            crates/franken-engine/src/module_resolver.rs \
+            crates/franken-engine/tests/crypto_builtin_bd_2z157.rs \
+            crates/franken-engine/tests/runtime_module_resolver_execution.rs \
             crates/franken-engine/src/baseline_interpreter/object_integrity.rs \
             crates/franken-engine/src/lowering_pipeline.rs \
             crates/franken-engine/tests/builtin_prototype_own_methods.rs \
@@ -136,6 +146,7 @@ jobs:
             --test module_namespace_to_string_tag_bd_9vouw_399 \
             --test object_json_globals_bd9a8cz2 \
             --test crypto_builtin_bd_2z157 \
+            --test runtime_module_resolver_execution \
             -- --nocapture --test-threads=1
 
       - name: Verify asymmetric key authority, reclamation, and allocation rollback
@@ -145,6 +156,22 @@ jobs:
           set -euo pipefail
           cargo test --locked --no-default-features -p frankenengine-engine --lib \
             bd_53l89 -- --nocapture --test-threads=1
+
+      - name: Verify captured CommonJS search directories and metadata policy
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --no-default-features -p frankenengine-engine --lib \
+            commonjs_search_paths_tests:: -- --nocapture --test-threads=1
+
+      - name: Verify CommonJS search expansion admission and scratch release
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --no-default-features -p frankenengine-engine --lib \
+            require_search_expansion_budget_tests:: -- --nocapture --test-threads=1
 
       - name: Verify IR schema and global declaration invariants
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}

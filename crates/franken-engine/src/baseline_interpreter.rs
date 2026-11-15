@@ -3959,6 +3959,8 @@ pub enum BuiltinFunctionKind {
     /// its Writable has discharged the outstanding backpressure obligation.
     /// Append only: builtin ordinals participate in deterministic hashing.
     StreamReadablePipeDrain,
+    /// Captured CommonJS lookup-directory inspection (append-only builtin tag).
+    RequireResolvePaths,
 }
 
 /// Annex B B.2.2.2-14: each String HTML method's tag and attribute name.
@@ -4177,6 +4179,15 @@ impl BuiltinFunction {
             module_specifier: require.module_specifier.clone(),
             iterator_handle: None,
             bound_object: require.bound_object,
+        }
+    }
+
+    fn require_resolve_paths(resolve: &BuiltinFunction) -> Self {
+        Self {
+            kind: BuiltinFunctionKind::RequireResolvePaths,
+            module_specifier: resolve.module_specifier.clone(),
+            iterator_handle: None,
+            bound_object: resolve.bound_object,
         }
     }
 
@@ -5438,6 +5449,7 @@ impl BuiltinFunction {
             BuiltinFunctionKind::RequireResolve | BuiltinFunctionKind::ImportMetaResolve => {
                 "resolve"
             }
+            BuiltinFunctionKind::RequireResolvePaths => "paths",
             BuiltinFunctionKind::FunctionConstructor => "Function",
             BuiltinFunctionKind::FunctionPrototype => "",
             BuiltinFunctionKind::NativeTimerPromisesGetter => "get",
@@ -6289,8 +6301,9 @@ impl BuiltinFunction {
             | K::PromiseAnyRejectElement
             | K::ModuleCreateRequire
             | K::ImportMetaResolve
+            | K::RequireResolvePaths
             | K::ObjectProtoSetter => Some(1),
-            K::PromiseCapabilityExecutor => Some(2),
+            K::PromiseCapabilityExecutor | K::RequireResolve => Some(2),
             K::IteratorNext
             | K::IteratorSelf
             | K::AsyncGeneratorIteratorSelf

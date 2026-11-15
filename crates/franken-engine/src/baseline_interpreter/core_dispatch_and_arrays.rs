@@ -519,7 +519,9 @@ impl InterpreterCore {
                 }
                 result
             }
-            BuiltinFunctionKind::RequireResolve | BuiltinFunctionKind::ImportMetaResolve => {
+            BuiltinFunctionKind::RequireResolve
+            | BuiltinFunctionKind::RequireResolvePaths
+            | BuiltinFunctionKind::ImportMetaResolve => {
                 check_hostcall_capability_gate(self, "module_load", self.ip as u32)?;
                 let args_label = self.join_arg_range_label(args)?;
                 let previous_module_specifier = self.current_module_specifier.clone();
@@ -531,8 +533,10 @@ impl InterpreterCore {
                 }
                 let result = if builtin.kind == BuiltinFunctionKind::ImportMetaResolve {
                     self.import_meta_resolve(Some(module), args)
+                } else if builtin.kind == BuiltinFunctionKind::RequireResolvePaths {
+                    self.require_resolve_paths(args)
                 } else {
-                    self.require_resolve(args)
+                    self.require_resolve(module, args)
                 };
                 self.current_module_specifier = previous_module_specifier;
                 if result.is_ok() {
@@ -14374,6 +14378,10 @@ impl InterpreterCore {
                                     Value::BuiltinFunction(BuiltinFunction::require_resolve(
                                         &builtin,
                                     ))
+                                } else if builtin.kind == BuiltinFunctionKind::RequireResolve
+                                    && property_key.as_str() == Some("paths")
+                                {
+                                    self.require_resolve_paths_property(module, &builtin)?
                                 } else if let Some(property_object) =
                                     Self::builtin_function_property_object(&builtin)
                                 {

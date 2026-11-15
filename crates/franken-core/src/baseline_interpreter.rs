@@ -19149,6 +19149,21 @@ impl InterpreterCore {
             .saturating_add(self.promise_in_flight_task_bytes)
     }
 
+    /// Recompute Promise-owned bytes without using retained payload totals.
+    /// The interpreter's full-memory oracle must remain independent of the
+    /// incremental accounting used around ordinary runtime mutations.
+    fn promise_runtime_memory_bytes_by_walk(&self) -> u64 {
+        self.promise_store
+            .estimated_memory_bytes_by_walk()
+            .saturating_add(self.event_loop.estimated_memory_bytes_by_walk())
+            .saturating_add(self.promise_combinators_memory_bytes())
+            .saturating_add(self.promise_combinator_watchers_memory_bytes())
+            .saturating_add(self.promise_reactions_memory_bytes())
+            .saturating_add(self.promise_resolving_functions_memory_bytes())
+            .saturating_add(self.timers_memory_bytes())
+            .saturating_add(self.promise_in_flight_task_bytes)
+    }
+
     /// Reprice the Promise runtime after a bracketed mutation, refusing
     /// atomically at the configured ceiling. Callers roll back their local
     /// mutation when this refuses.
@@ -19388,7 +19403,7 @@ impl InterpreterCore {
                 (self.async_generator_continuations.len() as u64)
                     .saturating_mul(Self::async_generator_continuation_bytes()),
             )
-            .saturating_add(self.promise_runtime_memory_bytes())
+            .saturating_add(self.promise_runtime_memory_bytes_by_walk())
             .saturating_add(self.module_state.retained_program_bytes)
             .saturating_add(self.temporarily_suspended_execution_bytes)
             .saturating_add(self.array_method_temporary_bytes)

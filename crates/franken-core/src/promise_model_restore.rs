@@ -38,10 +38,10 @@ impl<'de> Deserialize<'de> for MicrotaskQueue {
         }
 
         Ok(Self {
-            tasks: snapshot.tasks,
+            tasks: snapshot.tasks.into(),
             cursor: snapshot.cursor,
             enqueue_count: snapshot.enqueue_count,
-            witness: snapshot.witness,
+            witness: snapshot.witness.into(),
         })
     }
 }
@@ -67,6 +67,7 @@ impl<'de> Deserialize<'de> for MacrotaskQueue {
             (MacrotaskSource::IoCompletion, &snapshot.io_completion_tasks),
         ];
         let mut registrations = BTreeSet::new();
+        let mut label_bytes = 0u64;
         for (source, lane) in lanes {
             for entry in lane.iter() {
                 let task = &entry.task;
@@ -89,6 +90,8 @@ impl<'de> Deserialize<'de> for MacrotaskQueue {
                         "duplicate macrotask registration sequence",
                     ));
                 }
+                label_bytes =
+                    label_bytes.saturating_add(super::estimate_label_memory_bytes(&task.label));
             }
         }
 
@@ -97,6 +100,7 @@ impl<'de> Deserialize<'de> for MacrotaskQueue {
             timer_tasks: snapshot.timer_tasks,
             io_completion_tasks: snapshot.io_completion_tasks,
             next_registration_seq: snapshot.next_registration_seq,
+            label_bytes,
         })
     }
 }

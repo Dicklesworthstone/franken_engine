@@ -104,6 +104,90 @@ fn estimate_witness_log_memory_bytes(witness: &[WitnessEvent]) -> u64 {
     ))
 }
 
+/// Replay events with incrementally accounted retained payloads (bd-v7nlw).
+///
+/// The wire format remains the plain event sequence and every event remains
+/// retained. Mutable operations own the accounting delta; shared slice access
+/// cannot invalidate the total. Restoring a log rebuilds its derived total
+/// from the events rather than trusting serialized accounting metadata.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WitnessLog {
+    events: Vec<WitnessEvent>,
+    dynamic_bytes: u64,
+}
+
+impl WitnessLog {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push(&mut self, event: WitnessEvent) {
+        self.dynamic_bytes = self
+            .dynamic_bytes
+            .saturating_add(estimate_witness_event_memory_bytes(&event));
+        self.events.push(event);
+    }
+
+    pub fn pop(&mut self) -> Option<WitnessEvent> {
+        let event = self.events.pop()?;
+        self.dynamic_bytes = self
+            .dynamic_bytes
+            .saturating_sub(estimate_witness_event_memory_bytes(&event));
+        Some(event)
+    }
+
+    pub fn remove(&mut self, index: usize) -> WitnessEvent {
+        let event = self.events.remove(index);
+        self.dynamic_bytes = self
+            .dynamic_bytes
+            .saturating_sub(estimate_witness_event_memory_bytes(&event));
+        event
+    }
+
+    pub fn clear(&mut self) {
+        self.events.clear();
+        self.dynamic_bytes = 0;
+    }
+
+    fn memory_bytes(&self) -> u64 {
+        let bytes = estimate_vector_slot_bytes::<WitnessEvent>(self.events.len())
+            .saturating_add(self.dynamic_bytes);
+        #[cfg(test)]
+        debug_assert_eq!(bytes, estimate_witness_log_memory_bytes(&self.events));
+        bytes
+    }
+}
+
+impl std::ops::Deref for WitnessLog {
+    type Target = [WitnessEvent];
+
+    fn deref(&self) -> &Self::Target {
+        &self.events
+    }
+}
+
+impl From<Vec<WitnessEvent>> for WitnessLog {
+    fn from(events: Vec<WitnessEvent>) -> Self {
+        let dynamic_bytes = saturating_sum(events.iter().map(estimate_witness_event_memory_bytes));
+        Self {
+            events,
+            dynamic_bytes,
+        }
+    }
+}
+
+impl Serialize for WitnessLog {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.events.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for WitnessLog {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Vec::<WitnessEvent>::deserialize(deserializer).map(Self::from)
+    }
+}
+
 /// Dynamic payload retained by one queued microtask.
 pub(crate) fn estimate_microtask_payload_memory_bytes(task: &Microtask) -> u64 {
     match task {
@@ -245,6 +329,113 @@ impl PromiseRecord {
             creation_seq,
             rejection_handled: false,
         }
+    }
+}
+
+/// Payload beyond the record's inline arena slot. Kept as a full-walk oracle
+/// and used when reconstructing snapshots or repricing a changed record.
+fn estimate_promise_record_memory_bytes(record: &PromiseRecord) -> u64 {
+    let state_bytes = match &record.state {
+        PromiseState::Pending => 0,
+        PromiseState::Fulfilled(value) | PromiseState::Rejected(value) => {
+            estimate_js_value_memory_bytes(value)
+        }
+    };
+    state_bytes
+        .saturating_add(estimate_label_memory_bytes(&record.label))
+        .saturating_add(estimate_vector_slot_bytes::<PromiseReaction>(
+            record.reactions.len(),
+        ))
+        .saturating_add(saturating_sum(
+            record
+                .reactions
+                .iter()
+                .map(|reaction| estimate_label_memory_bytes(&reaction.label)),
+        ))
+}
+
+/// Promise records with a running payload total. Reads cannot mutate records;
+/// settlement reprices only the affected record, while reaction registration
+/// charges just the appended pair so pending fan-out also stays linear.
+#[derive(Debug, Clone, Default)]
+struct PromiseSlots {
+    records: Vec<PromiseRecord>,
+    dynamic_bytes: u64,
+}
+
+impl PromiseSlots {
+    fn push(&mut self, record: PromiseRecord) {
+        self.dynamic_bytes = self
+            .dynamic_bytes
+            .saturating_add(estimate_promise_record_memory_bytes(&record));
+        self.records.push(record);
+    }
+
+    fn pop(&mut self) -> Option<PromiseRecord> {
+        let record = self.records.pop()?;
+        self.dynamic_bytes = self
+            .dynamic_bytes
+            .saturating_sub(estimate_promise_record_memory_bytes(&record));
+        Some(record)
+    }
+
+    fn update<R>(
+        &mut self,
+        index: usize,
+        mutate: impl FnOnce(&mut PromiseRecord) -> R,
+    ) -> Option<R> {
+        let record = self.records.get_mut(index)?;
+        let previous = estimate_promise_record_memory_bytes(record);
+        let result = mutate(record);
+        self.dynamic_bytes = self
+            .dynamic_bytes
+            .saturating_sub(previous)
+            .saturating_add(estimate_promise_record_memory_bytes(record));
+        Some(result)
+    }
+
+    fn append_reactions(&mut self, index: usize, reactions: [PromiseReaction; 2]) -> Option<()> {
+        let record = self.records.get_mut(index)?;
+        let added_bytes = estimate_vector_slot_bytes::<PromiseReaction>(reactions.len())
+            .saturating_add(saturating_sum(
+                reactions
+                    .iter()
+                    .map(|reaction| estimate_label_memory_bytes(&reaction.label)),
+            ));
+        record.reactions.extend(reactions);
+        self.dynamic_bytes = self.dynamic_bytes.saturating_add(added_bytes);
+        Some(())
+    }
+
+    fn mark_rejection_handled(&mut self, index: usize) -> Option<()> {
+        self.records.get_mut(index)?.rejection_handled = true;
+        Some(())
+    }
+}
+
+impl std::ops::Deref for PromiseSlots {
+    type Target = [PromiseRecord];
+
+    fn deref(&self) -> &Self::Target {
+        &self.records
+    }
+}
+
+impl Serialize for PromiseSlots {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.records.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for PromiseSlots {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let records = Vec::<PromiseRecord>::deserialize(deserializer)?;
+        let dynamic_bytes =
+            saturating_sum(records.iter().map(estimate_promise_record_memory_bytes));
+        Ok(Self {
+            records,
+            dynamic_bytes,
+        })
     }
 }
 
@@ -459,19 +650,19 @@ impl std::fmt::Display for PromiseError {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PromiseStore {
     /// All promises, indexed by handle.
-    promises: Vec<PromiseRecord>,
+    promises: PromiseSlots,
     /// Monotonic creation counter.
     next_seq: u64,
     /// Witness log for replay.
-    witness: Vec<WitnessEvent>,
+    witness: WitnessLog,
 }
 
 impl PromiseStore {
     pub fn new() -> Self {
         Self {
-            promises: Vec::new(),
+            promises: PromiseSlots::default(),
             next_seq: 0,
-            witness: Vec::new(),
+            witness: WitnessLog::new(),
         }
     }
 
@@ -489,26 +680,22 @@ impl PromiseStore {
     /// Deterministic resident-memory estimate for every Promise-owned record,
     /// reaction, label, settled payload, and replay witness (bd-ur3tk.21).
     pub(crate) fn estimated_memory_bytes(&self) -> u64 {
+        let bytes = estimate_vector_slot_bytes::<PromiseRecord>(self.promises.len())
+            .saturating_add(self.promises.dynamic_bytes)
+            .saturating_add(self.witness.memory_bytes());
+        #[cfg(test)]
+        debug_assert_eq!(bytes, self.estimated_memory_bytes_by_walk());
+        bytes
+    }
+
+    /// Independent full-walk oracle for the running estimate (bd-v7nlw).
+    pub(crate) fn estimated_memory_bytes_by_walk(&self) -> u64 {
         estimate_vector_slot_bytes::<PromiseRecord>(self.promises.len())
-            .saturating_add(saturating_sum(self.promises.iter().map(|record| {
-                let state_bytes = match &record.state {
-                    PromiseState::Pending => 0,
-                    PromiseState::Fulfilled(value) | PromiseState::Rejected(value) => {
-                        estimate_js_value_memory_bytes(value)
-                    }
-                };
-                state_bytes
-                    .saturating_add(estimate_label_memory_bytes(&record.label))
-                    .saturating_add(estimate_vector_slot_bytes::<PromiseReaction>(
-                        record.reactions.len(),
-                    ))
-                    .saturating_add(saturating_sum(
-                        record
-                            .reactions
-                            .iter()
-                            .map(|reaction| estimate_label_memory_bytes(&reaction.label)),
-                    ))
-            })))
+            .saturating_add(saturating_sum(
+                self.promises
+                    .iter()
+                    .map(estimate_promise_record_memory_bytes),
+            ))
             .saturating_add(estimate_witness_log_memory_bytes(&self.witness))
     }
 
@@ -543,10 +730,14 @@ impl PromiseStore {
             .ok_or(PromiseError::InvalidHandle { handle })
     }
 
-    /// Get a mutable reference to a Promise by handle.
-    fn get_mut(&mut self, handle: PromiseHandle) -> Result<&mut PromiseRecord, PromiseError> {
+    /// Reprice exactly the record mutated by this operation.
+    fn update<R>(
+        &mut self,
+        handle: PromiseHandle,
+        mutate: impl FnOnce(&mut PromiseRecord) -> R,
+    ) -> Result<R, PromiseError> {
         self.promises
-            .get_mut(handle.0 as usize)
+            .update(handle.0 as usize, mutate)
             .ok_or(PromiseError::InvalidHandle { handle })
     }
 
@@ -564,10 +755,12 @@ impl PromiseStore {
         }
 
         // Drain reactions before mutating state to avoid borrow issues.
-        let record = self.get_mut(handle)?;
-        let reactions: Vec<PromiseReaction> = std::mem::take(&mut record.reactions);
-        record.state = PromiseState::Fulfilled(value.clone());
-        record.label = label.clone();
+        let reactions = self.update(handle, |record| {
+            let reactions = std::mem::take(&mut record.reactions);
+            record.state = PromiseState::Fulfilled(value.clone());
+            record.label = label.clone();
+            reactions
+        })?;
 
         self.witness.push(WitnessEvent::PromiseFulfilled {
             handle,
@@ -604,15 +797,17 @@ impl PromiseStore {
             return Err(PromiseError::AlreadySettled { handle });
         }
 
-        let record = self.get_mut(handle)?;
-        let reactions: Vec<PromiseReaction> = std::mem::take(&mut record.reactions);
-        let rejection_handled = record.rejection_handled
-            || reactions
-                .iter()
-                .any(|reaction| reaction.kind == ReactionKind::Reject);
-        record.state = PromiseState::Rejected(reason.clone());
-        record.label = label.clone();
-        record.rejection_handled = rejection_handled;
+        let reactions = self.update(handle, |record| {
+            let reactions = std::mem::take(&mut record.reactions);
+            let rejection_handled = record.rejection_handled
+                || reactions
+                    .iter()
+                    .any(|reaction| reaction.kind == ReactionKind::Reject);
+            record.state = PromiseState::Rejected(reason.clone());
+            record.label = label.clone();
+            record.rejection_handled = rejection_handled;
+            reactions
+        })?;
 
         self.witness.push(WitnessEvent::PromiseRejected {
             handle,
@@ -663,19 +858,25 @@ impl PromiseStore {
 
         match state {
             PromiseState::Pending => {
-                let record = self.get_mut(handle)?;
-                record.reactions.push(PromiseReaction {
-                    kind: ReactionKind::Fulfill,
-                    handler: on_fulfilled,
-                    result_promise,
-                    label: label.clone(),
-                });
-                record.reactions.push(PromiseReaction {
-                    kind: ReactionKind::Reject,
-                    handler: on_rejected,
-                    result_promise,
-                    label,
-                });
+                self.promises
+                    .append_reactions(
+                        handle.0 as usize,
+                        [
+                            PromiseReaction {
+                                kind: ReactionKind::Fulfill,
+                                handler: on_fulfilled,
+                                result_promise,
+                                label: label.clone(),
+                            },
+                            PromiseReaction {
+                                kind: ReactionKind::Reject,
+                                handler: on_rejected,
+                                result_promise,
+                                label,
+                            },
+                        ],
+                    )
+                    .ok_or(PromiseError::InvalidHandle { handle })?;
             }
             PromiseState::Fulfilled(value) => {
                 let effective_label = settlement_label.join(&label);
@@ -708,7 +909,9 @@ impl PromiseStore {
         // PerformPromiseThen marks the source handled even when the rejection
         // callback is the implicit thrower. In that case the queued rejection
         // job transfers any unhandled rejection to `result_promise`.
-        self.get_mut(handle)?.rejection_handled = true;
+        self.promises
+            .mark_rejection_handled(handle.0 as usize)
+            .ok_or(PromiseError::InvalidHandle { handle })?;
 
         Ok(result_promise)
     }
@@ -732,20 +935,28 @@ impl PromiseStore {
 
         match state {
             PromiseState::Pending => {
-                let record = self.get_mut(handle)?;
-                record.rejection_handled = true;
-                record.reactions.push(PromiseReaction {
-                    kind: ReactionKind::Fulfill,
-                    handler: None,
-                    result_promise,
-                    label: label.clone(),
-                });
-                record.reactions.push(PromiseReaction {
-                    kind: ReactionKind::Reject,
-                    handler: None,
-                    result_promise,
-                    label,
-                });
+                self.promises
+                    .append_reactions(
+                        handle.0 as usize,
+                        [
+                            PromiseReaction {
+                                kind: ReactionKind::Fulfill,
+                                handler: None,
+                                result_promise,
+                                label: label.clone(),
+                            },
+                            PromiseReaction {
+                                kind: ReactionKind::Reject,
+                                handler: None,
+                                result_promise,
+                                label,
+                            },
+                        ],
+                    )
+                    .ok_or(PromiseError::InvalidHandle { handle })?;
+                self.promises
+                    .mark_rejection_handled(handle.0 as usize)
+                    .ok_or(PromiseError::InvalidHandle { handle })?;
             }
             PromiseState::Fulfilled(value) => {
                 queue.enqueue(Microtask::PromiseReaction {
@@ -756,7 +967,9 @@ impl PromiseStore {
                 });
             }
             PromiseState::Rejected(reason) => {
-                self.get_mut(handle)?.rejection_handled = true;
+                self.promises
+                    .mark_rejection_handled(handle.0 as usize)
+                    .ok_or(PromiseError::InvalidHandle { handle })?;
                 queue.enqueue(Microtask::PromiseRejection {
                     reason,
                     result_promise,
@@ -830,6 +1043,65 @@ impl Default for PromiseStore {
 // Microtask queue
 // ---------------------------------------------------------------------------
 
+/// Physically retained tasks and their owned payload total. A dequeued task
+/// remains charged until compaction, matching the existing queue wire format
+/// and rollback semantics; accounting does not silently release its clone.
+#[derive(Debug, Clone, Default)]
+struct MicrotaskSlots {
+    tasks: Vec<Microtask>,
+    dynamic_bytes: u64,
+}
+
+impl MicrotaskSlots {
+    fn push(&mut self, task: Microtask) {
+        self.dynamic_bytes = self
+            .dynamic_bytes
+            .saturating_add(estimate_microtask_payload_memory_bytes(&task));
+        self.tasks.push(task);
+    }
+
+    fn pop(&mut self) -> Option<Microtask> {
+        let task = self.tasks.pop()?;
+        self.dynamic_bytes = self
+            .dynamic_bytes
+            .saturating_sub(estimate_microtask_payload_memory_bytes(&task));
+        Some(task)
+    }
+
+    fn drain_prefix(&mut self, count: usize) {
+        for task in self.tasks.drain(..count) {
+            self.dynamic_bytes = self
+                .dynamic_bytes
+                .saturating_sub(estimate_microtask_payload_memory_bytes(&task));
+        }
+    }
+}
+
+impl std::ops::Deref for MicrotaskSlots {
+    type Target = [Microtask];
+
+    fn deref(&self) -> &Self::Target {
+        &self.tasks
+    }
+}
+
+impl From<Vec<Microtask>> for MicrotaskSlots {
+    fn from(tasks: Vec<Microtask>) -> Self {
+        let dynamic_bytes =
+            saturating_sum(tasks.iter().map(estimate_microtask_payload_memory_bytes));
+        Self {
+            tasks,
+            dynamic_bytes,
+        }
+    }
+}
+
+impl Serialize for MicrotaskSlots {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.tasks.serialize(serializer)
+    }
+}
+
 /// Deterministic FIFO microtask queue.
 ///
 /// Microtasks are always drained completely before any macrotask executes.
@@ -837,22 +1109,22 @@ impl Default for PromiseStore {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct MicrotaskQueue {
     /// The queue.
-    tasks: Vec<Microtask>,
+    tasks: MicrotaskSlots,
     /// Read cursor — avoids Vec shifting.
     cursor: usize,
     /// Monotonic enqueue counter for witness events.
     enqueue_count: u64,
     /// Witness log.
-    witness: Vec<WitnessEvent>,
+    witness: WitnessLog,
 }
 
 impl MicrotaskQueue {
     pub fn new() -> Self {
         Self {
-            tasks: Vec::new(),
+            tasks: MicrotaskSlots::default(),
             cursor: 0,
             enqueue_count: 0,
-            witness: Vec::new(),
+            witness: WitnessLog::new(),
         }
     }
 
@@ -907,7 +1179,7 @@ impl MicrotaskQueue {
     /// Compact the internal buffer (call after draining a full turn).
     pub fn compact(&mut self) {
         if self.cursor > 0 {
-            self.tasks.drain(..self.cursor);
+            self.tasks.drain_prefix(self.cursor);
             self.cursor = 0;
         }
     }
@@ -916,6 +1188,16 @@ impl MicrotaskQueue {
     /// task buffer (dequeued entries stay resident until [`Self::compact`])
     /// and the enqueue/dequeue witness log (bd-ur3tk.21).
     pub(crate) fn estimated_memory_bytes(&self) -> u64 {
+        let bytes = estimate_vector_slot_bytes::<Microtask>(self.tasks.len())
+            .saturating_add(self.tasks.dynamic_bytes)
+            .saturating_add(self.witness.memory_bytes());
+        #[cfg(test)]
+        debug_assert_eq!(bytes, self.estimated_memory_bytes_by_walk());
+        bytes
+    }
+
+    /// Full walk over retained tasks and witnesses, independent of caches.
+    pub(crate) fn estimated_memory_bytes_by_walk(&self) -> u64 {
         estimate_vector_slot_bytes::<Microtask>(self.tasks.len())
             .saturating_add(saturating_sum(
                 self.tasks
@@ -971,6 +1253,9 @@ pub struct MacrotaskQueue {
     timer_tasks: BinaryHeap<MacrotaskHeapEntry>,
     io_completion_tasks: BinaryHeap<MacrotaskHeapEntry>,
     next_registration_seq: u64,
+    /// Derived retained label bytes, rebuilt after queue validation on restore.
+    #[serde(skip)]
+    label_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1004,6 +1289,7 @@ impl MacrotaskQueue {
             timer_tasks: BinaryHeap::new(),
             io_completion_tasks: BinaryHeap::new(),
             next_registration_seq: 0,
+            label_bytes: 0,
         }
     }
 
@@ -1024,6 +1310,9 @@ impl MacrotaskQueue {
             registration_seq: seq,
             label,
         };
+        self.label_bytes = self
+            .label_bytes
+            .saturating_add(estimate_label_memory_bytes(&task.label));
         self.tasks_for_source_mut(source)
             .push(MacrotaskHeapEntry { task });
         seq
@@ -1034,14 +1323,27 @@ impl MacrotaskQueue {
     /// Priority: source type (MessageChannel > Timer > IoCompletion),
     /// then earliest `scheduled_at`, then lowest `registration_seq`.
     pub fn dequeue_ready(&mut self, current_time_ms: u64) -> Option<Macrotask> {
-        Self::pop_ready_from(&mut self.message_channel_tasks, current_time_ms)
+        let task = Self::pop_ready_from(&mut self.message_channel_tasks, current_time_ms)
             .or_else(|| Self::pop_ready_from(&mut self.timer_tasks, current_time_ms))
-            .or_else(|| Self::pop_ready_from(&mut self.io_completion_tasks, current_time_ms))
+            .or_else(|| Self::pop_ready_from(&mut self.io_completion_tasks, current_time_ms))?;
+        self.label_bytes = self
+            .label_bytes
+            .saturating_sub(estimate_label_memory_bytes(&task.label));
+        Some(task)
     }
 
     /// Deterministic resident-memory estimate for every scheduled macrotask
     /// slot and its retained label payload (bd-ur3tk.21).
     pub(crate) fn estimated_memory_bytes(&self) -> u64 {
+        let bytes = estimate_vector_slot_bytes::<MacrotaskHeapEntry>(self.len())
+            .saturating_add(self.label_bytes);
+        #[cfg(test)]
+        debug_assert_eq!(bytes, self.estimated_memory_bytes_by_walk());
+        bytes
+    }
+
+    /// Full-walk reference for every scheduled slot and retained label.
+    pub(crate) fn estimated_memory_bytes_by_walk(&self) -> u64 {
         let heap_bytes = |heap: &BinaryHeap<MacrotaskHeapEntry>| {
             estimate_vector_slot_bytes::<MacrotaskHeapEntry>(heap.len()).saturating_add(
                 saturating_sum(
@@ -1088,7 +1390,10 @@ impl MacrotaskQueue {
                 break;
             }
         }
-        if removed.is_some() {
+        if let Some(task) = &removed {
+            self.label_bytes = self
+                .label_bytes
+                .saturating_sub(estimate_label_memory_bytes(&task.label));
             self.next_registration_seq = registration_seq;
         }
         removed
@@ -1169,7 +1474,7 @@ pub struct EventLoop {
     /// The virtual clock.
     pub clock: VirtualClock,
     /// Witness log for event loop level events.
-    pub witness: Vec<WitnessEvent>,
+    pub witness: WitnessLog,
     /// Maximum number of microtasks to drain per turn (safety limit).
     pub max_microtasks_per_turn: u64,
 }
@@ -1180,7 +1485,7 @@ impl EventLoop {
             microtasks: MicrotaskQueue::new(),
             macrotasks: MacrotaskQueue::new(),
             clock: VirtualClock::new(),
-            witness: Vec::new(),
+            witness: WitnessLog::new(),
             max_microtasks_per_turn: 100_000,
         }
     }
@@ -1192,6 +1497,14 @@ impl EventLoop {
         self.microtasks
             .estimated_memory_bytes()
             .saturating_add(self.macrotasks.estimated_memory_bytes())
+            .saturating_add(self.witness.memory_bytes())
+    }
+
+    /// Independent accounting oracle, including both queues and all events.
+    pub(crate) fn estimated_memory_bytes_by_walk(&self) -> u64 {
+        self.microtasks
+            .estimated_memory_bytes_by_walk()
+            .saturating_add(self.macrotasks.estimated_memory_bytes_by_walk())
             .saturating_add(estimate_witness_log_memory_bytes(&self.witness))
     }
 
@@ -3536,5 +3849,377 @@ mod tests {
                 assert_eq!(task1.registration_seq, task2.registration_seq);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod accounting_regressions {
+    use super::*;
+
+    fn owned_label() -> Label {
+        Label::Custom {
+            name: "tenant-private-promise-data".to_string(),
+            level: 6,
+        }
+    }
+
+    fn assert_store_and_queue(store: &PromiseStore, queue: &MicrotaskQueue) {
+        assert_eq!(
+            store.estimated_memory_bytes(),
+            store.estimated_memory_bytes_by_walk()
+        );
+        assert_eq!(
+            queue.estimated_memory_bytes(),
+            queue.estimated_memory_bytes_by_walk()
+        );
+    }
+
+    #[test]
+    fn witness_accounting_preserves_full_history_and_plain_array_snapshots() {
+        let events = vec![
+            WitnessEvent::PromiseCreated {
+                handle: PromiseHandle(0),
+                seq: 0,
+            },
+            WitnessEvent::PromiseFulfilled {
+                handle: PromiseHandle(0),
+                value: JsValue::Str("retained fulfillment".to_string()),
+                label: owned_label(),
+            },
+            WitnessEvent::PromiseRejected {
+                handle: PromiseHandle(1),
+                reason: JsValue::Str("retained rejection".to_string()),
+                label: owned_label(),
+            },
+        ];
+        let mut log = WitnessLog::new();
+        for event in &events {
+            log.push(event.clone());
+            assert_eq!(log.memory_bytes(), estimate_witness_log_memory_bytes(&log));
+        }
+        let snapshot = serde_json::to_value(&log).unwrap();
+        assert_eq!(snapshot, serde_json::to_value(&events).unwrap());
+        let mut restored: WitnessLog = serde_json::from_value(snapshot).unwrap();
+        assert_eq!(restored, log);
+        assert_eq!(restored.remove(1), events[1]);
+        assert_eq!(
+            restored.memory_bytes(),
+            estimate_witness_log_memory_bytes(&restored)
+        );
+        assert_eq!(restored.pop(), Some(events[2].clone()));
+        assert_eq!(
+            restored.memory_bytes(),
+            estimate_vector_slot_bytes::<WitnessEvent>(1)
+        );
+        restored.clear();
+        assert_eq!(restored.memory_bytes(), 0);
+        assert_eq!(restored.pop(), None);
+
+        // Accounting must not introduce the engine twin's bounded-history
+        // policy into the core model's complete replay log.
+        for index in 0..4_097 {
+            log.push(WitnessEvent::MicrotaskEnqueued { index });
+        }
+        assert_eq!(log.len(), events.len() + 4_097);
+        assert_eq!(log[0], events[0]);
+        assert_eq!(log.memory_bytes(), estimate_witness_log_memory_bytes(&log));
+    }
+
+    #[test]
+    fn promise_totals_survive_settlement_reactions_restore_and_refusal() {
+        for rejected in [false, true] {
+            for settled_first in [false, true] {
+                for awaiting in [false, true] {
+                    let mut store = PromiseStore::new();
+                    let mut queue = MicrotaskQueue::new();
+                    let source = store.create();
+                    let settle = |store: &mut PromiseStore, queue: &mut MicrotaskQueue| {
+                        let value = JsValue::Str("owned settled payload".repeat(8));
+                        if rejected {
+                            store.reject(source, value, owned_label(), queue).unwrap();
+                        } else {
+                            store.fulfill(source, value, owned_label(), queue).unwrap();
+                        }
+                    };
+                    assert_store_and_queue(&store, &queue);
+                    if settled_first {
+                        settle(&mut store, &mut queue);
+                        assert_store_and_queue(&store, &queue);
+                    }
+                    if awaiting {
+                        store
+                            .then_for_await(source, owned_label(), &mut queue)
+                            .unwrap();
+                    } else {
+                        store
+                            .then(
+                                source,
+                                Some(ClosureHandle(7)),
+                                None,
+                                owned_label(),
+                                &mut queue,
+                            )
+                            .unwrap();
+                    }
+                    assert_store_and_queue(&store, &queue);
+                    if !settled_first {
+                        settle(&mut store, &mut queue);
+                        assert_store_and_queue(&store, &queue);
+                    }
+                    assert_eq!(queue.pending_count(), 1);
+                    assert!(store.get(source).unwrap().reactions.is_empty());
+
+                    let snapshot = serde_json::to_value(&store).unwrap();
+                    assert_eq!(snapshot.as_object().unwrap().len(), 3);
+                    assert!(snapshot["promises"].is_array());
+                    assert!(snapshot["witness"].is_array());
+                    let mut restored: PromiseStore =
+                        serde_json::from_value(snapshot.clone()).unwrap();
+                    assert_eq!(
+                        restored.estimated_memory_bytes(),
+                        store.estimated_memory_bytes()
+                    );
+                    assert_eq!(serde_json::to_value(&restored).unwrap(), snapshot);
+                    assert!(
+                        restored
+                            .fulfill(source, JsValue::Int(1), Label::Public, &mut queue)
+                            .is_err()
+                    );
+                    assert!(
+                        restored
+                            .then(
+                                PromiseHandle(u32::MAX),
+                                None,
+                                None,
+                                owned_label(),
+                                &mut queue
+                            )
+                            .is_err()
+                    );
+                    assert_eq!(serde_json::to_value(&restored).unwrap(), snapshot);
+                    assert_store_and_queue(&restored, &queue);
+                    restored
+                        .then(
+                            source,
+                            None,
+                            Some(ClosureHandle(9)),
+                            owned_label(),
+                            &mut queue,
+                        )
+                        .unwrap();
+                    assert_store_and_queue(&restored, &queue);
+
+                    let before = restored.estimated_memory_bytes();
+                    let temporary = restored.create();
+                    assert!(restored.rollback_last_created(temporary));
+                    assert_eq!(restored.estimated_memory_bytes(), before);
+                    assert!(!restored.rollback_last_created(source));
+                    assert_store_and_queue(&restored, &queue);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pending_fanout_and_snapshot_continuation_keep_exact_totals() {
+        let mut store = PromiseStore::new();
+        let mut queue = MicrotaskQueue::new();
+        let source = store.create();
+        for index in 0..128 {
+            if index % 2 == 0 {
+                store
+                    .then(source, None, None, owned_label(), &mut queue)
+                    .unwrap();
+            } else {
+                store
+                    .then_for_await(source, owned_label(), &mut queue)
+                    .unwrap();
+            }
+            assert_store_and_queue(&store, &queue);
+        }
+        let mut restored: PromiseStore =
+            serde_json::from_str(&serde_json::to_string(&store).unwrap()).unwrap();
+        let mut cloned = restored.clone();
+        let cloned_before = cloned.estimated_memory_bytes();
+        restored
+            .fulfill(
+                source,
+                JsValue::Str("fanout result".to_string()),
+                owned_label(),
+                &mut queue,
+            )
+            .unwrap();
+        assert_eq!(queue.pending_count(), 128);
+        assert_store_and_queue(&restored, &queue);
+        assert_eq!(cloned.estimated_memory_bytes(), cloned_before);
+        cloned
+            .reject(
+                source,
+                JsValue::Str("fanout rejection".to_string()),
+                owned_label(),
+                &mut MicrotaskQueue::new(),
+            )
+            .unwrap();
+        assert_eq!(
+            cloned.estimated_memory_bytes(),
+            cloned.estimated_memory_bytes_by_walk()
+        );
+    }
+
+    #[test]
+    fn microtask_totals_follow_physical_retention_compaction_and_rollback() {
+        let tasks = [
+            Microtask::PromiseReaction {
+                handler: Some(ClosureHandle(2)),
+                argument: JsValue::Str("argument".repeat(7)),
+                result_promise: PromiseHandle(1),
+                label: owned_label(),
+            },
+            Microtask::PromiseRejection {
+                reason: JsValue::Str("reason".repeat(11)),
+                result_promise: PromiseHandle(2),
+                label: owned_label(),
+            },
+            Microtask::ResolveThenable {
+                promise: PromiseHandle(3),
+                then_handler: ClosureHandle(3),
+                thenable: JsValue::Str("thenable".repeat(13)),
+                label: owned_label(),
+            },
+            Microtask::ResolveThenableValue {
+                promise: PromiseHandle(4),
+                then: JsValue::Str("captured callable storage".repeat(5)),
+                thenable: JsValue::Str("captured receiver storage".repeat(3)),
+                label: owned_label(),
+            },
+        ];
+        let mut queue = MicrotaskQueue::new();
+        for task in &tasks {
+            queue.enqueue(task.clone());
+            assert_eq!(
+                queue.estimated_memory_bytes(),
+                queue.estimated_memory_bytes_by_walk()
+            );
+        }
+        let before_dequeue = queue.estimated_memory_bytes();
+        assert_eq!(queue.dequeue(), Some(tasks[0].clone()));
+        assert_eq!(
+            queue.estimated_memory_bytes(),
+            before_dequeue + estimate_vector_slot_bytes::<WitnessEvent>(1)
+        );
+        queue.rollback_last_dequeued();
+        assert_eq!(queue.estimated_memory_bytes(), before_dequeue);
+        assert_eq!(queue.dequeue(), Some(tasks[0].clone()));
+        assert_eq!(queue.dequeue(), Some(tasks[1].clone()));
+
+        let snapshot = serde_json::to_value(&queue).unwrap();
+        assert_eq!(snapshot.as_object().unwrap().len(), 4);
+        assert!(snapshot["tasks"].is_array());
+        assert!(snapshot["witness"].is_array());
+        let mut restored: MicrotaskQueue = serde_json::from_value(snapshot.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&restored).unwrap(), snapshot);
+        assert_eq!(
+            restored.estimated_memory_bytes(),
+            queue.estimated_memory_bytes()
+        );
+        let before_compact = restored.estimated_memory_bytes();
+        restored.compact();
+        let released = estimate_vector_slot_bytes::<Microtask>(2)
+            + estimate_microtask_payload_memory_bytes(&tasks[0])
+            + estimate_microtask_payload_memory_bytes(&tasks[1]);
+        assert_eq!(restored.estimated_memory_bytes(), before_compact - released);
+        assert_eq!(restored.pending_count(), 2);
+        let before_enqueue = restored.estimated_memory_bytes();
+        restored.enqueue(tasks[0].clone());
+        assert_eq!(restored.rollback_last_enqueued(), Some(tasks[0].clone()));
+        assert_eq!(restored.estimated_memory_bytes(), before_enqueue);
+        assert_eq!(restored.dequeue(), Some(tasks[2].clone()));
+        assert_eq!(restored.dequeue(), Some(tasks[3].clone()));
+        assert!(restored.rollback_last_enqueued().is_none());
+        restored.compact();
+        assert_eq!(
+            restored.estimated_memory_bytes(),
+            estimate_witness_log_memory_bytes(restored.witness_log())
+        );
+        assert_eq!(
+            restored.estimated_memory_bytes(),
+            restored.estimated_memory_bytes_by_walk()
+        );
+        let drained_snapshot = serde_json::to_string(&restored).unwrap();
+        let drained: MicrotaskQueue = serde_json::from_str(&drained_snapshot).unwrap();
+        assert_eq!(
+            drained.estimated_memory_bytes(),
+            restored.estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn event_loop_totals_cover_all_lanes_restore_execution_and_witness_clear() {
+        let mut event_loop = EventLoop::new();
+        for source in [
+            MacrotaskSource::Timer,
+            MacrotaskSource::MessageChannel,
+            MacrotaskSource::IoCompletion,
+        ] {
+            let before = event_loop.estimated_memory_bytes();
+            let sequence =
+                event_loop
+                    .macrotasks
+                    .schedule(source, ClosureHandle(1), 10, owned_label());
+            assert_eq!(
+                event_loop.estimated_memory_bytes(),
+                event_loop.estimated_memory_bytes_by_walk()
+            );
+            assert!(
+                event_loop
+                    .macrotasks
+                    .rollback_last_scheduled(sequence + 1)
+                    .is_none()
+            );
+            assert!(
+                event_loop
+                    .macrotasks
+                    .rollback_last_scheduled(sequence)
+                    .is_some()
+            );
+            assert_eq!(event_loop.estimated_memory_bytes(), before);
+            event_loop
+                .macrotasks
+                .schedule(source, ClosureHandle(1), 10, owned_label());
+        }
+        assert!(event_loop.macrotasks.dequeue_ready(9).is_none());
+        event_loop.witness.push(WitnessEvent::PromiseFulfilled {
+            handle: PromiseHandle(1),
+            value: JsValue::Str("external witness payload".to_string()),
+            label: owned_label(),
+        });
+        let snapshot = serde_json::to_value(&event_loop).unwrap();
+        assert_eq!(snapshot["macrotasks"].as_object().unwrap().len(), 4);
+        let mut restored: EventLoop = serde_json::from_value(snapshot.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&restored).unwrap(), snapshot);
+        assert_eq!(
+            restored.estimated_memory_bytes(),
+            event_loop.estimated_memory_bytes()
+        );
+        for expected_source in [
+            MacrotaskSource::MessageChannel,
+            MacrotaskSource::Timer,
+            MacrotaskSource::IoCompletion,
+        ] {
+            assert_eq!(restored.turn().macrotask.unwrap().source, expected_source);
+            assert_eq!(
+                restored.estimated_memory_bytes(),
+                restored.estimated_memory_bytes_by_walk()
+            );
+        }
+        assert_eq!(restored.macrotasks.estimated_memory_bytes(), 0);
+        assert!(restored.turn().macrotask.is_none());
+        restored.witness.clear();
+        assert_eq!(restored.estimated_memory_bytes(), 0);
+        assert_eq!(event_loop.macrotasks.len(), 3);
+        assert_eq!(
+            event_loop.estimated_memory_bytes(),
+            event_loop.estimated_memory_bytes_by_walk()
+        );
     }
 }

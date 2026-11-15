@@ -7578,7 +7578,7 @@ fn tls_alias_escape_mutation_shadow_and_value_reads_fail_closed_bd_70cv1() {
 }
 
 #[test]
-fn stream_named_esm_constructors_keep_distinct_native_builtins_bd_fw7zd() {
+fn stream_named_esm_constructors_use_the_shared_module_bd_fw7zd() {
     let ops = lower_esm_source_ops(
         "import { Readable, Writable, PassThrough } from 'node:stream';\n\
          const readable = new Readable({ highWaterMark: 4, read() {} });\n\
@@ -7586,18 +7586,11 @@ fn stream_named_esm_constructors_keep_distinct_native_builtins_bd_fw7zd() {
          const passthrough = new PassThrough({ highWaterMark: 16 });\n",
         "stream_constructors_bd_fw7zd.mjs",
     );
-    assert_eq!(count_hostcall_deep(&ops, "builtin:StreamReadable"), 1);
-    assert_eq!(count_hostcall_deep(&ops, "builtin:StreamWritable"), 1);
-    assert_eq!(count_hostcall_deep(&ops, "builtin:StreamPassThrough"), 1);
-    assert_eq!(count_hostcall_deep(&ops, "builtin:StreamReadableFrom"), 0);
-    assert!(
-        !ops.iter()
-            .any(|op| matches!(op, Ir1Op::ImportModule { .. }))
-    );
+    assert_stream_module_ops(&ops, "named ESM constructors");
 }
 
 #[test]
-fn stream_cjs_pipeline_uses_the_shared_module_and_esm_keeps_native_calls_bd_fw7zd_12() {
+fn stream_cjs_and_esm_pipelines_use_the_shared_module_bd_fw7zd_12() {
     let source = r#"
         const { Readable, Writable, Transform, pipeline, promises } = require('stream');
         const upper = new Transform({ transform(chunk, encoding, callback) { callback(null, chunk); } });
@@ -7616,12 +7609,7 @@ fn stream_cjs_pipeline_uses_the_shared_module_and_esm_keeps_native_calls_bd_fw7z
          await pipeline(Readable.from(['x']), t, w);",
         "stream_pipeline_bd_fw7zd_12.mjs",
     );
-    assert_eq!(count_hostcall_deep(&ops, "builtin:StreamTransform"), 1);
-    assert_eq!(count_hostcall_deep(&ops, "builtin:StreamPipeline"), 1);
-    assert_eq!(
-        count_hostcall_deep(&ops, "builtin:StreamPromisesPipeline"),
-        1
-    );
+    assert_stream_module_ops(&ops, "named ESM pipelines");
 }
 
 /// bd-305gi.2: every free CJS stream load uses the engine-owned module,
@@ -7629,6 +7617,10 @@ fn stream_cjs_pipeline_uses_the_shared_module_and_esm_keeps_native_calls_bd_fw7z
 /// process.nextTick HostCall marks the complete scheduler integration.
 fn assert_served_by_stream_module(source: &str, label: &str) {
     let ops = lower_script_source_ops(source, label);
+    assert_stream_module_ops(&ops, label);
+}
+
+fn assert_stream_module_ops(ops: &[Ir1Op], label: &str) {
     for kernel in [
         "builtin:StreamReadable",
         "builtin:StreamReadableFrom",
@@ -7639,20 +7631,20 @@ fn assert_served_by_stream_module(source: &str, label: &str) {
         "builtin:StreamPromisesPipeline",
     ] {
         assert_eq!(
-            count_hostcall_deep(&ops, kernel),
+            count_hostcall_deep(ops, kernel),
             0,
-            "{label}: {kernel} for {source}"
+            "{label}: unexpected native kernel {kernel}"
         );
     }
     assert!(
-        count_hostcall_deep(&ops, "builtin:ProcessNextTick") > 0,
-        "{label}: the stream module was not materialized for {source}"
+        count_hostcall_deep(ops, "builtin:ProcessNextTick") > 0,
+        "{label}: the stream module was not materialized"
     );
-    assert_eq!(count_hostcall_deep(&ops, "module:require"), 0, "{label}");
+    assert_eq!(count_hostcall_deep(ops, "module:require"), 0, "{label}");
     assert!(
         !ops.iter()
             .any(|op| matches!(op, Ir1Op::ImportModule { .. })),
-        "{label}: a pure CJS stream load must not require ambient module authority"
+        "{label}: a pure stream load must not require ambient module authority"
     );
 }
 
@@ -7680,18 +7672,14 @@ fn stream_transform_pipeline_escapes_get_the_module_not_the_kernel_bd_fw7zd_12()
 }
 
 #[test]
-fn stream_passthrough_named_import_is_static_and_shadow_safe_bd_fw7zd() {
+fn stream_passthrough_named_import_uses_ordinary_bindings_bd_fw7zd() {
     let ops = lower_esm_source_ops(
         "import { PassThrough as Through } from 'node:stream';\n\
          new Through();\n\
          function shadowed(Through) { return new Through(); }\n",
         "stream_passthrough_import_bd_fw7zd.mjs",
     );
-    assert_eq!(count_hostcall_deep(&ops, "builtin:StreamPassThrough"), 1);
-    assert!(
-        !ops.iter()
-            .any(|op| matches!(op, Ir1Op::ImportModule { .. }))
-    );
+    assert_stream_module_ops(&ops, "aliased and shadowed ESM PassThrough");
 }
 
 #[test]
@@ -7731,17 +7719,12 @@ fn stream_passthrough_elision_requires_every_unshadowed_use_bd_fw7zd() {
         ),
     ] {
         let ops = lower_esm_source_ops(source, &format!("stream_esm_{label}_bd_fw7zd.mjs"));
-        assert_eq!(count_hostcall_deep(&ops, "builtin:StreamPassThrough"), 0);
-        assert!(
-            ops.iter()
-                .any(|op| matches!(op, Ir1Op::ImportModule { .. })),
-            "{label} must retain its unsupported ESM module load"
-        );
+        assert_stream_module_ops(&ops, label);
     }
 }
 
 #[test]
-fn stream_constructor_sentinels_do_not_cross_parameter_shadows_bd_fw7zd() {
+fn stream_esm_constructor_bindings_preserve_parameter_shadows_bd_fw7zd() {
     let ops = lower_esm_source_ops(
         "import { Readable, Writable } from 'stream';\n\
          new Readable({ read() {} });\n\
@@ -7752,8 +7735,7 @@ fn stream_constructor_sentinels_do_not_cross_parameter_shadows_bd_fw7zd() {
          }\n",
         "stream_constructor_shadows_bd_fw7zd.mjs",
     );
-    assert_eq!(count_hostcall_deep(&ops, "builtin:StreamReadable"), 1);
-    assert_eq!(count_hostcall_deep(&ops, "builtin:StreamWritable"), 1);
+    assert_stream_module_ops(&ops, "ESM constructors and parameter shadows");
 }
 
 #[test]

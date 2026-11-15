@@ -10,8 +10,8 @@
 //! subclassing through `class` and util.inherits, pipe backpressure,
 //! pipeline (callback, promises and async-generator stages), finished,
 //! Duplex and the legacy Stream. Both namespace and direct destructured CJS
-//! loads run the same module. Native facade probes use explicit named ESM
-//! imports in stream_builtin_bd_m8vaa.
+//! loads and ESM imports run the same module. Native facade probes use
+//! explicit typed hostcalls in stream_builtin_bd_m8vaa.
 
 use std::collections::BTreeMap;
 
@@ -104,6 +104,123 @@ fn isolated_cjs_async_sources_need_no_module_or_io_authority_bd_305gi_2() {
             "lane {lane:?}"
         );
     }
+}
+
+#[test]
+fn esm_async_sources_share_cjs_iteration_cleanup_and_rejection() {
+    let (_, body) = include_str!("fixtures/stream_cjs_async_sources.js")
+        .split_once('\n')
+        .expect("fixture starts with its Readable import");
+    for import in [
+        "import { Readable } from 'stream';",
+        "import { Readable } from 'node:stream';",
+        "import stream from 'stream'; const { Readable } = stream;",
+        "import * as stream from 'node:stream'; const { Readable } = stream;",
+    ] {
+        assert_eq!(
+            console_line(&format!("{import}\n{body}")),
+            "promised:a,b,c,end\ngenerated:1,2,end\ncancelled:first,finally,close\nrejected:same-error,close",
+            "{import}"
+        );
+    }
+}
+
+#[test]
+fn esm_stream_sources_need_no_module_or_io_authority_on_either_lane() {
+    let (_, body) = include_str!("fixtures/stream_cjs_async_sources.js")
+        .split_once('\n')
+        .expect("fixture starts with its Readable import");
+    let source = format!("import {{ Readable }} from 'node:stream';\n{body}");
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let mut runtime = ExecutionOrchestrator::new(OrchestratorConfig {
+            force_lane: Some(lane),
+            ..OrchestratorConfig::default()
+        });
+        let package = ExtensionPackage {
+            extension_id: "esm-async-stream-sources".into(),
+            source: source.clone(),
+            source_file: None,
+            module_root: None,
+            capabilities: [
+                "vm_dispatch",
+                "heap_allocate",
+                "builtin",
+                "console",
+                "timer",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+            version: "1.0.0".into(),
+            metadata: BTreeMap::new(),
+        };
+        let result = runtime
+            .execute(&package)
+            .expect("pure ESM sources complete");
+        assert_eq!(
+            result
+                .console_output
+                .iter()
+                .map(|entry| entry.message.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "promised:a,b,c,end",
+                "generated:1,2,end",
+                "cancelled:first,finally,close",
+                "rejected:same-error,close"
+            ],
+            "lane {lane:?}"
+        );
+    }
+}
+
+#[test]
+fn esm_stream_namespaces_share_cjs_constructors_and_promises() {
+    let source = r#"
+import stream, { Readable, Writable, Transform, PassThrough, Duplex } from 'stream';
+import * as namespaced from 'node:stream';
+import promises, { pipeline, finished } from 'node:stream/promises';
+const cjs = require('node:stream');
+const otherPromises = require('stream/promises');
+console.log(stream === cjs, Readable === cjs.Readable, Writable === cjs.Writable,
+  Transform === cjs.Transform, PassThrough === cjs.PassThrough, Duplex === cjs.Duplex);
+console.log(namespaced.Readable === Readable, namespaced.Writable === Writable,
+  promises === cjs.promises, otherPromises === promises,
+  pipeline === promises.pipeline, finished === promises.finished);
+const readable = Readable.from([]);
+console.log(readable instanceof cjs.Readable, new Writable() instanceof stream.Writable);
+readable.resume();
+"#;
+    assert_eq!(
+        console_line(source),
+        "true true true true true true\ntrue true true true true true\ntrue true"
+    );
+}
+
+#[test]
+fn esm_stream_pipeline_handles_async_sources_backpressure_and_consumers() {
+    let source = r#"
+import { Readable, Writable } from 'stream';
+import { pipeline } from 'node:stream/promises';
+import { text } from 'stream/consumers';
+const output = [];
+let active = 0;
+let peak = 0;
+async function* source() { for (let i = 1; i <= 4; i++) { await Promise.resolve(); yield i; } }
+const sink = new Writable({ objectMode: true, highWaterMark: 1,
+  write(value, encoding, done) {
+    active++;
+    peak = Math.max(peak, active);
+    setImmediate(() => { output.push(value); active--; done(); });
+  }
+});
+(async () => {
+  await pipeline(Readable.from(source(), { highWaterMark: 1 }), sink);
+  console.log(output.join(','), peak, sink.writableFinished);
+  console.log(await text(Readable.from([Promise.resolve('left'), 'right'])));
+})();
+"#;
+    assert_eq!(console_line(source), "1,2,3,4 1 true\nleftright");
 }
 
 #[test]

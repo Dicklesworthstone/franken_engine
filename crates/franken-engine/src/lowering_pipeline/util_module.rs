@@ -38,8 +38,10 @@
 //! module's EventEmitter, string_decoder and the process.nextTick queue. It
 //! serves every free CommonJS `require('stream')` / `require('node:stream')`,
 //! so direct destructures, namespace bindings and deferred loads share the
-//! same constructors, async iteration and lifecycle. Named ESM imports retain
-//! their existing native facade boundary. `buffer` (bd-305gi.3) is Node's module object over the
+//! same constructors, async iteration and lifecycle. Source-only ESM imports
+//! use this same module through `esm_core_imports`; imports with an installed
+//! resolver keep their authenticated runtime-module boundary. `buffer`
+//! (bd-305gi.3) is Node's module object over the
 //! realm's Buffer, atob, btoa and Blob, so `require('buffer').Buffer`,
 //! safer-buffer's key copy and a destructured `{ Buffer }` load; the script
 //! goal refused every such form as a file read. No filesystem/module-load

@@ -15,11 +15,16 @@
 //! These tests exercise only engine-contained computation and deterministic
 //! scheduling. CJS loads use the shared pure module without general-purpose
 //! module-loading authority. The explicit `native_*` regressions use named
-//! ESM imports so they continue exercising native stream kernels.
+//! ESM fixture declarations adapted to explicit typed builtin hostcalls,
+//! so they continue exercising native stream kernels. Public ESM module
+//! behavior is covered in stream_module_bd_305gi_1.
 
 use std::collections::BTreeSet;
 
 use frankenengine_engine::HybridRouter;
+
+#[path = "support/native_stream_kernels.rs"]
+mod native_stream_kernels;
 
 #[derive(Clone, Copy)]
 struct EvalCase {
@@ -40,6 +45,10 @@ fn eval_console(source: &str) -> String {
         .map(|entry| entry.message.clone())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn eval_native_console(source: &str) -> String {
+    eval_console(&native_stream_kernels::source(source))
 }
 
 fn eval_error(source: &str) -> String {
@@ -2062,8 +2071,9 @@ fn readable_pipe_returns_destination_and_preserves_lifecycle_order_bd_7h43f() {
     ]);
 }
 
-// Named ESM imports intentionally exercise the native facade, including its
-// authenticated pipe edge. Free CJS requires use the complete JS module.
+// These explicit kernel probes adapt named fixture imports to typed hostcalls,
+// including the authenticated native pipe edge. Ordinary ESM and CJS probes
+// above and below use the public shared module without this adapter.
 #[test]
 fn native_pipe_resumes_after_async_destination_drain_bd_305gi_2() {
     let source = r#"
@@ -2086,7 +2096,7 @@ fn native_pipe_resumes_after_async_destination_drain_bd_305gi_2() {
         source.pipe(sink);
     "#;
     assert_eq!(
-        eval_console(source),
+        eval_native_console(source),
         "write:1,paused:false,done:1,write:2,paused:false,done:2,write:3,paused:false,done:3"
     );
 }
@@ -2105,7 +2115,7 @@ fn native_pipe_zero_high_water_mark_preserves_all_chunks_bd_305gi_2() {
         sink.on('finish', () => console.log(chunks.join(',')));
         console.log(source.pipe(sink) === sink);
     "#;
-    assert_eq!(eval_console(source), "true\na,b,c,d");
+    assert_eq!(eval_native_console(source), "true\na,b,c,d");
 }
 
 #[test]
@@ -2129,7 +2139,7 @@ fn native_pipe_synthetic_drain_cannot_release_pending_write_bd_305gi_2() {
         sink.on('finish', () => console.log(observations.join(',')));
         source.pipe(sink);
     "#;
-    assert_eq!(eval_console(source), "1:false,2:false");
+    assert_eq!(eval_native_console(source), "1:false,2:false");
 }
 
 #[test]
@@ -2165,7 +2175,7 @@ fn native_pipe_replacement_during_drain_ignores_stale_callback_bd_305gi_2() {
         });
         source.pipe(first);
     "#;
-    assert_eq!(eval_console(source), "1|2,3");
+    assert_eq!(eval_native_console(source), "1|2,3");
 }
 
 #[test]
@@ -2194,7 +2204,7 @@ fn native_pipe_removing_drain_listeners_cancels_resume_bd_305gi_2() {
                 source.pipe(sink);
             "#
         );
-        assert_eq!(eval_console(&source), "1:false");
+        assert_eq!(eval_native_console(&source), "1:false");
     }
 }
 
@@ -2208,7 +2218,7 @@ fn native_from_iterable_collects_set_and_live_mutation_bd_305gi_2() {
         values.add(3);
         stream.toArray().then(result => console.log(result.join(',')));
     "#;
-    assert_eq!(eval_console(source), "2,3");
+    assert_eq!(eval_native_console(source), "2,3");
 }
 
 #[test]
@@ -2218,7 +2228,7 @@ fn native_from_iterable_collects_map_entries_bd_305gi_2() {
         const values = new Map([['a', 1], ['b', 2]]);
         Readable.from(values).toArray().then(result => console.log(result.map(pair => pair.join(':')).join(',')));
     "#;
-    assert_eq!(eval_console(source), "a:1,b:2");
+    assert_eq!(eval_native_console(source), "a:1,b:2");
 }
 
 #[test]
@@ -2238,7 +2248,7 @@ fn native_from_iterable_generator_preserves_values_and_finally_bd_305gi_2() {
         stream.toArray().then(result => console.log(result.length, result[1] === retained, events.join(',')));
     "#;
     assert_eq!(
-        eval_console(source),
+        eval_native_console(source),
         "3 true created,start,finally,end,close"
     );
 }
@@ -2269,7 +2279,7 @@ fn native_from_iterable_observes_dynamic_next_and_result_getters_bd_305gi_2() {
         stream.toArray().then(result => console.log(result.join(','), events.join(',')));
     "#;
     assert_eq!(
-        eval_console(source),
+        eval_native_console(source),
         "1,2 iterator,created,next-get,next-call,value,done,next-get,next-call,value,done,next-get,next-call,value,done,return"
     );
 }
@@ -2282,7 +2292,7 @@ fn native_from_iterable_honors_array_iterator_override_bd_305gi_2() {
         values[Symbol.iterator] = function* () { yield 8; yield 9; };
         Readable.from(values).toArray().then(result => console.log(result.join(',')));
     "#;
-    assert_eq!(eval_console(source), "8,9");
+    assert_eq!(eval_native_console(source), "8,9");
 }
 
 #[test]
@@ -2294,7 +2304,7 @@ fn native_from_iterable_read_then_collects_remaining_values_bd_305gi_2() {
         console.log(stream.read());
         stream.toArray().then(result => console.log(result.join(',')));
     "#;
-    assert_eq!(eval_console(source), "1\n2,3");
+    assert_eq!(eval_native_console(source), "1\n2,3");
 }
 
 #[test]
@@ -2313,7 +2323,7 @@ fn native_from_iterable_destroy_runs_generator_finally_bd_305gi_2() {
         console.log(finalized);
         stream.on('close', () => console.log(finalized));
     "#;
-    assert_eq!(eval_console(source), "1\n1\n1");
+    assert_eq!(eval_native_console(source), "1\n1\n1");
 }
 
 #[test]
@@ -2332,7 +2342,7 @@ fn native_from_iterable_preserves_thrown_values_and_closes_bd_305gi_2() {
         stream.on('close', () => events.push('close'));
         stream.toArray().catch(error => console.log(error === failure, events.join(',')));
     "#;
-    assert_eq!(eval_console(source), "true throw,return,close");
+    assert_eq!(eval_native_console(source), "true throw,return,close");
 }
 
 #[test]
@@ -2351,7 +2361,7 @@ fn native_from_iterable_aggregates_cleanup_failure_bd_305gi_2() {
                       error.errors[1] === failure, error.message);
         });
     "#;
-    assert_eq!(eval_console(source), "true true true close failed");
+    assert_eq!(eval_native_console(source), "true true true close failed");
 }
 
 #[test]
@@ -2378,7 +2388,7 @@ fn native_from_iterable_preserves_destroy_outcome_after_reentrant_next_bd_305gi_
         stream.toArray().catch(error => console.log(error.code, closed, events.join(',')));
     "#;
     assert_eq!(
-        eval_console(source),
+        eval_native_console(source),
         "ERR_STREAM_PREMATURE_CLOSE 1 before,return,after,value,done"
     );
 }
@@ -2393,7 +2403,7 @@ fn native_from_iterable_rejects_null_and_runs_cleanup_bd_305gi_2() {
           console.log(error instanceof TypeError, error.code, closed);
         });
     "#;
-    assert_eq!(eval_console(source), "true ERR_STREAM_NULL_VALUES 1");
+    assert_eq!(eval_native_console(source), "true ERR_STREAM_NULL_VALUES 1");
 }
 
 #[test]
@@ -2406,7 +2416,7 @@ fn native_from_iterable_keeps_buffer_fast_path_and_typed_array_iteration_bd_305g
           Readable.from(new Uint8Array([4, 5])).toArray().then(values => console.log(values.join(',')));
         });
     "#;
-    assert_eq!(eval_console(source), "1 true true\n4,5");
+    assert_eq!(eval_native_console(source), "1 true true\n4,5");
 }
 
 #[test]
@@ -2423,7 +2433,7 @@ fn native_from_iterable_byte_mode_validation_closes_producer_bd_305gi_2() {
         stream.on('error', error => events.push(error instanceof TypeError ? 'error' : 'wrong'));
         stream.on('close', () => console.log(events.join(',')));
     "#;
-    assert_eq!(eval_console(source), "finally,error");
+    assert_eq!(eval_native_console(source), "finally,error");
 }
 
 #[test]
@@ -2455,7 +2465,7 @@ fn native_from_iterable_cleanup_get_order_and_reentrant_destroy_bd_305gi_2() {
         stream.toArray().then(() => console.log(events.join(',')));
     "#;
     assert_eq!(
-        eval_console(source),
+        eval_native_console(source),
         "iterator-get,iterator-get,iterator-call,next,throw-get,return-get,return-get,return-call:true,value"
     );
 }
@@ -2481,7 +2491,7 @@ fn native_from_iterable_throw_cleanup_failure_does_not_call_return_bd_305gi_2() 
           error.errors[1] === failure, events.join(',')));
     "#;
     assert_eq!(
-        eval_console(source),
+        eval_native_console(source),
         "true true true throw-get,throw-get,throw-call"
     );
 }
@@ -2502,7 +2512,7 @@ fn native_from_iterable_invalid_throw_result_does_not_call_return_bd_305gi_2() {
           error instanceof AggregateError, error.errors[0] instanceof TypeError,
           error.errors[1] === failure, returned));
     "#;
-    assert_eq!(eval_console(source), "true true true 0");
+    assert_eq!(eval_native_console(source), "true true true 0");
 }
 
 #[test]
@@ -2524,7 +2534,7 @@ fn native_from_iterable_falsy_throws_close_without_error_events_bd_305gi_2() {
         Promise.all(checks).then(results => console.log(results.join('|')));
     "#;
     assert_eq!(
-        eval_console(source),
+        eval_native_console(source),
         "ERR_STREAM_PREMATURE_CLOSE:return|ERR_STREAM_PREMATURE_CLOSE:return|ERR_STREAM_PREMATURE_CLOSE:return|ERR_STREAM_PREMATURE_CLOSE:return|ERR_STREAM_PREMATURE_CLOSE:return"
     );
 }
@@ -2546,7 +2556,7 @@ fn native_from_iterable_reuses_existing_cleanup_aggregate_bd_305gi_2() {
           error === cleanup, error.errors[0] === earlier,
           error.errors[1] === failure, error.code));
     "#;
-    assert_eq!(eval_console(source), "true true true CLEANUP");
+    assert_eq!(eval_native_console(source), "true true true CLEANUP");
 }
 
 #[test]
@@ -2570,7 +2580,7 @@ fn native_from_iterable_cleanup_aggregate_observes_message_and_code_bd_305gi_2()
           error.message, error.code, events.join(',')));
     "#;
     assert_eq!(
-        eval_console(source),
+        eval_native_console(source),
         "true true cleanup CLEANUP errors,message,code"
     );
 }
@@ -2596,7 +2606,10 @@ fn native_to_array_consumes_later_read_callbacks_bd_305gi_2() {
           console.log(values.join(','), reads, source.readableEnded, source.destroyed);
         });
     "#;
-    assert_eq!(eval_console(source), "true false true\n1,2,3 4 true true");
+    assert_eq!(
+        eval_native_console(source),
+        "true false true\n1,2,3 4 true true"
+    );
 }
 
 #[test]
@@ -2618,7 +2631,7 @@ fn native_to_array_drains_bounded_readable_backpressure_bd_305gi_2() {
         });
         source.toArray().then(values => console.log(values.join(','), reads));
     "#;
-    assert_eq!(eval_console(source), "1,2,3,4 5");
+    assert_eq!(eval_native_console(source), "1,2,3,4 5");
 }
 
 #[test]
@@ -2634,7 +2647,7 @@ fn native_to_array_coalesces_passthrough_bytes_bd_305gi_2() {
                       Buffer.isBuffer(chunks[0]), stream.readableEnded, stream.writableFinished);
         });
     "#;
-    assert_eq!(eval_console(source), "1 010203 true true true");
+    assert_eq!(eval_native_console(source), "1 010203 true true true");
 }
 
 #[test]
@@ -2655,7 +2668,7 @@ fn native_to_array_ignores_empty_bytes_but_keeps_empty_objects_bd_305gi_2() {
                 results[2].length, results[3].length, results[3][0] === '',
                 Buffer.isBuffer(results[3][1])));
     "#;
-    assert_eq!(eval_console(source), "0 0 0 2 true true");
+    assert_eq!(eval_native_console(source), "0 0 0 2 true true");
 }
 
 #[test]
@@ -2675,7 +2688,7 @@ fn native_to_array_collects_async_transform_and_flush_bd_305gi_2() {
         stream.end(2);
         result.then(values => console.log(values.join(','), stream.writableFinished));
     "#;
-    assert_eq!(eval_console(source), "2,4,99 true");
+    assert_eq!(eval_native_console(source), "2,4,99 true");
 }
 
 #[test]
@@ -2694,7 +2707,7 @@ fn native_to_array_preserves_partial_reads_and_chunk_identity_bd_305gi_2() {
         source.push(null);
         result.then(values => console.log(values.length, values[0] === retained, values[1]));
     "#;
-    assert_eq!(eval_console(source), "1\n2 true 3");
+    assert_eq!(eval_native_console(source), "1\n2 true 3");
 }
 
 #[test]
@@ -2710,7 +2723,7 @@ fn native_to_array_collects_decoded_utf8_across_pushes_bd_305gi_2() {
         source.push(null);
         result.then(chunks => console.log(chunks.length, chunks[0], typeof chunks[0]));
     "#;
-    assert_eq!(eval_console(source), "1 €! string");
+    assert_eq!(eval_native_console(source), "1 €! string");
 }
 
 #[test]
@@ -2726,7 +2739,7 @@ fn native_to_array_rejects_read_throw_without_error_listener_bd_305gi_2() {
           error => console.log(error === failure, events.join(','))
         );
     "#;
-    assert_eq!(eval_console(source), "true close");
+    assert_eq!(eval_native_console(source), "true close");
 }
 
 #[test]
@@ -2746,7 +2759,7 @@ fn native_to_array_rejects_destroy_error_once_bd_305gi_2() {
         result.catch(error => { settlements++; console.log(error === failure, events.join(',')); });
         result.then(() => console.log('unexpected fulfillment'), () => console.log(settlements));
     "#;
-    assert_eq!(eval_console(source), "true error,close\n1");
+    assert_eq!(eval_native_console(source), "true error,close\n1");
 }
 
 #[test]
@@ -2765,7 +2778,10 @@ fn native_to_array_preserves_first_error_before_explicit_destroy_bd_305gi_2() {
         source.destroy(later);
         result.catch(error => console.log(error === failure, events.join(',')));
     "#;
-    assert_eq!(eval_console(source), "true\ntrue error,after,error,close");
+    assert_eq!(
+        eval_native_console(source),
+        "true\ntrue error,after,error,close"
+    );
 }
 
 #[test]
@@ -2783,7 +2799,7 @@ fn native_to_array_rejects_manual_error_before_destroy_closes_bd_305gi_2() {
         result.catch(error => console.log(error === failure, events.join(','), stream.destroyed));
     "#;
     assert_eq!(
-        eval_console(source),
+        eval_native_console(source),
         "true false\ntrue error,after true\nerror,after,error,close"
     );
 }
@@ -2799,7 +2815,7 @@ fn native_to_array_handles_manual_error_without_error_listener_bd_305gi_2() {
         result.catch(error => console.log(error === failure, stream.destroyed));
         console.log(stream.emit('error', failure), stream.destroyed);
     "#;
-    assert_eq!(eval_console(source), "true false\ntrue true\nclosed");
+    assert_eq!(eval_native_console(source), "true false\ntrue true\nclosed");
 }
 
 #[test]
@@ -2822,7 +2838,7 @@ fn native_to_array_preserves_exact_rejection_values_bd_305gi_2() {
             rejected.catch(error => error === promise)
         ]).then(values => console.log(values.join(',')));
     "#;
-    assert_eq!(eval_console(source), "true,true,true");
+    assert_eq!(eval_native_console(source), "true,true,true");
 }
 
 #[test]
@@ -2835,7 +2851,7 @@ fn native_to_array_rejects_premature_close_with_error_object_bd_305gi_2() {
         result.catch(error => console.log(error instanceof Error, error.code, error.message));
     "#;
     assert_eq!(
-        eval_console(source),
+        eval_native_console(source),
         "true ERR_STREAM_PREMATURE_CLOSE Premature close"
     );
 }
@@ -2861,7 +2877,7 @@ fn native_pipe_end_false_reuses_destination_after_backpressure_bd_305gi_2() {
         sink.on('finish', () => console.log(chunks.join(',')));
         console.log(first.pipe(sink, { end: false }) === sink);
     "#;
-    assert_eq!(eval_console(source), "true\nopen:false\na,b,c,d");
+    assert_eq!(eval_native_console(source), "true\nopen:false\na,b,c,d");
 }
 
 #[test]
@@ -2888,7 +2904,7 @@ fn native_pipe_end_false_keeps_manual_end_and_tail_write_bd_305gi_2() {
           sink.end('tail');
         });
     "#;
-    assert_eq!(eval_console(source), "unpipe,ended:false\nbody,tail");
+    assert_eq!(eval_native_console(source), "unpipe,ended:false\nbody,tail");
 }
 
 #[test]
@@ -2921,7 +2937,7 @@ fn native_pipe_observes_end_option_once_before_pipe_bd_305gi_2() {
             "#,
         );
         assert_eq!(
-            eval_console(&source),
+            eval_native_console(&source),
             "get:end,pipe,write:one,unpipe,ended:false",
             "ordinary option lookup for {options}",
         );
@@ -2954,7 +2970,7 @@ fn native_pipe_observes_end_option_strict_false_semantics_bd_305gi_2() {
             "#,
         );
         assert_eq!(
-            eval_console(&source),
+            eval_native_console(&source),
             "true\nfinished",
             "options: {options}"
         );
@@ -2982,7 +2998,7 @@ fn native_pipe_observes_end_option_throw_without_attaching_bd_305gi_2() {
         source.pipe(sink, { end: false });
         source.on('end', () => sink.end());
     "#;
-    assert_eq!(eval_console(source), "true\n1:one");
+    assert_eq!(eval_native_console(source), "true\n1:one");
 }
 
 #[test]
@@ -3008,7 +3024,7 @@ fn native_pipe_end_false_destroy_while_paused_leaves_sink_open_bd_305gi_2() {
         });
         source.pipe(sink, { end: false });
     "#;
-    assert_eq!(eval_console(source), "1:false");
+    assert_eq!(eval_native_console(source), "1:false");
 }
 
 #[test]
@@ -3297,22 +3313,17 @@ fn module_possession_member_and_computed_forms_run_the_stream_module() {
 }
 
 #[test]
-fn unsupported_esm_namespace_possession_and_dynamic_import_fail_closed() {
-    for source in [
-        "import * as stream from 'node:stream'; console.log(stream);",
-        "import { Readable, Writable } from 'node:stream'; const readable = Readable.from([]); console.log(readable, Writable);",
-        "const name = 'node:stream'; import(name).then((stream) => console.log(stream));",
-    ] {
-        let error = eval_error(source);
-        assert!(
-            error.contains("ambient authority violation")
-                || error.contains("unsupported")
-                || error.contains("not supported")
-                || error.contains("dynamic import")
-                || error.contains("type error"),
-            "unsupported ESM stream possession must fail closed, got {error:?} for {source:?}",
-        );
-    }
+fn dynamic_import_without_module_authority_still_fails_closed() {
+    let source = "const name = 'node:stream'; import(name).then((stream) => console.log(stream));";
+    let error = eval_error(source);
+    assert!(
+        error.contains("ambient authority violation")
+            || error.contains("unsupported")
+            || error.contains("not supported")
+            || error.contains("dynamic import")
+            || error.contains("type error"),
+        "dynamic import without module authority must fail closed, got {error:?}",
+    );
 }
 
 /// A facade form inside a function declaration: the declaration is hoisted

@@ -57,7 +57,7 @@ use crate::ast::{
 /// Core modules whose `require` aliases lowering recognizes (and path's
 /// module object, `path_module.rs`). Loading one needs no authority;
 /// members with effects carry their own capabilities.
-const FACADE_MODULES: [&str; 20] = [
+const FACADE_MODULES: [&str; 23] = [
     "assert",
     "assert/strict",
     "crypto",
@@ -70,6 +70,9 @@ const FACADE_MODULES: [&str; 20] = [
     "querystring",
     "readline",
     "readline/promises",
+    "stream",
+    "stream/consumers",
+    "stream/promises",
     "stream/web",
     "string_decoder",
     "timers",
@@ -617,5 +620,76 @@ mod web_stream_tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn node_stream_imports_use_the_shared_module_for_every_binding_shape() {
+        for source in [
+            "import { Readable } from 'stream'; Readable.from([]);",
+            "import { Readable as R, Writable as W } from 'node:stream'; R.from([]); new W();",
+            "import stream from 'stream'; stream.Readable.from([]);",
+            "import * as stream from 'node:stream'; stream.Readable.from([]);",
+            "import stream, { Readable } from 'stream'; stream.Readable === Readable;",
+            "import { pipeline } from 'stream/promises'; pipeline();",
+            "import promises from 'node:stream/promises'; promises.pipeline();",
+            "import { text, json } from 'stream/consumers'; text([]); json([]);",
+            "import * as consumers from 'node:stream/consumers'; consumers.text([]);",
+            "export { Readable, Writable as Sink } from 'stream';",
+            "export * as streams from 'node:stream';",
+            "export { pipeline } from 'node:stream/promises';",
+        ] {
+            let original = parse(source);
+            let rewritten = rewrite_core_module_imports(&original)
+                .expect("stream imports reach their existing module provider");
+            assert!(
+                rewrite_core_module_imports(&rewritten).is_none(),
+                "{source}"
+            );
+            assert!(
+                !rewritten
+                    .body
+                    .iter()
+                    .any(|statement| matches!(statement, Statement::Import(_))),
+                "{source}: no finite named-import facade remains"
+            );
+            let shared = super::super::util_module::rewrite_util_requires(&rewritten)
+                .expect("shared builtin lowering")
+                .expect("stream module factory");
+            assert!(
+                super::super::util_module::rewrite_util_requires(&shared)
+                    .unwrap()
+                    .is_none(),
+                "{source}: module expansion is idempotent"
+            );
+            assert_eq!(original, parse(source), "input AST remains unchanged");
+        }
+    }
+
+    #[test]
+    fn node_stream_rewrite_preserves_module_authority_boundaries() {
+        for source in [
+            "import require from './loader.mjs'; import { Readable } from 'stream'; Readable.from([]);",
+            "import stream from './stream.mjs'; stream.Readable.from([]);",
+            "import stream from 'stream/unknown'; stream.Readable.from([]);",
+            "import { Readable } from 'stream' with { type: 'json' }; Readable.from([]);",
+        ] {
+            assert!(
+                rewrite_core_module_imports(&parse(source)).is_none(),
+                "{source}"
+            );
+        }
+        let source = parse(
+            "import { Readable } from 'stream'; import { value } from './data.mjs'; Readable.from([value]);",
+        );
+        let rewritten = rewrite_core_module_imports(&source).unwrap();
+        let retained: Vec<_> = rewritten
+            .body
+            .iter()
+            .filter_map(|statement| match statement {
+                Statement::Import(import) => Some(import.source.as_str().unwrap()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(retained, ["./data.mjs"]);
     }
 }

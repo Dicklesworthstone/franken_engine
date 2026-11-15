@@ -11,7 +11,7 @@
 //! program runs on the default QuickJS lane (100,000 heap objects, asserted)
 //! with 250,000 short-lived objects. Expected strings are Node v22.2.0's
 //! console output for the same programs.
-//! Named ESM imports keep these probes on the native stream kernels; a
+//! Named fixture imports become typed hostcalls to native stream kernels; a
 //! separate CJS probe covers the shared module's guest-owned stream state.
 //!
 //! No-claim: an unfinished stream's live state is a root, so a stream nothing
@@ -23,9 +23,13 @@
 
 use frankenengine_engine::{EngineKind, HybridRouter};
 
+#[path = "support/native_stream_kernels.rs"]
+mod native_stream_kernels;
+
 fn console_output(source: &str) -> String {
+    let source = native_stream_kernels::source(source);
     let outcome = HybridRouter::default()
-        .eval_with_instruction_budget(source, 1_000_000_000)
+        .eval_with_instruction_budget(&source, 1_000_000_000)
         .unwrap_or_else(|error| panic!("evaluation failed: {error}\nsource: {source}"));
     assert_eq!(outcome.engine, EngineKind::QuickJsInspiredNative);
     outcome

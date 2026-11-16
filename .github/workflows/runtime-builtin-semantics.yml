@@ -125,6 +125,7 @@ jobs:
             crates/franken-engine/tests/fs_callbacks.rs \
             crates/franken-extension-host/src/host_io.rs \
             crates/franken-extension-host/src/host_io/tests.rs \
+            crates/franken-extension-host/tests/directory_snapshot_budget.rs \
             crates/franken-engine/src/baseline_interpreter/object_integrity.rs \
             crates/franken-engine/src/lowering_pipeline.rs \
             crates/franken-engine/tests/builtin_prototype_own_methods.rs \
@@ -142,6 +143,8 @@ jobs:
         run: |
           set -euo pipefail
           cargo test --locked -p frankenengine-extension-host --lib host_io \
+            -- --nocapture --test-threads=1
+          cargo test --locked -p frankenengine-extension-host --test directory_snapshot_budget \
             -- --nocapture --test-threads=1
 
       - name: Check the complete production engine library

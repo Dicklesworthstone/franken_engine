@@ -904,6 +904,8 @@ impl SandboxedHostIo {
     }
 
     /// Create a provider with an explicit per-operation byte cap.
+    /// Directory snapshots charge decoded filename bytes and per-entry storage,
+    /// including empty-file entries, against the same cap.
     ///
     /// # Errors
     /// Returns the underlying [`std::io::Error`] if the root cannot be created or
@@ -2357,6 +2359,12 @@ impl SandboxedHostIo {
                     };
                     let mut names = Vec::new();
                     let mut entries = Vec::new();
+                    let mut result_bytes = 0_u64;
+                    let entry_bytes = if with_file_types {
+                        std::mem::size_of::<FsDirEntry>() as u64
+                    } else {
+                        std::mem::size_of::<String>() as u64
+                    };
                     let mut directory_entries = rustix::fs::Dir::read_from(&directory)
                         .map_err(|err| Self::fs_error("readdir", raw, std::io::Error::from(err)))?;
                     while let Some(entry) = directory_entries.read() {
@@ -2367,7 +2375,23 @@ impl SandboxedHostIo {
                         if matches!(file_name.to_bytes(), b"." | b"..") {
                             continue;
                         }
-                        let name = String::from_utf8_lossy(file_name.to_bytes()).into_owned();
+                        let name = String::from_utf8_lossy(file_name.to_bytes());
+                        // Bound both payload and entry count. Charging only
+                        // filenames would let many short names retain a much
+                        // larger vector. This bounds aggregate retained data;
+                        // allocator spare capacity is outside this logical cap.
+                        // Admit before retaining the name or looking up its type.
+                        result_bytes = result_bytes
+                            .checked_add(entry_bytes)
+                            .and_then(|bytes| bytes.checked_add(name.len() as u64))
+                            .filter(|bytes| *bytes <= self.max_bytes)
+                            .ok_or_else(|| HostIoError::Io {
+                                detail: format!(
+                                    "readdir result for {raw:?} exceeds byte limit of {}",
+                                    self.max_bytes
+                                ),
+                            })?;
+                        let name = name.into_owned();
                         if with_file_types {
                             let stat = rustix::fs::statat(
                                 &directory,

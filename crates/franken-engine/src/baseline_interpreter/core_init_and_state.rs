@@ -1021,6 +1021,7 @@ impl InterpreterCore {
             next_stream_pipeline_token: 0,
             pending_stream_emissions: BTreeMap::new(),
             readable_from_streams: BTreeMap::new(),
+            readable_from_awaits: BTreeMap::new(),
             readable_terminal_states: BTreeMap::new(),
             pending_readable_from_pumps: BTreeMap::new(),
             readable_pump_reservations: BTreeMap::new(),
@@ -10749,6 +10750,20 @@ impl InterpreterCore {
         for registration in registrations {
             self.event_loop.cancel_registration(registration);
         }
+        // Drop private await edges before a restored heap can reuse the
+        // stream id. A late source settlement must not reach the next run.
+        for (ticket, context) in &self.readable_from_awaits {
+            let _ = self.promise_store.cancel_await(
+                context.source,
+                crate::promise_model::PromiseHandle(*ticket),
+                &mut self.event_loop.microtasks,
+            );
+            if context.owned_source {
+                let _ = self
+                    .promise_store
+                    .cancel_owned_await_source(context.source, &mut self.event_loop.microtasks);
+            }
+        }
         let released_promise_bytes =
             previous_promise_bytes.saturating_sub(self.promise_runtime_memory_bytes());
         let retained_bytes = self
@@ -10764,6 +10779,7 @@ impl InterpreterCore {
             .collect();
 
         self.readable_from_streams.clear();
+        self.readable_from_awaits.clear();
         self.readable_terminal_states.clear();
         self.pending_readable_from_pumps.clear();
         self.readable_pump_reservations.clear();
@@ -11006,7 +11022,7 @@ impl InterpreterCore {
         Ok(true)
     }
 
-    /// Acquire a synchronous Readable.from source without taking a step.
+    /// Acquire a synchronous or asynchronous source without taking a step.
     /// Arrays use their observable iterator, including indexed accessors.
     /// Strings and Buffers retain their single-chunk paths; other sources
     /// keep the acquired iterator in private stream state and are driven by
@@ -11031,8 +11047,9 @@ impl InterpreterCore {
         let is_array = matches!(&source, Value::Object(id)
             if self.heap.get(id.0 as usize).is_some_and(|object| object.is_array));
         let is_buffer = matches!(&source, Value::Object(id) if self.is_buffer_object(*id));
-        let (source, push_only) = if matches!(source, Value::Str(_)) || is_buffer {
-            (source, false)
+        let (source, push_only, iterator_is_async) = if matches!(source, Value::Str(_)) || is_buffer
+        {
+            (source, false, false)
         } else if let Some(module) = module {
             let observation = self.begin_property_observation([args.start])?;
             let acquired = (|| {
@@ -11043,17 +11060,16 @@ impl InterpreterCore {
                         &RuntimePropertyKey::Symbol(WellKnownSymbol::AsyncIterator.id()),
                     )?
                     .is_truthy();
-                if async_method {
-                    return Err(InterpreterError::TypeError {
-                        expected: "synchronous Readable.from source; async iterator continuation is not implemented".to_string(),
-                        got: "truthy Symbol.asyncIterator".to_string(),
-                    });
-                }
-                let key = RuntimePropertyKey::Symbol(WellKnownSymbol::Iterator.id());
-                let selected = self
-                    .readable_iterator_property(module, &source, &key)?
-                    .is_truthy();
-                if !selected {
+                let key = RuntimePropertyKey::Symbol(if async_method {
+                    WellKnownSymbol::AsyncIterator.id()
+                } else {
+                    WellKnownSymbol::Iterator.id()
+                });
+                if !async_method
+                    && !self
+                        .readable_iterator_property(module, &source, &key)?
+                        .is_truthy()
+                {
                     return Err(InterpreterError::TypeError {
                         expected: "iterable source for Readable.from".to_string(),
                         got: source.type_name().to_string(),
@@ -11065,7 +11081,7 @@ impl InterpreterCore {
                 let method = self.readable_iterator_property(module, &source, &key)?;
                 if !method.is_callable() {
                     return Err(InterpreterError::TypeError {
-                        expected: "callable Symbol.iterator for Readable.from".to_string(),
+                        expected: "callable iterator method for Readable.from".to_string(),
                         got: method.type_name().to_string(),
                     });
                 }
@@ -11081,11 +11097,11 @@ impl InterpreterCore {
                     self.join_owned_label_with_temporary_budget(source_label.clone(), &label)?;
                 if !iterator.is_object_like() {
                     return Err(InterpreterError::TypeError {
-                        expected: "object returned by Symbol.iterator".to_string(),
+                        expected: "object returned by Readable.from iterator method".to_string(),
                         got: iterator.type_name().to_string(),
                     });
                 }
-                Ok((iterator, true))
+                Ok((iterator, true, async_method))
             })();
             let acquired = self.finish_property_read_observation(observation, acquired)?;
             if let Some(observed) = &self.pending_hostcall_result_label {
@@ -11094,7 +11110,7 @@ impl InterpreterCore {
             }
             acquired
         } else if is_array {
-            (source, false)
+            (source, false, false)
         } else {
             return Err(InterpreterError::TypeError {
                 expected: "module context for Readable.from iterator acquisition".to_string(),
@@ -11117,6 +11133,7 @@ impl InterpreterCore {
         };
         let state = ReadableFromState {
             source,
+            iterator_is_async,
             push_only,
             object_mode,
             high_water_mark: 1,
@@ -11227,6 +11244,7 @@ impl InterpreterCore {
         };
         let state = ReadableFromState {
             source: Value::Undefined,
+            iterator_is_async: false,
             push_only: true,
             object_mode,
             high_water_mark: usize::try_from(high_water_mark).unwrap_or(usize::MAX),
@@ -11384,6 +11402,7 @@ impl InterpreterCore {
         let high_water_mark_usize = usize::try_from(high_water_mark).unwrap_or(usize::MAX);
         let readable_state = ReadableFromState {
             source: Value::Undefined,
+            iterator_is_async: false,
             push_only: true,
             object_mode,
             high_water_mark: high_water_mark_usize,
@@ -11560,6 +11579,7 @@ impl InterpreterCore {
         let high_water_mark_usize = usize::try_from(high_water_mark).unwrap_or(usize::MAX);
         let readable_state = ReadableFromState {
             source: Value::Undefined,
+            iterator_is_async: false,
             push_only: true,
             object_mode,
             high_water_mark: high_water_mark_usize,

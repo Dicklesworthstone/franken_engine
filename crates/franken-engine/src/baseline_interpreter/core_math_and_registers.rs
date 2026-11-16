@@ -5364,6 +5364,10 @@ impl InterpreterCore {
                 .values()
                 .map(Self::estimate_readable_from_state_bytes),
         )
+        .saturating_add(
+            (self.readable_from_awaits.len() as u64)
+                .saturating_mul(Self::estimate_readable_from_await_bytes()),
+        )
     }
 
     pub(super) fn readable_terminal_states_memory_bytes(&self) -> u64 {

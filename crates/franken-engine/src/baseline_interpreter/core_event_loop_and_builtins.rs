@@ -1386,6 +1386,24 @@ impl InterpreterCore {
                     } => {
                         // Check if this is an async function resumption
                         if handler.is_none() {
+                            if let Some(context) = self.take_readable_from_await(result_promise.0) {
+                                let held = vec![
+                                    Value::Object(context.object_id),
+                                    Value::Promise(context.source.0),
+                                    Value::Promise(result_promise.0),
+                                    self.js_value_to_value(argument),
+                                ];
+                                let outcome = self.with_event_job_gc_request(held, |core| {
+                                    core.resume_readable_from_task(
+                                        context,
+                                        Ok(argument.clone()),
+                                        task_label.clone(),
+                                        module,
+                                    )
+                                });
+                                self.release_await_carrier(*result_promise);
+                                return outcome;
+                            }
                             if let Some(context) = self
                                 .async_generator_runtime
                                 .continuations
@@ -1530,6 +1548,24 @@ impl InterpreterCore {
                         result_promise,
                         label: task_label,
                     } => {
+                        if let Some(context) = self.take_readable_from_await(result_promise.0) {
+                            let held = vec![
+                                Value::Object(context.object_id),
+                                Value::Promise(context.source.0),
+                                Value::Promise(result_promise.0),
+                                self.js_value_to_value(reason),
+                            ];
+                            let outcome = self.with_event_job_gc_request(held, |core| {
+                                core.resume_readable_from_task(
+                                    context,
+                                    Err(reason.clone()),
+                                    task_label.clone(),
+                                    module,
+                                )
+                            });
+                            self.release_await_carrier(*result_promise);
+                            return outcome;
+                        }
                         if let Some(context) = self
                             .async_generator_runtime
                             .continuations

@@ -823,6 +823,24 @@ impl PromiseSlots {
         Some(result)
     }
 
+    /// Detach incoming edges to an abandoned private Promise without an
+    /// allocation or a scan through already-released arena chunks. Stable
+    /// retain preserves the order of every other consumer of each source.
+    fn remove_reactions_targeting(&mut self, target: PromiseHandle) {
+        for chunk_index in 0..self.chunks.len() {
+            let slots = self.chunks[chunk_index]
+                .as_ref()
+                .map_or(0, |chunk| chunk.slots.len());
+            for offset in 0..slots {
+                let _ = self.update(chunk_index * PROMISE_SLOT_CHUNK + offset, |record| {
+                    record
+                        .reactions
+                        .retain(|reaction| reaction.result_promise != target);
+                });
+            }
+        }
+    }
+
     fn memory_bytes(&self) -> u64 {
         estimate_vector_slot_bytes::<PromiseRecord>(self.occupied).saturating_add(self.record_bytes)
     }
@@ -1251,6 +1269,50 @@ impl PromiseStore {
             self.witness.remove(witness_index);
         }
         Ok(record)
+    }
+
+    /// Detach an engine-owned await at an execution boundary. A private
+    /// carrier may be removed only after both a pending source's reactions
+    /// and already-queued settlement jobs stop referring to it. Other
+    /// consumers of the source retain their order and rejection handling.
+    pub(crate) fn cancel_await(
+        &mut self,
+        source: PromiseHandle,
+        carrier: PromiseHandle,
+        queue: &mut MicrotaskQueue,
+    ) -> Result<(), PromiseError> {
+        self.update(source, |record| {
+            record.reactions.retain(|reaction| reaction.result_promise != carrier);
+        })?;
+        queue.remove_await_reactions(carrier);
+        if !self.get(carrier)?.state.is_settled() {
+            self.remove_pending_at_execution_boundary(carrier)?;
+        }
+        Ok(())
+    }
+
+    /// Cancel a PromiseResolve wrapper owned solely by an abandoned native
+    /// await. Its carrier must already be detached with [`Self::cancel_await`].
+    /// Guest source Promises are never passed here: their other reactions,
+    /// resolving functions, and pending resolution jobs must remain live.
+    ///
+    /// A wrapper can have an unstarted thenable/adoption job, or can already
+    /// follow another pending Promise. Remove both forms of incoming work
+    /// before settling it, otherwise stale jobs can invoke guest code after
+    /// heap restoration or try to fulfill a terminal wrapper. Keep the record
+    /// settled so escaped resolving functions retain their once-only guard.
+    pub(crate) fn cancel_owned_await_source(
+        &mut self,
+        source: PromiseHandle,
+        queue: &mut MicrotaskQueue,
+    ) -> Result<(), PromiseError> {
+        let pending = !self.get(source)?.state.is_settled();
+        self.promises.remove_reactions_targeting(source);
+        queue.remove_owned_promise_jobs(source);
+        if pending {
+            self.terminally_reject_without_jobs(source, &Label::Public)?;
+        }
+        self.mark_rejection_handled(source)
     }
 
     /// Get a Promise by handle.
@@ -2097,6 +2159,45 @@ impl MicrotaskQueue {
         self.witness.pop();
         self.enqueue_count = self.enqueue_count.saturating_sub(1);
         Some(task)
+    }
+
+    /// Remove only an abandoned internal await's identity/thrower jobs.
+    /// Vacating slots preserves all surviving FIFO positions and enqueue
+    /// sequence numbers, including when the checkpoint has already begun.
+    fn remove_await_reactions(&mut self, carrier: PromiseHandle) {
+        for index in self.cursor..self.tasks.len() {
+            if matches!(
+                &self.tasks[index],
+                Some(Microtask::PromiseReaction { handler: None, result_promise, .. }
+                    | Microtask::PromiseRejection { result_promise, .. })
+                    if *result_promise == carrier
+            ) {
+                self.tasks.take(index);
+            }
+        }
+    }
+
+    /// Remove work that would resolve or settle an abandoned private source.
+    /// As with carrier cancellation, holes preserve surviving enqueue IDs,
+    /// FIFO positions, and the queue's physical-slot memory charge.
+    fn remove_owned_promise_jobs(&mut self, source: PromiseHandle) {
+        for index in self.cursor..self.tasks.len() {
+            let remove = match &self.tasks[index] {
+                Some(
+                    Microtask::PromiseReaction { result_promise, .. }
+                    | Microtask::PromiseRejection { result_promise, .. }
+                    | Microtask::PromiseCombinator { result_promise, .. },
+                ) => *result_promise == source,
+                Some(
+                    Microtask::ResolveThenable { promise, .. }
+                    | Microtask::AdoptNative { promise, .. },
+                ) => *promise == source,
+                Some(Microtask::QueuedCallback { .. }) | None => false,
+            };
+            if remove {
+                self.tasks.take(index);
+            }
+        }
     }
 
     /// Dequeue the next microtask (FIFO).
@@ -3781,6 +3882,243 @@ mod tests {
             PromiseHandle(2),
             "vacant execution-boundary slots must never be reused"
         );
+    }
+
+    #[test]
+    fn owned_await_cancellation_detaches_adoption_and_preserves_guest_consumers() {
+        for reject in [false, true] {
+            let mut store = PromiseStore::new();
+            let mut queue = MicrotaskQueue::new();
+            // The adopter predates its source: handle order is not the
+            // direction of the forwarding dependency.
+            let owned = store.create();
+            let guest = store.create();
+            let first = store
+                .then_for_await(guest, Label::Confidential, &mut queue)
+                .expect("first independent guest consumer");
+            let label = Label::Custom {
+                name: "abandoned-stream-source".into(),
+                level: 8,
+            };
+            store
+                .register_native_adoption(guest, owned, label)
+                .expect("private wrapper adopts the guest source");
+            let second = store
+                .then_for_await(guest, Label::Secret, &mut queue)
+                .expect("second independent guest consumer");
+            let carrier = store
+                .then_for_await(owned, Label::Public, &mut queue)
+                .expect("private stream continuation");
+            let before = store.estimated_memory_bytes();
+
+            store
+                .cancel_await(owned, carrier, &mut queue)
+                .expect("detach the continuation");
+            store
+                .cancel_owned_await_source(owned, &mut queue)
+                .expect("cancel owned resolution work");
+
+            assert!(store.get(carrier).is_err());
+            let record = store.get(owned).expect("keep the resolver once guard");
+            assert!(record.state.is_settled());
+            assert!(record.rejection_handled);
+            assert_eq!(store.get(guest).unwrap().state, PromiseState::Pending);
+            assert_eq!(
+                store
+                    .get(guest)
+                    .unwrap()
+                    .reactions
+                    .iter()
+                    .map(|reaction| reaction.result_promise)
+                    .collect::<Vec<_>>(),
+                vec![first, first, second, second]
+            );
+            assert!(store.estimated_memory_bytes() < before);
+            assert_eq!(
+                store.estimated_memory_bytes(),
+                store.estimated_memory_bytes_by_walk()
+            );
+
+            if reject {
+                store
+                    .reject(guest, js_str("late"), Label::Internal, &mut queue)
+                    .expect("the independent source remains rejectable");
+            } else {
+                store
+                    .fulfill(guest, js_str("late"), Label::Internal, &mut queue)
+                    .expect("the independent source remains fulfillable");
+            }
+            for (expected, expected_label) in
+                [(first, Label::Confidential), (second, Label::Secret)]
+            {
+                let task = queue.dequeue().expect("surviving consumer runs");
+                if reject {
+                    assert_eq!(
+                        task,
+                        Microtask::PromiseRejection {
+                            reason: js_str("late"),
+                            result_promise: expected,
+                            label: expected_label,
+                        }
+                    );
+                } else {
+                    assert_eq!(
+                        task,
+                        Microtask::PromiseReaction {
+                            handler: None,
+                            argument: js_str("late"),
+                            result_promise: expected,
+                            label: expected_label,
+                        }
+                    );
+                }
+            }
+            assert!(queue.dequeue().is_none(), "no late job targets the wrapper");
+            assert!(store.take_unhandled_rejections().is_empty());
+            assert_eq!(
+                store.estimated_memory_bytes(),
+                store.estimated_memory_bytes_by_walk()
+            );
+            assert_eq!(
+                queue.estimated_memory_bytes(),
+                queue.estimated_memory_bytes_by_walk()
+            );
+        }
+    }
+
+    #[test]
+    fn owned_await_cancellation_preserves_queue_order_ids_and_resident_charges() {
+        for compact_prefix in [false, true] {
+            let mut store = PromiseStore::new();
+            let mut queue = MicrotaskQueue::new();
+            let owned = store.create();
+            let guest = store.create();
+            let other_source = store.create();
+            let carrier = store
+                .then_for_await(owned, Label::Public, &mut queue)
+                .expect("private continuation");
+            let label = Label::Custom {
+                name: "queued-source-label".into(),
+                level: 7,
+            };
+            let prefix = Microtask::QueuedCallback {
+                handler: ClosureHandle(0),
+                label: Label::Public,
+            };
+            let survivors = [
+                Microtask::ResolveThenable {
+                    promise: guest,
+                    then_handler: ClosureHandle(2),
+                    thenable: js_str("independent thenable"),
+                    label: label.clone(),
+                },
+                Microtask::QueuedCallback {
+                    handler: ClosureHandle(4),
+                    label: label.clone(),
+                },
+                Microtask::AdoptNative {
+                    promise: guest,
+                    source: other_source,
+                    settle: true,
+                    label: label.clone(),
+                },
+                Microtask::PromiseReaction {
+                    handler: Some(ClosureHandle(8)),
+                    argument: js_str("independent result"),
+                    result_promise: guest,
+                    label: label.clone(),
+                },
+                Microtask::QueuedCallback {
+                    handler: ClosureHandle(10),
+                    label: Label::Public,
+                },
+            ];
+            let abandoned = [
+                Microtask::ResolveThenable {
+                    promise: owned,
+                    then_handler: ClosureHandle(1),
+                    thenable: js_str("abandoned thenable"),
+                    label: label.clone(),
+                },
+                Microtask::AdoptNative {
+                    promise: owned,
+                    source: guest,
+                    settle: false,
+                    label: label.clone(),
+                },
+                Microtask::PromiseReaction {
+                    handler: None,
+                    argument: js_str("abandoned fulfillment"),
+                    result_promise: owned,
+                    label: label.clone(),
+                },
+                Microtask::PromiseRejection {
+                    reason: js_str("abandoned rejection"),
+                    result_promise: owned,
+                    label: label.clone(),
+                },
+                Microtask::PromiseCombinator {
+                    combinator: PromiseCombinatorReaction {
+                        combinator_id: 0,
+                        index: 0,
+                    },
+                    kind: ReactionKind::Fulfill,
+                    argument: js_str("abandoned combinator"),
+                    result_promise: owned,
+                    label,
+                },
+            ];
+            queue.enqueue(prefix.clone());
+            for (abandoned, survivor) in abandoned.into_iter().zip(&survivors) {
+                queue.enqueue(abandoned);
+                queue.enqueue(survivor.clone());
+            }
+            assert_eq!(queue.dequeue(), Some(prefix));
+            if compact_prefix {
+                queue.compact();
+            }
+            let before = queue.estimated_memory_bytes();
+            let slots = queue.tasks.len();
+            let enqueued = queue.total_enqueued();
+            store
+                .cancel_await(owned, carrier, &mut queue)
+                .expect("detach continuation");
+            store
+                .cancel_owned_await_source(owned, &mut queue)
+                .expect("cancel queued resolution");
+            assert_eq!(queue.pending_count(), survivors.len());
+            assert_eq!(queue.total_enqueued(), enqueued);
+            assert_eq!(queue.tasks.len(), slots, "cancellation leaves physical holes");
+            assert!(queue.estimated_memory_bytes() < before);
+            assert_eq!(
+                queue.estimated_memory_bytes(),
+                queue.estimated_memory_bytes_by_walk()
+            );
+            for expected in survivors {
+                assert_eq!(queue.dequeue(), Some(expected));
+            }
+            assert!(queue.dequeue().is_none());
+            assert_eq!(
+                queue
+                    .witness_log()
+                    .iter()
+                    .filter_map(|event| match event {
+                        WitnessEvent::MicrotaskDequeued { index } => Some(*index),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+                vec![0, 2, 4, 6, 8, 10]
+            );
+            queue.compact();
+            assert_eq!(
+                queue.estimated_memory_bytes(),
+                queue.estimated_memory_bytes_by_walk()
+            );
+            assert_eq!(
+                store.estimated_memory_bytes(),
+                store.estimated_memory_bytes_by_walk()
+            );
+        }
     }
 
     #[test]

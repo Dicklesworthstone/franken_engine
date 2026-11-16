@@ -7054,6 +7054,13 @@ fn readable_from_carries_stored_element_label_into_lifecycle_bd_ojvo1() {
 fn readable_sync_iterator_fixture(
     object_mode: bool,
 ) -> (InterpreterCore, Ir3Module, ObjectId, ObjectId, ObjectId) {
+    readable_iterator_fixture(object_mode, false)
+}
+
+fn readable_iterator_fixture(
+    object_mode: bool,
+    asynchronous: bool,
+) -> (InterpreterCore, Ir3Module, ObjectId, ObjectId, ObjectId) {
     let mut module = test_module_with_functions(
         vec![
             Ir3Instruction::LoadThis { dst: 0 },
@@ -7102,7 +7109,11 @@ fn readable_sync_iterator_fixture(
         .expect("iterator source");
     core.set_object_runtime_property(
         source,
-        RuntimePropertyKey::Symbol(WellKnownSymbol::Iterator.id()),
+        RuntimePropertyKey::Symbol(if asynchronous {
+            WellKnownSymbol::AsyncIterator.id()
+        } else {
+            WellKnownSymbol::Iterator.id()
+        }),
         Value::Function(1),
     )
     .expect("iterator acquisition method");
@@ -7121,6 +7132,40 @@ fn readable_sync_iterator_fixture(
     };
     core.clear_pending_hostcall_result_label();
     (core, module, readable, source, result)
+}
+
+fn readable_pending_iterator_fixture(
+    asynchronous: bool,
+) -> (
+    InterpreterCore,
+    Ir3Module,
+    ObjectId,
+    ObjectId,
+    crate::promise_model::PromiseHandle,
+) {
+    let (mut core, module, readable, source, result) =
+        readable_iterator_fixture(true, asynchronous);
+    let awaited = core.create_promise().expect("pending iterator operation");
+    let (holder, key) = if asynchronous {
+        (source, "result")
+    } else {
+        (result, "value")
+    };
+    core.set_object_property(holder, key.to_string(), Value::Promise(awaited.0))
+        .expect("pending next result or yielded chunk");
+    let projected = core
+        .clone_readable_state_with_budget(readable)
+        .unwrap()
+        .unwrap();
+    core.drive_readable_iterator_source(readable, &module, projected)
+        .expect("suspend the native producer");
+    core.set_object_property(holder, key.to_string(), Value::Undefined)
+        .expect("drop the source's reference to the awaited Promise");
+    for register in 0..2 {
+        core.write_reg(register, Value::Undefined)
+            .expect("drop guest source and option roots");
+    }
+    (core, module, readable, source, awaited)
 }
 
 #[test]
@@ -7248,65 +7293,437 @@ fn readable_from_iterator_fatal_end_listener_prevents_cleanup_bd_305gi_2() {
 }
 
 #[test]
-fn readable_from_iterator_explicitly_refuses_async_sources_and_values_bd_305gi_2() {
-    for asynchronous in [true, false] {
-        let (mut core, module, readable, _, result) = readable_sync_iterator_fixture(true);
-        let chunk = if asynchronous {
-            Value::Promise(core.create_promise().expect("pending source value").0)
-        } else {
+fn readable_from_iterator_pending_values_preserve_gc_roots_and_labels_bd_305gi_2() {
+    for asynchronous in [false, true] {
+        let (mut core, module, readable, source, awaited) =
+            readable_pending_iterator_fixture(asynchronous);
+        assert!(core.readable_from_streams[&readable].buffer.is_empty());
+        assert!(!core.readable_from_streams[&readable].destroy_requested);
+        assert!(!core.readable_from_awaits.is_empty());
+        assert!(core.promise_reaction_callables.is_empty());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        // No guest register or source property retains the awaited Promise.
+        // Exercise suspension roots independently of guest reachability.
+        core.set_gc_stress_interval(Some(1));
+        core.gc_arm_event_loop(None);
+        core.gc_event_loop_safe_point();
+        core.gc_disarm_event_loop();
+        assert!(core.gc_stats().collections > 0);
+        assert_eq!(
+            core.heap[source.0 as usize].properties.get("next"),
+            Some(&Value::Function(0))
+        );
+        assert!(matches!(
+            core.promise_store.get(awaited).unwrap().state,
+            crate::promise_model::PromiseState::Pending
+        ));
+
+        let payload = core
+            .alloc_object_with_properties(&[("message", Value::str("retained chunk"))])
+            .expect("nested chunk payload");
+        let chunk = core
+            .alloc_object_with_properties(&[("payload", Value::Object(payload))])
+            .expect("object chunk");
+        let settlement = if asynchronous {
             Value::Object(
-                core.alloc_object_with_properties(&[("then", Value::Function(0))])
-                    .expect("thenable source value"),
+                core.alloc_object_with_properties(&[
+                    ("value", Value::Object(chunk)),
+                    ("done", Value::Bool(false)),
+                ])
+                .expect("asynchronous iterator result"),
             )
+        } else {
+            Value::Object(chunk)
         };
-        core.set_object_property(result, "value".to_string(), chunk)
-            .expect("asynchronous chunk");
-        let projected = core
-            .clone_readable_state_with_budget(readable)
-            .unwrap()
-            .unwrap();
-        core.drive_readable_iterator_source(readable, &module, projected)
-            .expect("unsupported continuation follows stream error lifecycle");
+        let label = Label::Custom {
+            name: "classified-stream-settlement".into(),
+            level: 8,
+        };
+        core.fulfill_promise(
+            awaited,
+            InterpreterCore::value_to_js_value(&settlement),
+            label.clone(),
+        )
+        .expect("settle suspended producer");
+
+        // The queued reaction is now the only path to the newly allocated
+        // result and payload. Collect before and during its continuation.
+        core.gc_arm_event_loop(None);
+        core.gc_event_loop_safe_point();
+        assert_eq!(
+            core.heap[chunk.0 as usize].properties.get("payload"),
+            Some(&Value::Object(payload))
+        );
+        assert_eq!(
+            core.heap[payload.0 as usize].properties.get("message"),
+            Some(&Value::str("retained chunk"))
+        );
+        core.drain_microtasks(Some(&module))
+            .expect("resume suspended producer");
+        core.gc_event_loop_safe_point();
+        core.gc_disarm_event_loop();
+
+        let state = &core.readable_from_streams[&readable];
+        let buffered = state.buffer.front().expect("resolved data chunk");
+        assert_eq!(state.buffer.len(), 1);
+        assert_eq!(buffered.value, Value::Object(chunk));
+        assert_eq!(buffered.label, label);
+        assert_eq!(state.lifecycle_label, label);
+        assert!(!state.destroy_requested);
+        assert_eq!(
+            core.heap[chunk.0 as usize].properties.get("payload"),
+            Some(&Value::Object(payload))
+        );
+        assert_eq!(
+            core.heap[payload.0 as usize].properties.get("message"),
+            Some(&Value::str("retained chunk"))
+        );
+        assert!(core.readable_from_awaits.is_empty());
+        assert!(core.readable_pump_reservations.is_empty());
+        assert!(core.promise_reaction_callables.is_empty());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+}
+
+#[test]
+fn readable_from_iterator_destroy_awaits_cleanup_and_discards_late_value_bd_305gi_2() {
+    for asynchronous in [false, true] {
+        let (mut core, module, readable, source, awaited) =
+            readable_pending_iterator_fixture(asynchronous);
+        let cleanup = core.create_promise().expect("pending iterator cleanup");
+        core.set_object_property(source, "result".to_string(), Value::Promise(cleanup.0))
+            .expect("return callback result");
+        core.set_object_property(source, "return".to_string(), Value::Function(0))
+            .expect("iterator return callback");
+        core.write_reg(2, Value::Object(readable))
+            .expect("retain the public stream through terminal collection");
+        core.dispatch_readable_destroy(
+            &module,
+            Value::Object(readable),
+            RegRange { start: 0, count: 0 },
+        )
+        .expect("destroy a suspended producer");
+        core.drain_microtasks(Some(&module))
+            .expect("start asynchronous iterator cleanup");
+        assert!(
+            !core.promise_store.get(cleanup).unwrap().reactions.is_empty(),
+            "destroy must enter return() while the original pull is pending"
+        );
+        let cleanup_reactions = core.promise_store.get(cleanup).unwrap().reactions.len();
+        let awaits = core.readable_from_awaits.len();
+        core.dispatch_readable_destroy(
+            &module,
+            Value::Object(readable),
+            RegRange { start: 0, count: 0 },
+        )
+        .expect("duplicate destroy");
+        core.drain_microtasks(Some(&module))
+            .expect("duplicate destroy has no new cleanup work");
+        assert_eq!(
+            core.promise_store.get(cleanup).unwrap().reactions.len(),
+            cleanup_reactions
+        );
+        assert_eq!(core.readable_from_awaits.len(), awaits);
+        core.set_gc_stress_interval(Some(1));
+        core.gc_arm_event_loop(None);
+        core.gc_event_loop_safe_point();
+        core.gc_disarm_event_loop();
+        assert!(core.promise_store.get(awaited).is_ok());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        let settlement = if asynchronous {
+            Value::Object(
+                core.alloc_object_with_properties(&[
+                    ("value", Value::str("late chunk")),
+                    ("done", Value::Bool(false)),
+                ])
+                .expect("late asynchronous result"),
+            )
+        } else {
+            Value::str("late chunk")
+        };
+        core.fulfill_promise(
+            awaited,
+            InterpreterCore::value_to_js_value(&settlement),
+            Label::Public,
+        )
+        .expect("settle the cancelled pull");
+        core.run_event_loop_until_idle_with_module(Some(&module))
+            .expect("discard late fulfillment without closing pending cleanup");
         let state = &core.readable_from_streams[&readable];
         assert!(state.destroy_requested);
-        assert_eq!(state.source, Value::Undefined);
-        assert!(state.buffer.is_empty(), "never emit a Promise as data");
-        let Some(Value::Object(error)) = state.destroy_error else {
-            panic!("typed source refusal");
-        };
-        let message = core.heap[error.0 as usize]
-            .properties
-            .get("message")
-            .unwrap()
-            .to_string();
-        assert!(message.contains("Promise/thenable continuation is not implemented"));
-        assert_eq!(
-            core.estimated_memory_bytes(),
-            core.recompute_estimated_memory_bytes()
-        );
-    }
-
-    for method in [Value::Function(1), Value::Int(1)] {
-        let (mut core, module, _, source, _) = readable_sync_iterator_fixture(true);
-        core.set_object_runtime_property(
-            source,
-            RuntimePropertyKey::Symbol(WellKnownSymbol::AsyncIterator.id()),
-            method,
-        )
-        .expect("async iterator selection");
-        core.write_reg(0, Value::Object(source))
-            .expect("source argument");
-        let streams = core.readable_from_streams.len();
         assert!(
-            matches!(core.construct_readable_from(Some(&module), RegRange { start: 0, count: 1 }),
-            Err(InterpreterError::TypeError { expected, .. }) if expected.contains("async iterator continuation"))
+            state.buffer.is_empty(),
+            "destroyed stream cannot emit late data"
         );
-        assert_eq!(core.readable_from_streams.len(), streams);
+        assert!(matches!(
+            core.promise_store.get(cleanup).unwrap().state,
+            crate::promise_model::PromiseState::Pending
+        ));
+
+        let returned = core
+            .alloc_object_with_properties(&[
+                ("value", Value::Undefined),
+                ("done", Value::Bool(true)),
+            ])
+            .expect("iterator return result");
+        core.fulfill_promise(
+            cleanup,
+            InterpreterCore::value_to_js_value(&Value::Object(returned)),
+            Label::Secret,
+        )
+        .expect("complete asynchronous cleanup");
+        core.run_event_loop_until_idle_with_module(Some(&module))
+            .expect("close after iterator cleanup");
+        assert!(!core.readable_from_streams.contains_key(&readable));
+        assert_eq!(
+            core.readable_terminal_states[&readable].lifecycle_label,
+            Label::Secret
+        );
+        assert!(core.readable_from_awaits.is_empty());
+        assert!(core.pending_readable_from_pumps.is_empty());
+        assert!(core.readable_pump_reservations.is_empty());
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
         );
     }
+}
+
+#[test]
+fn readable_from_iterator_rejection_preserves_exact_reason_and_label_bd_305gi_2() {
+    for asynchronous in [false, true] {
+        let (mut core, module, readable, _, awaited) =
+            readable_pending_iterator_fixture(asynchronous);
+        let nested = core
+            .alloc_object_with_properties(&[("cause", Value::str("classified rejection"))])
+            .expect("nested rejection payload");
+        let reason = core
+            .alloc_object_with_properties(&[("payload", Value::Object(nested))])
+            .expect("exact rejection object");
+        let label = Label::Custom {
+            name: "classified-stream-rejection".into(),
+            level: 9,
+        };
+        core.reject_promise(
+            awaited,
+            InterpreterCore::value_to_js_value(&Value::Object(reason)),
+            label.clone(),
+        )
+        .expect("reject suspended producer");
+        core.set_gc_stress_interval(Some(1));
+        core.gc_arm_event_loop(None);
+        core.gc_event_loop_safe_point();
+        core.drain_microtasks(Some(&module))
+            .expect("convert producer rejection into stream failure");
+        core.gc_event_loop_safe_point();
+        core.gc_disarm_event_loop();
+
+        let state = &core.readable_from_streams[&readable];
+        assert!(state.destroy_requested);
+        assert!(state.buffer.is_empty());
+        assert_eq!(state.destroy_error, Some(Value::Object(reason)));
+        assert_eq!(state.lifecycle_label, label);
+        assert_eq!(
+            core.heap[reason.0 as usize].properties.get("payload"),
+            Some(&Value::Object(nested))
+        );
+        assert_eq!(
+            core.heap[nested.0 as usize].properties.get("cause"),
+            Some(&Value::str("classified rejection"))
+        );
+        assert!(core.readable_from_awaits.is_empty());
+        assert!(core.readable_pump_reservations.is_empty());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+}
+
+#[test]
+fn readable_from_iterator_reset_cancels_only_its_own_await_bd_305gi_2() {
+    for asynchronous in [false, true] {
+        for settle_before_reset in [false, true] {
+            let (mut core, module, readable, _, awaited) =
+                readable_pending_iterator_fixture(asynchronous);
+            let sibling = core
+                .register_promise_then(awaited, None, None, Label::Public)
+                .expect("independent consumer of the same source Promise");
+            if settle_before_reset {
+                core.fulfill_promise(
+                    awaited,
+                    crate::object_model::JsValue::Int(42),
+                    Label::Secret,
+                )
+                .expect("queue both the native await and the independent reaction");
+            }
+
+            core.clear_readable_execution_state();
+            assert!(!core.readable_from_streams.contains_key(&readable));
+            assert!(core.readable_from_awaits.is_empty());
+            assert!(core.pending_readable_from_pumps.is_empty());
+            assert!(core.readable_pump_reservations.is_empty());
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+
+            if !settle_before_reset {
+                assert!(matches!(
+                    core.promise_store.get(awaited).unwrap().state,
+                    crate::promise_model::PromiseState::Pending
+                ));
+                core.fulfill_promise(
+                    awaited,
+                    crate::object_model::JsValue::Int(42),
+                    Label::Secret,
+                )
+                .expect("the external Promise remains independently settleable");
+            }
+            core.drain_microtasks(Some(&module))
+                .expect("cancelled await leaves no stale carrier reaction");
+            let sibling = core.promise_store.get(sibling).unwrap();
+            assert_eq!(
+                sibling.state,
+                crate::promise_model::PromiseState::Fulfilled(
+                    crate::object_model::JsValue::Int(42)
+                )
+            );
+            assert_eq!(sibling.label, Label::Secret);
+            assert!(core.readable_from_streams.is_empty());
+            assert!(core.readable_from_awaits.is_empty());
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+}
+
+#[test]
+fn readable_from_iterator_reset_cancels_unstarted_thenable_body_bd_305gi_2() {
+    let (mut core, mut module, readable, _, result) = readable_sync_iterator_fixture(true);
+    let entry = u32::try_from(module.instructions.len()).unwrap();
+    let then_function = u32::try_from(module.function_table.len()).unwrap();
+    let property = u32::try_from(module.constant_pool.len()).unwrap();
+    module.constant_pool.push("called".into());
+    module.instructions.extend([
+        Ir3Instruction::LoadThis { dst: 0 },
+        Ir3Instruction::LoadStr {
+            dst: 1,
+            pool_index: property,
+        },
+        Ir3Instruction::LoadBool {
+            dst: 2,
+            value: true,
+        },
+        Ir3Instruction::SetProperty {
+            obj: 0,
+            key: 1,
+            val: 2,
+        },
+        Ir3Instruction::Return { value: 2 },
+    ]);
+    module.function_table.push(Ir3FunctionDesc {
+        entry,
+        arity: 2,
+        frame_size: 3,
+        name: Some("stream_thenable_body".to_string()),
+        is_generator: false,
+        rest_param_index: None,
+    });
+    let thenable = core
+        .alloc_object_with_properties(&[
+            ("then", Value::Function(then_function)),
+            ("called", Value::Bool(false)),
+        ])
+        .expect("observable thenable body");
+    core.set_object_property(result, "value".to_string(), Value::Object(thenable))
+        .expect("thenable source chunk");
+    core.write_reg(2, Value::Object(thenable))
+        .expect("retain the callback's observable state after reset");
+    let projected = core
+        .clone_readable_state_with_budget(readable)
+        .unwrap()
+        .unwrap();
+    core.drive_readable_iterator_source(readable, &module, projected)
+        .expect("queue thenable assimilation without calling its body");
+    let context = core.readable_from_awaits.values().next().unwrap();
+    assert!(context.owned_source);
+    let owned_source = context.source;
+    let independent = core.create_promise().expect("independent source Promise");
+    let sibling = core
+        .register_promise_then(independent, None, None, Label::Public)
+        .expect("unrelated queued reaction");
+    core.fulfill_promise(
+        independent,
+        crate::object_model::JsValue::Int(9),
+        Label::Secret,
+    )
+    .expect("queue the independent consumer");
+
+    core.clear_readable_execution_state();
+    assert!(
+        core.promise_store
+            .get(owned_source)
+            .map(|record| record.state.is_settled())
+            .unwrap_or(true),
+        "reset must not leave its abandoned PromiseResolve wrapper pending"
+    );
+    core.drain_microtasks(Some(&module))
+        .expect("only unrelated guest work survives reset");
+    assert_eq!(
+        core.heap[thenable.0 as usize].properties.get("called"),
+        Some(&Value::Bool(false)),
+        "the abandoned thenable body must not run in the next execution"
+    );
+    let sibling = core.promise_store.get(sibling).unwrap();
+    assert_eq!(
+        sibling.state,
+        crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Int(9))
+    );
+    assert_eq!(sibling.label, Label::Secret);
+    assert!(core.readable_from_streams.is_empty());
+    assert!(core.readable_from_awaits.is_empty());
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+}
+
+#[test]
+fn readable_from_iterator_noncallable_async_method_refuses_without_state_bd_305gi_2() {
+    let (mut core, module, _, source, _) = readable_sync_iterator_fixture(true);
+    core.set_object_runtime_property(
+        source,
+        RuntimePropertyKey::Symbol(WellKnownSymbol::AsyncIterator.id()),
+        Value::Int(1),
+    )
+    .expect("invalid async iterator method");
+    core.write_reg(0, Value::Object(source))
+        .expect("source argument");
+    let streams = core.readable_from_streams.len();
+    assert!(matches!(
+        core.construct_readable_from(Some(&module), RegRange { start: 0, count: 1 }),
+        Err(InterpreterError::TypeError { .. })
+    ));
+    assert_eq!(core.readable_from_streams.len(), streams);
+    assert!(core.readable_from_awaits.is_empty());
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
 }
 
 #[test]

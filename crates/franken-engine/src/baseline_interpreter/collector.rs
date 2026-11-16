@@ -856,6 +856,7 @@ impl GcMarker {
     fn readable_from_state(&mut self, state: &ReadableFromState) {
         let ReadableFromState {
             source,
+            iterator_is_async: _,
             push_only: _,
             object_mode: _,
             high_water_mark: _,
@@ -896,6 +897,7 @@ impl GcMarker {
             result,
             error,
             label: _,
+            awaiting: _,
         }) = to_array_waiter
         {
             self.promise(promise.0);
@@ -2049,6 +2051,7 @@ impl InterpreterCore {
             next_stream_pipeline_token: _,
             pending_stream_emissions,
             readable_from_streams,
+            readable_from_awaits,
             // Labels only; weak, purged after the sweep (bd-9vouw.164).
             readable_terminal_states: _,
             pending_readable_from_pumps,
@@ -2423,6 +2426,17 @@ impl InterpreterCore {
             m.object(*stream);
             m.readable_from_state(state);
         }
+        for (ticket, context) in readable_from_awaits {
+            let ReadableFromAwait {
+                object_id,
+                source,
+                kind: _,
+                owned_source: _,
+            } = context;
+            m.object(*object_id);
+            m.promise(*ticket);
+            m.promise(source.0);
+        }
         pending_readable_from_pumps
             .values()
             .for_each(|stream| m.object(*stream));
@@ -2676,7 +2690,8 @@ mod tests {
                      return [Object.create(callable), callable, payload]; }})()"
                 ));
                 let mut core = carrier_core();
-                let Value::Object(result) = core.execute(&module).expect("create prototype link").value
+                let Value::Object(result) =
+                    core.execute(&module).expect("create prototype link").value
                 else {
                     panic!("fixture returns identity witnesses");
                 };
@@ -2689,13 +2704,18 @@ mod tests {
                             .clone()
                     })
                     .collect::<Vec<_>>();
-                let [Value::Object(holder), Value::Closure(closure), Value::Object(payload)] =
-                    values.as_slice()
+                let [
+                    Value::Object(holder),
+                    Value::Closure(closure),
+                    Value::Object(payload),
+                ] = values.as_slice()
                 else {
                     panic!("holder, callable and captured payload");
                 };
                 let (holder, closure, payload) = (*holder, *closure, *payload);
-                let backing = core.heap[holder.0 as usize].prototype.expect("callable backing");
+                let backing = core.heap[holder.0 as usize]
+                    .prototype
+                    .expect("callable backing");
                 core.clear_current_register_frame();
                 core.set_reg(0, Value::Object(holder));
                 let memory_limit = core.config.max_total_memory_bytes;
@@ -2725,7 +2745,10 @@ mod tests {
                     ),
                     Ok(Value::Int(42))
                 );
-                assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes()
+                );
 
                 core.clear_current_register_frame();
                 core.collect_garbage();
@@ -2733,7 +2756,10 @@ mod tests {
                 for object in [holder, backing, payload] {
                     assert!(core.heap.is_reclaimed(object.0 as usize));
                 }
-                assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes()
+                );
             }
         }
     }

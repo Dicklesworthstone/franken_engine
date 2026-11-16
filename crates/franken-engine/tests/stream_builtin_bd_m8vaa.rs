@@ -3374,6 +3374,223 @@ setTimeout(() => console.log(log.join(' ')), 20);";
 }
 
 #[test]
+fn native_from_async_array_values_resolve_thenables_and_observe_elements_bd_305gi_2() {
+    let source = r#"
+        import { Readable } from 'stream';
+        const events = [];
+        const retained = { value: 'c', then: 42 };
+        const thenable = {
+          get then() {
+            events.push('get');
+            return resolve => { events.push('call'); resolve('b'); resolve('ignored'); };
+          }
+        };
+        const values = [Promise.resolve('a'), thenable, retained];
+        Object.defineProperty(values, '0', {
+          get() { events.push('element'); return Promise.resolve('a'); }
+        });
+        const stream = Readable.from(values);
+        events.push('created');
+        stream.toArray().then(result => {
+          console.log(result[0], result[1], result[2] === retained, events.join(','));
+        });
+    "#;
+    assert_native_stream_console_on_both_lanes(source, "a b true created,element,get,get,call");
+}
+
+#[test]
+fn native_from_async_sync_generator_waits_for_promised_chunks_bd_305gi_2() {
+    let source = r#"
+        import { Readable } from 'stream';
+        const events = [];
+        function* values() {
+          try {
+            yield Promise.resolve('a');
+            yield new Promise(resolve => setImmediate(() => resolve('b')));
+            yield 'c';
+          } finally { events.push('finally'); }
+        }
+        const stream = Readable.from(values());
+        stream.on('end', () => events.push('end'));
+        stream.on('close', () => events.push('close'));
+        stream.toArray().then(result => console.log(result.join(','), events.join(',')));
+    "#;
+    assert_native_stream_console_on_both_lanes(source, "a,b,c finally,end,close");
+}
+
+#[test]
+fn native_from_async_generator_collects_and_finalizes_bd_305gi_2() {
+    let source = r#"
+        import { Readable } from 'stream';
+        const events = [];
+        async function* values() {
+          try {
+            yield 1;
+            await new Promise(resolve => setImmediate(resolve));
+            yield 2;
+            yield Promise.resolve(3);
+          } finally { events.push('finally'); }
+        }
+        const stream = Readable.from(values());
+        events.push('created');
+        stream.on('end', () => events.push('end'));
+        stream.on('close', () => events.push('close'));
+        stream.toArray().then(result => console.log(result.join(','), events.join(',')));
+    "#;
+    assert_native_stream_console_on_both_lanes(source, "1,2,3 created,finally,end,close");
+}
+
+#[test]
+fn native_from_async_iterator_selects_async_and_observes_result_order_bd_305gi_2() {
+    let source = r#"
+        import { Readable } from 'stream';
+        const events = [];
+        let index = 0;
+        const source = {
+          get [Symbol.asyncIterator]() {
+            events.push('async-get');
+            return function () { events.push('async-call'); return this; };
+          },
+          get [Symbol.iterator]() { throw new Error('sync iterator must not be read'); },
+          next() {
+            const value = ++index;
+            events.push('next:' + value);
+            return Promise.resolve({
+              get value() { events.push('value:' + value); return Promise.resolve(value); },
+              get done() { events.push('done:' + value); return value > 2; }
+            });
+          },
+          return() {
+            events.push('return');
+            return Promise.resolve({ value: Promise.resolve('closed') });
+          }
+        };
+        const stream = Readable.from(source);
+        events.push('created');
+        stream.toArray().then(result => console.log(result.join(','), events.join(',')));
+    "#;
+    assert_native_stream_console_on_both_lanes(
+        source,
+        "1,2 async-get,async-get,async-call,created,next:1,value:1,done:1,next:2,value:2,done:2,next:3,value:3,done:3,return",
+    );
+}
+
+#[test]
+fn native_from_async_rejection_preserves_identity_and_awaits_cleanup_bd_305gi_2() {
+    let source = r#"
+        import { Readable } from 'stream';
+        const events = [];
+        const failure = new Error('source failed');
+        const source = {
+          [Symbol.asyncIterator]() { return this; },
+          next() { return Promise.reject(failure); },
+          throw(error) {
+            events.push(error === failure ? 'throw' : 'wrong');
+            return Promise.resolve({ value: Promise.resolve('ignored'), done: false });
+          },
+          return() {
+            events.push('return');
+            return new Promise(resolve => setImmediate(() => {
+              events.push('cleaned');
+              resolve({ value: Promise.resolve('closed') });
+            }));
+          }
+        };
+        const stream = Readable.from(source);
+        stream.on('error', error => events.push(error === failure ? 'error' : 'wrong-error'));
+        stream.on('close', () => events.push('close'));
+        stream.toArray().catch(error => console.log(error === failure, events.join(',')));
+    "#;
+    assert_native_stream_console_on_both_lanes(source, "true throw,return,cleaned,error,close");
+}
+
+#[test]
+fn native_from_async_cleanup_rejection_keeps_both_errors_bd_305gi_2() {
+    let source = r#"
+        import { Readable } from 'stream';
+        const failure = new Error('source failed');
+        const cleanup = new Error('cleanup failed');
+        const source = {
+          [Symbol.iterator]() { return this; },
+          next() { return { value: Promise.reject(failure), done: false }; },
+          return() { return Promise.reject(cleanup); }
+        };
+        Readable.from(source).toArray().catch(error => {
+          console.log(error instanceof AggregateError, error.errors[0] === cleanup,
+                      error.errors[1] === failure, error.message);
+        });
+    "#;
+    assert_native_stream_console_on_both_lanes(source, "true true true cleanup failed");
+}
+
+#[test]
+fn native_from_async_destroy_suppresses_late_next_and_awaits_return_bd_305gi_2() {
+    let source = r#"
+        import { Readable } from 'stream';
+        const events = [];
+        let releaseNext;
+        let returns = 0;
+        const source = {
+          [Symbol.asyncIterator]() { return this; },
+          next() {
+            events.push('next');
+            return new Promise(resolve => { releaseNext = resolve; });
+          },
+          return() {
+            returns++;
+            events.push('return');
+            return new Promise(resolve => setImmediate(() => {
+              events.push('cleaned'); resolve({ done: true });
+            }));
+          }
+        };
+        const stream = Readable.from(source);
+        stream.on('data', () => events.push('unexpected-data'));
+        stream.on('close', () => {
+          events.push('close');
+          releaseNext({ value: 'late', done: false });
+          setImmediate(() => console.log(returns, events.join(',')));
+        });
+        setImmediate(() => { stream.destroy(); stream.destroy(); });
+    "#;
+    assert_native_stream_console_on_both_lanes(source, "1 next,return,cleaned,close");
+}
+
+#[test]
+fn native_from_async_pipe_keeps_one_next_in_flight_and_respects_backpressure_bd_305gi_2() {
+    let source = r#"
+        import { Readable, Writable } from 'stream';
+        let current = 0;
+        let active = 0;
+        let peak = 0;
+        const input = {
+          [Symbol.asyncIterator]() { return this; },
+          next() {
+            const value = ++current;
+            active++;
+            peak = Math.max(peak, active);
+            return new Promise(resolve => setImmediate(() => {
+              active--; resolve({ value, done: value > 3 });
+            }));
+          }
+        };
+        const chunks = [];
+        const stream = Readable.from(input);
+        const sink = new Writable({
+          objectMode: true,
+          highWaterMark: 1,
+          write(chunk, encoding, done) {
+            chunks.push(chunk);
+            setImmediate(done);
+          }
+        });
+        sink.on('finish', () => console.log(chunks.join(','), peak, active, current));
+        stream.pipe(sink);
+    "#;
+    assert_native_stream_console_on_both_lanes(source, "1,2,3 1 0 4");
+}
+
+#[test]
 fn native_from_array_observes_indexed_getters_lazily_bd_305gi_2() {
     assert_native_stream_console_on_both_lanes(
         r#"
@@ -3439,4 +3656,60 @@ stream.toArray().then(
 "#,
         "true get:0,error,close",
     );
+}
+
+#[test]
+fn native_from_async_data_preserves_promise_and_thenable_identity_bd_305gi_2() {
+    let source = r#"
+        import { Readable } from 'stream';
+        let thenReads = 0;
+        const thenable = {
+          get then() { thenReads++; throw new Error('async source value was assimilated'); }
+        };
+        const values = [Promise.resolve(7), thenable];
+        const identities = [];
+        let nextIndex = 0;
+        let dataIndex = 0;
+        const input = {
+          [Symbol.asyncIterator]() { return this; },
+          next() {
+            const index = nextIndex++;
+            return Promise.resolve({ value: values[index], done: index === values.length });
+          }
+        };
+        const stream = Readable.from(input);
+        stream.on('data', chunk => identities.push(chunk === values[dataIndex++]));
+        stream.on('close', () => console.log(identities.join(','), thenReads));
+    "#;
+    assert_native_stream_console_on_both_lanes(source, "true,true 0");
+}
+
+#[test]
+fn native_from_async_reentrant_destroy_consumes_late_rejection_bd_305gi_2() {
+    let source = r#"
+        import { Readable } from 'stream';
+        const events = [];
+        const failure = new Error('late rejection');
+        let stream;
+        const input = {
+          [Symbol.asyncIterator]() { return this; },
+          next() {
+            events.push('next');
+            stream.destroy();
+            return Promise.reject(failure);
+          },
+          return() {
+            events.push('return');
+            return Promise.resolve({ done: true });
+          }
+        };
+        stream = Readable.from(input);
+        stream.on('data', () => events.push('unexpected-data'));
+        stream.on('error', () => events.push('unexpected-error'));
+        stream.on('close', () => {
+          events.push('close');
+          setImmediate(() => console.log(events.join(',')));
+        });
+    "#;
+    assert_native_stream_console_on_both_lanes(source, "next,return,close");
 }

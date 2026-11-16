@@ -1008,12 +1008,12 @@ const MAX_TLS_ALPN_WIRE_BYTES: u64 = u16::MAX as u64;
 const MAX_LOOPBACK_HOST_BYTES: usize = 253;
 /// Conservative base charge for one finite `Readable.from` side-table entry.
 /// A retained string source and custom IFC label are charged separately.
-const MEMORY_ESTIMATE_READABLE_FROM_BASE_BYTES: u64 = 64;
+const MEMORY_ESTIMATE_READABLE_FROM_BASE_BYTES: u64 = 64 + std::mem::size_of::<bool>() as u64;
 const MEMORY_ESTIMATE_READABLE_BUFFERED_CHUNK_BYTES: u64 = 32;
 /// Additional retained side-table charge while `Readable.toArray()` waits for
 /// the stream's terminal close phase before settling its Promise.
 const MEMORY_ESTIMATE_READABLE_TO_ARRAY_WAITER_BYTES: u64 =
-    48 + std::mem::size_of::<Option<Value>>() as u64;
+    48 + std::mem::size_of::<Option<Value>>() as u64 + std::mem::size_of::<bool>() as u64;
 /// Fixed charge retained after a Readable releases its live kernel. The
 /// terminal lifecycle label is charged separately.
 const MEMORY_ESTIMATE_READABLE_TERMINAL_BASE_BYTES: u64 = 64;
@@ -15862,6 +15862,47 @@ enum ReadableFromPumpPhase {
     SettleToArray,
 }
 
+/// Native producer suspension points. Each ticket is an internal await
+/// carrier, rather than a guest callable retained for every streamed chunk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReadableFromAwaitKind {
+    Next,
+    SyncNext,
+    Value,
+    ToArrayValue,
+    ThrowResult,
+    ThrowValue { done: bool },
+    ReturnResult,
+    ReturnValue,
+}
+
+impl ReadableFromAwaitKind {
+    fn is_cleanup(self) -> bool {
+        matches!(
+            self,
+            Self::ThrowResult | Self::ThrowValue { .. } | Self::ReturnResult | Self::ReturnValue
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ReadableFromAwait {
+    object_id: ObjectId,
+    kind: ReadableFromAwaitKind,
+    source: crate::promise_model::PromiseHandle,
+    owned_source: bool,
+}
+
+/// A protocol observation is completed before its result is published to
+/// the stream, so getter/callback provenance accompanies every transition.
+enum ReadableFromStep {
+    Chunk(Value),
+    Collected(Value),
+    Eof,
+    Await(Value, ReadableFromAwaitKind),
+    Complete,
+}
+
 /// Private result for native Readable.toArray(). Finite sources can populate
 /// it immediately; pushed streams append only as their pull queue is consumed.
 /// Success and explicit destruction settle after `close`. A manually emitted
@@ -15875,6 +15916,9 @@ struct ReadableToArrayWaiter {
     /// Preserve the first observed error independently of a later destroy
     /// error. Observing `error` must not synchronously destroy the stream.
     error: Option<Value>,
+    /// The consumer's async iteration unwraps object chunks independently
+    /// of the producer; data listeners still see their original identity.
+    awaiting: bool,
 }
 
 /// Authenticated, engine-owned WHATWG URL state (bd-8y0gs). The guest heap
@@ -15927,14 +15971,14 @@ struct ReadableBufferedChunk {
     units: usize,
 }
 
-/// Finite pure-compute readable state. The cursor and flow-control bit stay
-/// outside the JS heap so guest property writes cannot forge stream progress.
-/// Within the supported array subset, own indexed elements and length are read
-/// lazily so ordinary source mutation is observed between pump turns. Custom
-/// iterators, accessors, and inherited indexed properties remain fail-closed.
+/// Engine-owned readable state. Iterators, buffered chunks and flow control
+/// stay outside the JS heap so guest property writes cannot forge progress.
+/// Acquired sync/async iterators are pulled lazily; awaited next results,
+/// promised chunks and cleanup are resumed by private Promise continuations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ReadableFromState {
     source: Value,
+    iterator_is_async: bool,
     /// Generic `new Readable(...)` instances accept only explicit `push(null)`
     /// termination in this slice; they must not treat their placeholder source
     /// as an already-exhausted finite iterable when resumed.
@@ -17227,6 +17271,9 @@ pub struct InterpreterCore {
     /// Values and IFC labels remain engine-owned while lifecycle events reuse
     /// the shared EventEmitter tables above.
     readable_from_streams: BTreeMap<ObjectId, ReadableFromState>,
+    /// Awaited next results, chunks and iterator cleanup. The stream and
+    /// source Promise remain traced until the corresponding reaction runs.
+    readable_from_awaits: BTreeMap<u32, ReadableFromAwait>,
     /// Released Readable instances retain compact IFC provenance without
     /// participating in live pump scans.
     readable_terminal_states: BTreeMap<ObjectId, ReadableTerminalState>,

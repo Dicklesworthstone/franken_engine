@@ -7703,6 +7703,158 @@ fn readable_from_iterator_reset_cancels_unstarted_thenable_body_bd_305gi_2() {
 }
 
 #[test]
+fn readable_to_array_pending_chunk_survives_close_with_terminal_error_bd_305gi_2() {
+    for reject_chunk in [false, true] {
+        let (mut core, module, readable, _, result) = readable_iterator_fixture(true, true);
+        let chunk = core.create_promise().expect("pending consumer chunk");
+        core.set_object_property(result, "value".to_string(), Value::Promise(chunk.0))
+            .expect("async iterator emits the raw Promise");
+        let Value::Promise(consumer_id) = core
+            .readable_to_array(Value::Object(readable))
+            .expect("native toArray consumer")
+        else {
+            panic!("toArray must return a Promise");
+        };
+        let consumer = crate::promise_model::PromiseHandle(consumer_id);
+        // This unit test observes the returned rejection directly, instead
+        // of installing a guest catch callback that creates another Promise.
+        core.promise_store
+            .mark_rejection_handled(consumer)
+            .expect("observe the eventual consumer rejection");
+        let projected = core
+            .clone_readable_state_with_budget(readable)
+            .unwrap()
+            .unwrap();
+        core.drive_readable_iterator_source(readable, &module, projected)
+            .expect("request the asynchronous iterator result");
+        core.drain_microtasks(Some(&module))
+            .expect("buffer the Promise without awaiting its value");
+        let projected = core
+            .clone_readable_state_with_budget(readable)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            projected.buffer.front().unwrap().value,
+            Value::Promise(chunk.0)
+        );
+        core.drive_readable_to_array(readable, &module, projected)
+            .expect("suspend the consumer on its yielded chunk");
+        let waiter = core.readable_from_streams[&readable]
+            .to_array_waiter
+            .as_ref()
+            .unwrap();
+        assert!(waiter.awaiting);
+        let accumulator = waiter.result;
+        for (register, value) in [
+            (2, Value::Object(readable)),
+            (3, Value::Promise(consumer_id)),
+            (4, Value::Object(accumulator)),
+        ] {
+            core.write_reg(register, value).expect("retain observed outcomes");
+        }
+        core.set_object_property(result, "value".to_string(), Value::Undefined)
+            .expect("drop the producer's reference to the pending chunk");
+        core.dispatch_readable_destroy(
+            &module,
+            Value::Object(readable),
+            RegRange { start: 0, count: 0 },
+        )
+        .expect("destroy while toArray awaits its chunk");
+        core.run_event_loop_until_idle_with_module(Some(&module))
+            .expect("complete close without settling the suspended consumer");
+        let closed = &core.readable_from_streams[&readable];
+        assert_eq!(closed.phase, ReadableFromPumpPhase::SettleToArray);
+        assert!(closed.to_array_waiter.as_ref().unwrap().awaiting);
+        assert!(matches!(
+            core.promise_store.get(consumer).unwrap().state,
+            crate::promise_model::PromiseState::Pending
+        ));
+        assert!(core.read_array_like_values(accumulator).is_empty());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        core.set_gc_stress_interval(Some(1));
+        core.gc_arm_event_loop(None);
+        core.gc_event_loop_safe_point();
+        core.gc_disarm_event_loop();
+        assert!(matches!(
+            core.promise_store.get(chunk).unwrap().state,
+            crate::promise_model::PromiseState::Pending
+        ));
+        let label = Label::Custom {
+            name: "late-consumer-settlement".into(),
+            level: 8,
+        };
+        let reason = if reject_chunk {
+            let reason = core
+                .alloc_object_with_properties(&[
+                    ("message", Value::str("late chunk rejection")),
+                    ("payload", Value::Int(73)),
+                ])
+                .expect("exact late rejection");
+            core.reject_promise(
+                chunk,
+                InterpreterCore::value_to_js_value(&Value::Object(reason)),
+                label.clone(),
+            )
+            .expect("reject after the stream has closed");
+            Some(reason)
+        } else {
+            core.fulfill_promise(chunk, crate::object_model::JsValue::Int(42), label.clone())
+                .expect("fulfill after the stream has closed");
+            None
+        };
+        core.run_event_loop_until_idle_with_module(Some(&module))
+            .expect("settle the retained consumer after its chunk");
+        let record = core.promise_store.get(consumer).expect("consumer result");
+        assert_eq!(record.label, label);
+        let crate::promise_model::PromiseState::Rejected(rejected) = &record.state else {
+            panic!("closed consumer must reject after its chunk settles");
+        };
+        let Value::Object(error) = core.js_value_to_value(rejected) else {
+            panic!("consumer must retain a structured terminal error");
+        };
+        let premature_close = if let Some(reason) = reason {
+            let Some(Value::Object(errors)) = core.heap[error.0 as usize].properties.get("errors")
+            else {
+                panic!("late rejection must aggregate with the earlier close error");
+            };
+            let errors = core.read_array_like_values(*errors);
+            assert_eq!(errors.len(), 2);
+            assert_eq!(errors[0], Value::Object(reason));
+            assert_eq!(
+                core.heap[reason.0 as usize].properties.get("payload"),
+                Some(&Value::Int(73))
+            );
+            let Value::Object(premature_close) = errors[1] else {
+                panic!("aggregate must retain the premature-close Error");
+            };
+            premature_close
+        } else {
+            error
+        };
+        assert_eq!(
+            core.heap[premature_close.0 as usize].properties.get("code"),
+            Some(&Value::str("ERR_STREAM_PREMATURE_CLOSE"))
+        );
+        assert!(
+            core.read_array_like_values(accumulator).is_empty(),
+            "a late fulfilled chunk must not enter the closed consumer's result"
+        );
+        assert!(!core.readable_from_streams.contains_key(&readable));
+        assert!(core.readable_from_awaits.is_empty());
+        assert!(core.pending_readable_from_pumps.is_empty());
+        assert!(core.readable_pump_reservations.is_empty());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+}
+
+#[test]
 fn readable_from_iterator_noncallable_async_method_refuses_without_state_bd_305gi_2() {
     let (mut core, module, _, source, _) = readable_sync_iterator_fixture(true);
     core.set_object_runtime_property(

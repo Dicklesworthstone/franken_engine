@@ -3713,3 +3713,86 @@ fn native_from_async_reentrant_destroy_consumes_late_rejection_bd_305gi_2() {
     "#;
     assert_native_stream_console_on_both_lanes(source, "next,return,close");
 }
+
+#[test]
+fn native_from_async_to_array_waits_for_chunk_after_destroy_bd_305gi_2() {
+    let source = r#"
+        import { Readable } from 'stream';
+        let stream;
+        let release;
+        let settled = false;
+        let first = true;
+        const chunk = {
+          then(resolve) {
+            release = resolve;
+            setImmediate(() => stream.destroy());
+          }
+        };
+        const input = {
+          [Symbol.asyncIterator]() { return this; },
+          next() {
+            if (!first) return new Promise(() => {});
+            first = false;
+            return Promise.resolve({ value: chunk, done: false });
+          },
+          return() { return { done: true }; }
+        };
+        stream = Readable.from(input);
+        stream.on('close', () => setImmediate(() => setImmediate(() => {
+          console.log('pending', settled);
+          release('late chunk');
+        })));
+        stream.toArray().then(
+          () => { settled = true; console.log('unexpected fulfillment'); },
+          error => { settled = true; console.log('rejected', error.code); }
+        );
+    "#;
+    assert_native_stream_console_on_both_lanes(
+        source,
+        "pending false\nrejected ERR_STREAM_PREMATURE_CLOSE",
+    );
+}
+
+#[test]
+fn native_from_async_to_array_aggregates_late_chunk_rejection_bd_305gi_2() {
+    let source = r#"
+        import { Readable } from 'stream';
+        let stream;
+        let rejectChunk;
+        let settled = false;
+        let first = true;
+        const failure = new Error('late chunk rejection');
+        const chunk = {
+          then(resolve, reject) {
+            rejectChunk = reject;
+            setImmediate(() => stream.destroy());
+          }
+        };
+        const input = {
+          [Symbol.asyncIterator]() { return this; },
+          next() {
+            if (!first) return new Promise(() => {});
+            first = false;
+            return Promise.resolve({ value: chunk, done: false });
+          },
+          return() { return { done: true }; }
+        };
+        stream = Readable.from(input);
+        stream.on('close', () => setImmediate(() => setImmediate(() => {
+          console.log('pending', settled);
+          rejectChunk(failure);
+        })));
+        stream.toArray().then(
+          () => { settled = true; console.log('unexpected fulfillment'); },
+          error => {
+            settled = true;
+            console.log('rejected', error instanceof AggregateError,
+                        error.errors[0] === failure, error.errors[1].code);
+          }
+        );
+    "#;
+    assert_native_stream_console_on_both_lanes(
+        source,
+        "pending false\nrejected true true ERR_STREAM_PREMATURE_CLOSE",
+    );
+}

@@ -4119,6 +4119,107 @@ impl InterpreterCore {
         true
     }
 
+    /// A consumer can be suspended inside an async iterator's yielded
+    /// Promise after the stream itself has closed. Keep that outcome alive:
+    /// its rejection is combined with an already-observed close error,
+    /// while fulfillment observes that error without publishing a late chunk.
+    pub(super) fn finish_readable_to_array_await(
+        &mut self,
+        object_id: ObjectId,
+        module: &Ir3Module,
+        result: Result<Value, Value>,
+        mut label: Label,
+    ) -> Result<(), InterpreterError> {
+        if let Some(waiter) = self
+            .readable_from_streams
+            .get_mut(&object_id)
+            .and_then(|state| state.to_array_waiter.as_mut())
+        {
+            waiter.awaiting = false;
+        }
+        let result = match result {
+            Err(reason) => {
+                let previous = self.readable_from_streams.get(&object_id)
+                    .and_then(|state| state.to_array_waiter.as_ref())
+                    .and_then(|waiter| waiter.error.as_ref());
+                let temporary = Self::estimate_value_bytes(&reason)
+                    .saturating_add(previous.map_or(0, Self::estimate_value_bytes))
+                    .saturating_mul(2)
+                    .saturating_add(Self::estimate_label_bytes(&label).saturating_mul(2));
+                self.check_temporary_memory_budget(temporary)?;
+                let previous = previous.cloned();
+                if let Some(previous) = previous {
+                    let mut observed = label.clone();
+                    let merged = self.with_promise_temporary_bytes(temporary, |core| {
+                        core.in_promise_resolution_context(&label, |core| {
+                            let observation = core.begin_property_observation([])?;
+                            let outcome =
+                                core.aggregate_readable_iterator_errors(module, reason, previous);
+                            let outcome = core.finish_property_read_observation(observation, outcome);
+                            if !matches!(&outcome, Err(error) if Self::stops_guest_execution(error)) {
+                                observed = core.join_owned_label_with_temporary_budget(
+                                    observed.clone(),
+                                    &core.json_parse_context_label()?,
+                                )?;
+                            }
+                            outcome
+                        })
+                    });
+                    label = observed;
+                    Err(match merged {
+                        Ok(reason) => reason,
+                        Err(error) => self.take_readable_iterator_error(error, &mut label)?,
+                    })
+                } else {
+                    Err(reason)
+                }
+            }
+            Ok(value) => Ok(value),
+        };
+        let Some(mut projected) = self.clone_readable_state_with_budget(object_id)? else {
+            return Ok(());
+        };
+        if projected.to_array_waiter.is_none() {
+            return Ok(());
+        }
+        projected.lifecycle_label =
+            self.join_owned_label_with_temporary_budget(projected.lifecycle_label, &label)?;
+        if let Err(reason) = &result {
+            self.check_temporary_memory_budget(
+                Self::estimate_readable_from_state_bytes(&projected)
+                    .saturating_add(Self::estimate_value_bytes(reason)),
+            )?;
+            projected.to_array_waiter.as_mut().expect("checked consumer").error =
+                Some(reason.clone());
+        }
+        if projected.destroy_requested {
+            return self.commit_readable_state_and_schedule(object_id, projected);
+        }
+        match result {
+            Ok(value) => {
+                if projected.eof_requested && projected.buffer.is_empty() {
+                    projected.phase = ReadableFromPumpPhase::End;
+                }
+                self.commit_readable_to_array_progress(object_id, projected, Some(value))
+            }
+            Err(reason) => {
+                let label = projected.lifecycle_label.clone();
+                self.commit_readable_state(object_id, projected)?;
+                if reason.is_truthy() {
+                    self.record_readable_to_array_failure(object_id, reason, label, false)?;
+                } else {
+                    self.commit_readable_destroy(
+                        object_id,
+                        Value::Object(object_id),
+                        None,
+                        label,
+                    )?;
+                }
+                self.close_readable_iterator_source(object_id, module)
+            }
+        }
+    }
+
     pub(super) fn drive_readable_to_array(
         &mut self,
         object_id: ObjectId,
@@ -4211,7 +4312,7 @@ impl InterpreterCore {
                     return Err(error);
                 }
                 self.instructions_executed = next_instructions;
-                return self.run_readable_from_step(object_id, module, label, false, |_| {
+                return self.run_readable_from_step(object_id, module, label, false, true, |_| {
                     Ok(ReadableFromStep::Await(
                         value,
                         ReadableFromAwaitKind::ToArrayValue,
@@ -4480,6 +4581,9 @@ impl InterpreterCore {
         let Some(waiter) = state.to_array_waiter.as_ref() else {
             return Ok(());
         };
+        if waiter.awaiting {
+            return Ok(());
+        }
         let Some(error) = waiter.error.as_ref() else {
             return Ok(());
         };
@@ -4508,6 +4612,38 @@ impl InterpreterCore {
                 details: "Readable terminalization found live state beside an existing tombstone"
                     .to_string(),
             });
+        }
+        if self.readable_from_streams.get(&object_id).is_some_and(|state| {
+            state.to_array_waiter.as_ref().is_some_and(|waiter| waiter.awaiting)
+        }) {
+            // This runs in the close turn, before any listener-enqueued
+            // Promise reaction. The async iterator's EOS observer records
+            // premature close now, so a later chunk rejection can combine
+            // both errors in their observable order.
+            let needs_error = self.readable_from_streams.get(&object_id).is_some_and(|state| {
+                state.destroy_requested
+                    && state.to_array_waiter.as_ref().is_some_and(|waiter| waiter.error.is_none())
+            });
+            if !needs_error {
+                return Ok(());
+            }
+            let previous_heap_len = self.heap.len();
+            let previous_total = self.estimated_memory_bytes;
+            let outcome = (|| {
+                let Some(mut projected) = self.clone_readable_state_with_budget(object_id)? else {
+                    return Ok(());
+                };
+                let error = match &projected.destroy_error {
+                    Some(error) => error.clone(),
+                    None => self.stream_error_value("ERR_STREAM_PREMATURE_CLOSE", "Premature close")?,
+                };
+                projected.to_array_waiter.as_mut().expect("waiting consumer").error = Some(error);
+                self.commit_readable_state(object_id, projected)
+            })();
+            if outcome.is_err() {
+                self.rollback_heap_and_new_prototypes(previous_heap_len, previous_total);
+            }
+            return outcome;
         }
         let Some(mut state) = self.readable_from_streams.remove(&object_id) else {
             return Ok(());
@@ -4831,6 +4967,7 @@ impl InterpreterCore {
         module: &Ir3Module,
         label: Label,
         cleanup: bool,
+        consumer: bool,
         step: F,
     ) -> Result<(), InterpreterError>
     where
@@ -4850,6 +4987,7 @@ impl InterpreterCore {
             outcome
         });
         if !cleanup
+            && !consumer
             && !matches!(&outcome, Ok(ReadableFromStep::Await(..)))
             && self
                 .readable_from_streams
@@ -4873,19 +5011,7 @@ impl InterpreterCore {
                 self.finish_readable_iterator_cleanup(object_id, None, observed.clone())
             }
             Ok(ReadableFromStep::Collected(value)) => {
-                let Some(mut projected) = self.clone_readable_state_with_budget(object_id)? else {
-                    return Ok(());
-                };
-                let Some(waiter) = projected.to_array_waiter.as_mut() else {
-                    return Ok(());
-                };
-                waiter.awaiting = false;
-                projected.lifecycle_label = self
-                    .join_owned_label_with_temporary_budget(projected.lifecycle_label, &observed)?;
-                if projected.eof_requested && projected.buffer.is_empty() {
-                    projected.phase = ReadableFromPumpPhase::End;
-                }
-                self.commit_readable_to_array_progress(object_id, projected, Some(value))
+                self.finish_readable_to_array_await(object_id, module, Ok(value), observed.clone())
             }
             Ok(ReadableFromStep::Eof) => {
                 if let Some(state) = self.readable_from_streams.get_mut(&object_id) {
@@ -4920,6 +5046,7 @@ impl InterpreterCore {
             Err(error) => Err(error),
         };
         if !cleanup
+            && !consumer
             && self
                 .readable_from_streams
                 .get(&object_id)
@@ -4938,9 +5065,19 @@ impl InterpreterCore {
             Ok(()) => Ok(()),
             Err(error) if Self::stops_guest_execution(&error) => {
                 if let Some(state) = self.readable_from_streams.get_mut(&object_id) {
-                    state.read_callback_active = false;
+                    if consumer {
+                        if let Some(waiter) = &mut state.to_array_waiter {
+                            waiter.awaiting = false;
+                        }
+                    } else {
+                        state.read_callback_active = false;
+                    }
                 }
                 Err(error)
+            }
+            Err(error) if consumer => {
+                let reason = self.take_readable_iterator_error(error, &mut observed)?;
+                self.finish_readable_to_array_await(object_id, module, Err(reason), observed)
             }
             Err(error) if cleanup => {
                 let failure = self.take_readable_iterator_error(error, &mut observed)?;
@@ -5041,7 +5178,10 @@ impl InterpreterCore {
         let Some(state) = self.readable_from_streams.get(&object_id) else {
             return Ok(());
         };
-        if !cleanup && state.destroy_requested {
+        if !cleanup
+            && context.kind != ReadableFromAwaitKind::ToArrayValue
+            && state.destroy_requested
+        {
             return Ok(());
         }
         let module = module.ok_or_else(|| InterpreterError::TypeError {
@@ -5049,10 +5189,16 @@ impl InterpreterCore {
             got: "missing module context".to_string(),
         })?;
         let label = self.join_owned_label_with_temporary_budget(label, &state.lifecycle_label)?;
+        if context.kind == ReadableFromAwaitKind::ToArrayValue {
+            let result = result
+                .map(|value| self.js_value_to_value(&value))
+                .map_err(|reason| self.js_value_to_value(&reason));
+            return self.finish_readable_to_array_await(object_id, module, result, label);
+        }
         let outcome = match result {
             Ok(result) => {
                 let value = self.js_value_to_value(&result);
-                self.run_readable_from_step(object_id, module, label, cleanup, |core| {
+                self.run_readable_from_step(object_id, module, label, cleanup, false, |core| {
                     if context.kind == (ReadableFromAwaitKind::ThrowValue { done: false }) {
                         let iterator = core.readable_from_streams[&object_id].source.clone();
                         core.readable_cleanup_return_step(module, &iterator)
@@ -5066,16 +5212,7 @@ impl InterpreterCore {
                 if cleanup {
                     self.fail_readable_iterator_cleanup(object_id, module, reason, label)
                 } else {
-                    if context.kind == ReadableFromAwaitKind::ToArrayValue {
-                        if let Some(waiter) = self
-                            .readable_from_streams
-                            .get_mut(&object_id)
-                            .and_then(|state| state.to_array_waiter.as_mut())
-                        {
-                            waiter.awaiting = false;
-                        }
-                        self.readable_to_array_error_event(object_id, Some(&reason), &label)?;
-                    } else if let Some(state) = self.readable_from_streams.get_mut(&object_id) {
+                    if let Some(state) = self.readable_from_streams.get_mut(&object_id) {
                         state.read_callback_active = false;
                     }
                     if reason.is_truthy() {
@@ -5147,7 +5284,7 @@ impl InterpreterCore {
         }
         self.instructions_executed = next_instruction;
         let outcome = self.with_promise_temporary_bytes(temporary, |core| {
-            core.run_readable_from_step(object_id, module, lifecycle_label, false, |core| {
+            core.run_readable_from_step(object_id, module, lifecycle_label, false, false, |core| {
                 let next = core.readable_iterator_property(
                     module,
                     &iterator,
@@ -5375,7 +5512,7 @@ impl InterpreterCore {
             .read_callback_active = true;
         self.mirror_readable_bool(object_id, "destroyed", true);
         self.with_promise_temporary_bytes(temporary, |core| {
-            core.run_readable_from_step(object_id, module, lifecycle_label, true, |core| {
+            core.run_readable_from_step(object_id, module, lifecycle_label, true, false, |core| {
                 // The throw getter is observed even on normal close.
                 let has_throw = core
                     .readable_iterator_property(
@@ -5526,7 +5663,7 @@ impl InterpreterCore {
                     && state
                         .to_array_waiter
                         .as_ref()
-                        .is_some_and(|waiter| waiter.error.is_some())
+                        .is_some_and(|waiter| !waiter.awaiting && waiter.error.is_some())
             })
         {
             let state = &self.readable_from_streams[&object_id];

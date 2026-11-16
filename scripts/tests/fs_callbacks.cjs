@@ -491,3 +491,48 @@ test('null close callbacks and embedded-NUL paths fail before scheduling', () =>
   }
   assert.deepEqual(calls, []); assert.deepEqual(jobs, []);
 });
+
+
+test('copyFile callbacks preserve exclusive flags and defer exactly one result', async () => {
+  await both(async (api, {root, file}) => {
+    const destination = path.join(root, 'copy-target');
+    fs.writeFileSync(destination, 'preserved');
+    const codes = [];
+    for (const mode of [1, 3, 1.9]) {
+      try { await invoke(api, 'copyFile', file, destination, mode); }
+      catch (error) { codes.push(error.code); }
+      assert.equal(fs.readFileSync(destination, 'utf8'), 'preserved');
+    }
+    const created = path.join(root, 'copy-created');
+    assert.deepEqual(await invoke(api, 'copyFile', file, created, 3), []);
+    await invoke(api, 'copyFile', file, destination, 2);
+    return [codes, fs.readFileSync(created, 'hex'), fs.readFileSync(destination, 'hex')];
+  });
+});
+
+test('copyFile validates masks before queueing and captures its original writer', () => {
+  const effects = [], jobs = [];
+  const { api } = candidate({ copyFileSync(...args) { effects.push(args); } },
+    { queueMicrotask: job => jobs.push(job) });
+  for (const [mode, code] of [
+    ...[true, '1', {}, 1n].map(value => [value, 'ERR_INVALID_ARG_TYPE']),
+    ...[NaN, Infinity, -1, 8, 0x80000000].map(value => [value, 'ERR_OUT_OF_RANGE']),
+  ]) {
+    assert.throws(() => fs.copyFile('source', 'destination', mode, () => {}), { code });
+    assert.throws(() => api.copyFile('source', 'destination', mode, () => {}), { code });
+  }
+  assert.equal(jobs.length, 0); assert.equal(effects.length, 0);
+  let deliveries = 0;
+  for (const mode of [undefined, null, -0, -0.9, -0.5, -Number.MIN_VALUE, 0.9, 1.9, 3.9, 7.1, 7.9]) {
+    api.copyFile('source', 'destination', mode, function (error) {
+      assert.equal(arguments.length, 1);
+      assert.equal(error, null);
+      deliveries += 1;
+    });
+  }
+  api.copyFileSync = () => { throw new Error('replaced writer'); };
+  assert.equal(deliveries, 0); assert.equal(effects.length, 0);
+  while (jobs.length) jobs.shift()();
+  assert.equal(deliveries, 11);
+  assert.deepEqual(effects.map(args => args[2]), [0, 0, 0, 0, 0, 0, 0, 1, 3, 7, 7]);
+});

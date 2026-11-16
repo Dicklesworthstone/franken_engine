@@ -232,9 +232,17 @@
   });
   three('utimes', fs.utimesSync);
   const copyFileSync = fs.copyFileSync, symlinkSync = fs.symlinkSync;
+  function copyMode(value) {
+    if (value === undefined || value === null) return 0;
+    if (typeof value !== 'number') throw invalid('mode');
+    // Truncate before range validation, without wrapping large numeric masks.
+    if (!(value > -1 && value < 8)) throw range('mode');
+    return value | 0;
+  }
   install('copyFile', function (source, destination, mode, cb) {
     if (typeof mode === 'function') { cb = mode; mode = undefined; }
     callback(cb); source = pathValue(source); destination = pathValue(destination);
+    mode = copyMode(mode);
     run(function () { return copyFileSync(source, destination, mode); }, cb, voidResult);
   });
   const copy = fs.promises.cp;

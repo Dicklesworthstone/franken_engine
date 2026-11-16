@@ -99,7 +99,17 @@
     return __franken_fs_write('\0fsop:rename', oldPath, newPath);
   }
   function copyFileSync(source, destination, mode) {
-    return __franken_fs_write('\0fsop:copy_file', source, destination, mode);
+    return __franken_fs_write('\0fsop:copy_file', source, destination, copyMode(mode));
+  }
+  function copyMode(value) {
+    if (value === undefined || value === null) return 0;
+    if (typeof value !== 'number') throw argumentError('mode');
+    // Truncate before range validation, without wrapping large numeric masks.
+    if (!(value > -1 && value < 8)) {
+      var error = new RangeError('Copy mode must be between 0 and 7');
+      error.code = 'ERR_OUT_OF_RANGE'; throw error;
+    }
+    return value | 0;
   }
   function accessSync(path, mode) {
     return __franken_fs_read('\0fsop:access', path, mode);
@@ -336,7 +346,8 @@
   // guardplane scores as prototype pollution (a `{ __proto__: null }`
   // literal suspended every sandboxed fs program). Node's has a null
   // prototype; this one inherits from Object.prototype.
-  var constants = { F_OK: 0, R_OK: 4, W_OK: 2, X_OK: 1 };
+  var constants = { F_OK: 0, R_OK: 4, W_OK: 2, X_OK: 1,
+    COPYFILE_EXCL: 1, COPYFILE_FICLONE: 2, COPYFILE_FICLONE_FORCE: 4 };
   // Metadata operations use the engine's existing synchronous host effect and
   // Promise completion model. Executor throws become rejections, not fabricated
   // success values. This does not introduce an off-thread I/O implementation.

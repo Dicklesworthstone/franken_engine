@@ -180,3 +180,117 @@ console.log('VALIDATION_COMPLETE',fs.readFileSync('keep.txt','utf8'));
         );
     }
 }
+
+#[test]
+fn copy_file_masks_preserve_existing_files_across_sync_callback_and_promise_apis() {
+    let source = r#"
+const fs=require('fs');
+(async function(){
+  console.log('COPY_FLAGS',fs.constants.COPYFILE_EXCL,fs.constants.COPYFILE_FICLONE,
+    fs.constants.COPYFILE_FICLONE_FORCE,fs.promises.constants===fs.constants);
+  fs.copyFileSync('source','sync-created',fs.constants.COPYFILE_EXCL);
+  try{fs.copyFileSync('source','keep',fs.constants.COPYFILE_EXCL);}
+  catch(error){console.log('COPY_SYNC_REFUSED',error.code);}
+  let returned=false;
+  await new Promise(function(resolve){
+    fs.copyFile('source','keep',fs.constants.COPYFILE_EXCL|fs.constants.COPYFILE_FICLONE,
+      function(error){console.log('COPY_CALLBACK_REFUSED',returned,error.code);resolve();});
+    returned=true;
+  });
+  try{await fs.promises.copyFile('source','keep',1.9);}
+  catch(error){console.log('COPY_PROMISE_REFUSED',error.code);}
+  await fs.promises.copyFile('source','promise-created',3);
+  console.log('COPY_PRESERVED',fs.readFileSync('keep','utf8'));
+  fs.copyFileSync('source','fractional-default',-0.9);
+  fs.copyFileSync('source','fallback',2);
+  console.log('COPY_CREATED',fs.readFileSync('sync-created','utf8'),
+    fs.readFileSync('promise-created','utf8'),fs.readFileSync('fallback','utf8'));
+})();
+"#;
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let root = tempfile::tempdir().expect("sandbox");
+        std::fs::write(root.path().join("source"), b"copied").unwrap();
+        std::fs::write(root.path().join("keep"), b"preserved").unwrap();
+        std::fs::write(root.path().join("fallback"), b"previous contents").unwrap();
+        assert_eq!(
+            run(source, root.path(), lane, &["fs_read", "fs_write"]).unwrap(),
+            [
+                "COPY_FLAGS 1 2 4 true",
+                "COPY_SYNC_REFUSED EEXIST",
+                "COPY_CALLBACK_REFUSED true EEXIST",
+                "COPY_PROMISE_REFUSED EEXIST",
+                "COPY_PRESERVED preserved",
+                "COPY_CREATED copied copied copied",
+            ]
+        );
+        assert_eq!(
+            std::fs::read(root.path().join("keep")).unwrap(),
+            b"preserved"
+        );
+        for name in [
+            "sync-created",
+            "promise-created",
+            "fractional-default",
+            "fallback",
+        ] {
+            assert_eq!(std::fs::read(root.path().join(name)).unwrap(), b"copied");
+        }
+    }
+}
+
+#[test]
+fn copy_file_invalid_modes_and_forced_clone_do_not_mutate_files() {
+    let source = r#"
+const fs=require('fs');
+let callbacks=0;
+try{fs.copyFile('source','keep','1',function(){callbacks++;});}
+catch(error){console.log('COPY_TYPE',error.code);}
+try{fs.copyFileSync('source','keep',8);}
+catch(error){console.log('COPY_RANGE',error.code);}
+for(const mode of [4,5,6,7.9]){
+  try{fs.copyFileSync('source','must-not-exist',mode);}
+  catch(error){console.log('COPY_CLONE',error.code);}
+}
+console.log('COPY_UNCHANGED',callbacks,fs.readFileSync('keep','utf8'),
+  fs.existsSync('must-not-exist'));
+"#;
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let root = tempfile::tempdir().expect("sandbox");
+        std::fs::write(root.path().join("source"), b"copied").unwrap();
+        std::fs::write(root.path().join("keep"), b"preserved").unwrap();
+        assert_eq!(
+            run(source, root.path(), lane, &["fs_read", "fs_write"]).unwrap(),
+            [
+                "COPY_TYPE ERR_INVALID_ARG_TYPE",
+                "COPY_RANGE ERR_OUT_OF_RANGE",
+                "COPY_CLONE ENOTSUP",
+                "COPY_CLONE ENOTSUP",
+                "COPY_CLONE ENOTSUP",
+                "COPY_CLONE ENOTSUP",
+                "COPY_UNCHANGED 0 preserved false",
+            ]
+        );
+        assert_eq!(
+            std::fs::read(root.path().join("keep")).unwrap(),
+            b"preserved"
+        );
+        assert!(!root.path().join("must-not-exist").exists());
+    }
+}
+
+#[test]
+fn copy_file_flags_do_not_grant_write_authority() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let root = tempfile::tempdir().expect("sandbox");
+        std::fs::write(root.path().join("source"), b"source").unwrap();
+        let error = run(
+            "require('fs').copyFileSync('source','forbidden',1);",
+            root.path(),
+            lane,
+            &["fs_read"],
+        )
+        .expect_err("exclusive creation still requires FsWrite");
+        assert!(error.to_ascii_lowercase().contains("capabil"), "{error}");
+        assert!(!root.path().join("forbidden").exists());
+    }
+}

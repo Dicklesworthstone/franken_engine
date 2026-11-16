@@ -2165,6 +2165,33 @@ impl SandboxedHostIo {
         Self::fs_argument(arguments, name) == Some("true")
     }
 
+    /// Copy modes are optional at the provider API, but any supplied field
+    /// must be exact. Never reinterpret malformed or duplicated flags as an
+    /// ordinary overwriting copy.
+    fn fs_copy_mode(arguments: &[String]) -> Result<u8, HostIoError> {
+        match arguments {
+            [_destination] => Ok(0),
+            [_destination, mode] => match mode.as_str() {
+                "mode=0" => Ok(0),
+                "mode=1" => Ok(1),
+                "mode=2" => Ok(2),
+                "mode=3" => Ok(3),
+                "mode=4" => Ok(4),
+                "mode=5" => Ok(5),
+                "mode=6" => Ok(6),
+                "mode=7" => Ok(7),
+                _ => Err(HostIoError::Fs {
+                    code: "EINVAL".to_string(),
+                    detail: "copy_file requires mode=0 through mode=7".to_string(),
+                }),
+            },
+            _ => Err(HostIoError::Fs {
+                code: "EINVAL".to_string(),
+                detail: "copy_file requires a destination and at most one mode".to_string(),
+            }),
+        }
+    }
+
     fn fs_meta(
         &self,
         operation: FsOperation,
@@ -2448,6 +2475,20 @@ impl SandboxedHostIo {
                     code: "EINVAL".to_string(),
                     detail: format!("{} requires a destination path", operation.as_str()),
                 })?;
+                let copy_mode = if operation == FsOperation::CopyFile {
+                    Self::fs_copy_mode(arguments)?
+                } else {
+                    0
+                };
+                // This bounded-copy provider has no reflink mechanism.
+                // FICLONE permits an ordinary byte-copy fallback; FORCE does
+                // not. Refuse FORCE before resolving or touching either file.
+                if copy_mode & 4 != 0 {
+                    return Err(HostIoError::Fs {
+                        code: "ENOTSUP".to_string(),
+                        detail: "forced copy-on-write cloning is unavailable".to_string(),
+                    });
+                }
                 #[cfg(not(unix))]
                 {
                     let _ = destination_raw;
@@ -2503,9 +2544,18 @@ impl SandboxedHostIo {
                                 ),
                             });
                         }
+                        // Atomic create-if-absent is required: a preceding
+                        // existence check would permit a racing creator to
+                        // have its file truncated. NOFOLLOW and NONBLOCK stay
+                        // in the shared descriptor-relative opener.
+                        let mut destination_flags =
+                            rustix::fs::OFlags::WRONLY | rustix::fs::OFlags::CREATE;
+                        if copy_mode & 1 != 0 {
+                            destination_flags |= rustix::fs::OFlags::EXCL;
+                        }
                         let mut destination_file = Self::open_regular_mutation_file(
                             &destination,
-                            rustix::fs::OFlags::WRONLY | rustix::fs::OFlags::CREATE,
+                            destination_flags,
                             destination_raw,
                             "open copy destination",
                         )?;

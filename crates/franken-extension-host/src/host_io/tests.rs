@@ -2273,6 +2273,280 @@ mod bounded_file_mutations {
         )
     }
 
+    fn copy_mode_request(source: &str, destination: &str, mode: u8) -> HostIoRequest {
+        HostIoRequest::FsMeta {
+            operation: FsOperation::CopyFile,
+            path: source.to_string(),
+            arguments: vec![destination.to_string(), format!("mode={mode}")],
+            data: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn exclusive_copy_preserves_existing_files_directories_and_source_aliases() {
+        let scratch = ScratchDir::new();
+        let provider = SandboxedHostIo::with_root(&scratch.path).unwrap();
+        std::fs::write(scratch.path.join("source"), b"source bytes").unwrap();
+        std::fs::write(scratch.path.join("destination"), b"preserved bytes").unwrap();
+        std::fs::hard_link(scratch.path.join("source"), scratch.path.join("alias")).unwrap();
+        std::fs::create_dir(scratch.path.join("directory")).unwrap();
+        let before = std::fs::metadata(scratch.path.join("destination")).unwrap();
+
+        for mode in [1, 3] {
+            for destination in ["destination", "source", "./source", "alias", "directory"] {
+                let outcome = provider.perform(
+                    &copy_mode_request("source", destination, mode),
+                    &[HostIoCapability::FsWrite],
+                );
+                assert!(
+                    matches!(outcome, Err(HostIoError::Fs { ref code, .. }) if code == "EEXIST"),
+                    "exclusive copy must never replace {destination}: {outcome:?}"
+                );
+                assert_eq!(
+                    std::fs::read(scratch.path.join("destination")).unwrap(),
+                    b"preserved bytes"
+                );
+                assert_eq!(
+                    std::fs::read(scratch.path.join("source")).unwrap(),
+                    b"source bytes"
+                );
+                assert_eq!(
+                    std::fs::read(scratch.path.join("alias")).unwrap(),
+                    b"source bytes"
+                );
+                assert!(scratch.path.join("directory").is_dir());
+            }
+        }
+        let after = std::fs::metadata(scratch.path.join("destination")).unwrap();
+        assert_eq!(before.modified().unwrap(), after.modified().unwrap());
+        assert_eq!(before.permissions().mode(), after.permissions().mode());
+    }
+
+    #[test]
+    fn exclusive_copy_creates_at_limit_and_optional_clone_keeps_copy_semantics() {
+        let scratch = ScratchDir::new();
+        let provider = SandboxedHostIo::with_root_and_limit(&scratch.path, 8).unwrap();
+        std::fs::write(scratch.path.join("source"), b"12345678").unwrap();
+        std::fs::set_permissions(
+            scratch.path.join("source"),
+            std::fs::Permissions::from_mode(0o640),
+        )
+        .unwrap();
+        for mode in [1, 3] {
+            let destination = format!("new-{mode}");
+            assert_eq!(
+                provider.perform(
+                    &copy_mode_request("source", &destination, mode),
+                    &[HostIoCapability::FsWrite],
+                ),
+                Ok(HostIoResponse::FsMeta {
+                    result: FsMetaResult::Unit,
+                })
+            );
+            assert_eq!(
+                std::fs::read(scratch.path.join(&destination)).unwrap(),
+                b"12345678"
+            );
+            assert_eq!(
+                std::fs::metadata(scratch.path.join(&destination))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o640
+            );
+        }
+        std::fs::write(scratch.path.join("destination"), b"old longer contents").unwrap();
+        assert!(
+            provider
+                .perform(
+                    &copy_mode_request("source", "destination", 2),
+                    &[HostIoCapability::FsWrite],
+                )
+                .is_ok()
+        );
+        assert_eq!(
+            std::fs::read(scratch.path.join("destination")).unwrap(),
+            b"12345678"
+        );
+        std::fs::write(scratch.path.join("oversized"), b"123456789").unwrap();
+        for mode in [1, 2, 3] {
+            assert!(matches!(
+                provider.perform(
+                    &copy_mode_request("oversized", "must-not-exist", mode),
+                    &[HostIoCapability::FsWrite],
+                ),
+                Err(HostIoError::Io { .. })
+            ));
+        }
+        assert!(!scratch.path.join("must-not-exist").exists());
+    }
+
+    #[test]
+    fn exclusive_copy_never_follows_a_dangling_destination_symlink() {
+        let scratch = ScratchDir::new();
+        let outside = ScratchDir::new();
+        let provider = SandboxedHostIo::with_root(&scratch.path).unwrap();
+        std::fs::write(scratch.path.join("source"), b"source").unwrap();
+        let target = outside.path.join("must-not-exist");
+        std::os::unix::fs::symlink(&target, scratch.path.join("link")).unwrap();
+        for mode in [1, 3] {
+            assert!(matches!(
+                provider.perform(
+                    &copy_mode_request("source", "link", mode),
+                    &[HostIoCapability::FsWrite],
+                ),
+                Err(HostIoError::Fs { ref code, .. }) if code == "EEXIST"
+            ));
+            assert_eq!(
+                std::fs::read_link(scratch.path.join("link")).unwrap(),
+                target
+            );
+            assert!(!target.exists());
+        }
+    }
+
+    #[test]
+    fn exclusive_copy_refuses_a_destination_created_after_resolution() {
+        let scratch = ScratchDir::new();
+        let provider = SandboxedHostIo::with_root(&scratch.path).unwrap();
+        std::fs::write(scratch.path.join("source"), b"copy source").unwrap();
+        let hook = ResolutionRaceHook::new(2);
+        let worker_provider = provider.with_mutation_race_hook(std::sync::Arc::clone(&hook));
+        let request = copy_mode_request("source", "destination", 1);
+        let worker = std::thread::spawn(move || {
+            worker_provider.perform(&request, &[HostIoCapability::FsWrite])
+        });
+        hook.wait_until_resolved();
+        std::fs::write(scratch.path.join("destination"), b"racing creator").unwrap();
+        hook.resume();
+        assert!(matches!(
+            worker.join().unwrap(),
+            Err(HostIoError::Fs { ref code, .. }) if code == "EEXIST"
+        ));
+        assert_eq!(
+            std::fs::read(scratch.path.join("destination")).unwrap(),
+            b"racing creator"
+        );
+    }
+
+    #[test]
+    fn invalid_copy_modes_and_forced_clone_never_touch_destination() {
+        let scratch = ScratchDir::new();
+        let provider = SandboxedHostIo::with_root(&scratch.path).unwrap();
+        std::fs::write(scratch.path.join("source"), b"copy source").unwrap();
+        std::fs::write(scratch.path.join("destination"), b"preserved").unwrap();
+        for destination in ["destination", "new-file"] {
+            for mode in [
+                "mode=8", "mode=-1", "mode=NaN", "mode=0.5", "flags=1", "mode=01",
+            ] {
+                let request = HostIoRequest::FsMeta {
+                    operation: FsOperation::CopyFile,
+                    path: "source".to_string(),
+                    arguments: vec![destination.to_string(), mode.to_string()],
+                    data: Vec::new(),
+                };
+                assert!(matches!(
+                    provider.perform(&request, &[HostIoCapability::FsWrite]),
+                    Err(HostIoError::Fs { ref code, .. }) if code == "EINVAL"
+                ));
+            }
+            let duplicate = HostIoRequest::FsMeta {
+                operation: FsOperation::CopyFile,
+                path: "source".to_string(),
+                arguments: vec![
+                    destination.to_string(),
+                    "mode=1".to_string(),
+                    "mode=0".to_string(),
+                ],
+                data: Vec::new(),
+            };
+            assert!(matches!(
+                provider.perform(&duplicate, &[HostIoCapability::FsWrite]),
+                Err(HostIoError::Fs { ref code, .. }) if code == "EINVAL"
+            ));
+            for mode in [4, 5, 6, 7] {
+                assert!(matches!(
+                    provider.perform(
+                        &copy_mode_request("source", destination, mode),
+                        &[HostIoCapability::FsWrite],
+                    ),
+                    Err(HostIoError::Fs { ref code, .. }) if code == "ENOTSUP"
+                ));
+            }
+            assert_eq!(
+                std::fs::read(scratch.path.join("destination")).unwrap(),
+                b"preserved"
+            );
+            assert!(!scratch.path.join("new-file").exists());
+        }
+        // Validation does not resolve even a missing source or destination parent.
+        assert!(matches!(
+            provider.perform(
+                &copy_mode_request("missing-source", "missing-parent/output", 4),
+                &[HostIoCapability::FsWrite],
+            ),
+            Err(HostIoError::Fs { ref code, .. }) if code == "ENOTSUP"
+        ));
+        assert!(!scratch.path.join("missing-parent").exists());
+        assert!(matches!(
+            provider.perform(
+                &copy_mode_request("source", "new-file", 1),
+                &[HostIoCapability::FsRead],
+            ),
+            Err(HostIoError::CapabilityMissing {
+                capability: HostIoCapability::FsWrite,
+            })
+        ));
+        assert!(!scratch.path.join("new-file").exists());
+        assert!(copy(&provider, "source", "destination").is_ok());
+        assert_eq!(
+            std::fs::read(scratch.path.join("destination")).unwrap(),
+            b"copy source"
+        );
+    }
+
+    #[test]
+    fn copy_mode_recording_replays_success_and_refusal_without_overwriting() {
+        let scratch = ScratchDir::new();
+        let provider = SandboxedHostIo::with_root(&scratch.path).unwrap();
+        std::fs::write(scratch.path.join("source"), b"recorded source").unwrap();
+        let request = copy_mode_request("source", "destination", 1);
+        let recording = InMemoryHostIoTranscript::recording();
+        recording.begin_execution().unwrap();
+        let created = provider.perform(&request, &[HostIoCapability::FsWrite]);
+        assert!(created.is_ok());
+        recording.record(&request, &created);
+        let exists = provider.perform(&request, &[HostIoCapability::FsWrite]);
+        assert!(matches!(
+            &exists,
+            Err(HostIoError::Fs { code, .. }) if code == "EEXIST"
+        ));
+        recording.record(&request, &exists);
+        let transcript = recording.finish_execution().unwrap();
+        std::fs::write(scratch.path.join("destination"), b"changed after recording").unwrap();
+        let replay = InMemoryHostIoTranscript::replaying(transcript.clone());
+        replay.begin_execution().unwrap();
+        assert_eq!(replay.replay(&request), Some(created));
+        assert_eq!(replay.replay(&request), Some(exists));
+        assert_eq!(replay.finish_execution().unwrap(), transcript);
+        assert_eq!(
+            std::fs::read(scratch.path.join("destination")).unwrap(),
+            b"changed after recording"
+        );
+        let divergent = InMemoryHostIoTranscript::replaying(transcript);
+        divergent.begin_execution().unwrap();
+        assert!(matches!(
+            divergent.replay(&copy_mode_request("source", "destination", 0)),
+            Some(Err(HostIoError::SandboxViolation { .. }))
+        ));
+        assert!(divergent.finish_execution().is_err());
+        assert_eq!(
+            std::fs::read(scratch.path.join("destination")).unwrap(),
+            b"changed after recording"
+        );
+    }
+
     #[test]
     fn oversized_copy_preserves_existing_destination_and_creates_nothing() {
         let scratch = ScratchDir::new();

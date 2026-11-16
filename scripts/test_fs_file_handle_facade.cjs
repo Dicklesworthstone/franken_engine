@@ -40,6 +40,7 @@ function fixture(hook = () => {}, globals = {}) {
       case 'stat': return fs.statSync(...args);
       case 'fstat': return fs.fstatSync(...args);
       case 'mkdir': return fs.mkdirSync(...args);
+      case 'copy_file': return fs.copyFileSync(...args);
       default: throw new Error(`unexpected native operation: ${operation}`);
     }
   };
@@ -943,4 +944,77 @@ test('short-read packing preserves UTF-8 assembly, abort checks and close draini
   await closing;
   assert.equal(calls.filter(call => call.operation === 'read_fd').length, priorReads + 1);
   assert.equal(calls.at(-1).operation, 'close_fd');
+});
+
+
+test('copyFile exposes Node copy flags and preserves exclusivity across sync and promises', async () => {
+  async function exercise(api, file) {
+    const source = file + '-source';
+    fs.writeFileSync(source, 'source bytes');
+    fs.writeFileSync(file, 'must stay');
+    const observations = [];
+    for (const mode of [api.constants.COPYFILE_EXCL,
+      api.constants.COPYFILE_EXCL | api.constants.COPYFILE_FICLONE, 1.9]) {
+      assert.throws(() => api.copyFileSync(source, file, mode), { code: 'EEXIST' });
+      await assert.rejects(api.promises.copyFile(source, file, mode), { code: 'EEXIST' });
+      observations.push(fs.readFileSync(file, 'utf8'));
+    }
+    const first = file + '-exclusive';
+    assert.equal(api.copyFileSync(source, first, api.constants.COPYFILE_EXCL), undefined);
+    const second = file + '-promise';
+    assert.equal(await api.promises.copyFile(source, second,
+      api.constants.COPYFILE_EXCL | api.constants.COPYFILE_FICLONE), undefined);
+    assert.equal(api.copyFileSync(source, file, api.constants.COPYFILE_FICLONE), undefined);
+    observations.push(fs.readFileSync(first, 'utf8'), fs.readFileSync(second, 'utf8'),
+      fs.readFileSync(file, 'utf8'));
+    return observations;
+  }
+  const { facade, file, calls } = fixture();
+  assert.deepEqual([facade.constants.COPYFILE_EXCL, facade.constants.COPYFILE_FICLONE,
+    facade.constants.COPYFILE_FICLONE_FORCE], [1, 2, 4]);
+  assert.equal(facade.promises.constants, facade.constants);
+  assert.deepEqual(await exercise(facade, file), await exercise(fs, file + '-node'));
+  assert(calls.every(call => call.operation === 'copy_file' && call.authority === 'fs_write'));
+  assert.deepEqual(calls.map(call => call.args[2]), [1, 1, 3, 3, 1, 1, 1, 3, 2]);
+});
+
+test('invalid copyFile modes never enter the host boundary or touch a destination', async () => {
+  const { facade, file, calls } = fixture();
+  fs.writeFileSync(file + '-source', 'source bytes');
+  fs.writeFileSync(file, 'must stay');
+  for (const [mode, code] of [
+    ...[true, false, '1', {}, 1n].map(value => [value, 'ERR_INVALID_ARG_TYPE']),
+    ...[NaN, Infinity, -Infinity, -1, -1.1, 8, 8.1, 2147483647, 4294967296]
+      .map(value => [value, 'ERR_OUT_OF_RANGE']),
+  ]) {
+    assert.throws(() => fs.copyFileSync(file + '-source', file, mode), { code });
+    assert.throws(() => facade.copyFileSync(file + '-source', file, mode), { code });
+    await assert.rejects(facade.promises.copyFile(file + '-source', file, mode), { code });
+    assert.equal(calls.length, 0);
+    assert.equal(fs.readFileSync(file, 'utf8'), 'must stay');
+  }
+});
+
+test('copyFile snapshots default and fractional modes as concrete host flags', async () => {
+  const { facade, file, calls } = fixture();
+  fs.writeFileSync(file + '-source', 'source bytes');
+  const values = [undefined, null, -0, -0.9, -0.5, -Number.MIN_VALUE, 0.9, 1.9, 2.9, 3.9];
+  for (let i = 0; i < values.length; i++) {
+    fs.copyFileSync(file + '-source', file + '-node-' + i, values[i]);
+    facade.copyFileSync(file + '-source', file + '-' + i, values[i]);
+    assert.equal(fs.readFileSync(file + '-' + i, 'utf8'), 'source bytes');
+    await facade.promises.copyFile(file + '-source', file + '-promise-' + i, values[i]);
+    assert.equal(fs.readFileSync(file + '-promise-' + i, 'utf8'), 'source bytes');
+  }
+  // An existing destination makes Node's EXCL result independent of reflink support.
+  fs.writeFileSync(file, 'preserved');
+  for (const mode of [7.1, 7.9]) {
+    assert.throws(() => fs.copyFileSync(file + '-source', file, mode), { code: 'EEXIST' });
+    assert.throws(() => facade.copyFileSync(file + '-source', file, mode), { code: 'EEXIST' });
+    await assert.rejects(facade.promises.copyFile(file + '-source', file, mode), { code: 'EEXIST' });
+  }
+  assert.equal(fs.readFileSync(file, 'utf8'), 'preserved');
+  assert.deepEqual(calls.map(call => call.args[2]),
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 7, 7, 7, 7]);
+  assert(calls.every(call => !Object.is(call.args[2], -0)));
 });

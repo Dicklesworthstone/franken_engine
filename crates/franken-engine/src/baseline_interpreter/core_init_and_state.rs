@@ -2832,6 +2832,33 @@ impl InterpreterCore {
         })
     }
 
+    /// Node truncates numeric masks before checking the integer range [0, 7].
+    /// Null/undefined select the default zero.
+    /// Keep every accepted mask explicit in the effect transcript.
+    fn fs_copy_mode_argument(&mut self, value: Option<&Value>) -> Result<String, InterpreterError> {
+        let number = match value {
+            None | Some(Value::Undefined | Value::Null) => 0.0,
+            Some(Value::Int(number)) => *number as f64,
+            Some(Value::Float(number)) => number.inner(),
+            _ => {
+                return Err(self.throw_buffer_node_error(
+                    "TypeError",
+                    "ERR_INVALID_ARG_TYPE",
+                    "Copy mode must be a number".to_string(),
+                ));
+            }
+        };
+        let number = number.trunc();
+        if !(0.0..=7.0).contains(&number) {
+            return Err(self.throw_buffer_node_error(
+                "RangeError",
+                "ERR_OUT_OF_RANGE",
+                "Copy mode must be between 0 and 7".to_string(),
+            ));
+        }
+        Ok((number as u8).to_string())
+    }
+
     /// Directly lowered fs calls and module-facade calls share the same wire
     /// representation: decimal uint32 permission bits, including canonical +0.
     fn fs_mode_argument(&mut self, value: Option<&Value>) -> Result<String, InterpreterError> {
@@ -2930,9 +2957,13 @@ impl InterpreterCore {
                 ),
                 format!("force={}", self.fs_option_is_true(args.get(1), "force")),
             ],
-            FsOperation::Symlink | FsOperation::Rename | FsOperation::CopyFile => {
+            FsOperation::Symlink | FsOperation::Rename => {
                 vec![self.fs_path_argument(args.get(1))?]
             }
+            FsOperation::CopyFile => vec![
+                self.fs_path_argument(args.get(1))?,
+                format!("mode={}", self.fs_copy_mode_argument(args.get(2))?),
+            ],
             FsOperation::Truncate => vec![self.fs_length_argument(args.get(1))?],
             FsOperation::Chmod => vec![self.fs_mode_argument(args.get(1))?],
             FsOperation::Utimes => vec![

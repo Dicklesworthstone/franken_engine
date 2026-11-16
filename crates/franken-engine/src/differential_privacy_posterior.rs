@@ -316,13 +316,17 @@ pub struct PrivatePosteriorDelta {
 impl PrivatePosteriorDelta {
     /// Perturb one bounded, zero-sum posterior delta. Extension identity, epoch,
     /// confidence weight and round id are public metadata, not private inputs.
-    /// The source evidence hash is replaced by a digest of the released data.
+    /// Nonempty extension and round identities are required. The source
+    /// evidence hash is replaced by a digest of the released data.
     pub fn from_delta(
         delta: PosteriorDelta,
         privacy_params: PrivacyParameters,
         round_id: String,
         noise_generator: &mut dyn NoiseGenerator,
     ) -> Result<Self, DifferentialPrivacyError> {
+        if round_id.is_empty() || delta.extension_id.is_empty() {
+            return Err(DifferentialPrivacyError::InconsistentAggregationMetadata);
+        }
         let scale = privacy_params.gaussian_noise_scale(GLOBAL_SENSITIVITY_MILLIONTHS)?;
         if !delta.is_valid() {
             return Err(DifferentialPrivacyError::InvalidPosteriorDelta);
@@ -825,6 +829,7 @@ impl PrivacyPreservingAggregator {
     }
 
     /// Apply differential privacy to a posterior delta.
+    /// Reject invalid public identities before spending budget or sampling.
     pub fn make_delta_private(
         &mut self,
         node_id: &NodeId,
@@ -832,6 +837,9 @@ impl PrivacyPreservingAggregator {
         round_id: String,
         noise_generator: &mut dyn NoiseGenerator,
     ) -> Result<PrivatePosteriorDelta, DifferentialPrivacyError> {
+        if round_id.is_empty() || delta.extension_id.is_empty() {
+            return Err(DifferentialPrivacyError::InconsistentAggregationMetadata);
+        }
         let noise_scale = self
             .default_privacy_params
             .gaussian_noise_scale(GLOBAL_SENSITIVITY_MILLIONTHS)?;
@@ -865,73 +873,114 @@ impl PrivacyPreservingAggregator {
         ))
     }
 
-    /// Aggregate private deltas into a differentially private update.
+    /// Aggregate releases from one extension, security epoch and public round.
+    ///
+    /// Confidence weights and participant/round metadata must be fixed public
+    /// inputs to the release mechanism. This boundary checks their consistency;
+    /// it does not authenticate participants or prove that a producer sampled
+    /// noise. The caller supplies the timestamp so replay never reads a clock.
+    ///
+    /// The returned components retain confidence-weighted numerators, matching
+    /// `AggregatedPosteriorUpdate` and the secure-aggregation transport. They
+    /// are divided by the total confidence weight when applied to a posterior.
     pub fn aggregate_private_deltas(
         &self,
         private_deltas: Vec<PrivatePosteriorDelta>,
         round_id: String,
+        now_ns: u64,
     ) -> Result<AggregatedPosteriorUpdate, DifferentialPrivacyError> {
-        if private_deltas.is_empty() {
-            return Err(DifferentialPrivacyError::EmptyAggregation);
+        let first = private_deltas
+            .first()
+            .ok_or(DifferentialPrivacyError::EmptyAggregation)?;
+        let participant_count = u32::try_from(private_deltas.len())
+            .map_err(|_| DifferentialPrivacyError::TooManyParticipants)?;
+        let first_params = first.privacy_params;
+        first_params.validate()?;
+        let expected_noise_scale =
+            first_params.gaussian_noise_scale(GLOBAL_SENSITIVITY_MILLIONTHS)?;
+        let extension_id = first.base_delta.extension_id.clone();
+        if round_id.is_empty() || extension_id.is_empty() {
+            return Err(DifferentialPrivacyError::InconsistentAggregationMetadata);
         }
 
-        // Verify all deltas use consistent privacy parameters
-        let first_params = private_deltas[0].privacy_params;
-        for delta in &private_deltas {
-            if delta.privacy_params != first_params {
+        let mut weighted_sums = [0_i128; 4];
+        let mut total_weight = 0_u64;
+        let mut release_fingerprints = Vec::with_capacity(private_deltas.len());
+        for release in &private_deltas {
+            if release.privacy_params != first_params {
                 return Err(DifferentialPrivacyError::InconsistentPrivacyParams);
             }
+            let delta = &release.base_delta;
+            if release.round_id != round_id
+                || delta.extension_id != extension_id
+                || delta.epoch != self.current_epoch
+            {
+                return Err(DifferentialPrivacyError::InconsistentAggregationMetadata);
+            }
+            if release.noise_scale_millionths != expected_noise_scale {
+                return Err(DifferentialPrivacyError::NoiseScaleMismatch);
+            }
+            let weight = delta.confidence_weight_millionths;
+            if weight == 0 || weight > MILLION as u64 {
+                return Err(DifferentialPrivacyError::InvalidConfidenceWeight);
+            }
+            let components = [
+                delta.delta_benign_millionths,
+                delta.delta_anomalous_millionths,
+                delta.delta_malicious_millionths,
+                delta.delta_unknown_millionths,
+            ];
+            // Noisy releases need not fit the raw +/-1 probability range.
+            // Their four-dimensional zero-sum invariant still applies.
+            if components.iter().map(|value| i128::from(*value)).sum::<i128>() != 0 {
+                return Err(DifferentialPrivacyError::InvalidPosteriorDelta);
+            }
+            for (sum, component) in weighted_sums.iter_mut().zip(components) {
+                let weighted = i128::from(component) * i128::from(weight);
+                *sum = sum
+                    .checked_add(weighted)
+                    .ok_or(DifferentialPrivacyError::AggregationOverflow)?;
+            }
+            total_weight = total_weight
+                .checked_add(weight)
+                .ok_or(DifferentialPrivacyError::AggregationOverflow)?;
+            // Recompute from released fields, never from a caller-supplied
+            // hash of raw evidence or a claimed provenance digest.
+            release_fingerprints.push(release.release_fingerprint());
         }
 
-        // Extract noisy deltas for aggregation
-        let noisy_deltas: Vec<PosteriorDelta> = private_deltas
-            .iter()
-            .map(|pd| pd.base_delta.clone())
-            .collect();
-
-        // Perform standard aggregation on the noisy deltas
-        // (This would integrate with the existing AggregationCoordinator)
-        let extension_id = noisy_deltas[0].extension_id.clone();
-        let epoch = noisy_deltas[0].epoch;
-
-        // Aggregate with confidence weighting
-        let mut weighted_benign_sum: i128 = 0;
-        let mut weighted_anomalous_sum: i128 = 0;
-        let mut weighted_malicious_sum: i128 = 0;
-        let mut weighted_unknown_sum: i128 = 0;
-        let mut total_weight: u128 = 0;
-
-        for delta in &noisy_deltas {
-            let weight = delta.confidence_weight_millionths as i128;
-            weighted_benign_sum += delta.delta_benign_millionths as i128 * weight;
-            weighted_anomalous_sum += delta.delta_anomalous_millionths as i128 * weight;
-            weighted_malicious_sum += delta.delta_malicious_millionths as i128 * weight;
-            weighted_unknown_sum += delta.delta_unknown_millionths as i128 * weight;
-            total_weight += delta.confidence_weight_millionths as u128;
+        // Bind a canonical multiset: input order is irrelevant, but repeated
+        // contributions remain represented. Participant authentication and
+        // duplicate-node rejection belong to the admission protocol.
+        release_fingerprints.sort_unstable();
+        let mut fingerprint_input = b"frankenengine.private-posterior-aggregation.v1\0".to_vec();
+        fingerprint_input.extend_from_slice(&(round_id.len() as u64).to_be_bytes());
+        fingerprint_input.extend_from_slice(round_id.as_bytes());
+        fingerprint_input.extend_from_slice(&(extension_id.len() as u64).to_be_bytes());
+        fingerprint_input.extend_from_slice(extension_id.as_bytes());
+        fingerprint_input.extend_from_slice(&self.current_epoch.as_u64().to_be_bytes());
+        fingerprint_input.extend_from_slice(&now_ns.to_be_bytes());
+        fingerprint_input.extend_from_slice(&participant_count.to_be_bytes());
+        for fingerprint in release_fingerprints {
+            fingerprint_input.extend_from_slice(fingerprint.as_bytes());
         }
-
-        // Compute evidence fingerprint
-        let fingerprint_input = format!("private_aggregation_{}", round_id);
-        let evidence_fingerprint =
-            crate::hash_tiers::ContentHash::compute(fingerprint_input.as_bytes());
-
-        let aggregated = AggregatedPosteriorUpdate {
-            extension_id,
-            aggregate_delta_benign_millionths: weighted_benign_sum as i64,
-            aggregate_delta_anomalous_millionths: weighted_anomalous_sum as i64,
-            aggregate_delta_malicious_millionths: weighted_malicious_sum as i64,
-            aggregate_delta_unknown_millionths: weighted_unknown_sum as i64,
-            total_confidence_weight_millionths: total_weight as u64,
-            participant_count: noisy_deltas.len() as u32,
-            evidence_fingerprint,
-            epoch,
-            aggregation_timestamp_ns: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos() as u64,
+        let evidence_fingerprint = crate::hash_tiers::ContentHash::compute(&fingerprint_input);
+        let narrow = |value| {
+            i64::try_from(value).map_err(|_| DifferentialPrivacyError::AggregationOverflow)
         };
 
-        Ok(aggregated)
+        Ok(AggregatedPosteriorUpdate {
+            extension_id,
+            aggregate_delta_benign_millionths: narrow(weighted_sums[0])?,
+            aggregate_delta_anomalous_millionths: narrow(weighted_sums[1])?,
+            aggregate_delta_malicious_millionths: narrow(weighted_sums[2])?,
+            aggregate_delta_unknown_millionths: narrow(weighted_sums[3])?,
+            total_confidence_weight_millionths: total_weight,
+            participant_count,
+            evidence_fingerprint,
+            epoch: self.current_epoch,
+            aggregation_timestamp_ns: now_ns,
+        })
     }
 
     /// Get remaining budget for a node.
@@ -986,6 +1035,14 @@ pub enum DifferentialPrivacyError {
     InconsistentPrivacyParams,
     /// Inconsistent DP-SGD gradient metadata across nodes.
     InconsistentGradientMetadata,
+    /// A release has empty identities or belongs to another round, extension or epoch.
+    InconsistentAggregationMetadata,
+    /// Confidence weights must be positive public millionths ratios.
+    InvalidConfidenceWeight,
+    /// Declared noise scale does not match the release calibration.
+    NoiseScaleMismatch,
+    /// Weighted output cannot be represented without losing information.
+    AggregationOverflow,
 }
 
 impl std::fmt::Display for DifferentialPrivacyError {
@@ -1006,6 +1063,10 @@ impl std::fmt::Display for DifferentialPrivacyError {
             Self::EmptyAggregation => write!(f, "Empty aggregation"),
             Self::InconsistentPrivacyParams => write!(f, "Inconsistent privacy parameters"),
             Self::InconsistentGradientMetadata => write!(f, "Inconsistent gradient metadata"),
+            Self::InconsistentAggregationMetadata => write!(f, "Inconsistent aggregation metadata"),
+            Self::InvalidConfidenceWeight => write!(f, "Invalid confidence weight"),
+            Self::NoiseScaleMismatch => write!(f, "Noise scale does not match calibration"),
+            Self::AggregationOverflow => write!(f, "Weighted aggregation exceeds its representation"),
         }
     }
 }
@@ -1575,6 +1636,54 @@ mod tests {
             aggregator.get_node_budget(&node).unwrap().consumed_epsilon_millionths,
             100_000
         );
+    }
+
+    #[test]
+    fn empty_release_identities_do_not_sample_or_spend_budget() {
+        let epoch = SecurityEpoch::from_raw(26);
+        let node = NodeId::new("identity-node");
+        let parameters = PrivacyParameters::default();
+        let mut aggregator = PrivacyPreservingAggregator::new(parameters, epoch);
+        aggregator
+            .initialize_node_budget(node.clone(), 1_000_000, 100)
+            .unwrap();
+        let before = aggregator.get_node_budget(&node).unwrap().clone();
+        for (extension, round) in [("", "round"), ("extension", ""), ("", "")] {
+            let mut source = bounded_delta(epoch);
+            source.extension_id = extension.into();
+            let mut noise = RecordingNoise::new([0; 4]);
+            assert_eq!(
+                PrivatePosteriorDelta::from_delta(
+                    source.clone(),
+                    parameters,
+                    round.into(),
+                    &mut noise,
+                ),
+                Err(DifferentialPrivacyError::InconsistentAggregationMetadata)
+            );
+            assert!(noise.scales.is_empty());
+            assert_eq!(
+                aggregator.make_delta_private(&node, source, round.into(), &mut noise),
+                Err(DifferentialPrivacyError::InconsistentAggregationMetadata)
+            );
+            assert!(noise.scales.is_empty());
+            assert_eq!(aggregator.get_node_budget(&node), Some(&before));
+        }
+
+        // Refused identities do not consume a round or prevent a valid release.
+        let valid = aggregator
+            .make_delta_private(
+                &node,
+                bounded_delta(epoch),
+                "round".into(),
+                &mut RecordingNoise::new([0; 4]),
+            )
+            .unwrap();
+        assert_eq!(delta_sum(&valid.base_delta), 0);
+        let after = aggregator.get_node_budget(&node).unwrap();
+        assert_eq!(after.consumed_epsilon_millionths, parameters.epsilon_millionths);
+        assert_eq!(after.consumed_delta_millionths, parameters.delta_millionths);
+        assert_eq!(after.round_consumptions.len(), 1);
     }
 
     #[test]

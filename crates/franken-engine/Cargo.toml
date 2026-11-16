@@ -3227,6 +3227,11 @@ path = "tests/privacy_preserving_reconstruction_attack.rs"
 required-features = ["governance-surfaces"]
 
 [[test]]
+name = "private_posterior_aggregation"
+path = "tests/private_posterior_aggregation.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
 name = "production_feature_catalog_gate_integration"
 path = "tests/production_feature_catalog_gate_integration.rs"
 required-features = ["governance-surfaces"]

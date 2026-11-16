@@ -16,6 +16,8 @@ use frankenengine_engine::fleet_immune_protocol::NodeId;
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
+const AGGREGATION_TIME_NS: u64 = 1_640_995_200_000_000_000;
+
 // Temporary type definitions for test compilation
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum RiskLevel {
@@ -67,9 +69,9 @@ fn differential_privacy_protects_individual_contributions() {
     let delta1 = PosteriorDelta {
         extension_id: "test_extension".to_string(),
         // Changes from a public uniform prior, not absolute probabilities.
-        delta_benign_millionths: 250_000,
-        delta_anomalous_millionths: -50_000,
-        delta_malicious_millionths: 0,
+        delta_benign_millionths: -150_000,
+        delta_anomalous_millionths: -100_000,
+        delta_malicious_millionths: 450_000,
         delta_unknown_millionths: -200_000,
         confidence_weight_millionths: 950_000,
         evidence_hash: ContentHash::compute(b"delta1_evidence"),
@@ -105,8 +107,8 @@ fn differential_privacy_protects_individual_contributions() {
         extension_id: "test_extension".to_string(),
         delta_benign_millionths: 550_000,
         delta_anomalous_millionths: -150_000,
-        delta_malicious_millionths: -180_000,
-        delta_unknown_millionths: -220_000,
+        delta_malicious_millionths: -200_000,
+        delta_unknown_millionths: -200_000,
         confidence_weight_millionths: 900_000,
         evidence_hash: ContentHash::compute(b"delta3_evidence"),
         epoch,
@@ -129,11 +131,12 @@ fn differential_privacy_protects_individual_contributions() {
     // Aggregate using privacy-preserving aggregator
     let private_deltas = vec![private_delta1, private_delta2, private_delta3];
     let aggregated = aggregator
-        .aggregate_private_deltas(private_deltas, "test_round".to_string())
+        .aggregate_private_deltas(private_deltas, "test_round".to_string(), AGGREGATION_TIME_NS)
         .expect("Aggregation should succeed");
 
     // Verify the aggregation preserves essential properties
     assert_eq!(aggregated.participant_count, 3);
+    assert_eq!(aggregated.aggregation_timestamp_ns, AGGREGATION_TIME_NS);
     assert!(!aggregated.extension_id.is_empty());
 
     // A probability delta conserves mass exactly; it is not a distribution.
@@ -395,11 +398,12 @@ fn integration_with_federated_aggregation_pipeline() {
 
     // Perform privacy-preserving aggregation
     let final_aggregate = aggregator
-        .aggregate_private_deltas(private_deltas, "test_round".to_string())
+        .aggregate_private_deltas(private_deltas, "test_round".to_string(), AGGREGATION_TIME_NS)
         .expect("Privacy-preserving aggregation should succeed");
 
     // Verify the aggregated result maintains fleet-wide properties
     assert_eq!(final_aggregate.participant_count, 3);
+    assert_eq!(final_aggregate.aggregation_timestamp_ns, AGGREGATION_TIME_NS);
     assert!(!final_aggregate.extension_id.is_empty());
 
     // Verify combined confidence reflects weighted average with privacy noise
@@ -510,9 +514,14 @@ fn noise_preserves_differential_privacy_across_rounds() {
             );
         }
         let aggregated = aggregator
-            .aggregate_private_deltas(private_deltas, round_id)
+            .aggregate_private_deltas(
+                private_deltas,
+                round_id,
+                AGGREGATION_TIME_NS + round as u64,
+            )
             .unwrap();
         assert_eq!(aggregated.participant_count, 2);
+        assert_eq!(aggregated.aggregation_timestamp_ns, AGGREGATION_TIME_NS + round as u64);
         assert_eq!(aggregated.extension_id, "shared-extension");
         assert_eq!(aggregated.epoch, epoch);
         let total = i128::from(aggregated.aggregate_delta_benign_millionths)

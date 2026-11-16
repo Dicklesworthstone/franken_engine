@@ -27,6 +27,7 @@ use rand::{RngCore, SeedableRng, rngs::StdRng};
 // Mersenne prime leaves room for both the weighted sum and its signed decoding.
 const FIELD_MODULUS: u64 = (1u64 << 61) - 1;
 const DIMENSION: usize = 4;
+const AGGREGATION_TIME_NS: u64 = 1_640_995_200_000_000_000;
 
 fn delta(values: [i64; DIMENSION], weight: u64, epoch: SecurityEpoch) -> PosteriorDelta {
     assert_eq!(values.iter().sum::<i64>(), 0);
@@ -186,7 +187,7 @@ fn end_to_end_privacy_preserving_fleet_learning() {
         .map(|value| Some(weighted_input(value)))
         .collect();
     let reference = aggregator
-        .aggregate_private_deltas(private, "main-round".into())
+        .aggregate_private_deltas(private, "main-round".into(), AGGREGATION_TIME_NS)
         .unwrap();
     let expected = vec![
         reference.aggregate_delta_benign_millionths,
@@ -195,6 +196,7 @@ fn end_to_end_privacy_preserving_fleet_learning() {
         reference.aggregate_delta_unknown_millionths,
     ];
     assert_eq!(reference.extension_id, "shared-extension");
+    assert_eq!(reference.aggregation_timestamp_ns, AGGREGATION_TIME_NS);
     assert_eq!(reference.participant_count, 4);
     assert_eq!(reference.total_confidence_weight_millionths, 3_050_000);
     assert_eq!(aggregate_masked_inputs(&inputs, 3).unwrap(), expected);

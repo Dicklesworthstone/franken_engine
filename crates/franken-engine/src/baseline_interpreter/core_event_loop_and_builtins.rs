@@ -7416,38 +7416,48 @@ impl InterpreterCore {
         // UTF-16 code units over exact units; a fill truncated inside a
         // surrogate pair keeps the lone half losslessly (bd-3kvat;
         // previously scalar-counted over the projection).
-        let units = value.code_units_vec();
-        let cur_len = units.len();
+        let cur_len = value.utf16_len();
         let target = match self.builtin_number_arg(module, args, 0)? {
-            Some(arg) => Self::value_as_integer(&arg).max(0) as usize,
+            Some(arg) => {
+                usize::try_from(Self::value_as_integer(&arg).clamp(0, 9_007_199_254_740_991))
+                    .unwrap_or(usize::MAX)
+            }
             None => 0,
         };
+        // ToLength precedes the early return; unused fill must not convert.
+        if target <= cur_len {
+            return Ok(value.clone());
+        }
         let pad = match self.builtin_string_arg(module, args, 1)? {
             Some(Value::Undefined) | None => JsString::from(" "),
             Some(Value::Str(s)) => s,
             Some(Value::Symbol(_)) => return Err(Self::symbol_to_string_error()),
             Some(arg) => JsString::from(self.value_to_string(&arg)),
         };
-        let pad_units = pad.code_units_vec();
-        if target <= cur_len || pad_units.is_empty() {
+        if pad.is_empty() {
             return Ok(value.clone());
         }
-        // Guard before allocating the filler: a code unit re-encodes to at
-        // most 3 UTF-8 bytes, so this bounds the projected byte length.
-        self.check_string_limit(target.saturating_mul(3))?;
+        // Every UTF-16 unit contributes at least one projected UTF-8 byte.
+        // This lower bound rejects huge targets without falsely refusing
+        // ASCII output that fits the configured string limit.
+        self.check_string_limit(target)?;
         let fill_needed = target - cur_len;
-        let filler_units: Vec<u16> = (0..fill_needed)
-            .map(|i| pad_units[i % pad_units.len()])
-            .collect();
-        let mut result_units = Vec::with_capacity(target);
-        if pad_start {
-            result_units.extend_from_slice(&filler_units);
-            result_units.extend_from_slice(&units);
-        } else {
-            result_units.extend_from_slice(&units);
-            result_units.extend_from_slice(&filler_units);
-        }
-        Ok(JsString::from_code_units(&result_units))
+        let copies = fill_needed / pad.utf16_len();
+        let remainder = fill_needed % pad.utf16_len();
+        let mut output = StringOutputBuffer::default();
+        let outcome = (|| {
+            if !pad_start {
+                output.push(self, value)?;
+            }
+            output.push_repeated(self, &pad, copies)?;
+            output.push_prefix(self, &pad, remainder)?;
+            if pad_start {
+                output.push(self, value)?;
+            }
+            output.finish(self)
+        })();
+        output.release(self);
+        outcome
     }
 
     /// RequireObjectCoercible for primitive String.prototype receiver paths.
@@ -11189,15 +11199,25 @@ impl InterpreterCore {
         module: &Ir3Module,
         receiver: &Value,
     ) -> Result<JsString, InterpreterError> {
+        // RequireObjectCoercible applies to the original receiver. An
+        // object's conversion may legitimately return null or undefined,
+        // whose ToString results are "null" and "undefined".
+        if matches!(receiver, Value::Null | Value::Undefined) {
+            return Self::require_object_coercible_to_js_string(receiver);
+        }
         if receiver.is_object_like() {
             // Guest code runs while native locals hold values: no
             // collection until this returns.
             self.gc_nested_request = None;
             let primitive = self.coerce_runtime_primitive(Some(module), receiver.clone(), true)?;
-            if matches!(primitive, Value::Symbol(_)) {
-                return Err(Self::symbol_to_string_error());
-            }
-            return Self::require_object_coercible_to_js_string(&primitive);
+            return match primitive {
+                Value::Symbol(_) => Err(Self::symbol_to_string_error()),
+                Value::Str(text) => Ok(text),
+                other => Ok(JsString::from(self.value_to_string(&other))),
+            };
+        }
+        if matches!(receiver, Value::Symbol(_)) {
+            return Err(Self::symbol_to_string_error());
         }
         Self::require_object_coercible_to_js_string(receiver)
     }

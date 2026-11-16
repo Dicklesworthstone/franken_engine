@@ -3154,12 +3154,10 @@ impl InterpreterCore {
             ImplBinding::Manual { .. } => return None,
         };
         let coerced = match row.this_coercion {
-            // Coercion keeps exact UTF-16 code units for string receivers so
-            // lone surrogates survive table dispatch identically to the
-            // legacy seam (bd-neika); non-string receivers coerce through
-            // the (always well-formed) primitive-string path as before.
+            // Keep exact UTF-16 units and the observable conversion of
+            // object receivers identical in table and legacy dispatch.
             ThisCoercion::ToString => {
-                match Self::require_object_coercible_to_js_string(&receiver) {
+                match self.string_pattern_this(module, &receiver) {
                     Ok(value) => value,
                     Err(error) => return Some(Err(error)),
                 }
@@ -4031,14 +4029,41 @@ impl InterpreterCore {
                 message: format!("repeat count must be non-negative (got {count_int})"),
             });
         }
-        let count = count_int as usize;
-        let result_len = this_str.len().saturating_mul(count);
+        let count = usize::try_from(count_int).unwrap_or(usize::MAX);
+        if count == 0 || this_str.is_empty() {
+            return Ok(Value::Str(JsString::empty()));
+        }
+        let mut result_len = this_str.len().saturating_mul(count);
+        if !this_str.is_well_formed()
+            && this_str
+                .code_unit_at(0)
+                .is_some_and(|unit| (0xdc00..=0xdfff).contains(&unit))
+            && this_str
+                .code_unit_at(this_str.utf16_len() - 1)
+                .is_some_and(|unit| (0xd800..=0xdbff).contains(&unit))
+        {
+            // Preserve exact units; each repeated high/low boundary heals.
+            // Subtract before multiplying so saturation cannot undercount.
+            result_len = (this_str.len() - 2)
+                .saturating_mul(count)
+                .saturating_add(2);
+        }
         if result_len > 10_000_000 {
             return Err(InterpreterError::RangeError {
                 message: format!("repeat resulting length {result_len} exceeds maximum 10000000"),
             });
         }
-        Ok(Value::str(this_str.repeat(count)))
+        self.check_string_limit(result_len)?;
+        if count == 1 {
+            return Ok(Value::Str(this_str.clone()));
+        }
+        let mut output = StringOutputBuffer::default();
+        let outcome = (|| {
+            output.push_repeated(self, this_str, count)?;
+            output.finish(self).map(Value::Str)
+        })();
+        output.release(self);
+        outcome
     }
 
     pub(super) fn string_pad_start_impl(

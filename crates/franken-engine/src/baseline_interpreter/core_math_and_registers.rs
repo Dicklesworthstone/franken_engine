@@ -1454,7 +1454,7 @@ impl InterpreterCore {
         ancestors_bytes: &mut u64,
     ) -> Result<JsString, InterpreterError> {
         let comma_bytes = MEMORY_ESTIMATE_STRING_BASE_BYTES + 1;
-        ArrayJoinBuffer::reserve(self, ancestors_bytes, comma_bytes)?;
+        StringOutputBuffer::reserve(self, ancestors_bytes, comma_bytes)?;
         let comma = JsString::from(",");
         loop {
             // Holes, nullish values and empty separators still consume work.
@@ -1511,14 +1511,14 @@ impl InterpreterCore {
                         let required = nested.len().checked_add(1).ok_or_else(|| {
                             self.memory_budget_error(u64::MAX, self.heap_object_count_u32())
                         })?;
-                        ArrayJoinBuffer::grow_vec(
+                        StringOutputBuffer::grow_vec(
                             self,
                             nested,
                             required,
                             usize::MAX,
                             frames_bytes,
                         )?;
-                        ArrayJoinBuffer::reserve(
+                        StringOutputBuffer::reserve(
                             self,
                             ancestors_bytes,
                             MEMORY_ESTIMATE_MAP_ENTRY_BYTES,

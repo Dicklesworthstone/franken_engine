@@ -546,6 +546,140 @@ pub(in crate::baseline_interpreter) mod active_builtin_regressions {
     }
 
     #[test]
+    fn string_expansion_checks_exact_output_limits_and_releases_scratch() {
+        let mut core = test_core();
+        let module = halted_test_module();
+        let args = RegRange { start: 0, count: 2 };
+        core.write_reg(0, Value::Int(3)).unwrap();
+        core.write_reg(1, Value::str(".")).unwrap();
+        core.json_reserve_temporary(17).unwrap();
+
+        let text = JsString::from_code_units(&[0xdc00, 0xd800]);
+        core.config.max_string_size = 14;
+        assert_eq!(
+            core.string_repeat_impl(&module, &text, args).unwrap(),
+            Value::Str(JsString::from_code_units(&[
+                0xdc00, 0xd800, 0xdc00, 0xd800, 0xdc00, 0xd800,
+            ]))
+        );
+        assert_eq!(core.json_parse_temporary_bytes, 17);
+        core.config.max_string_size = 13;
+        assert!(matches!(
+            core.string_repeat_impl(&module, &text, args),
+            Err(InterpreterError::StringLimitExceeded { .. })
+        ));
+        assert_eq!(core.json_parse_temporary_bytes, 17);
+
+        core.write_reg(0, Value::Int(4)).unwrap();
+        core.config.max_string_size = 4;
+        for (pad_start, expected) in [(true, "...x"), (false, "x...")] {
+            assert_eq!(
+                core.string_pad_value(&module, &JsString::from("x"), args, pad_start)
+                    .unwrap(),
+                JsString::from(expected)
+            );
+            assert_eq!(core.json_parse_temporary_bytes, 17);
+        }
+        core.config.max_string_size = 3;
+        assert!(matches!(
+            core.string_pad_value(&module, &JsString::from("x"), args, true),
+            Err(InterpreterError::StringLimitExceeded { .. })
+        ));
+        assert_eq!(core.json_parse_temporary_bytes, 17);
+        core.json_release_temporary(17);
+    }
+
+    #[test]
+    fn string_expansion_bounds_memory_work_and_cancellation_and_recovers() {
+        for mode in 0..3 {
+            let mut core = test_core();
+            let module = halted_test_module();
+            let args = RegRange { start: 0, count: 2 };
+            let text = JsString::from("x");
+            core.write_reg(0, Value::Int(4_096)).unwrap();
+            core.write_reg(1, Value::str("y")).unwrap();
+            core.json_reserve_temporary(17).unwrap();
+            let expand = |core: &mut InterpreterCore| match mode {
+                0 => core.string_repeat_impl(&module, &text, args),
+                1 => core
+                    .string_pad_value(&module, &text, args, true)
+                    .map(Value::Str),
+                _ => core
+                    .string_pad_value(&module, &text, args, false)
+                    .map(Value::Str),
+            };
+
+            let memory_budget = core.config.max_total_memory_bytes;
+            core.config.max_total_memory_bytes = core.estimated_memory_bytes() + 128;
+            assert!(matches!(
+                expand(&mut core),
+                Err(InterpreterError::MemoryBudgetExceeded { .. })
+            ));
+            assert_eq!(core.json_parse_temporary_bytes, 17);
+
+            core.config.max_total_memory_bytes = memory_budget;
+            core.config.instruction_budget = core.instructions_executed + 4;
+            assert!(matches!(
+                expand(&mut core),
+                Err(InterpreterError::BudgetExhausted { .. })
+            ));
+            assert_eq!(core.json_parse_temporary_bytes, 17);
+
+            core.config.instruction_budget = core.instructions_executed + 10_000;
+            let cancellation = CancellationToken::new();
+            cancellation.cancel();
+            core.config.cancellation_token = Some(cancellation);
+            assert!(matches!(
+                expand(&mut core),
+                Err(InterpreterError::Cancelled)
+            ));
+            assert_eq!(core.json_parse_temporary_bytes, 17);
+
+            core.config.cancellation_token = None;
+            let Value::Str(result) = expand(&mut core).unwrap() else {
+                panic!("string expansion returned a non-string");
+            };
+            assert_eq!(result.utf16_len(), 4_096);
+            assert_eq!(core.json_parse_temporary_bytes, 17);
+            core.json_release_temporary(17);
+        }
+    }
+
+    #[test]
+    fn string_padding_prefix_charges_rope_descent_without_flattening() {
+        let mut core = test_core();
+        let piece = JsString::from("x".repeat(2_048));
+        let mut rope = piece.clone();
+        for _ in 0..128 {
+            rope = rope.concat(&piece);
+        }
+        assert!(rope.unjoined_concat_children().is_some());
+        let module = halted_test_module();
+        let args = RegRange { start: 0, count: 2 };
+        let text = JsString::from("z");
+        core.write_reg(0, Value::Int(2)).unwrap();
+        core.write_reg(1, Value::Str(rope.clone())).unwrap();
+        core.json_reserve_temporary(17).unwrap();
+        core.config.instruction_budget = core.instructions_executed + 4;
+        assert!(matches!(
+            core.string_pad_value(&module, &text, args, true),
+            Err(InterpreterError::BudgetExhausted { .. })
+        ));
+        assert_eq!(core.json_parse_temporary_bytes, 17);
+        assert!(rope.unjoined_concat_children().is_some());
+
+        core.config.instruction_budget = core.instructions_executed + 1_000;
+        core.config.max_string_size = 2;
+        assert_eq!(
+            core.string_pad_value(&module, &text, args, true).unwrap(),
+            JsString::from("xz")
+        );
+        assert_eq!(core.json_parse_temporary_bytes, 17);
+        assert!(rope.unjoined_concat_children().is_some());
+        core.json_release_temporary(17);
+    }
+
+    #[test]
     fn array_join_charges_empty_sparse_iterations() {
         let mut core = test_core();
         let array = core.alloc_array_from_values(&[]).unwrap();
@@ -665,7 +799,7 @@ pub(in crate::baseline_interpreter) mod active_builtin_regressions {
     fn array_join_buffer_scratch_stays_visible_to_nested_allocations() {
         let mut core = test_core();
         core.json_reserve_temporary(17).unwrap();
-        let mut output = ArrayJoinBuffer::default();
+        let mut output = StringOutputBuffer::default();
         output.push(&mut core, &JsString::from("retained")).unwrap();
         assert!(core.json_parse_temporary_bytes >= 17 + 8);
         core.config.max_total_memory_bytes = core.estimated_memory_bytes();

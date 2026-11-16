@@ -39,9 +39,16 @@ impl InterpreterCore {
         mut receiver: Option<Value>,
         receiver_register: Option<u32>,
     ) -> Result<Value, InterpreterError> {
-        // ES2020 thisXValue: a Number/String/Boolean/BigInt/Symbol prototype
-        // builtin called on a wrapper object works on its primitive.
-        if let Some(Value::Object(object_id)) = receiver {
+        // thisXValue unwraps primitive wrappers. Generic String methods
+        // instead run ToString on the original object, observing overrides;
+        // only String.prototype.toString/valueOf use [[StringData]] directly.
+        if let Some(Value::Object(object_id)) = receiver
+            && (builtin.spec_owner() != Some("String.prototype")
+                || matches!(
+                    builtin.kind,
+                    BuiltinFunctionKind::StringToString | BuiltinFunctionKind::StringValueOf
+                ))
+        {
             receiver = Some(self.this_primitive_receiver(builtin, object_id));
         }
         // ES2020 22.2.3 ValidateTypedArray(this): `%TypedArray%.prototype.some`
@@ -100,15 +107,7 @@ impl InterpreterCore {
                     | BuiltinFunctionKind::StringSearch
             )
         {
-            self.gc_nested_request = None;
-            let primitive = self.coerce_runtime_primitive(Some(module), object.clone(), true)?;
-            if matches!(primitive, Value::Symbol(_)) {
-                return Err(InterpreterError::TypeError {
-                    expected: format!("string-convertible this for {}", builtin.display_name()),
-                    got: "symbol".to_string(),
-                });
-            }
-            receiver = Some(primitive);
+            receiver = Some(Value::Str(self.string_pattern_this(module, object)?));
         }
         // A Symbol `this` has no ToString (ES2020 7.1.12) and no
         // [[StringData]], so every String.prototype method throws a TypeError

@@ -723,7 +723,7 @@ impl InterpreterCore {
                     Value::Undefined => JsString::from(","),
                     other => self.generic_to_js_string(m, other)?,
                 };
-                let mut out = ArrayJoinBuffer::default();
+                let mut out = StringOutputBuffer::default();
                 let outcome = (|| {
                     for k in 0..len {
                         self.json_charge_work()?;

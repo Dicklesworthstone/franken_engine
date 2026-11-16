@@ -513,9 +513,10 @@ const ARRAY_STRING_FALLBACK_MAX_DEPTH: usize = 128;
 
 /// Append exact string units in linear space. Well-formed output keeps the
 /// ordinary UTF-8 buffer; the first lone surrogate switches it to UTF-16.
-/// Capacity stays admitted across guest getters and conversions.
+/// Capacity stays admitted across guest getters and conversions. Joins,
+/// repetition and padding share the same output, work and scratch gates.
 #[derive(Default)]
-struct ArrayJoinBuffer {
+struct StringOutputBuffer {
     text: String,
     units: Option<Vec<u16>>,
     unit_len: usize,
@@ -523,7 +524,7 @@ struct ArrayJoinBuffer {
     charged: u64,
 }
 
-impl ArrayJoinBuffer {
+impl StringOutputBuffer {
     fn reserve(
         core: &mut InterpreterCore,
         charged: &mut u64,
@@ -537,7 +538,7 @@ impl ArrayJoinBuffer {
         Ok(())
     }
 
-    /// All vectors in the join (UTF-16 output, nested frames, rope frontier)
+    /// All vectors in string assembly (UTF-16 output, frames, rope frontier)
     /// grow geometrically, with capacity admitted before native allocation.
     fn grow_vec<T>(
         core: &mut InterpreterCore,
@@ -671,7 +672,7 @@ impl ArrayJoinBuffer {
             if self.unit_len.is_multiple_of(256) {
                 core.json_charge_work()?;
             }
-            let output = self.units.as_mut().expect("exact join buffer");
+            let output = self.units.as_mut().expect("exact string output buffer");
             // An adjacent high/low pair heals: its two three-byte lossy
             // projections become one four-byte scalar. This keeps the
             // existing UTF-8-byte string limit exact at surrogate boundaries.
@@ -716,7 +717,7 @@ impl ArrayJoinBuffer {
         if self.units.is_some() || !value.is_well_formed() {
             self.push_units(core, value.encode_utf16())
         } else {
-            self.push_text(core, value.as_str().expect("well-formed join leaf"))
+            self.push_text(core, value.as_str().expect("well-formed string leaf"))
         }
     }
 
@@ -725,11 +726,29 @@ impl ArrayJoinBuffer {
         core: &mut InterpreterCore,
         value: &JsString,
     ) -> Result<(), InterpreterError> {
+        self.push_prefix(core, value, value.utf16_len())
+    }
+
+    /// Copy only the requested exact units without flattening a rope or
+    /// allocating its iterator's uncharged traversal frontier.
+    fn push_prefix(
+        &mut self,
+        core: &mut InterpreterCore,
+        value: &JsString,
+        mut remaining: usize,
+    ) -> Result<(), InterpreterError> {
+        if remaining == 0 {
+            return Ok(());
+        }
         let Some([left, right]) = value.unjoined_concat_children() else {
-            return self.push_leaf(core, value);
+            return if remaining >= value.utf16_len() {
+                self.push_leaf(core, value)
+            } else {
+                self.push_units(core, value.encode_utf16().take(remaining))
+            };
         };
-        // Do not flatten an arbitrary rope before the output/work gates.
-        // Only its outstanding right children occupy admitted scratch.
+        // Only outstanding right children occupy admitted scratch. The
+        // work gate also bounds descent before the first unit is emitted.
         let mut pending = Vec::new();
         let mut charged = 0;
         let outcome = (|| {
@@ -747,7 +766,16 @@ impl ArrayJoinBuffer {
                     current = left;
                     continue;
                 }
+                let length = current.utf16_len();
+                if remaining < length {
+                    self.push_units(core, current.encode_utf16().take(remaining))?;
+                    return Ok(());
+                }
                 self.push_leaf(core, &current)?;
+                remaining -= length;
+                if remaining == 0 {
+                    return Ok(());
+                }
                 let Some(next) = pending.pop() else {
                     return Ok(());
                 };
@@ -757,6 +785,68 @@ impl ArrayJoinBuffer {
         drop(pending);
         core.json_release_temporary(charged);
         outcome
+    }
+
+    /// Grow by copying an already admitted prefix geometrically. Charge
+    /// every copied unit before native allocation/copy, including when a
+    /// one-unit filler expands into millions of output units.
+    fn push_repeated(
+        &mut self,
+        core: &mut InterpreterCore,
+        value: &JsString,
+        count: usize,
+    ) -> Result<(), InterpreterError> {
+        if count == 0 || value.is_empty() {
+            return Ok(());
+        }
+        let start_units = self.unit_len;
+        let start_bytes = self.projection_bytes;
+        self.push(core, value)?;
+        let heals = !value.is_well_formed()
+            && value
+                .code_unit_at(0)
+                .is_some_and(|unit| (0xdc00..=0xdfff).contains(&unit))
+            && value
+                .code_unit_at(value.utf16_len() - 1)
+                .is_some_and(|unit| (0xd800..=0xdbff).contains(&unit));
+        let mut copied = 1;
+        while copied < count {
+            let copies = copied.min(count - copied);
+            let extra_units = value.utf16_len().checked_mul(copies).ok_or_else(|| {
+                core.memory_budget_error(u64::MAX, core.heap_object_count_u32())
+            })?;
+            let required_units = self.unit_len.checked_add(extra_units).ok_or_else(|| {
+                core.memory_budget_error(u64::MAX, core.heap_object_count_u32())
+            })?;
+            let mut extra_bytes = value.len().checked_mul(copies).ok_or_else(|| {
+                core.memory_budget_error(u64::MAX, core.heap_object_count_u32())
+            })?;
+            if heals {
+                // Each new copy heals the high/low boundary before it.
+                extra_bytes -= copies * 2;
+            }
+            let required_bytes = self
+                .projection_bytes
+                .checked_add(extra_bytes)
+                .ok_or_else(|| core.memory_budget_error(u64::MAX, core.heap_object_count_u32()))?;
+            core.check_string_limit(required_bytes)?;
+            for _ in 0..extra_units.div_ceil(256) {
+                core.json_charge_work()?;
+            }
+            if let Some(units) = self.units.as_mut() {
+                let max_units = core.config.max_string_size;
+                Self::grow_vec(core, units, required_units, max_units, &mut self.charged)?;
+                units.extend_from_within(start_units..start_units + extra_units);
+            } else {
+                self.grow_text(core, required_bytes)?;
+                self.text
+                    .extend_from_within(start_bytes..start_bytes + extra_bytes);
+            }
+            self.unit_len = required_units;
+            self.projection_bytes = required_bytes;
+            copied += copies;
+        }
+        Ok(())
     }
 
     fn push_buffer(
@@ -816,7 +906,7 @@ struct ArrayJoinFrame {
     array_id: ObjectId,
     len: usize,
     index: usize,
-    output: ArrayJoinBuffer,
+    output: StringOutputBuffer,
 }
 
 impl ArrayJoinFrame {
@@ -825,7 +915,7 @@ impl ArrayJoinFrame {
             array_id,
             len,
             index: 0,
-            output: ArrayJoinBuffer::default(),
+            output: StringOutputBuffer::default(),
         }
     }
 }

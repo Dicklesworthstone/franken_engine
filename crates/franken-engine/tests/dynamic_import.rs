@@ -793,3 +793,70 @@ main();"#,
         ],
     );
 }
+
+
+/// Missing required bindings are guest SyntaxErrors of the importing module.
+/// The provider may already have evaluated: this is a binding-validation
+/// regression, not proof of graph-wide linking before all module side effects.
+#[test]
+fn required_export_failures_reject_dynamic_import_and_keep_the_same_error() {
+    assert_output(
+        &[
+            ("provider.mjs", "export const available = 7;"),
+            (
+                "bad.mjs",
+                "import { missing } from './provider.mjs'; console.log('bad body must not run');",
+            ),
+            (
+                "entry.mjs",
+                "async function main() {
+  let first;
+  let second;
+  await Promise.all([
+    import('./bad.mjs').catch(error => { first = error; }),
+    import('./bad.mjs').catch(error => { second = error; })
+  ]);
+  console.log(first instanceof SyntaxError, first === second);
+  await import('./bad.mjs').catch(error => console.log(error === first, error.name));
+  const valid = await import('./provider.mjs');
+  console.log(valid.available, valid.missing === undefined);
+}
+main();",
+            ),
+        ],
+        "entry.mjs",
+        ParseGoal::Module,
+        &["true true", "true SyntaxError", "7 true"],
+    );
+}
+
+#[test]
+fn invalid_indirect_export_keeps_its_syntax_error_across_dynamic_importers() {
+    assert_output(
+        &[
+            ("provider.mjs", "export const available = 7;"),
+            ("bad.mjs", "export { missing as renamed } from './provider.mjs';"),
+            (
+                "left.mjs",
+                "import * as ns from './bad.mjs'; console.log('left body must not run');",
+            ),
+            (
+                "right.mjs",
+                "import './bad.mjs'; console.log('right body must not run');",
+            ),
+            (
+                "entry.mjs",
+                "async function main() {
+  let first;
+  await import('./left.mjs').catch(error => { first = error; console.log(error instanceof SyntaxError); });
+  await import('./right.mjs').catch(error => console.log(error === first, error.name));
+  await import('./bad.mjs').catch(error => console.log(error === first));
+}
+main();",
+            ),
+        ],
+        "entry.mjs",
+        ParseGoal::Module,
+        &["true", "true SyntaxError", "true"],
+    );
+}

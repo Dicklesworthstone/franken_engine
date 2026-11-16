@@ -5479,13 +5479,38 @@ impl InterpreterCore {
         specifier: &str,
         name: &JsString,
     ) -> Result<ModuleExportResolution, InterpreterError> {
+        self.resolve_module_export_with_readiness(specifier, name, false)
+            .map(|(resolution, _)| resolution)
+    }
+
+    /// A required import may reject a missing or ambiguous binding only once
+    /// every visited provider has completed its export registration. A barrel
+    /// can be evaluated while one of its cyclic star sources is still active.
+    /// Such a source must remain eligible for later publication and TDZ checks.
+    /// Ordinary export propagation keeps its existing provisional resolution.
+    fn resolve_module_export_with_readiness(
+        &mut self,
+        specifier: &str,
+        name: &JsString,
+        require_evaluated: bool,
+    ) -> Result<(ModuleExportResolution, bool), InterpreterError> {
         let mut walk = ModuleExportWalk::default();
         let outcome = (|| {
             self.queue_module_export_walk(&mut walk, specifier, name)?;
             let mut resolved = None;
+            let mut ambiguous = false;
+            let mut ready = true;
             while let Some(key) = walk.pending.pop_first() {
                 let key_bytes = Self::module_export_key_bytes(&key.0, &key.1);
                 let step_result = (|| {
+                    if require_evaluated
+                        && self.module_state.modules.get(&key.0).is_some_and(|record| {
+                            !matches!(record.status, ModuleRuntimeStatus::Evaluated)
+                        })
+                    {
+                        ready = false;
+                        return Ok(false);
+                    }
                     let (step, bytes) = self.module_export_resolution_step(&key.0, &key.1)?;
                     self.json_reserve_temporary(bytes)?;
                     let result = match step {
@@ -5513,17 +5538,107 @@ impl InterpreterCore {
                 walk.temporary_bytes = walk.temporary_bytes.saturating_sub(key_bytes);
                 self.json_release_temporary(key_bytes);
                 if step_result? {
-                    return Ok(ModuleExportResolution::Ambiguous);
+                    if !require_evaluated {
+                        return Ok((ModuleExportResolution::Ambiguous, true));
+                    }
+                    // Finish the walk: an unfinished cyclic source prevents
+                    // the required-import check from treating this graph as final.
+                    ambiguous = true;
                 }
             }
-            Ok(resolved.map_or(
-                ModuleExportResolution::Missing,
-                ModuleExportResolution::Resolved,
-            ))
+            let resolution = if ambiguous {
+                ModuleExportResolution::Ambiguous
+            } else {
+                resolved.map_or(
+                    ModuleExportResolution::Missing,
+                    ModuleExportResolution::Resolved,
+                )
+            };
+            Ok((resolution, ready))
         })();
         let temporary_bytes = walk.temporary_bytes;
         drop(walk);
         self.json_release_temporary(temporary_bytes);
+        outcome
+    }
+
+    /// Validate the required name at the authenticated import-binding seam.
+    /// This is not an ordinary namespace [[Get]]: `ns.missing` still produces
+    /// undefined. Export existence depends on binding identity, never its
+    /// current value, so a real export of undefined remains valid.
+    ///
+    /// This checks completed providers; whole-graph instantiation and deferred
+    /// validation of unfinished cyclic imports remain separate linker work.
+    fn check_required_module_export(
+        &mut self,
+        namespace_object: ObjectId,
+        name: &JsString,
+        cell: &Rc<RefCell<ScopeBindingState>>,
+    ) -> Result<(), InterpreterError> {
+        // Admit the worst-case namespace lookup before scanning the records.
+        // The subsequent export walk separately charges every graph edge.
+        for _ in 0..self.module_state.modules.len() {
+            self.json_charge_work()?;
+        }
+        let Some((specifier, record)) = self
+            .module_state
+            .modules
+            .iter()
+            .find(|(_, record)| record.namespace_object == namespace_object)
+        else {
+            return Ok(());
+        };
+        if !matches!(record.status, ModuleRuntimeStatus::Evaluated) {
+            return Ok(());
+        }
+        let specifier_bytes = Self::estimate_string_bytes(specifier);
+        self.check_temporary_memory_budget(specifier_bytes)?;
+        let specifier = specifier.clone();
+        self.json_reserve_temporary(specifier_bytes)?;
+        let outcome = (|| {
+            let (resolution, ready) =
+                self.resolve_module_export_with_readiness(&specifier, name, true)?;
+            if !ready || matches!(resolution, ModuleExportResolution::Resolved(_)) {
+                return Ok(());
+            }
+
+            let state = cell.try_borrow().map_err(|_| InterpreterError::InternalError {
+                details: "module import binding is already mutably borrowed".to_string(),
+            })?;
+            // Include UTF-16 display expansion, message text and the retained
+            // observation label before allocating a diagnostic. Budget failures
+            // remain engine failures instead of becoming guest SyntaxErrors.
+            let temporary_bytes = 192u64
+                .saturating_add(specifier_bytes)
+                .saturating_add(Self::estimate_js_string_bytes(name).saturating_mul(4))
+                .saturating_add(Self::estimate_label_bytes(&state.label));
+            self.json_reserve_temporary(temporary_bytes)?;
+            let label = state.label.clone();
+            drop(state);
+            let result = (|| {
+                let message = match resolution {
+                    ModuleExportResolution::Missing => format!(
+                        "The requested module '{specifier}' does not provide an export named '{name}'"
+                    ),
+                    ModuleExportResolution::Ambiguous => format!(
+                        "The requested module '{specifier}' has an ambiguous export named '{name}'"
+                    ),
+                    ModuleExportResolution::Resolved(_) => {
+                        unreachable!("resolved imports returned")
+                    }
+                };
+                let error = self.throw_js_error("SyntaxError", message);
+                if matches!(error, InterpreterError::UncaughtException { .. }) {
+                    self.join_pending_exception_label(&label)?;
+                }
+                Err(error)
+            })();
+            drop(label);
+            self.json_release_temporary(temporary_bytes);
+            result
+        })();
+        drop(specifier);
+        self.json_release_temporary(specifier_bytes);
         outcome
     }
 
@@ -6021,6 +6136,7 @@ impl InterpreterCore {
         export_name: JsString,
         cell: &Rc<RefCell<ScopeBindingState>>,
     ) -> Result<(), InterpreterError> {
+        self.check_required_module_export(namespace_object, &export_name, cell)?;
         let Some(record) = self
             .module_state
             .modules
@@ -17905,5 +18021,134 @@ impl InterpreterCore {
                 profiler.record_instruction_time(instr_ref, profile_start.elapsed());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod required_module_export_tests {
+    use super::*;
+
+    const PROVIDER: &str = "required-export-provider.mjs";
+
+    fn provider() -> (InterpreterCore, ObjectId) {
+        let mut core = InterpreterCore::new(
+            InterpreterConfig::quickjs_defaults(),
+            "required-module-export",
+        );
+        let module = Ir3Module::new(ContentHash::compute(b"required-export-provider"), PROVIDER);
+        let namespace = core.ensure_module_record(&module, PROVIDER).unwrap();
+        core.module_state.modules.get_mut(PROVIDER).unwrap().status =
+            ModuleRuntimeStatus::Evaluated;
+        core.publish_module_export(
+            PROVIDER,
+            JsString::from("present"),
+            Value::Undefined,
+            Label::Public,
+            ExportPublication::Own,
+        )
+        .unwrap();
+        (core, namespace)
+    }
+
+    fn cell(label: Label) -> Rc<RefCell<ScopeBindingState>> {
+        ScopeBinding::with_labeled_state(BindingKind::Import, Value::Undefined, label, true).state
+    }
+
+    #[test]
+    fn missing_export_syntax_error_keeps_the_import_observation_label() {
+        let (mut core, namespace) = provider();
+        let label = Label::Custom {
+            name: "classified-module-shape".repeat(8),
+            level: 9,
+        };
+        let binding = cell(label.clone());
+        assert!(matches!(
+            core.check_required_module_export(namespace, &JsString::from("missing"), &binding),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        let Some(Value::Object(error)) = core.pending_exception.as_ref() else {
+            panic!("required import must throw a real SyntaxError");
+        };
+        assert_eq!(
+            core.chain_data_property(*error, "name"),
+            Some(&Value::str("SyntaxError"))
+        );
+        assert_eq!(core.pending_exception_label, label);
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+    }
+
+    #[test]
+    fn required_export_work_refusal_is_not_a_guest_syntax_error() {
+        let (mut core, namespace) = provider();
+        let binding = cell(Label::Public);
+        for specifier in ["unrelated-a.mjs", "unrelated-b.mjs"] {
+            let module = Ir3Module::new(ContentHash::compute(specifier.as_bytes()), specifier);
+            core.ensure_module_record(&module, specifier).unwrap();
+        }
+        let admitted_work = core.instructions_executed.saturating_add(2);
+        core.config.instruction_budget = admitted_work;
+        assert!(matches!(
+            core.check_required_module_export(namespace, &JsString::from("present"), &binding),
+            Err(InterpreterError::BudgetExhausted { .. })
+        ));
+        assert_eq!(core.instructions_executed, admitted_work);
+        assert!(core.pending_exception.is_none());
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+
+        core.config.instruction_budget = core.instructions_executed.saturating_add(1_000);
+        core.check_required_module_export(namespace, &JsString::from("present"), &binding)
+            .unwrap();
+        assert!(core.pending_exception.is_none());
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+    }
+
+    #[test]
+    fn required_export_memory_refusal_preserves_existing_abrupt_completion() {
+        let (mut core, namespace) = provider();
+        let binding = cell(Label::Public);
+        core.replace_pending_abrupt_slots(Some((Value::Int(17), Label::Secret)), None)
+            .unwrap();
+        let original_limit = core.config.max_total_memory_bytes;
+        core.config.max_total_memory_bytes = core.estimated_memory_bytes;
+        assert!(matches!(
+            core.check_required_module_export(namespace, &JsString::from("missing"), &binding),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.pending_exception, Some(Value::Int(17)));
+        assert_eq!(core.pending_exception_label, Label::Secret);
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+
+        core.config.max_total_memory_bytes = original_limit;
+        core.check_required_module_export(namespace, &JsString::from("present"), &binding)
+            .unwrap();
+        assert_eq!(core.pending_exception, Some(Value::Int(17)));
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+    }
+
+    #[test]
+    fn completed_barrel_waits_for_an_unfinished_star_source() {
+        let (mut core, namespace) = provider();
+        let module = Ir3Module::new(ContentHash::compute(b"active-source"), "active.mjs");
+        core.ensure_module_record(&module, "active.mjs").unwrap();
+        core.module_state
+            .modules
+            .get_mut(PROVIDER)
+            .unwrap()
+            .star_sources
+            .insert("active.mjs".to_string());
+        core.sync_estimated_memory_bytes().unwrap();
+        let binding = cell(Label::Public);
+        core.check_required_module_export(namespace, &JsString::from("later"), &binding)
+            .unwrap();
+        assert!(core.pending_exception.is_none());
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+
+        core.module_state.modules.get_mut("active.mjs").unwrap().status =
+            ModuleRuntimeStatus::Evaluated;
+        assert!(matches!(
+            core.check_required_module_export(namespace, &JsString::from("later"), &binding),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        assert_eq!(core.json_parse_temporary_bytes, 0);
     }
 }

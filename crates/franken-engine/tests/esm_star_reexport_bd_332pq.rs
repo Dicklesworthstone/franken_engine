@@ -657,3 +657,264 @@ fn exports_carry_the_values_the_module_assigned_bd_9vouw_222() {
         &["object 1 2 3 7 8 9 h1 2 h1"],
     );
 }
+
+
+// Required named bindings are checked after their provider has completed.
+// These cases do not claim a whole-graph link-before-evaluation barrier.
+fn assert_import_syntax_error(files: &[(&str, &str)], diagnostic: &str) {
+    let root = tempfile::tempdir().expect("module root");
+    for (name, source) in LIBRARY.iter().chain(files) {
+        let path = root.path().join(name);
+        std::fs::create_dir_all(path.parent().expect("fixture parent")).expect("fixture directory");
+        std::fs::write(path, source).expect("fixture file");
+    }
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let entry = root.path().join("app.mjs");
+        let package = ExtensionPackage {
+            extension_id: "esm-required-export".to_string(),
+            source: std::fs::read_to_string(&entry).expect("entry source"),
+            source_file: Some(entry.display().to_string()),
+            module_root: Some(root.path().display().to_string()),
+            capabilities: vec!["module_load".to_string(), "builtin".to_string()],
+            version: "1.0.0".to_string(),
+            metadata: Default::default(),
+        };
+        let mut runtime = ExecutionOrchestrator::try_new_lab(OrchestratorConfig {
+            force_lane: Some(lane),
+            parse_goal: ParseGoal::Module,
+            ..OrchestratorConfig::default()
+        })
+        .expect("native test runtime");
+        let error = runtime
+            .execute(&package)
+            .expect_err("a required export must not silently bind undefined")
+            .to_string();
+        assert!(error.contains("SyntaxError"), "{lane:?}: {error}");
+        assert!(error.contains(diagnostic), "{lane:?}: {error}");
+        assert!(
+            runtime.last_failed_console_output().is_empty(),
+            "{lane:?}: importer body ran after a rejected required binding"
+        );
+    }
+}
+
+#[test]
+fn completed_providers_reject_missing_named_imports_in_every_clause_shape() {
+    for clause in [
+        "{ missing }",
+        "{ missing as renamed }",
+        "defaultValue, { missing }",
+    ] {
+        let entry = format!(
+            "import {clause} from './lib/a.mjs'; console.log('importer must not run');"
+        );
+        assert_import_syntax_error(
+            &[("app.mjs", &entry)],
+            "does not provide an export named 'missing'",
+        );
+    }
+}
+
+#[test]
+fn required_default_is_missing_when_absent_or_excluded_by_a_star() {
+    assert_import_syntax_error(
+        &[(
+            "app.mjs",
+            "import absent from './lib/b.mjs'; console.log('importer must not run');",
+        )],
+        "does not provide an export named 'default'",
+    );
+    assert_import_syntax_error(
+        &[
+            ("lib/index.mjs", "export * from './a.mjs';"),
+            (
+                "app.mjs",
+                "import absent from './lib/index.mjs'; console.log('importer must not run');",
+            ),
+        ],
+        "does not provide an export named 'default'",
+    );
+}
+
+#[test]
+fn indirect_reexports_validate_the_source_name_even_for_namespace_consumers() {
+    for clause in ["{ missing as renamed }", "{ default as renamed }"] {
+        let barrel = format!("export {clause} from './b.mjs';");
+        assert_import_syntax_error(
+            &[
+                ("lib/index.mjs", &barrel),
+                (
+                    "app.mjs",
+                    "import * as ns from './lib/index.mjs'; console.log('importer must not run');",
+                ),
+            ],
+            "does not provide an export named",
+        );
+    }
+}
+
+#[test]
+fn named_import_rejects_distinct_star_bindings_even_when_their_values_are_equal() {
+    assert_import_syntax_error(
+        &[
+            ("lib/left.mjs", "export const duplicate = 1;"),
+            ("lib/right.mjs", "export const duplicate = 1;"),
+            (
+                "lib/index.mjs",
+                "export * from './left.mjs'; export * from './right.mjs';",
+            ),
+            (
+                "app.mjs",
+                "import { duplicate } from './lib/index.mjs'; console.log('importer must not run');",
+            ),
+        ],
+        "has an ambiguous export named 'duplicate'",
+    );
+}
+
+#[test]
+fn ordinary_namespace_reads_of_absent_and_ambiguous_names_still_return_undefined() {
+    assert_output(
+        &[
+            ("lib/left.mjs", "export const duplicate = 1;"),
+            ("lib/right.mjs", "export const duplicate = 1;"),
+            (
+                "lib/index.mjs",
+                "export * from './left.mjs'; export * from './right.mjs';",
+            ),
+            (
+                "app.mjs",
+                "import * as ns from './lib/index.mjs'; console.log(ns.missing === undefined, ns.duplicate === undefined, 'duplicate' in ns);",
+            ),
+        ],
+        &["true true false"],
+    );
+}
+
+#[test]
+fn real_undefined_exports_and_renamed_aliases_are_valid_required_bindings() {
+    assert_output(
+        &[
+            (
+                "lib/empty.mjs",
+                "export let empty; export { empty as renamed }; export default undefined;",
+            ),
+            (
+                "app.mjs",
+                "import defaultValue, { empty, renamed } from './lib/empty.mjs'; console.log(defaultValue === undefined, empty === undefined, renamed === undefined);",
+            ),
+        ],
+        &["true true true"],
+    );
+}
+
+#[test]
+fn required_binding_validation_preserves_commonjs_default_and_published_names() {
+    assert_output(
+        &[
+            ("lib/provider.cjs", "exports.empty = undefined; exports.value = 7;"),
+            (
+                "app.mjs",
+                "import provider, { empty, value } from './lib/provider.cjs'; console.log(empty === undefined, provider.value, value);",
+            ),
+        ],
+        &["true 7 7"],
+    );
+    assert_import_syntax_error(
+        &[
+            ("lib/provider.cjs", "exports.value = 7;"),
+            (
+                "app.mjs",
+                "import { missing } from './lib/provider.cjs'; console.log('importer must not run');",
+            ),
+        ],
+        "does not provide an export named 'missing'",
+    );
+}
+
+#[test]
+fn cyclic_required_bindings_preserve_the_temporal_dead_zone() {
+    assert_output(
+        &[
+            (
+                "lib/source.mjs",
+                "import { read } from './bridge.mjs'; try { read(); } catch (error) { console.log(error instanceof ReferenceError); } export let value = 3; console.log(read());",
+            ),
+            (
+                "lib/bridge.mjs",
+                "import { value } from './source.mjs'; export function read() { return value; }",
+            ),
+            ("app.mjs", "import './lib/source.mjs';"),
+        ],
+        &["true", "3"],
+    );
+}
+
+#[test]
+fn completed_barrel_can_wait_for_a_later_export_in_an_active_cycle() {
+    assert_output(
+        &[
+            (
+                "lib/source.mjs",
+                "import { value as observed } from './barrel.mjs'; try { console.log(observed); } catch (error) { console.log(error instanceof ReferenceError); } export let value = 4; console.log(observed);",
+            ),
+            ("lib/barrel.mjs", "export * from './source.mjs';"),
+            ("app.mjs", "import './lib/source.mjs';"),
+        ],
+        &["true", "4"],
+    );
+}
+
+#[test]
+fn required_undefined_binding_keeps_its_identity_through_a_renamed_diamond() {
+    assert_output(
+        &[
+            (
+                "lib/source.mjs",
+                "export let value; export { value as alias }; export function bump() { value = 5; }",
+            ),
+            (
+                "lib/left.mjs",
+                "export { value as shared, bump } from './source.mjs';",
+            ),
+            (
+                "lib/right.mjs",
+                "import { alias } from './source.mjs'; export { alias as shared }; export { bump } from './source.mjs';",
+            ),
+            (
+                "lib/index.mjs",
+                "export * from './left.mjs'; export * from './right.mjs';",
+            ),
+            (
+                "app.mjs",
+                "import { shared, bump } from './lib/index.mjs'; console.log(shared === undefined); bump(); console.log(shared);",
+            ),
+        ],
+        &["true", "5"],
+    );
+}
+
+#[test]
+fn required_bindings_preserve_json_default_and_native_facade_exports() {
+    assert_output(
+        &[
+            ("lib/data.json", r#"{"value":7}"#),
+            (
+                "app.mjs",
+                "import data, { default as same } from './lib/data.json' with { type: 'json' }; import path, { basename } from 'node:path'; console.log(data.value, data === same, path.basename('file'), basename('file'));",
+            ),
+        ],
+        &["7 true file file"],
+    );
+}
+
+#[test]
+fn native_facades_reject_unpublished_required_names() {
+    assert_import_syntax_error(
+        &[(
+            "app.mjs",
+            "import { definitelyMissingNativeExport } from 'node:path'; console.log('importer must not run');",
+        )],
+        "does not provide an export named 'definitelyMissingNativeExport'",
+    );
+}

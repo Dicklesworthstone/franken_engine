@@ -21,7 +21,9 @@
 
 use std::collections::BTreeSet;
 
-use frankenengine_engine::HybridRouter;
+use frankenengine_engine::{
+    HybridRouter, JsEngine, QuickJsInspiredNativeEngine, V8InspiredNativeEngine,
+};
 
 #[path = "support/native_stream_kernels.rs"]
 mod native_stream_kernels;
@@ -49,6 +51,28 @@ fn eval_console(source: &str) -> String {
 
 fn eval_native_console(source: &str) -> String {
     eval_console(&native_stream_kernels::source(source))
+}
+
+fn assert_native_stream_console_on_both_lanes(source: &str, expected: &str) {
+    let source = native_stream_kernels::source(source);
+    for throughput in [false, true] {
+        let outcome = if throughput {
+            V8InspiredNativeEngine.eval(&source)
+        } else {
+            QuickJsInspiredNativeEngine.eval(&source)
+        }
+        .unwrap_or_else(|error| {
+            panic!("native stream eval failed (throughput={throughput}): {error}\n{source}")
+        });
+        let output = outcome
+            .console_output
+            .iter()
+            .map(|entry| entry.message.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        // An idle event loop with an unresolved consumer is not completion.
+        assert_eq!(output, expected, "throughput={throughput}\n{source}");
+    }
 }
 
 fn eval_error(source: &str) -> String {
@@ -3347,4 +3371,72 @@ t.write('ab'); t.end('cd');
 w.write('x'); w.end();
 setTimeout(() => console.log(log.join(' ')), 20);";
     assert_eq!(eval_console(source), "data:AB data:CD w:x end finish");
+}
+
+#[test]
+fn native_from_array_observes_indexed_getters_lazily_bd_305gi_2() {
+    assert_native_stream_console_on_both_lanes(
+        r#"
+import { Readable } from 'node:stream';
+const events = [];
+const values = ['old', 'second'];
+Object.defineProperty(values, '0', {
+    get() { events.push('get:0'); return 'first'; }
+});
+const stream = Readable.from(values);
+events.push('created');
+values[1] = 'updated';
+stream.toArray().then(items => {
+    console.log(items.join(','), events.join(','));
+});
+"#,
+        "first,updated created,get:0",
+    );
+}
+
+#[test]
+fn native_from_array_observes_inherited_indices_and_live_length_bd_305gi_2() {
+    assert_native_stream_console_on_both_lanes(
+        r#"
+import { Readable } from 'node:stream';
+const events = [];
+const values = [1, , 3];
+const prototype = Object.create(Array.prototype);
+Object.defineProperty(prototype, '1', {
+    get() {
+        events.push('inherited:1');
+        values.push(4);
+        return 2;
+    }
+});
+Object.setPrototypeOf(values, prototype);
+Readable.from(values).toArray().then(items => {
+    console.log(items.join(','), events.join(','));
+});
+"#,
+        "1,2,3,4 inherited:1",
+    );
+}
+
+#[test]
+fn native_from_array_preserves_indexed_getter_error_identity_bd_305gi_2() {
+    assert_native_stream_console_on_both_lanes(
+        r#"
+import { Readable } from 'node:stream';
+const failure = new Error('element failed');
+const events = [];
+const values = [1];
+Object.defineProperty(values, '0', {
+    get() { events.push('get:0'); throw failure; }
+});
+const stream = Readable.from(values);
+stream.on('error', error => events.push(error === failure ? 'error' : 'wrong'));
+stream.on('close', () => events.push('close'));
+stream.toArray().then(
+    () => console.log('unexpected fulfillment'),
+    error => console.log(error === failure, events.join(','))
+);
+"#,
+        "true get:0,error,close",
+    );
 }

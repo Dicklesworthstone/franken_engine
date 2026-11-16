@@ -11007,9 +11007,10 @@ impl InterpreterCore {
     }
 
     /// Acquire a synchronous Readable.from source without taking a step.
-    /// Ordinary arrays and strings retain their finite fast paths; other
-    /// sources keep the acquired iterator in private stream state and are
-    /// driven by the same pull scheduler as a native Readable producer.
+    /// Arrays use their observable iterator, including indexed accessors.
+    /// Strings and Buffers retain their single-chunk paths; other sources
+    /// keep the acquired iterator in private stream state and are driven by
+    /// the same pull scheduler as a native Readable producer.
     pub(super) fn construct_readable_from(
         &mut self,
         module: Option<&Ir3Module>,
@@ -11062,12 +11063,6 @@ impl InterpreterCore {
                 // as the actual call target. Accessors can change between
                 // those two reads.
                 let method = self.readable_iterator_property(module, &source, &key)?;
-                if is_array
-                    && matches!(&method, Value::BuiltinFunction(builtin)
-                    if builtin.kind == BuiltinFunctionKind::ArrayValues)
-                {
-                    return Ok((source, false));
-                }
                 if !method.is_callable() {
                     return Err(InterpreterError::TypeError {
                         expected: "callable Symbol.iterator for Readable.from".to_string(),

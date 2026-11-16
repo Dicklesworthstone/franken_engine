@@ -140,7 +140,7 @@ impl PosteriorDelta {
             self.delta_malicious_millionths,
             self.delta_unknown_millionths,
         ];
-        if deltas.iter().any(|delta| delta.abs() > MILLION) {
+        if deltas.iter().any(|delta| !(-MILLION..=MILLION).contains(delta)) {
             return false;
         }
         // Bounded components (|each| <= 1e6) make this sum overflow-free.
@@ -163,13 +163,14 @@ impl PosteriorDelta {
 pub struct AggregatedPosteriorUpdate {
     /// Extension being evaluated.
     pub extension_id: String,
-    /// Weighted aggregate delta in P(Benign) (millionths).
+    /// Confidence-weighted P(Benign) numerator, in millionths squared.
+    /// Divide by `total_confidence_weight_millionths` to recover a delta in millionths.
     pub aggregate_delta_benign_millionths: i64,
-    /// Weighted aggregate delta in P(Anomalous) (millionths).
+    /// Confidence-weighted P(Anomalous) numerator, in millionths squared.
     pub aggregate_delta_anomalous_millionths: i64,
-    /// Weighted aggregate delta in P(Malicious) (millionths).
+    /// Confidence-weighted P(Malicious) numerator, in millionths squared.
     pub aggregate_delta_malicious_millionths: i64,
-    /// Weighted aggregate delta in P(Unknown) (millionths).
+    /// Confidence-weighted P(Unknown) numerator, in millionths squared.
     pub aggregate_delta_unknown_millionths: i64,
     /// Total confidence weight from all participants (millionths).
     pub total_confidence_weight_millionths: u64,
@@ -186,21 +187,23 @@ pub struct AggregatedPosteriorUpdate {
 impl AggregatedPosteriorUpdate {
     /// Apply this aggregated update to a posterior.
     pub fn apply_to_posterior(&self, posterior: &Posterior) -> Posterior {
-        // Scale aggregate deltas by total confidence weight for weighted averaging
-        let weight = self.total_confidence_weight_millionths.max(1);
-        let scaled_delta_benign = self.aggregate_delta_benign_millionths * MILLION / weight as i64;
-        let scaled_delta_anomalous =
-            self.aggregate_delta_anomalous_millionths * MILLION / weight as i64;
-        let scaled_delta_malicious =
-            self.aggregate_delta_malicious_millionths * MILLION / weight as i64;
-        let scaled_delta_unknown =
-            self.aggregate_delta_unknown_millionths * MILLION / weight as i64;
+        // Producers retain sum(delta_millionths * weight_millionths). Dividing
+        // by sum(weight_millionths) already yields a delta in millionths;
+        // multiplying by MILLION again amplifies every update a million-fold.
+        if self.total_confidence_weight_millionths == 0 {
+            return posterior.clone();
+        }
+        let weight = i128::from(self.total_confidence_weight_millionths);
+        let apply = |prior: i64, numerator: i64| {
+            (i128::from(prior) + i128::from(numerator) / weight)
+                .clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
+        };
 
         Posterior::from_millionths(
-            posterior.p_benign + scaled_delta_benign,
-            posterior.p_anomalous + scaled_delta_anomalous,
-            posterior.p_malicious + scaled_delta_malicious,
-            posterior.p_unknown + scaled_delta_unknown,
+            apply(posterior.p_benign, self.aggregate_delta_benign_millionths),
+            apply(posterior.p_anomalous, self.aggregate_delta_anomalous_millionths),
+            apply(posterior.p_malicious, self.aggregate_delta_malicious_millionths),
+            apply(posterior.p_unknown, self.aggregate_delta_unknown_millionths),
         )
     }
 
@@ -785,5 +788,110 @@ mod tests {
             prior.p_benign,
             updated.p_benign
         );
+    }
+
+    fn weighted_update(numerators: [i64; 4], weight: u64) -> AggregatedPosteriorUpdate {
+        AggregatedPosteriorUpdate {
+            extension_id: "weighted-update".into(),
+            aggregate_delta_benign_millionths: numerators[0],
+            aggregate_delta_anomalous_millionths: numerators[1],
+            aggregate_delta_malicious_millionths: numerators[2],
+            aggregate_delta_unknown_millionths: numerators[3],
+            total_confidence_weight_millionths: weight,
+            participant_count: 2,
+            evidence_fingerprint: ContentHash::compute(b"weighted-update"),
+            epoch: SecurityEpoch::from_raw(1),
+            aggregation_timestamp_ns: 42,
+        }
+    }
+
+    #[test]
+    fn weighted_posterior_update_preserves_millionths() {
+        // Two independently weighted contributions: 75% of
+        // [-100000, 50000, 30000, 20000] plus 25% of
+        // [0, -50000, 70000, -20000].
+        let update = weighted_update(
+            [-75_000_000_000, 25_000_000_000, 40_000_000_000, 10_000_000_000],
+            1_000_000,
+        );
+        assert_eq!(
+            update.apply_to_posterior(&Posterior::uniform()),
+            Posterior {
+                p_benign: 175_000,
+                p_anomalous: 275_000,
+                p_malicious: 290_000,
+                p_unknown: 260_000,
+            }
+        );
+    }
+
+    #[test]
+    fn weighted_posterior_update_is_invariant_to_common_weight_scale() {
+        let expected = Posterior {
+            p_benign: 249_877,
+            p_anomalous: 250_020,
+            p_malicious: 250_100,
+            p_unknown: 250_003,
+        };
+        for weight in [1_u64, 17, 1_000_000, 4_000_000] {
+            let numerators = [-123_i64, 20, 100, 3].map(|delta| delta * weight as i64);
+            assert_eq!(
+                weighted_update(numerators, weight).apply_to_posterior(&Posterior::uniform()),
+                expected,
+                "weight {weight}"
+            );
+        }
+    }
+
+    #[test]
+    fn zero_weight_update_cannot_change_the_posterior() {
+        let prior = Posterior::default_prior();
+        let update = weighted_update([i64::MAX, i64::MIN, 1, -1], 0);
+        assert_eq!(update.apply_to_posterior(&prior), prior);
+    }
+
+    #[test]
+    fn unsigned_weight_is_not_reinterpreted_as_a_negative_divisor() {
+        let prior = Posterior::uniform();
+        let update = weighted_update([i64::MIN, i64::MAX, -1, 1], u64::MAX);
+        assert_eq!(update.apply_to_posterior(&prior), prior);
+    }
+
+    #[test]
+    fn extreme_serialized_numerators_do_not_wrap_or_panic() {
+        let update = weighted_update([i64::MAX, i64::MIN, i64::MAX, i64::MIN], 1);
+        let encoded = serde_json::to_vec(&update).unwrap();
+        let decoded: AggregatedPosteriorUpdate = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(decoded, update);
+        let posterior = decoded.apply_to_posterior(&Posterior::uniform());
+        assert!(posterior.is_valid());
+        // Preserve the normalizer's 100-millionth floor and deterministic
+        // remainder assignment to the first maximal component.
+        assert_eq!(
+            posterior,
+            Posterior {
+                p_benign: 499_801,
+                p_anomalous: 100,
+                p_malicious: 499_999,
+                p_unknown: 100,
+            }
+        );
+    }
+
+    #[test]
+    fn posterior_delta_rejects_signed_extremes_without_absolute_value_overflow() {
+        for value in [i64::MIN, i64::MAX, -1_000_001, 1_000_001] {
+            let delta = PosteriorDelta {
+                extension_id: "invalid-delta".into(),
+                delta_benign_millionths: value,
+                delta_anomalous_millionths: 0,
+                delta_malicious_millionths: 0,
+                delta_unknown_millionths: 0,
+                confidence_weight_millionths: 1_000_000,
+                evidence_hash: ContentHash::compute(b"invalid-delta"),
+                epoch: SecurityEpoch::from_raw(1),
+            };
+            assert!(!delta.is_valid(), "component {value}");
+        }
     }
 }

@@ -545,6 +545,191 @@ pub(in crate::baseline_interpreter) mod active_builtin_regressions {
         }
     }
 
+    #[test]
+    fn array_join_charges_empty_sparse_iterations() {
+        let mut core = test_core();
+        let array = core.alloc_array_from_values(&[]).unwrap();
+        core.set_object_property(array, "length".into(), Value::Int(10_000))
+            .unwrap();
+        core.config.instruction_budget = core.instructions_executed + 8;
+        assert!(matches!(
+            core.array_join_observable(&halted_test_module(), array, &JsString::from("")),
+            Err(InterpreterError::BudgetExhausted { .. })
+        ));
+        assert!(core.array_join_stack.is_empty());
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+    }
+
+    #[test]
+    fn array_join_checks_string_size_before_building_output() {
+        let mut core = test_core();
+        let array = core
+            .alloc_array_from_values(&[Value::str("abcdefgh")])
+            .unwrap();
+        core.config.max_string_size = 3;
+        assert!(matches!(
+            core.array_join_observable(&halted_test_module(), array, &JsString::from(",")),
+            Err(InterpreterError::StringLimitExceeded { .. })
+        ));
+        assert!(core.array_join_stack.is_empty());
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+    }
+
+    #[test]
+    fn array_join_output_respects_the_remaining_memory_budget() {
+        let mut core = test_core();
+        let array = core
+            .alloc_array_from_values(&[Value::str("x".repeat(4_096))])
+            .unwrap();
+        core.config.max_total_memory_bytes = core.estimated_memory_bytes() + 1_024;
+        assert!(matches!(
+            core.array_join_observable(&halted_test_module(), array, &JsString::from(",")),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert!(core.array_join_stack.is_empty());
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+    }
+
+    #[test]
+    fn array_join_failure_releases_only_its_own_scratch_and_recovers() {
+        let mut core = test_core();
+        let child = core.alloc_array_from_values(&[Value::str("abcd")]).unwrap();
+        let array = core
+            .alloc_array_from_values(&[Value::str("abc"), Value::Object(child)])
+            .unwrap();
+        core.json_reserve_temporary(17).unwrap();
+        core.config.max_string_size = 5;
+        assert!(matches!(
+            core.array_join_observable(&halted_test_module(), array, &JsString::from(",")),
+            Err(InterpreterError::StringLimitExceeded { .. })
+        ));
+        assert!(core.array_join_stack.is_empty());
+        assert_eq!(core.json_parse_temporary_bytes, 17);
+        core.config.max_string_size = 8;
+        assert_eq!(
+            core.array_join_observable(&halted_test_module(), array, &JsString::from(","))
+                .unwrap(),
+            JsString::from("abc,abcd")
+        );
+        assert!(core.array_join_stack.is_empty());
+        assert_eq!(core.json_parse_temporary_bytes, 17);
+        core.json_release_temporary(17);
+    }
+
+    #[test]
+    fn array_join_output_limit_preserves_surrogate_healing() {
+        let mut core = test_core();
+        let array = core
+            .alloc_array_from_values(&[
+                Value::Str(JsString::from_code_units(&[0xd83d])),
+                Value::Str(JsString::from_code_units(&[0xde00])),
+            ])
+            .unwrap();
+        core.config.max_string_size = 4;
+        assert_eq!(
+            core.array_join_observable(&halted_test_module(), array, &JsString::from(""))
+                .unwrap(),
+            JsString::from("😀")
+        );
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert!(core.array_join_stack.is_empty());
+    }
+
+    #[test]
+    fn array_join_cancellation_and_output_work_failure_leave_no_scratch() {
+        let mut core = test_core();
+        let array = core
+            .alloc_array_from_values(&[Value::str("q".repeat(4_096))])
+            .unwrap();
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        core.config.cancellation_token = Some(cancellation);
+        assert!(matches!(
+            core.array_join_observable(&halted_test_module(), array, &JsString::from(",")),
+            Err(InterpreterError::Cancelled)
+        ));
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert!(core.array_join_stack.is_empty());
+
+        core.config.cancellation_token = None;
+        core.config.instruction_budget = core.instructions_executed + 4;
+        assert!(matches!(
+            core.array_join_observable(&halted_test_module(), array, &JsString::from(",")),
+            Err(InterpreterError::BudgetExhausted { .. })
+        ));
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert!(core.array_join_stack.is_empty());
+    }
+
+    #[test]
+    fn array_join_buffer_scratch_stays_visible_to_nested_allocations() {
+        let mut core = test_core();
+        core.json_reserve_temporary(17).unwrap();
+        let mut output = ArrayJoinBuffer::default();
+        output.push(&mut core, &JsString::from("retained")).unwrap();
+        assert!(core.json_parse_temporary_bytes >= 17 + 8);
+        core.config.max_total_memory_bytes = core.estimated_memory_bytes();
+        assert!(matches!(
+            core.json_reserve_temporary(1),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        output.release(&mut core);
+        assert_eq!(core.json_parse_temporary_bytes, 17);
+        core.json_reserve_temporary(1).unwrap();
+        core.json_release_temporary(18);
+    }
+
+    #[test]
+    fn array_join_borrowed_output_is_bounded_and_recovers() {
+        let mut core = test_core();
+        let object = core
+            .alloc_object_with_properties(&[
+                ("length", Value::Int(2)),
+                ("0", Value::str("abc")),
+                ("1", Value::str("def")),
+            ])
+            .unwrap();
+        let module = halted_test_module();
+        core.config.max_string_size = 4;
+        let args = RegRange { start: 0, count: 0 };
+        assert!(matches!(
+            core.array_method_generic(&module, BuiltinFunctionKind::ArrayJoin, object, args),
+            Err(InterpreterError::StringLimitExceeded { .. })
+        ));
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        core.config.max_string_size = 7;
+        assert_eq!(
+            core.array_method_generic(&module, BuiltinFunctionKind::ArrayJoin, object, args)
+                .unwrap(),
+            Some(Value::str("abc,def"))
+        );
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+    }
+
+    #[test]
+    fn array_join_rope_and_nested_exact_buffers_preserve_every_code_unit() {
+        let mut core = test_core();
+        let rope = JsString::from("a".repeat(2_048)).concat(&JsString::from("é".repeat(2_048)));
+        assert!(rope.unjoined_concat_children().is_some());
+        let child = core
+            .alloc_array_from_values(&[Value::Str(JsString::from_code_units(&[0xd800]))])
+            .unwrap();
+        let array = core
+            .alloc_array_from_values(&[
+                Value::Str(rope.clone()),
+                Value::Object(child),
+                Value::Str(JsString::from_code_units(&[0xdc00])),
+            ])
+            .unwrap();
+        let result = core
+            .array_join_observable(&halted_test_module(), array, &JsString::from(""))
+            .unwrap();
+        let mut expected = rope.code_units_vec();
+        expected.extend([0xd800, 0xdc00]);
+        assert_eq!(result.code_units_vec(), expected);
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert!(core.array_join_stack.is_empty());
+    }
     fn install_pending_pipeline_fixture(
         core: &mut InterpreterCore,
         token: u32,

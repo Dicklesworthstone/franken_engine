@@ -724,17 +724,22 @@ impl InterpreterCore {
                     other => self.generic_to_js_string(m, other)?,
                 };
                 let mut out = ArrayJoinBuffer::default();
-                for k in 0..len {
-                    if k > 0 {
-                        out.push(&separator);
+                let outcome = (|| {
+                    for k in 0..len {
+                        self.json_charge_work()?;
+                        if k > 0 {
+                            out.push(self, &separator)?;
+                        }
+                        let element = self.generic_get(m, o, &Self::generic_index_key(k))?;
+                        if !element.is_nullish() {
+                            let text = self.generic_to_js_string(m, element)?;
+                            out.push(self, &text)?;
+                        }
                     }
-                    let element = self.generic_get(m, o, &Self::generic_index_key(k))?;
-                    if !element.is_nullish() {
-                        out.push(&self.generic_to_js_string(m, element)?);
-                    }
-                    self.check_temporary_memory_budget(out.bytes())?;
-                }
-                Value::Str(out.finish())
+                    out.finish(self)
+                })();
+                out.release(self);
+                Value::Str(outcome?)
             }
             K::ArrayToString => {
                 let join =

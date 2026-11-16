@@ -513,37 +513,300 @@ const ARRAY_STRING_FALLBACK_MAX_DEPTH: usize = 128;
 
 /// Append exact string units in linear space. Well-formed output keeps the
 /// ordinary UTF-8 buffer; the first lone surrogate switches it to UTF-16.
+/// Capacity stays admitted across guest getters and conversions.
 #[derive(Default)]
 struct ArrayJoinBuffer {
     text: String,
     units: Option<Vec<u16>>,
+    unit_len: usize,
+    projection_bytes: usize,
+    charged: u64,
 }
 
 impl ArrayJoinBuffer {
-    fn push(&mut self, value: &JsString) {
-        if let Some(units) = &mut self.units {
-            units.extend(value.encode_utf16());
-        } else if let Some(text) = value.as_str() {
-            self.text.push_str(text);
+    fn reserve(
+        core: &mut InterpreterCore,
+        charged: &mut u64,
+        bytes: u64,
+    ) -> Result<(), InterpreterError> {
+        let total = charged
+            .checked_add(bytes)
+            .ok_or_else(|| core.memory_budget_error(u64::MAX, core.heap_object_count_u32()))?;
+        core.json_reserve_temporary(bytes)?;
+        *charged = total;
+        Ok(())
+    }
+
+    /// All vectors in the join (UTF-16 output, nested frames, rope frontier)
+    /// grow geometrically, with capacity admitted before native allocation.
+    fn grow_vec<T>(
+        core: &mut InterpreterCore,
+        values: &mut Vec<T>,
+        required: usize,
+        limit: usize,
+        charged: &mut u64,
+    ) -> Result<(), InterpreterError> {
+        if required <= values.capacity() {
+            return Ok(());
+        }
+        let previous = values.capacity();
+        let desired = required.max(previous.saturating_mul(2)).max(8).min(limit);
+        if desired < required {
+            return Err(core.memory_budget_error(u64::MAX, core.heap_object_count_u32()));
+        }
+        let slot = std::mem::size_of::<T>() as u64;
+        let growth = ((desired - previous) as u64).saturating_mul(slot);
+        Self::reserve(core, charged, growth)?;
+        if values.try_reserve_exact(desired - values.len()).is_err() {
+            core.json_release_temporary(growth);
+            *charged -= growth;
+            return Err(core.memory_budget_error(u64::MAX, core.heap_object_count_u32()));
+        }
+        let actual = ((values.capacity() - previous) as u64).saturating_mul(slot);
+        if actual > growth {
+            Self::reserve(core, charged, actual - growth)?;
+        }
+        Ok(())
+    }
+
+    fn grow_text(
+        &mut self,
+        core: &mut InterpreterCore,
+        required: usize,
+    ) -> Result<(), InterpreterError> {
+        if required <= self.text.capacity() {
+            return Ok(());
+        }
+        let previous = self.text.capacity();
+        let desired = required
+            .max(previous.saturating_mul(2))
+            .max(8)
+            .min(core.config.max_string_size);
+        let growth = (desired - previous) as u64;
+        Self::reserve(core, &mut self.charged, growth)?;
+        if self
+            .text
+            .try_reserve_exact(desired - self.text.len())
+            .is_err()
+        {
+            core.json_release_temporary(growth);
+            self.charged -= growth;
+            return Err(core.memory_budget_error(u64::MAX, core.heap_object_count_u32()));
+        }
+        let actual = (self.text.capacity() - previous) as u64;
+        if actual > growth {
+            Self::reserve(core, &mut self.charged, actual - growth)?;
+        }
+        Ok(())
+    }
+
+    fn switch_to_units(&mut self, core: &mut InterpreterCore) -> Result<(), InterpreterError> {
+        if self.units.is_some() {
+            return Ok(());
+        }
+        let mut units = Vec::new();
+        let mut charged = 0;
+        let outcome = (|| {
+            let max_units = core.config.max_string_size;
+            Self::grow_vec(core, &mut units, self.unit_len, max_units, &mut charged)?;
+            for (index, unit) in self.text.encode_utf16().enumerate() {
+                if index.is_multiple_of(256) {
+                    core.json_charge_work()?;
+                }
+                units.push(unit);
+            }
+            Ok(())
+        })();
+        if let Err(error) = outcome {
+            drop(units);
+            core.json_release_temporary(charged);
+            return Err(error);
+        }
+        let text = std::mem::take(&mut self.text);
+        let released = text.capacity() as u64;
+        drop(text);
+        core.json_release_temporary(released);
+        self.charged -= released;
+        self.charged += charged;
+        self.units = Some(units);
+        Ok(())
+    }
+
+    fn push_text(
+        &mut self,
+        core: &mut InterpreterCore,
+        mut text: &str,
+    ) -> Result<(), InterpreterError> {
+        if self.units.is_some() {
+            return self.push_units(core, text.encode_utf16());
+        }
+        while !text.is_empty() {
+            core.json_charge_work()?;
+            let mut count = text.len().min(256);
+            while !text.is_char_boundary(count) {
+                count -= 1;
+            }
+            let span = &text[..count];
+            let length = self
+                .projection_bytes
+                .checked_add(count)
+                .ok_or_else(|| core.memory_budget_error(u64::MAX, core.heap_object_count_u32()))?;
+            core.check_string_limit(length)?;
+            self.grow_text(core, length)?;
+            self.text.push_str(span);
+            self.projection_bytes = length;
+            self.unit_len += span.encode_utf16().count();
+            text = &text[count..];
+        }
+        Ok(())
+    }
+
+    fn push_units(
+        &mut self,
+        core: &mut InterpreterCore,
+        units: impl Iterator<Item = u16>,
+    ) -> Result<(), InterpreterError> {
+        self.switch_to_units(core)?;
+        for unit in units {
+            if self.unit_len.is_multiple_of(256) {
+                core.json_charge_work()?;
+            }
+            let output = self.units.as_mut().expect("exact join buffer");
+            // An adjacent high/low pair heals: its two three-byte lossy
+            // projections become one four-byte scalar. This keeps the
+            // existing UTF-8-byte string limit exact at surrogate boundaries.
+            let added = match unit {
+                0..=0x7f => 1,
+                0x80..=0x7ff => 2,
+                0xdc00..=0xdfff
+                    if output
+                        .last()
+                        .is_some_and(|previous| (0xd800..=0xdbff).contains(previous)) =>
+                {
+                    1
+                }
+                _ => 3,
+            };
+            let length = self
+                .projection_bytes
+                .checked_add(added)
+                .ok_or_else(|| core.memory_budget_error(u64::MAX, core.heap_object_count_u32()))?;
+            core.check_string_limit(length)?;
+            let required = self
+                .unit_len
+                .checked_add(1)
+                .ok_or_else(|| core.memory_budget_error(u64::MAX, core.heap_object_count_u32()))?;
+            let max_units = core.config.max_string_size;
+            Self::grow_vec(core, output, required, max_units, &mut self.charged)?;
+            output.push(unit);
+            self.projection_bytes = length;
+            self.unit_len = required;
+        }
+        Ok(())
+    }
+
+    fn push_leaf(
+        &mut self,
+        core: &mut InterpreterCore,
+        value: &JsString,
+    ) -> Result<(), InterpreterError> {
+        if value.is_empty() {
+            return Ok(());
+        }
+        if self.units.is_some() || !value.is_well_formed() {
+            self.push_units(core, value.encode_utf16())
         } else {
-            let mut units: Vec<u16> = self.text.encode_utf16().collect();
-            units.extend(value.encode_utf16());
-            self.text = String::new();
-            self.units = Some(units);
+            self.push_text(core, value.as_str().expect("well-formed join leaf"))
         }
     }
 
-    fn bytes(&self) -> u64 {
-        self.units.as_ref().map_or(self.text.len() as u64, |units| {
-            (units.len() as u64).saturating_mul(2)
+    fn push(
+        &mut self,
+        core: &mut InterpreterCore,
+        value: &JsString,
+    ) -> Result<(), InterpreterError> {
+        let Some([left, right]) = value.unjoined_concat_children() else {
+            return self.push_leaf(core, value);
+        };
+        // Do not flatten an arbitrary rope before the output/work gates.
+        // Only its outstanding right children occupy admitted scratch.
+        let mut pending = Vec::new();
+        let mut charged = 0;
+        let outcome = (|| {
+            Self::grow_vec(core, &mut pending, 1, usize::MAX, &mut charged)?;
+            pending.push(right);
+            let mut current = left;
+            loop {
+                core.json_charge_work()?;
+                if let Some([left, right]) = current.unjoined_concat_children() {
+                    let required = pending.len().checked_add(1).ok_or_else(|| {
+                        core.memory_budget_error(u64::MAX, core.heap_object_count_u32())
+                    })?;
+                    Self::grow_vec(core, &mut pending, required, usize::MAX, &mut charged)?;
+                    pending.push(right);
+                    current = left;
+                    continue;
+                }
+                self.push_leaf(core, &current)?;
+                let Some(next) = pending.pop() else {
+                    return Ok(());
+                };
+                current = next;
+            }
+        })();
+        drop(pending);
+        core.json_release_temporary(charged);
+        outcome
+    }
+
+    fn push_buffer(
+        &mut self,
+        core: &mut InterpreterCore,
+        other: &Self,
+    ) -> Result<(), InterpreterError> {
+        match &other.units {
+            Some(units) => self.push_units(core, units.iter().copied()),
+            None => self.push_text(core, &other.text),
+        }
+    }
+
+    fn finish(&self, core: &mut InterpreterCore) -> Result<JsString, InterpreterError> {
+        for _ in 0..self.unit_len.div_ceil(256) {
+            core.json_charge_work()?;
+        }
+        let bytes = self.projection_bytes as u64;
+        let units = self.unit_len as u64;
+        let metadata = MEMORY_ESTIMATE_STRING_BASE_BYTES
+            .saturating_mul(2)
+            .saturating_add(frankenengine_core::js_string::CONCAT_NODE_BYTES as u64);
+        let temporary = if self.units.is_some() {
+            // Exact normalization may hold a UTF-8 scratch string, its Arc,
+            // exact-unit backing and indexed-string metadata simultaneously.
+            units
+                .saturating_mul(6)
+                .saturating_add(bytes.saturating_mul(2))
+                .saturating_add(metadata)
+        } else if self.unit_len == self.projection_bytes
+            || self.unit_len.checked_mul(3) == Some(self.projection_bytes)
+        {
+            // ASCII and fixed-width three-byte BMP text need no sparse index.
+            bytes.saturating_add(MEMORY_ESTIMATE_STRING_BASE_BYTES)
+        } else {
+            bytes
+                .saturating_add(units.saturating_mul(2))
+                .saturating_add(metadata)
+        };
+        core.check_temporary_memory_budget(temporary)?;
+        Ok(match &self.units {
+            Some(units) => JsString::from_code_units(units),
+            None => JsString::from(self.text.as_str()),
         })
     }
 
-    fn finish(self) -> JsString {
-        self.units.map_or_else(
-            || JsString::from(self.text),
-            |units| JsString::from_code_units(&units),
-        )
+    fn release(self, core: &mut InterpreterCore) {
+        let charged = self.charged;
+        drop(self);
+        core.json_release_temporary(charged);
     }
 }
 
@@ -4317,11 +4580,7 @@ impl BuiltinFunction {
         }
     }
 
-    fn readable_pipe_listener(
-        kind: BuiltinFunctionKind,
-        peer: ObjectId,
-        token: u32,
-    ) -> Self {
+    fn readable_pipe_listener(kind: BuiltinFunctionKind, peer: ObjectId, token: u32) -> Self {
         debug_assert!(matches!(
             kind,
             BuiltinFunctionKind::StreamReadablePipeData

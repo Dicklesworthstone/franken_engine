@@ -1406,56 +1406,83 @@ impl InterpreterCore {
         array_id: ObjectId,
         separator: &JsString,
     ) -> Result<JsString, InterpreterError> {
-        // The ancestor chain is the interpreter's join stack, not a set owned
-        // by one call: an element's guest toString may re-enter here, and a
-        // fresh set per entry never saw a cycle (`a.push(a); a.join()`
-        // overflowed the call stack; V8 keeps one join stack per isolate,
-        // bd-9vouw.481). Every array this join puts on the stack comes off
-        // again, however it ends.
-        if !self.array_join_stack.insert(array_id.0) {
+        self.json_charge_work()?;
+        // Reentrant joins share the ancestor set; a cycle contributes an
+        // empty string. Never remove or release an ancestor owned by a caller.
+        if self.array_join_stack.contains(&array_id.0) {
             return Ok(JsString::from(""));
         }
+        let mut ancestors_bytes = MEMORY_ESTIMATE_MAP_ENTRY_BYTES;
+        self.json_reserve_temporary(ancestors_bytes)?;
+        self.array_join_stack.insert(array_id.0);
+        let mut root = ArrayJoinFrame::new(array_id, 0);
         let mut nested = Vec::new();
-        let joined = self.array_join_observable_frames(module, array_id, separator, &mut nested);
+        let mut frames_bytes = 0;
+        let outcome = (|| {
+            root.len = self.array_like_length(array_id)?;
+            self.array_join_observable_frames(
+                module,
+                separator,
+                &mut root,
+                &mut nested,
+                &mut frames_bytes,
+                &mut ancestors_bytes,
+            )
+        })();
         self.array_join_stack.remove(&array_id.0);
-        for frame in &nested {
+        root.output.release(self);
+        for frame in nested {
             self.array_join_stack.remove(&frame.array_id.0);
+            frame.output.release(self);
         }
-        joined
+        // The vector and every output buffer have dropped before their
+        // capacity admission is returned. Inherited callback scratch survives.
+        self.json_release_temporary(frames_bytes);
+        self.json_release_temporary(ancestors_bytes);
+        outcome
     }
 
-    /// The join of [`Self::array_join_observable`] over an explicit stack of
-    /// nested arrays, so nesting costs no native stack: `nested` holds the
-    /// arrays being joined below `array_id`, each on the join stack.
+    /// Walk nested arrays with an explicit, admitted stack. Output capacity
+    /// remains charged through every observable Get and ToPrimitive callback.
     pub(super) fn array_join_observable_frames(
         &mut self,
         module: &Ir3Module,
-        array_id: ObjectId,
         separator: &JsString,
+        root: &mut ArrayJoinFrame,
         nested: &mut Vec<ArrayJoinFrame>,
+        frames_bytes: &mut u64,
+        ancestors_bytes: &mut u64,
     ) -> Result<JsString, InterpreterError> {
-        let len = self.array_like_length(array_id)?;
-        let mut root = ArrayJoinFrame::new(array_id, len);
+        let comma_bytes = MEMORY_ESTIMATE_STRING_BASE_BYTES + 1;
+        ArrayJoinBuffer::reserve(self, ancestors_bytes, comma_bytes)?;
         let comma = JsString::from(",");
         loop {
+            // Holes, nullish values and empty separators still consume work.
+            // Otherwise a giant sparse array can run indefinitely with no
+            // allocation and no interpreter instruction-budget checkpoint.
+            self.json_charge_work()?;
             let separator = if nested.is_empty() { separator } else { &comma };
-            let frame = nested.last_mut().unwrap_or(&mut root);
+            let frame = nested.last_mut().unwrap_or(&mut *root);
             if frame.index == frame.len {
                 let Some(done) = nested.pop() else {
-                    return Ok(root.output.finish());
+                    return root.output.finish(self);
                 };
                 self.array_join_stack.remove(&done.array_id.0);
-                nested
+                self.json_release_temporary(MEMORY_ESTIMATE_MAP_ENTRY_BYTES);
+                *ancestors_bytes -= MEMORY_ESTIMATE_MAP_ENTRY_BYTES;
+                let outcome = nested
                     .last_mut()
-                    .unwrap_or(&mut root)
+                    .unwrap_or(&mut *root)
                     .output
-                    .push(&done.output.finish());
+                    .push_buffer(self, &done.output);
+                done.output.release(self);
+                outcome?;
                 continue;
             }
             let (current, index) = (frame.array_id, frame.index);
             frame.index += 1;
             if index > 0 {
-                frame.output.push(separator);
+                frame.output.push(self, separator)?;
             }
             let element = self
                 .array_index_get(Some(module), current, index)?
@@ -1472,29 +1499,33 @@ impl InterpreterCore {
                         .is_some_and(|object| object.is_array)
                         && !self.object_has_user_conversion_hook(nested_id) =>
                 {
-                    // An array already being joined renders "" (the cycle
-                    // guard); a nested one is joined as its own frame.
-                    if !self.array_join_stack.insert(nested_id.0) {
+                    if self.array_join_stack.contains(&nested_id.0) {
                         JsString::from("")
-                    } else if self.array_join_stack.len() > ARRAY_JOIN_MAX_DEPTH {
-                        self.array_join_stack.remove(&nested_id.0);
-                        // Deeper nesting fails loudly, as Node does once its
-                        // native stack runs out, instead of rendering "".
+                    } else if self.array_join_stack.len() >= ARRAY_JOIN_MAX_DEPTH {
                         return Err(InterpreterError::StackOverflow {
                             depth: self.array_join_stack.len() + 1,
                             max: ARRAY_JOIN_MAX_DEPTH,
                         });
                     } else {
-                        match self.array_like_length(nested_id) {
-                            Ok(nested_len) => {
-                                nested.push(ArrayJoinFrame::new(nested_id, nested_len));
-                                continue;
-                            }
-                            Err(error) => {
-                                self.array_join_stack.remove(&nested_id.0);
-                                return Err(error);
-                            }
-                        }
+                        let nested_len = self.array_like_length(nested_id)?;
+                        let required = nested.len().checked_add(1).ok_or_else(|| {
+                            self.memory_budget_error(u64::MAX, self.heap_object_count_u32())
+                        })?;
+                        ArrayJoinBuffer::grow_vec(
+                            self,
+                            nested,
+                            required,
+                            usize::MAX,
+                            frames_bytes,
+                        )?;
+                        ArrayJoinBuffer::reserve(
+                            self,
+                            ancestors_bytes,
+                            MEMORY_ESTIMATE_MAP_ENTRY_BYTES,
+                        )?;
+                        self.array_join_stack.insert(nested_id.0);
+                        nested.push(ArrayJoinFrame::new(nested_id, nested_len));
+                        continue;
                     }
                 }
                 Value::Object(object_id) if self.object_has_user_conversion_hook(object_id) => {
@@ -1503,23 +1534,19 @@ impl InterpreterCore {
                         Value::Object(object_id),
                         "string",
                     )? {
-                        // ToString of a Symbol (a Symbol wrapper converts to
-                        // its symbol, bd-9vouw.239) is a TypeError.
                         Value::Symbol(_) => return Err(Self::symbol_to_string_error()),
                         Value::Str(text) => text,
                         primitive => JsString::from(self.value_to_string(&primitive)),
                     }
                 }
-                Value::Symbol(_) => {
-                    return Err(Self::symbol_to_string_error());
-                }
+                Value::Symbol(_) => return Err(Self::symbol_to_string_error()),
                 other => JsString::from(self.value_to_string(&other)),
             };
             nested
                 .last_mut()
-                .unwrap_or(&mut root)
+                .unwrap_or(&mut *root)
                 .output
-                .push(&rendered);
+                .push(self, &rendered)?;
         }
     }
 
@@ -10391,9 +10418,7 @@ impl InterpreterCore {
                 let iterable = self.arg_or_undefined(args, 0)?;
                 if !matches!(iterable, Value::Undefined | Value::Null) {
                     match self.collection_seed_adder(module, object_id, "Set")? {
-                        None => {
-                            self.seed_set_values_from_iterable(module, values_id, iterable)?
-                        }
+                        None => self.seed_set_values_from_iterable(module, values_id, iterable)?,
                         Some(adder) => self.seed_collection_with_adder(
                             module, object_id, adder, false, iterable,
                         )?,

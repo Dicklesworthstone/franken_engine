@@ -112,6 +112,8 @@ jobs:
           rustfmt --edition 2024 --config skip_children=true --check \
             crates/franken-engine/src/baseline_interpreter.rs \
             crates/franken-engine/src/baseline_interpreter/core_math_and_registers.rs \
+            crates/franken-engine/src/baseline_interpreter/array_generic.rs \
+            crates/franken-engine/src/baseline_interpreter/tests_builtins_and_modules.rs \
             crates/franken-engine/src/baseline_interpreter/core_init_and_state.rs \
             crates/franken-engine/src/baseline_interpreter/core_objects_and_descriptors.rs \
             crates/franken-engine/src/baseline_interpreter/core_dispatch_and_arrays.rs \
@@ -172,7 +174,18 @@ jobs:
             --test crypto_builtin_bd_2z157 \
             --test runtime_module_resolver_execution \
             --test fs_callbacks \
+            --test cyclic_array_join_stack_bd_9vouw_481 \
+            --test array_conversion_hooks_bd_9vouw_481 \
+            --test array_callback_accessors_bd_9vouw_182 \
             -- --nocapture --test-threads=1
+
+      - name: Verify array join work and allocation admission
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --no-default-features -p frankenengine-engine --lib \
+            array_join_ -- --nocapture --test-threads=1
 
       - name: Verify asymmetric key authority, reclamation, and allocation rollback
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}

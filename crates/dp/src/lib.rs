@@ -11,7 +11,7 @@
 use rand::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub mod error;
 pub mod participant;
@@ -34,6 +34,19 @@ pub struct SecureAggregationSession {
     pub aggregated_result: Option<Vec<i64>>,
     /// Session configuration parameters
     pub config: AggregationConfig,
+    /// Identity sets bound to the accepted contribution batch. This is retained
+    /// in snapshots; a round cannot infer its contributors from a later
+    /// coordinator-supplied survivor list.
+    contribution_state: ContributionState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum ContributionState {
+    Pending,
+    Accepted {
+        registered: BTreeSet<ParticipantId>,
+        contributors: BTreeSet<ParticipantId>,
+    },
 }
 
 /// Configuration parameters for secure aggregation
@@ -73,6 +86,7 @@ impl SecureAggregationSession {
             current_round: AggregationRound::Setup,
             aggregated_result: None,
             config,
+            contribution_state: ContributionState::Pending,
         }
     }
 
@@ -85,6 +99,11 @@ impl SecureAggregationSession {
         if self.current_round != AggregationRound::Setup {
             return Err(SecureAggregationError::InvalidRound);
         }
+        if self.participants.contains_key(&participant.id) {
+            return Err(SecureAggregationError::ProtocolViolation(
+                "Participant is already registered".into(),
+            ));
+        }
 
         self.participants
             .insert(participant.id.clone(), participant);
@@ -96,6 +115,13 @@ impl SecureAggregationSession {
         &mut self,
         rng: &mut R,
     ) -> Result<Vec<(ParticipantId, Vec<u8>)>> {
+        if self.current_round != AggregationRound::Setup {
+            return Err(SecureAggregationError::InvalidRound);
+        }
+        if !matches!(self.contribution_state, ContributionState::Pending) {
+            return Err(SecureAggregationError::InvalidState);
+        }
+        self.validate_configuration()?;
         if self.participants.len() < self.config.min_participants {
             return Err(SecureAggregationError::InsufficientParticipants);
         }
@@ -122,21 +148,32 @@ impl SecureAggregationSession {
         if self.current_round != AggregationRound::ContributionSubmission {
             return Err(SecureAggregationError::InvalidRound);
         }
-        if self.config.field_modulus == 0 || self.config.field_modulus > i64::MAX as u64 {
-            return Err(SecureAggregationError::ProtocolViolation(
-                "Field modulus must fit a positive signed representation".into(),
-            ));
+        if !matches!(self.contribution_state, ContributionState::Pending) {
+            return Err(SecureAggregationError::InvalidState);
         }
+        self.validate_configuration()?;
 
         // Verify we have enough contributions
         if contributions.len() < self.config.min_participants {
             return Err(SecureAggregationError::InsufficientContributions);
         }
+        if contributions.len() > self.config.max_participants {
+            return Err(SecureAggregationError::TooManyParticipants);
+        }
 
         // Validate every contribution before changing the session state.
+        let mut contributors = BTreeSet::new();
         for contribution in &contributions {
             contribution.verify_dimension(self.config.vector_dimension)?;
             contribution.verify_field_bounds(self.config.field_modulus)?;
+            if !self.participants.contains_key(&contribution.participant_id) {
+                return Err(SecureAggregationError::ParticipantNotFound);
+            }
+            if !contributors.insert(contribution.participant_id.clone()) {
+                return Err(SecureAggregationError::ProtocolViolation(
+                    "Participant submitted more than one contribution".into(),
+                ));
+            }
         }
 
         // Aggregate the masked values
@@ -150,6 +187,10 @@ impl SecureAggregationSession {
             }
         }
 
+        self.contribution_state = ContributionState::Accepted {
+            registered: self.participants.keys().cloned().collect(),
+            contributors,
+        };
         self.current_round = AggregationRound::Unmasking;
         self.aggregated_result = Some(aggregated.clone());
         Ok(aggregated)
@@ -191,6 +232,35 @@ impl SecureAggregationSession {
         self.current_round = AggregationRound::Complete;
         self.aggregated_result = Some(result.clone());
         Ok(result)
+    }
+
+    fn validate_configuration(&self) -> Result<()> {
+        if self.config.field_modulus == 0 || self.config.field_modulus > i64::MAX as u64 {
+            return Err(SecureAggregationError::ProtocolViolation(
+                "Field modulus must fit a positive signed representation".into(),
+            ));
+        }
+        if self.config.min_participants < 2
+            || self.config.min_participants > self.config.max_participants
+        {
+            return Err(SecureAggregationError::ProtocolViolation(
+                "Secure aggregation requires a minimum of at least two within the participant limit"
+                    .into(),
+            ));
+        }
+        if self.participants.len() > self.config.max_participants {
+            return Err(SecureAggregationError::TooManyParticipants);
+        }
+        if self
+            .participants
+            .iter()
+            .any(|(id, participant)| id != &participant.id)
+        {
+            return Err(SecureAggregationError::ProtocolViolation(
+                "Registered participant identity does not match its roster key".into(),
+            ));
+        }
+        Ok(())
     }
 
     /// Generate deterministic share seed for a participant
@@ -309,6 +379,15 @@ pub struct PairwiseMaskParticipant {
     pub id: ParticipantId,
     pairwise_seeds: BTreeMap<ParticipantId, [u8; 32]>,
     submitted: bool,
+    /// One authoritative survivor decision per submitted mask. Persisting this
+    /// state prevents a retry from requesting a different subset of secrets.
+    dropout_disclosure: DropoutDisclosure,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum DropoutDisclosure {
+    Unrevealed,
+    Revealed(BTreeSet<ParticipantId>),
 }
 
 impl PairwiseMaskParticipant {
@@ -317,6 +396,7 @@ impl PairwiseMaskParticipant {
             id,
             pairwise_seeds: BTreeMap::new(),
             submitted: false,
+            dropout_disclosure: DropoutDisclosure::Unrevealed,
         }
     }
 
@@ -329,6 +409,14 @@ impl PairwiseMaskParticipant {
         if a.id == b.id {
             return Err(SecureAggregationError::ProtocolViolation(
                 "Cannot establish pairwise mask seed with self".into(),
+            ));
+        }
+        if a.submitted || b.submitted {
+            return Err(SecureAggregationError::InvalidState);
+        }
+        if a.pairwise_seeds.contains_key(&b.id) || b.pairwise_seeds.contains_key(&a.id) {
+            return Err(SecureAggregationError::ProtocolViolation(
+                "Pairwise seed is already established".into(),
             ));
         }
         let mut seed = [0u8; 32];
@@ -393,26 +481,51 @@ impl PairwiseMaskParticipant {
         ))
     }
 
-    /// Reveal pairwise seeds ONLY for peers absent from `survivors`. Refuses to
-    /// reveal any seed shared with another surviving participant.
+    /// Reveal pairwise seeds ONLY for peers absent from the first accepted
+    /// `survivors` set. Survivors must be distinct established peers including
+    /// self, with at least two participants. Reordered retries are idempotent;
+    /// a conflicting survivor decision is refused without exposing more seeds.
+    ///
+    /// The caller must authenticate and agree on the survivor decision outside
+    /// this local state machine. This guard does not establish distributed
+    /// agreement or protect cloned/rolled-back secret-holder state.
     pub fn reveal_dropout_seeds(
-        &self,
+        &mut self,
         survivors: &[ParticipantId],
     ) -> Result<Vec<DropoutPairwiseSeed>> {
         if !self.submitted {
             return Err(SecureAggregationError::InvalidState);
         }
-        if !survivors.contains(&self.id) {
+        let survivor_set: BTreeSet<_> = survivors.iter().cloned().collect();
+        if survivor_set.len() != survivors.len() {
+            return Err(SecureAggregationError::ProtocolViolation(
+                "Survivor list contains duplicate participants".into(),
+            ));
+        }
+        if !survivor_set.contains(&self.id) {
             return Err(SecureAggregationError::ProtocolViolation(
                 "Non-surviving participant cannot emit survivor dropout shares".into(),
             ));
         }
-        if survivors.len() < 2 {
+        if survivor_set.len() < 2 {
             return Err(SecureAggregationError::InsufficientParticipants);
+        }
+        if survivor_set
+            .iter()
+            .any(|id| id != &self.id && !self.pairwise_seeds.contains_key(id))
+        {
+            return Err(SecureAggregationError::ParticipantNotFound);
+        }
+        if let DropoutDisclosure::Revealed(accepted) = &self.dropout_disclosure
+            && accepted != &survivor_set
+        {
+            return Err(SecureAggregationError::ProtocolViolation(
+                "Survivor decision conflicts with the accepted disclosure roster".into(),
+            ));
         }
         let mut revealed = Vec::new();
         for (peer_id, seed) in &self.pairwise_seeds {
-            if !survivors.contains(peer_id) {
+            if !survivor_set.contains(peer_id) {
                 revealed.push(DropoutPairwiseSeed {
                     survivor: self.id.clone(),
                     dropped_peer: peer_id.clone(),
@@ -420,6 +533,7 @@ impl PairwiseMaskParticipant {
                 });
             }
         }
+        self.dropout_disclosure = DropoutDisclosure::Revealed(survivor_set);
         Ok(revealed)
     }
 }
@@ -437,17 +551,35 @@ impl SecureAggregationSession {
         if self.current_round != AggregationRound::Unmasking {
             return Err(SecureAggregationError::InvalidRound);
         }
-        if self.config.field_modulus == 0 || self.config.field_modulus > i64::MAX as u64 {
+        self.validate_configuration()?;
+        let ContributionState::Accepted {
+            registered,
+            contributors,
+        } = &self.contribution_state
+        else {
+            return Err(SecureAggregationError::InvalidState);
+        };
+        let expected_set: BTreeSet<_> = expected_roster.iter().cloned().collect();
+        let survivor_set: BTreeSet<_> = survivors.iter().cloned().collect();
+        if expected_set.len() != expected_roster.len() || survivor_set.len() != survivors.len() {
             return Err(SecureAggregationError::ProtocolViolation(
-                "Field modulus must fit a positive signed representation".into(),
+                "Roster and survivors must contain distinct participant identities".into(),
             ));
         }
-        if survivors.len() < self.config.min_participants {
+        if &expected_set != registered
+            || !self.participants.keys().eq(registered.iter())
+            || &survivor_set != contributors
+            || !contributors.is_subset(registered)
+        {
+            return Err(SecureAggregationError::ProtocolViolation(
+                "Completion roster does not match the registered and submitted participants".into(),
+            ));
+        }
+        if survivor_set.len() < self.config.min_participants {
             return Err(SecureAggregationError::InsufficientParticipants);
         }
-        let dropped: Vec<ParticipantId> = expected_roster
-            .iter()
-            .filter(|pid| !survivors.contains(pid))
+        let dropped: BTreeSet<ParticipantId> = expected_set
+            .difference(&survivor_set)
             .cloned()
             .collect();
         if dropped.len() > self.config.dropout_threshold {
@@ -458,16 +590,31 @@ impl SecureAggregationSession {
 
         let mut seed_lookup = BTreeMap::new();
         for item in dropout_seeds {
-            if !survivors.contains(&item.survivor) || survivors.contains(&item.dropped_peer) {
+            if !survivor_set.contains(&item.survivor) || !dropped.contains(&item.dropped_peer) {
                 return Err(SecureAggregationError::ProtocolViolation(
                     "Invalid dropout seed disclosure (must be survivor -> dropped_peer only)"
                         .into(),
                 ));
             }
-            seed_lookup.insert(
-                (item.survivor.clone(), item.dropped_peer.clone()),
-                item.shared_seed,
-            );
+            if seed_lookup
+                .insert(
+                    (item.survivor.clone(), item.dropped_peer.clone()),
+                    item.shared_seed,
+                )
+                .is_some()
+            {
+                return Err(SecureAggregationError::ProtocolViolation(
+                    "Duplicate dropout seed disclosure".into(),
+                ));
+            }
+        }
+        let required_seeds = survivor_set.len().checked_mul(dropped.len()).ok_or_else(|| {
+            SecureAggregationError::ProtocolViolation("Dropout seed coverage overflow".into())
+        })?;
+        if seed_lookup.len() != required_seeds {
+            return Err(SecureAggregationError::ProtocolViolation(
+                "Dropout seeds must cover every survivor and dropped-peer pair exactly once".into(),
+            ));
         }
 
         let modulus = i128::from(self.config.field_modulus);
@@ -475,8 +622,11 @@ impl SecureAggregationSession {
             .aggregated_result
             .clone()
             .ok_or(SecureAggregationError::InvalidState)?;
+        if result.len() != self.config.vector_dimension {
+            return Err(SecureAggregationError::InvalidDimension);
+        }
 
-        for survivor in survivors {
+        for survivor in &survivor_set {
             for dropped_peer in &dropped {
                 let seed = seed_lookup
                     .get(&(survivor.clone(), dropped_peer.clone()))
@@ -816,6 +966,11 @@ mod tests {
                 dropout_threshold: 1,
             },
         );
+        for id in &roster {
+            full_session
+                .add_participant(Participant::new(id.clone()))
+                .unwrap();
+        }
         full_session.current_round = AggregationRound::ContributionSubmission;
         full_session
             .aggregate_contributions(vec![c_alice.clone(), c_bob.clone(), c_carol])
@@ -833,6 +988,20 @@ mod tests {
         // Case 2: Carol drops out -> Alice & Bob reveal ONLY their Carol seed;
         // their Alice<->Bob seed remains secret so coordinator cannot recover
         // Alice's or Bob's individual vector!
+        // This is an independent round, not a conflicting second survivor
+        // decision for the already-completed all-survivor round above.
+        let mut alice = PairwiseMaskParticipant::new(alice_id.clone());
+        let mut bob = PairwiseMaskParticipant::new(bob_id.clone());
+        let mut carol = PairwiseMaskParticipant::new(carol_id.clone());
+        PairwiseMaskParticipant::establish_shared_seed(&mut alice, &mut bob, &mut rng).unwrap();
+        PairwiseMaskParticipant::establish_shared_seed(&mut alice, &mut carol, &mut rng).unwrap();
+        PairwiseMaskParticipant::establish_shared_seed(&mut bob, &mut carol, &mut rng).unwrap();
+        let c_alice = alice
+            .create_masked_contribution("secagg-dropout", &[100, 200, 300], modulus)
+            .unwrap();
+        let c_bob = bob
+            .create_masked_contribution("secagg-dropout", &[400, 500, 600], modulus)
+            .unwrap();
         let survivors = vec![alice_id.clone(), bob_id.clone()];
         let mut dropout_seeds = alice.reveal_dropout_seeds(&survivors).unwrap();
         dropout_seeds.extend(bob.reveal_dropout_seeds(&survivors).unwrap());
@@ -840,7 +1009,7 @@ mod tests {
         assert!(dropout_seeds.iter().all(|s| s.dropped_peer == carol_id));
 
         let mut drop_session = SecureAggregationSession::new(
-            "secagg-zero-disc".into(),
+            "secagg-dropout".into(),
             AggregationConfig {
                 min_participants: 2,
                 max_participants: 10,
@@ -849,6 +1018,11 @@ mod tests {
                 dropout_threshold: 1,
             },
         );
+        for id in &roster {
+            drop_session
+                .add_participant(Participant::new(id.clone()))
+                .unwrap();
+        }
         drop_session.current_round = AggregationRound::ContributionSubmission;
         let raw_survivor_sum = drop_session
             .aggregate_contributions(vec![c_alice.clone(), c_bob])

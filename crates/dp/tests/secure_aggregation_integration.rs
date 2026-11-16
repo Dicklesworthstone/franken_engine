@@ -3,11 +3,405 @@
 //! These in-process round trips do not establish coordinator privacy.
 
 use dp::{
-    AggregationConfig, SecureAggregationError, SecureAggregationSession,
+    AggregationConfig, DropoutPairwiseSeed, PairwiseMaskParticipant, SecureAggregationError,
+    SecureAggregationSession,
     participant::{Participant, ParticipantId, ParticipantStatus},
     protocol::{AggregationProtocol, AggregationRound, MaskedContribution, SecurityParameters},
 };
-use rand::thread_rng;
+use rand::{SeedableRng, rngs::StdRng, thread_rng};
+
+fn pairwise_participants() -> Vec<PairwiseMaskParticipant> {
+    let mut rng = StdRng::seed_from_u64(20261115);
+    let mut participants: Vec<_> = ["alice", "bob", "carol"]
+        .into_iter()
+        .map(|name| PairwiseMaskParticipant::new(ParticipantId(name.into())))
+        .collect();
+    for right in 1..participants.len() {
+        let (earlier, later) = participants.split_at_mut(right);
+        for peer in earlier {
+            PairwiseMaskParticipant::establish_shared_seed(peer, &mut later[0], &mut rng)
+                .unwrap();
+        }
+    }
+    participants
+}
+
+fn pending_pairwise_round(
+    submitted: &[usize],
+) -> (
+    Vec<PairwiseMaskParticipant>,
+    SecureAggregationSession,
+    Vec<ParticipantId>,
+) {
+    let mut participants = pairwise_participants();
+    let roster: Vec<_> = participants.iter().map(|peer| peer.id.clone()).collect();
+    let mut session = SecureAggregationSession::new(
+        "pairwise-roster".into(),
+        AggregationConfig {
+            min_participants: 2,
+            max_participants: 3,
+            vector_dimension: 2,
+            field_modulus: 2_147_483_647,
+            dropout_threshold: 1,
+        },
+    );
+    for id in &roster {
+        session
+            .add_participant(Participant::new(id.clone()))
+            .unwrap();
+    }
+    let contributions = submitted
+        .iter()
+        .map(|&index| {
+            let value = (index as i64 + 1) * 100;
+            participants[index]
+                .create_masked_contribution(
+                    &session.session_id,
+                    &[value, value * 2],
+                    session.config.field_modulus,
+                )
+                .unwrap()
+        })
+        .collect();
+    session.current_round = AggregationRound::ContributionSubmission;
+    session.aggregate_contributions(contributions).unwrap();
+    (participants, session, roster)
+}
+
+#[test]
+fn dropout_disclosure_rejects_duplicate_unknown_and_missing_self_survivors_atomically() {
+    let (mut participants, _, roster) = pending_pairwise_round(&[0, 1]);
+    let alice = &mut participants[0];
+    let before = serde_json::to_value(&alice).unwrap();
+    for survivors in [
+        vec![roster[0].clone(), roster[0].clone()],
+        vec![roster[0].clone(), ParticipantId("unknown".into())],
+        vec![roster[1].clone(), roster[2].clone()],
+        vec![roster[0].clone()],
+    ] {
+        assert!(
+            alice.reveal_dropout_seeds(&survivors).is_err(),
+            "invalid survivor identities must never expose all of Alice's masks: {survivors:?}"
+        );
+        assert_eq!(serde_json::to_value(&alice).unwrap(), before);
+    }
+    let revealed = alice.reveal_dropout_seeds(&roster[..2]).unwrap();
+    assert_eq!(revealed.len(), 1);
+    assert_eq!(revealed[0].dropped_peer, roster[2]);
+}
+
+#[test]
+fn dropout_disclosure_locks_survivors_across_retries_and_serialization() {
+    let (mut participants, _, roster) = pending_pairwise_round(&[0, 1]);
+    let alice = &mut participants[0];
+    let revealed = alice.reveal_dropout_seeds(&roster[..2]).unwrap();
+    let before = serde_json::to_value(&alice).unwrap();
+    assert_eq!(
+        alice
+            .reveal_dropout_seeds(&[roster[1].clone(), roster[0].clone()])
+            .unwrap(),
+        revealed
+    );
+    assert_eq!(serde_json::to_value(&alice).unwrap(), before);
+
+    for survivors in [vec![roster[0].clone(), roster[2].clone()], roster.clone()] {
+        assert!(alice.reveal_dropout_seeds(&survivors).is_err());
+        assert_eq!(serde_json::to_value(&alice).unwrap(), before);
+    }
+
+    let mut restored: PairwiseMaskParticipant = serde_json::from_value(before).unwrap();
+    assert_eq!(restored.reveal_dropout_seeds(&roster[..2]).unwrap(), revealed);
+    assert!(
+        restored
+            .reveal_dropout_seeds(&[roster[0].clone(), roster[2].clone()])
+            .is_err()
+    );
+
+    // Even a no-dropout decision is final: a subsequent smaller roster cannot
+    // turn an all-survivor round into disclosure of one of those peers' seeds.
+    let (mut full_participants, _, full_roster) = pending_pairwise_round(&[0, 1, 2]);
+    assert!(
+        full_participants[0]
+            .reveal_dropout_seeds(&full_roster)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        full_participants[0]
+            .reveal_dropout_seeds(&full_roster[..2])
+            .is_err()
+    );
+}
+
+#[test]
+fn pairwise_seed_setup_cannot_rekey_or_change_a_submitted_roster() {
+    let mut participants = pairwise_participants();
+    let before = serde_json::to_value(&participants).unwrap();
+    let mut rng = StdRng::seed_from_u64(9);
+    let (left, right) = participants.split_at_mut(1);
+    assert!(
+        PairwiseMaskParticipant::establish_shared_seed(&mut left[0], &mut right[0], &mut rng)
+            .is_err()
+    );
+    assert_eq!(serde_json::to_value(&participants).unwrap(), before);
+
+    participants[0]
+        .create_masked_contribution("frozen-roster", &[12], 101)
+        .unwrap();
+    let mut newcomer = PairwiseMaskParticipant::new(ParticipantId("dave".into()));
+    let before = serde_json::to_value((&participants, &newcomer)).unwrap();
+    assert!(
+        PairwiseMaskParticipant::establish_shared_seed(&mut participants[0], &mut newcomer, &mut rng)
+            .is_err()
+    );
+    assert!(
+        PairwiseMaskParticipant::establish_shared_seed(&mut newcomer, &mut participants[0], &mut rng)
+            .is_err()
+    );
+    assert_eq!(serde_json::to_value((&participants, &newcomer)).unwrap(), before);
+}
+
+#[test]
+fn session_contributions_require_unique_registered_participants() {
+    let mut session = SecureAggregationSession::new(
+        "contribution-membership".into(),
+        AggregationConfig {
+            vector_dimension: 1,
+            ..AggregationConfig::default()
+        },
+    );
+    let alice = ParticipantId("alice".into());
+    let bob = ParticipantId("bob".into());
+    session
+        .add_participant(Participant::new(alice.clone()))
+        .unwrap();
+    session
+        .add_participant(Participant::new(bob.clone()))
+        .unwrap();
+    session.current_round = AggregationRound::ContributionSubmission;
+    let a = MaskedContribution::new(alice, vec![10], Vec::new());
+    let b = MaskedContribution::new(bob, vec![20], Vec::new());
+    let unknown = MaskedContribution::new(ParticipantId("unknown".into()), vec![30], Vec::new());
+    let before = serde_json::to_value(&session).unwrap();
+    for contributions in [vec![a.clone(), a.clone()], vec![a.clone(), unknown]] {
+        assert!(session.aggregate_contributions(contributions).is_err());
+        assert_eq!(serde_json::to_value(&session).unwrap(), before);
+    }
+    assert_eq!(session.aggregate_contributions(vec![a, b]).unwrap(), vec![30]);
+}
+
+#[test]
+fn pairwise_completion_binds_registered_roster_and_actual_contributors() {
+    let (mut participants, mut session, roster) = pending_pairwise_round(&[0, 1]);
+    let survivors = &roster[..2];
+    let mut seeds = participants[0].reveal_dropout_seeds(survivors).unwrap();
+    seeds.extend(participants[1].reveal_dropout_seeds(survivors).unwrap());
+    let before = serde_json::to_value(&session).unwrap();
+    for (expected, claimed) in [
+        (
+            vec![roster[0].clone(), roster[0].clone(), roster[1].clone()],
+            survivors.to_vec(),
+        ),
+        (
+            vec![roster[0].clone(), roster[1].clone(), ParticipantId("unknown".into())],
+            survivors.to_vec(),
+        ),
+        (survivors.to_vec(), survivors.to_vec()),
+        (roster.clone(), vec![roster[0].clone(), roster[0].clone()]),
+        (roster.clone(), vec![roster[0].clone(), roster[2].clone()]),
+        (roster.clone(), roster.clone()),
+    ] {
+        assert!(
+            session
+                .complete_pairwise_aggregation(&expected, &claimed, &seeds)
+                .is_err(),
+            "completion cannot invent or substitute submitted identities"
+        );
+        assert_eq!(serde_json::to_value(&session).unwrap(), before);
+    }
+    // Reordering identity lists is not a different round.
+    assert_eq!(
+        session
+            .complete_pairwise_aggregation(
+                &[roster[2].clone(), roster[1].clone(), roster[0].clone()],
+                &[roster[1].clone(), roster[0].clone()],
+                &seeds,
+            )
+            .unwrap(),
+        vec![300, 600]
+    );
+}
+
+#[test]
+fn pairwise_completion_requires_exact_dropout_seed_coverage() {
+    let (mut participants, mut session, roster) = pending_pairwise_round(&[0, 1]);
+    let survivors = &roster[..2];
+    let mut seeds = participants[0].reveal_dropout_seeds(survivors).unwrap();
+    seeds.extend(participants[1].reveal_dropout_seeds(survivors).unwrap());
+    let mut duplicate = seeds.clone();
+    duplicate.push(seeds[0].clone());
+    let mut extra = seeds.clone();
+    extra.push(DropoutPairwiseSeed {
+        survivor: roster[0].clone(),
+        dropped_peer: ParticipantId("unknown".into()),
+        shared_seed: [0; 32],
+    });
+    let mut living_peer = seeds.clone();
+    living_peer[0].dropped_peer = roster[1].clone();
+    let mut unknown_sender = seeds.clone();
+    unknown_sender[0].survivor = ParticipantId("unknown".into());
+    let before = serde_json::to_value(&session).unwrap();
+    for invalid in [seeds[..1].to_vec(), duplicate, extra, living_peer, unknown_sender] {
+        assert!(
+            session
+                .complete_pairwise_aggregation(&roster, survivors, &invalid)
+                .is_err()
+        );
+        assert_eq!(serde_json::to_value(&session).unwrap(), before);
+    }
+    assert_eq!(
+        session
+            .complete_pairwise_aggregation(&roster, survivors, &seeds)
+            .unwrap(),
+        vec![300, 600]
+    );
+}
+
+#[test]
+fn session_rejects_invalid_quorums_and_preserves_registered_peers() {
+    for (minimum, maximum) in [(0, 3), (1, 3), (4, 3)] {
+        let mut session = SecureAggregationSession::new(
+            "invalid-quorum".into(),
+            AggregationConfig {
+                min_participants: minimum,
+                max_participants: maximum,
+                vector_dimension: 1,
+                ..AggregationConfig::default()
+            },
+        );
+        for name in ["alice", "bob"] {
+            session
+                .add_participant(Participant::new(ParticipantId(name.into())))
+                .unwrap();
+        }
+        let before = serde_json::to_value(&session).unwrap();
+        assert!(
+            session
+                .start_aggregation(&mut StdRng::seed_from_u64(1))
+                .is_err()
+        );
+        assert_eq!(serde_json::to_value(&session).unwrap(), before);
+        session.current_round = AggregationRound::ContributionSubmission;
+        let before = serde_json::to_value(&session).unwrap();
+        assert!(
+            session
+                .aggregate_contributions(vec![
+                    MaskedContribution::new(ParticipantId("alice".into()), vec![1], Vec::new()),
+                    MaskedContribution::new(ParticipantId("bob".into()), vec![2], Vec::new()),
+                ])
+                .is_err()
+        );
+        assert_eq!(serde_json::to_value(&session).unwrap(), before);
+    }
+
+    let mut session = SecureAggregationSession::new(
+        "duplicate-registration".into(),
+        AggregationConfig::default(),
+    );
+    let mut alice = Participant::new(ParticipantId("alice".into()));
+    alice.status = ParticipantStatus::GeneratingShares;
+    session.add_participant(alice).unwrap();
+    let before = serde_json::to_value(&session).unwrap();
+    assert!(
+        session
+            .add_participant(Participant::new(ParticipantId("alice".into())))
+            .is_err()
+    );
+    assert_eq!(serde_json::to_value(&session).unwrap(), before);
+}
+
+#[test]
+fn pairwise_state_survives_round_trip_and_missing_state_is_not_reset() {
+    let (mut participants, session, roster) = pending_pairwise_round(&[0, 1]);
+    let survivors = &roster[..2];
+    let mut seeds = participants[0].reveal_dropout_seeds(survivors).unwrap();
+    seeds.extend(participants[1].reveal_dropout_seeds(survivors).unwrap());
+
+    let mut serialized_session = serde_json::to_value(&session).unwrap();
+    let mut restored: SecureAggregationSession =
+        serde_json::from_value(serialized_session.clone()).unwrap();
+    assert_eq!(
+        restored
+            .complete_pairwise_aggregation(&roster, survivors, &seeds)
+            .unwrap(),
+        vec![300, 600]
+    );
+    serialized_session
+        .as_object_mut()
+        .unwrap()
+        .remove("contribution_state");
+    assert!(serde_json::from_value::<SecureAggregationSession>(serialized_session).is_err());
+
+    let mut serialized_participant = serde_json::to_value(&participants[0]).unwrap();
+    serialized_participant
+        .as_object_mut()
+        .unwrap()
+        .remove("dropout_disclosure");
+    assert!(serde_json::from_value::<PairwiseMaskParticipant>(serialized_participant).is_err());
+}
+
+#[test]
+fn pairwise_completion_rechecks_quorum_and_dropout_limit_before_mutation() {
+    for (minimum, maximum, dropout_threshold) in [(1, 3, 1), (3, 3, 1), (2, 1, 1), (2, 3, 0)] {
+        let (mut participants, mut session, roster) = pending_pairwise_round(&[0, 1]);
+        let survivors = &roster[..2];
+        let mut seeds = participants[0].reveal_dropout_seeds(survivors).unwrap();
+        seeds.extend(participants[1].reveal_dropout_seeds(survivors).unwrap());
+        session.config.min_participants = minimum;
+        session.config.max_participants = maximum;
+        session.config.dropout_threshold = dropout_threshold;
+        let before = serde_json::to_value(&session).unwrap();
+        assert!(
+            session
+                .complete_pairwise_aggregation(&roster, survivors, &seeds)
+                .is_err()
+        );
+        assert_eq!(serde_json::to_value(&session).unwrap(), before);
+    }
+}
+
+#[test]
+fn pairwise_completion_rejects_unregistered_contributors_in_restored_state() {
+    let (_, session, roster) = pending_pairwise_round(&[0, 1]);
+    let outsiders = vec![
+        ParticipantId("outside-a".into()),
+        ParticipantId("outside-b".into()),
+    ];
+    let mut snapshot = serde_json::to_value(&session).unwrap();
+    snapshot["contribution_state"]["Accepted"]["contributors"] =
+        serde_json::to_value(&outsiders).unwrap();
+    // Allow enough dropouts to ensure the identity invariant, rather than the
+    // ordinary threshold check, rejects this inconsistent restored state.
+    snapshot["config"]["dropout_threshold"] = serde_json::json!(3);
+    let mut restored: SecureAggregationSession = serde_json::from_value(snapshot).unwrap();
+    let seeds: Vec<_> = outsiders
+        .iter()
+        .flat_map(|survivor| {
+            roster.iter().map(move |dropped_peer| DropoutPairwiseSeed {
+                survivor: survivor.clone(),
+                dropped_peer: dropped_peer.clone(),
+                shared_seed: [0; 32],
+            })
+        })
+        .collect();
+    let before = serde_json::to_value(&restored).unwrap();
+    assert!(
+        restored
+            .complete_pairwise_aggregation(&roster, &outsiders, &seeds)
+            .is_err()
+    );
+    assert_eq!(serde_json::to_value(&restored).unwrap(), before);
+}
 
 #[test]
 fn aggregate_sums_near_the_signed_field_limit_without_overflow() {
@@ -43,6 +437,11 @@ fn aggregate_sums_near_the_signed_field_limit_without_overflow() {
             ..AggregationConfig::default()
         },
     );
+    for contribution in &contributions {
+        session
+            .add_participant(Participant::new(contribution.participant_id.clone()))
+            .unwrap();
+    }
     session.current_round = AggregationRound::ContributionSubmission;
     let result = session.aggregate_contributions(contributions).unwrap();
     assert_eq!(result, vec![modulus - 2, modulus - 4]);
@@ -98,16 +497,22 @@ fn rejected_field_elements_leave_session_ready_for_a_valid_retry() {
         AggregationConfig {
             field_modulus: 101,
             vector_dimension: 1,
-            min_participants: 1,
+            min_participants: 2,
             ..AggregationConfig::default()
         },
     );
+    for name in ["alice", "bob"] {
+        session
+            .add_participant(Participant::new(ParticipantId(name.into())))
+            .unwrap();
+    }
+    let bob = MaskedContribution::new(ParticipantId("bob".into()), vec![0], Vec::new());
     session.current_round = AggregationRound::ContributionSubmission;
     for invalid in [-1, 101, i64::MAX] {
         let contribution =
             MaskedContribution::new(ParticipantId("alice".into()), vec![invalid], Vec::new());
         assert!(matches!(
-            session.aggregate_contributions(vec![contribution]),
+            session.aggregate_contributions(vec![contribution, bob.clone()]),
             Err(SecureAggregationError::ProtocolViolation(_))
         ));
         assert_eq!(
@@ -118,11 +523,10 @@ fn rejected_field_elements_leave_session_ready_for_a_valid_retry() {
     }
     assert_eq!(
         session
-            .aggregate_contributions(vec![MaskedContribution::new(
-                ParticipantId("alice".into()),
-                vec![100],
-                Vec::new(),
-            )])
+            .aggregate_contributions(vec![
+                MaskedContribution::new(ParticipantId("alice".into()), vec![100], Vec::new()),
+                bob,
+            ])
             .unwrap(),
         vec![100]
     );

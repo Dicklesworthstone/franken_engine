@@ -167,7 +167,7 @@ fn reconstruction_attack_against_differential_privacy() {
                 privacy_params,
                 format!("round_{}", i),
                 &mut DeterministicTestNoiseGenerator::new(),
-            );
+            ).expect("valid source delta and Gaussian parameters");
 
             private_deltas.push(private_delta);
         }
@@ -346,7 +346,7 @@ fn minimum_privacy_requirements_enforced() {
                 min_privacy_params,
                 format!("round_{}", i),
                 &mut DeterministicTestNoiseGenerator::new(),
-            );
+            ).expect("valid source delta and Gaussian parameters");
 
             private_deltas.push(private_delta);
         }
@@ -455,7 +455,7 @@ fn attempt_reconstruction_attack(
                 privacy_params,
                 format!("round_{}", i),
                 &mut DeterministicTestNoiseGenerator::new(),
-            );
+            ).expect("valid source delta and Gaussian parameters");
 
             private_deltas.push(private_delta);
         }
@@ -594,7 +594,7 @@ fn simulate_collusion_attack(
                 privacy_params,
                 format!("round_{}", i),
                 &mut DeterministicTestNoiseGenerator::new(),
-            );
+            ).expect("valid source delta and Gaussian parameters");
 
             private_deltas.push(private_delta);
         }
@@ -707,7 +707,7 @@ fn privacy_budget_tracking_prevents_leakage() {
                 privacy_params,
                 format!("test_round_{}", applications),
                 &mut DeterministicTestNoiseGenerator::new(),
-            );
+            ).expect("valid source delta and Gaussian parameters");
 
         applications += 1;
     }

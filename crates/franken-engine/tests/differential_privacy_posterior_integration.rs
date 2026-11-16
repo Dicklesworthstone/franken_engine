@@ -1,12 +1,13 @@
 #![forbid(unsafe_code)]
-//! Integration tests demonstrating differential privacy posterior aggregation
-//! with (ε,δ)-differential privacy guarantees using Gaussian mechanism.
+//! Public Gaussian calibration, posterior-release and budget lifecycle tests.
+//! Deterministic noise makes these reproducible functional regressions, not
+//! empirical or cryptographic proof of a production privacy guarantee.
 
 use std::collections::BTreeMap;
 
 use frankenengine_engine::differential_privacy_posterior::{
-    DeterministicTestNoiseGenerator, PrivacyBudget, PrivacyParameters, PrivacyPreservingAggregator,
-    PrivatePosteriorDelta,
+    DeterministicTestNoiseGenerator, DifferentialPrivacyError, PrivacyBudget, PrivacyParameters,
+    PrivacyPreservingAggregator, PrivatePosteriorDelta,
 };
 use frankenengine_engine::federated_posterior_aggregation::{
     LocalPosteriorProvider, PosteriorDelta,
@@ -33,8 +34,7 @@ impl Timestamp {
     }
 }
 
-/// Integration test demonstrating end-to-end differential privacy aggregation
-/// where individual node contributions are protected by Gaussian noise
+/// Exercise charged per-node perturbations and a shared-round aggregation.
 #[test]
 fn differential_privacy_protects_individual_contributions() {
     let epoch = SecurityEpoch::from_raw(1000);
@@ -47,6 +47,15 @@ fn differential_privacy_protects_individual_contributions() {
     let node2 = NodeId::new("node_2".to_string());
     let node3 = NodeId::new("node_3".to_string());
     let _timestamp = Timestamp::from_millis(1640995200000);
+    for node in [&node1, &node2, &node3] {
+        aggregator
+            .initialize_node_budget(
+                node.clone(),
+                privacy_budget.total_epsilon_millionths,
+                privacy_budget.total_delta_millionths,
+            )
+            .unwrap();
+    }
 
     // Node 1: High confidence in malicious classification
     let mut posterior1 = BTreeMap::new();
@@ -56,11 +65,12 @@ fn differential_privacy_protects_individual_contributions() {
     posterior1.insert(RiskLevel::Unknown, 50_000); // 5%
 
     let delta1 = PosteriorDelta {
-        extension_id: "test_extension_1".to_string(),
-        delta_benign_millionths: 500_000,    // 50%
-        delta_anomalous_millionths: 200_000, // 20%
-        delta_malicious_millionths: 250_000, // 25%
-        delta_unknown_millionths: 50_000,    // 5%
+        extension_id: "test_extension".to_string(),
+        // Changes from a public uniform prior, not absolute probabilities.
+        delta_benign_millionths: 250_000,
+        delta_anomalous_millionths: -50_000,
+        delta_malicious_millionths: 0,
+        delta_unknown_millionths: -200_000,
         confidence_weight_millionths: 950_000,
         evidence_hash: ContentHash::compute(b"delta1_evidence"),
         epoch,
@@ -74,11 +84,11 @@ fn differential_privacy_protects_individual_contributions() {
     posterior2.insert(RiskLevel::Unknown, 50_000); // 5%
 
     let delta2 = PosteriorDelta {
-        extension_id: "test_extension_2".to_string(),
-        delta_benign_millionths: 300_000,    // 30%
-        delta_anomalous_millionths: 500_000, // 50%
-        delta_malicious_millionths: 150_000, // 15%
-        delta_unknown_millionths: 50_000,    // 5%
+        extension_id: "test_extension".to_string(),
+        delta_benign_millionths: 50_000,
+        delta_anomalous_millionths: 250_000,
+        delta_malicious_millionths: -100_000,
+        delta_unknown_millionths: -200_000,
         confidence_weight_millionths: 750_000,
         evidence_hash: ContentHash::compute(b"delta2_evidence"),
         epoch,
@@ -92,11 +102,11 @@ fn differential_privacy_protects_individual_contributions() {
     posterior3.insert(RiskLevel::Unknown, 50_000); // 5%
 
     let delta3 = PosteriorDelta {
-        extension_id: "test_extension_3".to_string(),
-        delta_benign_millionths: 800_000,    // 80%
-        delta_anomalous_millionths: 100_000, // 10%
-        delta_malicious_millionths: 70_000,  // 7%
-        delta_unknown_millionths: 30_000,    // 3%
+        extension_id: "test_extension".to_string(),
+        delta_benign_millionths: 550_000,
+        delta_anomalous_millionths: -150_000,
+        delta_malicious_millionths: -180_000,
+        delta_unknown_millionths: -220_000,
         confidence_weight_millionths: 900_000,
         evidence_hash: ContentHash::compute(b"delta3_evidence"),
         epoch,
@@ -105,15 +115,15 @@ fn differential_privacy_protects_individual_contributions() {
     // Apply differential privacy to individual contributions
     let mut noise_gen = DeterministicTestNoiseGenerator::new();
     let private_delta1 = aggregator
-        .make_delta_private(&node1, delta1, "round_1".to_string(), &mut noise_gen)
+        .make_delta_private(&node1, delta1, "test_round".to_string(), &mut noise_gen)
         .expect("Privacy budget should be sufficient");
 
     let private_delta2 = aggregator
-        .make_delta_private(&node2, delta2, "round_2".to_string(), &mut noise_gen)
+        .make_delta_private(&node2, delta2, "test_round".to_string(), &mut noise_gen)
         .expect("Privacy budget should be sufficient");
 
     let private_delta3 = aggregator
-        .make_delta_private(&node3, delta3, "round_3".to_string(), &mut noise_gen)
+        .make_delta_private(&node3, delta3, "test_round".to_string(), &mut noise_gen)
         .expect("Privacy budget should be sufficient");
 
     // Aggregate using privacy-preserving aggregator
@@ -126,79 +136,66 @@ fn differential_privacy_protects_individual_contributions() {
     assert_eq!(aggregated.participant_count, 3);
     assert!(!aggregated.extension_id.is_empty());
 
-    // Verify probability distributions are valid (sum to ~1.0 within noise tolerance)
+    // A probability delta conserves mass exactly; it is not a distribution.
     let total_probability: u64 = (aggregated.aggregate_delta_benign_millionths
         + aggregated.aggregate_delta_anomalous_millionths
         + aggregated.aggregate_delta_malicious_millionths
         + aggregated.aggregate_delta_unknown_millionths)
         .unsigned_abs();
-    assert!(
-        (950_000..=1_050_000).contains(&total_probability),
-        "Total probability should be close to 1.0 with noise: {}",
-        total_probability
-    );
+    assert_eq!(total_probability, 0, "Noisy deltas must conserve mass");
 
     // Verify aggregated deltas are present
     assert_ne!(aggregated.aggregate_delta_benign_millionths, 0);
     assert!(aggregated.total_confidence_weight_millionths > 0);
 
-    // Verify privacy budget was consumed
-    let initial_epsilon_remaining_millionths = 10_000_000u64;
-    let epsilon_used_millionths = 3_000_000u64; // 3 calls with ε=1.0 each (in millionths)
-    assert!(privacy_budget.remaining_epsilon() < initial_epsilon_remaining_millionths);
-    assert!(
-        privacy_budget.remaining_epsilon()
-            >= initial_epsilon_remaining_millionths.saturating_sub(epsilon_used_millionths)
-    );
+    // Inspect the actual ledgers charged by the three public API calls.
+    for node in [&node1, &node2, &node3] {
+        let spent = aggregator.get_node_budget(node).unwrap();
+        assert_eq!(spent.consumed_epsilon_millionths, 1_000_000);
+        assert_eq!(spent.consumed_delta_millionths, 10);
+        assert_eq!(spent.remaining_epsilon(), 9_000_000);
+        assert_eq!(spent.round_consumptions.len(), 1);
+    }
 }
 
 /// Test that privacy budget enforcement prevents excessive consumption
 #[test]
 fn privacy_budget_enforcement_prevents_excessive_consumption() {
     let epoch = SecurityEpoch::from_raw(1000);
-    let privacy_params = PrivacyParameters::new(2_000_000, 10).unwrap(); // 2.0ε, 1e-5δ in millionths
-    let _privacy_budget = PrivacyBudget::new(3_000_000, 100, epoch).unwrap(); // 3.0ε, 1e-4δ in millionths
-
-    let _node = NodeId::new("test_node".to_string());
-    let _timestamp = Timestamp::from_millis(1640995200000);
-
-    let mut posterior = BTreeMap::new();
-    posterior.insert(RiskLevel::Benign, 500_000);
-    posterior.insert(RiskLevel::Malicious, 500_000);
-
+    let parameters = PrivacyParameters::new(1_000_000, 10).unwrap();
+    let mut aggregator = PrivacyPreservingAggregator::new(parameters, epoch);
+    let node = NodeId::new("budget-node");
+    aggregator
+        .initialize_node_budget(node.clone(), 3_000_000, 100)
+        .unwrap();
     let delta = PosteriorDelta {
         extension_id: "test_extension_budget".to_string(),
-        delta_benign_millionths: 600_000,    // 60%
-        delta_anomalous_millionths: 300_000, // 30%
-        delta_malicious_millionths: 100_000, // 10%
-        delta_unknown_millionths: 0,         // 0%
+        delta_benign_millionths: 350_000,
+        delta_anomalous_millionths: 50_000,
+        delta_malicious_millionths: -150_000,
+        delta_unknown_millionths: -250_000,
         confidence_weight_millionths: 800_000,
-        evidence_hash: ContentHash::compute(b"delta_budget_evidence"),
+        evidence_hash: ContentHash::compute(b"local-budget-evidence"),
         epoch,
     };
-
-    // Apply differential privacy to the delta
-    let mut noise_gen1 = DeterministicTestNoiseGenerator::new();
-    let _result1 = PrivatePosteriorDelta::from_delta(
-        delta.clone(),
-        privacy_params,
-        "budget_test_1".to_string(),
-        &mut noise_gen1,
+    let mut noise = DeterministicTestNoiseGenerator::new();
+    for index in 0..3 {
+        aggregator
+            .make_delta_private(&node, delta.clone(), format!("round-{index}"), &mut noise)
+            .unwrap();
+    }
+    let spent = aggregator.get_node_budget(&node).unwrap().clone();
+    assert_eq!(spent.consumed_epsilon_millionths, 3_000_000);
+    assert_eq!(spent.consumed_delta_millionths, 30);
+    assert_eq!(spent.round_consumptions.len(), 3);
+    assert_eq!(
+        aggregator.make_delta_private(&node, delta, "refused".into(), &mut noise),
+        Err(DifferentialPrivacyError::InsufficientBudget)
     );
-
-    // Apply again with different round
-    let mut noise_gen2 = DeterministicTestNoiseGenerator::new();
-    let _result2 = PrivatePosteriorDelta::from_delta(
-        delta.clone(),
-        privacy_params,
-        "budget_test_2".to_string(),
-        &mut noise_gen2,
-    );
-
-    // Budget tracking test passed
+    assert_eq!(aggregator.get_node_budget(&node), Some(&spent));
 }
 
-/// Test noise injection maintains differential privacy guarantees
+/// Test deterministic perturbation, calibration and exact mass conservation.
 #[test]
 fn noise_injection_maintains_differential_privacy() {
     let epoch = SecurityEpoch::from_raw(1000);
@@ -215,25 +212,32 @@ fn noise_injection_maintains_differential_privacy() {
 
     let delta = PosteriorDelta {
         extension_id: node.as_str().to_string(),
-        delta_benign_millionths: *original_posterior.get(&RiskLevel::Benign).unwrap_or(&0) as i64,
+        delta_benign_millionths: *original_posterior.get(&RiskLevel::Benign).unwrap_or(&0)
+            as i64
+            - 250_000,
         delta_anomalous_millionths: *original_posterior.get(&RiskLevel::Anomalous).unwrap_or(&0)
-            as i64,
+            as i64
+            - 250_000,
         delta_malicious_millionths: *original_posterior.get(&RiskLevel::Malicious).unwrap_or(&0)
-            as i64,
-        delta_unknown_millionths: *original_posterior.get(&RiskLevel::Unknown).unwrap_or(&0) as i64,
+            as i64
+            - 250_000,
+        delta_unknown_millionths: *original_posterior.get(&RiskLevel::Unknown).unwrap_or(&0)
+            as i64
+            - 250_000,
         confidence_weight_millionths: 900_000,
         evidence_hash: ContentHash::compute(b"test_evidence_1"),
         epoch,
     };
 
-    // Apply privacy multiple times to verify noise is different
+    // Repeating the same injected sampler sequence reproduces the coordinates.
     let mut noise_generator1 = DeterministicTestNoiseGenerator::new();
     let private_delta1 = PrivatePosteriorDelta::from_delta(
         delta.clone(),
         privacy_params,
         "test_round_1".to_string(),
         &mut noise_generator1,
-    );
+    )
+    .unwrap();
 
     let mut noise_generator2 = DeterministicTestNoiseGenerator::new();
     let private_delta2 = PrivatePosteriorDelta::from_delta(
@@ -241,12 +245,13 @@ fn noise_injection_maintains_differential_privacy() {
         privacy_params,
         "test_round_2".to_string(),
         &mut noise_generator2,
-    );
+    )
+    .unwrap();
 
     // Verify noise was applied (values should differ from original)
     let benign1 = private_delta1.base_delta.delta_benign_millionths;
     let benign2 = private_delta2.base_delta.delta_benign_millionths;
-    let original_benign = *original_posterior.get(&RiskLevel::Benign).unwrap_or(&0) as i64;
+    let original_benign = delta.delta_benign_millionths;
 
     // At least one should differ significantly from original due to noise
     let differs1 = (benign1 - original_benign).abs() > 10_000; // >1% difference
@@ -256,13 +261,10 @@ fn noise_injection_maintains_differential_privacy() {
         "Noise should cause significant deviation from original values"
     );
 
-    // Two noisy versions should likely differ from each other
-    let noise_difference = (benign1 - benign2).abs();
-    // With Gaussian noise, difference is very likely to be non-zero
-    // but we allow for rare case where noise cancels out
-    if noise_difference == 0 {
-        println!("Rare case: noise produced identical results");
-    }
+    // This is an injected deterministic test sampler, not a randomness test.
+    assert_eq!(benign1, benign2);
+    assert_eq!(private_delta1.noise_scale_millionths, private_delta2.noise_scale_millionths);
+    assert!(private_delta1.noise_scale_millionths >= 19_379_222);
 
     // Verify probability normalization is maintained
     let total1: u64 = (private_delta1.base_delta.delta_benign_millionths
@@ -276,16 +278,8 @@ fn noise_injection_maintains_differential_privacy() {
         + private_delta2.base_delta.delta_unknown_millionths)
         .unsigned_abs();
 
-    assert!(
-        (950_000..=1_050_000).contains(&total1),
-        "Noisy posterior should normalize close to 1.0: {}",
-        total1
-    );
-    assert!(
-        (950_000..=1_050_000).contains(&total2),
-        "Noisy posterior should normalize close to 1.0: {}",
-        total2
-    );
+    assert_eq!(total1, 0, "First noisy delta must conserve mass");
+    assert_eq!(total2, 0, "Replayed noisy delta must conserve mass");
 }
 
 /// Test integration with federated aggregation pipeline
@@ -295,6 +289,13 @@ fn integration_with_federated_aggregation_pipeline() {
     let privacy_params = PrivacyParameters::new(500_000, 1).unwrap(); // 0.5ε, 1e-6δ in millionths
     let _privacy_budget = PrivacyBudget::new(5_000_000, 10, epoch).unwrap(); // 5.0ε, 1e-5δ in millionths
     let aggregator = PrivacyPreservingAggregator::new(privacy_params, epoch);
+    let from_uniform_prior = |mut delta: PosteriorDelta| {
+        delta.delta_benign_millionths -= 250_000;
+        delta.delta_anomalous_millionths -= 250_000;
+        delta.delta_malicious_millionths -= 250_000;
+        delta.delta_unknown_millionths -= 250_000;
+        delta
+    };
 
     // Create local providers for different fleet zones
     let _provider_us_east =
@@ -312,7 +313,7 @@ fn integration_with_federated_aggregation_pipeline() {
     posterior_us_east.insert(RiskLevel::Malicious, 100_000);
 
     let delta_us_east = PosteriorDelta {
-        extension_id: "node_us_east".to_string(),
+        extension_id: "shared_extension".to_string(),
         delta_benign_millionths: *posterior_us_east.get(&RiskLevel::Benign).unwrap_or(&0) as i64,
         delta_anomalous_millionths: *posterior_us_east.get(&RiskLevel::Anomalous).unwrap_or(&0)
             as i64,
@@ -330,7 +331,7 @@ fn integration_with_federated_aggregation_pipeline() {
     posterior_us_west.insert(RiskLevel::Malicious, 300_000);
 
     let delta_us_west = PosteriorDelta {
-        extension_id: "node_us_west".to_string(),
+        extension_id: "shared_extension".to_string(),
         delta_benign_millionths: *posterior_us_west.get(&RiskLevel::Benign).unwrap_or(&0) as i64,
         delta_anomalous_millionths: *posterior_us_west.get(&RiskLevel::Anomalous).unwrap_or(&0)
             as i64,
@@ -348,7 +349,7 @@ fn integration_with_federated_aggregation_pipeline() {
     posterior_eu_central.insert(RiskLevel::Malicious, 50_000);
 
     let delta_eu_central = PosteriorDelta {
-        extension_id: "node_eu_central".to_string(),
+        extension_id: "shared_extension".to_string(),
         delta_benign_millionths: *posterior_eu_central.get(&RiskLevel::Benign).unwrap_or(&0) as i64,
         delta_anomalous_millionths: *posterior_eu_central
             .get(&RiskLevel::Anomalous)
@@ -370,23 +371,26 @@ fn integration_with_federated_aggregation_pipeline() {
 
     let private_deltas = vec![
         PrivatePosteriorDelta::from_delta(
-            delta_us_east,
+            from_uniform_prior(delta_us_east),
             privacy_params,
-            "multi_node_east".to_string(),
+            "test_round".to_string(),
             &mut noise_gen_east,
-        ),
+        )
+        .unwrap(),
         PrivatePosteriorDelta::from_delta(
-            delta_us_west,
+            from_uniform_prior(delta_us_west),
             privacy_params,
-            "multi_node_west".to_string(),
+            "test_round".to_string(),
             &mut noise_gen_west,
-        ),
+        )
+        .unwrap(),
         PrivatePosteriorDelta::from_delta(
-            delta_eu_central,
+            from_uniform_prior(delta_eu_central),
             privacy_params,
-            "multi_node_central".to_string(),
+            "test_round".to_string(),
             &mut noise_gen_central,
-        ),
+        )
+        .unwrap(),
     ];
 
     // Perform privacy-preserving aggregation
@@ -412,30 +416,13 @@ fn integration_with_federated_aggregation_pipeline() {
         + final_aggregate.aggregate_delta_malicious_millionths
         + final_aggregate.aggregate_delta_unknown_millionths)
         .unsigned_abs();
-    assert!(
-        (950_000..=1_050_000).contains(&total_probability),
-        "Total aggregated probability should normalize properly: {}",
-        total_probability
+    assert_eq!(total_probability, 0, "Weighted deltas must conserve mass");
+    // Noisy deltas need not be positive or bounded by one probability unit.
+    // Their application must still produce a normalized posterior.
+    let updated = final_aggregate.apply_to_posterior(
+        &frankenengine_engine::bayesian_posterior::Posterior::uniform(),
     );
-
-    // Verify individual node privacy: aggregator should not be able to
-    // reverse-engineer individual contributions from the noisy aggregate
-    let benign_aggregate = final_aggregate.aggregate_delta_benign_millionths;
-
-    // The aggregate should be influenced by all nodes but not directly reveal
-    // any individual contribution due to noise
-    assert!(
-        benign_aggregate > 0,
-        "Benign category should have some probability"
-    );
-
-    // We cannot assert exact values due to random noise, but can verify
-    // the result is plausible given the input range
-    assert!(
-        benign_aggregate <= 1_000_000,
-        "Benign probability should not exceed 100%: {}",
-        benign_aggregate
-    );
+    assert!(updated.is_valid());
 }
 
 /// Test privacy parameter validation and error handling
@@ -445,8 +432,8 @@ fn privacy_parameter_validation_and_error_handling() {
     // Test invalid epsilon (negative - should use 0 since u64 can't be negative)
     assert!(PrivacyParameters::new(0, 10).is_err()); // 0 epsilon is invalid
 
-    // Test invalid epsilon (zero)
-    assert!(PrivacyParameters::new(0, 10).is_err());
+    // The finite Gaussian mechanism requires positive delta too.
+    assert!(PrivacyParameters::new(100_000, 0).is_err());
 
     // Test invalid delta (too large)
     assert!(PrivacyParameters::new(1_000_000, 2_000_000).is_err()); // >1.0 delta in millionths
@@ -457,8 +444,18 @@ fn privacy_parameter_validation_and_error_handling() {
 
     // Test valid parameters
     assert!(PrivacyParameters::new(100_000, 1).is_ok()); // 0.1ε, 1e-6δ
-    assert!(PrivacyParameters::new(10_000_000, 1000).is_ok()); // 10.0ε, 1e-3δ
-    assert!(PrivacyParameters::new(1_000_000, 990_000).is_ok()); // 1.0ε, 0.99δ
+    assert!(PrivacyParameters::new(1_000_000, 100).is_ok()); // documented boundary
+    assert!(PrivacyParameters::new(10_000_000, 1000).is_err());
+    assert!(PrivacyParameters::new(1_000_000, 990_000).is_err());
+    // Direct public-field/serde construction must not bypass operation checks.
+    let raw: PrivacyParameters = serde_json::from_str(
+        r#"{"epsilon_millionths":100000,"delta_millionths":0}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        raw.gaussian_noise_scale(1_000_000),
+        Err(DifferentialPrivacyError::InvalidDelta)
+    );
 
     // Test budget initialization with invalid total budget
     let _valid_params = PrivacyParameters::new(1_000_000, 10).unwrap();
@@ -475,105 +472,60 @@ fn privacy_parameter_validation_and_error_handling() {
     assert!(budget.remaining_delta() > 0);
 }
 
-/// Test that noise preserves differential privacy properties across multiple aggregation rounds
+/// Test charged repeated releases and aggregation within one authorized epoch.
 #[test]
 fn noise_preserves_differential_privacy_across_rounds() {
-    let base_epoch = SecurityEpoch::from_raw(3000);
-    let privacy_params = PrivacyParameters::new(1_000_000, 10).unwrap(); // 1.0ε, 1e-5δ in millionths
-    let privacy_budget = PrivacyBudget::new(20_000_000, 1000, base_epoch).unwrap(); // 20.0ε, 1e-3δ in millionths
-    let aggregator = PrivacyPreservingAggregator::new(privacy_params, base_epoch);
-
-    let node1 = NodeId::new("consistent_node".to_string());
-    let node2 = NodeId::new("varying_node".to_string());
-
-    // Simulate multiple security epochs with similar but slightly varying data
-    for round in 0..5 {
-        let epoch = SecurityEpoch::from_raw(3000 + round as u64);
-        let _timestamp = Timestamp::from_millis(1640995400000 + round as u64 * 60000);
-
-        // Node1: consistent posterior across rounds
-        let mut posterior1 = BTreeMap::new();
-        posterior1.insert(RiskLevel::Benign, 600_000);
-        posterior1.insert(RiskLevel::Malicious, 400_000);
-
-        let delta1 = PosteriorDelta {
-            extension_id: node1.as_str().to_string(),
-            delta_benign_millionths: *posterior1.get(&RiskLevel::Benign).unwrap_or(&0) as i64,
-            delta_anomalous_millionths: *posterior1.get(&RiskLevel::Anomalous).unwrap_or(&0) as i64,
-            delta_malicious_millionths: *posterior1.get(&RiskLevel::Malicious).unwrap_or(&0) as i64,
-            delta_unknown_millionths: *posterior1.get(&RiskLevel::Unknown).unwrap_or(&0) as i64,
-            confidence_weight_millionths: 800_000,
-            evidence_hash: ContentHash::compute(format!("round_{}_node1", round).as_bytes()),
-            epoch,
-        };
-
-        // Node2: slightly varying posterior
-        let mut posterior2 = BTreeMap::new();
-        posterior2.insert(RiskLevel::Benign, 500_000 + round as u32 * 20_000); // 50-58%
-        posterior2.insert(RiskLevel::Malicious, 500_000 - round as u32 * 20_000); // 50-42%
-
-        let delta2 = PosteriorDelta {
-            extension_id: node2.as_str().to_string(),
-            delta_benign_millionths: *posterior2.get(&RiskLevel::Benign).unwrap_or(&0) as i64,
-            delta_anomalous_millionths: *posterior2.get(&RiskLevel::Anomalous).unwrap_or(&0) as i64,
-            delta_malicious_millionths: *posterior2.get(&RiskLevel::Malicious).unwrap_or(&0) as i64,
-            delta_unknown_millionths: *posterior2.get(&RiskLevel::Unknown).unwrap_or(&0) as i64,
-            confidence_weight_millionths: 750_000,
-            evidence_hash: ContentHash::compute(format!("round_{}_node2", round).as_bytes()),
-            epoch,
-        };
-
-        // Apply privacy and aggregate
-        let mut noise_gen1 = DeterministicTestNoiseGenerator::new();
-        let mut noise_gen2 = DeterministicTestNoiseGenerator::new();
-        let private_deltas = vec![
-            PrivatePosteriorDelta::from_delta(
-                delta1,
-                privacy_params,
-                format!("round_{}_delta1", round),
-                &mut noise_gen1,
-            ),
-            PrivatePosteriorDelta::from_delta(
-                delta2,
-                privacy_params,
-                format!("round_{}_delta2", round),
-                &mut noise_gen2,
-            ),
-        ];
-
-        let aggregated = aggregator
-            .aggregate_private_deltas(private_deltas, "test_round".to_string())
-            .expect("Round aggregation should succeed");
-
-        // Verify aggregation properties are maintained across rounds
-        assert_eq!(aggregated.participant_count, 2);
-        assert!(!aggregated.extension_id.is_empty());
-
-        let total_prob: u64 = (aggregated.aggregate_delta_benign_millionths
-            + aggregated.aggregate_delta_anomalous_millionths
-            + aggregated.aggregate_delta_malicious_millionths
-            + aggregated.aggregate_delta_unknown_millionths)
-            .unsigned_abs();
-        assert!(
-            (950_000..=1_050_000).contains(&total_prob),
-            "Round {} probability normalization failed: {}",
-            round,
-            total_prob
-        );
-
-        // Due to noise, each round should produce different aggregated values
-        // even for consistent inputs, preserving privacy across time
-        println!(
-            "Round {}: Benign={}, Malicious={}",
-            round,
-            aggregated.aggregate_delta_benign_millionths,
-            aggregated.aggregate_delta_malicious_millionths
-        );
+    let epoch = SecurityEpoch::from_raw(3000);
+    let parameters = PrivacyParameters::new(1_000_000, 10).unwrap();
+    let mut aggregator = PrivacyPreservingAggregator::new(parameters, epoch);
+    let nodes = [
+        NodeId::new("consistent_node"),
+        NodeId::new("varying_node"),
+    ];
+    for node in &nodes {
+        aggregator
+            .initialize_node_budget(node.clone(), 6_000_000, 100)
+            .unwrap();
     }
-
-    // Verify privacy budget was consumed across all rounds
-    assert!(
-        privacy_budget.remaining_epsilon() < 10_000_000,
-        "Privacy budget should be significantly consumed"
-    );
+    let mut noise = DeterministicTestNoiseGenerator::new();
+    for round in 0..5 {
+        let round_id = format!("round-{round}");
+        let mut private_deltas = Vec::new();
+        for (index, node) in nodes.iter().enumerate() {
+            let change = if index == 0 { 100_000 } else { round * 20_000 };
+            let delta = PosteriorDelta {
+                extension_id: "shared-extension".to_string(),
+                delta_benign_millionths: change,
+                delta_anomalous_millionths: 0,
+                delta_malicious_millionths: -change,
+                delta_unknown_millionths: 0,
+                confidence_weight_millionths: if index == 0 { 800_000 } else { 750_000 },
+                evidence_hash: ContentHash::compute(format!("local-{round}-{index}").as_bytes()),
+                epoch,
+            };
+            private_deltas.push(
+                aggregator
+                    .make_delta_private(node, delta, round_id.clone(), &mut noise)
+                    .unwrap(),
+            );
+        }
+        let aggregated = aggregator
+            .aggregate_private_deltas(private_deltas, round_id)
+            .unwrap();
+        assert_eq!(aggregated.participant_count, 2);
+        assert_eq!(aggregated.extension_id, "shared-extension");
+        assert_eq!(aggregated.epoch, epoch);
+        let total = i128::from(aggregated.aggregate_delta_benign_millionths)
+            + i128::from(aggregated.aggregate_delta_anomalous_millionths)
+            + i128::from(aggregated.aggregate_delta_malicious_millionths)
+            + i128::from(aggregated.aggregate_delta_unknown_millionths);
+        assert_eq!(total, 0, "round {round} must conserve probability mass");
+    }
+    for node in &nodes {
+        let budget = aggregator.get_node_budget(node).unwrap();
+        assert_eq!(budget.consumed_epsilon_millionths, 5_000_000);
+        assert_eq!(budget.consumed_delta_millionths, 50);
+        assert_eq!(budget.remaining_epsilon(), 1_000_000);
+        assert_eq!(budget.round_consumptions.len(), 5);
+    }
 }

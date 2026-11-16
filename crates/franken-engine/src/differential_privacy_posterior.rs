@@ -1,8 +1,10 @@
 //! (ε,δ)-differential privacy for posterior updates in federated learning.
 //!
-//! Implements the Gaussian mechanism for differential privacy on Bayesian posterior
-//! deltas in federated fleet learning. Provides formal privacy guarantees while
-//! enabling collective learning across nodes.
+//! Calibrates the Gaussian mechanism for bounded posterior updates using
+//! conservative fixed-point arithmetic. The caller must supply a suitable secure
+//! Gaussian sampler; the deterministic test sampler is not a privacy mechanism.
+//! Extension identity, epoch, cohort, confidence weights and prior are public
+//! inputs to this contract. Raw evidence and uncloaked gradients are not releases.
 //!
 //! References:
 //! - McMahan et al. 2017: "Communication-Efficient Learning of Deep Networks from Decentralized Data"
@@ -45,10 +47,11 @@ const MAX_EPSILON_MILLIONTHS: u64 = 1_000_000;
 /// 1e-4 = 100 millionths is an upper bound for reasonable delta values.
 const MAX_DELTA_MILLIONTHS: u64 = 100;
 
-/// Global sensitivity of posterior deltas - the maximum possible L2 sensitivity.
-/// Since posterior deltas sum to zero and are bounded by probability mass changes,
-/// the global sensitivity is bounded by the maximum possible probability shift.
-const GLOBAL_SENSITIVITY_MILLIONTHS: u64 = 2_000_000; // 2.0 in millionths
+/// Replace-one L2 sensitivity of a validated posterior delta. Four coordinates
+/// in [-1, 1] have norm at most 2; replacing one such zero-sum vector by another
+/// has distance at most 4. The bound is attained by opposite [1, 1, -1, -1]
+/// vectors. Metadata and confidence weights are declared public.
+pub(crate) const GLOBAL_SENSITIVITY_MILLIONTHS: u64 = 4_000_000;
 
 /// Conservative upper bound for DP-SGD clipping norm validation.
 const MAX_CLIPPING_NORM_MILLIONTHS: u64 = 4_000_000;
@@ -76,103 +79,103 @@ impl PrivacyParameters {
         epsilon_millionths: u64,
         delta_millionths: u64,
     ) -> Result<Self, DifferentialPrivacyError> {
-        if epsilon_millionths == 0 || epsilon_millionths > MAX_EPSILON_MILLIONTHS {
-            return Err(DifferentialPrivacyError::InvalidEpsilon);
-        }
-        if delta_millionths > MAX_DELTA_MILLIONTHS {
-            return Err(DifferentialPrivacyError::InvalidDelta);
-        }
-
-        Ok(Self {
+        let parameters = Self {
             epsilon_millionths,
             delta_millionths,
-        })
+        };
+        parameters.validate()?;
+        Ok(parameters)
+    }
+
+    /// Validate public fields, including values restored from serialized input.
+    /// The finite Gaussian mechanism requires strictly positive delta.
+    pub fn validate(&self) -> Result<(), DifferentialPrivacyError> {
+        if self.epsilon_millionths == 0 || self.epsilon_millionths > MAX_EPSILON_MILLIONTHS {
+            return Err(DifferentialPrivacyError::InvalidEpsilon);
+        }
+        if self.delta_millionths == 0 || self.delta_millionths > MAX_DELTA_MILLIONTHS {
+            return Err(DifferentialPrivacyError::InvalidDelta);
+        }
+        Ok(())
     }
 
     /// Strong privacy parameters (lower epsilon, lower delta).
     pub fn strong_privacy() -> Self {
         Self {
-            epsilon_millionths: 50_000, // ε = 0.05
-            delta_millionths: 5,        // δ = 5e-6
+            epsilon_millionths: 50_000,
+            delta_millionths: 5,
         }
     }
 
     /// Moderate privacy parameters (balanced privacy-utility).
     pub fn moderate_privacy() -> Self {
         Self {
-            epsilon_millionths: 200_000, // ε = 0.2
-            delta_millionths: 20,        // δ = 2e-5
+            epsilon_millionths: 200_000,
+            delta_millionths: 20,
         }
     }
 
-    /// Calculate noise scale for Gaussian mechanism.
-    /// σ = sqrt(2 * ln(1.25/δ)) * Δ / ε
-    pub fn gaussian_noise_scale(&self, sensitivity_millionths: u64) -> u64 {
-        // Compute ln(1.25/δ) using fixed-point approximation
-        let delta_ratio = (1_250_000u128 * MILLION as u128) / self.delta_millionths as u128;
-        let ln_factor = self.approximate_ln(delta_ratio as u64);
+    /// Conservative Gaussian scale in millionths:
+    /// sigma = sensitivity * sqrt(2 * ln(1.25 / delta)) / epsilon.
+    ///
+    /// Dwork--Roth, Appendix A, applies for 0 < epsilon <= 1. Logarithm,
+    /// square root and final division round upward, including the logarithm's
+    /// omitted positive series tail. The result must fit the signed sampler
+    /// interface; an unrepresentable scale is refused, never saturated.
+    pub fn gaussian_noise_scale(
+        &self,
+        sensitivity_millionths: u64,
+    ) -> Result<u64, DifferentialPrivacyError> {
+        self.validate()?;
+        // The logarithm uses M^2 precision. Its square root therefore has
+        // M precision; omitting that second scale produces ~1000x too little
+        // noise when taking the square root of a millionths logarithm.
+        let ln_upper = gaussian_ln_ratio_upper(self.delta_millionths);
+        let root = ceil_sqrt_u128(2 * ln_upper);
+        // Validated delta bounds root by 6*M, so even u64::MAX sensitivity
+        // multiplies without overflowing u128.
+        let scale = (root * u128::from(sensitivity_millionths))
+            .div_ceil(u128::from(self.epsilon_millionths));
+        if scale > i64::MAX as u128 {
+            return Err(DifferentialPrivacyError::NoiseScaleOutOfRange);
+        }
+        Ok(scale as u64)
+    }
+}
 
-        // σ = sqrt(2 * ln_factor) * sensitivity / epsilon
-        let two_ln = 2u128 * ln_factor as u128;
-        let sqrt_two_ln = self.approximate_sqrt(two_ln);
+/// Upper bound for ln(1_250_000 / delta), scaled by M^2.
+///
+/// Range reduction uses exact integer ratios. For m in [1, 2],
+/// ln(m) = 2 * sum(y^(2*j+1)/(2*j+1)), y = (m-1)/(m+1).
+/// Every fixed-point operation rounds up. y_up <= 1/3 + 1/S < 1/2;
+/// after 24 terms the omitted tail is at most
+/// (8/3) * 2^-49 / 49 < 1/S. The final extra unit covers it.
+fn gaussian_ln_ratio_upper(delta_millionths: u64) -> u128 {
+    const SCALE: u128 = 1_000_000_000_000;
+    const LN_2_UP: u128 = 693_147_180_560;
+    const NUMERATOR: u128 = 1_250_000;
 
-        let numerator = sqrt_two_ln * sensitivity_millionths as u128;
-        let noise_scale = numerator / self.epsilon_millionths as u128;
-
-        noise_scale.min(u64::MAX as u128) as u64
+    let mut denominator = u128::from(delta_millionths);
+    let mut powers_of_two = 0u128;
+    while NUMERATOR > 2 * denominator {
+        denominator *= 2;
+        powers_of_two += 1;
     }
 
-    /// Fixed-point approximation of natural logarithm using Taylor series.
-    fn approximate_ln(&self, x_millionths: u64) -> u64 {
-        if x_millionths <= MILLION as u64 {
-            return 0; // ln(x) ≤ 0 for x ≤ 1
-        }
-
-        // Use ln(x) ≈ (x-1) - (x-1)²/2 + (x-1)³/3 for x close to 1
-        // For larger x, use ln(x) = ln(x/e) + 1 repeatedly
-        let mut result = 0u64;
-        let mut current = x_millionths;
-
-        // Reduce to range near 1 by factoring out e ≈ 2.718282
-        let e_millionths = 2_718_282u64;
-        while current > 3 * MILLION as u64 {
-            current = (current * MILLION as u64) / e_millionths;
-            result += MILLION as u64; // Add ln(e) = 1
-        }
-
-        // Taylor series for ln(1 + y) where y = (current - 1)
-        if current > MILLION as u64 {
-            let y = current - MILLION as u64;
-            let y2 = (y * y) / MILLION as u64;
-            let y3 = (y2 * y) / MILLION as u64;
-
-            result += y - y2 / 2 + y3 / 3;
-        }
-
-        result
+    let y = ((NUMERATOR - denominator) * SCALE).div_ceil(NUMERATOR + denominator);
+    let y_squared = (y * y).div_ceil(SCALE);
+    let mut power = y;
+    let mut sum = y;
+    for j in 1..24u128 {
+        power = (power * y_squared).div_ceil(SCALE);
+        sum += power.div_ceil(2 * j + 1);
     }
+    powers_of_two * LN_2_UP + 2 * sum + 1
+}
 
-    /// Fixed-point square root using Newton's method.
-    fn approximate_sqrt(&self, x: u128) -> u128 {
-        if x == 0 {
-            return 0;
-        }
-        if x <= 1 {
-            return 1;
-        }
-
-        // Newton's method: x_{n+1} = (x_n + x/x_n) / 2
-        let mut estimate = x / 2;
-        for _ in 0..10 {
-            // 10 iterations for convergence
-            let new_estimate = (estimate + x / estimate) / 2;
-            if new_estimate.abs_diff(estimate) <= 1 {
-                break;
-            }
-            estimate = new_estimate;
-        }
-        estimate
-    }
+fn ceil_sqrt_u128(value: u128) -> u128 {
+    let root = value.isqrt();
+    root + u128::from(root * root != value)
 }
 
 impl Default for PrivacyParameters {
@@ -235,6 +238,9 @@ impl PrivacyBudget {
 
     /// Check if budget is sufficient for a proposed allocation.
     pub fn can_allocate(&self, params: &PrivacyParameters) -> bool {
+        if params.validate().is_err() {
+            return false;
+        }
         let Some(epsilon) = self
             .consumed_epsilon_millionths
             .checked_add(params.epsilon_millionths)
@@ -256,6 +262,7 @@ impl PrivacyBudget {
         round_id: &str,
         params: PrivacyParameters,
     ) -> Result<(), DifferentialPrivacyError> {
+        params.validate()?;
         if !self.can_allocate(&params) {
             return Err(DifferentialPrivacyError::InsufficientBudget);
         }
@@ -307,53 +314,124 @@ pub struct PrivatePosteriorDelta {
 }
 
 impl PrivatePosteriorDelta {
-    /// Apply differential privacy noise to a posterior delta.
+    /// Perturb one bounded, zero-sum posterior delta. Extension identity, epoch,
+    /// confidence weight and round id are public metadata, not private inputs.
+    /// The source evidence hash is replaced by a digest of the released data.
     pub fn from_delta(
         delta: PosteriorDelta,
         privacy_params: PrivacyParameters,
         round_id: String,
         noise_generator: &mut dyn NoiseGenerator,
+    ) -> Result<Self, DifferentialPrivacyError> {
+        let scale = privacy_params.gaussian_noise_scale(GLOBAL_SENSITIVITY_MILLIONTHS)?;
+        if !delta.is_valid() {
+            return Err(DifferentialPrivacyError::InvalidPosteriorDelta);
+        }
+        Ok(Self::from_validated_delta(
+            delta,
+            privacy_params,
+            round_id,
+            scale,
+            noise_generator,
+        ))
+    }
+
+    /// All fallible validation happens before the budget is charged. Sampling
+    /// and the following postprocessing cannot refund or partially spend it.
+    fn from_validated_delta(
+        mut delta: PosteriorDelta,
+        privacy_params: PrivacyParameters,
+        round_id: String,
+        noise_scale: u64,
+        noise_generator: &mut dyn NoiseGenerator,
     ) -> Self {
-        let noise_scale = privacy_params.gaussian_noise_scale(GLOBAL_SENSITIVITY_MILLIONTHS);
+        let components = [
+            delta.delta_benign_millionths,
+            delta.delta_anomalous_millionths,
+            delta.delta_malicious_millionths,
+            delta.delta_unknown_millionths,
+        ];
+        // Clamping uses a public bound and only noisy coordinates. Centering
+        // four values in [-MAX/2, MAX/2] remains representable in i64, even
+        // when an injected sampler returns i64::MIN or i64::MAX.
+        let limit = i128::from(i64::MAX / 2);
+        let noisy = components.map(|component| {
+            (i128::from(component)
+                + i128::from(noise_generator.sample_gaussian(noise_scale as i64)))
+            .clamp(-limit, limit)
+        });
+        let total: i128 = noisy.iter().sum();
+        let mean = total.div_euclid(4);
+        let remainder = total.rem_euclid(4) as usize;
+        let mut centered = noisy.map(|value| value - mean);
+        for value in centered.iter_mut().take(remainder) {
+            *value -= 1;
+        }
 
-        // Add Gaussian noise to each component of the delta
-        let noisy_benign =
-            delta.delta_benign_millionths + noise_generator.sample_gaussian(noise_scale as i64);
-        let noisy_anomalous =
-            delta.delta_anomalous_millionths + noise_generator.sample_gaussian(noise_scale as i64);
-        let noisy_malicious =
-            delta.delta_malicious_millionths + noise_generator.sample_gaussian(noise_scale as i64);
-        let noisy_unknown =
-            delta.delta_unknown_millionths + noise_generator.sample_gaussian(noise_scale as i64);
-
-        // Renormalize to maintain probability conservation (deltas sum to zero)
-        let total_noise = noisy_benign + noisy_anomalous + noisy_malicious + noisy_unknown
-            - (delta.delta_benign_millionths
-                + delta.delta_anomalous_millionths
-                + delta.delta_malicious_millionths
-                + delta.delta_unknown_millionths);
-
-        // Distribute excess noise equally across all components
-        let correction = total_noise / 4;
-
-        let mut noisy_delta = delta.clone();
-        noisy_delta.delta_benign_millionths = noisy_benign - correction;
-        noisy_delta.delta_anomalous_millionths = noisy_anomalous - correction;
-        noisy_delta.delta_malicious_millionths = noisy_malicious - correction;
-        noisy_delta.delta_unknown_millionths = noisy_unknown - correction;
-
-        Self {
-            base_delta: noisy_delta,
+        delta.delta_benign_millionths = centered[0] as i64;
+        delta.delta_anomalous_millionths = centered[1] as i64;
+        delta.delta_malicious_millionths = centered[2] as i64;
+        delta.delta_unknown_millionths = centered[3] as i64;
+        let mut release = Self {
+            base_delta: delta,
             privacy_params,
             noise_scale_millionths: noise_scale,
             round_id,
-        }
+        };
+        // The old hash committed to raw local evidence. A dictionary attack
+        // on that hash is not protected by adding noise to the coordinates.
+        release.base_delta.evidence_hash = release.release_fingerprint();
+        release
+    }
+
+    /// Canonical provenance of the public release, independent of the source
+    /// evidence hash or any caller-supplied replacement for that hash.
+    pub(crate) fn release_fingerprint(&self) -> crate::hash_tiers::ContentHash {
+        released_delta_fingerprint(
+            &self.base_delta,
+            self.privacy_params,
+            self.noise_scale_millionths,
+            &self.round_id,
+        )
     }
 
     /// Get the noisy posterior delta for aggregation.
     pub fn get_noisy_delta(&self) -> &PosteriorDelta {
         &self.base_delta
     }
+}
+
+/// Canonical release provenance: domain-separated, length-framed public
+/// metadata and noisy coordinates. It never includes the raw evidence hash.
+fn released_delta_fingerprint(
+    delta: &PosteriorDelta,
+    parameters: PrivacyParameters,
+    noise_scale: u64,
+    round_id: &str,
+) -> crate::hash_tiers::ContentHash {
+    let mut encoded = b"frankenengine.private-posterior-release.v1\0".to_vec();
+    for text in [&delta.extension_id[..], round_id] {
+        encoded.extend_from_slice(&(text.len() as u64).to_le_bytes());
+        encoded.extend_from_slice(text.as_bytes());
+    }
+    for value in [
+        delta.epoch.as_u64(),
+        delta.confidence_weight_millionths,
+        parameters.epsilon_millionths,
+        parameters.delta_millionths,
+        noise_scale,
+    ] {
+        encoded.extend_from_slice(&value.to_le_bytes());
+    }
+    for value in [
+        delta.delta_benign_millionths,
+        delta.delta_anomalous_millionths,
+        delta.delta_malicious_millionths,
+        delta.delta_unknown_millionths,
+    ] {
+        encoded.extend_from_slice(&value.to_le_bytes());
+    }
+    crate::hash_tiers::ContentHash::compute(&encoded)
 }
 
 // ---------------------------------------------------------------------------
@@ -387,9 +465,16 @@ impl Default for DeterministicTestNoiseGenerator {
 impl NoiseGenerator for DeterministicTestNoiseGenerator {
     fn sample_gaussian(&mut self, scale_millionths: i64) -> i64 {
         // Simple deterministic "noise" for testing - not secure!
-        self.counter += 1;
-        let pseudo_random = (self.counter * 1664525 + 1013904223) % (1u64 << 31);
-        (pseudo_random as i64 - (1i64 << 30)) * scale_millionths / (1i64 << 29)
+        self.counter = self.counter.wrapping_add(1);
+        let pseudo_random = self
+            .counter
+            .wrapping_mul(1_664_525)
+            .wrapping_add(1_013_904_223)
+            % (1u64 << 31);
+        clamp_i128_to_i64(
+            (i128::from(pseudo_random) - (1i128 << 30)) * i128::from(scale_millionths)
+                / (1i128 << 29),
+        )
     }
 }
 
@@ -415,19 +500,26 @@ impl DpSgdConfig {
         learning_rate_millionths: u64,
         privacy_params: PrivacyParameters,
     ) -> Result<Self, DifferentialPrivacyError> {
-        if clipping_norm_millionths == 0 || clipping_norm_millionths > MAX_CLIPPING_NORM_MILLIONTHS
-        {
-            return Err(DifferentialPrivacyError::InvalidClippingNorm);
-        }
-        if learning_rate_millionths == 0 || learning_rate_millionths > MILLION as u64 {
-            return Err(DifferentialPrivacyError::InvalidLearningRate);
-        }
-
-        Ok(Self {
+        let config = Self {
             clipping_norm_millionths,
             learning_rate_millionths,
             privacy_params,
-        })
+        };
+        config.validate()?;
+        Ok(config)
+    }
+
+    /// Revalidate public fields before any budget charge or noise sampling.
+    pub fn validate(&self) -> Result<(), DifferentialPrivacyError> {
+        if self.clipping_norm_millionths == 0
+            || self.clipping_norm_millionths > MAX_CLIPPING_NORM_MILLIONTHS
+        {
+            return Err(DifferentialPrivacyError::InvalidClippingNorm);
+        }
+        if self.learning_rate_millionths == 0 || self.learning_rate_millionths > MILLION as u64 {
+            return Err(DifferentialPrivacyError::InvalidLearningRate);
+        }
+        self.privacy_params.validate()
     }
 }
 
@@ -463,53 +555,56 @@ impl DpSgdGradient {
 
     /// Return this gradient clipped to the configured L2 norm.
     pub fn clipped_to(&self, clipping_norm_millionths: u64) -> Self {
-        let norm = self.l2_norm_millionths();
-        if norm == 0 || norm <= clipping_norm_millionths {
+        let norm = self.l2_norm_upper_millionths();
+        if norm == 0 || norm <= u128::from(clipping_norm_millionths) {
             return self.clone();
         }
 
-        let factor_millionths =
-            (clipping_norm_millionths as u128 * MILLION as u128 / norm as u128) as i128;
-
+        // Divide each component only once. Rounding toward zero with an upper
+        // bound on the denominator cannot leave the result outside the ball.
+        let scale = |component: i64| {
+            (i128::from(component) * i128::from(clipping_norm_millionths) / norm as i128) as i64
+        };
         Self {
             extension_id: self.extension_id.clone(),
-            gradient_benign_millionths: scale_component(
-                self.gradient_benign_millionths,
-                factor_millionths,
-            ),
-            gradient_anomalous_millionths: scale_component(
-                self.gradient_anomalous_millionths,
-                factor_millionths,
-            ),
-            gradient_malicious_millionths: scale_component(
-                self.gradient_malicious_millionths,
-                factor_millionths,
-            ),
-            gradient_unknown_millionths: scale_component(
-                self.gradient_unknown_millionths,
-                factor_millionths,
-            ),
+            gradient_benign_millionths: scale(self.gradient_benign_millionths),
+            gradient_anomalous_millionths: scale(self.gradient_anomalous_millionths),
+            gradient_malicious_millionths: scale(self.gradient_malicious_millionths),
+            gradient_unknown_millionths: scale(self.gradient_unknown_millionths),
             epoch: self.epoch,
         }
     }
 
-    /// Deterministic integer L2 norm in millionths.
+    /// Upward-rounded integer L2 norm, capped at u64::MAX for this reporting API.
+    /// Clipping uses the uncapped u128 bound internally.
     pub fn l2_norm_millionths(&self) -> u64 {
+        self.l2_norm_upper_millionths().min(u128::from(u64::MAX)) as u64
+    }
+
+    fn l2_norm_upper_millionths(&self) -> u128 {
         let components = [
             self.gradient_benign_millionths,
             self.gradient_anomalous_millionths,
             self.gradient_malicious_millionths,
             self.gradient_unknown_millionths,
         ];
-        let sum_squares = components.iter().fold(0u128, |acc, value| {
-            let abs_value = i128::from(*value).unsigned_abs();
-            acc.saturating_add(abs_value.saturating_mul(abs_value))
-        });
-        integer_sqrt_u128(sum_squares)
+        let mut sum_squares = 0u128;
+        for component in components {
+            let magnitude = i128::from(component).unsigned_abs();
+            let Some(next) = sum_squares.checked_add(magnitude * magnitude) else {
+                // Four i64 coordinates have squared norm at most 2^128,
+                // whose exact square root is 2^64 (representable in u128).
+                return 1u128 << 64;
+            };
+            sum_squares = next;
+        }
+        ceil_sqrt_u128(sum_squares)
     }
 }
 
-/// Result of one DP-SGD posterior update round.
+/// Released result of one DP-SGD posterior update round. Only noisy gradients
+/// are exposed; the exact clipped sums are private intermediates. The prior,
+/// fixed participant roster, epoch and configuration are public inputs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DpSgdPosteriorUpdate {
     /// Round identifier whose privacy budget was spent.
@@ -528,14 +623,6 @@ pub struct DpSgdPosteriorUpdate {
     pub privacy_params: PrivacyParameters,
     /// Gaussian noise scale used for gradient perturbation.
     pub noise_scale_millionths: u64,
-    /// Averaged clipped gradient for P(Benign).
-    pub clipped_gradient_benign_millionths: i64,
-    /// Averaged clipped gradient for P(Anomalous).
-    pub clipped_gradient_anomalous_millionths: i64,
-    /// Averaged clipped gradient for P(Malicious).
-    pub clipped_gradient_malicious_millionths: i64,
-    /// Averaged clipped gradient for P(Unknown).
-    pub clipped_gradient_unknown_millionths: i64,
     /// Noisy averaged gradient for P(Benign).
     pub noisy_gradient_benign_millionths: i64,
     /// Noisy averaged gradient for P(Anomalous).
@@ -549,7 +636,9 @@ pub struct DpSgdPosteriorUpdate {
 }
 
 impl DpSgdPosteriorUpdate {
-    /// Run one deterministic DP-SGD posterior update over a fleet minibatch.
+    /// Run one DP-SGD posterior update over a public, fixed fleet minibatch.
+    /// Replace-one adjacency uses sensitivity 2*C for the clipped SUM; noise
+    /// is added to that sum before division by the public participant count.
     pub fn from_gradients(
         prior: &Posterior,
         gradients: &BTreeMap<NodeId, DpSgdGradient>,
@@ -558,10 +647,16 @@ impl DpSgdPosteriorUpdate {
         budget: &mut PrivacyBudget,
         noise_generator: &mut dyn NoiseGenerator,
     ) -> Result<Self, DifferentialPrivacyError> {
+        config.validate()?;
+        if !prior.is_valid() {
+            return Err(DifferentialPrivacyError::InvalidPosterior);
+        }
         if gradients.is_empty() {
             return Err(DifferentialPrivacyError::EmptyAggregation);
         }
 
+        let participant_count_u32 = u32::try_from(gradients.len())
+            .map_err(|_| DifferentialPrivacyError::TooManyParticipants)?;
         let round_id = round_id.into();
         let first_gradient = gradients
             .values()
@@ -571,11 +666,17 @@ impl DpSgdPosteriorUpdate {
         for gradient in gradients.values() {
             if gradient.extension_id != first_gradient.extension_id
                 || gradient.epoch != first_gradient.epoch
+                || gradient.epoch != budget.epoch
             {
                 return Err(DifferentialPrivacyError::InconsistentGradientMetadata);
             }
         }
 
+        // Config bounds make the multiplication exact. Complete calibration
+        // before charging: invalid input cannot spend budget or sample noise.
+        let noise_scale = config
+            .privacy_params
+            .gaussian_noise_scale(2 * config.clipping_norm_millionths)?;
         budget.allocate_for_round(&round_id, config.privacy_params)?;
 
         let mut sum_benign: i128 = 0;
@@ -591,18 +692,7 @@ impl DpSgdPosteriorUpdate {
             sum_unknown += i128::from(clipped.gradient_unknown_millionths);
         }
 
-        let participant_count = gradients.len() as i128;
-        let clipped_gradient_benign_millionths = clamp_i128_to_i64(sum_benign / participant_count);
-        let clipped_gradient_anomalous_millionths =
-            clamp_i128_to_i64(sum_anomalous / participant_count);
-        let clipped_gradient_malicious_millionths =
-            clamp_i128_to_i64(sum_malicious / participant_count);
-        let clipped_gradient_unknown_millionths =
-            clamp_i128_to_i64(sum_unknown / participant_count);
-
-        let noise_scale = config
-            .privacy_params
-            .gaussian_noise_scale(config.clipping_norm_millionths);
+        let participant_count = i128::from(participant_count_u32);
         let noisy_gradient_benign_millionths =
             noisy_average(sum_benign, participant_count, noise_scale, noise_generator);
         let noisy_gradient_anomalous_millionths = noisy_average(
@@ -648,15 +738,11 @@ impl DpSgdPosteriorUpdate {
             round_id,
             extension_id: first_gradient.extension_id.clone(),
             epoch: first_gradient.epoch,
-            participant_count: gradients.len() as u32,
+            participant_count: participant_count_u32,
             clipping_norm_millionths: config.clipping_norm_millionths,
             learning_rate_millionths: config.learning_rate_millionths,
             privacy_params: config.privacy_params,
             noise_scale_millionths: noise_scale,
-            clipped_gradient_benign_millionths,
-            clipped_gradient_anomalous_millionths,
-            clipped_gradient_malicious_millionths,
-            clipped_gradient_unknown_millionths,
             noisy_gradient_benign_millionths,
             noisy_gradient_anomalous_millionths,
             noisy_gradient_malicious_millionths,
@@ -683,30 +769,12 @@ fn sgd_step(gradient_millionths: i64, learning_rate_millionths: u64) -> i64 {
     )
 }
 
-fn scale_component(component: i64, factor_millionths: i128) -> i64 {
-    clamp_i128_to_i64(i128::from(component) * factor_millionths / i128::from(MILLION))
-}
-
 fn add_i64(left: i64, right: i64) -> i64 {
     clamp_i128_to_i64(i128::from(left) + i128::from(right))
 }
 
 fn clamp_i128_to_i64(value: i128) -> i64 {
     value.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
-}
-
-fn integer_sqrt_u128(value: u128) -> u64 {
-    if value == 0 {
-        return 0;
-    }
-
-    let mut estimate = value;
-    let mut next = (estimate + value / estimate) / 2;
-    while next < estimate {
-        estimate = next;
-        next = (estimate + value / estimate) / 2;
-    }
-    estimate.min(u128::from(u64::MAX)) as u64
 }
 
 // ---------------------------------------------------------------------------
@@ -764,6 +832,15 @@ impl PrivacyPreservingAggregator {
         round_id: String,
         noise_generator: &mut dyn NoiseGenerator,
     ) -> Result<PrivatePosteriorDelta, DifferentialPrivacyError> {
+        let noise_scale = self
+            .default_privacy_params
+            .gaussian_noise_scale(GLOBAL_SENSITIVITY_MILLIONTHS)?;
+        if !delta.is_valid() {
+            return Err(DifferentialPrivacyError::InvalidPosteriorDelta);
+        }
+        if delta.epoch != self.current_epoch {
+            return Err(DifferentialPrivacyError::InconsistentGradientMetadata);
+        }
         let budget = self
             .node_budgets
             .get_mut(node_id)
@@ -777,15 +854,15 @@ impl PrivacyPreservingAggregator {
         // Allocate budget for this round
         budget.allocate_for_round(&round_id, self.default_privacy_params)?;
 
-        // Apply noise to the delta
-        let private_delta = PrivatePosteriorDelta::from_delta(
+        // Sampling begins only after the entire input and scale were validated
+        // and the round was charged. No sampled release can refund its spend.
+        Ok(PrivatePosteriorDelta::from_validated_delta(
             delta,
             self.default_privacy_params,
             round_id,
+            noise_scale,
             noise_generator,
-        );
-
-        Ok(private_delta)
+        ))
     }
 
     /// Aggregate private deltas into a differentially private update.
@@ -883,6 +960,14 @@ pub enum DifferentialPrivacyError {
     InvalidEpsilon,
     /// Invalid delta parameter.
     InvalidDelta,
+    /// Required Gaussian scale does not fit the signed sampler interface.
+    NoiseScaleOutOfRange,
+    /// Source delta is not a bounded, zero-sum probability change.
+    InvalidPosteriorDelta,
+    /// The public prior is not a normalized non-negative posterior.
+    InvalidPosterior,
+    /// A public participant count cannot be represented in the release.
+    TooManyParticipants,
     /// Invalid DP-SGD clipping norm.
     InvalidClippingNorm,
     /// Invalid DP-SGD learning rate.
@@ -908,6 +993,10 @@ impl std::fmt::Display for DifferentialPrivacyError {
         match self {
             Self::InvalidEpsilon => write!(f, "Invalid epsilon parameter"),
             Self::InvalidDelta => write!(f, "Invalid delta parameter"),
+            Self::NoiseScaleOutOfRange => write!(f, "Gaussian noise scale is out of range"),
+            Self::InvalidPosteriorDelta => write!(f, "Invalid source posterior delta"),
+            Self::InvalidPosterior => write!(f, "Invalid prior posterior"),
+            Self::TooManyParticipants => write!(f, "Too many aggregation participants"),
             Self::InvalidClippingNorm => write!(f, "Invalid clipping norm"),
             Self::InvalidLearningRate => write!(f, "Invalid learning rate"),
             Self::InsufficientBudget => write!(f, "Insufficient privacy budget"),
@@ -939,10 +1028,16 @@ mod tests {
             Err(DifferentialPrivacyError::InvalidEpsilon)
         );
 
-        // Invalid delta (too large)
+        // A finite Gaussian mechanism has no delta=0 configuration.
+        for delta in [0, MAX_DELTA_MILLIONTHS + 1, u64::MAX] {
+            assert_eq!(
+                PrivacyParameters::new(100_000, delta),
+                Err(DifferentialPrivacyError::InvalidDelta)
+            );
+        }
         assert_eq!(
-            PrivacyParameters::new(100_000, 200),
-            Err(DifferentialPrivacyError::InvalidDelta)
+            PrivacyParameters::new(0, 10),
+            Err(DifferentialPrivacyError::InvalidEpsilon)
         );
     }
 
@@ -978,20 +1073,26 @@ mod tests {
         let spent = budget.clone();
         // Public fields/serde input can carry values outside constructor bounds.
         // Each addition must reject independently, without debug panic or wrap.
-        for params in [
-            PrivacyParameters {
-                epsilon_millionths: u64::MAX,
-                delta_millionths: 1,
-            },
-            PrivacyParameters {
-                epsilon_millionths: 1,
-                delta_millionths: u64::MAX,
-            },
+        for (params, error) in [
+            (
+                PrivacyParameters {
+                    epsilon_millionths: u64::MAX,
+                    delta_millionths: 1,
+                },
+                DifferentialPrivacyError::InvalidEpsilon,
+            ),
+            (
+                PrivacyParameters {
+                    epsilon_millionths: 1,
+                    delta_millionths: u64::MAX,
+                },
+                DifferentialPrivacyError::InvalidDelta,
+            ),
         ] {
             assert!(!budget.can_allocate(&params));
             assert_eq!(
                 budget.allocate_for_round("overflow", params),
-                Err(DifferentialPrivacyError::InsufficientBudget)
+                Err(error)
             );
             assert_eq!(budget, spent);
         }
@@ -1046,13 +1147,19 @@ mod tests {
 
     #[test]
     fn gaussian_noise_scale_calculation() {
-        let params = PrivacyParameters::new(100_000, 10).unwrap(); // ε=0.1, δ=1e-5
-
-        let noise_scale = params.gaussian_noise_scale(GLOBAL_SENSITIVITY_MILLIONTHS);
-
-        // Should produce reasonable noise scale
-        assert!(noise_scale > 0);
-        assert!(noise_scale < 100_000_000); // Should be reasonable magnitude
+        // Independently evaluated ceil(2 / 0.1 * sqrt(2*ln(1.25/delta))*M).
+        // The ceiling square root may add at most sensitivity/epsilon + 1.
+        for (delta, reference) in [
+            (1, 105_976_051),
+            (5, 99_716_463),
+            (10, 96_896_106),
+            (20, 93_991_157),
+            (100, 86_872_247),
+        ] {
+            let parameters = PrivacyParameters::new(100_000, delta).unwrap();
+            let actual = parameters.gaussian_noise_scale(2_000_000).unwrap();
+            assert!((reference..=reference + 21).contains(&actual));
+        }
     }
 
     #[test]
@@ -1083,7 +1190,8 @@ mod tests {
             params,
             "test_round".to_string(),
             &mut noise_gen,
-        );
+        )
+        .unwrap();
 
         // Verify the private delta maintains the round ID and privacy params
         assert_eq!(private_delta.round_id, "test_round");
@@ -1302,5 +1410,346 @@ mod tests {
 
         assert_eq!(decoded, update);
         assert_eq!(decoded.round_id, "round_qq_serde");
+    }
+
+    struct RecordingNoise {
+        samples: [i64; 4],
+        scales: Vec<i64>,
+    }
+
+    impl RecordingNoise {
+        fn new(samples: [i64; 4]) -> Self {
+            Self {
+                samples,
+                scales: Vec::new(),
+            }
+        }
+    }
+
+    impl NoiseGenerator for RecordingNoise {
+        fn sample_gaussian(&mut self, scale_millionths: i64) -> i64 {
+            let value = self.samples[self.scales.len() % self.samples.len()];
+            self.scales.push(scale_millionths);
+            value
+        }
+    }
+
+    fn bounded_delta(epoch: SecurityEpoch) -> PosteriorDelta {
+        PosteriorDelta {
+            extension_id: "calibration-test".to_string(),
+            delta_benign_millionths: 100_000,
+            delta_anomalous_millionths: -50_000,
+            delta_malicious_millionths: -30_000,
+            delta_unknown_millionths: -20_000,
+            confidence_weight_millionths: 800_000,
+            evidence_hash: crate::hash_tiers::ContentHash::compute(b"private-local-evidence"),
+            epoch,
+        }
+    }
+
+    fn delta_sum(delta: &PosteriorDelta) -> i128 {
+        i128::from(delta.delta_benign_millionths)
+            + i128::from(delta.delta_anomalous_millionths)
+            + i128::from(delta.delta_malicious_millionths)
+            + i128::from(delta.delta_unknown_millionths)
+    }
+
+    #[test]
+    fn gaussian_calibration_is_conservative_across_supported_delta_domain() {
+        // Floating point is only an independent test oracle. Production
+        // calibration and replay use integer arithmetic exclusively.
+        for delta in 1..=MAX_DELTA_MILLIONTHS {
+            for epsilon in [1, 37, 1_000, 50_000, 100_000, 1_000_000] {
+                let parameters = PrivacyParameters::new(epsilon, delta).unwrap();
+                for sensitivity in [1, 1_000_000, 4_000_000, 8_000_000] {
+                    let actual = parameters.gaussian_noise_scale(sensitivity).unwrap();
+                    let reference = sensitivity as f64 * MILLION as f64 / epsilon as f64
+                        * (2.0 * (1_250_000.0 / delta as f64).ln()).sqrt();
+                    assert!(
+                        actual as f64 >= reference,
+                        "under-calibrated epsilon={epsilon} delta={delta} sensitivity={sensitivity}"
+                    );
+                    assert!(
+                        actual as f64 <= reference + sensitivity.div_ceil(epsilon) as f64 + 2.0
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn gaussian_calibration_rejects_raw_invalid_parameters_and_unrepresentable_scales() {
+        for parameters in [
+            PrivacyParameters {
+                epsilon_millionths: 0,
+                delta_millionths: 10,
+            },
+            PrivacyParameters {
+                epsilon_millionths: 100_000,
+                delta_millionths: 0,
+            },
+            PrivacyParameters {
+                epsilon_millionths: u64::MAX,
+                delta_millionths: u64::MAX,
+            },
+        ] {
+            assert!(parameters.gaussian_noise_scale(0).is_err());
+            assert!(parameters.gaussian_noise_scale(u64::MAX).is_err());
+        }
+        let parameters = PrivacyParameters::new(1, 1).unwrap();
+        assert_eq!(parameters.gaussian_noise_scale(0), Ok(0));
+        assert_eq!(
+            parameters.gaussian_noise_scale(u64::MAX),
+            Err(DifferentialPrivacyError::NoiseScaleOutOfRange)
+        );
+        assert_eq!(ceil_sqrt_u128(u128::MAX), 1u128 << 64);
+        assert_eq!(ceil_sqrt_u128(0), 0);
+        assert_eq!(ceil_sqrt_u128(1), 1);
+        assert_eq!(ceil_sqrt_u128(2), 2);
+    }
+
+    #[test]
+    fn private_delta_projection_is_exact_for_extreme_noise_and_hides_raw_evidence_hash() {
+        let epoch = SecurityEpoch::from_raw(25);
+        let source = bounded_delta(epoch);
+        for samples in [
+            [1, 0, 0, 0],
+            [-1, 0, 0, 0],
+            [i64::MAX, i64::MIN, i64::MAX, i64::MIN],
+            [i64::MAX, i64::MIN, i64::MIN, i64::MIN],
+        ] {
+            let mut noise = RecordingNoise::new(samples);
+            let release = PrivatePosteriorDelta::from_delta(
+                source.clone(),
+                PrivacyParameters::default(),
+                "release".to_string(),
+                &mut noise,
+            )
+            .unwrap();
+            assert_eq!(delta_sum(&release.base_delta), 0);
+            assert_eq!(noise.scales.len(), 4);
+            assert!(noise.scales.iter().all(|scale| *scale >= 193_792_211));
+            assert_ne!(release.base_delta.evidence_hash, source.evidence_hash);
+            assert_eq!(release.base_delta.evidence_hash, release.release_fingerprint());
+
+            let mut other_source = source.clone();
+            other_source.evidence_hash =
+                crate::hash_tiers::ContentHash::compute(b"other-private-evidence");
+            let repeated = PrivatePosteriorDelta::from_delta(
+                other_source,
+                PrivacyParameters::default(),
+                "release".to_string(),
+                &mut RecordingNoise::new(samples),
+            )
+            .unwrap();
+            assert_eq!(release, repeated, "source evidence hash must not be a release");
+        }
+    }
+
+    #[test]
+    fn invalid_posterior_release_does_not_sample_or_spend_budget() {
+        let epoch = SecurityEpoch::from_raw(26);
+        let node = NodeId::new("node");
+        let mut aggregator =
+            PrivacyPreservingAggregator::new(PrivacyParameters::default(), epoch);
+        aggregator
+            .initialize_node_budget(node.clone(), 1_000_000, 100)
+            .unwrap();
+        let before = aggregator.get_node_budget(&node).unwrap().clone();
+        let mut noise = RecordingNoise::new([0; 4]);
+        let mut invalid = bounded_delta(epoch);
+        invalid.delta_benign_millionths = i64::MIN;
+        assert_eq!(
+            aggregator.make_delta_private(&node, invalid, "bad".into(), &mut noise),
+            Err(DifferentialPrivacyError::InvalidPosteriorDelta)
+        );
+        assert_eq!(aggregator.get_node_budget(&node), Some(&before));
+        assert!(noise.scales.is_empty());
+
+        let good = aggregator
+            .make_delta_private(&node, bounded_delta(epoch), "good".into(), &mut noise)
+            .unwrap();
+        assert_eq!(delta_sum(&good.base_delta), 0);
+        assert_eq!(noise.scales.len(), 4);
+        assert_eq!(
+            aggregator.get_node_budget(&node).unwrap().consumed_epsilon_millionths,
+            100_000
+        );
+    }
+
+    #[test]
+    fn clipping_covers_nonsquare_boundary_and_full_width_gradient() {
+        let epoch = SecurityEpoch::from_raw(27);
+        let boundary = test_gradient("clip", epoch, 1_000_000, 1, 0, 0);
+        assert_eq!(boundary.l2_norm_millionths(), 1_000_001);
+        let clipped = boundary.clipped_to(1_000_000);
+        assert!(clipped.gradient_benign_millionths < 1_000_000);
+
+        for gradient in [
+            boundary,
+            test_gradient("clip", epoch, i64::MIN, i64::MIN, i64::MIN, i64::MIN),
+            test_gradient("clip", epoch, i64::MAX, i64::MIN, 0, 1),
+        ] {
+            let clipped = gradient.clipped_to(1_000_000);
+            let components = [
+                clipped.gradient_benign_millionths,
+                clipped.gradient_anomalous_millionths,
+                clipped.gradient_malicious_millionths,
+                clipped.gradient_unknown_millionths,
+            ];
+            let squared: u128 = components
+                .into_iter()
+                .map(|value| {
+                    let magnitude = i128::from(value).unsigned_abs();
+                    magnitude * magnitude
+                })
+                .sum();
+            assert!(squared <= 1_000_000u128 * 1_000_000);
+        }
+    }
+
+    #[test]
+    fn dp_sgd_revalidates_public_config_before_sampling_or_budget_charge() {
+        let epoch = SecurityEpoch::from_raw(28);
+        let gradients = BTreeMap::from([(
+            NodeId::new("node"),
+            test_gradient("dp-sgd", epoch, 100_000, 0, -100_000, 0),
+        )]);
+        let valid = test_dp_sgd_config();
+        for config in [
+            DpSgdConfig {
+                clipping_norm_millionths: u64::MAX,
+                ..valid
+            },
+            DpSgdConfig {
+                learning_rate_millionths: 0,
+                ..valid
+            },
+            DpSgdConfig {
+                privacy_params: PrivacyParameters {
+                    epsilon_millionths: 0,
+                    delta_millionths: 10,
+                },
+                ..valid
+            },
+            DpSgdConfig {
+                privacy_params: PrivacyParameters {
+                    epsilon_millionths: 100_000,
+                    delta_millionths: 0,
+                },
+                ..valid
+            },
+        ] {
+            let mut budget = PrivacyBudget::new(1_000_000, 100, epoch).unwrap();
+            let before = budget.clone();
+            let mut noise = RecordingNoise::new([0; 4]);
+            assert!(
+                DpSgdPosteriorUpdate::from_gradients(
+                    &Posterior::uniform(),
+                    &gradients,
+                    config,
+                    "invalid",
+                    &mut budget,
+                    &mut noise,
+                )
+                .is_err()
+            );
+            assert_eq!(budget, before);
+            assert!(noise.scales.is_empty());
+        }
+    }
+
+    #[test]
+    fn dp_sgd_rejects_invalid_prior_and_wrong_budget_epoch_without_spending() {
+        let epoch = SecurityEpoch::from_raw(29);
+        let gradients = BTreeMap::from([(
+            NodeId::new("node"),
+            test_gradient("dp-sgd", epoch, 100_000, 0, -100_000, 0),
+        )]);
+        let mut prior = Posterior::uniform();
+        prior.p_benign = i64::MAX;
+        let mut budget = PrivacyBudget::new(1_000_000, 100, epoch).unwrap();
+        let before = budget.clone();
+        let mut noise = RecordingNoise::new([0; 4]);
+        assert_eq!(
+            DpSgdPosteriorUpdate::from_gradients(
+                &prior,
+                &gradients,
+                test_dp_sgd_config(),
+                "bad-prior",
+                &mut budget,
+                &mut noise,
+            ),
+            Err(DifferentialPrivacyError::InvalidPosterior)
+        );
+        assert_eq!(budget, before);
+        budget.epoch = SecurityEpoch::from_raw(30);
+        let before = budget.clone();
+        assert_eq!(
+            DpSgdPosteriorUpdate::from_gradients(
+                &Posterior::uniform(),
+                &gradients,
+                test_dp_sgd_config(),
+                "wrong-epoch",
+                &mut budget,
+                &mut noise,
+            ),
+            Err(DifferentialPrivacyError::InconsistentGradientMetadata)
+        );
+        assert_eq!(budget, before);
+        assert!(noise.scales.is_empty());
+    }
+
+    #[test]
+    fn dp_sgd_release_has_only_noisy_gradients_and_replace_one_calibration() {
+        let epoch = SecurityEpoch::from_raw(31);
+        let gradients = BTreeMap::from([
+            (
+                NodeId::new("node-a"),
+                test_gradient("dp-sgd", epoch, 2_000_000, 0, -2_000_000, 0),
+            ),
+            (
+                NodeId::new("node-b"),
+                test_gradient("dp-sgd", epoch, i64::MIN, i64::MAX, 1, 0),
+            ),
+        ]);
+        let mut budget = PrivacyBudget::new(1_000_000, 100, epoch).unwrap();
+        let mut noise = RecordingNoise::new([i64::MAX, i64::MIN, 1, -1]);
+        let update = DpSgdPosteriorUpdate::from_gradients(
+            &Posterior::uniform(),
+            &gradients,
+            test_dp_sgd_config(),
+            "release",
+            &mut budget,
+            &mut noise,
+        )
+        .unwrap();
+        assert_eq!(update.participant_count, 2);
+        assert_eq!(noise.scales.len(), 4);
+        assert!(noise.scales.iter().all(|scale| *scale >= 96_896_106));
+        assert!(update.updated_posterior.is_valid());
+        assert_eq!(budget.consumed_epsilon_millionths, 100_000);
+        let encoded = serde_json::to_value(&update).unwrap();
+        let fields = encoded.as_object().unwrap();
+        assert!(fields.contains_key("noisy_gradient_benign_millionths"));
+        assert!(!fields.keys().any(|key| key.starts_with("clipped_gradient_")));
+        assert!(!format!("{update:?}").contains("clipped_gradient_"));
+        let restored: DpSgdPosteriorUpdate = serde_json::from_value(encoded).unwrap();
+        assert_eq!(update, restored);
+    }
+
+    #[test]
+    fn deterministic_test_noise_handles_full_calibration_range_without_wrapping() {
+        let parameters = PrivacyParameters::new(1, 1).unwrap();
+        let scale = parameters.gaussian_noise_scale(8_000_000).unwrap() as i64;
+        assert!(scale > 40_000_000_000_000);
+        let mut first = DeterministicTestNoiseGenerator::new();
+        let mut second = DeterministicTestNoiseGenerator::new();
+        for _ in 0..16 {
+            assert_eq!(first.sample_gaussian(scale), second.sample_gaussian(scale));
+        }
+        first.counter = u64::MAX;
+        let _ = first.sample_gaussian(i64::MAX);
+        assert_eq!(first.counter, 0);
     }
 }

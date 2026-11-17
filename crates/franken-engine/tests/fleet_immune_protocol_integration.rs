@@ -177,6 +177,26 @@ impl frankenengine_engine::fleet_immune_protocol::FleetRegistryAnchorAuthority
     }
 }
 
+enum IntegrationHistoryEvent {
+    Evidence(
+        EvidencePacket,
+        frankenengine_engine::fleet_immune_protocol::FleetSignatureV2,
+    ),
+    Intent(
+        ContainmentIntent,
+        frankenengine_engine::fleet_immune_protocol::FleetSignatureV2,
+    ),
+    Heartbeat(
+        HeartbeatLiveness,
+        frankenengine_engine::fleet_immune_protocol::FleetSignatureV2,
+    ),
+    Checkpoint(
+        frankenengine_engine::fleet_checkpoint_v2::SignedFleetCheckpointV2,
+        frankenengine_engine::fleet_checkpoint_v2::FleetCheckpointQuorumV2,
+        u64,
+    ),
+}
+
 struct IntegrationV2Driver {
     authority_id: frankenengine_engine::fleet_immune_protocol::FleetAuthorityId,
     config: GossipConfig,
@@ -187,6 +207,7 @@ struct IntegrationV2Driver {
     >,
     signers: BTreeMap<NodeId, frankenengine_engine::fleet_immune_protocol::FleetSigner>,
     electorate: BTreeSet<NodeId>,
+    history: Vec<IntegrationHistoryEvent>,
 }
 
 impl serde::Serialize for IntegrationV2Driver {
@@ -218,6 +239,7 @@ impl IntegrationV2Driver {
             peers: BTreeMap::new(),
             signers: BTreeMap::new(),
             electorate: BTreeSet::from([local_id.clone()]),
+            history: Vec::new(),
         };
         drv.ensure_node(&local_id);
         drv
@@ -243,7 +265,7 @@ impl IntegrationV2Driver {
             self.signers.insert(node.clone(), signer);
         }
         if node != &self.local.state().local_node_id && !self.peers.contains_key(node) {
-            let peer_state =
+            let mut peer_state =
                 frankenengine_engine::fleet_immune_protocol::AuthenticatedFleetProtocolStateV2::new(
                     self.authority_id,
                     node.clone(),
@@ -251,6 +273,32 @@ impl IntegrationV2Driver {
                     SecurityEpoch::from_raw(1),
                 )
                 .unwrap();
+            if !self.history.is_empty() {
+                let anchor = IntegrationAnchor {
+                    id: self.authority_id,
+                    current: std::cell::RefCell::new(None),
+                };
+                let reg = self.registry(&anchor);
+                for event in &self.history {
+                    match event {
+                        IntegrationHistoryEvent::Evidence(packet, sig) => {
+                            let _ = peer_state.process_evidence(packet, sig, &reg, &anchor);
+                        }
+                        IntegrationHistoryEvent::Intent(item, sig) => {
+                            let _ = peer_state.process_intent(item, sig, &reg, &anchor);
+                        }
+                        IntegrationHistoryEvent::Heartbeat(hb, sig) => {
+                            let _ = peer_state.process_heartbeat(hb, sig, &reg, &anchor);
+                        }
+                        IntegrationHistoryEvent::Checkpoint(signed, quorum, ts) => {
+                            if quorum.electorate().contains(node) {
+                                let _ = peer_state
+                                    .accept_checkpoint_v2(signed, quorum, *ts, &reg, &anchor);
+                            }
+                        }
+                    }
+                }
+            }
             self.peers.insert(node.clone(), peer_state);
         }
     }
@@ -311,6 +359,8 @@ impl IntegrationV2Driver {
         for peer in self.peers.values_mut() {
             let _ = peer.process_evidence(packet, &sig, &reg, &anchor);
         }
+        self.history
+            .push(IntegrationHistoryEvent::Evidence(packet.clone(), sig));
         Ok(())
     }
 
@@ -331,6 +381,8 @@ impl IntegrationV2Driver {
         for peer in self.peers.values_mut() {
             let _ = peer.process_intent(item, &sig, &reg, &anchor);
         }
+        self.history
+            .push(IntegrationHistoryEvent::Intent(item.clone(), sig));
         Ok(())
     }
 
@@ -352,6 +404,8 @@ impl IntegrationV2Driver {
         for peer in self.peers.values_mut() {
             let _ = peer.process_heartbeat(hb, &sig, &reg, &anchor);
         }
+        self.history
+            .push(IntegrationHistoryEvent::Heartbeat(hb.clone(), sig));
         Ok(())
     }
 
@@ -394,10 +448,8 @@ impl IntegrationV2Driver {
     fn build_checkpoint_v2(
         &mut self,
         timestamp_ns: u64,
-    ) -> Result<
-        QuorumCheckpoint,
-        frankenengine_engine::fleet_checkpoint_v2::FleetCheckpointV2Error,
-    > {
+    ) -> Result<QuorumCheckpoint, frankenengine_engine::fleet_checkpoint_v2::FleetCheckpointV2Error>
+    {
         use frankenengine_engine::fleet_checkpoint_v2::FleetCheckpointQuorumV2;
 
         let quorum = FleetCheckpointQuorumV2::new(
@@ -441,14 +493,19 @@ impl IntegrationV2Driver {
                 draft.add_signature(sig, &reg, &anchor)?;
             }
         }
-        let signed = self
-            .local
-            .finalize_checkpoint_v2(&draft, &quorum, timestamp_ns, &reg, &anchor)?;
+        let signed =
+            self.local
+                .finalize_checkpoint_v2(&draft, &quorum, timestamp_ns, &reg, &anchor)?;
         for (peer_id, peer) in &mut self.peers {
             if signed.checkpoint.participating_nodes.contains(peer_id) {
                 let _ = peer.accept_checkpoint_v2(&signed, &quorum, timestamp_ns, &reg, &anchor);
             }
         }
+        self.history.push(IntegrationHistoryEvent::Checkpoint(
+            signed.clone(),
+            quorum,
+            timestamp_ns,
+        ));
         Ok(signed.checkpoint)
     }
 }
@@ -2509,19 +2566,13 @@ fn fleet_state_encodes_evidence_for_erasure_gossip_v2_and_advances_sequence() {
     }
 
     let signed_shards = state
-        .encode_evidence_for_erasure_gossip_v2(
-            &mk_evidence("node-0", "ext-coded", 2, 250_000),
-            now,
-        )
+        .encode_evidence_for_erasure_gossip_v2(&mk_evidence("node-0", "ext-coded", 2, 250_000), now)
         .unwrap();
     assert_eq!(signed_shards.len(), 6);
     assert_eq!(state.local_sequence, 6);
-    assert!(
-        signed_shards
-            .iter()
-            .all(|s| s.message.shard.origin_node == NodeId::new("coordinator")
-                && s.signature.signer == NodeId::new("coordinator"))
-    );
+    assert!(signed_shards.iter().all(|s| s.message.shard.origin_node
+        == NodeId::new("coordinator")
+        && s.signature.signer == NodeId::new("coordinator")));
     assert_eq!(signed_shards[0].message.shard.sequence, 1);
     assert_eq!(signed_shards[5].message.shard.sequence, 6);
 }

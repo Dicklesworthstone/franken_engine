@@ -372,8 +372,7 @@ fn build_registry(
     anchor: &DemoAnchorAuthority,
 ) -> Result<DurableFleetVerificationRegistry, Box<dyn std::error::Error>> {
     let mut storage = InMemoryStorageAdapter::new();
-    let context =
-        EventContext::new("quarantine-mesh-trace", "quarantine-mesh-dec", "mesh-pol")?;
+    let context = EventContext::new("quarantine-mesh-trace", "quarantine-mesh-dec", "mesh-pol")?;
     let first = &nodes[0];
     let mut registry = FleetVerificationRegistryPersistence::new(&mut storage, &context)
         .prepare_initial_registration(
@@ -505,7 +504,8 @@ fn simulate_instance(
         .max()
         .unwrap_or(local_node.revocation_applied_ns);
     let checkpoint_timestamp_ns = last_intent_received_ns.saturating_add(CHECKPOINT_LAG_NS);
-    let mut draft = peer_states[local_index].draft_checkpoint_v2(checkpoint_timestamp_ns, quorum)?;
+    let mut draft =
+        peer_states[local_index].draft_checkpoint_v2(checkpoint_timestamp_ns, quorum)?;
     for (peer_idx, node) in nodes.iter().enumerate() {
         let sig = if peer_idx == local_index {
             peer_states[peer_idx].sign_checkpoint_v2(

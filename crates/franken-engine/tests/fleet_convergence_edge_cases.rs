@@ -209,7 +209,8 @@ impl frankenengine_engine::fleet_immune_protocol::FleetRegistryAnchorAuthority
         >,
         next: &frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim,
     ) -> Result<Vec<u8>, frankenengine_engine::fleet_immune_protocol::FleetIdentityError> {
-        if self.current.borrow().as_ref() != expected || next.fleet_authority_id != self.authority_id
+        if self.current.borrow().as_ref() != expected
+            || next.fleet_authority_id != self.authority_id
         {
             return Err(
                 frankenengine_engine::fleet_immune_protocol::FleetIdentityError::UnverifiedRegistryAnchor {
@@ -251,13 +252,14 @@ impl TestAuthenticatedFleetState {
             .unwrap();
         let mut s = Self {
             authority_id,
-            state: frankenengine_engine::fleet_immune_protocol::AuthenticatedFleetProtocolStateV2::new(
-                authority_id,
-                node(name),
-                GossipConfig::default(),
-                SecurityEpoch::from_raw(1),
-            )
-            .unwrap(),
+            state:
+                frankenengine_engine::fleet_immune_protocol::AuthenticatedFleetProtocolStateV2::new(
+                    authority_id,
+                    node(name),
+                    GossipConfig::default(),
+                    SecurityEpoch::from_raw(1),
+                )
+                .unwrap(),
             signers: BTreeMap::new(),
         };
         s.ensure_signer(&node(name));
@@ -269,8 +271,7 @@ impl TestAuthenticatedFleetState {
             return;
         }
         let mut seed =
-            *ContentHash::compute(format!("conv-edge-signer:{}", n.as_str()).as_bytes())
-                .as_bytes();
+            *ContentHash::compute(format!("conv-edge-signer:{}", n.as_str()).as_bytes()).as_bytes();
         if seed == [0u8; 32] {
             seed[0] = 1;
         }

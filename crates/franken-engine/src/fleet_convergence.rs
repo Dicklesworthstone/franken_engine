@@ -1508,9 +1508,7 @@ mod tests {
                     .expect("valid test fleet authority id");
             let mut instance = Self {
                 authority_id,
-                anchor: crate::fleet_immune_protocol::TestDurableAnchorAuthority::new(
-                    authority_id,
-                ),
+                anchor: crate::fleet_immune_protocol::TestDurableAnchorAuthority::new(authority_id),
                 state: crate::fleet_immune_protocol::AuthenticatedFleetProtocolStateV2::new(
                     authority_id,
                     NodeId::new(node),
@@ -1537,9 +1535,13 @@ mod tests {
             }
             let key = crate::signature_preimage::SigningKey::from_bytes(seed_bytes)
                 .expect("valid deterministic test key");
-            let signer =
-                crate::fleet_immune_protocol::FleetSigner::new(self.authority_id, node.clone(), 1, key)
-                    .expect("valid test fleet signer");
+            let signer = crate::fleet_immune_protocol::FleetSigner::new(
+                self.authority_id,
+                node.clone(),
+                1,
+                key,
+            )
+            .expect("valid test fleet signer");
             self.signers.insert(node.clone(), signer);
         }
 
@@ -1548,9 +1550,8 @@ mod tests {
             packet: &EvidencePacket,
         ) -> Result<(), crate::fleet_immune_protocol::FleetIngressV2Error> {
             self.ensure_signer(&packet.node_id);
-            let anchor = crate::fleet_immune_protocol::TestDurableAnchorAuthority::new(
-                self.authority_id,
-            );
+            let anchor =
+                crate::fleet_immune_protocol::TestDurableAnchorAuthority::new(self.authority_id);
             let registry = crate::fleet_immune_protocol::test_durable_registry_for_signers(
                 self.signers.values(),
                 SecurityEpoch::from_raw(1),
@@ -1567,9 +1568,8 @@ mod tests {
             heartbeat: &HeartbeatLiveness,
         ) -> Result<(), crate::fleet_immune_protocol::FleetIngressV2Error> {
             self.ensure_signer(&heartbeat.node_id);
-            let anchor = crate::fleet_immune_protocol::TestDurableAnchorAuthority::new(
-                self.authority_id,
-            );
+            let anchor =
+                crate::fleet_immune_protocol::TestDurableAnchorAuthority::new(self.authority_id);
             let registry = crate::fleet_immune_protocol::test_durable_registry_for_signers(
                 self.signers.values(),
                 SecurityEpoch::from_raw(1),

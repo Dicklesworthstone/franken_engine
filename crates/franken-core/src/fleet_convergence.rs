@@ -1532,10 +1532,7 @@ mod tests {
             self.signers.insert(node.clone(), signer);
         }
 
-        fn process_evidence(
-            &mut self,
-            packet: &EvidencePacket,
-        ) -> Result<(), FleetIngressV2Error> {
+        fn process_evidence(&mut self, packet: &EvidencePacket) -> Result<(), FleetIngressV2Error> {
             self.ensure_signer(&packet.node_id);
             let registry = test_anchored_registry_for_signers(
                 self.authority_id,

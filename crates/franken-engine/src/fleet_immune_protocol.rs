@@ -6788,12 +6788,11 @@ impl AuthenticatedFleetProtocolStateV2 {
             signer: packet.node_id.clone(),
             hash: AuthenticityHash([0; 32]),
         };
-        let payload = serde_json::to_vec(&normalized).map_err(|err| {
-            ProtocolError::SerializationFailed {
+        let payload =
+            serde_json::to_vec(&normalized).map_err(|err| ProtocolError::SerializationFailed {
                 message_type: "EvidencePacket".to_string(),
                 detail: err.to_string(),
-            }
-        })?;
+            })?;
         let plan = self.state.erasure_coding_plan(current_time_ns);
         let shard_set_id = format!("{}:{}", packet.node_id, packet.trace_id);
         let first_sequence = self.state.local_sequence.checked_add(1).ok_or_else(|| {
@@ -7305,9 +7304,8 @@ where
         .next()
         .expect("at least one test signer required for durable registry");
     let mut storage = crate::storage_adapter::InMemoryStorageAdapter::new();
-    let context =
-        EventContext::new("test-fleet-trace", "test-fleet-decision", "test-fleet-pol")
-            .expect("valid test event context");
+    let context = EventContext::new("test-fleet-trace", "test-fleet-decision", "test-fleet-pol")
+        .expect("valid test event context");
     let mut registry = FleetVerificationRegistryPersistence::new(&mut storage, &context)
         .prepare_initial_registration(
             first.identity().signer.clone(),
@@ -9344,15 +9342,13 @@ mod tests {
         let before_receiver = serde_json::to_value(receiver.state()).unwrap();
         assert!(
             receiver
-                .process_reconciliation(
-                    &tampered_req,
-                    &req_sig,
-                    &harness.registry,
-                    &harness.anchor
-                )
+                .process_reconciliation(&tampered_req, &req_sig, &harness.registry, &harness.anchor)
                 .is_err()
         );
-        assert_eq!(serde_json::to_value(receiver.state()).unwrap(), before_receiver);
+        assert_eq!(
+            serde_json::to_value(receiver.state()).unwrap(),
+            before_receiver
+        );
         receiver
             .process_reconciliation(&req, &req_sig, &harness.registry, &harness.anchor)
             .unwrap();
@@ -9404,7 +9400,10 @@ mod tests {
         assert!(signed_shards.len() >= 2);
         // No public-NodeId MAC is placed in V2 shards:
         for signed in &signed_shards {
-            assert_eq!(signed.message.shard.signature.hash, AuthenticityHash([0; 32]));
+            assert_eq!(
+                signed.message.shard.signature.hash,
+                AuthenticityHash([0; 32])
+            );
             receiver
                 .process_erasure_shard_v2(signed, &harness.registry, &harness.anchor)
                 .unwrap();
@@ -9443,8 +9442,7 @@ mod tests {
                 &harness.anchor,
             )
             .unwrap();
-        let decoded_packet: EvidencePacket =
-            serde_json::from_slice(&reconstructed_bytes).unwrap();
+        let decoded_packet: EvidencePacket = serde_json::from_slice(&reconstructed_bytes).unwrap();
         assert_eq!(decoded_packet.trace_id, evidence.trace_id);
         assert_eq!(decoded_packet.signature.hash, AuthenticityHash([0; 32]));
         let mut ledger = TrustedReconstructionReceiptLedger::new();

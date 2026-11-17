@@ -366,11 +366,11 @@ fn sequence_range_inverted_is_empty() {
 }
 
 #[test]
-#[should_panic(expected = "overflow")]
 fn sequence_range_large_overflows() {
     let r = SequenceRange::new(0, u64::MAX);
-    // u64::MAX - 0 + 1 overflows in debug mode
-    let _ = r.len();
+    // Hardened SequenceRange::len saturates to u64::MAX instead of panicking on (0, u64::MAX).
+    assert_eq!(r.len(), u64::MAX);
+    assert!(!r.is_empty());
 }
 
 // ── EvidencePacket ──────────────────────────────────────────────────────────
@@ -1033,6 +1033,26 @@ impl frankenengine_engine::fleet_immune_protocol::FleetRegistryAnchorAuthority f
     }
 }
 
+enum EdgeHistoryEvent {
+    Evidence(
+        EvidencePacket,
+        frankenengine_engine::fleet_immune_protocol::FleetSignatureV2,
+    ),
+    Intent(
+        ContainmentIntent,
+        frankenengine_engine::fleet_immune_protocol::FleetSignatureV2,
+    ),
+    Heartbeat(
+        HeartbeatLiveness,
+        frankenengine_engine::fleet_immune_protocol::FleetSignatureV2,
+    ),
+    Checkpoint(
+        frankenengine_engine::fleet_checkpoint_v2::SignedFleetCheckpointV2,
+        frankenengine_engine::fleet_checkpoint_v2::FleetCheckpointQuorumV2,
+        u64,
+    ),
+}
+
 struct EdgeV2Driver {
     authority_id: frankenengine_engine::fleet_immune_protocol::FleetAuthorityId,
     config: GossipConfig,
@@ -1043,6 +1063,7 @@ struct EdgeV2Driver {
     >,
     signers: BTreeMap<NodeId, frankenengine_engine::fleet_immune_protocol::FleetSigner>,
     electorate: BTreeSet<NodeId>,
+    history: Vec<EdgeHistoryEvent>,
 }
 
 impl EdgeV2Driver {
@@ -1068,6 +1089,7 @@ impl EdgeV2Driver {
             peers: BTreeMap::new(),
             signers: BTreeMap::new(),
             electorate: BTreeSet::from([local_id.clone()]),
+            history: Vec::new(),
         };
         drv.ensure_node(&local_id);
         drv
@@ -1093,7 +1115,7 @@ impl EdgeV2Driver {
             self.signers.insert(node.clone(), signer);
         }
         if node != &self.local.state().local_node_id && !self.peers.contains_key(node) {
-            let peer_state =
+            let mut peer_state =
                 frankenengine_engine::fleet_immune_protocol::AuthenticatedFleetProtocolStateV2::new(
                     self.authority_id,
                     node.clone(),
@@ -1101,6 +1123,32 @@ impl EdgeV2Driver {
                     SecurityEpoch::from_raw(1),
                 )
                 .unwrap();
+            if !self.history.is_empty() {
+                let anchor = EdgeAnchor {
+                    id: self.authority_id,
+                    current: std::cell::RefCell::new(None),
+                };
+                let reg = self.registry(&anchor);
+                for event in &self.history {
+                    match event {
+                        EdgeHistoryEvent::Evidence(packet, sig) => {
+                            let _ = peer_state.process_evidence(packet, sig, &reg, &anchor);
+                        }
+                        EdgeHistoryEvent::Intent(item, sig) => {
+                            let _ = peer_state.process_intent(item, sig, &reg, &anchor);
+                        }
+                        EdgeHistoryEvent::Heartbeat(hb, sig) => {
+                            let _ = peer_state.process_heartbeat(hb, sig, &reg, &anchor);
+                        }
+                        EdgeHistoryEvent::Checkpoint(signed, quorum, ts) => {
+                            if quorum.electorate().contains(node) {
+                                let _ = peer_state
+                                    .accept_checkpoint_v2(signed, quorum, *ts, &reg, &anchor);
+                            }
+                        }
+                    }
+                }
+            }
             self.peers.insert(node.clone(), peer_state);
         }
     }
@@ -1161,6 +1209,8 @@ impl EdgeV2Driver {
         for peer in self.peers.values_mut() {
             let _ = peer.process_evidence(packet, &sig, &reg, &anchor);
         }
+        self.history
+            .push(EdgeHistoryEvent::Evidence(packet.clone(), sig));
         Ok(())
     }
 
@@ -1181,6 +1231,8 @@ impl EdgeV2Driver {
         for peer in self.peers.values_mut() {
             let _ = peer.process_intent(item, &sig, &reg, &anchor);
         }
+        self.history
+            .push(EdgeHistoryEvent::Intent(item.clone(), sig));
         Ok(())
     }
 
@@ -1202,16 +1254,16 @@ impl EdgeV2Driver {
         for peer in self.peers.values_mut() {
             let _ = peer.process_heartbeat(hb, &sig, &reg, &anchor);
         }
+        self.history
+            .push(EdgeHistoryEvent::Heartbeat(hb.clone(), sig));
         Ok(())
     }
 
     fn build_checkpoint_v2(
         &mut self,
         timestamp_ns: u64,
-    ) -> Result<
-        QuorumCheckpoint,
-        frankenengine_engine::fleet_checkpoint_v2::FleetCheckpointV2Error,
-    > {
+    ) -> Result<QuorumCheckpoint, frankenengine_engine::fleet_checkpoint_v2::FleetCheckpointV2Error>
+    {
         use frankenengine_engine::fleet_checkpoint_v2::FleetCheckpointQuorumV2;
 
         let quorum = FleetCheckpointQuorumV2::new(
@@ -1255,14 +1307,19 @@ impl EdgeV2Driver {
                 draft.add_signature(sig, &reg, &anchor)?;
             }
         }
-        let signed = self
-            .local
-            .finalize_checkpoint_v2(&draft, &quorum, timestamp_ns, &reg, &anchor)?;
+        let signed =
+            self.local
+                .finalize_checkpoint_v2(&draft, &quorum, timestamp_ns, &reg, &anchor)?;
         for (peer_id, peer) in &mut self.peers {
             if signed.checkpoint.participating_nodes.contains(peer_id) {
                 let _ = peer.accept_checkpoint_v2(&signed, &quorum, timestamp_ns, &reg, &anchor);
             }
         }
+        self.history.push(EdgeHistoryEvent::Checkpoint(
+            signed.clone(),
+            quorum,
+            timestamp_ns,
+        ));
         Ok(signed.checkpoint)
     }
 }

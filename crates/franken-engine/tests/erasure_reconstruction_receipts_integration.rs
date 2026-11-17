@@ -71,7 +71,10 @@ struct ReceiptV2StateFixture {
     authority_id: frankenengine_engine::fleet_immune_protocol::FleetAuthorityId,
     anchor: ReceiptTestAuthority,
     registry: frankenengine_engine::fleet_immune_protocol::DurableFleetVerificationRegistry,
-    signers: std::collections::BTreeMap<NodeId, frankenengine_engine::fleet_immune_protocol::FleetSigner>,
+    signers: std::collections::BTreeMap<
+        NodeId,
+        frankenengine_engine::fleet_immune_protocol::FleetSigner,
+    >,
 }
 
 struct ReceiptTestAuthority {
@@ -261,7 +264,10 @@ fn fleet_state_reconstructs_and_signs_authenticated_v2_receipt_while_rejecting_l
         .unwrap();
     assert_eq!(payload, b"fleet gossip evidence payload");
     assert_eq!(signed.receipt.reconstructing_node, node("node-alpha"));
-    assert_eq!(signed.receipt.schema_id, RECONSTRUCTION_RECEIPT_SCHEMA_ID_V2);
+    assert_eq!(
+        signed.receipt.schema_id,
+        RECONSTRUCTION_RECEIPT_SCHEMA_ID_V2
+    );
     assert_eq!(signed.receipt.coding_scheme, XOR_SINGLE_PARITY_SCHEME);
     signed
         .verify_live(

@@ -279,12 +279,13 @@ impl FleetConvergenceHarness {
                     detail: err.to_string(),
                 })
             })?;
-            let signer = FleetSigner::new(authority_id, node_id.clone(), 1, key).map_err(|err| {
-                ConvergenceHarnessError::Protocol(ProtocolError::SerializationFailed {
-                    message_type: "FleetSigner".to_string(),
-                    detail: err.to_string(),
-                })
-            })?;
+            let signer =
+                FleetSigner::new(authority_id, node_id.clone(), 1, key).map_err(|err| {
+                    ConvergenceHarnessError::Protocol(ProtocolError::SerializationFailed {
+                        message_type: "FleetSigner".to_string(),
+                        detail: err.to_string(),
+                    })
+                })?;
             signers.insert(node_id.clone(), signer);
         }
 
@@ -540,9 +541,9 @@ impl FleetConvergenceHarness {
                                 )
                             })
                     };
-                    match vote_res.and_then(|sig| {
-                        draft.add_signature(sig, &self.registry, &self.anchor)
-                    }) {
+                    match vote_res
+                        .and_then(|sig| draft.add_signature(sig, &self.registry, &self.anchor))
+                    {
                         Ok(()) => {}
                         Err(err) => {
                             cosign_error = Some(err);
@@ -601,8 +602,7 @@ impl FleetConvergenceHarness {
                 }
             }
             Err(FleetCheckpointV2Error::InsufficientQuorum { required, actual }) => {
-                let partitioned_nodes =
-                    self.peer_states[0].state().partitioned_nodes(base_time_ns);
+                let partitioned_nodes = self.peer_states[0].state().partitioned_nodes(base_time_ns);
                 ConvergenceResult::QuorumNotReached {
                     required_nodes: required,
                     available_nodes: actual,

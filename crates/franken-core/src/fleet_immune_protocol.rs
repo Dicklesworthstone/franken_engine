@@ -5453,7 +5453,8 @@ mod tests {
     #[test]
     fn state_duplicate_evidence_cannot_poison_actor_sequence() {
         for rejected_node in ["remote-1", "previously-unseen"] {
-            let harness = TestV2Harness::new(&["local", "remote-1", "observer", "previously-unseen"]);
+            let harness =
+                TestV2Harness::new(&["local", "remote-1", "observer", "previously-unseen"]);
             let mut state = harness.state("local", GossipConfig::default());
             let original = test_evidence("remote-1", "ext-1", 1, 500_000);
             harness.admit_evidence(&mut state, &original).unwrap();
@@ -6325,7 +6326,9 @@ mod tests {
             500_000,
         )
         .unwrap();
-        let mut draft = s1.draft_checkpoint_v2(now + 1_000_000_000, &quorum).unwrap();
+        let mut draft = s1
+            .draft_checkpoint_v2(now + 1_000_000_000, &quorum)
+            .unwrap();
         let sig1 = s1
             .sign_checkpoint_v2(
                 &draft,
@@ -6454,7 +6457,10 @@ mod tests {
         )
         .unwrap();
         let err = state.draft_checkpoint_v2(now, &quorum).unwrap_err();
-        assert!(matches!(err, FleetCheckpointV2Error::InsufficientQuorum { .. }));
+        assert!(matches!(
+            err,
+            FleetCheckpointV2Error::InsufficientQuorum { .. }
+        ));
     }
 
     #[test]

@@ -163,6 +163,26 @@ impl frankenengine_engine::fleet_immune_protocol::FleetRegistryAnchorAuthority f
     }
 }
 
+enum EnrichmentHistoryEvent {
+    Evidence(
+        EvidencePacket,
+        frankenengine_engine::fleet_immune_protocol::FleetSignatureV2,
+    ),
+    Intent(
+        ContainmentIntent,
+        frankenengine_engine::fleet_immune_protocol::FleetSignatureV2,
+    ),
+    Heartbeat(
+        HeartbeatLiveness,
+        frankenengine_engine::fleet_immune_protocol::FleetSignatureV2,
+    ),
+    Checkpoint(
+        frankenengine_engine::fleet_checkpoint_v2::SignedFleetCheckpointV2,
+        frankenengine_engine::fleet_checkpoint_v2::FleetCheckpointQuorumV2,
+        u64,
+    ),
+}
+
 struct TestFleetV2Driver {
     authority_id: frankenengine_engine::fleet_immune_protocol::FleetAuthorityId,
     config: GossipConfig,
@@ -173,6 +193,7 @@ struct TestFleetV2Driver {
     >,
     signers: BTreeMap<NodeId, frankenengine_engine::fleet_immune_protocol::FleetSigner>,
     electorate: BTreeSet<NodeId>,
+    history: Vec<EnrichmentHistoryEvent>,
 }
 
 impl TestFleetV2Driver {
@@ -198,6 +219,7 @@ impl TestFleetV2Driver {
             peers: BTreeMap::new(),
             signers: BTreeMap::new(),
             electorate: BTreeSet::from([local_id.clone()]),
+            history: Vec::new(),
         };
         drv.ensure_node(&local_id);
         drv
@@ -223,7 +245,7 @@ impl TestFleetV2Driver {
             self.signers.insert(node.clone(), signer);
         }
         if node != &self.local.state().local_node_id && !self.peers.contains_key(node) {
-            let peer_state =
+            let mut peer_state =
                 frankenengine_engine::fleet_immune_protocol::AuthenticatedFleetProtocolStateV2::new(
                     self.authority_id,
                     node.clone(),
@@ -231,6 +253,32 @@ impl TestFleetV2Driver {
                     SecurityEpoch::from_raw(1),
                 )
                 .unwrap();
+            if !self.history.is_empty() {
+                let anchor = EnrAnchor {
+                    id: self.authority_id,
+                    current: std::cell::RefCell::new(None),
+                };
+                let reg = self.registry(&anchor);
+                for event in &self.history {
+                    match event {
+                        EnrichmentHistoryEvent::Evidence(packet, sig) => {
+                            let _ = peer_state.process_evidence(packet, sig, &reg, &anchor);
+                        }
+                        EnrichmentHistoryEvent::Intent(item, sig) => {
+                            let _ = peer_state.process_intent(item, sig, &reg, &anchor);
+                        }
+                        EnrichmentHistoryEvent::Heartbeat(hb, sig) => {
+                            let _ = peer_state.process_heartbeat(hb, sig, &reg, &anchor);
+                        }
+                        EnrichmentHistoryEvent::Checkpoint(signed, quorum, ts) => {
+                            if quorum.electorate().contains(node) {
+                                let _ = peer_state
+                                    .accept_checkpoint_v2(signed, quorum, *ts, &reg, &anchor);
+                            }
+                        }
+                    }
+                }
+            }
             self.peers.insert(node.clone(), peer_state);
         }
     }
@@ -289,6 +337,8 @@ impl TestFleetV2Driver {
         for peer in self.peers.values_mut() {
             let _ = peer.process_evidence(packet, &sig, &reg, &anchor);
         }
+        self.history
+            .push(EnrichmentHistoryEvent::Evidence(packet.clone(), sig));
         Ok(())
     }
 
@@ -307,6 +357,8 @@ impl TestFleetV2Driver {
         for peer in self.peers.values_mut() {
             let _ = peer.process_intent(item, &sig, &reg, &anchor);
         }
+        self.history
+            .push(EnrichmentHistoryEvent::Intent(item.clone(), sig));
         Ok(())
     }
 
@@ -326,16 +378,16 @@ impl TestFleetV2Driver {
         for peer in self.peers.values_mut() {
             let _ = peer.process_heartbeat(hb, &sig, &reg, &anchor);
         }
+        self.history
+            .push(EnrichmentHistoryEvent::Heartbeat(hb.clone(), sig));
         Ok(())
     }
 
     fn build_checkpoint_v2(
         &mut self,
         timestamp_ns: u64,
-    ) -> Result<
-        QuorumCheckpoint,
-        frankenengine_engine::fleet_checkpoint_v2::FleetCheckpointV2Error,
-    > {
+    ) -> Result<QuorumCheckpoint, frankenengine_engine::fleet_checkpoint_v2::FleetCheckpointV2Error>
+    {
         use frankenengine_engine::fleet_checkpoint_v2::FleetCheckpointQuorumV2;
 
         let quorum = FleetCheckpointQuorumV2::new(
@@ -379,14 +431,19 @@ impl TestFleetV2Driver {
                 draft.add_signature(sig, &reg, &anchor)?;
             }
         }
-        let signed = self
-            .local
-            .finalize_checkpoint_v2(&draft, &quorum, timestamp_ns, &reg, &anchor)?;
+        let signed =
+            self.local
+                .finalize_checkpoint_v2(&draft, &quorum, timestamp_ns, &reg, &anchor)?;
         for (peer_id, peer) in &mut self.peers {
             if signed.checkpoint.participating_nodes.contains(peer_id) {
                 let _ = peer.accept_checkpoint_v2(&signed, &quorum, timestamp_ns, &reg, &anchor);
             }
         }
+        self.history.push(EnrichmentHistoryEvent::Checkpoint(
+            signed.clone(),
+            quorum,
+            timestamp_ns,
+        ));
         Ok(signed.checkpoint)
     }
 }

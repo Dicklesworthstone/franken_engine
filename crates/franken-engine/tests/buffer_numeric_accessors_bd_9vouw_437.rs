@@ -100,10 +100,18 @@ const EXPECTED: &[&str] = &[
 
 #[test]
 fn buffer_numeric_accessors_and_write_match_node() {
-    let root = tempfile::tempdir().expect("temp dir");
-    let entry = root.path().join("buffer_numeric.mjs");
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time after unix epoch")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "bd_9vouw_437_buf_num_{}_{nonce}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).expect("persistent temp dir");
+    let entry = root.join("buffer_numeric.mjs");
     std::fs::write(&entry, PROGRAM).expect("write program");
-    let report = root.path().join("report.json");
+    let report = root.join("report.json");
     let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
         .args([
             "run",

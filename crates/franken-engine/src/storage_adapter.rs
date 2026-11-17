@@ -6161,8 +6161,16 @@ mod tests {
     #[test]
     #[cfg(feature = "sibling-persistence")]
     fn durable_frankensqlite_storage_adapter_persists_across_reopen() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let db_path = dir.path().join("state.db");
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time after unix epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "fe_storage_adapter_reopen_{}_{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("create persistent test dir");
+        let db_path = dir.join("state.db");
         let mut metadata = BTreeMap::new();
         metadata.insert("extension_id".to_string(), "ext-alpha".to_string());
 

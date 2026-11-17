@@ -22,10 +22,16 @@ const EXPECTED: &[&str] = &["after1", "2", "after3"];
 
 #[test]
 fn debugger_statements_do_nothing() {
-    let root = tempfile::tempdir().expect("temp dir");
-    let entry = root.path().join("debugger.js");
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time after unix epoch")
+        .as_nanos();
+    let root =
+        std::env::temp_dir().join(format!("bd_9vouw_452_dbg_{}_{nonce}", std::process::id()));
+    std::fs::create_dir_all(&root).expect("persistent temp dir");
+    let entry = root.join("debugger.js");
     std::fs::write(&entry, PROGRAM).expect("write program");
-    let report = root.path().join("report.json");
+    let report = root.join("report.json");
     let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
         .args([
             "run",

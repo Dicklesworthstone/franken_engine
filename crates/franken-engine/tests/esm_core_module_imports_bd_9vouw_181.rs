@@ -66,11 +66,21 @@ fn run_with_capabilities(
 }
 
 fn with_tree<T>(files: &[(&str, &str)], check: impl Fn(&Path) -> T) -> T {
-    let root = tempfile::tempdir().expect("module root");
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time after unix epoch")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "bd_9vouw_181_esm_{}_{nonce}_{seq}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).expect("persistent module root");
     for (name, source) in files {
-        std::fs::write(root.path().join(name), source).expect("fixture file");
+        std::fs::write(root.join(name), source).expect("fixture file");
     }
-    check(root.path())
+    check(&root)
 }
 
 fn assert_output(files: &[(&str, &str)], expected: &[&str]) {

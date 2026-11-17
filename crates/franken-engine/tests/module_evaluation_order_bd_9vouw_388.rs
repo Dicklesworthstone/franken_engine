@@ -44,9 +44,27 @@ fn run(root: &Path, entry: &str) -> Result<Vec<String>, String> {
     .map_err(|error| error.to_string())
 }
 
+struct PersistentDir(std::path::PathBuf);
+
+impl PersistentDir {
+    fn new(prefix: &str) -> Self {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time after unix epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("{prefix}_{}_{nonce}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("persistent module root");
+        Self(dir)
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
 #[test]
 fn requested_modules_and_function_exports_precede_the_body() {
-    let root = tempfile::tempdir().expect("module root");
+    let root = PersistentDir::new("bd_9vouw_388_order");
     let files: &[(&str, &str)] = &[
         (
             "main.mjs",

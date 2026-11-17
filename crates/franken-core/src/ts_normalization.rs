@@ -583,7 +583,27 @@ pub fn normalize_typescript_to_es2020(
         hostcall_stripped != normalized_source,
         "Hostcall generic type parameters stripped for ES2020 parser compatibility.",
     ));
-    let normalized_source = hostcall_stripped;
+    let type_erased_imports_elided =
+        elide_type_erased_value_imports(&normalized_newlines, &hostcall_stripped);
+    if type_erased_imports_elided != hostcall_stripped
+        && let Some(first_decision) = decisions
+            .iter_mut()
+            .find(|decision| decision.step == "type_only_import_elision")
+    {
+        first_decision.changed = true;
+    }
+    let normalized_source = type_erased_imports_elided;
+    if normalized_source.trim().is_empty() {
+        events.push(failure_event(
+            trace_id,
+            decision_id,
+            policy_id,
+            "ts_normalization",
+            "post_normalization_validation",
+            "FE-TSNORM-0001",
+        ));
+        return Err(TsNormalizationError::EmptySource);
+    }
 
     let source_map = build_identity_source_map(&normalized_newlines, &normalized_source);
 
@@ -1235,6 +1255,326 @@ fn filter_runtime_named_specifiers(specifiers: &str) -> (Vec<String>, bool) {
     }
 
     (runtime_specifiers, removed_any)
+}
+
+fn elide_type_erased_value_imports(original_source: &str, normalized_source: &str) -> String {
+    let original_refs = collect_non_import_binding_identifiers(original_source);
+    let normalized_refs = collect_non_import_binding_identifiers(normalized_source);
+    let erased_identifiers: BTreeSet<String> = original_refs
+        .into_iter()
+        .filter(|name| !normalized_refs.contains(name))
+        .collect();
+    if erased_identifiers.is_empty() {
+        return normalized_source.to_string();
+    }
+
+    rewrite_outside_strings_and_comments(normalized_source, |source, index, output| {
+        if !starts_with_keyword(source, index, "import") || !is_statement_start(source, index) {
+            return None;
+        }
+        let statement_end = find_import_export_statement_end(source, index)?;
+        let statement = &source[index..statement_end];
+        let rewritten = rewrite_type_erased_value_import_statement(statement, &erased_identifiers)?;
+        trim_trailing_inline_whitespace(output);
+        output.push_str(&rewritten);
+        Some(statement_end)
+    })
+}
+
+fn collect_non_import_binding_identifiers(source: &str) -> BTreeSet<String> {
+    let bytes = source.as_bytes();
+    let mut identifiers = BTreeSet::<String>::new();
+    let mut cursor = 0usize;
+    let mut state = LexicalRewriteState::Code;
+    let mut template_expr_brace_depths = Vec::<usize>::new();
+    let mut prev_non_ws_char = None::<char>;
+
+    while cursor < source.len() {
+        match state {
+            LexicalRewriteState::Code => {
+                if bytes[cursor] == b'/' && cursor + 1 < source.len() {
+                    match bytes[cursor + 1] {
+                        b'/' => {
+                            cursor += 2;
+                            state = LexicalRewriteState::LineComment;
+                            continue;
+                        }
+                        b'*' => {
+                            cursor += 2;
+                            state = LexicalRewriteState::BlockComment;
+                            continue;
+                        }
+                        _ => {}
+                    }
+                }
+                if starts_with_keyword(source, cursor, "import")
+                    && is_statement_start(source, cursor)
+                    && let Some(after_import) =
+                        next_code_token_index(source, cursor + "import".len())
+                    && !source[after_import..].starts_with('(')
+                    && !source[after_import..].starts_with('.')
+                {
+                    cursor =
+                        find_import_export_statement_end(source, cursor).unwrap_or(source.len());
+                    prev_non_ws_char = Some(';');
+                    continue;
+                }
+                if let Some(end) = skip_identifier(source, cursor) {
+                    if prev_non_ws_char != Some('.') {
+                        identifiers.insert(source[cursor..end].to_string());
+                    }
+                    prev_non_ws_char = source[cursor..end].chars().last();
+                    cursor = end;
+                    continue;
+                }
+                let ch = source[cursor..]
+                    .chars()
+                    .next()
+                    .expect("cursor should remain on a char boundary");
+                cursor += ch.len_utf8();
+                match ch {
+                    '\'' => {
+                        state = LexicalRewriteState::SingleQuote;
+                        prev_non_ws_char = Some(ch);
+                    }
+                    '"' => {
+                        state = LexicalRewriteState::DoubleQuote;
+                        prev_non_ws_char = Some(ch);
+                    }
+                    '`' => {
+                        state = LexicalRewriteState::TemplateLiteral;
+                        prev_non_ws_char = Some(ch);
+                    }
+                    '{' => {
+                        if let Some(depth) = template_expr_brace_depths.last_mut() {
+                            *depth += 1;
+                        }
+                        prev_non_ws_char = Some(ch);
+                    }
+                    '}' => {
+                        if let Some(depth) = template_expr_brace_depths.last_mut() {
+                            if *depth == 0 {
+                                template_expr_brace_depths.pop();
+                                state = LexicalRewriteState::TemplateLiteral;
+                            } else {
+                                *depth -= 1;
+                            }
+                        }
+                        prev_non_ws_char = Some(ch);
+                    }
+                    _ => {
+                        if !ch.is_ascii_whitespace() {
+                            prev_non_ws_char = Some(ch);
+                        }
+                    }
+                }
+            }
+            LexicalRewriteState::SingleQuote => {
+                let ch = source[cursor..]
+                    .chars()
+                    .next()
+                    .expect("cursor should remain on a char boundary");
+                cursor += ch.len_utf8();
+                if ch == '\\' && cursor < source.len() {
+                    let escaped = source[cursor..]
+                        .chars()
+                        .next()
+                        .expect("escaped string should remain on a char boundary");
+                    cursor += escaped.len_utf8();
+                    continue;
+                }
+                if ch == '\'' {
+                    state = LexicalRewriteState::Code;
+                }
+            }
+            LexicalRewriteState::DoubleQuote => {
+                let ch = source[cursor..]
+                    .chars()
+                    .next()
+                    .expect("cursor should remain on a char boundary");
+                cursor += ch.len_utf8();
+                if ch == '\\' && cursor < source.len() {
+                    let escaped = source[cursor..]
+                        .chars()
+                        .next()
+                        .expect("escaped string should remain on a char boundary");
+                    cursor += escaped.len_utf8();
+                    continue;
+                }
+                if ch == '"' {
+                    state = LexicalRewriteState::Code;
+                }
+            }
+            LexicalRewriteState::TemplateLiteral => {
+                let ch = source[cursor..]
+                    .chars()
+                    .next()
+                    .expect("cursor should remain on a char boundary");
+                cursor += ch.len_utf8();
+                if ch == '\\' && cursor < source.len() {
+                    let escaped = source[cursor..]
+                        .chars()
+                        .next()
+                        .expect("escaped template should remain on a char boundary");
+                    cursor += escaped.len_utf8();
+                    continue;
+                }
+                if ch == '$' && source[cursor..].starts_with('{') {
+                    cursor += 1;
+                    template_expr_brace_depths.push(0);
+                    state = LexicalRewriteState::Code;
+                    prev_non_ws_char = Some('{');
+                    continue;
+                }
+                if ch == '`' {
+                    state = LexicalRewriteState::Code;
+                    prev_non_ws_char = Some('`');
+                }
+            }
+            LexicalRewriteState::LineComment => {
+                let ch = source[cursor..]
+                    .chars()
+                    .next()
+                    .expect("cursor should remain on a char boundary");
+                cursor += ch.len_utf8();
+                if ch == '\n' {
+                    state = LexicalRewriteState::Code;
+                }
+            }
+            LexicalRewriteState::BlockComment => {
+                if bytes[cursor] == b'*' && cursor + 1 < source.len() && bytes[cursor + 1] == b'/' {
+                    cursor += 2;
+                    state = LexicalRewriteState::Code;
+                    continue;
+                }
+                let ch = source[cursor..]
+                    .chars()
+                    .next()
+                    .expect("cursor should remain on a char boundary");
+                cursor += ch.len_utf8();
+            }
+        }
+    }
+
+    identifiers
+}
+
+fn rewrite_type_erased_value_import_statement(
+    statement: &str,
+    erased_identifiers: &BTreeSet<String>,
+) -> Option<String> {
+    let start = statement.find(|ch: char| !ch.is_ascii_whitespace())?;
+    if !starts_with_keyword(statement, start, "import") {
+        return None;
+    }
+    let first = next_code_token_index(statement, start + "import".len())?;
+    if statement[first..].starts_with('(')
+        || statement[first..].starts_with('.')
+        || statement[first..].starts_with('\'')
+        || statement[first..].starts_with('"')
+        || statement[first..].starts_with('`')
+    {
+        return None;
+    }
+    if starts_with_keyword(statement, first, "type")
+        && import_type_keyword_uses_type_only_syntax(statement, first)
+    {
+        return None;
+    }
+    if statement[first..].starts_with('*') {
+        let after_star = next_code_token_index(statement, first + 1)?;
+        if !starts_with_keyword(statement, after_star, "as") {
+            return None;
+        }
+        let ns_start = next_code_token_index(statement, after_star + "as".len())?;
+        let ns_end = skip_identifier(statement, ns_start)?;
+        let after_ns = next_code_token_index(statement, ns_end)?;
+        if starts_with_keyword(statement, after_ns, "from")
+            && erased_identifiers.contains(&statement[ns_start..ns_end])
+        {
+            return Some(String::new());
+        }
+        return None;
+    }
+
+    let (default_name, brace_start) = if statement[first..].starts_with('{') {
+        (None, first)
+    } else {
+        let default_end = skip_identifier(statement, first)?;
+        let name = &statement[first..default_end];
+        let after_default = next_code_token_index(statement, default_end)?;
+        if starts_with_keyword(statement, after_default, "from") {
+            return erased_identifiers.contains(name).then(String::new);
+        }
+        if !statement[after_default..].starts_with(',') {
+            return None;
+        }
+        let brace = next_code_token_index(statement, after_default + 1)
+            .filter(|idx| statement[*idx..].starts_with('{'))?;
+        (Some(name), brace)
+    };
+
+    let brace_end = find_matching_delimiter(statement, brace_start, '{', '}')?;
+    let after_brace = next_code_token_index(statement, brace_end + 1)?;
+    if !starts_with_keyword(statement, after_brace, "from") {
+        return None;
+    }
+
+    let keep_default = default_name
+        .map(|name| !erased_identifiers.contains(name))
+        .unwrap_or(false);
+    let removed_default = default_name.is_some() && !keep_default;
+    let mut kept_specifiers = Vec::<String>::new();
+    let mut removed_named = false;
+    for specifier in statement[brace_start + 1..brace_end].split(',') {
+        let trimmed = specifier.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let local_name = imported_named_specifier_local_binding(trimmed);
+        if local_name.is_some_and(|name| erased_identifiers.contains(name)) {
+            removed_named = true;
+        } else {
+            kept_specifiers.push(trimmed.to_string());
+        }
+    }
+    if !removed_default && !removed_named {
+        return None;
+    }
+
+    let suffix = statement[brace_end + 1..].trim_start();
+    match (keep_default, kept_specifiers.is_empty()) {
+        (false, true) => Some(String::new()),
+        (true, true) => Some(format!(
+            "import {} {suffix}",
+            default_name.expect("guarded keep_default")
+        )),
+        (false, false) => Some(format!(
+            "import {{ {} }} {suffix}",
+            kept_specifiers.join(", ")
+        )),
+        (true, false) => Some(format!(
+            "import {}, {{ {} }} {suffix}",
+            default_name.expect("guarded keep_default"),
+            kept_specifiers.join(", ")
+        )),
+    }
+}
+
+fn imported_named_specifier_local_binding(specifier: &str) -> Option<&str> {
+    let first_end = skip_identifier(specifier, 0)?;
+    let after_first = skip_ascii_whitespace(specifier, first_end);
+    if after_first == specifier.len() {
+        return Some(&specifier[..first_end]);
+    }
+    if starts_with_keyword(specifier, after_first, "as") {
+        let local_start = skip_ascii_whitespace(specifier, after_first + "as".len());
+        let local_end = skip_identifier(specifier, local_start)?;
+        if specifier[local_end..].trim().is_empty() {
+            return Some(&specifier[local_start..local_end]);
+        }
+    }
+    None
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

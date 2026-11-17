@@ -10,14 +10,22 @@ use std::process::Command;
 
 #[test]
 fn exported_declarations_keep_their_type_members() {
-    let root = tempfile::tempdir().expect("temp dir");
-    let entry = root.path().join("actions.ts");
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time after unix epoch")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "bd_9vouw_433_type_mem_{}_{nonce}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).expect("persistent temp dir");
+    let entry = root.join("actions.ts");
     std::fs::write(
         &entry,
         "export interface Action { type: string; payload: number }\nexport const config = { type: 'json', n: 1 };\nexport const make = (payload: number): Action => ({ type: 'add', payload });\nconsole.log(config.type, config.n, make(2).type, make(2).payload);\n",
     )
     .expect("write actions.ts");
-    let report = root.path().join("report.json");
+    let report = root.join("report.json");
     let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
         .args([
             "run",

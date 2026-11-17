@@ -41,8 +41,15 @@ fn run_module(root: &Path, entry: &str) -> Vec<String> {
 
 #[test]
 fn typescript_specifiers_resolve_as_bun_resolves_them() {
-    let root = tempfile::tempdir().expect("temp dir");
-    std::fs::create_dir(root.path().join("dir")).expect("create dir");
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time after unix epoch")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "bd_9vouw_431_ts_res_{}_{nonce}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(root.join("dir")).expect("create dir");
     for (name, source) in [
         ("lib.ts", "export const a: string = 'lib';\n"),
         ("util.ts", "export const b: string = 'util';\n"),
@@ -54,10 +61,7 @@ fn typescript_specifiers_resolve_as_bun_resolves_them() {
             "import { a } from './lib';\nimport { b } from './util.js';\nimport { c } from './dir';\nimport { d } from './app.config';\nimport { e } from './esm.mjs';\nconsole.log(a, b, c, d, e);\n",
         ),
     ] {
-        std::fs::write(root.path().join(name), source).expect("write module");
+        std::fs::write(root.join(name), source).expect("write module");
     }
-    assert_eq!(
-        run_module(root.path(), "main.ts"),
-        ["lib util dir config m"]
-    );
+    assert_eq!(run_module(&root, "main.ts"), ["lib util dir config m"]);
 }

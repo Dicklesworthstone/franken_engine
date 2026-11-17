@@ -8318,20 +8318,11 @@ impl InterpreterCore {
     }
 
     /// Emit a tier promotion event when a function or loop crosses the hot threshold.
-    pub(super) fn emit_tier_promotion_event(&mut self, function_id: u32, call_count: u64) {
-        // Emit a witness event for tier promotion. This is the correct,
-        // replay-auditable telemetry channel for JIT tier-ups; the promotion
-        // must NOT be written to the program's `console` stream, which is
-        // observable program output (a `JIT: ...` line corrupts stdout once any
-        // function or loop crosses the hot threshold and breaks cross-runtime
-        // output comparison against node/bun).
-        self.emit_witness(
-            WitnessEventKind::HostcallDispatched, // Reuse existing event type
-            Some(&format!(
-                "tier_promotion:function_{}:count_{}",
-                function_id, call_count
-            )),
-        );
+    pub(super) fn emit_tier_promotion_event(&mut self, _function_id: u32, _call_count: u64) {
+        // Record tier promotion on the bounded structured telemetry stream
+        // rather than stdout (which corrupts program output) or IR4
+        // `HostcallDispatched` witness records (which bind real hostcalls).
+        self.push_event("tier_promotion", "ok", None);
     }
 
     /// Get JIT statistics for testing and debugging.

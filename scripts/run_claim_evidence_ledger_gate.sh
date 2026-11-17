@@ -119,8 +119,8 @@ preflight_log="${step_logs_dir}/step_000.log"
 
 if [[ -z "${bin:-}" ]]; then
   echo "building franken_claim_evidence_ledger ..." >&2
-  printf 'cargo build -p frankenengine-engine --bin franken_claim_evidence_ledger\n' >>"$commands_path"
-  cargo build -p frankenengine-engine --bin franken_claim_evidence_ledger >>"$preflight_log" 2>&1
+  printf 'cargo build -p frankenengine-engine --features governance-surfaces --bin franken_claim_evidence_ledger\n' >>"$commands_path"
+  cargo build -p frankenengine-engine --features governance-surfaces --bin franken_claim_evidence_ledger >>"$preflight_log" 2>&1
   bin="target/debug/franken_claim_evidence_ledger"
 fi
 printf 'located verifier binary: %s\n' "$bin" >>"$preflight_log"

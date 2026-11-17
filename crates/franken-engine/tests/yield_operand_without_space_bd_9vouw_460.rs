@@ -26,10 +26,16 @@ const EXPECTED: &[&str] = &[
 
 #[test]
 fn yield_takes_an_operand_that_follows_without_a_space() {
-    let root = tempfile::tempdir().expect("temp dir");
-    let entry = root.path().join("yield_operand.js");
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time after unix epoch")
+        .as_nanos();
+    let root =
+        std::env::temp_dir().join(format!("bd_9vouw_460_yield_{}_{nonce}", std::process::id()));
+    std::fs::create_dir_all(&root).expect("persistent temp dir");
+    let entry = root.join("yield_operand.js");
     std::fs::write(&entry, PROGRAM).expect("write program");
-    let report = root.path().join("report.json");
+    let report = root.join("report.json");
     let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
         .args([
             "run",

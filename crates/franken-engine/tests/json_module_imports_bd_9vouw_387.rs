@@ -45,9 +45,30 @@ fn run(root: &Path, entry: &str, lane: LaneChoice) -> Result<Vec<String>, String
     .map_err(|error| error.to_string())
 }
 
+struct PersistentDir(std::path::PathBuf);
+
+impl PersistentDir {
+    fn new(prefix: &str) -> Self {
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time after unix epoch")
+            .as_nanos();
+        let dir =
+            std::env::temp_dir().join(format!("{prefix}_{}_{nonce}_{seq}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("persistent module root");
+        Self(dir)
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
 #[test]
 fn json_imports_with_type_attribute_load_json_modules() {
-    let root = tempfile::tempdir().expect("module root");
+    let root = PersistentDir::new("bd_9vouw_387_json");
     let files: &[(&str, &str)] = &[
         (
             "data.json",
@@ -94,7 +115,7 @@ console.log(ns.default === data, Object.keys(ns).join(), Array.isArray(arr), JSO
 fn native_json_modules_share_the_require_value_and_only_export_default_in_both_orders() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
         for cjs_first in [true, false] {
-            let root = tempfile::tempdir().expect("module root");
+            let root = PersistentDir::new("bd_9vouw_387_shared");
             std::fs::write(
                 root.path().join("data.json"),
                 concat!(

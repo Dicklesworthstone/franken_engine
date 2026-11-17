@@ -32,16 +32,24 @@ console.log(console.marker, JSON.extra, typeof Reflect.getMetadata, Reflect.getM
 /// Runs ENTRY as a CommonJS entry file next to LIB, as Node runs
 /// `node entry.cjs`, on both lanes.
 fn run_entry() -> Vec<String> {
-    let root = tempfile::tempdir().expect("module root");
-    let entry = root.path().join("entry.cjs");
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time after unix epoch")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "bd_9vouw_297_shared_{}_{nonce}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).expect("persistent module root");
+    let entry = root.join("entry.cjs");
     std::fs::write(&entry, ENTRY).expect("entry file");
-    std::fs::write(root.path().join("lib.cjs"), LIB).expect("lib file");
+    std::fs::write(root.join("lib.cjs"), LIB).expect("lib file");
     let mut outputs = [LaneChoice::QuickJs, LaneChoice::V8].map(|lane| {
         let package = ExtensionPackage {
             extension_id: "shared-namespace-globals".to_string(),
             source: ENTRY.to_string(),
             source_file: Some(entry.display().to_string()),
-            module_root: Some(root.path().display().to_string()),
+            module_root: Some(root.display().to_string()),
             capabilities: vec!["module_load".to_string(), "builtin".to_string()],
             version: "1.0.0".to_string(),
             metadata: Default::default(),

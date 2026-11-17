@@ -7970,7 +7970,12 @@ impl InterpreterCore {
                 expected: "valid closure".to_string(),
                 got: format!("closure#{closure_id} not found"),
             })?;
-        let key = (self.prototype_owner_ids(module).closure, closure_id);
+        let owner_module = self.foreign_closure_module(&Value::Closure(closure_id), module)?;
+        let key = (
+            self.prototype_owner_ids(owner_module.as_deref().unwrap_or(module))
+                .closure,
+            closure_id,
+        );
         if let Some(existing) = self.function_prototypes.get(&key) {
             Ok(*existing)
         } else {
@@ -10848,7 +10853,7 @@ impl InterpreterCore {
         }
         if key == "prototype" {
             Ok(Value::Object(
-                self.ensure_closure_prototype(module, closure_id)?,
+                self.ensure_closure_prototype(owner_module, closure_id)?,
             ))
         } else {
             let func_idx = self.closure_function_index(closure_id)?;

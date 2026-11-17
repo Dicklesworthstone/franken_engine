@@ -43,7 +43,15 @@ fn run_module(root: &Path, entry: &str) -> Vec<String> {
 
 #[test]
 fn imported_typescript_and_empty_modules_load() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time after unix epoch")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "bd_9vouw_430_ts_mod_{}_{nonce}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).expect("persistent temp dir");
     for (name, source) in [
         (
             "lib.ts",
@@ -64,7 +72,7 @@ fn imported_typescript_and_empty_modules_load() {
             "import { add, label, Box } from './lib.ts';\nimport { User } from './types.ts';\nimport type { Id } from './types.ts';\nimport { n } from './helper.mts';\nimport './empty.mjs';\nimport './comments.mjs';\nconst u: User = { id: 1 as Id, name: 'a' };\nconsole.log(label, add(1, n), u.name, u.id, new Box<string>('b').value);\n",
         ),
     ] {
-        std::fs::write(root.path().join(name), source).expect("write module");
+        std::fs::write(root.join(name), source).expect("write module");
     }
-    assert_eq!(run_module(root.path(), "main.ts"), ["sum 3 a 1 b"]);
+    assert_eq!(run_module(&root, "main.ts"), ["sum 3 a 1 b"]);
 }

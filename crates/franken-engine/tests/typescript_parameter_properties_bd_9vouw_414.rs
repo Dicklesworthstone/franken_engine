@@ -12,9 +12,17 @@ use std::process::Command;
 
 #[test]
 fn parameter_properties_lower_as_typescript_emits_them() {
-    let root = tempfile::tempdir().expect("temp dir");
-    let input = root.path().join("params.ts");
-    let report = root.path().join("report.json");
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time after unix epoch")
+        .as_nanos();
+    let root_dir = std::env::temp_dir().join(format!(
+        "bd_9vouw_414_params_{}_{nonce}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root_dir).expect("persistent temp dir");
+    let input = root_dir.join("params.ts");
+    let report = root_dir.join("report.json");
     std::fs::write(
         &input,
         r#"class B { constructor(public base: number) {} }

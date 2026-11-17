@@ -50,15 +50,27 @@ fn run(root: &Path, lane: LaneChoice) -> Result<Vec<String>, String> {
     .map_err(|error| error.to_string())
 }
 
+fn persistent_module_root(prefix: &str) -> std::path::PathBuf {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time after unix epoch")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("{prefix}_{}_{nonce}_{seq}", std::process::id()));
+    std::fs::create_dir_all(&root).expect("persistent module root");
+    root
+}
+
 fn assert_output(files: &[(&str, &str)], expected: &[&str]) {
-    let root = tempfile::tempdir().expect("module root");
+    let root = persistent_module_root("bd_332pq_out");
     for (name, source) in LIBRARY.iter().chain(files) {
-        let path = root.path().join(name);
+        let path = root.join(name);
         std::fs::create_dir_all(path.parent().expect("fixture parent")).expect("fixture directory");
         std::fs::write(path, source).expect("fixture file");
     }
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        let actual = run(root.path(), lane).unwrap_or_else(|error| panic!("{lane:?}: {error}"));
+        let actual = run(&root, lane).unwrap_or_else(|error| panic!("{lane:?}: {error}"));
         assert_eq!(actual, expected, "{lane:?}");
     }
 }
@@ -661,19 +673,19 @@ fn exports_carry_the_values_the_module_assigned_bd_9vouw_222() {
 // Required named bindings are checked after their provider has completed.
 // These cases do not claim a whole-graph link-before-evaluation barrier.
 fn assert_import_syntax_error(files: &[(&str, &str)], diagnostic: &str) {
-    let root = tempfile::tempdir().expect("module root");
+    let root = persistent_module_root("bd_332pq_err");
     for (name, source) in LIBRARY.iter().chain(files) {
-        let path = root.path().join(name);
+        let path = root.join(name);
         std::fs::create_dir_all(path.parent().expect("fixture parent")).expect("fixture directory");
         std::fs::write(path, source).expect("fixture file");
     }
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        let entry = root.path().join("app.mjs");
+        let entry = root.join("app.mjs");
         let package = ExtensionPackage {
             extension_id: "esm-required-export".to_string(),
             source: std::fs::read_to_string(&entry).expect("entry source"),
             source_file: Some(entry.display().to_string()),
-            module_root: Some(root.path().display().to_string()),
+            module_root: Some(root.display().to_string()),
             capabilities: vec!["module_load".to_string(), "builtin".to_string()],
             version: "1.0.0".to_string(),
             metadata: Default::default(),

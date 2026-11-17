@@ -42,9 +42,30 @@ fn run(root: &Path, entry_label: &str) -> Result<Vec<String>, String> {
     .map_err(|error| error.to_string())
 }
 
+struct PersistentDir(std::path::PathBuf);
+
+impl PersistentDir {
+    fn new(prefix: &str) -> Self {
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time after unix epoch")
+            .as_nanos();
+        let dir =
+            std::env::temp_dir().join(format!("{prefix}_{}_{nonce}_{seq}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("persistent module root");
+        Self(dir)
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
 #[test]
 fn a_cycle_back_to_a_non_canonical_entry_evaluates_it_once() {
-    let root = tempfile::tempdir().expect("module root");
+    let root = PersistentDir::new("bd_9vouw_411_esm");
     let files: &[(&str, &str)] = &[
         (
             "helper.mjs",
@@ -84,7 +105,7 @@ console.log('main evaluated', helper(), typeof self.base, Object.keys(self).join
 
 #[test]
 fn a_require_cycle_back_to_a_non_canonical_commonjs_entry_loads_it_once() {
-    let root = tempfile::tempdir().expect("module root");
+    let root = PersistentDir::new("bd_9vouw_411_cjs");
     let root = root.path().canonicalize().expect("canonical root");
     std::fs::write(
         root.join("a.js"),

@@ -45,7 +45,12 @@ fn run(root: &Path, entry: &str) -> Result<Vec<String>, String> {
 
 #[test]
 fn imports_cycling_back_to_the_entry_are_checked_against_its_ceiling() {
-    let root = tempfile::tempdir().expect("module root");
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time after unix epoch")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("bd_j8f7q_cycle_{}_{nonce}", std::process::id()));
+    std::fs::create_dir_all(&root).expect("persistent module root");
     let files: &[(&str, &str)] = &[
         (
             "a.mjs",
@@ -63,8 +68,8 @@ console.log(helper(), typeof self.base, Object.keys(self).join());
         ),
     ];
     for (name, source) in files {
-        std::fs::write(root.path().join(name), source).expect("fixture file");
+        std::fs::write(root.join(name), source).expect("fixture file");
     }
-    let lines = run(root.path(), "main.mjs").unwrap_or_else(|error| panic!("run failed: {error}"));
+    let lines = run(&root, "main.mjs").unwrap_or_else(|error| panic!("run failed: {error}"));
     assert_eq!(lines, ["42 function base",]);
 }

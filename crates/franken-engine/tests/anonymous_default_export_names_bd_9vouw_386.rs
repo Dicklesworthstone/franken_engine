@@ -39,9 +39,19 @@ fn run(root: &Path, entry: &str) -> Result<Vec<String>, String> {
     .map_err(|error| error.to_string())
 }
 
+fn persistent_dir(prefix: &str) -> std::path::PathBuf {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time after unix epoch")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("{prefix}_{}_{nonce}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("persistent module root");
+    dir
+}
+
 #[test]
 fn anonymous_default_exports_are_named_default() {
-    let root = tempfile::tempdir().expect("module root");
+    let root = persistent_dir("bd_9vouw_386_anon");
     let files: &[(&str, &str)] = &[
         (
             "f.mjs",
@@ -66,9 +76,9 @@ console.log(JSON.stringify([f.name, c.name, c.n, p.name]));
         ),
     ];
     for (name, source) in files {
-        std::fs::write(root.path().join(name), source).expect("fixture file");
+        std::fs::write(root.join(name), source).expect("fixture file");
     }
-    let lines = run(root.path(), "main.mjs").unwrap_or_else(|error| panic!("run failed: {error}"));
+    let lines = run(&root, "main.mjs").unwrap_or_else(|error| panic!("run failed: {error}"));
     assert_eq!(
         lines,
         ["[\"default\",\"default\",\"default\",\"default\"]",]

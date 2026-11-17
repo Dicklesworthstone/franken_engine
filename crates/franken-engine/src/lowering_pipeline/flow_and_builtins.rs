@@ -7862,9 +7862,6 @@ pub(super) fn static_member_value_capability(
 pub(crate) const JSON_VALUE_CAPABILITY: &str = "builtin:static-value:JSON";
 
 pub(super) fn global_function_value_capability(name: &str) -> Option<String> {
-    if name == "JSON" {
-        return Some(JSON_VALUE_CAPABILITY.to_string());
-    }
     if !GLOBAL_FUNCTION_VALUE_NAMES.contains(&name) {
         return None;
     }

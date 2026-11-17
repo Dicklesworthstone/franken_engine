@@ -1290,12 +1290,12 @@ fn alias_only_direct_facade_calls(
             if before_checker.pattern(&mut pattern).is_err() || before_checker.escaped {
                 return false;
             }
-            if index <= decl_idx {
-                if let Some(initializer) = &declarator.initializer {
-                    let mut expr = initializer.clone();
-                    if before_checker.expression(&mut expr).is_err() || before_checker.escaped {
-                        return false;
-                    }
+            if index <= decl_idx
+                && let Some(initializer) = &declarator.initializer
+            {
+                let mut expr = initializer.clone();
+                if before_checker.expression(&mut expr).is_err() || before_checker.escaped {
+                    return false;
                 }
             }
         }

@@ -11838,11 +11838,12 @@ pub(super) fn simulate_ir2_flow_labels<O: FlowOp>(
                         operation_exception_label_override = Some(Label::TopSecret);
                     }
                 }
-                if hostcall_is_operand_derived && capability == "builtin:RequireObjectCoercible" {
-                    if let [input] = inputs.as_slice() {
-                        result_shape = input.shape;
-                        result_origin = input.crypto_origin;
-                    }
+                if hostcall_is_operand_derived
+                    && capability == "builtin:RequireObjectCoercible"
+                    && let [input] = inputs.as_slice()
+                {
+                    result_shape = input.shape;
+                    result_origin = input.crypto_origin;
                 }
                 if hostcall_is_operand_derived
                     && matches!(

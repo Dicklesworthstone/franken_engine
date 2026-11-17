@@ -257,6 +257,31 @@
       "id": "50_getter_label_join",
       "source": "const o = { get v(){ return 40 } }; const a = [1,2]; console.log(o.v + a.length);",
       "node_output": "42"
+    },
+    {
+      "id": "51_function_own_props_and_statics",
+      "source": "function F(){} F.x = 1; const g = function(){}; g.tag = 'k'; class C { static s() { return 3; } } F.thrower = function(){ throw new F(); }; let threw = false; try { F.thrower(); } catch (e) { threw = e instanceof F; } console.log(F.x, g.tag, C.s(), threw);",
+      "node_output": "1 k 3 true"
+    },
+    {
+      "id": "52_es2020_typeof_50_globals",
+      "source": "console.log([typeof Object,typeof Function,typeof Array,typeof Number,typeof String,typeof Boolean,typeof Symbol,typeof BigInt,typeof Math,typeof Date,typeof RegExp,typeof JSON,typeof Reflect,typeof Proxy,typeof Map,typeof Set,typeof WeakMap,typeof WeakSet,typeof Promise,typeof ArrayBuffer,typeof SharedArrayBuffer,typeof DataView,typeof Atomics,typeof Int8Array,typeof Uint8Array,typeof Uint8ClampedArray,typeof Int16Array,typeof Uint16Array,typeof Int32Array,typeof Uint32Array,typeof Float32Array,typeof Float64Array,typeof BigInt64Array,typeof BigUint64Array,typeof Error,typeof EvalError,typeof RangeError,typeof ReferenceError,typeof SyntaxError,typeof TypeError,typeof URIError,typeof globalThis,typeof Infinity,typeof NaN,typeof undefined,typeof isNaN,typeof isFinite,typeof parseFloat,typeof parseInt,typeof encodeURI].join(','));",
+      "node_output": "function,function,function,function,function,function,function,function,object,function,function,object,object,function,function,function,function,function,function,function,function,function,object,function,function,function,function,function,function,function,function,function,function,function,function,function,function,function,function,function,function,object,number,number,undefined,function,function,function,function,function"
+    },
+    {
+      "id": "53_test262_assert_sta_prelude",
+      "source": "function Test262Error(m){this.message=m||\"\";} Test262Error.prototype.toString=function(){return \"Test262Error: \"+this.message;}; Test262Error.thrower=function(m){throw new Test262Error(m);}; function assert(b,m){if(b!==true)throw new Test262Error(m||\"fail\");} assert._isSameValue=function(a,b){return a===b?(a!==0||1/a===1/b):(a!==a&&b!==b);}; assert.sameValue=function(a,e,m){if(!assert._isSameValue(a,e))throw new Test262Error(m||\"diff\");}; assert(true); assert.sameValue(1+2,3); console.log(\"prelude ok\");",
+      "node_output": "prelude ok"
+    },
+    {
+      "id": "54_strict_frozen_function_rejects_write",
+      "source": "\"use strict\"; function fn(){} Object.freeze(fn); let name=\"\"; try { fn.extra = 1; } catch (e) { name = e.name; } let nw=\"\"; function fn2(){} Object.defineProperty(fn2, \"ro\", { value: 7, writable: false }); try { fn2.ro = 8; } catch (e) { nw = e.name + \":\" + fn2.ro; } console.log(name, nw);",
+      "node_output": "TypeError TypeError:7"
+    },
+    {
+      "id": "55_direct_ambient_require_fs",
+      "source": "const fs = require('fs'); console.log(fs.readFileSync('/dev/null', 'utf8').length);",
+      "node_output": "0"
     }
   ]
 }

@@ -147,5 +147,8 @@ jobs:
       - name: Cargo fmt
         run: cargo fmt --check
 
+      - name: Standing JS differential probe corpus (bd-9vouw.5)
+        run: cargo test -p frankenengine-engine --test js_probe_corpus_bd_9vouw_5 -- --nocapture
+
       - name: Cargo test
         run: cargo test --workspace

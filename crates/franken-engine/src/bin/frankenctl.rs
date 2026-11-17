@@ -10904,9 +10904,10 @@ fn execute_run_report_replay(args: ReplayArgs) -> Result<i32, String> {
 
     let parse_goal = parse_goal(&input.parse_goal)?;
     let package = if let Some(manifest) = input.agent_sandbox_manifest.as_ref() {
-        if input.commonjs_entry || input.module_root.is_some() || input.capability_witness.is_some() {
+        if input.commonjs_entry || input.module_root.is_some() || input.capability_witness.is_some()
+        {
             return Err(
-                "sandbox replay contains unsupported execution authority overrides".to_string()
+                "sandbox replay contains unsupported execution authority overrides".to_string(),
             );
         }
         let package = manifest
@@ -11061,9 +11062,8 @@ fn execute_run_report_replay(args: ReplayArgs) -> Result<i32, String> {
         // signer through the pinned trust snapshot, never through this summary.
         actual.evidence_verification_identity = summary.evidence_verification_identity.clone();
         if &actual != summary {
-            divergences.push(
-                "re-executed sandbox authority or guardplane summary differs".to_string(),
-            );
+            divergences
+                .push("re-executed sandbox authority or guardplane summary differs".to_string());
             decisions_match = false;
         }
     }
@@ -12939,10 +12939,15 @@ fn execute_react_compile(args: ReactCompileArgs) -> Result<i32, String> {
         output.compilation = Some(match args.source_form {
             ReactSourceForm::JsxFragment => {
                 let result = compile_react_source(&source, language, &config).map_err(|error| {
-                    format!("react compile failed for `{}`: {error}", args.input.display())
+                    format!(
+                        "react compile failed for `{}`: {error}",
+                        args.input.display()
+                    )
                 })?;
-                let evidence = generate_compilation_evidence(&result, &config, language)
-                    .map_err(|error| format!("react compile evidence generation failed: {error}"))?;
+                let evidence =
+                    generate_compilation_evidence(&result, &config, language).map_err(|error| {
+                        format!("react compile evidence generation failed: {error}")
+                    })?;
                 build_react_cli_compilation_output(
                     &result.generated_code,
                     result.source_map.as_deref(),
@@ -12954,10 +12959,15 @@ fn execute_react_compile(args: ReactCompileArgs) -> Result<i32, String> {
             }
             ReactSourceForm::Jsx | ReactSourceForm::Tsx => {
                 let result = compile_react_module(&source, language, &config).map_err(|error| {
-                    format!("react compile failed for `{}`: {error}", args.input.display())
+                    format!(
+                        "react compile failed for `{}`: {error}",
+                        args.input.display()
+                    )
                 })?;
                 let evidence = generate_module_compilation_evidence(&result, &config, language)
-                    .map_err(|error| format!("react compile evidence generation failed: {error}"))?;
+                    .map_err(|error| {
+                        format!("react compile evidence generation failed: {error}")
+                    })?;
                 build_react_cli_compilation_output(
                     &result.generated_code,
                     result.source_map.as_deref(),

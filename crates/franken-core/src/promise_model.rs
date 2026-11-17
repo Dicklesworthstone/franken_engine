@@ -3883,12 +3883,12 @@ mod accounting_regressions {
             },
             WitnessEvent::PromiseFulfilled {
                 handle: PromiseHandle(0),
-                value: JsValue::Str("retained fulfillment".to_string()),
+                value: JsValue::Str("retained fulfillment".into()),
                 label: owned_label(),
             },
             WitnessEvent::PromiseRejected {
                 handle: PromiseHandle(1),
-                reason: JsValue::Str("retained rejection".to_string()),
+                reason: JsValue::Str("retained rejection".into()),
                 label: owned_label(),
             },
         ];
@@ -3934,7 +3934,7 @@ mod accounting_regressions {
                     let mut queue = MicrotaskQueue::new();
                     let source = store.create();
                     let settle = |store: &mut PromiseStore, queue: &mut MicrotaskQueue| {
-                        let value = JsValue::Str("owned settled payload".repeat(8));
+                        let value = JsValue::Str("owned settled payload".repeat(8).into());
                         if rejected {
                             store.reject(source, value, owned_label(), queue).unwrap();
                         } else {
@@ -4044,7 +4044,7 @@ mod accounting_regressions {
         restored
             .fulfill(
                 source,
-                JsValue::Str("fanout result".to_string()),
+                JsValue::Str("fanout result".into()),
                 owned_label(),
                 &mut queue,
             )
@@ -4055,7 +4055,7 @@ mod accounting_regressions {
         cloned
             .reject(
                 source,
-                JsValue::Str("fanout rejection".to_string()),
+                JsValue::Str("fanout rejection".into()),
                 owned_label(),
                 &mut MicrotaskQueue::new(),
             )
@@ -4071,25 +4071,25 @@ mod accounting_regressions {
         let tasks = [
             Microtask::PromiseReaction {
                 handler: Some(ClosureHandle(2)),
-                argument: JsValue::Str("argument".repeat(7)),
+                argument: JsValue::Str("argument".repeat(7).into()),
                 result_promise: PromiseHandle(1),
                 label: owned_label(),
             },
             Microtask::PromiseRejection {
-                reason: JsValue::Str("reason".repeat(11)),
+                reason: JsValue::Str("reason".repeat(11).into()),
                 result_promise: PromiseHandle(2),
                 label: owned_label(),
             },
             Microtask::ResolveThenable {
                 promise: PromiseHandle(3),
                 then_handler: ClosureHandle(3),
-                thenable: JsValue::Str("thenable".repeat(13)),
+                thenable: JsValue::Str("thenable".repeat(13).into()),
                 label: owned_label(),
             },
             Microtask::ResolveThenableValue {
                 promise: PromiseHandle(4),
-                then: JsValue::Str("captured callable storage".repeat(5)),
-                thenable: JsValue::Str("captured receiver storage".repeat(3)),
+                then: JsValue::Str("captured callable storage".repeat(5).into()),
+                thenable: JsValue::Str("captured receiver storage".repeat(3).into()),
                 label: owned_label(),
             },
         ];
@@ -4190,7 +4190,7 @@ mod accounting_regressions {
         assert!(event_loop.macrotasks.dequeue_ready(9).is_none());
         event_loop.witness.push(WitnessEvent::PromiseFulfilled {
             handle: PromiseHandle(1),
-            value: JsValue::Str("external witness payload".to_string()),
+            value: JsValue::Str("external witness payload".into()),
             label: owned_label(),
         });
         let snapshot = serde_json::to_value(&event_loop).unwrap();

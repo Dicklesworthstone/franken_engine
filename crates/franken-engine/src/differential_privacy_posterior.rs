@@ -932,7 +932,12 @@ impl PrivacyPreservingAggregator {
             ];
             // Noisy releases need not fit the raw +/-1 probability range.
             // Their four-dimensional zero-sum invariant still applies.
-            if components.iter().map(|value| i128::from(*value)).sum::<i128>() != 0 {
+            if components
+                .iter()
+                .map(|value| i128::from(*value))
+                .sum::<i128>()
+                != 0
+            {
                 return Err(DifferentialPrivacyError::InvalidPosteriorDelta);
             }
             for (sum, component) in weighted_sums.iter_mut().zip(components) {
@@ -965,9 +970,8 @@ impl PrivacyPreservingAggregator {
             fingerprint_input.extend_from_slice(fingerprint.as_bytes());
         }
         let evidence_fingerprint = crate::hash_tiers::ContentHash::compute(&fingerprint_input);
-        let narrow = |value| {
-            i64::try_from(value).map_err(|_| DifferentialPrivacyError::AggregationOverflow)
-        };
+        let narrow =
+            |value| i64::try_from(value).map_err(|_| DifferentialPrivacyError::AggregationOverflow);
 
         Ok(AggregatedPosteriorUpdate {
             extension_id,
@@ -1066,7 +1070,9 @@ impl std::fmt::Display for DifferentialPrivacyError {
             Self::InconsistentAggregationMetadata => write!(f, "Inconsistent aggregation metadata"),
             Self::InvalidConfidenceWeight => write!(f, "Invalid confidence weight"),
             Self::NoiseScaleMismatch => write!(f, "Noise scale does not match calibration"),
-            Self::AggregationOverflow => write!(f, "Weighted aggregation exceeds its representation"),
+            Self::AggregationOverflow => {
+                write!(f, "Weighted aggregation exceeds its representation")
+            }
         }
     }
 }
@@ -1151,10 +1157,7 @@ mod tests {
             ),
         ] {
             assert!(!budget.can_allocate(&params));
-            assert_eq!(
-                budget.allocate_for_round("overflow", params),
-                Err(error)
-            );
+            assert_eq!(budget.allocate_for_round("overflow", params), Err(error));
             assert_eq!(budget, spent);
         }
         budget
@@ -1591,7 +1594,10 @@ mod tests {
             assert_eq!(noise.scales.len(), 4);
             assert!(noise.scales.iter().all(|scale| *scale >= 193_792_211));
             assert_ne!(release.base_delta.evidence_hash, source.evidence_hash);
-            assert_eq!(release.base_delta.evidence_hash, release.release_fingerprint());
+            assert_eq!(
+                release.base_delta.evidence_hash,
+                release.release_fingerprint()
+            );
 
             let mut other_source = source.clone();
             other_source.evidence_hash =
@@ -1603,7 +1609,10 @@ mod tests {
                 &mut RecordingNoise::new(samples),
             )
             .unwrap();
-            assert_eq!(release, repeated, "source evidence hash must not be a release");
+            assert_eq!(
+                release, repeated,
+                "source evidence hash must not be a release"
+            );
         }
     }
 
@@ -1611,8 +1620,7 @@ mod tests {
     fn invalid_posterior_release_does_not_sample_or_spend_budget() {
         let epoch = SecurityEpoch::from_raw(26);
         let node = NodeId::new("node");
-        let mut aggregator =
-            PrivacyPreservingAggregator::new(PrivacyParameters::default(), epoch);
+        let mut aggregator = PrivacyPreservingAggregator::new(PrivacyParameters::default(), epoch);
         aggregator
             .initialize_node_budget(node.clone(), 1_000_000, 100)
             .unwrap();
@@ -1633,7 +1641,10 @@ mod tests {
         assert_eq!(delta_sum(&good.base_delta), 0);
         assert_eq!(noise.scales.len(), 4);
         assert_eq!(
-            aggregator.get_node_budget(&node).unwrap().consumed_epsilon_millionths,
+            aggregator
+                .get_node_budget(&node)
+                .unwrap()
+                .consumed_epsilon_millionths,
             100_000
         );
     }
@@ -1681,7 +1692,10 @@ mod tests {
             .unwrap();
         assert_eq!(delta_sum(&valid.base_delta), 0);
         let after = aggregator.get_node_budget(&node).unwrap();
-        assert_eq!(after.consumed_epsilon_millionths, parameters.epsilon_millionths);
+        assert_eq!(
+            after.consumed_epsilon_millionths,
+            parameters.epsilon_millionths
+        );
         assert_eq!(after.consumed_delta_millionths, parameters.delta_millionths);
         assert_eq!(after.round_consumptions.len(), 1);
     }
@@ -1841,7 +1855,11 @@ mod tests {
         let encoded = serde_json::to_value(&update).unwrap();
         let fields = encoded.as_object().unwrap();
         assert!(fields.contains_key("noisy_gradient_benign_millionths"));
-        assert!(!fields.keys().any(|key| key.starts_with("clipped_gradient_")));
+        assert!(
+            !fields
+                .keys()
+                .any(|key| key.starts_with("clipped_gradient_"))
+        );
         assert!(!format!("{update:?}").contains("clipped_gradient_"));
         let restored: DpSgdPosteriorUpdate = serde_json::from_value(encoded).unwrap();
         assert_eq!(update, restored);

@@ -453,18 +453,53 @@ impl BacktrackRegExp {
         let found = if self.ignore_case {
             let target = self.canonicalize(c);
             class.contains(c)
-                || [single_lower(c), single_upper(c), target]
-                    .into_iter()
-                    .any(|candidate| {
-                        candidate != c
-                            && self.canonicalize(candidate) == target
-                            && class.contains(candidate)
-                    })
+                || case_equivalents(target, self.unicode)
+                    .iter()
+                    .any(|&candidate| candidate != c && class.contains(candidate))
         } else {
             class.contains(c)
         };
         found != class.negated
     }
+}
+
+fn case_equivalents(target: char, unicode: bool) -> &'static [char] {
+    type CaseTable = Box<[(char, Box<[char]>)]>;
+    static TABLES: OnceLock<(CaseTable, CaseTable)> = OnceLock::new();
+    let (legacy, unicode_table) =
+        TABLES.get_or_init(|| (build_case_equivalents(false), build_case_equivalents(true)));
+    let table = if unicode { unicode_table } else { legacy };
+    match table.binary_search_by_key(&target, |&(key, _)| key) {
+        Ok(index) => &table[index].1,
+        Err(_) => &[],
+    }
+}
+
+fn build_case_equivalents(unicode: bool) -> Box<[(char, Box<[char]>)]> {
+    let mut pairs: Vec<(char, char)> = ('\0'..='\u{10FFFF}')
+        .filter_map(|c| {
+            let folded = canonicalize(c, unicode);
+            (folded != c).then_some((folded, c))
+        })
+        .collect();
+    pairs.sort_unstable_by_key(|&(folded, c)| (folded, c));
+    let mut groups: Vec<(char, Box<[char]>)> = Vec::new();
+    let mut index = 0;
+    while index < pairs.len() {
+        let target = pairs[index].0;
+        let mut members = Vec::new();
+        if canonicalize(target, unicode) == target {
+            members.push(target);
+        }
+        while index < pairs.len() && pairs[index].0 == target {
+            members.push(pairs[index].1);
+            index += 1;
+        }
+        members.sort_unstable();
+        members.dedup();
+        groups.push((target, members.into_boxed_slice()));
+    }
+    groups.into_boxed_slice()
 }
 
 /// ES2020 21.2.2.8.2 Canonicalize. Without `u`: the single-character upper

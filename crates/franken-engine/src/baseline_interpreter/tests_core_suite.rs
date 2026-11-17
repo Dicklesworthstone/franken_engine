@@ -4945,11 +4945,7 @@ fn crypto_key_pair_allocates_distinct_authenticated_keys_bd_53l89() {
     );
     assert_eq!(
         core.crypto_key_pair_private(&Value::Object(private)),
-        Ok((
-            CryptoKeyPairAlgorithm::Ed25519,
-            private_key,
-            Label::Secret,
-        ))
+        Ok((CryptoKeyPairAlgorithm::Ed25519, private_key, Label::Secret,))
     );
     for handle in [private, public] {
         assert_eq!(
@@ -5129,11 +5125,7 @@ fn crypto_public_key_root_does_not_retain_private_key_bd_53l89() {
     assert_eq!(core.crypto_objects.len(), 1);
     assert_eq!(
         core.crypto_key_pair_public(&Value::Object(public)),
-        Ok((
-            CryptoKeyPairAlgorithm::Ed25519,
-            public_key,
-            Label::Secret,
-        ))
+        Ok((CryptoKeyPairAlgorithm::Ed25519, public_key, Label::Secret,))
     );
     assert!(matches!(
         core.crypto_key_pair_private(&Value::Object(private)),
@@ -5381,7 +5373,8 @@ fn crypto_key_generation_preserves_option_shape_provenance_bd_53l89() {
         .expect("allocate empty generation options");
     // Only the object's shape is classified. Neither argument register nor
     // any stored option value carries the TopSecret selection provenance.
-    core.object_mutation_labels.insert(options, Label::TopSecret);
+    core.object_mutation_labels
+        .insert(options, Label::TopSecret);
     core.sync_estimated_memory_bytes()
         .expect("account for classified option shape");
     core.write_reg_with_label(0, Value::str("ed25519"), Label::Public)
@@ -5407,7 +5400,11 @@ fn crypto_key_generation_preserves_option_shape_provenance_bd_53l89() {
     }
     assert_eq!(core.pending_hostcall_result_label, Some(Label::TopSecret));
     assert_eq!(
-        provider.requests.lock().expect("read entropy requests").as_slice(),
+        provider
+            .requests
+            .lock()
+            .expect("read entropy requests")
+            .as_slice(),
         &[32]
     );
     assert_eq!(
@@ -6228,7 +6225,10 @@ fn weakset_empty_iterator_completion_retains_membership_provenance() {
     };
     assert!(core.weakmap_storage[&set].entries.is_empty());
     assert_eq!(core.object_mutation_labels.get(&set), Some(&Label::Secret));
-    assert_eq!(core.pending_hostcall_result_label.as_ref(), Some(&Label::Secret));
+    assert_eq!(
+        core.pending_hostcall_result_label.as_ref(),
+        Some(&Label::Secret)
+    );
 
     let absent = core
         .alloc_object_with_prototype(None)
@@ -6245,7 +6245,10 @@ fn weakset_empty_iterator_completion_retains_membership_provenance() {
         ),
         Ok(Value::Bool(false))
     );
-    assert_eq!(core.pending_hostcall_result_label.as_ref(), Some(&Label::Secret));
+    assert_eq!(
+        core.pending_hostcall_result_label.as_ref(),
+        Some(&Label::Secret)
+    );
 }
 
 #[test]

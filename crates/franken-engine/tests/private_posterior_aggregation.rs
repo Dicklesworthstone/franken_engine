@@ -211,10 +211,7 @@ fn nonconserving_release_is_rejected_without_wrapping_the_sum() {
 
 #[test]
 fn unrepresentable_weighted_numerators_fail_without_saturation() {
-    for components in [
-        [i64::MAX, -i64::MAX, 0, 0],
-        [i64::MIN, i64::MAX, 1, 0],
-    ] {
+    for components in [[i64::MAX, -i64::MAX, 0, 0], [i64::MIN, i64::MAX, 1, 0]] {
         assert_eq!(
             aggregate(vec![release(components, 1_000_000)], 789),
             Err(DifferentialPrivacyError::AggregationOverflow)
@@ -222,11 +219,7 @@ fn unrepresentable_weighted_numerators_fail_without_saturation() {
     }
     // The same exact values remain admissible when their weighted numerator
     // fits the transport representation.
-    let exact = aggregate(
-        vec![release([i64::MIN, i64::MAX, 1, 0], 1)],
-        789,
-    )
-    .unwrap();
+    let exact = aggregate(vec![release([i64::MIN, i64::MAX, 1, 0], 1)], 789).unwrap();
     assert_eq!(exact.aggregate_delta_benign_millionths, i64::MIN);
     assert_eq!(exact.aggregate_delta_anomalous_millionths, i64::MAX);
     assert!(exact.apply_to_posterior(&Posterior::uniform()).is_valid());

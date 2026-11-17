@@ -239,8 +239,7 @@ pub fn build_react_client(config: &ReactClientBuildConfig) -> BuildResult<ReactC
                 ReactClientBuildError::new("FE-REACT-BUILD-PARSE", format!("{name}: {error}"))
             })?;
         let mut expected_ast = serde_json::to_value(&tree).map_err(serialization_error)?;
-        let mut imports =
-            bounded_dynamic_imports(&compiled.generated_code, &expected_ast, &name)?;
+        let mut imports = bounded_dynamic_imports(&compiled.generated_code, &expected_ast, &name)?;
         let mut edits = Vec::new();
         let mut dynamic_edits = Vec::new();
         let mut dynamic_targets = BTreeMap::new();
@@ -713,7 +712,8 @@ fn bounded_dynamic_imports(
         let [Expression::StringLiteral(specifier)] = arguments.as_slice() else {
             continue;
         };
-        if !matches!(callee.as_ref(), Expression::Identifier(identifier) if identifier == "import") {
+        if !matches!(callee.as_ref(), Expression::Identifier(identifier) if identifier == "import")
+        {
             continue;
         }
         let Some(specifier) = specifier
@@ -756,7 +756,9 @@ fn collect_bounded_imports(
                 let Some(literal) = literal else {
                     return Err(ReactClientBuildError::new(
                         "FE-REACT-BUILD-DYNAMIC",
-                        format!("{name}: import() requires one string literal and no options in a closed-world ESM client build"),
+                        format!(
+                            "{name}: import() requires one string literal and no options in a closed-world ESM client build"
+                        ),
                     ));
                 };
                 let specifier: crate::js_string::JsString =
@@ -874,10 +876,7 @@ fn verify_dynamic_import_edits(
     Ok(())
 }
 
-fn normalize_dynamic_import_ast(
-    value: &mut serde_json::Value,
-    targets: &BTreeMap<String, String>,
-) {
+fn normalize_dynamic_import_ast(value: &mut serde_json::Value, targets: &BTreeMap<String, String>) {
     match value {
         serde_json::Value::Object(fields) => {
             fields.remove("span");
@@ -1227,7 +1226,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn client_build_closes_lazy_tsx_graph_without_eager_imports() {
         let files = [
@@ -1316,10 +1314,8 @@ export const load = () => import /* keep */ (
 );
 export const describe = async () => `loaded:${(await import('./lazy.js')).value}`;
 "#;
-        let (_directory, mut config) = fixture(&[
-            ("app.js", source),
-            ("lazy.js", "export const value = 1;"),
-        ]);
+        let (_directory, mut config) =
+            fixture(&[("app.js", source), ("lazy.js", "export const value = 1;")]);
         config.compile.generate_source_maps = true;
         let build = build_react_client(&config).expect("exact lexical import rewriting");
         let entry = &build.modules[0];
@@ -1337,7 +1333,10 @@ export const describe = async () => `loaded:${(await import('./lazy.js')).value}
     #[test]
     fn client_build_dynamic_imports_enforce_missing_ambiguous_and_root_bounds() {
         let (directory, config) = fixture(&[
-            ("app.js", "export const load = () => import('./missing.js');"),
+            (
+                "app.js",
+                "export const load = () => import('./missing.js');",
+            ),
             ("both.js", "export const value = 1;"),
             ("both.ts", "export const value: number = 2;"),
         ]);
@@ -1431,7 +1430,8 @@ export const describe = async () => `loaded:${(await import('./lazy.js')).value}
 
     #[test]
     fn dynamic_import_literal_edits_preserve_line_continuations_and_utf16_maps() {
-        let original = "const emoji = '😀'; const load = () => import('./la\\\nzy.js'); const value = 1;";
+        let original =
+            "const emoji = '😀'; const load = () => import('./la\\\nzy.js'); const value = 1;";
         let tree = CanonicalEs2020Parser
             .parse(original, crate::ast::ParseGoal::Module)
             .unwrap();

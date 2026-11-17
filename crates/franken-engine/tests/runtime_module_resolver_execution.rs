@@ -7883,14 +7883,29 @@ fn ordinary_require_resolve_search_paths_preserve_package_selection_and_metadata
             "app/second/node_modules/pick/package.json",
             r#"{"main":"index.js"}"#,
         ),
-        ("app/first/node_modules/pick/selected.cjs", "throw new Error('not evaluated');"),
-        ("app/second/node_modules/pick/index.js", "throw new Error('not evaluated');"),
-        ("app/second/node_modules/pick/missing.js", "throw new Error('must not fall through');"),
+        (
+            "app/first/node_modules/pick/selected.cjs",
+            "throw new Error('not evaluated');",
+        ),
+        (
+            "app/second/node_modules/pick/index.js",
+            "throw new Error('not evaluated');",
+        ),
+        (
+            "app/second/node_modules/pick/missing.js",
+            "throw new Error('must not fall through');",
+        ),
         ("app/second/asset.json", "invalid JSON must not be parsed"),
         ("app/first/asset.json", "invalid JSON must not be parsed"),
         ("app/self.cjs", "throw new Error('self is metadata only');"),
-        ("app/private.cjs", "throw new Error('private is metadata only');"),
-        ("app/first/dir/index.js", "throw new Error('directory is metadata only');"),
+        (
+            "app/private.cjs",
+            "throw new Error('private is metadata only');",
+        ),
+        (
+            "app/first/dir/index.js",
+            "throw new Error('directory is metadata only');",
+        ),
     ] {
         write_require_search_fixture(root, path, content.as_bytes());
     }
@@ -8075,7 +8090,11 @@ fn ordinary_require_resolve_explicit_paths_refuse_root_escape_without_guest_catc
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("root");
     std::fs::create_dir(&root).unwrap();
-    write_require_search_fixture(directory.path(), "outside/hit.js", b"throw new Error('outside');");
+    write_require_search_fixture(
+        directory.path(),
+        "outside/hit.js",
+        b"throw new Error('outside');",
+    );
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
         let mut execution = package();
         execution.source = r#"
@@ -8087,8 +8106,13 @@ console.log('escaped');
         execution.source_file = Some(root.join("entry.cjs").display().to_string());
         execution.module_root = Some(root.display().to_string());
         let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
-        let error = engine.execute(&execution).expect_err("search roots cannot widen module authority");
-        assert!(error.to_string().contains("CommonJS search path"), "{lane:?}: {error}");
+        let error = engine
+            .execute(&execution)
+            .expect_err("search roots cannot widen module authority");
+        assert!(
+            error.to_string().contains("CommonJS search path"),
+            "{lane:?}: {error}"
+        );
         assert!(engine.last_failed_console_output().is_empty());
     }
 }
@@ -8099,17 +8123,25 @@ fn ordinary_require_resolve_explicit_paths_refuse_symlink_escape() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("root");
     std::fs::create_dir(&root).unwrap();
-    write_require_search_fixture(directory.path(), "outside/hit.js", b"throw new Error('outside');");
+    write_require_search_fixture(
+        directory.path(),
+        "outside/hit.js",
+        b"throw new Error('outside');",
+    );
     std::os::unix::fs::symlink(directory.path().join("outside"), root.join("linked")).unwrap();
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
         let mut execution = package();
-        execution.source = "require.resolve('./hit', { paths: [__dirname + '/linked'] });".to_string();
+        execution.source =
+            "require.resolve('./hit', { paths: [__dirname + '/linked'] });".to_string();
         execution.source_file = Some(root.join("entry.cjs").display().to_string());
         execution.module_root = Some(root.display().to_string());
         let error = orchestrator(lane, ModuleSyntax::CommonJs)
             .execute(&execution)
             .expect_err("existing ancestors of a search root must remain contained");
-        assert!(error.to_string().contains("CommonJS search path"), "{lane:?}: {error}");
+        assert!(
+            error.to_string().contains("CommonJS search path"),
+            "{lane:?}: {error}"
+        );
     }
 }
 
@@ -8121,8 +8153,14 @@ fn require_search_registry(source: &str) -> DeterministicModuleResolver {
             "nested/loader.cjs",
             "exports.resolve = require.resolve; exports.paths = require.resolve.paths;",
         ),
-        ("alternate/node_modules/pick/index.js", "throw new Error('must not execute');"),
-        ("alternate/hit.js", "not valid JavaScript; metadata must not parse it"),
+        (
+            "alternate/node_modules/pick/index.js",
+            "throw new Error('must not execute');",
+        ),
+        (
+            "alternate/hit.js",
+            "not valid JavaScript; metadata must not parse it",
+        ),
     ] {
         resolver
             .register_workspace_module(name, definition(ModuleSyntax::CommonJs, source))
@@ -8175,10 +8213,14 @@ console.log(paths('pick').join('|'));
             "{lane:?}"
         );
         let calls = policy.requests.lock().unwrap();
-        for (request, _) in calls.iter().filter(|(request, _)| {
-            matches!(request.specifier.as_str(), "pick" | "./hit")
-        }) {
-            assert_eq!(request.referrer.as_deref(), Some(format!("{ROOT}/nested/loader.cjs").as_str()));
+        for (request, _) in calls
+            .iter()
+            .filter(|(request, _)| matches!(request.specifier.as_str(), "pick" | "./hit"))
+        {
+            assert_eq!(
+                request.referrer.as_deref(),
+                Some(format!("{ROOT}/nested/loader.cjs").as_str())
+            );
             assert_eq!(request.style, ImportStyle::Require);
         }
     }
@@ -8191,7 +8233,11 @@ fn delivered_require_resolve_search_paths_reauthorize_and_do_not_disguise_policy
             format!("require.resolve('pick', {{ paths: ['{ROOT}/alternate'] }})"),
             "require.resolve.paths('./hit')".to_string(),
         ] {
-            let specifier = if operation.contains("'pick'") { "pick" } else { "./hit" };
+            let specifier = if operation.contains("'pick'") {
+                "pick"
+            } else {
+                "./hit"
+            };
             let resolver = Arc::new(require_search_registry(&format!(
                 "console.log('before'); try {{ {operation}; }}                  catch (error) {{ console.log('authority denial caught'); }} console.log('after');"
             )));
@@ -8209,12 +8255,19 @@ fn delivered_require_resolve_search_paths_reauthorize_and_do_not_disguise_policy
                 .expect_err("metadata policy denial cannot become catchable module absence");
             assert!(error.to_string().contains("refused"), "{lane:?}: {error}");
             assert_eq!(
-                engine.last_failed_console_output().iter().map(|line| line.message.as_str()).collect::<Vec<_>>(),
+                engine
+                    .last_failed_console_output()
+                    .iter()
+                    .map(|line| line.message.as_str())
+                    .collect::<Vec<_>>(),
                 ["before"],
             );
             let calls = policy.requests.lock().unwrap();
             assert_eq!(calls.len(), 1);
-            assert_eq!(calls[0].0.referrer.as_deref(), Some(format!("{ROOT}/entry.cjs").as_str()));
+            assert_eq!(
+                calls[0].0.referrer.as_deref(),
+                Some(format!("{ROOT}/entry.cjs").as_str())
+            );
         }
     }
 }
@@ -8229,11 +8282,17 @@ fn delivered_require_resolve_search_hints_are_opt_in_for_external_resolvers() {
             let resolver = Arc::new(OpaqueResolver::new(vec![
                 (
                     "entry.cjs",
-                    definition(ModuleSyntax::CommonJs, &format!(
-                        "console.log(require.resolve('./dep.cjs').endsWith('/dep.cjs'));                                                    try {{ {operation}; }} catch (error) {{ console.log('caught'); }}"
-                    )),
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        &format!(
+                            "console.log(require.resolve('./dep.cjs').endsWith('/dep.cjs'));                                                    try {{ {operation}; }} catch (error) {{ console.log('caught'); }}"
+                        ),
+                    ),
                 ),
-                ("dep.cjs", definition(ModuleSyntax::CommonJs, "throw new Error('metadata only');")),
+                (
+                    "dep.cjs",
+                    definition(ModuleSyntax::CommonJs, "throw new Error('metadata only');"),
+                ),
             ]));
             let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
             let installed = ExecutionModuleResolver::new(
@@ -8247,7 +8306,11 @@ fn delivered_require_resolve_search_hints_are_opt_in_for_external_resolvers() {
                 .expect_err("a pre-existing resolver must explicitly admit new lookup semantics");
             assert!(error.to_string().contains("refused"), "{lane:?}: {error}");
             assert_eq!(
-                engine.last_failed_console_output().iter().map(|line| line.message.as_str()).collect::<Vec<_>>(),
+                engine
+                    .last_failed_console_output()
+                    .iter()
+                    .map(|line| line.message.as_str())
+                    .collect::<Vec<_>>(),
                 ["true"],
             );
             assert_eq!(resolver.metadata_requests.lock().unwrap().len(), 1);
@@ -8274,7 +8337,9 @@ impl ModuleResolver for MissingSearchMetadataAuthority {
         context: &ResolutionContext,
         policy: &dyn ModulePolicyHook,
     ) -> ResolutionResult<MetadataResolutionOutcome> {
-        let mut outcome = self.0.resolve_require_metadata_from_paths(request, paths, context, policy)?;
+        let mut outcome = self
+            .0
+            .resolve_require_metadata_from_paths(request, paths, context, policy)?;
         outcome.module.metadata.required_capabilities.clear();
         Ok(outcome)
     }
@@ -8292,17 +8357,27 @@ impl ModuleResolver for MissingSearchMetadataAuthority {
 #[test]
 fn delivered_require_resolve_search_paths_validate_returned_metadata_authority() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        let resolver = Arc::new(MissingSearchMetadataAuthority(require_search_registry(&format!(
-            "try {{ require.resolve('pick', {{ paths: ['{ROOT}/alternate'] }}); }}              catch (error) {{ console.log('forged authority caught'); }}"
-        ))));
+        let resolver = Arc::new(MissingSearchMetadataAuthority(require_search_registry(
+            &format!(
+                "try {{ require.resolve('pick', {{ paths: ['{ROOT}/alternate'] }}); }}              catch (error) {{ console.log('forged authority caught'); }}"
+            ),
+        )));
         let source = require_search_entry(resolver.as_ref());
-        let installed =
-            ExecutionModuleResolver::new(&source.module.record.id, resolver, Arc::new(AllowAllPolicy));
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
         let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
         let error = engine
             .execute_resolved_entry_with_resolver(&package(), &source, installed)
             .expect_err("new metadata lookup cannot bypass the runtime authority validator");
-        assert!(error.to_string().contains("inconsistent identity or resolution authority"), "{error}");
+        assert!(
+            error
+                .to_string()
+                .contains("inconsistent identity or resolution authority"),
+            "{error}"
+        );
         assert!(engine.last_failed_console_output().is_empty());
     }
 }
@@ -8378,7 +8453,9 @@ console.log('after');
         .unwrap();
         let error = engine
             .execute_resolved_entry_with_resolver(&package(), &source, installed)
-            .expect_err("quadratic ancestor expansion must be refused before entering the resolver");
+            .expect_err(
+                "quadratic ancestor expansion must be refused before entering the resolver",
+            );
         assert!(
             matches!(
                 error.primary_error(),
@@ -8401,8 +8478,11 @@ console.log('after');
             "console.log(require.resolve('pick', {{ paths: ['{ROOT}/alternate'] }}).endsWith('/pick/index.js'));"
         )));
         let source = require_search_entry(resolver.as_ref());
-        let installed =
-            ExecutionModuleResolver::new(&source.module.record.id, resolver, Arc::new(AllowAllPolicy));
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
         let recovered = engine
             .execute_resolved_entry_with_resolver(&package(), &source, installed)
             .expect("a failed lookup must not retain expansion scratch in the next run");

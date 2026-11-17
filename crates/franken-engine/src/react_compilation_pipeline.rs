@@ -934,8 +934,14 @@ impl<'a> JavaScriptEmitter<'a> {
         {
             return None;
         }
-        let start_line = locations.original_lines.partition_point(|offset| *offset <= start) - 1;
-        let end_line = locations.original_lines.partition_point(|offset| *offset <= end) - 1;
+        let start_line = locations
+            .original_lines
+            .partition_point(|offset| *offset <= start)
+            - 1;
+        let end_line = locations
+            .original_lines
+            .partition_point(|offset| *offset <= end)
+            - 1;
         let start_column = locations.original[locations.original_lines[start_line]..start]
             .chars()
             .count();
@@ -1909,7 +1915,9 @@ export default class extends class {} { render() { return <footer/>; } }
             .iter()
             .find(|diagnostic| diagnostic.code == LoweringDiagnosticCode::DuplicateKey)
             .expect("nested duplicate-key warning must survive module compilation");
-        let span = duplicate.span.expect("original JSX location is recoverable");
+        let span = duplicate
+            .span
+            .expect("original JSX location is recoverable");
         assert_eq!(
             &source[span.start_offset as usize..span.end_offset as usize],
             "key=\"last\""
@@ -1956,7 +1964,10 @@ export default class extends class {} { render() { return <footer/>; } }
         let changed =
             generate_module_compilation_evidence(&result, &config, ReactInputLanguage::Jsx)
                 .unwrap();
-        assert_eq!(original.output_spec.code_hash, changed.output_spec.code_hash);
+        assert_eq!(
+            original.output_spec.code_hash,
+            changed.output_spec.code_hash
+        );
         assert_ne!(
             original.compile_receipt.process_hash,
             changed.compile_receipt.process_hash

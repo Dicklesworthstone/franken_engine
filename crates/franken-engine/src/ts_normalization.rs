@@ -3729,28 +3729,26 @@ abstract class Base { }"#;
 
     #[test]
     fn parse_class_declaration_name_valid() {
-        assert_eq!(
-            parse_class_declaration_name("class MyClass { }"),
-            Some("MyClass".to_string())
-        );
+        let lowered = lower_simple_class_decorators("@dec\nclass MyClass { }")
+            .expect("valid decorated class must lower");
+        assert!(lowered.contains("__applyClassDecorator([dec], MyClass)"));
     }
 
     #[test]
     fn parse_class_declaration_name_with_extends() {
-        assert_eq!(
-            parse_class_declaration_name("class Child extends Base { }"),
-            Some("Child".to_string())
-        );
+        let lowered = lower_simple_class_decorators("@dec\nclass Child extends Base { }")
+            .expect("decorated derived class must lower");
+        assert!(lowered.contains("__applyClassDecorator([dec], Child)"));
     }
 
     #[test]
     fn parse_class_declaration_name_not_class() {
-        assert_eq!(parse_class_declaration_name("function foo() { }"), None);
+        assert!(lower_simple_class_decorators("@dec\nfunction foo() { }").is_err());
     }
 
     #[test]
     fn parse_class_declaration_name_empty_name() {
-        assert_eq!(parse_class_declaration_name("class  { }"), None);
+        assert!(lower_simple_class_decorators("@dec\nclass  { }").is_err());
     }
 
     #[test]

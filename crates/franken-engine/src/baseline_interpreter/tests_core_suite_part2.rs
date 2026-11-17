@@ -5369,7 +5369,7 @@ mod containment_tests {
             .unwrap();
         interpreter.apply_memory_component_delta(8, 0).unwrap();
         let before = interpreter.estimated_memory_bytes();
-        assert_sandbox_interruption(interpreter.apply_memory_component_delta(0, 1));
+        assert_sandbox_interruption(interpreter.apply_memory_component_delta(0, 1).map(|_| ()));
         assert_eq!(interpreter.estimated_memory_bytes(), before);
         assert_sandbox_interruption(interpreter.alloc_buffer_object(0, false).map(|_| ()));
         assert_sandbox_interruption(

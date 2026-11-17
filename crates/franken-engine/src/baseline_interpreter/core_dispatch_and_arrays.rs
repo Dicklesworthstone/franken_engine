@@ -5601,9 +5601,11 @@ impl InterpreterCore {
                 return Ok(());
             }
 
-            let state = cell.try_borrow().map_err(|_| InterpreterError::InternalError {
-                details: "module import binding is already mutably borrowed".to_string(),
-            })?;
+            let state = cell
+                .try_borrow()
+                .map_err(|_| InterpreterError::InternalError {
+                    details: "module import binding is already mutably borrowed".to_string(),
+                })?;
             // Include UTF-16 display expansion, message text and the retained
             // observation label before allocating a diagnostic. Budget failures
             // remain engine failures instead of becoming guest SyntaxErrors.
@@ -7657,14 +7659,14 @@ impl InterpreterCore {
                 let _ = self.raise_await_rejection_with_label(error_value, label)?;
             }
             (ModuleAwaitContinuation::Dependency { .. }, Ok(_)) => {}
-            (ModuleAwaitContinuation::Dependency { .. }, Err(reason)) => {
+            (ModuleAwaitContinuation::Dependency { specifier }, Err(reason)) => {
                 // Static dependency failures abort the importing module; they
                 // do not enter its guest catch handlers or replace the value
                 // with a description of the rejected Promise.
                 let value = self.js_value_to_value(&reason);
                 self.rearm_nested_module_throw(Some((value, label)))?;
                 return Err(InterpreterError::UncaughtException {
-                    value: "async module dependency rejected".to_string(),
+                    value: format!("async module dependency rejected: {specifier}"),
                 });
             }
         }
@@ -14020,7 +14022,7 @@ impl InterpreterCore {
                         .as_ref()
                         .map(|local| {
                             self.scope_chain
-                                .resolve(&local.to_string())
+                                .resolve(local.as_ref())
                                 .map(|(_, binding)| binding.clone())
                                 .ok_or_else(|| InterpreterError::InternalError {
                                     details: "module export's linked local binding is missing"
@@ -18142,8 +18144,11 @@ mod required_module_export_tests {
         assert!(core.pending_exception.is_none());
         assert_eq!(core.json_parse_temporary_bytes, 0);
 
-        core.module_state.modules.get_mut("active.mjs").unwrap().status =
-            ModuleRuntimeStatus::Evaluated;
+        core.module_state
+            .modules
+            .get_mut("active.mjs")
+            .unwrap()
+            .status = ModuleRuntimeStatus::Evaluated;
         assert!(matches!(
             core.check_required_module_export(namespace, &JsString::from("later"), &binding),
             Err(InterpreterError::UncaughtException { .. })

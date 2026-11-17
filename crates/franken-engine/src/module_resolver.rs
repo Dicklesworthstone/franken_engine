@@ -2806,12 +2806,8 @@ impl DeterministicModuleResolver {
     ) -> ResolutionResult<Vec<String>> {
         let failed = |message: &str| {
             Box::new(
-                ResolutionError::new(
-                    ResolutionErrorCode::UnsupportedSpecifier,
-                    message,
-                    context,
-                )
-                .with_resolution_attempt(request.specifier.clone(), None, None, Vec::new()),
+                ResolutionError::new(ResolutionErrorCode::UnsupportedSpecifier, message, context)
+                    .with_resolution_attempt(request.specifier.clone(), None, None, Vec::new()),
             )
         };
         if request.style != ImportStyle::Require || !request.import_attributes.is_empty() {
@@ -2838,7 +2834,9 @@ impl DeterministicModuleResolver {
         let mut seen = BTreeSet::new();
         for root in roots {
             if !is_within_workspace_root(&self.root_dir, &root) {
-                return Err(failed("CommonJS search directory escapes the resolver root"));
+                return Err(failed(
+                    "CommonJS search directory escapes the resolver root",
+                ));
             }
             if relative {
                 if seen.insert(root.clone()) {
@@ -8066,14 +8064,28 @@ mod commonjs_search_paths_tests {
     fn explicit_search_roots_preserve_order_and_never_hash_or_load_source() {
         let resolver = resolver();
         for (roots, expected) in [
-            (vec!["first".to_string(), "second".to_string()], "/sandbox/first/node_modules/pick/index.js"),
-            (vec!["/sandbox/second".to_string(), "first".to_string()], "/sandbox/second/node_modules/pick/index.js"),
+            (
+                vec!["first".to_string(), "second".to_string()],
+                "/sandbox/first/node_modules/pick/index.js",
+            ),
+            (
+                vec!["/sandbox/second".to_string(), "first".to_string()],
+                "/sandbox/second/node_modules/pick/index.js",
+            ),
         ] {
             let outcome = resolver
-                .resolve_require_metadata_from_paths(&request("pick"), &roots, &context(), &AllowAllPolicy)
+                .resolve_require_metadata_from_paths(
+                    &request("pick"),
+                    &roots,
+                    &context(),
+                    &AllowAllPolicy,
+                )
                 .unwrap();
             assert_eq!(outcome.module.metadata.id, expected);
-            assert_eq!(outcome.module.metadata.target, ModuleMetadataTarget::Filename);
+            assert_eq!(
+                outcome.module.metadata.target,
+                ModuleMetadataTarget::Filename
+            );
             assert_eq!(
                 outcome.module.metadata.required_capabilities,
                 BTreeSet::from([RuntimeCapability::ModuleLoad]),
@@ -8089,14 +8101,22 @@ mod commonjs_search_paths_tests {
             )
             .unwrap();
         assert_eq!(outcome.module.metadata.id, "/sandbox/first/hit.js");
-        assert!(outcome.module.probe_sequence.iter().any(|path| path.starts_with("/sandbox/missing/")));
+        assert!(
+            outcome
+                .module
+                .probe_sequence
+                .iter()
+                .any(|path| path.starts_with("/sandbox/missing/"))
+        );
     }
 
     #[test]
     fn lookup_directories_skip_nested_node_modules_and_stop_at_the_admitted_root() {
         let resolver = resolver();
         assert_eq!(
-            resolver.require_lookup_paths(&request("pick"), &context(), &AllowAllPolicy).unwrap(),
+            resolver
+                .require_lookup_paths(&request("pick"), &context(), &AllowAllPolicy)
+                .unwrap(),
             Some(vec![
                 "/sandbox/app/node_modules/owner/node_modules".to_string(),
                 "/sandbox/app/node_modules".to_string(),
@@ -8104,7 +8124,9 @@ mod commonjs_search_paths_tests {
             ]),
         );
         assert_eq!(
-            resolver.require_lookup_paths(&request("../hit"), &context(), &AllowAllPolicy).unwrap(),
+            resolver
+                .require_lookup_paths(&request("../hit"), &context(), &AllowAllPolicy)
+                .unwrap(),
             Some(vec!["/sandbox/app/node_modules/owner".to_string()]),
         );
     }
@@ -8113,9 +8135,21 @@ mod commonjs_search_paths_tests {
     fn empty_roots_empty_requests_and_forged_callers_cannot_select_registered_directories() {
         let resolver = resolver();
         for (request, roots, expected) in [
-            (request("pick"), Vec::new(), ResolutionErrorCode::ModuleNotFound),
-            (request(""), vec!["first".to_string()], ResolutionErrorCode::ModuleNotFound),
-            (request("pick"), vec!["../outside".to_string()], ResolutionErrorCode::UnsupportedSpecifier),
+            (
+                request("pick"),
+                Vec::new(),
+                ResolutionErrorCode::ModuleNotFound,
+            ),
+            (
+                request(""),
+                vec!["first".to_string()],
+                ResolutionErrorCode::ModuleNotFound,
+            ),
+            (
+                request("pick"),
+                vec!["../outside".to_string()],
+                ResolutionErrorCode::UnsupportedSpecifier,
+            ),
             (
                 request("pick").with_referrer("/sandbox/forged.cjs"),
                 vec!["first".to_string()],
@@ -8179,7 +8213,9 @@ mod commonjs_search_paths_tests {
                 &policy,
             )
             .unwrap();
-        resolver.require_lookup_paths(&request, &context(), &policy).unwrap();
+        resolver
+            .require_lookup_paths(&request, &context(), &policy)
+            .unwrap();
         let observed = policy.0.lock().unwrap();
         assert_eq!(observed.len(), 4);
         assert!(observed.iter().all(|actual| actual == &request));

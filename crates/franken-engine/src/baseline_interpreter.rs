@@ -812,15 +812,18 @@ impl StringOutputBuffer {
         let mut copied = 1;
         while copied < count {
             let copies = copied.min(count - copied);
-            let extra_units = value.utf16_len().checked_mul(copies).ok_or_else(|| {
-                core.memory_budget_error(u64::MAX, core.heap_object_count_u32())
-            })?;
-            let required_units = self.unit_len.checked_add(extra_units).ok_or_else(|| {
-                core.memory_budget_error(u64::MAX, core.heap_object_count_u32())
-            })?;
-            let mut extra_bytes = value.len().checked_mul(copies).ok_or_else(|| {
-                core.memory_budget_error(u64::MAX, core.heap_object_count_u32())
-            })?;
+            let extra_units = value
+                .utf16_len()
+                .checked_mul(copies)
+                .ok_or_else(|| core.memory_budget_error(u64::MAX, core.heap_object_count_u32()))?;
+            let required_units = self
+                .unit_len
+                .checked_add(extra_units)
+                .ok_or_else(|| core.memory_budget_error(u64::MAX, core.heap_object_count_u32()))?;
+            let mut extra_bytes = value
+                .len()
+                .checked_mul(copies)
+                .ok_or_else(|| core.memory_budget_error(u64::MAX, core.heap_object_count_u32()))?;
             if heals {
                 // Each new copy heals the high/low boundary before it.
                 extra_bytes -= copies * 2;
@@ -15464,10 +15467,10 @@ pub enum ExecutionSeed {
     },
     Materialized {
         registers: Vec<Value>,
-        heap: Heap,
+        heap: Box<Heap>,
         function_prototypes: BTreeMap<(ContentHash, u32), ObjectId>,
         builtin_prototypes: BTreeMap<String, ObjectId>,
-        symbol_state: RuntimeSymbolState,
+        symbol_state: Box<RuntimeSymbolState>,
         /// Private weak entries must travel with the heap identities they name.
         weakmap_storage: BTreeMap<ObjectId, WeakMapStorage>,
         /// Only labels owned by weak collections survive the execution reset.

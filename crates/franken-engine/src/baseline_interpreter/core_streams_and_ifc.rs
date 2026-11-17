@@ -4105,8 +4105,14 @@ impl InterpreterCore {
             };
             if object.brand() == Some(PROXY_TYPE_TAG)
                 || self.builtin_prototypes.get("Promise") == Some(&id)
-                || self.object_mutation_labels.get(&id).is_some_and(|label| label > floor)
-                || object.property_labels.get("then").is_some_and(|label| label > floor)
+                || self
+                    .object_mutation_labels
+                    .get(&id)
+                    .is_some_and(|label| label > floor)
+                || object
+                    .property_labels
+                    .get("then")
+                    .is_some_and(|label| label > floor)
             {
                 return true;
             }
@@ -4139,7 +4145,9 @@ impl InterpreterCore {
         }
         let result = match result {
             Err(reason) => {
-                let previous = self.readable_from_streams.get(&object_id)
+                let previous = self
+                    .readable_from_streams
+                    .get(&object_id)
                     .and_then(|state| state.to_array_waiter.as_ref())
                     .and_then(|waiter| waiter.error.as_ref());
                 let temporary = Self::estimate_value_bytes(&reason)
@@ -4155,8 +4163,10 @@ impl InterpreterCore {
                             let observation = core.begin_property_observation([])?;
                             let outcome =
                                 core.aggregate_readable_iterator_errors(module, reason, previous);
-                            let outcome = core.finish_property_read_observation(observation, outcome);
-                            if !matches!(&outcome, Err(error) if Self::stops_guest_execution(error)) {
+                            let outcome =
+                                core.finish_property_read_observation(observation, outcome);
+                            if !matches!(&outcome, Err(error) if Self::stops_guest_execution(error))
+                            {
                                 observed = core.join_owned_label_with_temporary_budget(
                                     observed.clone(),
                                     &core.json_parse_context_label()?,
@@ -4189,8 +4199,11 @@ impl InterpreterCore {
                 Self::estimate_readable_from_state_bytes(&projected)
                     .saturating_add(Self::estimate_value_bytes(reason)),
             )?;
-            projected.to_array_waiter.as_mut().expect("checked consumer").error =
-                Some(reason.clone());
+            projected
+                .to_array_waiter
+                .as_mut()
+                .expect("checked consumer")
+                .error = Some(reason.clone());
         }
         if projected.destroy_requested {
             return self.commit_readable_state_and_schedule(object_id, projected);
@@ -4208,12 +4221,7 @@ impl InterpreterCore {
                 if reason.is_truthy() {
                     self.record_readable_to_array_failure(object_id, reason, label, false)?;
                 } else {
-                    self.commit_readable_destroy(
-                        object_id,
-                        Value::Object(object_id),
-                        None,
-                        label,
-                    )?;
+                    self.commit_readable_destroy(object_id, Value::Object(object_id), None, label)?;
                 }
                 self.close_readable_iterator_source(object_id, module)
             }
@@ -4613,17 +4621,30 @@ impl InterpreterCore {
                     .to_string(),
             });
         }
-        if self.readable_from_streams.get(&object_id).is_some_and(|state| {
-            state.to_array_waiter.as_ref().is_some_and(|waiter| waiter.awaiting)
-        }) {
+        if self
+            .readable_from_streams
+            .get(&object_id)
+            .is_some_and(|state| {
+                state
+                    .to_array_waiter
+                    .as_ref()
+                    .is_some_and(|waiter| waiter.awaiting)
+            })
+        {
             // This runs in the close turn, before any listener-enqueued
             // Promise reaction. The async iterator's EOS observer records
             // premature close now, so a later chunk rejection can combine
             // both errors in their observable order.
-            let needs_error = self.readable_from_streams.get(&object_id).is_some_and(|state| {
-                state.destroy_requested
-                    && state.to_array_waiter.as_ref().is_some_and(|waiter| waiter.error.is_none())
-            });
+            let needs_error = self
+                .readable_from_streams
+                .get(&object_id)
+                .is_some_and(|state| {
+                    state.destroy_requested
+                        && state
+                            .to_array_waiter
+                            .as_ref()
+                            .is_some_and(|waiter| waiter.error.is_none())
+                });
             if !needs_error {
                 return Ok(());
             }
@@ -4635,9 +4656,15 @@ impl InterpreterCore {
                 };
                 let error = match &projected.destroy_error {
                     Some(error) => error.clone(),
-                    None => self.stream_error_value("ERR_STREAM_PREMATURE_CLOSE", "Premature close")?,
+                    None => {
+                        self.stream_error_value("ERR_STREAM_PREMATURE_CLOSE", "Premature close")?
+                    }
                 };
-                projected.to_array_waiter.as_mut().expect("waiting consumer").error = Some(error);
+                projected
+                    .to_array_waiter
+                    .as_mut()
+                    .expect("waiting consumer")
+                    .error = Some(error);
                 self.commit_readable_state(object_id, projected)
             })();
             if outcome.is_err() {
@@ -4939,10 +4966,9 @@ impl InterpreterCore {
             {
                 self.close_terminal_async_promise_dependencies(epoch, &label);
             }
-            let _ = self.promise_store.cancel_owned_await_source(
-                source,
-                &mut self.event_loop.microtasks,
-            );
+            let _ = self
+                .promise_store
+                .cancel_owned_await_source(source, &mut self.event_loop.microtasks);
             let released = before.saturating_sub(self.promise_runtime_memory_bytes());
             self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released);
         }
@@ -6882,10 +6908,10 @@ impl InterpreterCore {
             if let ExecutionSeed::Lazy { .. } = **seed {
                 **seed = ExecutionSeed::Materialized {
                     registers: self.registers.value.clone(),
-                    heap: self.heap.value.clone(),
+                    heap: Box::new(self.heap.value.clone()),
                     function_prototypes: self.function_prototypes.value.clone(),
                     builtin_prototypes: self.builtin_prototypes.value.clone(),
-                    symbol_state: self.symbol_state.value.clone(),
+                    symbol_state: Box::new(self.symbol_state.value.clone()),
                     weakmap_storage: self.weakmap_storage.clone(),
                     weak_collection_labels: self
                         .weakmap_storage
@@ -7024,10 +7050,10 @@ impl InterpreterCore {
                     weak_collection_labels,
                 } => Some((
                     registers.clone(),
-                    heap.clone(),
+                    (**heap).clone(),
                     function_prototypes.clone(),
                     builtin_prototypes.clone(),
-                    symbol_state.clone(),
+                    (**symbol_state).clone(),
                     weakmap_storage.clone(),
                     weak_collection_labels.clone(),
                 )),

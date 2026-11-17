@@ -34,16 +34,29 @@ fn run(source: &str, root: &Path, lane: LaneChoice) -> Execution {
         source: source.into(),
         source_file: None,
         module_root: None,
-        capabilities: ["vm_dispatch", "heap_allocate", "builtin", "console", "fs_read", "fs_write"]
-            .into_iter()
-            .map(str::to_string)
-            .collect(),
+        capabilities: [
+            "vm_dispatch",
+            "heap_allocate",
+            "builtin",
+            "console",
+            "fs_read",
+            "fs_write",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
         version: "1.0.0".into(),
         metadata: BTreeMap::new(),
     };
-    let result = runtime.execute(&package).expect("native descriptor metadata execution");
+    let result = runtime
+        .execute(&package)
+        .expect("native descriptor metadata execution");
     Execution {
-        output: result.console_output.into_iter().map(|line| line.message).collect(),
+        output: result
+            .console_output
+            .into_iter()
+            .map(|line| line.message)
+            .collect(),
         entries: transcript.recorded_entries(),
     }
 }
@@ -82,25 +95,61 @@ returned = true;
         let root = tempfile::tempdir().expect("sandbox");
         std::fs::write(root.path().join("input.txt"), b"abcdef").unwrap();
         let execution = run(source, root.path(), lane);
-        assert_eq!(execution.output, [
-            "PREFIX ab", "STAT 6 true false false", "BIG bigint 6 bigint bigint", "CURSOR cd",
-            "INVALID ERR_OUT_OF_RANGE", "RETURN true", "CALLBACK true 6 true", "CLOSED EBADF true",
-        ]);
-        let stats: Vec<_> = execution.entries.iter().filter(|(request, _)| {
-            matches!(request, HostIoRequest::FsMeta { operation: FsOperation::Fstat, .. })
-        }).collect();
-        assert_eq!(stats.len(), 4, "invalid input must not dispatch a host effect");
+        assert_eq!(
+            execution.output,
+            [
+                "PREFIX ab",
+                "STAT 6 true false false",
+                "BIG bigint 6 bigint bigint",
+                "CURSOR cd",
+                "INVALID ERR_OUT_OF_RANGE",
+                "RETURN true",
+                "CALLBACK true 6 true",
+                "CLOSED EBADF true",
+            ]
+        );
+        let stats: Vec<_> = execution
+            .entries
+            .iter()
+            .filter(|(request, _)| {
+                matches!(
+                    request,
+                    HostIoRequest::FsMeta {
+                        operation: FsOperation::Fstat,
+                        ..
+                    }
+                )
+            })
+            .collect();
+        assert_eq!(
+            stats.len(),
+            4,
+            "invalid input must not dispatch a host effect"
+        );
         for (request, _) in &stats {
             assert_eq!(request.required_capability(), HostIoCapability::FsRead);
-            let HostIoRequest::FsMeta { path, arguments, data, .. } = request else { unreachable!() };
+            let HostIoRequest::FsMeta {
+                path,
+                arguments,
+                data,
+                ..
+            } = request
+            else {
+                unreachable!()
+            };
             assert_eq!(arguments, &[format!("fd={path}")]);
             assert!(data.is_empty(), "stat must not read file contents");
         }
         for (_, outcome) in &stats[..3] {
-            assert!(matches!(outcome, Ok(HostIoResponse::FsMeta { result: FsMetaResult::Metadata(value) }) if value.size == 6));
+            assert!(
+                matches!(outcome, Ok(HostIoResponse::FsMeta { result: FsMetaResult::Metadata(value) }) if value.size == 6)
+            );
         }
         assert!(matches!(&stats[3].1, Err(HostIoError::Fs { code, .. }) if code == "EBADF"));
-        assert_eq!(std::fs::read(root.path().join("input.txt")).unwrap(), b"replacement with a different size");
+        assert_eq!(
+            std::fs::read(root.path().join("input.txt")).unwrap(),
+            b"replacement with a different size"
+        );
     }
 }
 
@@ -132,12 +181,30 @@ fs.promises.open('owned.txt', 'w').then(function (value) {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
         let root = tempfile::tempdir().expect("sandbox");
         let execution = run(source, root.path(), lane);
-        assert_eq!(execution.output, ["OWNED 1 bigint 5 true", "CLOSED EBADF fstat"]);
-        let operations: Vec<_> = execution.entries.iter().filter_map(|(request, _)| match request {
-            HostIoRequest::FsMeta { operation, .. } => Some(*operation),
-            _ => None,
-        }).collect();
-        assert_eq!(operations, [FsOperation::Open, FsOperation::WriteFd, FsOperation::Fstat, FsOperation::CloseFd]);
-        assert_eq!(std::fs::read(root.path().join("owned.txt")).unwrap(), b"owned");
+        assert_eq!(
+            execution.output,
+            ["OWNED 1 bigint 5 true", "CLOSED EBADF fstat"]
+        );
+        let operations: Vec<_> = execution
+            .entries
+            .iter()
+            .filter_map(|(request, _)| match request {
+                HostIoRequest::FsMeta { operation, .. } => Some(*operation),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            operations,
+            [
+                FsOperation::Open,
+                FsOperation::WriteFd,
+                FsOperation::Fstat,
+                FsOperation::CloseFd
+            ]
+        );
+        assert_eq!(
+            std::fs::read(root.path().join("owned.txt")).unwrap(),
+            b"owned"
+        );
     }
 }

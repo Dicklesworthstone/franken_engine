@@ -6429,7 +6429,7 @@ fn incremental_readable_to_array_chunk_commit_is_atomic_bd_305gi_2() {
                 .expect("live queue");
             core.drive_readable_to_array(readable, &module, projected)
         };
-        let exact_ceiling = calibrate_readable_memory_ceiling(&fixture, &operation);
+        let exact_ceiling = calibrate_readable_memory_ceiling(fixture, operation);
         let (mut refused, readable) = fixture();
         let before_state = refused.readable_from_streams[&readable].clone();
         let result = before_state
@@ -7413,7 +7413,12 @@ fn readable_from_iterator_destroy_awaits_cleanup_and_discards_late_value_bd_305g
         core.drain_microtasks(Some(&module))
             .expect("start asynchronous iterator cleanup");
         assert!(
-            !core.promise_store.get(cleanup).unwrap().reactions.is_empty(),
+            !core
+                .promise_store
+                .get(cleanup)
+                .unwrap()
+                .reactions
+                .is_empty(),
             "destroy must enter return() while the original pull is pending"
         );
         let cleanup_reactions = core.promise_store.get(cleanup).unwrap().reactions.len();
@@ -7596,9 +7601,9 @@ fn readable_from_iterator_reset_cancels_only_its_own_await_bd_305gi_2() {
             let sibling = core.promise_store.get(sibling).unwrap();
             assert_eq!(
                 sibling.state,
-                crate::promise_model::PromiseState::Fulfilled(
-                    crate::object_model::JsValue::Int(42)
-                )
+                crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Int(
+                    42
+                ))
             );
             assert_eq!(sibling.label, Label::Secret);
             assert!(core.readable_from_streams.is_empty());
@@ -7750,7 +7755,8 @@ fn readable_to_array_pending_chunk_survives_close_with_terminal_error_bd_305gi_2
             (3, Value::Promise(consumer_id)),
             (4, Value::Object(accumulator)),
         ] {
-            core.write_reg(register, value).expect("retain observed outcomes");
+            core.write_reg(register, value)
+                .expect("retain observed outcomes");
         }
         core.set_object_property(result, "value".to_string(), Value::Undefined)
             .expect("drop the producer's reference to the pending chunk");

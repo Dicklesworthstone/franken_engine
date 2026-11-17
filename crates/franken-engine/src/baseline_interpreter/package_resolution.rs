@@ -106,6 +106,18 @@ impl From<PathBuf> for ModuleResolutionTarget {
     }
 }
 
+#[cfg(test)]
+impl ModuleResolutionTarget {
+    fn canonicalize(&self) -> std::io::Result<PathBuf> {
+        match self {
+            Self::File(path) => path.canonicalize(),
+            Self::Native(module) => Err(std::io::Error::other(format!(
+                "expected resolved file path, got native builtin {module:?}"
+            ))),
+        }
+    }
+}
+
 /// Largest package.json the resolver reads.
 const MAX_PACKAGE_MANIFEST_BYTES: u64 = 1 << 20;
 
@@ -845,7 +857,8 @@ impl InterpreterCore {
     ) -> Result<PathBuf, InterpreterError> {
         let refuse = || InterpreterError::ModuleLoweringFailed {
             specifier: specifier.to_string(),
-            error: "CommonJS search path escapes or cannot authenticate the module root".to_string(),
+            error: "CommonJS search path escapes or cannot authenticate the module root"
+                .to_string(),
         };
         let joined = if path.is_absolute() {
             path.to_path_buf()
@@ -907,7 +920,11 @@ impl InterpreterCore {
         start
             .ancestors()
             .take_while(|directory| directory.starts_with(root))
-            .filter(|directory| directory.file_name().is_none_or(|name| name != "node_modules"))
+            .filter(|directory| {
+                directory
+                    .file_name()
+                    .is_none_or(|name| name != "node_modules")
+            })
             .map(|directory| directory.join("node_modules"))
             .collect()
     }
@@ -965,9 +982,10 @@ impl InterpreterCore {
         let package = if relative {
             None
         } else {
-            Some(split_package_specifier(specifier).ok_or_else(|| {
-                failed(ModuleResolutionFailureReason::MalformedSpecifier)
-            })?)
+            Some(
+                split_package_specifier(specifier)
+                    .ok_or_else(|| failed(ModuleResolutionFailureReason::MalformedSpecifier))?,
+            )
         };
         if let Some((name, subpath)) = package
             && let Some((scope, manifest)) =
@@ -1020,11 +1038,8 @@ impl InterpreterCore {
                     return Ok(self.module_key_for_canonical_path(&canonical));
                 }
             }
-            let candidate = self.contained_require_search_base(
-                specifier,
-                &root,
-                &directory.join(specifier),
-            )?;
+            let candidate =
+                self.contained_require_search_base(specifier, &root, &directory.join(specifier))?;
             let force_directory = matches!(specifier, "." | "..") || specifier.ends_with('/');
             if let Some(target) = self.resolve_require_candidate(&candidate, force_directory)? {
                 self.contained_require_search_base(specifier, &root, &target)?;

@@ -2,7 +2,7 @@
   "schema_version": "franken-engine.execution-truth-ledger.v1",
   "ledger_id": "franken-engine-performance-conformance-bridge-truth-v1",
   "owning_bead": "bd-performance-conformance-bridge-tu32j.1.1",
-  "source_cutoff_utc": "2026-07-24T08:04:40Z",
+  "source_cutoff_utc": "2026-11-17T05:50:00Z",
   "max_age_days": 90,
   "rendered_markdown_path": "docs/EXECUTION_TRUTH_LEDGER_V1.md",
   "purpose": "Bind the historical JIT, AOT, tiering, Test262, performance, and claim records to the code paths and artifacts that actually exist. The ledger preserves useful scaffolding while preventing planning records, input-only hashes, synthetic timings, test-only paths, or observed failures from being promoted into production-success claims.",
@@ -57,7 +57,7 @@
           "proof_id": "bd-11p.ci-workflow",
           "kind": "ci_wiring",
           "path": ".github/workflows/version_matrix_conformance.yml",
-          "file_sha256": "c39b8e55e4dd28e67d61605d2a3d6575246cf7febf066c94dd3e659863651159",
+          "file_sha256": "28d66de250fcd676fa374f9b5ed13f833721389bd5bb1677f3024be62f8913ce",
           "must_contain": [
             "Run test262 ES2020 release-blocker suite",
             "./scripts/run_test262_es2020_gate.sh ci"
@@ -72,7 +72,7 @@
           "path": "scripts/run_test262_es2020_gate.sh",
           "start_line": 34,
           "end_line": 99,
-          "range_sha256": "8eb03008f1501b6cfbdf609bd7f5780971a8b2acf77ffd4d1c08890965f33718",
+          "range_sha256": "887923448eea7e1871c2d9f341f80c05c7f328aa7e4a8041cdc25a56d5314372",
           "must_contain": [
             "rch exec -- env",
             "cargo test -p frankenengine-engine --test test262_release_gate",
@@ -182,7 +182,7 @@
         "planning_provenance",
         "test_only"
       ],
-      "runtime_reality": "Executable hot-path, superblock, guard, side-exit, and compilation-unit planners exist and name Cranelift as the intended backend, but repository manifests contain no Cranelift codegen/JIT/module dependency and runtime dispatch never executes native output",
+      "runtime_reality": "Executable hot-path, superblock, guard, side-exit, and compilation-unit planners exist and name Cranelift as the intended backend; while an external native-capsule worker crate in Cargo.lock now pulls cranelift-codegen, frankenengine-engine itself links no Cranelift JIT/module/native backend and superblock_formation's plan does not execute machine code",
       "user_impact": "Users benefit from reusable deterministic tier-up policy records, but receive no optimized native tier speedup or real deoptimization transition",
       "limitations": [
         "OptimizedTierBackend::Cranelift is a serialized enum value, not a linked backend.",
@@ -198,14 +198,16 @@
           "proof_id": "bd-1lsy-7-3.lock-no-cranelift",
           "kind": "manifest",
           "path": "Cargo.lock",
+          "must_contain": [
+            "name = \"franken-native-capsule-worker\""
+          ],
           "forbidden_text": [
-            "name = \"cranelift-codegen\"",
             "name = \"cranelift-jit\"",
             "name = \"cranelift-module\"",
             "name = \"cranelift-native\""
           ],
           "caller": "Cargo dependency resolver",
-          "interpretation": "No Cranelift backend crate is locked."
+          "interpretation": "No Cranelift JIT/module/native runtime backend is locked; cranelift-codegen enters only via the external native-capsule worker crate."
         },
         {
           "proof_id": "bd-1lsy-7-3.manifest-no-cranelift",
@@ -305,7 +307,7 @@
           "path": "crates/franken-engine/src/bin/franken_test262_runner.rs",
           "start_line": 542,
           "end_line": 609,
-          "range_sha256": "bffeaf056f7ffc34f17b387ee3a53ffcb0d499a9df8b6c6d8753f24cc7bf393b",
+          "range_sha256": "bd35ef4efab89de5b79bbc37d3a038020513bd542d64957ce841711f69cbf561",
           "must_contain": [
             "HybridRouter::default",
             "router",
@@ -345,16 +347,16 @@
           "proof_id": "bd-6a61n-1-8.vector-metadata-loss",
           "kind": "source",
           "path": "crates/franken-engine/src/test262_harness.rs",
-          "start_line": 427,
-          "end_line": 444,
-          "range_sha256": "885e9964e55e4c32386d986b341be83b3f37f7eaefecd6251066c5317419cead",
+          "start_line": 621,
+          "end_line": 687,
+          "range_sha256": "221233f0c0ba99a5dcc1e39de05f2ba6376d15971b58382eb0f7422a95ef65aa",
           "must_contain": [
+            "fn test_case_to_vectors",
             "Test262CaseVector",
-            "source: test.source.clone()",
             "expected_value"
           ],
-          "caller": "vectors_from_suite",
-          "interpretation": "The vector conversion omits includes, flags, features, and structured negative metadata."
+          "caller": "generate_case_vectors",
+          "interpretation": "Vector conversion now composes harness preludes and sloppy/strict variants into source, while Test262CaseVector still flattens structured negative phase/error-type and async $DONE metadata."
         }
       ],
       "revalidation": {
@@ -546,6 +548,71 @@
       }
     },
     {
+      "subject_id": "bead:bd-performance-conformance-bridge-tu32j.1.12",
+      "kind": "bead",
+      "title": "[FRESH-REALITY][MOCK] Remove simulated timer success from FullCapsHandler",
+      "current_state": "closed",
+      "claim_posture": "not_applicable",
+      "classifications": [
+        "executable",
+        "observed",
+        "production_wired",
+        "test_only"
+      ],
+      "runtime_reality": "FullCapsHandler and EngineCoreHandler validate timer parameter shapes and fail closed with TIMER_PROVIDER_UNAVAILABLE when unbound, while orchestrated execution routes SetTimeout, SetInterval, ClearTimeout, and ClearInterval through CellAuthorizedTimerEffectAuthority and InterpreterCore's deterministic event loop with replayable cell transcripts",
+      "user_impact": "Users never receive fabricated constant-42 timer handles or fake timer stdout lines on any public handler stack, and orchestrated timer callbacks fire in deterministic deadline/FIFO order under cell capability and cancellation control",
+      "limitations": [
+        "Timers advance virtual deterministic event-loop ticks within an execution cell rather than sleeping against OS wall-clock threads.",
+        "Public handler stacks constructed outside an interpreter execution cell intentionally refuse hostcall:timer rather than synthesizing stand-in handles."
+      ],
+      "downstream_decisions": [
+        "Keep unbound FullCapsHandler and EngineCoreHandler timer arms fail-closed with TIMER_PROVIDER_UNAVAILABLE.",
+        "Gate any future host wall-clock timer bridge on explicit cell authority, cancellation, and replay-transcript parity."
+      ],
+      "proofs": [
+        {
+          "proof_id": "tu32j-1-12.no-mock-integration",
+          "kind": "source",
+          "path": "crates/franken-engine/tests/timer_authority_no_mock_tu32j_1_12.rs",
+          "start_line": 223,
+          "end_line": 260,
+          "range_sha256": "02b345f60b9c6454c0478f53616bb9fbdfeae8790c23976e24b9cb2a9e6297a6",
+          "must_contain": [
+            "no_mock_set_timeout_and_clear_timeout_allocate_distinct_handles_order_and_replay_transcript",
+            "clearTimeout(cancelled)"
+          ],
+          "expected_git_tracked": true,
+          "caller": "cargo test -p frankenengine-engine --test timer_authority_no_mock_tu32j_1_12",
+          "interpretation": "No-mock orchestrated integration verifies distinct handles, exact clear targeting, event-loop ordering, and replayable cell transcripts."
+        },
+        {
+          "proof_id": "tu32j-1-12.unbound-timer-fail-closed",
+          "kind": "source",
+          "path": "crates/franken-engine/src/hostcall_effects_migration.rs",
+          "start_line": 982,
+          "end_line": 1020,
+          "range_sha256": "f35a5a4d543fe3ac937b01bb294b7cc33ac8ec5c2a6285bb25403e175d62e02c",
+          "must_contain": [
+            "fn reject_unbound_timer",
+            "TIMER_PROVIDER_UNAVAILABLE_CODE",
+            "timer effect requires an interpreter-owned event-loop provider"
+          ],
+          "expected_git_tracked": true,
+          "caller": "FullCapsHandler::handle and EngineCoreHandler::handle",
+          "interpretation": "Unbound public handler stacks validate timer parameters and fail closed before side effects."
+        }
+      ],
+      "revalidation": {
+        "owner_id": "bd-performance-conformance-bridge-tu32j.1.2",
+        "role": "timer-authority and no-mock hostcall gate owner",
+        "trigger": "hostcall_effects_migration, execution_cell timer authority, or InterpreterCore timer scheduling changes",
+        "command": "./scripts/run_execution_truth_ledger_gate.sh ci",
+        "fallback": "reject hostcall:timer fail-closed with TIMER_PROVIDER_UNAVAILABLE",
+        "kill_rule": "block any handler path that returns a constant/synthetic timer handle or bypasses cell authority",
+        "rollback": "restore reject_unbound_timer and cell-authorized InterpreterTimerHandler wiring"
+      }
+    },
+    {
       "subject_id": "bead:bd-w2dov",
       "kind": "bead",
       "title": "[reality-check] aot_entrygraph_compiler doc claims AOT compilation but fabricates artifact hash with no codegen",
@@ -595,7 +662,7 @@
     {
       "subject_id": "claim:FE-CLAIM-001",
       "kind": "claim",
-      "title": "FrankenEngine is a native Rust runtime for adversarial extension workloads with deterministic replay, cryptographic decision receipts, and fleet-scale containment.",
+      "title": "FrankenEngine is a native Rust runtime for adversarial JavaScript/TypeScript extension workloads.",
       "current_state": "observed",
       "claim_posture": "observed",
       "classifications": [
@@ -618,10 +685,10 @@
         {
           "proof_id": "fe-claim-001.interpreter-lanes",
           "kind": "source",
-          "path": "crates/franken-engine/src/baseline_interpreter.rs",
-          "start_line": 72846,
-          "end_line": 73101,
-          "range_sha256": "69d2947c6324578a085e1454c2ad6379d2018a859a0580124e03769bf24a6f16",
+          "path": "crates/franken-engine/src/baseline_interpreter/lane_router.rs",
+          "start_line": 1770,
+          "end_line": 2078,
+          "range_sha256": "224afa1d63f4d0f2c93ec65fd9123079430f0386b10c080a4bab01295e80898d",
           "must_contain": [
             "let mut core = InterpreterCore::new",
             "pub struct QuickJsLane",
@@ -634,13 +701,13 @@
           "proof_id": "fe-claim-001.orchestrator-runtime",
           "kind": "source",
           "path": "crates/franken-engine/src/execution_orchestrator.rs",
-          "start_line": 2986,
-          "end_line": 3157,
-          "range_sha256": "ef154e039d15abbb77a7dd3442a5dc2bde151eb3ff7b3cc1d396ca961120974d",
+          "start_line": 4372,
+          "end_line": 4525,
+          "range_sha256": "19312dde94dd7cc5ea0c3ce9d02f9c7bd53e1b4a7e64757722fdf09aa99360d0",
           "must_contain": [
             "LaneRouter::with_configs",
             "lane_router.set_host_io",
-            ".execute_with_hook"
+            ".execute_with_hook_and_compact_tier1"
           ],
           "caller": "ExecutionOrchestrator::phase_execute",
           "interpretation": "Production orchestration reaches the native lane router and preserves host authority."
@@ -682,18 +749,30 @@
         "observed",
         "test_only"
       ],
-      "runtime_reality": "When invoked, the claim-matrix gate checks tracked repro.lock partners for observed rows; it is absent from all five current GitHub workflows and does not re-execute every producer",
-      "user_impact": "Users can inspect committed evidence contracts, but repository CI does not yet make the flagship claim matrix self-enforcing on every change",
+      "runtime_reality": "The claim-matrix gate checks tracked repro.lock partners for observed rows and is wired into quality-gates.yml, though it remains absent from the other primary GitHub workflows and does not re-execute every producer",
+      "user_impact": "Users get CI enforcement of committed claim-matrix contracts in quality-gates.yml, while producer re-execution and broader capstone wiring still require BRIDGE-00.2 completion",
       "limitations": [
         "The gate verifies recorded artifacts and wording; it does not re-execute every producer.",
         "Ignored working-tree bundles such as the May pass1 profile cannot support fresh-clone reproducibility.",
-        "Manual or downstream gate invocation can be omitted unless BRIDGE-00.2 adds CI wiring."
+        "The reflexive integrity capstone is not yet wired alongside the matrix gate in GitHub workflows."
       ],
       "downstream_decisions": [
         "Keep the bounded observed row only for published claims with tracked repro.lock partners.",
-        "Wire the matrix and execution-truth gates into CI under BRIDGE-00.2."
+        "Wire the execution-truth and capstone gates into CI under BRIDGE-00.2."
       ],
       "proofs": [
+        {
+          "proof_id": "fe-claim-009.claim-gate-in-quality-ci",
+          "kind": "ci_wiring",
+          "path": ".github/workflows/quality-gates.yml",
+          "file_sha256": "dd8c92ed40c509b3e4288c306e0bcd8682037257f46b13b32c5856443a94df3d",
+          "must_contain": [
+            "./scripts/run_claim_to_proof_matrix_gate.sh ci"
+          ],
+          "expected_git_tracked": true,
+          "caller": "GitHub Actions quality-gates workflow",
+          "interpretation": "quality-gates.yml invokes the claim-to-proof matrix gate in CI."
+        },
         {
           "proof_id": "fe-claim-009.claim-gate-not-in-adversarial-fuzz-ci",
           "kind": "ci_wiring",
@@ -725,16 +804,6 @@
           "interpretation": "This workflow does not invoke the claim-matrix gate."
         },
         {
-          "proof_id": "fe-claim-009.claim-gate-not-in-quality-ci",
-          "kind": "ci_wiring",
-          "path": ".github/workflows/quality-gates.yml",
-          "forbidden_text": [
-            "run_claim_to_proof_matrix_gate.sh"
-          ],
-          "caller": "GitHub Actions",
-          "interpretation": "This workflow does not invoke the claim-matrix gate."
-        },
-        {
           "proof_id": "fe-claim-009.claim-gate-not-in-version-ci",
           "kind": "ci_wiring",
           "path": ".github/workflows/version_matrix_conformance.yml",
@@ -757,8 +826,8 @@
           "proof_id": "fe-claim-009.tracking-check",
           "kind": "source",
           "path": "scripts/run_claim_to_proof_matrix_gate.sh",
-          "start_line": 205,
-          "end_line": 230,
+          "start_line": 286,
+          "end_line": 311,
           "range_sha256": "8496e461f325db4f38c6865dbd2bf80051258783ef35bd8295ac8b0fec074fc1",
           "must_contain": [
             "repro_lock_committed",
@@ -1263,33 +1332,33 @@
         "observed",
         "test_only"
       ],
-      "runtime_reality": "A real capstone composes matrix wording, bidirectional evidence ceilings, a committed Merkle ledger, and Test262 posture checks, with tracked FE-CLAIM-025 evidence; however neither the capstone nor matrix gate runs in current GitHub workflows, and its own backfilled reproducibility metadata contains hard-coded schema-hash constants rather than derived schema digests",
-      "user_impact": "Users can manually run a substantive fail-closed integrity and drift system, but automatic enforcement and the integrity claim's own reproduction metadata are weaker than the observed wording suggests",
+      "runtime_reality": "A real capstone composes matrix wording, bidirectional evidence ceilings, a committed Merkle ledger, and Test262 posture checks, with tracked FE-CLAIM-025 evidence whose manifest now records an execution-derived schema digest; however the capstone itself is not yet wired into GitHub workflows and repro.lock still carries a legacy patterned schema_hash and cargo clean command",
+      "user_impact": "Users can run a substantive fail-closed integrity and drift system with an execution-derived manifest receipt, while full CI capstone wiring and repro.lock cleanup remain tracked under BRIDGE-00.2",
       "limitations": [
-        "No current GitHub workflow invokes the claim-evidence integrity capstone or claim-to-proof matrix gate.",
-        "The tracked env, manifest, and repro.lock schema_hash fields are static patterned constants from the backfill generator rather than hashes computed from a named schema.",
+        "No current GitHub workflow invokes run_claim_evidence_integrity_capstone.sh directly.",
+        "Although manifest.json now carries a computed schema_hash from reemit_evidence_receipts.py, repro.lock still retains a legacy patterned schema_hash constant.",
         "The repro.lock prescribes cargo clean, a direct non-rch Cargo command, an absolute historical workspace, and an old source commit, so it is not a safe exact replay recipe for the current tree.",
-        "The tracked manifest records a historical 4/4 run; the gate still needs live rerun evidence for current-state closure."
+        "The tracked manifest records an August live gate run; fresh current-HEAD capstone replay remains part of BRIDGE-00.2."
       ],
       "downstream_decisions": [
-        "Keep the executable capstone and Merkle ledger, but wire them into CI under BRIDGE-00.2.",
-        "Replace patterned schema identifiers and stale replay metadata with computed schema hashes, current toolchain fingerprints, rch-safe commands, and a fresh proof bundle."
+        "Keep the executable capstone and Merkle ledger, and wire run_claim_evidence_integrity_capstone.sh into CI under BRIDGE-00.2.",
+        "Replace repro.lock's legacy patterned schema_hash and cargo clean command with rch-safe commands and current source bindings."
       ],
       "proofs": [
         {
           "proof_id": "fe-claim-025.backfill-schema-constants",
           "kind": "source",
           "path": "scripts/backfill_reproducibility_bundles.py",
-          "start_line": 145,
-          "end_line": 205,
-          "range_sha256": "54c82d739445196cc4baf0145bff4fcd5457b545967533abc2aa9249b0911cab",
+          "start_line": 136,
+          "end_line": 166,
+          "range_sha256": "f6becb53fa69ccaebb4f5086a882465ee9669aaa7d851ccefcc7d42a2a051215",
           "must_contain": [
-            "sha256:7f8a9b2c3d4e5f6789abcdef",
-            "sha256:8f9a0b1c2d3e4f5678abc9def",
-            "backfill_reproducibility_bundles.py"
+            "reemit_evidence_receipts.py",
+            "schema_hash",
+            "bd-q0cwt"
           ],
           "caller": "reproducibility bundle backfill",
-          "interpretation": "The schema_hash values are hard-coded generator constants, not computed digests."
+          "interpretation": "The backfill script now delegates to execution-derived reemit_evidence_receipts.py rather than generating placeholder schema_hash constants in-process."
         },
         {
           "proof_id": "fe-claim-025.capstone",
@@ -1326,7 +1395,7 @@
           "proof_id": "fe-claim-025.manifest",
           "kind": "artifact",
           "path": "docs/evidence/FE-CLAIM-025/manifest.json",
-          "file_sha256": "75791a98e00dd758f84baf2d7bd663d60521727c2d4d0941a93bca9aa88749dd",
+          "file_sha256": "1c9aa9cd8572df1925cb396108951901227e5bb2ea889866ba0a5bbf4711da89",
           "json_assertions": [
             {
               "pointer": "/claim/id",
@@ -1342,12 +1411,12 @@
             },
             {
               "pointer": "/schema_hash",
-              "expected": "sha256:8f9a0b1c2d3e4f5678abc9def0123456789abcdef0123456789abcdef01234567"
+              "expected": "sha256:29312de03b4e940a821b9f57290d6ce49c72d4e1ec65c8348e683df5b30d88cf"
             }
           ],
           "expected_git_tracked": true,
           "caller": "FE-CLAIM-025 evidence bundle",
-          "interpretation": "The historical run is tracked, while its patterned schema identifier is exposed rather than trusted as a real digest."
+          "interpretation": "The tracked manifest now carries an execution-derived schema digest from reemit_evidence_receipts.py."
         },
         {
           "proof_id": "fe-claim-025.repro-lock",
@@ -1499,16 +1568,16 @@
           "proof_id": "fe-claim-test262.suite-conversion",
           "kind": "source",
           "path": "crates/franken-engine/src/bin/franken_test262_runner.rs",
-          "start_line": 646,
-          "end_line": 692,
-          "range_sha256": "f2c6865f26acd4b089bc83b02e48d76a7a8dc7a8913a7ca92a3ad92990272f6b",
+          "start_line": 746,
+          "end_line": 786,
+          "range_sha256": "936b0c8d3067d3f4f01f616179d3d391c1872a45f8b699a73ba51caa41acc708",
           "must_contain": [
             "Test262Harness",
             "generate_case_vectors",
             "source: v.source"
           ],
           "caller": "execute_live_case_vectors",
-          "interpretation": "The live corpus is real, but conversion retains only the reduced vector fields."
+          "interpretation": "The live corpus is real, while vector conversion still flattens structured negative and async completion metadata into reduced vector fields."
         }
       ],
       "revalidation": {
@@ -1644,10 +1713,10 @@
       "finding_id": "TRUTH-008",
       "severity": "major",
       "status": "open",
-      "summary": "The claim-to-proof matrix gate and claim-evidence integrity capstone exist and check real tracked state but are absent from all current GitHub workflows.",
+      "summary": "quality-gates.yml now runs run_claim_to_proof_matrix_gate.sh ci, while the reflexive claim-evidence integrity capstone and execution-truth ledger gate remain unwired across GitHub workflows.",
       "opportunity_score": 90,
       "relevance_score": 100,
-      "score_rationale": "This is a small integration change with disproportionate leverage against silent claim and evidence regression.",
+      "score_rationale": "Completing capstone and truth-ledger CI wiring prevents silent regression of reflexive evidence integrity.",
       "implementation_budget": "S: workflow wiring, branch-protection requirement, failure artifacts, and retention policy",
       "subject_ids": [
         "claim:FE-CLAIM-009",
@@ -1660,10 +1729,10 @@
       "finding_id": "TRUTH-009",
       "severity": "major",
       "status": "open",
-      "summary": "FE-CLAIM-025's tracked env, manifest, and repro metadata use hard-coded patterned schema_hash constants instead of computed schema digests, while repro.lock prescribes cargo clean, direct Cargo, an absolute historical workspace, and a stale source revision.",
+      "summary": "Although FE-CLAIM-025's manifest.json and backfill script were upgraded to execution-derived schema digests, repro.lock still carries a legacy patterned schema_hash constant and prescribes cargo clean, direct Cargo, an absolute historical workspace, and a stale source revision.",
       "opportunity_score": 85,
       "relevance_score": 95,
-      "score_rationale": "An integrity claim cannot rely on patterned pseudo-hashes or an unsafe, stale reproduction recipe.",
+      "score_rationale": "An integrity claim cannot rely on a legacy patterned lock hash or an unsafe, stale reproduction recipe.",
       "implementation_budget": "M: computed schema identities, safe rch reproduction, source rebinding, and evidence regeneration",
       "subject_ids": [
         "claim:FE-CLAIM-025"

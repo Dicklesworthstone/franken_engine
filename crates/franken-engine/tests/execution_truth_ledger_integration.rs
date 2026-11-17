@@ -82,7 +82,7 @@ fn canonical_ledger_validates_against_live_repository() {
         "canonical truth ledger must pass: {:?}",
         output.report.findings
     );
-    assert_eq!(output.report.subject_count, 19);
+    assert_eq!(output.report.subject_count, 20);
     assert!(output.report.proof_count >= 25);
     assert!(output.report.checks_run > output.report.proof_count);
     assert!(output.events.iter().all(|event| {

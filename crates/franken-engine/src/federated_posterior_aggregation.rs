@@ -140,7 +140,10 @@ impl PosteriorDelta {
             self.delta_malicious_millionths,
             self.delta_unknown_millionths,
         ];
-        if deltas.iter().any(|delta| !(-MILLION..=MILLION).contains(delta)) {
+        if deltas
+            .iter()
+            .any(|delta| !(-MILLION..=MILLION).contains(delta))
+        {
             return false;
         }
         // Bounded components (|each| <= 1e6) make this sum overflow-free.
@@ -201,8 +204,14 @@ impl AggregatedPosteriorUpdate {
 
         Posterior::from_millionths(
             apply(posterior.p_benign, self.aggregate_delta_benign_millionths),
-            apply(posterior.p_anomalous, self.aggregate_delta_anomalous_millionths),
-            apply(posterior.p_malicious, self.aggregate_delta_malicious_millionths),
+            apply(
+                posterior.p_anomalous,
+                self.aggregate_delta_anomalous_millionths,
+            ),
+            apply(
+                posterior.p_malicious,
+                self.aggregate_delta_malicious_millionths,
+            ),
             apply(posterior.p_unknown, self.aggregate_delta_unknown_millionths),
         )
     }
@@ -811,7 +820,12 @@ mod tests {
         // [-100000, 50000, 30000, 20000] plus 25% of
         // [0, -50000, 70000, -20000].
         let update = weighted_update(
-            [-75_000_000_000, 25_000_000_000, 40_000_000_000, 10_000_000_000],
+            [
+                -75_000_000_000,
+                25_000_000_000,
+                40_000_000_000,
+                10_000_000_000,
+            ],
             1_000_000,
         );
         assert_eq!(

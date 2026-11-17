@@ -936,13 +936,8 @@ mod lazy_seed_tests {
         ));
     }
 
-    fn weak_collection_seed_fixture() -> (
-        InterpreterCore,
-        Ir3Module,
-        ObjectId,
-        ObjectId,
-        SymbolId,
-    ) {
+    fn weak_collection_seed_fixture() -> (InterpreterCore, Ir3Module, ObjectId, ObjectId, SymbolId)
+    {
         let mut core = test_core();
         core.config.granted_capabilities = [
             RuntimeCapability::VmDispatch,
@@ -1033,7 +1028,10 @@ mod lazy_seed_tests {
                 let storage = &core.weakmap_storage[&owner];
                 assert_eq!(storage.get(object_key.0), Some(&Value::str("original")));
                 assert_eq!(storage.get_symbol(symbol_key.0), Some(&Value::Bool(true)));
-                assert_eq!(core.object_mutation_labels.get(&owner), Some(&Label::Secret));
+                assert_eq!(
+                    core.object_mutation_labels.get(&owner),
+                    Some(&Label::Secret)
+                );
                 assert_eq!(
                     core.estimated_memory_bytes(),
                     core.recompute_estimated_memory_bytes()
@@ -1062,11 +1060,17 @@ mod lazy_seed_tests {
         core.reset_execution_state_from_seed(&seed)
             .expect("unchanged lazy state");
         assert!(seed.is_lazy());
-        assert_eq!(core.object_mutation_labels.get(&owner), Some(&Label::Secret));
+        assert_eq!(
+            core.object_mutation_labels.get(&owner),
+            Some(&Label::Secret)
+        );
 
         core.join_direct_object_mutation_label(owner, &Label::TopSecret)
             .expect("same-size owner label mutation");
-        assert!(!seed.is_lazy(), "label-only writes must preserve the old label");
+        assert!(
+            !seed.is_lazy(),
+            "label-only writes must preserve the old label"
+        );
         seed.inspect(|state| match state {
             ExecutionSeed::Materialized {
                 weak_collection_labels,
@@ -1077,7 +1081,10 @@ mod lazy_seed_tests {
         core.config.max_total_memory_bytes = u64::MAX;
         core.reset_execution_state_from_seed(&seed)
             .expect("restore owner provenance");
-        assert_eq!(core.object_mutation_labels.get(&owner), Some(&Label::Secret));
+        assert_eq!(
+            core.object_mutation_labels.get(&owner),
+            Some(&Label::Secret)
+        );
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
@@ -1088,11 +1095,15 @@ mod lazy_seed_tests {
     fn seeded_weak_collection_survives_repeated_execute() {
         let (mut core, module, owner, object_key, symbol_key) = weak_collection_seed_fixture();
         for _ in 0..2 {
-            core.execute(&module).expect("execute from seeded weak state");
+            core.execute(&module)
+                .expect("execute from seeded weak state");
             let storage = &core.weakmap_storage[&owner];
             assert_eq!(storage.get(object_key.0), Some(&Value::str("original")));
             assert_eq!(storage.get_symbol(symbol_key.0), Some(&Value::Bool(true)));
-            assert_eq!(core.object_mutation_labels.get(&owner), Some(&Label::Secret));
+            assert_eq!(
+                core.object_mutation_labels.get(&owner),
+                Some(&Label::Secret)
+            );
             assert_eq!(
                 core.estimated_memory_bytes(),
                 core.recompute_estimated_memory_bytes()

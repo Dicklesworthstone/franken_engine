@@ -1459,7 +1459,7 @@ impl UncommittedEvidenceChainEvidence {
                 });
             }
             if receipt.action == ContainmentAction::Sandbox
-                && (primary_entry.metadata.get("sandbox_policy_hash").is_none()
+                && (!primary_entry.metadata.contains_key("sandbox_policy_hash")
                     || primary_entry.metadata.get("sandbox_policy_hash")
                         != receipt.metadata.get("sandbox_policy_hash"))
             {

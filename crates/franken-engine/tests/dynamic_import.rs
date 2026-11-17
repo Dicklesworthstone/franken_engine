@@ -794,7 +794,6 @@ main();"#,
     );
 }
 
-
 /// Missing required bindings are guest SyntaxErrors of the importing module.
 /// The provider may already have evaluated: this is a binding-validation
 /// regression, not proof of graph-wide linking before all module side effects.

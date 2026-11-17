@@ -658,7 +658,6 @@ fn exports_carry_the_values_the_module_assigned_bd_9vouw_222() {
     );
 }
 
-
 // Required named bindings are checked after their provider has completed.
 // These cases do not claim a whole-graph link-before-evaluation barrier.
 fn assert_import_syntax_error(files: &[(&str, &str)], diagnostic: &str) {
@@ -705,9 +704,8 @@ fn completed_providers_reject_missing_named_imports_in_every_clause_shape() {
         "{ missing as renamed }",
         "defaultValue, { missing }",
     ] {
-        let entry = format!(
-            "import {clause} from './lib/a.mjs'; console.log('importer must not run');"
-        );
+        let entry =
+            format!("import {clause} from './lib/a.mjs'; console.log('importer must not run');");
         assert_import_syntax_error(
             &[("app.mjs", &entry)],
             "does not provide an export named 'missing'",
@@ -812,7 +810,10 @@ fn real_undefined_exports_and_renamed_aliases_are_valid_required_bindings() {
 fn required_binding_validation_preserves_commonjs_default_and_published_names() {
     assert_output(
         &[
-            ("lib/provider.cjs", "exports.empty = undefined; exports.value = 7;"),
+            (
+                "lib/provider.cjs",
+                "exports.empty = undefined; exports.value = 7;",
+            ),
             (
                 "app.mjs",
                 "import provider, { empty, value } from './lib/provider.cjs'; console.log(empty === undefined, provider.value, value);",

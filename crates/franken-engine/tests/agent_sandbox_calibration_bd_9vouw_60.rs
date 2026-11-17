@@ -345,7 +345,10 @@ fn record_replayable_sandbox(dir: &Path) -> serde_json::Value {
         "recorded write"
     );
     assert!(report["replay"]["replay_input_signature"].is_object());
-    assert_eq!(report["replay"]["replay_input"]["module_hashes_exact"], true);
+    assert_eq!(
+        report["replay"]["replay_input"]["module_hashes_exact"],
+        true
+    );
     report
 }
 
@@ -371,9 +374,16 @@ fn sandbox_replay_uses_recorded_host_effects_without_live_root_rc_c2() {
     let dir = scratch_dir("offline_replay");
     let report = record_replayable_sandbox(&dir);
     fs::rename(dir.join("root"), dir.join("retained-root")).expect("retain original files");
-    fs::write(dir.join("retained-root/notes.txt"), "changed after recording")
-        .expect("change live input");
-    fs::write(dir.join("retained-root/output.txt"), "must remain untouched").expect("canary");
+    fs::write(
+        dir.join("retained-root/notes.txt"),
+        "changed after recording",
+    )
+    .expect("change live input");
+    fs::write(
+        dir.join("retained-root/output.txt"),
+        "must remain untouched",
+    )
+    .expect("canary");
 
     let output = replay_sandbox_report(&dir, "offline", &report);
     assert!(

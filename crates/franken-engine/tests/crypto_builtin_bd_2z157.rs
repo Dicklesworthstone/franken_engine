@@ -1542,8 +1542,14 @@ fn key_generation_observes_inherited_and_proxy_options_before_entropy_bd_53l89()
 #[test]
 fn invalid_key_options_and_throwing_getters_do_not_consume_entropy_bd_53l89() {
     for (expression, expected) in [
-        ("crypto.generateKeyPairSync('ed25519', null)", "options argument"),
-        ("crypto.generateKeyPairSync('ed25519', [])", "options argument"),
+        (
+            "crypto.generateKeyPairSync('ed25519', null)",
+            "options argument",
+        ),
+        (
+            "crypto.generateKeyPairSync('ed25519', [])",
+            "options argument",
+        ),
         ("crypto.generateKeyPairSync('ec', {})", "namedCurve"),
         (
             "crypto.generateKeyPairSync('ec', { namedCurve: 'P-384' })",
@@ -1617,7 +1623,10 @@ fn separate_key_handles_replay_without_live_entropy_bd_53l89() {
     let never = Arc::new(ScriptedRandomHostIo::never());
     let replayed = execute_crypto(source, never.clone(), replay.clone());
     assert_eq!(never.calls.load(Ordering::Acquire), 0);
-    assert_eq!(replayed.host_effect_transcript, recorded.host_effect_transcript);
+    assert_eq!(
+        replayed.host_effect_transcript,
+        recorded.host_effect_transcript
+    );
     replay
         .finish_execution()
         .expect("the key lifecycle consumes exactly its recorded entropy");

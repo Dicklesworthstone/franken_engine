@@ -19,8 +19,7 @@ fn pairwise_participants() -> Vec<PairwiseMaskParticipant> {
     for right in 1..participants.len() {
         let (earlier, later) = participants.split_at_mut(right);
         for peer in earlier {
-            PairwiseMaskParticipant::establish_shared_seed(peer, &mut later[0], &mut rng)
-                .unwrap();
+            PairwiseMaskParticipant::establish_shared_seed(peer, &mut later[0], &mut rng).unwrap();
         }
     }
     participants
@@ -110,7 +109,10 @@ fn dropout_disclosure_locks_survivors_across_retries_and_serialization() {
     }
 
     let mut restored: PairwiseMaskParticipant = serde_json::from_value(before).unwrap();
-    assert_eq!(restored.reveal_dropout_seeds(&roster[..2]).unwrap(), revealed);
+    assert_eq!(
+        restored.reveal_dropout_seeds(&roster[..2]).unwrap(),
+        revealed
+    );
     assert!(
         restored
             .reveal_dropout_seeds(&[roster[0].clone(), roster[2].clone()])
@@ -151,14 +153,25 @@ fn pairwise_seed_setup_cannot_rekey_or_change_a_submitted_roster() {
     let mut newcomer = PairwiseMaskParticipant::new(ParticipantId("dave".into()));
     let before = serde_json::to_value((&participants, &newcomer)).unwrap();
     assert!(
-        PairwiseMaskParticipant::establish_shared_seed(&mut participants[0], &mut newcomer, &mut rng)
-            .is_err()
+        PairwiseMaskParticipant::establish_shared_seed(
+            &mut participants[0],
+            &mut newcomer,
+            &mut rng
+        )
+        .is_err()
     );
     assert!(
-        PairwiseMaskParticipant::establish_shared_seed(&mut newcomer, &mut participants[0], &mut rng)
-            .is_err()
+        PairwiseMaskParticipant::establish_shared_seed(
+            &mut newcomer,
+            &mut participants[0],
+            &mut rng
+        )
+        .is_err()
     );
-    assert_eq!(serde_json::to_value((&participants, &newcomer)).unwrap(), before);
+    assert_eq!(
+        serde_json::to_value((&participants, &newcomer)).unwrap(),
+        before
+    );
 }
 
 #[test]
@@ -187,7 +200,10 @@ fn session_contributions_require_unique_registered_participants() {
         assert!(session.aggregate_contributions(contributions).is_err());
         assert_eq!(serde_json::to_value(&session).unwrap(), before);
     }
-    assert_eq!(session.aggregate_contributions(vec![a, b]).unwrap(), vec![30]);
+    assert_eq!(
+        session.aggregate_contributions(vec![a, b]).unwrap(),
+        vec![30]
+    );
 }
 
 #[test]
@@ -203,7 +219,11 @@ fn pairwise_completion_binds_registered_roster_and_actual_contributors() {
             survivors.to_vec(),
         ),
         (
-            vec![roster[0].clone(), roster[1].clone(), ParticipantId("unknown".into())],
+            vec![
+                roster[0].clone(),
+                roster[1].clone(),
+                ParticipantId("unknown".into()),
+            ],
             survivors.to_vec(),
         ),
         (survivors.to_vec(), survivors.to_vec()),
@@ -251,7 +271,13 @@ fn pairwise_completion_requires_exact_dropout_seed_coverage() {
     let mut unknown_sender = seeds.clone();
     unknown_sender[0].survivor = ParticipantId("unknown".into());
     let before = serde_json::to_value(&session).unwrap();
-    for invalid in [seeds[..1].to_vec(), duplicate, extra, living_peer, unknown_sender] {
+    for invalid in [
+        seeds[..1].to_vec(),
+        duplicate,
+        extra,
+        living_peer,
+        unknown_sender,
+    ] {
         assert!(
             session
                 .complete_pairwise_aggregation(&roster, survivors, &invalid)

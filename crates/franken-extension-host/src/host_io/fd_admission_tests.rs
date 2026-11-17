@@ -4,8 +4,8 @@ use super::*;
 use std::sync::{Arc, Barrier, mpsc};
 
 const NODE_OPEN_FLAGS: [&str; 22] = [
-    "r", "r+", "rs", "sr", "rs+", "sr+", "w", "wx", "xw", "w+", "wx+", "xw+", "a", "ax",
-    "xa", "a+", "ax+", "xa+", "as", "sa", "as+", "sa+",
+    "r", "r+", "rs", "sr", "rs+", "sr+", "w", "wx", "xw", "w+", "wx+", "xw+", "a", "ax", "xa",
+    "a+", "ax+", "xa+", "as", "sa", "as+", "sa+",
 ];
 
 fn provider(limit: usize) -> (tempfile::TempDir, SandboxedHostIo) {

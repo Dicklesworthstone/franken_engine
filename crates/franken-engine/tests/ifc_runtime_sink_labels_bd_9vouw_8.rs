@@ -31,8 +31,8 @@ use frankenengine_engine::lowering_pipeline::{
 };
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 use frankenengine_extension_host::host_io::{
-    HostIoCapability, HostIoControl, HostIoError, HostIoOutcome, HostIoProvider, HostIoRecorder,
-    HostIoRequest, HostIoResponse, InMemoryHostIoTranscript,
+    HostIoCapability, HostIoControl, HostIoError, HostIoExceptionProvenance, HostIoOutcome,
+    HostIoProvider, HostIoRecorder, HostIoRequest, HostIoResponse, InMemoryHostIoTranscript,
 };
 
 const FILE_CONTENTS: &str = "db-password=hunter2";
@@ -419,8 +419,8 @@ fn deferred_function_body_secret_egress_denied_and_local_server_receives_zero_by
     let addr = listener.local_addr().expect("listener addr");
 
     // Lower a script where `deferredSend` is a deferred nested function body
-    // that passed static IFC lowering because its captured `slot` initializer
-    // was Public at compile time.
+    // that passed static IFC lowering under canonical ProviderInternal
+    // provenance because its captured `slot` initializer was Public at compile time.
     let source = format!(
         "const http = require('http');\n\
          const slot = '__PLACEHOLDER_PUBLIC_VALUE__';\n\
@@ -434,7 +434,7 @@ fn deferred_function_body_secret_egress_denied_and_local_server_receives_zero_by
         .parse_with_options(
             ParserSource {
                 label: "deferred_egress_probe.js".into(),
-                text: source.into(),
+                text: source,
             },
             ParseGoal::Script,
             &ParserOptions::default(),
@@ -442,18 +442,24 @@ fn deferred_function_body_secret_egress_denied_and_local_server_receives_zero_by
         .expect("parse");
     let mut ir3 = lower_ir0_to_ir3(
         &Ir0Module::from_syntax_tree(tree, "deferred_egress_probe.js"),
-        &LoweringContext::new("trace-wyazf", "decision-wyazf", "policy-wyazf"),
+        &LoweringContext::new("trace-wyazf", "decision-wyazf", "policy-wyazf")
+            .with_host_io_exception_provenance(HostIoExceptionProvenance::ProviderInternal),
     )
     .expect("benign-looking deferred body lowers statically")
     .ir3;
     assert!(
-        !ir3.function_table.is_empty(),
+        ir3.function_table
+            .iter()
+            .any(|desc| desc.name.as_deref() == Some("deferredSend")),
         "deferredSend must compile into ir3.function_table"
     );
 
     // Replace the placeholder literal load with a Move from pre-seeded Secret
     // register 250, simulating a runtime-tainted value bypassing static IR2.
     let secret_reg = 250u32;
+    if let Some(main_desc) = ir3.function_table.first_mut() {
+        main_desc.frame_size = main_desc.frame_size.max(secret_reg + 1);
+    }
     let mut patched = false;
     for instr in &mut ir3.instructions {
         if let Ir3Instruction::LoadStr { dst, pool_index } = *instr

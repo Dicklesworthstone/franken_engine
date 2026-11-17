@@ -830,7 +830,8 @@ mod tests {
         core.set_object_property(dead, "payload".to_string(), Value::Object(payload))
             .expect("member graph");
         core.seed_register(0, Value::Object(set)).expect("set root");
-        core.seed_register(1, Value::Object(live)).expect("live member root");
+        core.seed_register(1, Value::Object(live))
+            .expect("live member root");
         for id in [live, dead] {
             core.write_reg(2, Value::Object(id)).expect("add argument");
             core.weakset_method(
@@ -841,7 +842,8 @@ mod tests {
             )
             .expect("weak insertion");
         }
-        core.write_reg(2, Value::Undefined).expect("release argument");
+        core.write_reg(2, Value::Undefined)
+            .expect("release argument");
         let before = core.estimated_memory_bytes;
         core.collect_garbage();
         assert!(core.heap.get(live.0 as usize).is_some());
@@ -877,7 +879,8 @@ mod tests {
                 )
                 .expect("member insertion");
             }
-            core.write_reg(1, Value::Undefined).expect("release final member");
+            core.write_reg(1, Value::Undefined)
+                .expect("release final member");
             core.collect_garbage();
             assert!(core.weakmap_storage[&set].entries.is_empty());
             assert!(core.weakmap_storage[&set].weak_key_objects.is_empty());
@@ -895,7 +898,10 @@ mod tests {
         let mut core = core();
         let set = core.alloc_weak_collection("WeakSet").expect("WeakSet");
         let key = object(&mut core);
-        let label = Label::Custom { name: "membership".repeat(128), level: 7 };
+        let label = Label::Custom {
+            name: "membership".repeat(128),
+            level: 7,
+        };
         core.write_reg_with_label(0, Value::Object(key), label.clone())
             .expect("classified membership input");
         core.clear_pending_hostcall_result_label();
@@ -908,7 +914,10 @@ mod tests {
         core.config.max_total_memory_bytes = admitted - 1;
         assert!(matches!(
             core.weakset_method(
-                None, "add", Value::Object(set), RegRange { start: 0, count: 1 },
+                None,
+                "add",
+                Value::Object(set),
+                RegRange { start: 0, count: 1 },
             ),
             Err(InterpreterError::MemoryBudgetExceeded { .. })
         ));
@@ -920,7 +929,10 @@ mod tests {
         core.config.max_total_memory_bytes = admitted;
         assert_eq!(
             core.weakset_method(
-                None, "add", Value::Object(set), RegRange { start: 0, count: 1 },
+                None,
+                "add",
+                Value::Object(set),
+                RegRange { start: 0, count: 1 },
             ),
             Ok(Value::Object(set))
         );
@@ -929,25 +941,35 @@ mod tests {
         assert_eq!(core.pending_hostcall_result_label.as_ref(), Some(&label));
 
         core.config.max_total_memory_bytes = u64::MAX;
-        core.set_register_label(0, Label::Public).expect("public query identity");
+        core.set_register_label(0, Label::Public)
+            .expect("public query identity");
         core.clear_pending_hostcall_result_label();
         assert_eq!(
             core.weakset_method(
-                None, "has", Value::Object(set), RegRange { start: 0, count: 1 },
+                None,
+                "has",
+                Value::Object(set),
+                RegRange { start: 0, count: 1 },
             ),
             Ok(Value::Bool(true))
         );
         assert_eq!(core.pending_hostcall_result_label.as_ref(), Some(&label));
         assert_eq!(
             core.weakset_method(
-                None, "delete", Value::Object(set), RegRange { start: 0, count: 1 },
+                None,
+                "delete",
+                Value::Object(set),
+                RegRange { start: 0, count: 1 },
             ),
             Ok(Value::Bool(true))
         );
         core.clear_pending_hostcall_result_label();
         assert_eq!(
             core.weakset_method(
-                None, "has", Value::Object(set), RegRange { start: 0, count: 1 },
+                None,
+                "has",
+                Value::Object(set),
+                RegRange { start: 0, count: 1 },
             ),
             Ok(Value::Bool(false))
         );

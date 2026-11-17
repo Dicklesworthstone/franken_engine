@@ -9370,7 +9370,9 @@ fn readable_pipe_link_is_authenticated_memory_exact_and_atomic_bd_7h43f() {
     assert_eq!(accepted.event_listener_records_for(source, "data").len(), 1);
     assert_eq!(accepted.event_listener_records_for(source, "end").len(), 1);
     assert_eq!(
-        accepted.event_listener_records_for(destination, "drain").len(),
+        accepted
+            .event_listener_records_for(destination, "drain")
+            .len(),
         1
     );
     assert!(
@@ -9395,7 +9397,8 @@ fn readable_pipe_link_is_authenticated_memory_exact_and_atomic_bd_7h43f() {
         Value::BuiltinFunction(builtin) => builtin.clone(),
         other => panic!("pipe data listener must be a builtin, got {other:?}"),
     };
-    let drain_builtin = match &accepted.event_listener_records_for(destination, "drain")[0].listener {
+    let drain_builtin = match &accepted.event_listener_records_for(destination, "drain")[0].listener
+    {
         Value::BuiltinFunction(builtin) => builtin.clone(),
         other => panic!("pipe drain listener must be a builtin, got {other:?}"),
     };
@@ -9450,14 +9453,15 @@ fn readable_pipe_link_is_authenticated_memory_exact_and_atomic_bd_7h43f() {
         .expect("replacement pipe after retiring the first token");
     accepted.detach_readable_pipe(source, destination, 0);
     assert_eq!(
-        accepted.readable_pipe_links[&source].token,
-        1,
+        accepted.readable_pipe_links[&source].token, 1,
         "an old invocation's cleanup must not detach a re-entrant replacement"
     );
     assert!(accepted.readable_from_streams[&source].flowing);
     assert_eq!(accepted.event_listener_records_for(source, "data").len(), 1);
     assert_eq!(
-        accepted.event_listener_records_for(destination, "drain").len(),
+        accepted
+            .event_listener_records_for(destination, "drain")
+            .len(),
         1
     );
     accepted.clear_readable_pipe_links();
@@ -9799,7 +9803,10 @@ fn readable_pipe_end_false_observes_options_and_retires_authenticated_edge_bd_30
         assert!(core.readable_pipe_sources.is_empty());
         assert!(core.event_listener_records_for(source, "data").is_empty());
         assert!(core.event_listener_records_for(source, "end").is_empty());
-        assert!(core.event_listener_records_for(destination, "drain").is_empty());
+        assert!(
+            core.event_listener_records_for(destination, "drain")
+                .is_empty()
+        );
 
         core.readable_pipe(
             &module,
@@ -9882,7 +9889,10 @@ fn readable_pipe_end_false_preflights_eof_provenance_before_detach_bd_305gi_2() 
     assert_eq!(core.readable_pipe_sources[&destination], source);
     assert_eq!(core.event_listener_records_for(source, "data").len(), 1);
     assert_eq!(core.event_listener_records_for(source, "end").len(), 1);
-    assert_eq!(core.event_listener_records_for(destination, "drain").len(), 1);
+    assert_eq!(
+        core.event_listener_records_for(destination, "drain").len(),
+        1
+    );
     assert_eq!(core.estimated_memory_bytes(), before);
     assert_eq!(before, core.recompute_estimated_memory_bytes());
 
@@ -10193,9 +10203,8 @@ fn readable_pipe_buffered_chunk_observes_resume_provenance_bd_305gi_2() {
     .expect("pipe the classified source into a fresh Public destination");
     let before = core.estimated_memory_bytes();
     let source_before = core.readable_from_streams[&source].clone();
-    let projection_bytes = InterpreterCore::estimate_readable_from_state_bytes(
-        &core.readable_from_streams[&source],
-    );
+    let projection_bytes =
+        InterpreterCore::estimate_readable_from_state_bytes(&core.readable_from_streams[&source]);
     let label_bytes = InterpreterCore::estimate_label_bytes(&completion_label);
     core.config.max_total_memory_bytes = before
         .saturating_add(projection_bytes)
@@ -10217,8 +10226,7 @@ fn readable_pipe_buffered_chunk_observes_resume_provenance_bd_305gi_2() {
     assert!(core.readable_from_streams[&source].buffer.is_empty());
     assert_eq!(core.writable_streams[&destination].writes.len(), 1);
     assert_eq!(
-        core.writable_streams[&destination].writes[0].label,
-        completion_label,
+        core.writable_streams[&destination].writes[0].label, completion_label,
         "the EventEmitter data argument must carry current lifecycle provenance"
     );
     assert_eq!(
@@ -10251,7 +10259,8 @@ fn readable_pipe_drain_registration_precharges_cleanup_bd_305gi_2() {
         RegRange { start: 0, count: 1 },
     )
     .expect("pipe");
-    let guest = Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::ArrayIsArray));
+    let guest =
+        Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::ArrayIsArray));
     let instructions = core.instructions_executed;
     let bytes = core.estimated_memory_bytes();
     core.config.instruction_budget = instructions.saturating_add(1);
@@ -10269,7 +10278,10 @@ fn readable_pipe_drain_registration_precharges_cleanup_bd_305gi_2() {
     ));
     assert_eq!(core.instructions_executed, instructions);
     assert_eq!(core.estimated_memory_bytes(), bytes);
-    assert_eq!(core.event_listener_records_for(destination, "drain").len(), 1);
+    assert_eq!(
+        core.event_listener_records_for(destination, "drain").len(),
+        1
+    );
     core.config.instruction_budget = instructions.saturating_add(2);
     core.insert_event_listener(
         destination,
@@ -10660,6 +10672,7 @@ fn readable_from_precharges_fixed_state_before_heap_side_effects_bd_fw7zd() {
         paused: false,
         nonflowing_read_consumed: false,
         lifecycle_label: Label::Public,
+        iterator_is_async: false,
         to_array_waiter: None,
     };
     let state_bytes = InterpreterCore::estimate_readable_from_state_bytes(&state);

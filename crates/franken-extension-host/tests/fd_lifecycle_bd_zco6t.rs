@@ -643,8 +643,8 @@ fn descriptor_truncate_enforces_the_host_byte_cap_before_changing_length() {
 fn node_string_open_aliases_preserve_read_write_truncate_and_append_behavior() {
     let (root, provider) = sandbox();
     for (index, flags) in [
-        "r", "r+", "rs", "sr", "rs+", "sr+", "w", "wx", "xw", "w+", "wx+", "xw+", "a", "ax",
-        "xa", "a+", "ax+", "xa+", "as", "sa", "as+", "sa+",
+        "r", "r+", "rs", "sr", "rs+", "sr+", "w", "wx", "xw", "w+", "wx+", "xw+", "a", "ax", "xa",
+        "a+", "ax+", "xa+", "as", "sa", "as+", "sa+",
     ]
     .into_iter()
     .enumerate()
@@ -668,7 +668,11 @@ fn node_string_open_aliases_preserve_read_write_truncate_and_append_behavior() {
             "{flags}"
         );
         if readable {
-            assert_eq!(provider.read_fd(fd, 8, Some(0)).unwrap(), initial, "{flags}");
+            assert_eq!(
+                provider.read_fd(fd, 8, Some(0)).unwrap(),
+                initial,
+                "{flags}"
+            );
         } else {
             assert!(
                 matches!(provider.read_fd(fd, 1, None), Err(HostIoError::Fs { code, .. }) if code == "EBADF")
@@ -685,7 +689,11 @@ fn node_string_open_aliases_preserve_read_write_truncate_and_append_behavior() {
             };
             assert_eq!(std::fs::read(&path).unwrap(), expected, "{flags}");
             if readable {
-                assert_eq!(provider.read_fd(fd, 8, Some(0)).unwrap(), expected, "{flags}");
+                assert_eq!(
+                    provider.read_fd(fd, 8, Some(0)).unwrap(),
+                    expected,
+                    "{flags}"
+                );
             }
         } else {
             assert!(
@@ -762,7 +770,11 @@ fn every_append_alias_keeps_linux_positional_append_and_cursor_semantics() {
         let fd = provider.open_fd(&name, flags).unwrap();
         provider.write_fd(fd, b"seed").unwrap();
         provider.write_fd_at(fd, b"!", Some(0)).unwrap();
-        assert_eq!(std::fs::read(root.join(&name)).unwrap(), b"seed!", "{flags}");
+        assert_eq!(
+            std::fs::read(root.join(&name)).unwrap(),
+            b"seed!",
+            "{flags}"
+        );
         if flags.contains('+') {
             assert_eq!(
                 provider.read_fd(fd, 1, None).unwrap(),
@@ -792,16 +804,14 @@ fn exclusive_and_sync_opens_preserve_symlink_containment() {
     symlink(&outside, root.join("external-directory")).unwrap();
     symlink("missing-target", root.join("dangling")).unwrap();
     for flags in [
-        "rs", "sr", "rs+", "sr+", "wx", "xw", "wx+", "xw+", "ax", "xa", "ax+", "xa+", "as",
-        "sa", "as+", "sa+",
+        "rs", "sr", "rs+", "sr+", "wx", "xw", "wx+", "xw+", "ax", "xa", "ax+", "xa+", "as", "sa",
+        "as+", "sa+",
     ] {
         for path in ["external-file", "dangling"] {
             let result = provider.open_fd(path, flags);
             assert!(result.is_err(), "{flags} unexpectedly followed {path}");
             if flags.contains('x') {
-                assert!(
-                    matches!(result, Err(HostIoError::Fs { code, .. }) if code == "EEXIST")
-                );
+                assert!(matches!(result, Err(HostIoError::Fs { code, .. }) if code == "EEXIST"));
             }
         }
         assert!(

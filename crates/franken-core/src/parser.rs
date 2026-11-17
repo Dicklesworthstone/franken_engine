@@ -13851,7 +13851,7 @@ fn authenticate_for_await_intrinsics(
             if arguments.len() != if index == 0 { 3 } else { 1 } {
                 return Err(invalid());
             }
-            *callee = Box::new(Expression::Identifier(intrinsic.to_string()));
+            **callee = Expression::Identifier(intrinsic.to_string());
             if index == 0 {
                 arguments.truncate(2);
             }

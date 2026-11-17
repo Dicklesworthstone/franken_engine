@@ -12889,9 +12889,7 @@ impl InterpreterCore {
                 let iterable = self.arg_or_undefined(args, 0)?;
                 if !matches!(iterable, Value::Undefined | Value::Null) {
                     match self.collection_seed_adder(module, set_id, "Set")? {
-                        None => {
-                            self.seed_set_values_from_iterable(module, values_id, iterable)?
-                        }
+                        None => self.seed_set_values_from_iterable(module, values_id, iterable)?,
                         Some(adder) => {
                             self.seed_collection_with_adder(module, set_id, adder, false, iterable)?
                         }
@@ -12928,9 +12926,7 @@ impl InterpreterCore {
                 let iterable = self.arg_or_undefined(args, 0)?;
                 if !matches!(iterable, Value::Undefined | Value::Null) {
                     match self.collection_seed_adder(module, weakset_id, "WeakSet")? {
-                        None => {
-                            self.seed_weakset_from_iterable(module, weakset_id, iterable)?
-                        }
+                        None => self.seed_weakset_from_iterable(module, weakset_id, iterable)?,
                         Some(adder) => self.seed_collection_with_adder(
                             module, weakset_id, adder, false, iterable,
                         )?,

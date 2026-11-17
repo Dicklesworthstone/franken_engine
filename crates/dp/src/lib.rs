@@ -578,10 +578,8 @@ impl SecureAggregationSession {
         if survivor_set.len() < self.config.min_participants {
             return Err(SecureAggregationError::InsufficientParticipants);
         }
-        let dropped: BTreeSet<ParticipantId> = expected_set
-            .difference(&survivor_set)
-            .cloned()
-            .collect();
+        let dropped: BTreeSet<ParticipantId> =
+            expected_set.difference(&survivor_set).cloned().collect();
         if dropped.len() > self.config.dropout_threshold {
             return Err(SecureAggregationError::ProtocolViolation(
                 "Dropped participants exceed configured dropout_threshold".into(),
@@ -608,9 +606,12 @@ impl SecureAggregationSession {
                 ));
             }
         }
-        let required_seeds = survivor_set.len().checked_mul(dropped.len()).ok_or_else(|| {
-            SecureAggregationError::ProtocolViolation("Dropout seed coverage overflow".into())
-        })?;
+        let required_seeds = survivor_set
+            .len()
+            .checked_mul(dropped.len())
+            .ok_or_else(|| {
+                SecureAggregationError::ProtocolViolation("Dropout seed coverage overflow".into())
+            })?;
         if seed_lookup.len() != required_seeds {
             return Err(SecureAggregationError::ProtocolViolation(
                 "Dropout seeds must cover every survivor and dropped-peer pair exactly once".into(),

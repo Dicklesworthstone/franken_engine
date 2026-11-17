@@ -1301,7 +1301,11 @@ mod shared_binding_cell_accounting_tests_bd_sblaq {
                     core.heap[array.0 as usize].own_property_attributes(
                         &RuntimePropertyKey::String(JsString::from("length")),
                     ),
-                    PropertyAttributes::DEFAULT
+                    PropertyAttributes {
+                        writable: true,
+                        enumerable: false,
+                        configurable: false,
+                    }
                 );
                 assert_eq!(
                     core.heap[array.0 as usize]

@@ -1282,7 +1282,9 @@ impl PromiseStore {
         queue: &mut MicrotaskQueue,
     ) -> Result<(), PromiseError> {
         self.update(source, |record| {
-            record.reactions.retain(|reaction| reaction.result_promise != carrier);
+            record
+                .reactions
+                .retain(|reaction| reaction.result_promise != carrier);
         })?;
         queue.remove_await_reactions(carrier);
         if !self.get(carrier)?.state.is_settled() {
@@ -4088,7 +4090,11 @@ mod tests {
                 .expect("cancel queued resolution");
             assert_eq!(queue.pending_count(), survivors.len());
             assert_eq!(queue.total_enqueued(), enqueued);
-            assert_eq!(queue.tasks.len(), slots, "cancellation leaves physical holes");
+            assert_eq!(
+                queue.tasks.len(),
+                slots,
+                "cancellation leaves physical holes"
+            );
             assert!(queue.estimated_memory_bytes() < before);
             assert_eq!(
                 queue.estimated_memory_bytes(),

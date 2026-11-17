@@ -8,7 +8,7 @@ This file is an exact golden artifact. Update it only by regenerating the invent
 
 | Metric | Count |
 | --- | ---: |
-| Source module files | 854 |
+| Source module files | 855 |
 | lib.rs public module exports | 625 |
 | Disabled lib.rs exports | 0 |
 | Gate module files | 62 |
@@ -127,6 +127,7 @@ This file is an exact golden artifact. Update it only by regenerating the invent
 - `baseline_interpreter::json_stringify::tests::unicode_batches` — `crates/franken-engine/src/baseline_interpreter/json_stringify/tests/unicode_batches.rs`
 - `baseline_interpreter::lane_router` — `crates/franken-engine/src/baseline_interpreter/lane_router.rs`
 - `baseline_interpreter::legacy_regexp` — `crates/franken-engine/src/baseline_interpreter/legacy_regexp.rs`
+- `baseline_interpreter::module_integrity` — `crates/franken-engine/src/baseline_interpreter/module_integrity.rs`
 - `baseline_interpreter::number_locale` — `crates/franken-engine/src/baseline_interpreter/number_locale.rs`
 - `baseline_interpreter::object_integrity` — `crates/franken-engine/src/baseline_interpreter/object_integrity.rs`
 - `baseline_interpreter::package_resolution` — `crates/franken-engine/src/baseline_interpreter/package_resolution.rs`
@@ -1670,3 +1671,4 @@ None.
 - `promise_model_restore`
 - `trust_zone`
 - `wasm_numeric_vm`
+

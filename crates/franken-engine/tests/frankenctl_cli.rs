@@ -5347,7 +5347,6 @@ fn frankenctl_benchmark_verify_incomplete_bundle_fails_with_runtime_remediation(
     let _ = fs::remove_dir_all(bundle_dir);
 }
 
-
 // These tests exercise the public CLI with complete source files. The tiny
 // classic factory below observes emitted call semantics; it is not a React
 // renderer and does not establish browser, SSR or hydration compatibility.
@@ -5465,8 +5464,11 @@ console.log(JSON.stringify(Card("ready")));
 console.log(calls.join(","));
 "#;
         fs::write(&input, source).expect("write complete JSX module");
-        fs::write(root.path().join("suffix.mjs"), "export const suffix = '!';\n")
-            .expect("write local dependency");
+        fs::write(
+            root.path().join("suffix.mjs"),
+            "export const suffix = '!';\n",
+        )
+        .expect("write local dependency");
 
         let report = successful_report(&compile(&input, "jsx", Some("classic")));
         assert_compilation_identity(&report, &input, source);
@@ -5647,12 +5649,10 @@ export default function Card(props: Props) {
             "the module compiler must retain duplicate-key lowering warnings: {report}"
         );
         assert!(
-            entries
-                .iter()
-                .all(|entry| !entry["entry_id"]
-                    .as_str()
-                    .unwrap()
-                    .starts_with("ast-compile-error")),
+            entries.iter().all(|entry| !entry["entry_id"]
+                .as_str()
+                .unwrap()
+                .starts_with("ast-compile-error")),
             "a valid module with a lowering warning is not a compile error: {report}"
         );
     }

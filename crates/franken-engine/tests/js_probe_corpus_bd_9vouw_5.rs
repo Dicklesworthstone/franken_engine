@@ -33,11 +33,10 @@ enum Expect {
     /// Names the bead that owns the fix.
     KnownFailure(&'static str),
     DeniedByDesign,
+    /// Ordinary ES2020 Script mode intentionally withholds CommonJS `require`,
+    /// so `typeof require === 'undefined'` takes the guarded fallback branch.
+    ScriptWithholdsCommonJs(&'static str),
 }
-
-// Owning beads for the known failures (BRIDGE semantic leaves, plus the two
-// focused bugs filed from this corpus's first real run on 2026-09-23).
-const SLOPPY_MODE: &str = "bd-performance-conformance-bridge-tu32j.15.6";
 
 /// Case id -> expectation. Every corpus case must appear exactly once.
 /// Filled from the observed verdicts of the first run (2026-09-23): 20 match
@@ -78,7 +77,7 @@ const LEDGER: &[(&str, Expect)] = &[
     ("18_string_methods", Expect::Pass),
     ("19_optional_nullish", Expect::Pass),
     ("20_tagged_template", Expect::Pass),
-    ("21_sloppy_with_args", Expect::KnownFailure(SLOPPY_MODE)),
+    ("21_sloppy_with_args", Expect::Pass),
     ("22_eval_function", Expect::DeniedByDesign),
     ("23_number_format", Expect::Pass),
     ("24_date", Expect::Pass),
@@ -106,14 +105,41 @@ const LEDGER: &[(&str, Expect)] = &[
     ("46_catch_message", Expect::Pass),
     ("47_number_to_string", Expect::Pass),
     ("48_ambient_process", Expect::DeniedByDesign),
-    ("49_ambient_require_fs", Expect::DeniedByDesign),
+    (
+        "49_ambient_require_fs",
+        Expect::ScriptWithholdsCommonJs("no-require"),
+    ),
     ("50_getter_label_join", Expect::Pass),
+    ("51_function_own_props_and_statics", Expect::Pass),
+    ("52_es2020_typeof_50_globals", Expect::Pass),
+    ("53_test262_assert_sta_prelude", Expect::Pass),
+    ("54_strict_frozen_function_rejects_write", Expect::Pass),
+    ("55_direct_ambient_require_fs", Expect::DeniedByDesign),
 ];
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Observed {
     Output(String),
     Failed(String),
+}
+
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+fn is_denied_stderr(stderr: &str) -> bool {
+    stderr.contains("ambient authority violation")
+        || stderr.contains("capability denied:")
+        || stderr.contains("capability_denied")
+}
+
+fn extract_denial_op(stderr: &str) -> Option<String> {
+    for line in stderr.lines() {
+        if is_denied_stderr(line) {
+            return Some(line.trim().chars().take(200).collect());
+        }
+    }
+    None
 }
 
 fn corpus() -> Vec<(String, String, String)> {
@@ -155,6 +181,9 @@ fn run_case(dir: &Path, id: &str, source: &str) -> Observed {
             "--out",
             report.to_str().expect("utf8"),
         ])
+        .env_remove("FORCE_COLOR")
+        .env_remove("CLICOLOR_FORCE")
+        .env("NO_COLOR", "1")
         .output()
         .expect("frankenctl should execute");
     if !output.status.success() {
@@ -172,25 +201,21 @@ fn run_case(dir: &Path, id: &str, source: &str) -> Observed {
     Observed::Output(text)
 }
 
-#[test]
-fn js_probe_corpus_matches_node_ledger_bd_9vouw_5() {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("time")
-        .as_nanos();
-    let dir = std::env::temp_dir().join(format!("fe_probe_corpus_{}_{nonce}", std::process::id()));
-    fs::create_dir_all(&dir).expect("temp dir");
-
-    let ledger: BTreeMap<&str, Expect> = LEDGER.iter().copied().collect();
-    assert_eq!(ledger.len(), LEDGER.len(), "duplicate ledger entries");
-
+fn evaluate_observations(
+    cases: &[(String, String, String)],
+    observations: &BTreeMap<String, Observed>,
+    ledger: &BTreeMap<&str, Expect>,
+) -> (Vec<String>, Vec<String>, Vec<serde_json::Value>) {
     let mut problems = Vec::new();
     let mut table = Vec::new();
-    let cases = corpus();
-    for (id, source, node_output) in &cases {
-        let observed = run_case(&dir, id, source);
-        let matches = matches!(&observed, Observed::Output(text) if text == node_output);
-        let denied = matches!(&observed, Observed::Failed(stderr) if stderr.contains("ambient authority violation"));
+    let mut jsonl_rows = Vec::with_capacity(cases.len());
+
+    for (id, _source, node_output) in cases {
+        let observed = observations
+            .get(id)
+            .expect("every corpus case must have an observation");
+        let matches = matches!(observed, Observed::Output(text) if text == node_output);
+        let denied = matches!(observed, Observed::Failed(stderr) if is_denied_stderr(stderr));
         let verdict = if matches {
             "PASS"
         } else if denied {
@@ -198,17 +223,29 @@ fn js_probe_corpus_matches_node_ledger_bd_9vouw_5() {
         } else {
             "FAIL"
         };
-        let detail = match &observed {
-            Observed::Output(text) => format!("output={text:?}"),
+        let (observed_str, denial_op, detail) = match observed {
+            Observed::Output(text) => (text.clone(), None, format!("output={text:?}")),
             Observed::Failed(stderr) => {
                 let line = stderr
                     .lines()
                     .find(|line| line.contains("failed for"))
                     .unwrap_or(stderr);
-                format!("error={}", line.chars().take(200).collect::<String>())
+                let truncated: String = line.chars().take(200).collect();
+                (
+                    truncated.clone(),
+                    extract_denial_op(stderr),
+                    format!("error={truncated}"),
+                )
             }
         };
         table.push(format!("{verdict:6} {id:32} node={node_output:?} {detail}"));
+        jsonl_rows.push(serde_json::json!({
+            "case_id": id,
+            "expected": node_output,
+            "observed": observed_str,
+            "verdict": verdict,
+            "denial_op": denial_op,
+        }));
         match ledger.get(id.as_str()) {
             None => problems.push(format!("{id}: missing from LEDGER (observed {verdict})")),
             Some(Expect::Pass) if !matches => {
@@ -227,6 +264,12 @@ fn js_probe_corpus_matches_node_ledger_bd_9vouw_5() {
                     "{id}: expected an ambient-authority refusal, {detail}"
                 ));
             }
+            Some(Expect::ScriptWithholdsCommonJs(expected_script_out)) if !matches!(observed, Observed::Output(text) if text == expected_script_out) =>
+            {
+                problems.push(format!(
+                    "{id}: expected Script-mode withheld-CommonJS output {expected_script_out:?}, {detail}"
+                ));
+            }
             _ => {}
         }
     }
@@ -235,10 +278,50 @@ fn js_probe_corpus_matches_node_ledger_bd_9vouw_5() {
             problems.push(format!("{id}: in LEDGER but not in the corpus"));
         }
     }
+    (problems, table, jsonl_rows)
+}
+
+#[test]
+fn js_probe_corpus_matches_node_ledger_bd_9vouw_5() {
+    let stamp_nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time")
+        .as_nanos();
+    let root = repo_root();
+    let run_tag = format!("{}_{stamp_nanos}", std::process::id());
+    let dir = root
+        .join("target/js_probe_corpus_bd_9vouw_5")
+        .join(&run_tag);
+    fs::create_dir_all(&dir).expect("scratch dir");
+
+    let artifact_dir = root.join("artifacts/js_probe_corpus").join(&run_tag);
+    fs::create_dir_all(&artifact_dir).expect("artifact dir");
+
+    let ledger: BTreeMap<&str, Expect> = LEDGER.iter().copied().collect();
+    assert_eq!(ledger.len(), LEDGER.len(), "duplicate ledger entries");
+
+    let cases = corpus();
+    let mut observations = BTreeMap::new();
+    for (id, source, _node_output) in &cases {
+        observations.insert(id.clone(), run_case(&dir, id, source));
+    }
+
+    let (problems, table, jsonl_rows) = evaluate_observations(&cases, &observations, &ledger);
+    let jsonl_text = jsonl_rows
+        .iter()
+        .map(|row| serde_json::to_string(row).expect("serialize jsonl row"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    let jsonl_path = artifact_dir.join("probe_verdicts.jsonl");
+    fs::write(&jsonl_path, jsonl_text).expect("write probe_verdicts.jsonl");
+    assert!(jsonl_path.is_file());
+
     let passing = table.iter().filter(|row| row.starts_with("PASS")).count();
     eprintln!(
-        "probe corpus: {passing}/{} match Node\n{}",
+        "probe corpus: {passing}/{} match Node (verdicts={})\n{}",
         cases.len(),
+        jsonl_path.display(),
         table.join("\n")
     );
     assert!(
@@ -246,4 +329,59 @@ fn js_probe_corpus_matches_node_ledger_bd_9vouw_5() {
         "probe corpus ledger violations:\n{}",
         problems.join("\n")
     );
+}
+
+#[test]
+fn negative_fault_injection_trips_two_way_ratchet_with_readable_diff() {
+    let ledger: BTreeMap<&str, Expect> = LEDGER.iter().copied().collect();
+    let cases = corpus();
+    let mut baseline = BTreeMap::new();
+    for (id, _source, node_output) in &cases {
+        let obs = match ledger.get(id.as_str()).copied() {
+            Some(Expect::Pass) => Observed::Output(node_output.clone()),
+            Some(Expect::DeniedByDesign) => Observed::Failed(
+                "compile failed for probe: ambient authority violation on host global".to_string(),
+            ),
+            Some(Expect::ScriptWithholdsCommonJs(expected_script_out)) => {
+                Observed::Output(expected_script_out.to_string())
+            }
+            Some(Expect::KnownFailure(_)) => {
+                Observed::Failed("compile failed for probe: unsupported with statement".to_string())
+            }
+            None => unreachable!(),
+        };
+        baseline.insert(id.clone(), obs);
+    }
+    let (clean_problems, _, _) = evaluate_observations(&cases, &baseline, &ledger);
+    assert!(clean_problems.is_empty());
+
+    // Fault 1: simulate IFC fail-high over-taint on Math.max (35_math).
+    let mut math_overtaint = baseline.clone();
+    math_overtaint.insert(
+        "35_math".to_string(),
+        Observed::Failed(
+            "run failed for 35_math.js: unauthorized flow TopSecret -> Internal on Math.max"
+                .to_string(),
+        ),
+    );
+    let (math_problems, _, _) = evaluate_observations(&cases, &math_overtaint, &ledger);
+    assert_eq!(math_problems.len(), 1);
+    assert!(math_problems[0].contains("35_math: expected Node output"));
+
+    // Fault 2: simulate i64 wrap regression on 41_int_overflow.
+    let mut int_wrap = baseline.clone();
+    int_wrap.insert(
+        "41_int_overflow".to_string(),
+        Observed::Output("-9223372036854775808".to_string()),
+    );
+    let (wrap_problems, _, _) = evaluate_observations(&cases, &int_wrap, &ledger);
+    assert_eq!(wrap_problems.len(), 1);
+    assert!(wrap_problems[0].contains("41_int_overflow: expected Node output"));
+
+    // Fault 3: stale KnownFailure that now matches Node must trip the upward ratchet.
+    let mut stale_ledger = ledger.clone();
+    stale_ledger.insert("21_sloppy_with_args", Expect::KnownFailure("bd-test-owner"));
+    let (stale_problems, _, _) = evaluate_observations(&cases, &baseline, &stale_ledger);
+    assert_eq!(stale_problems.len(), 1);
+    assert!(stale_problems[0].contains("21_sloppy_with_args: now matches Node"));
 }

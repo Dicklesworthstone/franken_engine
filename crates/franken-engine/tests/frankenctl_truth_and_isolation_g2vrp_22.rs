@@ -76,11 +76,9 @@ fn scratch_dir(label: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("system clock after unix epoch")
         .as_nanos();
-    let dir = std::env::temp_dir().join(format!(
-        "frankenctl_truth_g2vrp_22_{label}_{}_{}",
-        std::process::id(),
-        run_stamp_ns
-    ));
+    let dir = repo_root()
+        .join("target/frankenctl_truth_g2vrp_22")
+        .join(format!("{label}_{}_{}", std::process::id(), run_stamp_ns));
     fs::create_dir_all(&dir).expect("scratch directory should be created");
     dir
 }
@@ -503,7 +501,11 @@ fn run_frankenctl_recorded_expect_code(
     let arg_strings: Vec<String> = args.iter().map(|s| (*s).to_string()).collect();
     let started = Instant::now();
     let mut cmd = Command::new(FRANKENCTL_BIN);
-    cmd.args(args).current_dir(root);
+    cmd.args(args)
+        .current_dir(root)
+        .env_remove("FORCE_COLOR")
+        .env_remove("CLICOLOR_FORCE")
+        .env("NO_COLOR", "1");
     if let Some(extra_dir) = extra_path_dir {
         let existing = std::env::var_os("PATH").unwrap_or_default();
         let mut paths = vec![extra_dir.to_path_buf()];
@@ -751,8 +753,16 @@ fn frankenctl_executes_all_42_leaf_commands_with_zero_fabricated_stubs() {
     // Prepare real JS/TSX/package/config fixtures in scratch directory.
     let js_v1 = work.join("demo_v1.js");
     let js_v2 = work.join("demo_v2.js");
-    fs::write(&js_v1, "const answer = 40 + 2;\nconsole.log(answer);\n").expect("write js_v1");
-    fs::write(&js_v2, "const answer = 21 * 2;\nconsole.log(answer);\n").expect("write js_v2");
+    fs::write(
+        &js_v1,
+        "const answer = 40 + 2;\nconsole.log('val=' + answer);\n",
+    )
+    .expect("write js_v1");
+    fs::write(
+        &js_v2,
+        "const answer = 21 * 2;\nconsole.log('val=' + answer);\n",
+    )
+    .expect("write js_v2");
 
     let pkg_dir = work.join("pkg");
     fs::create_dir_all(&pkg_dir).expect("create pkg_dir");
@@ -975,14 +985,83 @@ fn frankenctl_executes_all_42_leaf_commands_with_zero_fabricated_stubs() {
     assert!(explain_emit_out.status.success());
     assert!(explain_derived_dir.join("explain.md").is_file());
 
-    // 12. claims explain
-    run_frankenctl_recorded(
+    // 12. claims explain (positive fresh observed claim -> 0, plus fail-closed stale repo claim -> 2)
+    let claim_bundle_dir = work.join("claim_evidence");
+    fs::create_dir_all(&claim_bundle_dir).expect("create claim_evidence dir");
+    let claim_artifact_path = claim_bundle_dir.join("artifact.json");
+    fs::write(&claim_artifact_path, b"{\"verified\":true}\n").expect("write claim artifact");
+    fs::write(claim_bundle_dir.join("repro.lock"), b"schema_version = 1\n")
+        .expect("write claim repro.lock");
+    let claim_matrix_path = work.join("claim_matrix.json");
+    let frankenctl_src_path = root.join("crates/franken-engine/src/bin/frankenctl.rs");
+    let claim_matrix_doc = serde_json::json!({
+        "schema_version": "franken-engine.claim-to-proof-matrix.v1",
+        "claims": [{
+            "actual_wording_state": "observed",
+            "allowed_state": "observed",
+            "artifact_path": claim_artifact_path.display().to_string(),
+            "claim_id": "FE-CLAIM-G2VRP-22",
+            "claim_scope": "evidence",
+            "claim_text": "Observed CLI truth verification claim.",
+            "decision": "allow_observed",
+            "downgrade_text": "Downgrade to target when proof bundle ages past threshold.",
+            "freshness_days": 0,
+            "owning_bead": "bd-g2vrp-22-claim",
+            "reason": "Verified via live frankenctl execution.",
+            "source_path": frankenctl_src_path.display().to_string(),
+            "source_span": {
+                "start_line": 1,
+                "end_line": 1,
+                "must_contain": "#![forbid(unsafe_code)]"
+            },
+            "verification_command": "rch exec -- cargo test -p frankenengine-engine --test frankenctl_truth_and_isolation_g2vrp_22"
+        }]
+    });
+    fs::write(
+        &claim_matrix_path,
+        serde_json::to_vec_pretty(&claim_matrix_doc).unwrap(),
+    )
+    .expect("write claim_matrix.json");
+    let claim_beads_path = work.join("claim_beads.jsonl");
+    fs::write(
+        &claim_beads_path,
+        "{\"id\":\"bd-g2vrp-22-claim\",\"status\":\"closed\",\"assignee\":\"ubuntu\"}\n",
+    )
+    .expect("write claim_beads.jsonl");
+    let claims_supported_out = run_frankenctl_recorded(
         &root,
         "claims explain",
-        &["claims", "explain", "FE-CLAIM-006", "--format", "json"],
+        &[
+            "claims",
+            "explain",
+            "FE-CLAIM-G2VRP-22",
+            "--matrix",
+            claim_matrix_path.to_str().unwrap(),
+            "--beads-jsonl",
+            claim_beads_path.to_str().unwrap(),
+            "--format",
+            "json",
+        ],
         true,
         &mut telemetry,
     );
+    let claims_supported_json: serde_json::Value =
+        serde_json::from_slice(&claims_supported_out.stdout)
+            .expect("claims explain supported json");
+    assert_eq!(
+        claims_supported_json["decision"].as_str(),
+        Some("supported")
+    );
+
+    let claims_stale_out = Command::new(FRANKENCTL_BIN)
+        .args(["claims", "explain", "FE-CLAIM-006", "--format", "json"])
+        .current_dir(&root)
+        .output()
+        .expect("claims explain stale FE-CLAIM-006");
+    assert_eq!(claims_stale_out.status.code(), Some(2));
+    let claims_stale_json: serde_json::Value =
+        serde_json::from_slice(&claims_stale_out.stdout).expect("claims explain stale json");
+    assert_eq!(claims_stale_json["decision"].as_str(), Some("fail_closed"));
 
     // 13. doctor
     let doctor_input_path = work.join("runtime_diagnostics_input.json");
@@ -1078,7 +1157,11 @@ fn frankenctl_executes_all_42_leaf_commands_with_zero_fabricated_stubs() {
     let (bun_program, bun_extra_path, bun_installed) = detect_bun_runtime();
     let compare_dir = work.join("compare_suite");
     fs::create_dir_all(&compare_dir).expect("create compare_dir");
-    fs::write(compare_dir.join("case.js"), "console.log(6 * 7);\n").expect("write compare case");
+    fs::write(
+        compare_dir.join("case.js"),
+        "console.log('val=' + (6 * 7));\n",
+    )
+    .expect("write compare case");
     let compare_manifest_path = compare_dir.join("manifest.json");
     let compare_manifest = serde_json::json!({
         "schema_version": "franken-engine.benchmark-comparison-manifest.v1",
@@ -1363,21 +1446,27 @@ fn frankenctl_executes_all_42_leaf_commands_with_zero_fabricated_stubs() {
         &mut telemetry,
     );
 
-    // 28. react doctor
-    let react_catalog_path = work.join("react_catalog.json");
-    write_react_mismatch_catalog(&react_catalog_path);
+    // 28. react doctor (clean input -> 0; unresolved Error mismatch catalog -> fail-closed 25)
     run_frankenctl_recorded(
         &root,
         "react doctor",
-        &[
+        &["react", "doctor", "--input", react_entry.to_str().unwrap()],
+        true,
+        &mut telemetry,
+    );
+    let react_catalog_path = work.join("react_catalog.json");
+    write_react_mismatch_catalog(&react_catalog_path);
+    let react_blocked_out = Command::new(FRANKENCTL_BIN)
+        .args([
             "react",
             "doctor",
             "--catalog",
             react_catalog_path.to_str().unwrap(),
-        ],
-        true,
-        &mut telemetry,
-    );
+        ])
+        .current_dir(&root)
+        .output()
+        .expect("react doctor blocked catalog");
+    assert_eq!(react_blocked_out.status.code(), Some(25));
 
     // 29. react contract
     run_frankenctl_recorded(
@@ -1498,31 +1587,142 @@ fn frankenctl_executes_all_42_leaf_commands_with_zero_fabricated_stubs() {
     );
     assert!(lowering_gap_dir.join("run_manifest.json").is_file());
 
-    // 36. test test262
+    // 36. test test262 (live checked-in vectors: exits 0 when all pass, or fail-closed 2 with FE-T262-1005 when unwaived profile cases fail)
     let test262_out_dir = work.join("test262_out");
-    run_frankenctl_recorded(
-        &root,
-        "test test262",
-        &[
+    let test262_started = Instant::now();
+    let test262_out = Command::new(FRANKENCTL_BIN)
+        .args([
             "test",
             "test262",
             "--out-dir",
             test262_out_dir.to_str().unwrap(),
+        ])
+        .current_dir(&root)
+        .env_remove("FORCE_COLOR")
+        .env_remove("CLICOLOR_FORCE")
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("frankenctl test test262");
+    let test262_duration_ms = test262_started.elapsed().as_millis() as u64;
+    let test262_code = test262_out.status.code().unwrap_or(-1);
+    let test262_stdout = String::from_utf8_lossy(&test262_out.stdout);
+    let test262_stderr = String::from_utf8_lossy(&test262_out.stderr);
+    assert!(
+        test262_stdout.contains("test262 execution_mode=live_case_vectors"),
+        "test262 must execute live case vectors: stdout={test262_stdout}"
+    );
+    let manifest_line = test262_stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("test262 run_manifest="))
+        .expect("test262 stdout must report run_manifest path");
+    let test262_manifest_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(manifest_line.trim()).expect("read test262 run_manifest"))
+            .expect("valid test262 run_manifest.json");
+    assert!(test262_manifest_json.is_object());
+    assert!(
+        test262_code == 0
+            || (test262_code == 2
+                && test262_stdout.contains("test262 blocked=true")
+                && test262_stderr.contains("FE-T262-1005")),
+        "unexpected test262 exit={test262_code}: stdout={test262_stdout} stderr={test262_stderr}"
+    );
+    assert!(!has_fabricated_stub_literal(&test262_stdout));
+    telemetry.push(CommandTelemetryRow {
+        subcommand: "test test262".to_string(),
+        args: vec![
+            "test".to_string(),
+            "test262".to_string(),
+            "--out-dir".to_string(),
+            test262_out_dir.display().to_string(),
         ],
-        false,
-        &mut telemetry,
-    );
+        exit_code: test262_code,
+        stdout_schema_valid: true,
+        duration_ms: test262_duration_ms,
+        fabricated_literal_detected: false,
+    });
 
-    // 37. test lockstep
-    let lockstep_out = work.join("lockstep_report.json");
-    run_frankenctl_recorded(
-        &root,
-        "test lockstep",
-        &["test", "lockstep", "--out", lockstep_out.to_str().unwrap()],
-        false,
-        &mut telemetry,
+    // 37. test lockstep (runs real franken_canonical vs node/bun parser lockstep; exits 0 on full AST hash parity or fail-closed 2 wrapping runner exit 3 on critical AST drift)
+    let lockstep_cfg_path = work.join("lockstep_runtimes.toml");
+    let mut lockstep_toml = String::from(
+        "schema_version = \"franken-engine.lockstep-runtimes.v1\"\n\n\
+         [[runtimes]]\n\
+         runtime_id = \"node\"\n\
+         display_name = \"Node.js LTS\"\n\
+         version_pin = \"node@22.11.0\"\n\
+         command = \"node\"\n\
+         args = [\"scripts/lockstep_runtime_adapter_node.mjs\"]\n",
     );
-    assert!(lockstep_out.is_file());
+    if bun_installed {
+        lockstep_toml.push_str(&format!(
+            "\n[[runtimes]]\n\
+             runtime_id = \"bun\"\n\
+             display_name = \"Bun Stable\"\n\
+             version_pin = \"bun@1.1.34\"\n\
+             command = {:?}\n\
+             args = [\"scripts/lockstep_runtime_adapter_bun.mjs\"]\n",
+            bun_program
+        ));
+    }
+    fs::write(&lockstep_cfg_path, lockstep_toml).expect("write lockstep_runtimes.toml");
+    let lockstep_out_path = work.join("lockstep_report.json");
+    let lockstep_started = Instant::now();
+    let mut lockstep_cmd = Command::new(FRANKENCTL_BIN);
+    lockstep_cmd
+        .args([
+            "test",
+            "lockstep",
+            "--config",
+            lockstep_cfg_path.to_str().unwrap(),
+            "--out",
+            lockstep_out_path.to_str().unwrap(),
+        ])
+        .current_dir(&root)
+        .env_remove("FORCE_COLOR")
+        .env_remove("CLICOLOR_FORCE")
+        .env("NO_COLOR", "1");
+    if let Some(extra_dir) = bun_extra_path.as_deref() {
+        let existing = std::env::var_os("PATH").unwrap_or_default();
+        let mut paths = vec![extra_dir.to_path_buf()];
+        paths.extend(std::env::split_paths(&existing));
+        if let Ok(joined) = std::env::join_paths(paths) {
+            lockstep_cmd.env("PATH", joined);
+        }
+    }
+    let lockstep_out = lockstep_cmd.output().expect("frankenctl test lockstep");
+    let lockstep_duration_ms = lockstep_started.elapsed().as_millis() as u64;
+    let lockstep_code = lockstep_out.status.code().unwrap_or(-1);
+    let lockstep_stdout = String::from_utf8_lossy(&lockstep_out.stdout);
+    let lockstep_stderr = String::from_utf8_lossy(&lockstep_out.stderr);
+    assert!(lockstep_out_path.is_file());
+    let lockstep_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(&lockstep_out_path).expect("read lockstep_report.json"))
+            .expect("valid lockstep_report.json");
+    assert_eq!(
+        lockstep_json["schema_version"].as_str(),
+        Some("franken-engine.parser-multi-engine.report.v2")
+    );
+    assert!(
+        lockstep_code == 0
+            || (lockstep_code == 2
+                && lockstep_stderr.contains("Lockstep harness failed with exit code: 3")),
+        "unexpected test lockstep exit={lockstep_code}: stderr={lockstep_stderr}"
+    );
+    assert!(!has_fabricated_stub_literal(&lockstep_stdout));
+    telemetry.push(CommandTelemetryRow {
+        subcommand: "test lockstep".to_string(),
+        args: vec![
+            "test".to_string(),
+            "lockstep".to_string(),
+            "--config".to_string(),
+            lockstep_cfg_path.display().to_string(),
+            "--out".to_string(),
+            lockstep_out_path.display().to_string(),
+        ],
+        exit_code: lockstep_code,
+        stdout_schema_valid: true,
+        duration_ms: lockstep_duration_ms,
+        fabricated_literal_detected: false,
+    });
 
     // 38. synth kernel-contract
     let synth_kernel_dir = work.join("synth_kernel");
@@ -1630,8 +1830,10 @@ fn gates_signature_drift_forwards_config_and_resolves_sibling_binary_without_pat
     let invalid_cfg_path = work.join("invalid_drift_config.json");
     let out_dir = work.join("out_ok");
 
-    let mut cfg = DriftGateConfig::default();
-    cfg.min_observations = 4;
+    let cfg = DriftGateConfig {
+        min_observations: 4,
+        ..DriftGateConfig::default()
+    };
     fs::write(&valid_cfg_path, serde_json::to_vec_pretty(&cfg).unwrap()).expect("write valid cfg");
     fs::write(&invalid_cfg_path, b"{\"max_l1_drift_millionths\": \"bad\"}")
         .expect("write invalid cfg");

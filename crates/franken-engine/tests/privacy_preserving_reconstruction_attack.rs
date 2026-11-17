@@ -99,8 +99,14 @@ fn run_reconstruction_probe(
             .make_delta_private(&node, delta.clone(), round_id.clone(), noise)
             .unwrap();
         let budget = aggregator.get_node_budget(&node).unwrap();
-        assert_eq!(budget.consumed_epsilon_millionths, parameters.epsilon_millionths);
-        assert_eq!(budget.consumed_delta_millionths, parameters.delta_millionths);
+        assert_eq!(
+            budget.consumed_epsilon_millionths,
+            parameters.epsilon_millionths
+        );
+        assert_eq!(
+            budget.consumed_delta_millionths,
+            parameters.delta_millionths
+        );
         assert_eq!(budget.remaining_epsilon(), 0);
         assert_eq!(budget.round_consumptions.len(), 1);
         original.push(delta);
@@ -144,7 +150,10 @@ fn run_reconstruction_probe(
 
     let mut expected_released = [0i128; 4];
     let mut raw_remaining = [0i128; 4];
-    for (delta, private) in original[..honest_count].iter().zip(&released[..honest_count]) {
+    for (delta, private) in original[..honest_count]
+        .iter()
+        .zip(&released[..honest_count])
+    {
         for (index, (raw, noisy)) in weighted(delta)
             .into_iter()
             .zip(weighted(&private.base_delta))

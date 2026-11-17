@@ -58,7 +58,8 @@ use crate::expected_loss_selector::{
 use crate::flow_lattice::{Clearance, DeclassificationObligation, Ir2FlowLattice, LabelClass};
 use crate::guardplane_adapter::{
     GuardplaneAdapter, GuardplaneDecisionRecord, GuardplaneExecutionSummary,
-    GuardplaneExtensionContext, GuardplaneOperation,
+    GuardplaneExtensionContext, GuardplaneLatencyReport, GuardplaneOperation,
+    GuardplaneSignalLatencyRecord,
 };
 use crate::hash_tiers::ContentHash;
 use crate::hostcall_effects_migration::{
@@ -1239,6 +1240,10 @@ pub struct OrchestratorResult {
     // Containment
     pub containment_receipt: Option<ContainmentReceipt>,
     pub saga_id: Option<String>,
+    /// Per-decision guardplane signal-to-action latency telemetry (`bd-9vouw.7` / `FE-CLAIM-012`),
+    /// kept outside signed `EvidenceEntry` metadata so fixed-input deterministic evidence chains
+    /// stay byte-identical modulo signing authority.
+    pub guardplane_signal_latencies: Vec<GuardplaneSignalLatencyRecord>,
 
     // Cell
     pub cell_events: Vec<CellEvent>,
@@ -1278,6 +1283,38 @@ pub struct OrchestratorResult {
 
     // Epoch
     pub epoch: SecurityEpoch,
+}
+
+impl OrchestratorResult {
+    /// Export per-decision guardplane signal-to-action latency telemetry for
+    /// `BRIDGE-09.10` / `FE-CLAIM-012` (`bd-9vouw.7`).
+    #[must_use]
+    pub fn export_guardplane_latency_report(&self, policy_id: &str) -> GuardplaneLatencyReport {
+        let first_containment = self
+            .guardplane_signal_latencies
+            .iter()
+            .find(|record| !matches!(record.action, HookAction::Allow));
+        let max_signal_to_action_latency_ns = self
+            .guardplane_signal_latencies
+            .iter()
+            .map(|record| record.signal_to_action_latency_ns)
+            .max()
+            .unwrap_or(0);
+        GuardplaneLatencyReport {
+            schema_version: "franken-engine.guardplane-latency-report.v1".to_string(),
+            trace_id: self.trace_id.clone(),
+            decision_id: self.decision_id.clone(),
+            policy_id: policy_id.to_string(),
+            extension_id: self.extension_id.clone(),
+            containment_action: self.containment_action.to_string(),
+            containment_instruction_index: first_containment.map(|record| record.instruction_index),
+            containment_signal_to_action_latency_ns: first_containment
+                .map(|record| record.signal_to_action_latency_ns),
+            max_signal_to_action_latency_ns,
+            decision_count: self.guardplane_signal_latencies.len(),
+            decisions: self.guardplane_signal_latencies.clone(),
+        }
+    }
 }
 
 /// Inspectable evidence from the mandatory execution-cell close attempt.
@@ -1591,6 +1628,7 @@ struct EvidenceCompressionAttempt {
 struct GuardplaneHookReport {
     summary: GuardplaneExecutionSummary,
     decisions: Vec<GuardplaneDecisionRecord>,
+    signal_latencies: Vec<GuardplaneSignalLatencyRecord>,
     instruction_hooks_enabled: bool,
 }
 
@@ -2066,6 +2104,8 @@ pub struct ExecutionOrchestrator {
     last_failed_console_output: FailedConsoleSink,
     /// `process.argv` the host launched the program with (bd-my9hk).
     process_argv: Vec<String>,
+    /// Optional virtual wall-clock epoch override in milliseconds (`bd-9vouw.59`).
+    clock_epoch_ms: Option<i64>,
     /// Closed-world source delivery, installed only for one resolved-entry run.
     module_resolver: Option<(ExecutionModuleResolver, ContentHash)>,
     /// Shared read-boundary capture/verification for filesystem module inputs.
@@ -2412,6 +2452,7 @@ impl ExecutionOrchestrator {
             last_failed_trace_id: None,
             last_failed_console_output: Arc::default(),
             process_argv: Vec::new(),
+            clock_epoch_ms: None,
             module_resolver: None,
             module_source_integrity: ModuleSourceIntegrity::default(),
             cancellation_token: None,
@@ -2677,6 +2718,12 @@ impl ExecutionOrchestrator {
     /// them. Unset, the program sees an empty array.
     pub fn set_process_argv(&mut self, argv: Vec<String>) {
         self.process_argv = argv;
+    }
+
+    /// Override the starting virtual wall-clock epoch in milliseconds (`bd-9vouw.59`).
+    /// When `None`, lanes use [`crate::baseline_interpreter::DETERMINISTIC_EPOCH_MS`].
+    pub fn set_clock_epoch_ms(&mut self, epoch_ms: Option<i64>) {
+        self.clock_epoch_ms = epoch_ms;
     }
 
     /// Validate every filesystem dependency against an exact prior run's
@@ -3595,6 +3642,10 @@ impl ExecutionOrchestrator {
                 evidence_compression_status,
                 containment_receipt,
                 saga_id,
+                guardplane_signal_latencies: guardplane_report
+                    .as_ref()
+                    .map(|report| report.signal_latencies.clone())
+                    .unwrap_or_default(),
                 cell_events: Vec::new(),
                 finalize_result: None,
                 cell_execution_transcript: None,
@@ -4505,6 +4556,9 @@ impl ExecutionOrchestrator {
         lane_router.set_timer_effect_authority(timer_effect_authority);
         lane_router.set_failed_console_output_sink(Arc::clone(&self.last_failed_console_output));
         lane_router.set_entry_flow_label_ceiling(entry_flow_label_ceiling.clone());
+        if let Some(epoch_ms) = self.clock_epoch_ms {
+            lane_router.set_clock_epoch_ms(epoch_ms);
+        }
         if let Some((resolver, entry_hash)) = &self.module_resolver {
             lane_router.set_module_resolver(
                 resolver.clone(),
@@ -4525,6 +4579,7 @@ impl ExecutionOrchestrator {
         let report = GuardplaneHookReport {
             summary: guardplane_adapter.summary(),
             decisions: guardplane_adapter.decision_records(),
+            signal_latencies: guardplane_adapter.signal_latency_records(),
             instruction_hooks_enabled: guardplane_adapter.instruction_hooks_enabled(),
         };
         Ok((routed, Some(report)))

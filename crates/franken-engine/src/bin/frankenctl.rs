@@ -381,6 +381,14 @@ struct DiffBehaviorArgs {
     out: Option<PathBuf>,
 }
 
+const MAX_JS_DATE_EPOCH_MS: i64 = 8_640_000_000_000_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClockEpochSelection {
+    FixedMs(i64),
+    Now,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RunArgs {
     input: PathBuf,
@@ -400,6 +408,12 @@ struct RunArgs {
     /// Write the run's recorded nondeterminism trace here (bd-9mr8o), the
     /// exact input `frankenctl replay debug --trace` consumes.
     emit_trace: Option<PathBuf>,
+    /// Write the run's unsigned guardplane signal-to-action latency report
+    /// here (`bd-9vouw.7` / `FE-CLAIM-012`), keeping wall-clock telemetry
+    /// outside the deterministic run report.
+    emit_guardplane_latency: Option<PathBuf>,
+    /// Optional starting virtual wall-clock epoch override (`bd-9vouw.59`).
+    clock_epoch: Option<ClockEpochSelection>,
     /// Export public verification material for an operator to retain and pin
     /// separately from the untrusted run report. This does not enroll a key.
     emit_evidence_trust: Option<PathBuf>,
@@ -1124,6 +1138,10 @@ struct RunReplayInput {
     /// for default-budget runs, so earlier reports keep their exact bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     instruction_budget: Option<u64>,
+    /// `--clock-epoch` override used by the run (`bd-9vouw.59`). Absent when
+    /// using the default fixed epoch, so default reports stay byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    clock_epoch_ms: Option<i64>,
     /// `--parser-max-tokens` override used by the run (bd-9vouw.58); absent
     /// for default-budget runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1228,6 +1246,8 @@ struct FailedRunReplayInput {
     cell_close_budget_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     instruction_budget: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    clock_epoch_ms: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     parser_max_token_count: Option<u64>,
     #[serde(flatten)]
@@ -2657,6 +2677,8 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
     let mut explain = false;
     let mut explain_out: Option<PathBuf> = None;
     let mut emit_trace: Option<PathBuf> = None;
+    let mut emit_guardplane_latency: Option<PathBuf> = None;
+    let mut clock_epoch: Option<ClockEpochSelection> = None;
     let mut emit_evidence_trust: Option<PathBuf> = None;
     let mut evidence_key_file = None;
     let mut evidence_producer_id = None;
@@ -2751,6 +2773,20 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
             "--emit-trace" => {
                 emit_trace = Some(PathBuf::from(next_arg(args, &mut index, "--emit-trace")?));
             }
+            "--emit-guardplane-latency" => {
+                emit_guardplane_latency = Some(PathBuf::from(next_arg(
+                    args,
+                    &mut index,
+                    "--emit-guardplane-latency",
+                )?));
+            }
+            "--clock-epoch" => {
+                clock_epoch = Some(parse_clock_epoch_flag(&next_arg(
+                    args,
+                    &mut index,
+                    "--clock-epoch",
+                )?)?);
+            }
             "--emit-evidence-trust" => {
                 emit_evidence_trust = Some(PathBuf::from(next_arg(
                     args,
@@ -2837,6 +2873,8 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
         explain,
         explain_out,
         emit_trace,
+        emit_guardplane_latency,
+        clock_epoch,
         emit_evidence_trust,
         evidence_authority,
         data_contract,
@@ -2959,6 +2997,43 @@ fn parse_instruction_budget_flag(args: &[String], index: &mut usize) -> Result<u
         ));
     }
     Ok(budget)
+}
+
+fn parse_clock_epoch_flag(raw: &str) -> Result<ClockEpochSelection, String> {
+    if raw == "now" {
+        return Ok(ClockEpochSelection::Now);
+    }
+    let millis = raw.parse::<i64>().map_err(|_| {
+        format!("--clock-epoch expects `now` or an integer epoch millisecond value, got `{raw}`")
+    })?;
+    if !(-MAX_JS_DATE_EPOCH_MS..=MAX_JS_DATE_EPOCH_MS).contains(&millis) {
+        return Err(format!(
+            "--clock-epoch millisecond value `{millis}` exceeds ECMAScript Date TimeClip bounds (+/-{MAX_JS_DATE_EPOCH_MS})"
+        ));
+    }
+    Ok(ClockEpochSelection::FixedMs(millis))
+}
+
+fn resolve_clock_epoch_selection(
+    selection: Option<ClockEpochSelection>,
+) -> Result<Option<i64>, String> {
+    match selection {
+        None => Ok(None),
+        Some(ClockEpochSelection::FixedMs(ms)) => Ok(Some(ms)),
+        Some(ClockEpochSelection::Now) => {
+            let duration = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|error| format!("system clock predates UNIX_EPOCH: {error}"))?;
+            let millis = i64::try_from(duration.as_millis())
+                .map_err(|_| "system clock milliseconds overflow i64".to_string())?;
+            if !(-MAX_JS_DATE_EPOCH_MS..=MAX_JS_DATE_EPOCH_MS).contains(&millis) {
+                return Err(format!(
+                    "resolved `--clock-epoch now` ({millis}) exceeds ECMAScript Date TimeClip bounds"
+                ));
+            }
+            Ok(Some(millis))
+        }
+    }
 }
 
 fn parse_explain_command(args: &[String]) -> Result<CommandSpec, String> {
@@ -5641,6 +5716,8 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
     if let Some(witness) = loaded_witness.as_ref() {
         orchestrator.set_capability_witness(witness.clone());
     }
+    let resolved_clock_epoch_ms = resolve_clock_epoch_selection(args.clock_epoch)?;
+    orchestrator.set_clock_epoch_ms(resolved_clock_epoch_ms);
     // bd-fqlfw.8.2: the bound contract's ingress label + sink surface gates
     // execution fail-closed and records flow edges in the provenance index.
     let data_contract_ingress = bound_contract
@@ -5661,6 +5738,7 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
                 policy_id: &policy_id,
                 epoch: run_epoch,
                 replay_cell_close_budget_ms,
+                clock_epoch_ms: resolved_clock_epoch_ms,
                 evidence_authority: &evidence_authority,
                 configured_evidence: configured_evidence.as_ref(),
             };
@@ -5730,6 +5808,9 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
     // --trace` consumes, enabling the end-to-end --input inspection loop.
     if let Some(path) = args.emit_trace.as_ref() {
         write_json_file(path, &result.nondeterminism_trace)?;
+    }
+    if let Some(path) = args.emit_guardplane_latency.as_ref() {
+        write_json_file(path, &result.export_guardplane_latency_report(&policy_id))?;
     }
     let explain_bundle_path = resolve_run_explain_path(&args);
 
@@ -5802,6 +5883,7 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         data_contract_ingress,
         agent_sandbox_manifest: None,
         instruction_budget: args.instruction_budget,
+        clock_epoch_ms: resolved_clock_epoch_ms,
         parser_max_token_count: args.parser_max_token_count,
         limits: args.limits,
         commonjs_entry: args.commonjs_entry,
@@ -6197,6 +6279,7 @@ fn execute_agent_sandbox(args: AgentSandboxArgs) -> Result<i32, String> {
         data_contract_ingress,
         agent_sandbox_manifest: Some(manifest),
         instruction_budget: args.instruction_budget,
+        clock_epoch_ms: None,
         parser_max_token_count: None,
         limits: args.limits,
         commonjs_entry: false,
@@ -8067,6 +8150,7 @@ struct FailedRunEmitContext<'a> {
     policy_id: &'a str,
     epoch: SecurityEpoch,
     replay_cell_close_budget_ms: u64,
+    clock_epoch_ms: Option<i64>,
     evidence_authority: &'a RuntimeEvidenceAuthority,
     configured_evidence: Option<&'a LoadedRunEvidenceAuthority>,
 }
@@ -8196,6 +8280,7 @@ fn emit_orchestration_failure(
                     policy_epoch: epoch.as_u64(),
                     cell_close_budget_ms: ctx.replay_cell_close_budget_ms,
                     instruction_budget: ctx.args.instruction_budget,
+                    clock_epoch_ms: ctx.clock_epoch_ms,
                     parser_max_token_count: ctx.args.parser_max_token_count,
                     limits: ctx.args.limits,
                     commonjs_entry: ctx.args.commonjs_entry,
@@ -10973,6 +11058,7 @@ fn execute_run_report_replay(args: ReplayArgs) -> Result<i32, String> {
     if let Some(witness) = input.capability_witness.as_ref() {
         orchestrator.set_capability_witness(witness.clone());
     }
+    orchestrator.set_clock_epoch_ms(input.clock_epoch_ms);
     if let Some(ingress) = input.data_contract_ingress.as_ref() {
         orchestrator.set_data_contract_ingress(ingress.clone());
     }
@@ -11351,6 +11437,7 @@ fn execute_failed_run_report_replay(
         evidence_authority,
     )
     .map_err(|error| format!("failed to initialize replay execution orchestrator: {error}"))?;
+    orchestrator.set_clock_epoch_ms(input.clock_epoch_ms);
 
     match orchestrator.execute(&package) {
         Ok(_) => {
@@ -15297,7 +15384,8 @@ fn run_usage() -> String {
         "      [--module-root <dir>] [--out <report.json>] [--state-db <state.db>] [--witness <witness.json>]",
         "      [--data-contract <contract.json>] [--purpose <purpose>] [--certificate-out <bundle-dir>]",
         "      [--explain [bundle.json]] [--explain-out <bundle.json>]",
-        "      [--emit-trace <trace.json>] [--cell-close-budget-ms <n>]",
+        "      [--emit-trace <trace.json>] [--emit-guardplane-latency <latency.json>]",
+        "      [--clock-epoch <ms|now>] [--cell-close-budget-ms <n>]",
         "      [--emit-evidence-trust <public-trust.json>]",
         "      [--evidence-key-file <private.seed> --evidence-producer-id <id>",
         "       --trust-snapshot <public.json> --expected-trust-digest <64-hex-digest>]",

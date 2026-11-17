@@ -35,7 +35,7 @@
       "freshness_tier": "standard",
       "freshness_tier_rationale": "guardplane decision smoke; the Bayesian/e-process substrate is mature, but engine-wide changes still reach it through the evidence stream",
       "owning_bead": "bd-1ypps",
-      "reason": "Live guardplane decision example (bd-1ypps) generates actual posterior computation and expected-loss decision artifacts with smoke test validation.",
+      "reason": "Default live host-effect guardplane hooks ship on ExecutionOrchestrator and frankenctl run (bd-9vouw.7: signed per-effect EvidenceEntry + EvidenceChainReceipt batch, in-flight Sandbox policy narrowing, durable Quarantine admission barrier, optional instruction-level hooks) alongside examples/live_guardplane_decision_example.rs (bd-1ypps); production containment-latency campaign stays TARGETED under FE-CLAIM-012.",
       "source_path": "README.md",
       "source_span": {
         "end_line": 140,
@@ -287,7 +287,7 @@
       "decision": "downgrade_target",
       "downgrade_text": "Target: <= 250ms median containment latency under declared workload conditions.",
       "freshness_days": null,
-      "owning_bead": "bd-9vouw.7",
+      "owning_bead": "bd-performance-conformance-bridge-tu32j.10.10",
       "reason": "Downgraded observed->target under CEI B.2 (bd-sde5e.2.2): the containment-latency gate fails closed without a measured CONTAINMENT_LATENCY_METRIC_INPUT, the matrix verification_command omits it, and no production-measured latency artifact is committed (the only input is a rev-under-test fixture). 'Real latency artifacts' was over-claimed.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {

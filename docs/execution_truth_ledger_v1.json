@@ -2,7 +2,7 @@
   "schema_version": "franken-engine.execution-truth-ledger.v1",
   "ledger_id": "franken-engine-performance-conformance-bridge-truth-v1",
   "owning_bead": "bd-performance-conformance-bridge-tu32j.1.1",
-  "source_cutoff_utc": "2026-11-17T05:50:00Z",
+  "source_cutoff_utc": "2026-11-17T10:15:00Z",
   "max_age_days": 90,
   "rendered_markdown_path": "docs/EXECUTION_TRUTH_LEDGER_V1.md",
   "purpose": "Bind the historical JIT, AOT, tiering, Test262, performance, and claim records to the code paths and artifacts that actually exist. The ledger preserves useful scaffolding while preventing planning records, input-only hashes, synthetic timings, test-only paths, or observed failures from being promoted into production-success claims.",
@@ -265,7 +265,7 @@
     {
       "subject_id": "bead:bd-6a61n.1.8",
       "kind": "bead",
-      "title": "[RC-1.8] Test262 Conformance Harness — Baseline Pass Rate Measurement",
+      "title": "[RC-1.8] Test262 Conformance Harness \u2014 Baseline Pass Rate Measurement",
       "current_state": "closed",
       "claim_posture": "not_applicable",
       "classifications": [
@@ -466,7 +466,7 @@
         }
       ],
       "revalidation": {
-        "owner_id": "bd-performance-conformance-bridge-tu32j.1.2",
+        "owner_id": "bd-performance-conformance-bridge-tu32j.1.4",
         "role": "Track-G claim-truth owner",
         "trigger": "Lean, Z3, bounded-sample verification, proof emitters, Track-G artifacts, or FE-CLAIM-016 through FE-CLAIM-021 rationale change",
         "command": "./scripts/run_execution_truth_ledger_gate.sh ci",
@@ -478,7 +478,7 @@
     {
       "subject_id": "bead:bd-o4cbn",
       "kind": "bead",
-      "title": "Profile-Driven Performance Pass v1 — Address Phase-1 Profiling Hotspots",
+      "title": "Profile-Driven Performance Pass v1 \u2014 Address Phase-1 Profiling Hotspots",
       "current_state": "open",
       "claim_posture": "not_applicable",
       "classifications": [
@@ -603,7 +603,7 @@
         }
       ],
       "revalidation": {
-        "owner_id": "bd-performance-conformance-bridge-tu32j.1.2",
+        "owner_id": "bd-performance-conformance-bridge-tu32j.1.4",
         "role": "timer-authority and no-mock hostcall gate owner",
         "trigger": "hostcall_effects_migration, execution_cell timer authority, or InterpreterCore timer scheduling changes",
         "command": "./scripts/run_execution_truth_ledger_gate.sh ci",
@@ -650,7 +650,7 @@
         }
       ],
       "revalidation": {
-        "owner_id": "bd-performance-conformance-bridge-tu32j.1.2",
+        "owner_id": "bd-performance-conformance-bridge-tu32j.1.4",
         "role": "claim-language and executable-output gate owner",
         "trigger": "any AOT, tiering, image, cache, or artifact-hash wording changes",
         "command": "./scripts/run_execution_truth_ledger_gate.sh ci",
@@ -687,8 +687,8 @@
           "kind": "source",
           "path": "crates/franken-engine/src/baseline_interpreter/lane_router.rs",
           "start_line": 1770,
-          "end_line": 2078,
-          "range_sha256": "224afa1d63f4d0f2c93ec65fd9123079430f0386b10c080a4bab01295e80898d",
+          "end_line": 2095,
+          "range_sha256": "83477df06dcfe96f5ef127af5912eb8b39f764b67f267d7d70235302134ced50",
           "must_contain": [
             "let mut core = InterpreterCore::new",
             "pub struct QuickJsLane",
@@ -701,9 +701,9 @@
           "proof_id": "fe-claim-001.orchestrator-runtime",
           "kind": "source",
           "path": "crates/franken-engine/src/execution_orchestrator.rs",
-          "start_line": 4372,
-          "end_line": 4525,
-          "range_sha256": "19312dde94dd7cc5ea0c3ce9d02f9c7bd53e1b4a7e64757722fdf09aa99360d0",
+          "start_line": 4422,
+          "end_line": 4580,
+          "range_sha256": "6c14f85e012da85d78688052a48bf379205a5a1dc3cd40f8c18956c61283daa5",
           "must_contain": [
             "LaneRouter::with_configs",
             "lane_router.set_host_io",
@@ -749,25 +749,27 @@
         "observed",
         "test_only"
       ],
-      "runtime_reality": "The claim-matrix gate checks tracked repro.lock partners for observed rows and is wired into quality-gates.yml, though it remains absent from the other primary GitHub workflows and does not re-execute every producer",
-      "user_impact": "Users get CI enforcement of committed claim-matrix contracts in quality-gates.yml, while producer re-execution and broader capstone wiring still require BRIDGE-00.2 completion",
+      "runtime_reality": "The claim-matrix, Merkle-ledger, Test262-posture, truth-ledger, and executable-output truth gates are wired into quality-gates.yml alongside advisory capstone staleness reporting per ADR-0012 \u00a75, though push CI still verifies recorded artifacts rather than re-executing every expensive producer",
+      "user_impact": "Users get fail-closed CI enforcement of committed claim-matrix, Merkle-ledger, Test262-posture, truth-ledger, and executable-output contracts in quality-gates.yml, while scheduled producer refresh runs separately in evidence_refresh.yml",
       "limitations": [
-        "The gate verifies recorded artifacts and wording; it does not re-execute every producer.",
+        "Push CI verifies recorded artifacts, Merkle commitments, and claim wording; scheduled producer re-execution runs in evidence_refresh.yml.",
         "Ignored working-tree bundles such as the May pass1 profile cannot support fresh-clone reproducibility.",
-        "The reflexive integrity capstone is not yet wired alongside the matrix gate in GitHub workflows."
+        "Other specialized workflows (dist, fuzz, perf) do not duplicate quality-gates.yml's claim-matrix step."
       ],
       "downstream_decisions": [
         "Keep the bounded observed row only for published claims with tracked repro.lock partners.",
-        "Wire the execution-truth and capstone gates into CI under BRIDGE-00.2."
+        "Preserve fail-closed push regression checks in quality-gates.yml and recertify historical truth under BRIDGE-00.4."
       ],
       "proofs": [
         {
           "proof_id": "fe-claim-009.claim-gate-in-quality-ci",
           "kind": "ci_wiring",
           "path": ".github/workflows/quality-gates.yml",
-          "file_sha256": "dd8c92ed40c509b3e4288c306e0bcd8682037257f46b13b32c5856443a94df3d",
+          "file_sha256": "9ca344773ba8f16a3d990c9b7686c32aaed009adf769653ee2083444555f6c23",
           "must_contain": [
-            "./scripts/run_claim_to_proof_matrix_gate.sh ci"
+            "./scripts/run_claim_to_proof_matrix_gate.sh ci",
+            "./scripts/run_execution_truth_ledger_gate.sh check",
+            "./scripts/run_executable_output_truth_gate.sh ci"
           ],
           "expected_git_tracked": true,
           "caller": "GitHub Actions quality-gates workflow",
@@ -838,7 +840,7 @@
         }
       ],
       "revalidation": {
-        "owner_id": "bd-performance-conformance-bridge-tu32j.1.2",
+        "owner_id": "bd-performance-conformance-bridge-tu32j.1.4",
         "role": "claim-integrity CI owner",
         "trigger": "a workflow, the claim matrix, artifact publication, or repro.lock changes",
         "command": "./scripts/run_execution_truth_ledger_gate.sh ci",
@@ -991,7 +993,7 @@
         }
       ],
       "revalidation": {
-        "owner_id": "bd-performance-conformance-bridge-tu32j.1.2",
+        "owner_id": "bd-performance-conformance-bridge-tu32j.1.4",
         "role": "Lean proof-claim owner",
         "trigger": "Lean sources, the producer schema, toolchain pin, proof artifact, CI lane, or claim scope change",
         "command": "./scripts/run_execution_truth_ledger_gate.sh ci",
@@ -1040,7 +1042,7 @@
         }
       ],
       "revalidation": {
-        "owner_id": "bd-performance-conformance-bridge-tu32j.1.2",
+        "owner_id": "bd-performance-conformance-bridge-tu32j.1.4",
         "role": "compiler proof-claim owner",
         "trigger": "translation validators or theorem-backed proof emitters change",
         "command": "./scripts/run_execution_truth_ledger_gate.sh ci",
@@ -1104,7 +1106,7 @@
         }
       ],
       "revalidation": {
-        "owner_id": "bd-performance-conformance-bridge-tu32j.1.2",
+        "owner_id": "bd-performance-conformance-bridge-tu32j.1.4",
         "role": "formal policy-semantics claim owner",
         "trigger": "policy theorem formulas, default axioms, solver routing, proof emission, or the claim domain changes",
         "command": "./scripts/run_execution_truth_ledger_gate.sh ci",
@@ -1168,7 +1170,7 @@
         }
       ],
       "revalidation": {
-        "owner_id": "bd-performance-conformance-bridge-tu32j.1.2",
+        "owner_id": "bd-performance-conformance-bridge-tu32j.1.4",
         "role": "optimization proof-claim owner",
         "trigger": "the optimizer verifier, Z3 integration, proof bundle, or matrix rationale changes",
         "command": "./scripts/run_execution_truth_ledger_gate.sh ci",
@@ -1247,7 +1249,7 @@
         }
       ],
       "revalidation": {
-        "owner_id": "bd-performance-conformance-bridge-tu32j.1.2",
+        "owner_id": "bd-performance-conformance-bridge-tu32j.1.4",
         "role": "theorem-backed compiler claim owner",
         "trigger": "obligation generation, verifier coverage, proof emission, compiler integration, or the promotion bundle changes",
         "command": "./scripts/run_execution_truth_ledger_gate.sh ci",
@@ -1312,7 +1314,7 @@
         }
       ],
       "revalidation": {
-        "owner_id": "bd-performance-conformance-bridge-tu32j.1.2",
+        "owner_id": "bd-performance-conformance-bridge-tu32j.1.4",
         "role": "policy theorem-engine claim owner",
         "trigger": "the theorem inventory, axioms, solver routing, cache provenance, proof emission, or public scope changes",
         "command": "./scripts/run_execution_truth_ledger_gate.sh ci",
@@ -1332,17 +1334,15 @@
         "observed",
         "test_only"
       ],
-      "runtime_reality": "A real capstone composes matrix wording, bidirectional evidence ceilings, a committed Merkle ledger, and Test262 posture checks, with tracked FE-CLAIM-025 evidence whose manifest now records an execution-derived schema digest; however the capstone itself is not yet wired into GitHub workflows and repro.lock still carries a legacy patterned schema_hash and cargo clean command",
-      "user_impact": "Users can run a substantive fail-closed integrity and drift system with an execution-derived manifest receipt, while full CI capstone wiring and repro.lock cleanup remain tracked under BRIDGE-00.2",
+      "runtime_reality": "A real capstone composes matrix wording, bidirectional evidence ceilings, a committed Merkle ledger, and Test262 posture checks, wired into quality-gates.yml alongside the truth-ledger and executable-output gates, with tracked FE-CLAIM-025 manifest and repro.lock carrying computed schema digests and rch-safe reproduction commands",
+      "user_impact": "Users can run a substantive fail-closed integrity and drift system with execution-derived manifest and lock digests and CI enforcement, while e-process receipt freshness continues under scheduled refresh and G0 recertification",
       "limitations": [
-        "No current GitHub workflow invokes run_claim_evidence_integrity_capstone.sh directly.",
-        "Although manifest.json now carries a computed schema_hash from reemit_evidence_receipts.py, repro.lock still retains a legacy patterned schema_hash constant.",
-        "The repro.lock prescribes cargo clean, a direct non-rch Cargo command, an absolute historical workspace, and an old source commit, so it is not a safe exact replay recipe for the current tree.",
-        "The tracked manifest records an August live gate run; fresh current-HEAD capstone replay remains part of BRIDGE-00.2."
+        "Observed claim receipts from August exceed the 31-day e-process freshness bound until the next scheduled evidence_refresh.yml run lands.",
+        "Push CI runs blocking Merkle/matrix/posture/truth/output gates plus advisory capstone freshness per ADR-0012 \u00a75 so wall-clock receipt age does not masquerade as a code regression."
       ],
       "downstream_decisions": [
-        "Keep the executable capstone and Merkle ledger, and wire run_claim_evidence_integrity_capstone.sh into CI under BRIDGE-00.2.",
-        "Replace repro.lock's legacy patterned schema_hash and cargo clean command with rch-safe commands and current source bindings."
+        "Preserve the CI-wired Merkle ledger, capstone, truth-ledger, and executable-output gates.",
+        "Audit end-to-end recertification in BRIDGE-00.4 (G0 capstone)."
       ],
       "proofs": [
         {
@@ -1381,11 +1381,11 @@
           "path": "docs/claim_evidence_ledger_root.txt",
           "start_line": 1,
           "end_line": 42,
-          "range_sha256": "ae441c5e12ae192011144a0c3109f455ba88c00264e4e3c8c4d115fda112c746",
+          "range_sha256": "43a15ed5e5cb4c04deb3771c1303b2862a04bf424bb30899616dddebc0c0c6d5",
           "must_contain": [
-            "root e7d9a6b46c1d1db943d083ec54af6c1bb563157fe73a71832102e8e9a8e9a15a",
+            "root 36f8dfa1cb26eb7126b5481d1e4ed79b99c4174009262933fc631e2dca3568cd",
             "leaf_count 28",
-            "leaf FE-CLAIM-025 observed reproduced"
+            "leaf FE-CLAIM-025 observed exercised"
           ],
           "expected_git_tracked": true,
           "caller": "scripts/run_claim_evidence_ledger_gate.sh ci",
@@ -1422,11 +1422,11 @@
           "proof_id": "fe-claim-025.repro-lock",
           "kind": "artifact",
           "path": "docs/evidence/FE-CLAIM-025/repro.lock",
-          "file_sha256": "2fdee1ca3fe0ad438f48289ca368175b5991717f8117a3164fc4a4ae19cbffa5",
+          "file_sha256": "2a150e1554a2040e65f42ff7640090205f0d8e78a3b90b259c7d8972200d9e76",
           "json_assertions": [
             {
               "pointer": "/commands/cleanup",
-              "expected": "cargo clean"
+              "expected": "none (preserve incremental rch target pool)"
             },
             {
               "pointer": "/expected_outputs/verification_success",
@@ -1434,16 +1434,16 @@
             },
             {
               "pointer": "/schema_hash",
-              "expected": "sha256:9f0a1b2c3d4e5f6789abcdef0123456789abcdef0123456789abcdef01234567"
+              "expected": "sha256:2f2b1608f0dcb77c107313b6a88ab11c11f51e7bea916fafeede08d06388458c"
             }
           ],
           "expected_git_tracked": true,
           "caller": "FE-CLAIM-025 reproduction contract",
-          "interpretation": "The lock is durable but its destructive cleanup and patterned schema identifier require correction."
+          "interpretation": "The lock binds an rch-safe verification recipe, non-destructive target preservation, and a computed canonical schema_hash."
         }
       ],
       "revalidation": {
-        "owner_id": "bd-performance-conformance-bridge-tu32j.1.2",
+        "owner_id": "bd-performance-conformance-bridge-tu32j.1.4",
         "role": "reflexive claim-integrity owner",
         "trigger": "claim rows, evidence tiers, the ledger root, capstone sub-gates, workflows, schemas, or reproduction metadata change",
         "command": "./scripts/run_execution_truth_ledger_gate.sh ci",
@@ -1467,19 +1467,19 @@
       "user_impact": "Users can see where the runtime reaches code rather than failing immediately, while a separate stricter metric prevents coverage from masquerading as correctness",
       "limitations": [
         "Assertion outcomes are not verified by this metric.",
-        "The coverage summary contains a contradictory sentence saying the stricter harness preloads includes even though both runner evidence and the next limitation say it does not.",
+        "Test262 harness includes are not preloaded by either execution-coverage or current real-corpus conformance runs.",
         "Zero-total intentional-divergence view requires careful interpretation."
       ],
       "downstream_decisions": [
         "Keep FE-CLAIM-026 at target.",
-        "Correct the contradictory include wording and maintain separate coverage and conformance scoreboards."
+        "Maintain separate coverage and conformance scoreboards with contradiction checks ratcheted in audit-output-claims."
       ],
       "proofs": [
         {
           "proof_id": "fe-claim-026.coverage-summary",
           "kind": "artifact",
           "path": "docs/coverage/es2020_coverage_summary_bundle_v1/coverage_summary.json",
-          "file_sha256": "f3df45a6b2ee258feff486ef00518c4b19c852aba11b77ed2dc8d3d2d88e5cfa",
+          "file_sha256": "d71f74e6dc724a807cb64dc9d138fd58396baaa4f35cf6a074b836a3c164ec56",
           "json_assertions": [
             {
               "pointer": "/in_scope_passed",
@@ -1643,8 +1643,8 @@
     {
       "finding_id": "TRUTH-004",
       "severity": "major",
-      "status": "open",
-      "summary": "The coverage summary contradicts itself about whether the stricter harness preloads Test262 includes.",
+      "status": "corrected",
+      "summary": "The coverage summary previously contradicted itself about whether the stricter harness preloads Test262 includes; reconciled in coverage_summary.json and ratcheted by audit-output-claims under BRIDGE-00.2.",
       "opportunity_score": 70,
       "relevance_score": 95,
       "score_rationale": "The correction is small but prevents execution coverage from being mistaken for conformance and protects the campaign denominator.",
@@ -1675,7 +1675,7 @@
         "claim:FE-CLAIM-021"
       ],
       "correction_owner": "claim-integrity-evidence",
-      "successor_bead": "bd-performance-conformance-bridge-tu32j.1.2"
+      "successor_bead": "bd-performance-conformance-bridge-tu32j.1.4"
     },
     {
       "finding_id": "TRUTH-006",
@@ -1712,8 +1712,8 @@
     {
       "finding_id": "TRUTH-008",
       "severity": "major",
-      "status": "open",
-      "summary": "quality-gates.yml now runs run_claim_to_proof_matrix_gate.sh ci, while the reflexive claim-evidence integrity capstone and execution-truth ledger gate remain unwired across GitHub workflows.",
+      "status": "corrected",
+      "summary": "quality-gates.yml now wires Merkle-ledger, Test262-posture, execution-truth-ledger, executable-output-truth, and advisory capstone staleness checks under BRIDGE-00.2.",
       "opportunity_score": 90,
       "relevance_score": 100,
       "score_rationale": "Completing capstone and truth-ledger CI wiring prevents silent regression of reflexive evidence integrity.",
@@ -1728,8 +1728,8 @@
     {
       "finding_id": "TRUTH-009",
       "severity": "major",
-      "status": "open",
-      "summary": "Although FE-CLAIM-025's manifest.json and backfill script were upgraded to execution-derived schema digests, repro.lock still carries a legacy patterned schema_hash constant and prescribes cargo clean, direct Cargo, an absolute historical workspace, and a stale source revision.",
+      "status": "corrected",
+      "summary": "FE-CLAIM-025 repro.lock now binds a computed canonical schema_hash, current source metadata, and an rch-safe non-destructive reproduction command under BRIDGE-00.2.",
       "opportunity_score": 85,
       "relevance_score": 95,
       "score_rationale": "An integrity claim cannot rely on a legacy patterned lock hash or an unsafe, stale reproduction recipe.",

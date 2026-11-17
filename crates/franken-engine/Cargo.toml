@@ -1752,6 +1752,11 @@ path = "tests/exception_translation_validation_integration.rs"
 required-features = ["governance-surfaces"]
 
 [[test]]
+name = "executable_output_truth_gate_tu32j_1_2"
+path = "tests/executable_output_truth_gate_tu32j_1_2.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
 name = "execution_truth_ledger_integration"
 path = "tests/execution_truth_ledger_integration.rs"
 required-features = ["governance-surfaces"]

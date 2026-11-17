@@ -137,7 +137,7 @@ The table below mirrors [`docs/CLAIM_TO_PROOF_MATRIX_V1.md`](./docs/CLAIM_TO_PRO
 | Capability | State | What that actually means |
 |---|---|---|
 | Native execution profiles (`baseline_deterministic_profile`, `baseline_throughput_profile`, `adaptive_profile_router`) | OBSERVED | Live in tree, exercised by the CLI smoke and the RGC execution-profile gate. |
-| Probabilistic guardplane (Bayesian + e-process boundaries) | OBSERVED | Backed by live decision artifacts; demonstrated in `examples/live_guardplane_decision_example.rs`. |
+| Probabilistic guardplane (Bayesian + e-process boundaries) | OBSERVED | Default live host-effect guardplane hooks on `ExecutionOrchestrator` / `frankenctl run` (`guardplane_hook_scope=host_effects`, in-flight `Sandbox` capability narrowing, durable `Quarantine` admission barrier, signed `EvidenceChainReceipt` decision batch) plus `examples/live_guardplane_decision_example.rs`; production containment-latency campaign remains `TARGETED` (`FE-CLAIM-012`). |
 | Deterministic replay for the declared high-severity inventory | OBSERVED | `replay_coverage` proof gate (`bd-2488a`) + fixed-input CLI determinism proof (`compile` byte-identical; `run` identical modulo per-invocation signing authority). |
 | Cryptographic decision receipts with transparency-log + MMR proofs (signing OBSERVED; TEE attestation is HYPOTHESIS — simulated by default) | OBSERVED (signing + transparency log) · HYPOTHESIS (TEE) | Receipt-only proof handle (`bd-cixqu.1.1`) and transparency log + MMR inclusion/consistency proofs (`bd-cixqu.1.2`) are live, cross-referenced and content-addressed by `scripts/run_rgc_signed_decision_receipt.sh` + replay wrapper (`bd-cixqu.1.4`). TEE attestation policy (`bd-cixqu.1.3`) is simulated-by-default — no hardware root of trust, the `tee-real-sdk` SDK path is unwired (`tee_live_quote.rs`) — so it stays HYPOTHESIS (`FE-CLAIM-004-TEE`). |
 | Fleet immune system / quarantine propagation convergence SLO | TARGETED | The N-node harness, bounded SLO declaration, de-escalation primitive, and partition profiles exist, but the published CI gate validates contract shape and source references without executing the harness or preserving measured percentiles. |
@@ -247,10 +247,10 @@ The orchestrated extension path composes capability, security-epoch, evidence, a
 
 | Surface | Count / size (tracked HEAD, verified 2026-09-22) |
 |---|---|
-| Source modules in `crates/franken-engine/src/` | 636 top-level `.rs` files / 625 `pub mod` declarations in `lib.rs` (`baseline_interpreter.rs` alone is ~0.6 MB / 17,563 LoC). The generated companion [`docs/ARCHITECTURE_INVENTORY.md`](./docs/ARCHITECTURE_INVENTORY.md) counts module files recursively (excluding `lib.rs` itself). |
+| Source modules in `crates/franken-engine/src/` | 636 top-level `.rs` files / 625 `pub mod` declarations in `lib.rs` (`baseline_interpreter.rs` alone is ~0.6 MB / 17,566 LoC). The generated companion [`docs/ARCHITECTURE_INVENTORY.md`](./docs/ARCHITECTURE_INVENTORY.md) counts module files recursively (excluding `lib.rs` itself). |
 | Internal operator binaries in `crates/franken-engine/src/bin/` | 73 `.rs` files in total (6 of them are the release binaries listed above; 67 are internal operator tools) |
-| Integration tests in `crates/franken-engine/tests/` | 2,255 top-level `.rs` files (41 are RGC gate tests) |
-| Operator gate scripts in `scripts/run_*.sh` | 296 (RGC, parser, and FRX families plus claim/evidence/build plumbing) |
+| Integration tests in `crates/franken-engine/tests/` | 2,256 top-level `.rs` files (41 are RGC gate tests) |
+| Operator gate scripts in `scripts/run_*.sh` | 297 (RGC, parser, and FRX families plus claim/evidence/build plumbing) |
 | Replay wrappers in `scripts/e2e/*_replay.sh` | 187 (some are exact `<gate>_replay.sh` partners to a `run_<gate>.sh`; the rest cover composite or sub-gate replay shapes) |
 | Architecture / contract docs in `docs/` | 737 top-level files (`*.md` + `*.json` contracts) plus `docs/architecture/`, `docs/adr/`, `docs/plans/`, `docs/planning/` (janitor-relocated root reports: `HASHER_AUDIT_FIXED_LAYOUT_MIGRATION.md`, `REVIEW_SUMMARY.md`), `docs/templates/`, `docs/operator-gates/` |
 | Impossible-by-default demos under `examples/` | 13 impossible-by-default *capabilities* across 24 numbered directories (`01_…` through `26_…`, with gaps at `08_…` and `10_…`). The 13 capabilities are the originally-scoped set; the remaining dirs cover live-runtime variants and integration smokes that sit alongside but are not themselves separate capability claims. |

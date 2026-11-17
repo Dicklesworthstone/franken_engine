@@ -1934,6 +1934,7 @@ impl InterpreterCore {
             instructions_executed: _,
             native_hole_reads: _,
             // Instruction count at the last virtual-clock advance (bd-9vouw.59).
+            virtual_clock_epoch_ms: _,
             virtual_clock_instruction_mark: _,
             tier_i_instructions_executed: _,
             tier_i_specialized_instructions_executed: _,

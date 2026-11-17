@@ -18,7 +18,7 @@
       "sha256": "cae596c43a5e4b4018b7dcbc06fbd037af255b0e756cec2cb9002bbd808e0ed8"
     }
   ],
-  "generated_at_utc": "20260626T200450Z",
+  "generated_at_utc": "20261117T091500Z",
   "inputs": [
     {
       "kind": "test262_corpus_commit",
@@ -27,7 +27,7 @@
     }
   ],
   "schema_version": "franken-engine.repro-lock.v1",
-  "source_commit": "5e77ab86dc36a5c379037f37e45425f0c4733351",
+  "source_commit": "f04e2bca570830e66ed4c7fc5f32c39440f9e379",
   "verification": {
     "command": "./scripts/run_coverage_summary_bundle_gate.sh ci",
     "expected_verdict": "pass"

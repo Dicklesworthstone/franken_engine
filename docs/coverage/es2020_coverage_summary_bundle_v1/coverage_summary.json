@@ -8,7 +8,7 @@
   "limitations": [
     "scope: ES2020-normative observable surface (language/* + built-ins/*); excludes intl402, annexB, proposals, and harness",
     "EXECUTED means the engine evaluated a positive case without an engine error, or correctly rejected a negative case; assertion outcomes are NOT verified — this is an execution-coverage measure, not a spec-conformance pass-rate",
-    "the stricter harness-based ES2020 conformance pass-rate (assertions enforced, Test262 includes preloaded) is far lower — see docs/test262_real_corpus_pass_rate_v1.json; this executed-% must not be read as a conformance score",
+    "the stricter harness-based ES2020 conformance pass-rate (assertions enforced; Test262 harness includes not preloaded in that historical run, so positive tests depending on them fail) is far lower — see docs/test262_real_corpus_pass_rate_v1.json; this executed-% must not be read as a conformance score",
     "the runner does not preload Test262 harness includes (assert.js, sta.js, propertyHelper.js), so cases that call those helpers are recorded as engine errors and excluded from executed"
   ],
   "observable_surface_executed_millionths": 130508,

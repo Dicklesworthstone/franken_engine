@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -7,13 +8,18 @@ use std::process::ExitCode;
 
 use chrono::{DateTime, Utc};
 use frankenengine_engine::execution_truth_ledger::{
-    ExecutionTruthLedger, ValidationContext, render_markdown, validate_ledger_file,
-    write_events_jsonl,
+    ExecutionTruthLedger, OutputTruthAuditRequest, ValidationContext, audit_output_claims,
+    render_markdown, validate_ledger_file, write_events_jsonl,
 };
 
 const USAGE: &str = "\
 usage:
   franken_execution_truth_ledger validate [--repo-root <path>] [--ledger <path>]
+      [--events <path>] [--run-id <id>] [--trace-id <id>] [--scenario-id <id>]
+      [--seed <u64>] [--attempt <u32>] [--as-of <RFC3339>]
+  franken_execution_truth_ledger audit-output-claims [--repo-root <path>]
+      [--executable-bundle <path>]... [--conformance-bundle <path>]...
+      [--doc-override <rel=path>]... [--skip-repo-language-scan]
       [--events <path>] [--run-id <id>] [--trace-id <id>] [--scenario-id <id>]
       [--seed <u64>] [--attempt <u32>] [--as-of <RFC3339>]
   franken_execution_truth_ledger render [--repo-root <path>] [--ledger <path>]
@@ -37,6 +43,13 @@ fn main() -> ExitCode {
     match args.next().as_deref() {
         Some("validate") => match parse_validate_args(args.collect()) {
             Ok(config) => validate(config),
+            Err(reason) => {
+                eprintln!("{reason}\n{USAGE}");
+                ExitCode::from(2)
+            }
+        },
+        Some("audit-output-claims") => match parse_audit_output_args(args.collect()) {
+            Ok(config) => run_audit_output_claims(config),
             Err(reason) => {
                 eprintln!("{reason}\n{USAGE}");
                 ExitCode::from(2)
@@ -173,6 +186,148 @@ fn validate(config: ValidateArgs) -> ExitCode {
         Ok(report) => println!("{report}"),
         Err(error) => {
             eprintln!("failed to serialize validation report: {error}");
+            return ExitCode::from(2);
+        }
+    }
+    if output.passed() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+#[derive(Debug)]
+struct AuditOutputArgs {
+    repo_root: PathBuf,
+    request: OutputTruthAuditRequest,
+    events_path: Option<PathBuf>,
+    run_id: String,
+    trace_id: String,
+    scenario_id: String,
+    seed: u64,
+    attempt: u32,
+    as_of_utc: DateTime<Utc>,
+}
+
+fn parse_audit_output_args(raw: Vec<String>) -> Result<AuditOutputArgs, String> {
+    let detected_repo_root = find_repo_root();
+    let mut repo_root: Option<PathBuf> = None;
+    let mut executable_bundles = Vec::new();
+    let mut conformance_bundles = Vec::new();
+    let mut doc_overrides = BTreeMap::new();
+    let mut skip_repository_language_scan = false;
+    let mut events_path: Option<PathBuf> = None;
+    let mut run_id = "run-executable-output-truth-gate".to_string();
+    let mut trace_id = "trace-executable-output-truth-gate".to_string();
+    let mut scenario_id = "canonical-output-truth".to_string();
+    let mut seed = 0u64;
+    let mut attempt = 1u32;
+    let mut as_of_utc = Utc::now();
+
+    let mut index = 0usize;
+    while index < raw.len() {
+        let flag = &raw[index];
+        if flag == "--skip-repo-language-scan" {
+            skip_repository_language_scan = true;
+            index += 1;
+            continue;
+        }
+        let value = raw
+            .get(index + 1)
+            .ok_or_else(|| format!("{flag} requires a value"))?;
+        match flag.as_str() {
+            "--repo-root" => repo_root = Some(PathBuf::from(value)),
+            "--executable-bundle" => executable_bundles.push(PathBuf::from(value)),
+            "--conformance-bundle" => conformance_bundles.push(PathBuf::from(value)),
+            "--doc-override" => {
+                let (rel, path) = value
+                    .split_once('=')
+                    .ok_or_else(|| format!("--doc-override expects <rel=path>, got `{value}`"))?;
+                if rel.trim().is_empty() || path.trim().is_empty() {
+                    return Err("--doc-override requires non-empty <rel> and <path>".to_string());
+                }
+                doc_overrides.insert(rel.to_string(), PathBuf::from(path));
+            }
+            "--events" => events_path = Some(PathBuf::from(value)),
+            "--run-id" => run_id = nonempty(flag, value)?,
+            "--trace-id" => trace_id = nonempty(flag, value)?,
+            "--scenario-id" => scenario_id = nonempty(flag, value)?,
+            "--seed" => {
+                seed = value
+                    .parse()
+                    .map_err(|_| format!("--seed must be an unsigned integer: {value}"))?;
+            }
+            "--attempt" => {
+                attempt = value
+                    .parse()
+                    .map_err(|_| format!("--attempt must be an unsigned integer: {value}"))?;
+                if attempt == 0 {
+                    return Err("--attempt must be at least 1".to_string());
+                }
+            }
+            "--as-of" => {
+                as_of_utc = DateTime::parse_from_rfc3339(value)
+                    .map_err(|error| format!("--as-of must be RFC3339: {error}"))?
+                    .with_timezone(&Utc);
+            }
+            unknown => return Err(format!("unknown audit-output-claims option `{unknown}`")),
+        }
+        index += 2;
+    }
+
+    let repo_root = repo_root
+        .or(detected_repo_root)
+        .ok_or_else(|| "could not find repository root; pass --repo-root explicitly".to_string())?;
+    let executable_bundles = executable_bundles
+        .into_iter()
+        .map(|p| resolve_against(&repo_root, p))
+        .collect();
+    let conformance_bundles = conformance_bundles
+        .into_iter()
+        .map(|p| resolve_against(&repo_root, p))
+        .collect();
+    let doc_overrides = doc_overrides
+        .into_iter()
+        .map(|(k, p)| (k, resolve_against(&repo_root, p)))
+        .collect();
+    Ok(AuditOutputArgs {
+        events_path: events_path.map(|p| resolve_against(&repo_root, p)),
+        repo_root,
+        request: OutputTruthAuditRequest {
+            executable_bundles,
+            conformance_bundles,
+            doc_overrides,
+            skip_repository_language_scan,
+        },
+        run_id,
+        trace_id,
+        scenario_id,
+        seed,
+        attempt,
+        as_of_utc,
+    })
+}
+
+fn run_audit_output_claims(config: AuditOutputArgs) -> ExitCode {
+    let context = ValidationContext {
+        run_id: config.run_id,
+        trace_id: config.trace_id,
+        scenario_id: config.scenario_id,
+        seed: config.seed,
+        attempt: config.attempt,
+        as_of_utc: config.as_of_utc,
+    };
+    let output = audit_output_claims(&config.repo_root, &config.request, &context);
+    if let Some(events_path) = config.events_path.as_deref()
+        && let Err(reason) = write_events_jsonl(events_path, &output.events)
+    {
+        eprintln!("failed to write audit events: {reason}");
+        return ExitCode::from(2);
+    }
+    match serde_json::to_string_pretty(&output.report) {
+        Ok(report) => println!("{report}"),
+        Err(error) => {
+            eprintln!("failed to serialize output truth audit report: {error}");
             return ExitCode::from(2);
         }
     }

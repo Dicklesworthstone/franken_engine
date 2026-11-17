@@ -147,6 +147,14 @@ jobs:
       - name: Cargo fmt
         run: cargo fmt --check
 
+      - name: Claim-evidence integrity capstone & execution truth gates (BRIDGE-00.2)
+        run: |
+          ./scripts/run_claim_evidence_ledger_gate.sh ci
+          ./scripts/run_test262_posture_consistency.sh ci
+          ./scripts/run_claim_evidence_integrity_capstone.sh dev
+          ./scripts/run_execution_truth_ledger_gate.sh check
+          ./scripts/run_executable_output_truth_gate.sh ci
+
       - name: Standing JS differential probe corpus (bd-9vouw.5)
         run: cargo test -p frankenengine-engine --test js_probe_corpus_bd_9vouw_5 -- --nocapture
 

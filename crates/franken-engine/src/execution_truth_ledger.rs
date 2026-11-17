@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::{self, Write};
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
@@ -2293,6 +2293,967 @@ fn bounded_redacted_reason(reason: &str, repo_root: &Path) -> String {
         redacted.push('…');
     }
     redacted
+}
+
+// ---------------------------------------------------------------------------
+// BRIDGE-00.2 (bd-performance-conformance-bridge-tu32j.1.2)
+// Executable-output, conformance-claim, and authoritative claim-language gate
+// ---------------------------------------------------------------------------
+
+pub const OUTPUT_TRUTH_REPORT_SCHEMA_VERSION: &str =
+    "franken-engine.executable-output-truth-gate.report.v1";
+pub const EXECUTABLE_TIER_BUNDLE_SCHEMA_VERSION: &str =
+    "franken-engine.executable-tier-claim-bundle.v1";
+pub const CONFORMANCE_CLAIM_BUNDLE_SCHEMA_VERSION: &str =
+    "franken-engine.conformance-claim-bundle.v1";
+
+pub const ERROR_OUTGATE_IO: &str = "FE-OUTGATE-2001";
+pub const ERROR_OUTGATE_JSON: &str = "FE-OUTGATE-2002";
+pub const ERROR_OUTGATE_SCHEMA: &str = "FE-OUTGATE-2003";
+pub const ERROR_OUTGATE_BACKEND_LABEL_ONLY: &str = "FE-OUTGATE-2004";
+pub const ERROR_OUTGATE_SIMULATED_COMPILE: &str = "FE-OUTGATE-2005";
+pub const ERROR_OUTGATE_INPUT_ONLY_HASH: &str = "FE-OUTGATE-2006";
+pub const ERROR_OUTGATE_MACHINE_CODE: &str = "FE-OUTGATE-2007";
+pub const ERROR_OUTGATE_DISPATCH_ZERO: &str = "FE-OUTGATE-2008";
+pub const ERROR_OUTGATE_DISASSEMBLY: &str = "FE-OUTGATE-2009";
+pub const ERROR_OUTGATE_MAPS: &str = "FE-OUTGATE-2010";
+pub const ERROR_OUTGATE_TIER_R_EQUIV: &str = "FE-OUTGATE-2011";
+pub const ERROR_OUTGATE_HARNESS_ORACLE: &str = "FE-OUTGATE-2012";
+pub const ERROR_OUTGATE_SELECTED_MANIFEST: &str = "FE-OUTGATE-2013";
+pub const ERROR_OUTGATE_SYNTHETIC_PERCENTAGE: &str = "FE-OUTGATE-2014";
+pub const ERROR_OUTGATE_CLAIM_LANGUAGE: &str = "FE-OUTGATE-2015";
+pub const ERROR_OUTGATE_STALE_OR_ORDER: &str = "FE-OUTGATE-2016";
+
+pub const GOVERNED_CLAIM_DOCUMENTS: &[&str] = &[
+    "README.md",
+    "docs/ARCHITECTURE_OVERVIEW.md",
+    "docs/CLAIM_TO_PROOF_MATRIX_V1.md",
+    "docs/architecture/frankenengine_native_synthesis.md",
+    "docs/coverage/es2020_coverage_summary_bundle_v1/coverage_summary.json",
+    "docs/evidence/FE-CLAIM-025/repro.lock",
+    "docs/test262_real_corpus_pass_rate_v1.json",
+    ".github/workflows/quality-gates.yml",
+];
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StackMapEntryRecord {
+    pub code_offset: usize,
+    pub live_root_slots: Vec<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeoptMapEntryRecord {
+    pub code_offset: usize,
+    pub ir3_pc: usize,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TierREquivalenceRecord {
+    pub verified: bool,
+    pub witness_cases_passed: u64,
+    pub witness_cases_total: u64,
+    pub tier_r_trace_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutableTierClaimBundle {
+    pub schema_version: String,
+    pub bundle_id: String,
+    pub owning_bead: String,
+    pub claim_id: String,
+    pub backend_kind: String,
+    pub generated_at_utc: String,
+    pub max_age_days: u64,
+    pub simulated: bool,
+    pub compile_duration_origin: String,
+    pub compile_duration_ns: u64,
+    pub input_ir_sha256: String,
+    pub machine_code_hex: String,
+    pub machine_code_byte_len: usize,
+    pub final_byte_sha256: String,
+    pub actual_dispatch_count: u64,
+    pub disassembly_lines: Vec<String>,
+    pub stack_map_entries: Vec<StackMapEntryRecord>,
+    pub deopt_map_entries: Vec<DeoptMapEntryRecord>,
+    pub tier_r_equivalence: TierREquivalenceRecord,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HarnessOracleRecord {
+    pub oracle_kind: String,
+    pub includes_preloaded: bool,
+    pub async_done_tracked: bool,
+    pub negative_phase_verified: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConformanceClaimBundle {
+    pub schema_version: String,
+    pub bundle_id: String,
+    pub owning_bead: String,
+    pub claim_id: String,
+    pub generated_at_utc: String,
+    pub max_age_days: u64,
+    pub selected_manifest_path: String,
+    pub selected_manifest_sha256: String,
+    pub selected_case_ids: Vec<String>,
+    pub selected_case_count: u64,
+    pub executed_count: u64,
+    pub passed_count: u64,
+    pub failed_count: u64,
+    pub skipped_count: u64,
+    pub pass_rate_millionths: u64,
+    pub synthetic_percentage: bool,
+    pub estimation_method: String,
+    pub full_suite_claim_allowed: bool,
+    pub harness_oracle: HarnessOracleRecord,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct OutputTruthAuditRequest {
+    pub executable_bundles: Vec<PathBuf>,
+    pub conformance_bundles: Vec<PathBuf>,
+    pub doc_overrides: BTreeMap<String, PathBuf>,
+    pub skip_repository_language_scan: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutputTruthAuditReport {
+    pub schema_version: String,
+    pub owning_bead: String,
+    pub as_of_utc: String,
+    pub status: String,
+    pub governed_documents_checked: usize,
+    pub executable_bundles_checked: usize,
+    pub conformance_bundles_checked: usize,
+    pub checks_run: usize,
+    pub error_count: usize,
+    pub findings: Vec<ValidationFinding>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputTruthAuditOutput {
+    pub report: OutputTruthAuditReport,
+    pub events: Vec<ValidationEvent>,
+}
+
+impl OutputTruthAuditOutput {
+    #[must_use]
+    pub fn passed(&self) -> bool {
+        self.report.error_count == 0
+    }
+}
+
+fn is_valid_lower_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn decode_hex_bytes(hex_str: &str) -> Result<Vec<u8>, String> {
+    if hex_str.is_empty() || !hex_str.len().is_multiple_of(2) {
+        return Err("machine_code_hex must have a positive, even byte length".to_string());
+    }
+    let mut out = Vec::with_capacity(hex_str.len() / 2);
+    let bytes = hex_str.as_bytes();
+    let mut idx = 0;
+    while idx < bytes.len() {
+        let nibble = |b: u8| -> Result<u8, String> {
+            match b {
+                b'0'..=b'9' => Ok(b - b'0'),
+                b'a'..=b'f' => Ok(b - b'a' + 10),
+                b'A'..=b'F' => Ok(b - b'A' + 10),
+                _ => Err("machine_code_hex contains a non-hexadecimal character".to_string()),
+            }
+        };
+        out.push((nibble(bytes[idx])? << 4) | nibble(bytes[idx + 1])?);
+        idx += 2;
+    }
+    Ok(out)
+}
+
+#[must_use]
+pub fn audit_output_claims(
+    repo_root: &Path,
+    request: &OutputTruthAuditRequest,
+    context: &ValidationContext,
+) -> OutputTruthAuditOutput {
+    let dummy_ledger = repo_root.join("docs/execution_truth_ledger_v1.json");
+    let mut validator = Validator::new(repo_root, &dummy_ledger, context);
+    validator.source_cutoff = context.as_of_utc.to_rfc3339();
+
+    let mut governed_documents_checked = 0usize;
+    if !request.skip_repository_language_scan {
+        governed_documents_checked =
+            audit_repository_claim_language(repo_root, &request.doc_overrides, &mut validator);
+    } else if !request.doc_overrides.is_empty() {
+        let started = Instant::now();
+        validator.check(
+            "claim_language.override_scope",
+            None,
+            Some("doc_overrides"),
+            Err((
+                ERROR_OUTGATE_CLAIM_LANGUAGE,
+                "doc_overrides cannot be combined with skip_repository_language_scan".to_string(),
+            )),
+            started,
+            BTreeMap::new(),
+        );
+    }
+
+    for path in &request.executable_bundles {
+        audit_executable_tier_bundle(repo_root, path, context, &mut validator);
+    }
+    for path in &request.conformance_bundles {
+        audit_conformance_claim_bundle(repo_root, path, context, &mut validator);
+    }
+
+    let error_count = validator.findings.len();
+    OutputTruthAuditOutput {
+        report: OutputTruthAuditReport {
+            schema_version: OUTPUT_TRUTH_REPORT_SCHEMA_VERSION.to_string(),
+            owning_bead: "bd-performance-conformance-bridge-tu32j.1.2".to_string(),
+            as_of_utc: context.as_of_utc.to_rfc3339(),
+            status: if error_count == 0 { "pass" } else { "fail" }.to_string(),
+            governed_documents_checked,
+            executable_bundles_checked: request.executable_bundles.len(),
+            conformance_bundles_checked: request.conformance_bundles.len(),
+            checks_run: validator.checks_run,
+            error_count,
+            findings: validator.findings,
+        },
+        events: validator.events,
+    }
+}
+
+fn audit_repository_claim_language(
+    repo_root: &Path,
+    doc_overrides: &BTreeMap<String, PathBuf>,
+    validator: &mut Validator<'_>,
+) -> usize {
+    let governed_set: BTreeSet<&str> = GOVERNED_CLAIM_DOCUMENTS.iter().copied().collect();
+    for key in doc_overrides.keys() {
+        let started = Instant::now();
+        let outcome = if governed_set.contains(key.as_str()) {
+            Ok(format!("governed document override admitted: {key}"))
+        } else {
+            Err((
+                ERROR_OUTGATE_CLAIM_LANGUAGE,
+                format!("unowned/unknown document override rejected: {key}"),
+            ))
+        };
+        validator.check(
+            "claim_language.override_governance",
+            Some("repo:claim-language"),
+            Some(key),
+            outcome,
+            started,
+            BTreeMap::new(),
+        );
+    }
+
+    let mut checked = 0usize;
+    for &rel_path in GOVERNED_CLAIM_DOCUMENTS {
+        let started = Instant::now();
+        let disk_path = doc_overrides
+            .get(rel_path)
+            .cloned()
+            .unwrap_or_else(|| repo_root.join(rel_path));
+        let bytes = match fs::read(&disk_path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                validator.check(
+                    "claim_language.read",
+                    Some("repo:claim-language"),
+                    Some(rel_path),
+                    Err((
+                        ERROR_OUTGATE_IO,
+                        format!("failed to read governed document {rel_path}: {error}"),
+                    )),
+                    started,
+                    BTreeMap::new(),
+                );
+                continue;
+            }
+        };
+        checked += 1;
+        let file_hash = sha256_hex(&bytes);
+        let hashes = BTreeMap::from([(rel_path.to_string(), file_hash)]);
+        let text = match String::from_utf8(bytes) {
+            Ok(text) => text,
+            Err(error) => {
+                validator.check(
+                    "claim_language.utf8",
+                    Some("repo:claim-language"),
+                    Some(rel_path),
+                    Err((
+                        ERROR_OUTGATE_SCHEMA,
+                        format!("governed document {rel_path} is not UTF-8: {error}"),
+                    )),
+                    started,
+                    hashes,
+                );
+                continue;
+            }
+        };
+
+        let outcome = check_governed_document_semantics(rel_path, &text);
+        validator.check(
+            "claim_language.semantics",
+            Some("repo:claim-language"),
+            Some(rel_path),
+            outcome,
+            started,
+            hashes,
+        );
+    }
+    checked
+}
+
+fn check_governed_document_semantics(
+    rel_path: &str,
+    text: &str,
+) -> Result<String, (&'static str, String)> {
+    let lower = text.to_ascii_lowercase();
+    for forbidden in [
+        "100% es2020 test262 conformance achieved",
+        "full test262 conformance is observed",
+        "achieves >= 3x speedup over node and bun",
+        "cranelift native jit is active in production",
+    ] {
+        if lower.contains(forbidden) {
+            return Err((
+                ERROR_OUTGATE_CLAIM_LANGUAGE,
+                format!("{rel_path} contains prohibited over-claim phrase: {forbidden:?}"),
+            ));
+        }
+    }
+
+    match rel_path {
+        "docs/architecture/frankenengine_native_synthesis.md" => {
+            if text.contains("`IR3` (Specialization-Intent IR)")
+                || text.contains("`IR4` (Execution-Ready Low-Level IR)")
+            {
+                return Err((
+                    ERROR_OUTGATE_CLAIM_LANGUAGE,
+                    "frankenengine_native_synthesis.md mislabels IR3/IR4 against ir_contract.rs"
+                        .to_string(),
+                ));
+            }
+            if !text.contains("`IR3` (`ExecIR`") || !text.contains("`IR4` (`WitnessIR`") {
+                return Err((
+                    ERROR_OUTGATE_CLAIM_LANGUAGE,
+                    "frankenengine_native_synthesis.md must bind IR3 to ExecIR and IR4 to WitnessIR"
+                        .to_string(),
+                ));
+            }
+        }
+        "docs/ARCHITECTURE_OVERVIEW.md" => {
+            if lower.contains("forbid(unsafe_code) is enforced repository-wide") {
+                return Err((
+                    ERROR_OUTGATE_CLAIM_LANGUAGE,
+                    "ARCHITECTURE_OVERVIEW.md must not claim repository-wide forbid(unsafe_code) while test-only unsafe blocks exist".to_string(),
+                ));
+            }
+        }
+        "docs/coverage/es2020_coverage_summary_bundle_v1/coverage_summary.json" => {
+            let doc: JsonValue = serde_json::from_str(text).map_err(|error| {
+                (
+                    ERROR_OUTGATE_JSON,
+                    format!("coverage_summary.json failed to parse: {error}"),
+                )
+            })?;
+            let serialized = doc.to_string().to_ascii_lowercase();
+            if serialized.contains("stricter conformance harness preloads test262 includes")
+                || serialized.contains("harness preloads includes before")
+            {
+                return Err((
+                    ERROR_OUTGATE_CLAIM_LANGUAGE,
+                    "coverage_summary.json re-introduced TRUTH-004 includes-preloading contradiction"
+                        .to_string(),
+                ));
+            }
+        }
+        "docs/evidence/FE-CLAIM-025/repro.lock" => {
+            let doc: JsonValue = serde_json::from_str(text).map_err(|error| {
+                (
+                    ERROR_OUTGATE_JSON,
+                    format!("FE-CLAIM-025/repro.lock failed to parse: {error}"),
+                )
+            })?;
+            let cleanup = doc
+                .pointer("/commands/cleanup")
+                .and_then(JsonValue::as_str)
+                .unwrap_or("");
+            let schema_hash = doc
+                .pointer("/schema_hash")
+                .and_then(JsonValue::as_str)
+                .unwrap_or("");
+            if cleanup.contains("cargo clean") || cleanup.contains("rm ") {
+                return Err((
+                    ERROR_OUTGATE_CLAIM_LANGUAGE,
+                    format!("FE-CLAIM-025/repro.lock prescribes destructive cleanup: {cleanup:?}"),
+                ));
+            }
+            if schema_hash.contains("0123456789abcdef0123456789abcdef")
+                || !schema_hash.starts_with("sha256:")
+                || !is_valid_lower_sha256(schema_hash.trim_start_matches("sha256:"))
+            {
+                return Err((
+                    ERROR_OUTGATE_CLAIM_LANGUAGE,
+                    format!(
+                        "FE-CLAIM-025/repro.lock has placeholder or invalid schema_hash: {schema_hash:?}"
+                    ),
+                ));
+            }
+        }
+        "docs/test262_real_corpus_pass_rate_v1.json" => {
+            let doc: JsonValue = serde_json::from_str(text).map_err(|error| {
+                (
+                    ERROR_OUTGATE_JSON,
+                    format!("test262_real_corpus_pass_rate_v1.json failed to parse: {error}"),
+                )
+            })?;
+            if doc.pointer("/full_suite_claim_allowed") != Some(&JsonValue::Bool(false)) {
+                return Err((
+                    ERROR_OUTGATE_CLAIM_LANGUAGE,
+                    "test262_real_corpus_pass_rate_v1.json cannot allow full-suite claim while unwaived failures remain"
+                        .to_string(),
+                ));
+            }
+        }
+        ".github/workflows/quality-gates.yml" => {
+            for required_gate in [
+                "run_claim_to_proof_matrix_gate.sh",
+                "run_claim_evidence_integrity_capstone.sh",
+                "run_execution_truth_ledger_gate.sh",
+                "run_executable_output_truth_gate.sh",
+            ] {
+                if !text.contains(required_gate) {
+                    return Err((
+                        ERROR_OUTGATE_CLAIM_LANGUAGE,
+                        format!("quality-gates.yml missing required truth gate `{required_gate}`"),
+                    ));
+                }
+            }
+        }
+        _ => {}
+    }
+
+    Ok(format!("{rel_path} passed claim-language truth audit"))
+}
+
+fn audit_executable_tier_bundle(
+    repo_root: &Path,
+    bundle_path: &Path,
+    context: &ValidationContext,
+    validator: &mut Validator<'_>,
+) {
+    let label = path_for_report(repo_root, bundle_path);
+    let started = Instant::now();
+    let bytes = match fs::read(bundle_path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            validator.check(
+                "executable_bundle.read",
+                Some("executable_tier"),
+                Some(&label),
+                Err((
+                    ERROR_OUTGATE_IO,
+                    format!("failed to read executable bundle {label}: {error}"),
+                )),
+                started,
+                BTreeMap::new(),
+            );
+            return;
+        }
+    };
+    let hashes = BTreeMap::from([(label.clone(), sha256_hex(&bytes))]);
+    let bundle: ExecutableTierClaimBundle = match serde_json::from_slice(&bytes) {
+        Ok(bundle) => bundle,
+        Err(error) => {
+            validator.check(
+                "executable_bundle.parse",
+                Some("executable_tier"),
+                Some(&label),
+                Err((
+                    ERROR_OUTGATE_JSON,
+                    format!("malformed executable-tier bundle {label}: {error}"),
+                )),
+                started,
+                hashes,
+            );
+            return;
+        }
+    };
+
+    let outcome = validate_executable_tier_bundle(&bundle, context);
+    validator.check(
+        "executable_bundle.verify",
+        Some(&bundle.claim_id),
+        Some(&bundle.bundle_id),
+        outcome,
+        started,
+        hashes,
+    );
+}
+
+pub fn validate_executable_tier_bundle(
+    bundle: &ExecutableTierClaimBundle,
+    context: &ValidationContext,
+) -> Result<String, (&'static str, String)> {
+    if bundle.schema_version != EXECUTABLE_TIER_BUNDLE_SCHEMA_VERSION {
+        return Err((
+            ERROR_OUTGATE_SCHEMA,
+            format!(
+                "unexpected executable bundle schema_version {:?}",
+                bundle.schema_version
+            ),
+        ));
+    }
+    if bundle.bundle_id.trim().is_empty()
+        || !bundle.owning_bead.starts_with("bd-")
+        || !bundle.claim_id.starts_with("FE-CLAIM-")
+    {
+        return Err((
+            ERROR_OUTGATE_SCHEMA,
+            "bundle_id, bd-* owning_bead, and FE-CLAIM-* claim_id are mandatory".to_string(),
+        ));
+    }
+
+    let generated = DateTime::parse_from_rfc3339(&bundle.generated_at_utc)
+        .map_err(|error| {
+            (
+                ERROR_OUTGATE_STALE_OR_ORDER,
+                format!("generated_at_utc is not RFC3339: {error}"),
+            )
+        })?
+        .with_timezone(&Utc);
+    if bundle.max_age_days == 0 {
+        return Err((
+            ERROR_OUTGATE_STALE_OR_ORDER,
+            "max_age_days must be positive".to_string(),
+        ));
+    }
+    let age_secs = (context.as_of_utc - generated).num_seconds();
+    let max_age_secs =
+        i64::try_from(bundle.max_age_days.saturating_mul(86_400)).unwrap_or(i64::MAX);
+    if age_secs < 0 || age_secs > max_age_secs {
+        return Err((
+            ERROR_OUTGATE_STALE_OR_ORDER,
+            format!(
+                "executable bundle timestamp {} is stale or future-dated relative to {}",
+                bundle.generated_at_utc,
+                context.as_of_utc.to_rfc3339()
+            ),
+        ));
+    }
+
+    let backend_lower = bundle.backend_kind.trim().to_ascii_lowercase();
+    if backend_lower.is_empty()
+        || [
+            "label",
+            "planning",
+            "unlinked",
+            "scaffold",
+            "simulated",
+            "mock",
+            "stub",
+        ]
+        .iter()
+        .any(|bad| backend_lower.contains(bad))
+    {
+        return Err((
+            ERROR_OUTGATE_BACKEND_LABEL_ONLY,
+            format!(
+                "backend_kind {:?} is a non-executable label/planning scaffold",
+                bundle.backend_kind
+            ),
+        ));
+    }
+
+    let origin_lower = bundle.compile_duration_origin.trim().to_ascii_lowercase();
+    if bundle.simulated
+        || bundle.compile_duration_ns == 0
+        || !matches!(
+            origin_lower.as_str(),
+            "measured_wall_ns" | "measured_cycle_counter"
+        )
+    {
+        return Err((
+            ERROR_OUTGATE_SIMULATED_COMPILE,
+            format!(
+                "simulated/synthetic compile timing rejected (simulated={}, origin={:?}, ns={})",
+                bundle.simulated, bundle.compile_duration_origin, bundle.compile_duration_ns
+            ),
+        ));
+    }
+
+    if !is_valid_lower_sha256(&bundle.input_ir_sha256)
+        || !is_valid_lower_sha256(&bundle.final_byte_sha256)
+    {
+        return Err((
+            ERROR_OUTGATE_SCHEMA,
+            "input_ir_sha256 and final_byte_sha256 must be 64-char lowercase hex SHA-256 digests"
+                .to_string(),
+        ));
+    }
+    if bundle.final_byte_sha256 == bundle.input_ir_sha256 {
+        return Err((
+            ERROR_OUTGATE_INPUT_ONLY_HASH,
+            "final_byte_sha256 equals input_ir_sha256 (input-only hash masquerading as executable output)".to_string(),
+        ));
+    }
+
+    let machine_bytes = decode_hex_bytes(&bundle.machine_code_hex)
+        .map_err(|detail| (ERROR_OUTGATE_MACHINE_CODE, detail))?;
+    if machine_bytes.is_empty() || machine_bytes.len() != bundle.machine_code_byte_len {
+        return Err((
+            ERROR_OUTGATE_MACHINE_CODE,
+            format!(
+                "machine_code_byte_len ({}) does not match decoded machine_code_hex length ({})",
+                bundle.machine_code_byte_len,
+                machine_bytes.len()
+            ),
+        ));
+    }
+    let computed_final_hash = sha256_hex(&machine_bytes);
+    if computed_final_hash != bundle.final_byte_sha256 {
+        return Err((
+            ERROR_OUTGATE_MACHINE_CODE,
+            format!(
+                "final_byte_sha256 mismatch: bundle claims {}, actual machine bytes hash to {computed_final_hash}",
+                bundle.final_byte_sha256
+            ),
+        ));
+    }
+
+    if bundle.actual_dispatch_count == 0 {
+        return Err((
+            ERROR_OUTGATE_DISPATCH_ZERO,
+            "actual_dispatch_count must be > 0 (unexecuted code cannot back an executable-tier claim)"
+                .to_string(),
+        ));
+    }
+
+    if bundle.disassembly_lines.is_empty()
+        || bundle
+            .disassembly_lines
+            .iter()
+            .any(|line| line.trim().is_empty())
+    {
+        return Err((
+            ERROR_OUTGATE_DISASSEMBLY,
+            "disassembly_lines must be non-empty and contain no blank lines".to_string(),
+        ));
+    }
+
+    if bundle.stack_map_entries.is_empty() || bundle.deopt_map_entries.is_empty() {
+        return Err((
+            ERROR_OUTGATE_MAPS,
+            "stack_map_entries and deopt_map_entries are both required for executable-tier claims"
+                .to_string(),
+        ));
+    }
+    let mut prev_stack_offset: Option<usize> = None;
+    for entry in &bundle.stack_map_entries {
+        if entry.code_offset >= machine_bytes.len() {
+            return Err((
+                ERROR_OUTGATE_MAPS,
+                format!(
+                    "stack_map code_offset {} out of bounds for {}-byte code buffer",
+                    entry.code_offset,
+                    machine_bytes.len()
+                ),
+            ));
+        }
+        if prev_stack_offset.is_some_and(|prev| entry.code_offset <= prev) {
+            return Err((
+                ERROR_OUTGATE_STALE_OR_ORDER,
+                "stack_map_entries must be strictly ordered and free of duplicate code_offset values"
+                    .to_string(),
+            ));
+        }
+        prev_stack_offset = Some(entry.code_offset);
+    }
+    let mut prev_deopt_offset: Option<usize> = None;
+    for entry in &bundle.deopt_map_entries {
+        if entry.code_offset >= machine_bytes.len() || entry.reason.trim().is_empty() {
+            return Err((
+                ERROR_OUTGATE_MAPS,
+                format!(
+                    "deopt_map entry at offset {} is out of bounds or missing reason",
+                    entry.code_offset
+                ),
+            ));
+        }
+        if prev_deopt_offset.is_some_and(|prev| entry.code_offset <= prev) {
+            return Err((
+                ERROR_OUTGATE_STALE_OR_ORDER,
+                "deopt_map_entries must be strictly ordered and free of duplicate code_offset values"
+                    .to_string(),
+            ));
+        }
+        prev_deopt_offset = Some(entry.code_offset);
+    }
+
+    let eq = &bundle.tier_r_equivalence;
+    if !eq.verified
+        || eq.witness_cases_total == 0
+        || eq.witness_cases_passed != eq.witness_cases_total
+        || !is_valid_lower_sha256(&eq.tier_r_trace_sha256)
+        || eq.tier_r_trace_sha256 == bundle.final_byte_sha256
+    {
+        return Err((
+            ERROR_OUTGATE_TIER_R_EQUIV,
+            "tier_r_equivalence requires verified=true, passed==total>0, and a distinct valid tier_r_trace_sha256"
+                .to_string(),
+        ));
+    }
+
+    Ok(format!(
+        "executable-tier bundle {} verified ({} bytes, {} dispatches, {} Tier-R witnesses)",
+        bundle.bundle_id,
+        machine_bytes.len(),
+        bundle.actual_dispatch_count,
+        eq.witness_cases_passed
+    ))
+}
+
+fn audit_conformance_claim_bundle(
+    repo_root: &Path,
+    bundle_path: &Path,
+    context: &ValidationContext,
+    validator: &mut Validator<'_>,
+) {
+    let label = path_for_report(repo_root, bundle_path);
+    let started = Instant::now();
+    let bytes = match fs::read(bundle_path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            validator.check(
+                "conformance_bundle.read",
+                Some("conformance"),
+                Some(&label),
+                Err((
+                    ERROR_OUTGATE_IO,
+                    format!("failed to read conformance bundle {label}: {error}"),
+                )),
+                started,
+                BTreeMap::new(),
+            );
+            return;
+        }
+    };
+    let hashes = BTreeMap::from([(label.clone(), sha256_hex(&bytes))]);
+    let bundle: ConformanceClaimBundle = match serde_json::from_slice(&bytes) {
+        Ok(bundle) => bundle,
+        Err(error) => {
+            validator.check(
+                "conformance_bundle.parse",
+                Some("conformance"),
+                Some(&label),
+                Err((
+                    ERROR_OUTGATE_JSON,
+                    format!("malformed conformance bundle {label}: {error}"),
+                )),
+                started,
+                hashes,
+            );
+            return;
+        }
+    };
+
+    let outcome = validate_conformance_claim_bundle(repo_root, &bundle, context);
+    validator.check(
+        "conformance_bundle.verify",
+        Some(&bundle.claim_id),
+        Some(&bundle.bundle_id),
+        outcome,
+        started,
+        hashes,
+    );
+}
+
+pub fn validate_conformance_claim_bundle(
+    repo_root: &Path,
+    bundle: &ConformanceClaimBundle,
+    context: &ValidationContext,
+) -> Result<String, (&'static str, String)> {
+    if bundle.schema_version != CONFORMANCE_CLAIM_BUNDLE_SCHEMA_VERSION {
+        return Err((
+            ERROR_OUTGATE_SCHEMA,
+            format!(
+                "unexpected conformance bundle schema_version {:?}",
+                bundle.schema_version
+            ),
+        ));
+    }
+    if bundle.bundle_id.trim().is_empty()
+        || !bundle.owning_bead.starts_with("bd-")
+        || !bundle.claim_id.starts_with("FE-CLAIM-")
+    {
+        return Err((
+            ERROR_OUTGATE_SCHEMA,
+            "bundle_id, bd-* owning_bead, and FE-CLAIM-* claim_id are mandatory".to_string(),
+        ));
+    }
+
+    let generated = DateTime::parse_from_rfc3339(&bundle.generated_at_utc)
+        .map_err(|error| {
+            (
+                ERROR_OUTGATE_STALE_OR_ORDER,
+                format!("generated_at_utc is not RFC3339: {error}"),
+            )
+        })?
+        .with_timezone(&Utc);
+    if bundle.max_age_days == 0 {
+        return Err((
+            ERROR_OUTGATE_STALE_OR_ORDER,
+            "max_age_days must be positive".to_string(),
+        ));
+    }
+    let age_secs = (context.as_of_utc - generated).num_seconds();
+    let max_age_secs =
+        i64::try_from(bundle.max_age_days.saturating_mul(86_400)).unwrap_or(i64::MAX);
+    if age_secs < 0 || age_secs > max_age_secs {
+        return Err((
+            ERROR_OUTGATE_STALE_OR_ORDER,
+            format!(
+                "conformance bundle timestamp {} is stale or future-dated relative to {}",
+                bundle.generated_at_utc,
+                context.as_of_utc.to_rfc3339()
+            ),
+        ));
+    }
+
+    if bundle.synthetic_percentage || bundle.estimation_method != "exact_executed_corpus" {
+        return Err((
+            ERROR_OUTGATE_SYNTHETIC_PERCENTAGE,
+            format!(
+                "synthetic/estimated conformance rate rejected (synthetic_percentage={}, estimation_method={:?})",
+                bundle.synthetic_percentage, bundle.estimation_method
+            ),
+        ));
+    }
+
+    let oracle = &bundle.harness_oracle;
+    if oracle.oracle_kind != "test262_harness_v1"
+        || !oracle.includes_preloaded
+        || !oracle.async_done_tracked
+        || !oracle.negative_phase_verified
+    {
+        return Err((
+            ERROR_OUTGATE_HARNESS_ORACLE,
+            format!(
+                "conformance claim requires full harness oracle (got kind={:?}, includes={}, async={}, negative={})",
+                oracle.oracle_kind,
+                oracle.includes_preloaded,
+                oracle.async_done_tracked,
+                oracle.negative_phase_verified
+            ),
+        ));
+    }
+
+    let rel_manifest = Path::new(&bundle.selected_manifest_path);
+    if !safe_relative_path(rel_manifest) || !is_valid_lower_sha256(&bundle.selected_manifest_sha256)
+    {
+        return Err((
+            ERROR_OUTGATE_SELECTED_MANIFEST,
+            "selected_manifest_path must be a safe relative path with a 64-hex selected_manifest_sha256"
+                .to_string(),
+        ));
+    }
+    let manifest_disk = repo_root.join(rel_manifest);
+    let manifest_bytes = fs::read(&manifest_disk).map_err(|error| {
+        (
+            ERROR_OUTGATE_SELECTED_MANIFEST,
+            format!(
+                "missing or unreadable selected manifest {}: {error}",
+                bundle.selected_manifest_path
+            ),
+        )
+    })?;
+    let actual_manifest_sha = sha256_hex(&manifest_bytes);
+    if actual_manifest_sha != bundle.selected_manifest_sha256 {
+        return Err((
+            ERROR_OUTGATE_SELECTED_MANIFEST,
+            format!(
+                "selected_manifest_sha256 mismatch: expected {}, got {actual_manifest_sha}",
+                bundle.selected_manifest_sha256
+            ),
+        ));
+    }
+
+    if bundle.selected_case_count == 0
+        || u64::try_from(bundle.selected_case_ids.len()).ok() != Some(bundle.selected_case_count)
+    {
+        return Err((
+            ERROR_OUTGATE_SELECTED_MANIFEST,
+            "selected_case_ids must be non-empty and match selected_case_count".to_string(),
+        ));
+    }
+    let mut prev_case: Option<&str> = None;
+    for case_id in &bundle.selected_case_ids {
+        if case_id.trim().is_empty() {
+            return Err((
+                ERROR_OUTGATE_SELECTED_MANIFEST,
+                "selected_case_ids must not contain empty IDs".to_string(),
+            ));
+        }
+        if prev_case.is_some_and(|prev| case_id.as_str() <= prev) {
+            return Err((
+                ERROR_OUTGATE_STALE_OR_ORDER,
+                format!(
+                    "selected_case_ids must be strictly sorted and duplicate-free (offending case: {case_id:?})"
+                ),
+            ));
+        }
+        prev_case = Some(case_id.as_str());
+    }
+
+    if bundle.executed_count.checked_add(bundle.skipped_count) != Some(bundle.selected_case_count)
+        || bundle.passed_count.checked_add(bundle.failed_count) != Some(bundle.executed_count)
+    {
+        return Err((
+            ERROR_OUTGATE_SCHEMA,
+            "conformance case totals are inconsistent (executed+skipped != selected or passed+failed != executed)"
+                .to_string(),
+        ));
+    }
+    let expected_rate = bundle.passed_count.saturating_mul(1_000_000) / bundle.selected_case_count;
+    if bundle.pass_rate_millionths != expected_rate {
+        return Err((
+            ERROR_OUTGATE_SYNTHETIC_PERCENTAGE,
+            format!(
+                "pass_rate_millionths ({}) does not match exact passed/selected ratio ({expected_rate})",
+                bundle.pass_rate_millionths
+            ),
+        ));
+    }
+    if bundle.full_suite_claim_allowed && (bundle.failed_count > 0 || bundle.skipped_count > 0) {
+        return Err((
+            ERROR_OUTGATE_CLAIM_LANGUAGE,
+            "full_suite_claim_allowed=true is forbidden when failed_count > 0 or skipped_count > 0"
+                .to_string(),
+        ));
+    }
+
+    Ok(format!(
+        "conformance bundle {} verified ({}/{} passed, exact manifest {})",
+        bundle.bundle_id,
+        bundle.passed_count,
+        bundle.selected_case_count,
+        bundle.selected_manifest_path
+    ))
 }
 
 #[cfg(test)]

@@ -1,8 +1,8 @@
 {
   "commands": {
-    "cleanup": "cargo clean",
-    "environment_setup": "export CARGO_INCREMENTAL=0",
-    "verification": "cargo test -p frankenengine-engine --test claim_evidence_adversarial_corpus"
+    "cleanup": "none (preserve incremental rch target pool)",
+    "environment_setup": "export CARGO_INCREMENTAL=0 RCH_TOPOLOGY_PATHS_PRESENT=1",
+    "verification": "rch exec -- env RUSTUP_TOOLCHAIN=nightly-2026-09-21 cargo test -j 2 -p frankenengine-engine --test claim_evidence_adversarial_corpus"
   },
   "determinism": {
     "environment_isolation": "process",
@@ -16,7 +16,7 @@
     "exit_code": 0,
     "verification_success": true
   },
-  "generated_at_utc": "2026-06-21T03:53:42.855335+00:00",
+  "generated_at_utc": "2026-11-17T09:15:00+00:00",
   "inputs": {
     "dependencies": [
       "Cargo.toml",
@@ -25,25 +25,27 @@
       "docs/claim_to_proof_matrix_v1.json"
     ],
     "primary_artifact": {
-      "hash": "f0c41551197890b131a32260b3a63a8f95ceccfcafb99edfdd8f8e390c5361b7",
+      "hash": "046d153ec76087d910e600641a1af3955bcddb907ca3cfca75dfc21f271dff8f",
       "path": "crates/franken-engine/tests/claim_evidence_adversarial_corpus.rs",
-      "size_bytes": 6893
+      "size_bytes": 6941
     }
   },
   "lock_id": "lock-fe-claim-025-20260621",
   "manifest_id": "manifest-fe-claim-025-20260621",
   "replay": {
     "command_sequence": [
-      "cargo test -p frankenengine-engine --test claim_evidence_adversarial_corpus"
+      "rch exec -- env RUSTUP_TOOLCHAIN=nightly-2026-09-21 cargo test -j 2 -p frankenengine-engine --test claim_evidence_adversarial_corpus"
     ],
     "environment_vars": {
-      "CARGO_INCREMENTAL": "0"
+      "CARGO_INCREMENTAL": "0",
+      "RCH_TOPOLOGY_PATHS_PRESENT": "1",
+      "RUSTUP_TOOLCHAIN": "nightly-2026-09-21"
     },
-    "working_directory": "/data/projects/franken_engine"
+    "working_directory": "."
   },
-  "schema_hash": "sha256:9f0a1b2c3d4e5f6789abcdef0123456789abcdef0123456789abcdef01234567",
+  "schema_hash": "sha256:2f2b1608f0dcb77c107313b6a88ab11c11f51e7bea916fafeede08d06388458c",
   "schema_version": "frankenengine.reproducibility.lock.v1",
-  "source_commit": "12cec3f9",
+  "source_commit": "f04e2bca570830e66ed4c7fc5f32c39440f9e379",
   "verification": {
     "freshness_check": "required",
     "hash_algorithm": "sha256",

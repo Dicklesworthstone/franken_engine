@@ -7481,13 +7481,11 @@ impl InterpreterCore {
         self.finish_property_read_observation(observation, outcome)
     }
 
-    /// Deterministic wall-clock reading in epoch milliseconds: the fixed
-    /// epoch plus the event loop's virtual time, after crediting guest work
-    /// since the previous reading (one virtual millisecond per
-    /// [`INSTRUCTIONS_PER_VIRTUAL_MS`] instructions). Advancing the shared
-    /// event-loop clock keeps readings monotonic and consistent with timer
-    /// due times (bd-9vouw.59).
-    pub(super) fn virtual_wall_clock_ms(&mut self) -> f64 {
+    /// Credit executed guest instructions into the shared virtual event-loop
+    /// clock (`1` virtual millisecond per [`INSTRUCTIONS_PER_VIRTUAL_MS`]
+    /// instructions) and return the remaining sub-millisecond instruction ticks
+    /// (`0..INSTRUCTIONS_PER_VIRTUAL_MS`, `bd-9vouw.59`).
+    pub(super) fn advance_virtual_clock_from_instructions(&mut self) -> u64 {
         if self.instructions_executed < self.virtual_clock_instruction_mark {
             // A reused core restarted its instruction counter.
             self.virtual_clock_instruction_mark = self.instructions_executed;
@@ -7503,12 +7501,26 @@ impl InterpreterCore {
                 .virtual_clock_instruction_mark
                 .saturating_add(elapsed_ms.saturating_mul(INSTRUCTIONS_PER_VIRTUAL_MS));
         }
-        DETERMINISTIC_EPOCH_MS as f64 + self.event_loop.clock.now_ms() as f64
+        self.instructions_executed
+            .saturating_sub(self.virtual_clock_instruction_mark)
+    }
+
+    /// Deterministic wall-clock reading in epoch milliseconds: the recorded
+    /// epoch plus the event loop's virtual time, after crediting guest work
+    /// since the previous reading (one virtual millisecond per
+    /// [`INSTRUCTIONS_PER_VIRTUAL_MS`] instructions). Advancing the shared
+    /// event-loop clock keeps readings monotonic and consistent with timer
+    /// due times (bd-9vouw.59).
+    pub(super) fn virtual_wall_clock_ms(&mut self) -> f64 {
+        self.advance_virtual_clock_from_instructions();
+        self.virtual_clock_epoch_ms as f64 + self.event_loop.clock.now_ms() as f64
     }
 
     pub(super) fn deterministic_performance_now(&mut self) -> Value {
         const DETERMINISTIC_PERFORMANCE_BASE_TICK: u64 = 0;
 
+        let sub_ms_ticks = self.advance_virtual_clock_from_instructions();
+        let virtual_ms = self.event_loop.clock.now_ms();
         let consumed_ticks = self.instructions_executed;
         let payload = format!(
             "clock_source=deterministic_instruction_tick;base_tick={DETERMINISTIC_PERFORMANCE_BASE_TICK};consumed_ticks={consumed_ticks}"
@@ -7520,7 +7532,9 @@ impl InterpreterCore {
             "baseline_interpreter",
         );
         Value::Float(Float64::new(
-            DETERMINISTIC_PERFORMANCE_BASE_TICK as f64 + consumed_ticks as f64,
+            DETERMINISTIC_PERFORMANCE_BASE_TICK as f64
+                + virtual_ms as f64
+                + (sub_ms_ticks as f64 / INSTRUCTIONS_PER_VIRTUAL_MS as f64),
         ))
     }
 

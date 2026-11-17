@@ -228,7 +228,8 @@ jq -n \
     owning_bead: $owning_bead
   }' >"$manifest_path"
 
-rm -f "$results_path"
+# Retain `.subgate_results.jsonl` inside `$run_dir` for audit reproducibility
+# without deleting intermediate evidence files.
 
 {
   echo "Claim-Evidence Integrity Capstone (CEI G.1, bd-sde5e.7.1)"

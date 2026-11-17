@@ -17402,6 +17402,9 @@ pub struct InterpreterCore {
     /// Exit status set by `process.exitCode = n` or `process.exit(n)`
     /// (bd-my9hk); `None` means the program never set one.
     process_exit_code: Option<i32>,
+    /// Recorded virtual wall-clock epoch in milliseconds (`bd-9vouw.59`).
+    /// Defaults to [`DETERMINISTIC_EPOCH_MS`] unless overridden via `--clock-epoch`.
+    virtual_clock_epoch_ms: i64,
     /// Instruction count already converted into virtual wall-clock time
     /// (see [`INSTRUCTIONS_PER_VIRTUAL_MS`]).
     virtual_clock_instruction_mark: u64,

@@ -1068,6 +1068,7 @@ impl InterpreterCore {
             console_counts: BTreeMap::new(),
             console_timers: BTreeMap::new(),
             process_exit_code: None,
+            virtual_clock_epoch_ms: DETERMINISTIC_EPOCH_MS,
             virtual_clock_instruction_mark: 0,
             profiling_data: None,
             next_timer_id: 0,
@@ -1191,6 +1192,11 @@ impl InterpreterCore {
     /// the embedder from the entry's lowering.
     pub fn set_entry_flow_label_ceiling(&mut self, ceiling: Label) {
         self.entry_flow_label_ceiling = Some(ceiling);
+    }
+
+    /// Override the starting virtual wall-clock epoch in milliseconds (`bd-9vouw.59`).
+    pub fn set_clock_epoch_ms(&mut self, epoch_ms: i64) {
+        self.virtual_clock_epoch_ms = epoch_ms;
     }
 
     pub(super) fn join_object_mutation_label(

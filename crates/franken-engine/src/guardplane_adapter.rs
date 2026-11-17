@@ -463,6 +463,30 @@ pub struct GuardplaneExecutionSummary {
     pub last_risk_state: Option<RiskState>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuardplaneSignalLatencyRecord {
+    pub decision_index: usize,
+    pub instruction_index: u64,
+    pub operation: GuardplaneOperation,
+    pub action: HookAction,
+    pub signal_to_action_latency_ns: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuardplaneLatencyReport {
+    pub schema_version: String,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub extension_id: String,
+    pub containment_action: String,
+    pub containment_instruction_index: Option<u64>,
+    pub containment_signal_to_action_latency_ns: Option<u64>,
+    pub max_signal_to_action_latency_ns: u64,
+    pub decision_count: usize,
+    pub decisions: Vec<GuardplaneSignalLatencyRecord>,
+}
+
 #[derive(Debug)]
 struct GuardplaneAdapterState {
     // Legacy fields for backward compatibility during migration
@@ -475,6 +499,7 @@ struct GuardplaneAdapterState {
     /// Operations at or above [`SUSPICIOUS_OPERATION_FLOOR_MILLIONTHS`].
     suspicious_operation_count: u64,
     decisions: Vec<GuardplaneDecisionRecord>,
+    signal_latencies: Vec<GuardplaneSignalLatencyRecord>,
     diagnostics: Vec<GuardplaneDiagnosticRecord>,
 }
 
@@ -594,6 +619,7 @@ impl GuardplaneAdapter {
                 operation_count: 0,
                 suspicious_operation_count: 0,
                 decisions: Vec::new(),
+                signal_latencies: Vec::new(),
                 diagnostics: Vec::new(),
             }),
         }
@@ -638,6 +664,12 @@ impl GuardplaneAdapter {
         self.lock_state("decision_records").decisions.clone()
     }
 
+    pub fn signal_latency_records(&self) -> Vec<GuardplaneSignalLatencyRecord> {
+        self.lock_state("signal_latency_records")
+            .signal_latencies
+            .clone()
+    }
+
     pub fn diagnostic_records(&self) -> Vec<GuardplaneDiagnosticRecord> {
         let mut diagnostics = self.context.diagnostics.clone();
         diagnostics.extend(self.lock_state("diagnostic_records").diagnostics.clone());
@@ -649,6 +681,7 @@ impl GuardplaneAdapter {
         hook_context: &HookContext,
         operation: GuardplaneOperation,
     ) -> HookAction {
+        let decision_started = std::time::Instant::now();
         let mut state = self.lock_state("evaluate_operation");
         state.operation_count = state.operation_count.saturating_add(1);
         let suspicious_index = if operation.suspicion_millionths()
@@ -723,6 +756,16 @@ impl GuardplaneAdapter {
         );
 
         let final_action = stricter_hook_action(action, unified_action);
+        let signal_to_action_latency_ns =
+            u64::try_from(decision_started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        let decision_index = state.decisions.len();
+        state.signal_latencies.push(GuardplaneSignalLatencyRecord {
+            decision_index,
+            instruction_index: hook_context.instruction_count,
+            operation: operation.clone(),
+            action: final_action.clone(),
+            signal_to_action_latency_ns,
+        });
 
         state.decisions.push(GuardplaneDecisionRecord {
             hook_context: hook_context.clone(),

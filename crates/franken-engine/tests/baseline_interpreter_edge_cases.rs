@@ -935,11 +935,12 @@ fn budget_exactly_sufficient() {
         Ir3Instruction::Halt,
     ]);
     let mut cfg = baseline_test_config();
-    cfg.instruction_budget = 2;
+    // Ephemeral lane entry charges 1 step + LoadInt (1) + Halt (1) = 3 steps.
+    cfg.instruction_budget = 3;
     let lane = QuickJsLane::with_config(cfg);
     let result = lane.execute(&m, "test").unwrap();
     assert_eq!(result.value, Value::Int(42));
-    assert_eq!(result.instructions_executed, 2);
+    assert_eq!(result.instructions_executed, 3);
 }
 
 #[test]
@@ -949,7 +950,7 @@ fn budget_one_short() {
         Ir3Instruction::Halt,
     ]);
     let mut cfg = baseline_test_config();
-    cfg.instruction_budget = 1;
+    cfg.instruction_budget = 2;
     let lane = QuickJsLane::with_config(cfg);
     let err = lane.execute(&m, "test").unwrap_err();
     assert!(matches!(err, InterpreterError::BudgetExhausted { .. }));
@@ -1253,7 +1254,8 @@ fn empty_module_returns_undefined() {
     let m = test_module(vec![]);
     let result = quickjs_execute(&m).unwrap();
     assert_eq!(result.value, Value::Undefined);
-    assert_eq!(result.instructions_executed, 0);
+    // Ephemeral lane entry charges 1 step even on an empty instruction body.
+    assert_eq!(result.instructions_executed, 1);
 }
 
 // ===========================================================================
@@ -1440,7 +1442,7 @@ fn many_sequential_loads() {
     instrs.push(Ir3Instruction::Halt);
     let m = test_module(instrs);
     let result = quickjs_execute(&m).unwrap();
-    assert_eq!(result.instructions_executed, 101);
+    assert_eq!(result.instructions_executed, 102);
 }
 
 // ===========================================================================

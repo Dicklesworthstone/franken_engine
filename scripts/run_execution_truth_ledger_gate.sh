@@ -24,7 +24,7 @@ esac
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 artifact_root="${EXECUTION_TRUTH_LEDGER_ARTIFACT_ROOT:-artifacts/execution_truth_ledger}"
 run_dir="${2:-${artifact_root}/${timestamp}-$$}"
-target_dir="${EXECUTION_TRUTH_LEDGER_CARGO_TARGET_DIR:-/tmp/rch_target_franken_engine_truth_${timestamp}_$$}"
+target_dir="${EXECUTION_TRUTH_LEDGER_CARGO_TARGET_DIR:-${RCH_TARGET_BASE:-target2}/rch_target_franken_engine_truth_${timestamp}_$$}"
 toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
 rch_timeout_seconds="${RCH_EXEC_TIMEOUT_SECONDS:-1200}"
 rch_bin="${EXECUTION_TRUTH_LEDGER_RCH_BIN:-rch}"
@@ -119,14 +119,23 @@ append_event() {
 }
 
 run_rch() {
-  timeout "$rch_timeout_seconds" \
-    env RCH_REQUIRE_REMOTE=1 \
-    "$rch_bin" --no-color exec -- env -u CARGO_ENCODED_RUSTFLAGS \
-      "RUSTUP_TOOLCHAIN=${toolchain}" \
-      "CARGO_TARGET_DIR=${target_dir}" \
-      "CARGO_INCREMENTAL=0" \
-      "RUSTFLAGS=-C linker=cc -Clinker-features=-lld" \
-      "$@"
+  if [[ "${GITHUB_ACTIONS:-}" == "true" ]] && ! command -v "$rch_bin" >/dev/null 2>&1; then
+    timeout "$rch_timeout_seconds" \
+      env -u CARGO_ENCODED_RUSTFLAGS \
+        "RUSTUP_TOOLCHAIN=${toolchain}" \
+        "CARGO_TARGET_DIR=${target_dir}" \
+        "CARGO_INCREMENTAL=0" \
+        "$@"
+  else
+    timeout "$rch_timeout_seconds" \
+      env RCH_REQUIRE_REMOTE=1 RCH_TOPOLOGY_PATHS_PRESENT=1 \
+      "$rch_bin" --no-color exec -- env -u CARGO_ENCODED_RUSTFLAGS \
+        "RUSTUP_TOOLCHAIN=${toolchain}" \
+        "CARGO_TARGET_DIR=${target_dir}" \
+        "CARGO_INCREMENTAL=0" \
+        "RUSTFLAGS=-C linker=cc -Clinker-features=-lld" \
+        "$@"
+  fi
 }
 
 record_rch_command() {
@@ -161,7 +170,7 @@ for required_tool in jq git sha256sum timeout diff; do
     break
   fi
 done
-if [[ -z "$preflight_error" ]] && ! command -v "$rch_bin" >/dev/null 2>&1; then
+if [[ -z "$preflight_error" ]] && [[ "${GITHUB_ACTIONS:-}" != "true" ]] && ! command -v "$rch_bin" >/dev/null 2>&1; then
   preflight_error="missing required rch executable: ${rch_bin}"
 fi
 if [[ -z "$preflight_error" && ! -f "$ledger_path" ]]; then

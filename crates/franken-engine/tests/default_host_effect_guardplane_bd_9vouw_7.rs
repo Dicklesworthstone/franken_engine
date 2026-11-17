@@ -481,7 +481,12 @@ fn live_sandbox_rechecks_the_effect_that_triggered_it_in_both_lanes() {
         let result = orchestrator
             .execute(&package("console.log('forbidden'); 42;", &[]))
             .expect("sandbox refusal remains a structured containment outcome");
-        assert_eq!(result.containment_action, ContainmentAction::Sandbox);
+        // The live hook requests Sandbox and immediately rechecks + denies the
+        // sole hostcall (`1/1` = 100% denial rate), so post-execution Bayesian
+        // scoring escalates the final containment transition to Suspend while
+        // `assert_signed_sandbox_policy` verifies the live `"sandbox"` hook
+        // decision and authenticated `sandbox_policy_hash`.
+        assert_eq!(result.containment_action, ContainmentAction::Suspend);
         assert!(result.console_output.is_empty(), "{lane:?}");
         assert!(result.host_effect_transcript.is_empty());
         assert!(result.host_effect_journal.is_empty());
@@ -795,9 +800,12 @@ fn quarantine_admission_survives_a_new_orchestrator_and_unrelated_allowed_execut
 #[cfg(feature = "sibling-persistence")]
 #[test]
 fn quarantine_survives_state_db_reopen_and_is_seen_by_an_already_open_orchestrator() {
-    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        let directory = tempfile::tempdir().expect("quarantine database directory");
-        let path = directory.path().join("containment.db");
+    for (idx, lane) in [LaneChoice::QuickJs, LaneChoice::V8]
+        .into_iter()
+        .enumerate()
+    {
+        let directory = guardplane_artifact_dir(&format!("state_db_reopen_{idx}"));
+        let path = directory.join("containment.db");
         let record;
         {
             let mut original = quarantine_orchestrator(lane);
@@ -1080,4 +1088,285 @@ fn racing_quarantine_commit_preserves_the_first_barrier_and_rejects_corruption()
         assert!(orchestrator.last_failed_console_output().is_empty());
         assert_quarantined_before_execution(&mut orchestrator, &package("42;", &[]));
     }
+}
+
+fn guardplane_artifact_dir(tag: &str) -> std::path::PathBuf {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock")
+        .as_nanos();
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("workspace root")
+        .join("target")
+        .join("guardplane_bd_9vouw_7")
+        .join(format!("{tag}_{}_{nonce}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create guardplane test artifact dir");
+    dir
+}
+
+#[test]
+fn guardplane_signal_to_action_latency_report_exports_per_decision_telemetry() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let mut orchestrator = quarantine_orchestrator(lane);
+        let result = orchestrator
+            .execute(&package(
+                "console.log('blocked-first'); console.log('blocked-second');",
+                &[],
+            ))
+            .expect("quarantine containment completes with structured telemetry");
+        assert_eq!(result.containment_action, ContainmentAction::Quarantine);
+        assert!(result.console_output.is_empty());
+        assert_eq!(
+            result.guardplane_signal_latencies.len(),
+            1,
+            "in-flight containment must stop before the second hostcall"
+        );
+        let report = result.export_guardplane_latency_report("default-policy");
+        assert_eq!(
+            report.schema_version,
+            "franken-engine.guardplane-latency-report.v1"
+        );
+        assert_eq!(report.decision_count, 1);
+        assert_eq!(report.containment_action, "quarantine");
+        assert!(report.containment_instruction_index.is_some());
+        assert_eq!(
+            report.containment_signal_to_action_latency_ns,
+            Some(report.decisions[0].signal_to_action_latency_ns)
+        );
+        assert_eq!(
+            report.max_signal_to_action_latency_ns,
+            report.decisions[0].signal_to_action_latency_ns
+        );
+    }
+}
+
+#[test]
+fn benign_corpus_reports_zero_false_positives_in_structured_log() {
+    let benign_probes: Vec<String> = (0..25)
+        .flat_map(|i| {
+            [
+                format!(
+                    "const arr = [1, 2, 3, {i}]; const sum = arr.reduce((a, b) => a + b, 0); console.log('sum', sum);"
+                ),
+                format!(
+                    "function fib(n) {{ return n <= 1 ? n : fib(n - 1) + fib(n - 2); }} const obj = {{ k: fib({}) }}; console.log(JSON.stringify(obj));",
+                    (i % 7) + 2
+                ),
+            ]
+        })
+        .collect();
+    assert_eq!(benign_probes.len(), 50);
+
+    let mut false_positive_count = 0usize;
+    let mut records = Vec::with_capacity(benign_probes.len());
+    for (idx, source) in benign_probes.iter().enumerate() {
+        let lane = if idx % 2 == 0 {
+            LaneChoice::QuickJs
+        } else {
+            LaneChoice::V8
+        };
+        let mut orchestrator = ExecutionOrchestrator::new_lab(OrchestratorConfig {
+            force_lane: Some(lane),
+            ..OrchestratorConfig::default()
+        });
+        let mut pkg = package(source, &[]);
+        pkg.extension_id = format!("benign-probe-{idx:02}");
+        let result = orchestrator
+            .execute(&pkg)
+            .expect("benign probe must execute without error");
+        let is_false_positive = result.containment_action != ContainmentAction::Allow
+            || result.console_output.len() != 1;
+        if is_false_positive {
+            false_positive_count += 1;
+        }
+        records.push(serde_json::json!({
+            "probe_index": idx,
+            "lane": lane.to_string(),
+            "trace_id": result.trace_id,
+            "containment_action": result.containment_action.to_string(),
+            "guardplane_decisions": result.guardplane_signal_latencies.len(),
+            "false_positive": is_false_positive,
+        }));
+    }
+
+    let rate_millionths = (false_positive_count as u64 * 1_000_000) / (benign_probes.len() as u64);
+    let log_dir = guardplane_artifact_dir("benign_corpus");
+    let log_path = log_dir.join("benign_false_positive_report.json");
+    let structured_log = serde_json::json!({
+        "schema_version": "franken-engine.guardplane-benign-corpus-report.v1",
+        "total_probes": benign_probes.len(),
+        "false_positive_count": false_positive_count,
+        "false_positive_rate_millionths": rate_millionths,
+        "probes": records,
+    });
+    std::fs::write(
+        &log_path,
+        serde_json::to_vec_pretty(&structured_log).expect("serialize benign report"),
+    )
+    .expect("write structured benign false-positive report");
+    assert_eq!(
+        false_positive_count, 0,
+        "benign corpus must incur zero false-positive containment actions"
+    );
+    assert_eq!(rate_millionths, 0);
+}
+
+#[test]
+fn cli_strict_replay_reproduces_mid_execution_containment_and_latency_export() {
+    let dir = guardplane_artifact_dir("cli_replay");
+    let frankenctl = env!("CARGO_BIN_EXE_frankenctl");
+
+    // 1. Verify `--emit-guardplane-latency` on `frankenctl run` exports FE-CLAIM-012 JSON
+    // without perturbing deterministic replay.
+    let run_js = dir.join("authorized_effect.js");
+    let run_report = dir.join("authorized_effect.run.json");
+    let latency_json = dir.join("authorized_effect.latency.json");
+    let run_replay = dir.join("authorized_effect.replay.json");
+    std::fs::write(&run_js, "console.log('hello-guardplane');\n").expect("write run_js");
+    let run_out = std::process::Command::new(frankenctl)
+        .args([
+            "run",
+            "--input",
+            run_js.to_str().unwrap(),
+            "--extension-id",
+            "cli-latency-check",
+            "--emit-guardplane-latency",
+            latency_json.to_str().unwrap(),
+            "--out",
+            run_report.to_str().unwrap(),
+        ])
+        .output()
+        .expect("frankenctl run");
+    assert!(
+        run_out.status.success(),
+        "frankenctl run failed: {}",
+        String::from_utf8_lossy(&run_out.stderr)
+    );
+    let latency_doc: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&latency_json).expect("read latency json"))
+            .expect("parse latency json");
+    assert_eq!(
+        latency_doc["schema_version"],
+        "franken-engine.guardplane-latency-report.v1"
+    );
+    assert_eq!(latency_doc["decision_count"], 1);
+    assert!(
+        latency_doc["decisions"][0]["instruction_index"]
+            .as_u64()
+            .is_some()
+    );
+    assert!(
+        latency_doc["decisions"][0]["signal_to_action_latency_ns"]
+            .as_u64()
+            .is_some()
+    );
+
+    let replay_out = std::process::Command::new(frankenctl)
+        .args([
+            "replay",
+            "run",
+            "--trace",
+            run_report.to_str().unwrap(),
+            "--mode",
+            "strict",
+            "--out",
+            run_replay.to_str().unwrap(),
+        ])
+        .output()
+        .expect("frankenctl replay run");
+    assert!(
+        replay_out.status.success(),
+        "strict replay failed: {}",
+        String::from_utf8_lossy(&replay_out.stderr)
+    );
+
+    // 2. Verify mid-execution containment in `frankenctl agent-sandbox` stops BEFORE
+    // trailing effects AND `frankenctl replay run --mode strict` reproduces the exact
+    // containment decision and instruction index!
+    let manifest_path = dir.join("sandbox_manifest.json");
+    let malicious_js = dir.join("malicious_probe.js");
+    let sandbox_report = dir.join("sandbox.run.json");
+    let sandbox_replay = dir.join("sandbox.replay.json");
+    std::fs::write(
+        &manifest_path,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schema_version": "franken-engine.agent-sandbox-manifest.v1",
+            "agent_id": "untrusted-agent-bd-9vouw-7",
+            "tool_grants": [
+                {
+                    "tool_name": "log",
+                    "capability_tag": "console"
+                }
+            ],
+            "denied_capability_tags": ["process_spawn", "network"]
+        }))
+        .unwrap(),
+    )
+    .expect("write manifest");
+    std::fs::write(
+        &malicious_js,
+        "const probe = { process: 1, require: 2 };\n\
+         for (let i = 0; i < 40; i++) { probe.process; probe.require; }\n\
+         console.log('must-be-contained-before-this-effect');\n",
+    )
+    .expect("write malicious_js");
+    let sandbox_out = std::process::Command::new(frankenctl)
+        .args([
+            "agent-sandbox",
+            "--manifest",
+            manifest_path.to_str().unwrap(),
+            "--input",
+            malicious_js.to_str().unwrap(),
+            "--out",
+            sandbox_report.to_str().unwrap(),
+        ])
+        .output()
+        .expect("frankenctl agent-sandbox");
+    assert_eq!(
+        sandbox_out.status.code(),
+        Some(3),
+        "agent-sandbox must exit with AGENT_SANDBOX_EXIT_CONTAINED (3) on in-flight containment: {}",
+        String::from_utf8_lossy(&sandbox_out.stderr)
+    );
+    let sandbox_doc: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&sandbox_report).expect("read sandbox report"))
+            .expect("parse sandbox report");
+    assert_ne!(
+        sandbox_doc["replay"]["containment_action"], "allow",
+        "repeated suspicious probes must trigger mid-execution containment"
+    );
+    assert_eq!(
+        sandbox_doc["replay"]["console_output"]
+            .as_array()
+            .expect("console array")
+            .len(),
+        0,
+        "containment must take effect mid-execution BEFORE the trailing console effect"
+    );
+
+    let sandbox_replay_out = std::process::Command::new(frankenctl)
+        .args([
+            "replay",
+            "run",
+            "--trace",
+            sandbox_report.to_str().unwrap(),
+            "--mode",
+            "strict",
+            "--out",
+            sandbox_replay.to_str().unwrap(),
+        ])
+        .output()
+        .expect("frankenctl replay sandbox");
+    assert!(
+        sandbox_replay_out.status.success(),
+        "strict replay of mid-execution containment failed: {}",
+        String::from_utf8_lossy(&sandbox_replay_out.stderr)
+    );
+    let sandbox_replay_doc: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&sandbox_replay).expect("read sandbox replay"))
+            .expect("parse sandbox replay");
+    assert_eq!(sandbox_replay_doc["complete"], true);
+    assert_eq!(sandbox_replay_doc["decisions_match"], true);
 }

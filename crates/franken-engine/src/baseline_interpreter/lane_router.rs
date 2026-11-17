@@ -1784,6 +1784,7 @@ pub struct QuickJsLane {
     timer_effect_authority: Option<Arc<dyn TimerEffectAuthority>>,
     failed_console_output: Option<FailedConsoleSink>,
     entry_flow_label_ceiling: Option<Label>,
+    clock_epoch_ms: Option<i64>,
     module_resolver: Option<InstalledModuleResolver>,
 }
 
@@ -1798,6 +1799,7 @@ impl Default for QuickJsLane {
             timer_effect_authority: None,
             failed_console_output: None,
             entry_flow_label_ceiling: None,
+            clock_epoch_ms: None,
             module_resolver: None,
         }
     }
@@ -1818,6 +1820,7 @@ impl QuickJsLane {
             timer_effect_authority: None,
             failed_console_output: None,
             entry_flow_label_ceiling: None,
+            clock_epoch_ms: None,
             module_resolver: None,
         }
     }
@@ -1858,6 +1861,11 @@ impl QuickJsLane {
     /// creates (bd-j8f7q).
     pub fn set_entry_flow_label_ceiling(&mut self, ceiling: Label) {
         self.entry_flow_label_ceiling = Some(ceiling);
+    }
+
+    /// Override the starting virtual wall-clock epoch in milliseconds (`bd-9vouw.59`).
+    pub fn set_clock_epoch_ms(&mut self, epoch_ms: i64) {
+        self.clock_epoch_ms = Some(epoch_ms);
     }
 
     pub fn execute(
@@ -1903,6 +1911,7 @@ impl QuickJsLane {
             self.timer_effect_authority.clone(),
             self.failed_console_output.clone(),
             self.entry_flow_label_ceiling.clone(),
+            self.clock_epoch_ms,
             self.module_resolver.clone(),
             module,
             trace_id,
@@ -1943,6 +1952,7 @@ pub struct V8Lane {
     timer_effect_authority: Option<Arc<dyn TimerEffectAuthority>>,
     failed_console_output: Option<FailedConsoleSink>,
     entry_flow_label_ceiling: Option<Label>,
+    clock_epoch_ms: Option<i64>,
     module_resolver: Option<InstalledModuleResolver>,
 }
 
@@ -1957,6 +1967,7 @@ impl Default for V8Lane {
             timer_effect_authority: None,
             failed_console_output: None,
             entry_flow_label_ceiling: None,
+            clock_epoch_ms: None,
             module_resolver: None,
         }
     }
@@ -2061,6 +2072,7 @@ pub(super) fn execute_lane_with_provisioned_stack(
     timer_effect_authority: Option<Arc<dyn TimerEffectAuthority>>,
     failed_console_output: Option<FailedConsoleSink>,
     entry_flow_label_ceiling: Option<Label>,
+    clock_epoch_ms: Option<i64>,
     module_resolver: Option<InstalledModuleResolver>,
     module: &Ir3Module,
     trace_id: &str,
@@ -2091,6 +2103,9 @@ pub(super) fn execute_lane_with_provisioned_stack(
         }
         if let Some(ceiling) = entry_flow_label_ceiling {
             core.set_entry_flow_label_ceiling(ceiling);
+        }
+        if let Some(epoch_ms) = clock_epoch_ms {
+            core.set_clock_epoch_ms(epoch_ms);
         }
         let execution = match compact_tier1.as_ref() {
             Some(program) => core.execute_ephemeral_with_compact_tier1(&module, program),
@@ -2159,6 +2174,7 @@ impl V8Lane {
             timer_effect_authority: None,
             failed_console_output: None,
             entry_flow_label_ceiling: None,
+            clock_epoch_ms: None,
             module_resolver: None,
         }
     }
@@ -2201,6 +2217,11 @@ impl V8Lane {
         self.entry_flow_label_ceiling = Some(ceiling);
     }
 
+    /// Override the starting virtual wall-clock epoch in milliseconds (`bd-9vouw.59`).
+    pub fn set_clock_epoch_ms(&mut self, epoch_ms: i64) {
+        self.clock_epoch_ms = Some(epoch_ms);
+    }
+
     pub fn execute(
         &self,
         module: &Ir3Module,
@@ -2234,6 +2255,7 @@ impl V8Lane {
             self.timer_effect_authority.clone(),
             self.failed_console_output.clone(),
             self.entry_flow_label_ceiling.clone(),
+            self.clock_epoch_ms,
             self.module_resolver.clone(),
             module,
             trace_id,
@@ -2756,6 +2778,12 @@ impl LaneRouter {
     pub fn set_entry_flow_label_ceiling(&mut self, ceiling: Label) {
         self.quickjs.set_entry_flow_label_ceiling(ceiling.clone());
         self.v8.set_entry_flow_label_ceiling(ceiling);
+    }
+
+    /// Override the starting virtual wall-clock epoch on both lanes (`bd-9vouw.59`).
+    pub fn set_clock_epoch_ms(&mut self, epoch_ms: i64) {
+        self.quickjs.set_clock_epoch_ms(epoch_ms);
+        self.v8.set_clock_epoch_ms(epoch_ms);
     }
 
     /// Route and execute the module.

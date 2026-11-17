@@ -41,7 +41,7 @@ use frankenengine_core::parser::{
     ParserOptions as CoreParserOptions,
 };
 
-use crate::{EngineMemoryBudget, EvalErrorCode, HybridRouter, RouteReason};
+use crate::{EngineMemoryBudget, EvalErrorCode, HybridRouter};
 
 pub const DIFFERENTIAL_ORACLE_SCHEMA_VERSION: &str = "franken-engine.differential-oracle.v1";
 pub const DIFFERENTIAL_ORACLE_CANONICALIZATION_SCHEMA_VERSION: &str =
@@ -1633,13 +1633,9 @@ fn eval_with_franken_core(
 }
 
 fn core_parse_goal(source: &str) -> CoreParseGoal {
-    match HybridRouter::classify_source_route(source) {
-        RouteReason::ContainsImportKeyword | RouteReason::ContainsAwaitKeyword => {
-            CoreParseGoal::Module
-        }
-        RouteReason::DirectEngineInvocation | RouteReason::DefaultQuickJsPath => {
-            CoreParseGoal::Script
-        }
+    match crate::infer_parse_goal(source) {
+        crate::ast::ParseGoal::Module => CoreParseGoal::Module,
+        crate::ast::ParseGoal::Script => CoreParseGoal::Script,
     }
 }
 

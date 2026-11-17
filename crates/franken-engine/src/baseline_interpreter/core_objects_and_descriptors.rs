@@ -4107,6 +4107,77 @@ impl InterpreterCore {
         result
     }
 
+    /// Attach receiver-bound lifecycle methods onto a crypto object created via
+    /// first-class runtime module dispatch (`crypto_core_module` / `.copy()`).
+    /// Direct `Ir3Instruction::HostCall` script-facade objects do not invoke
+    /// this helper and remain methodless at the generic property boundary
+    /// (bd-2z157).
+    pub(super) fn install_crypto_runtime_methods(
+        &mut self,
+        object_id: ObjectId,
+    ) -> Result<(), InterpreterError> {
+        let methods: &[(&str, BuiltinFunctionKind)] = match self.crypto_objects.get(&object_id) {
+            Some(
+                CryptoObjectState::HashActive { .. } | CryptoObjectState::HashFinalized { .. },
+            ) => &[
+                ("update", BuiltinFunctionKind::CryptoUpdate),
+                ("digest", BuiltinFunctionKind::CryptoDigest),
+                ("copy", BuiltinFunctionKind::CryptoCopy),
+            ],
+            Some(
+                CryptoObjectState::HmacActive { .. } | CryptoObjectState::HmacFinalized { .. },
+            ) => &[
+                ("update", BuiltinFunctionKind::CryptoUpdate),
+                ("digest", BuiltinFunctionKind::CryptoDigest),
+            ],
+            Some(
+                CryptoObjectState::CipherActive {
+                    algorithm: CryptoCipherAlgorithm::Aes256Gcm,
+                    direction: CryptoCipherDirection::Encrypt,
+                    ..
+                }
+                | CryptoObjectState::CipherFinalized {
+                    algorithm: CryptoCipherAlgorithm::Aes256Gcm,
+                    direction: CryptoCipherDirection::Encrypt,
+                    ..
+                },
+            ) => &[
+                ("update", BuiltinFunctionKind::CryptoCipherUpdate),
+                ("final", BuiltinFunctionKind::CryptoCipherFinal),
+                ("getAuthTag", BuiltinFunctionKind::CryptoGetAuthTag),
+            ],
+            Some(
+                CryptoObjectState::CipherActive {
+                    algorithm: CryptoCipherAlgorithm::Aes256Gcm,
+                    direction: CryptoCipherDirection::Decrypt,
+                    ..
+                }
+                | CryptoObjectState::CipherFinalized {
+                    algorithm: CryptoCipherAlgorithm::Aes256Gcm,
+                    direction: CryptoCipherDirection::Decrypt,
+                    ..
+                },
+            ) => &[
+                ("update", BuiltinFunctionKind::CryptoCipherUpdate),
+                ("final", BuiltinFunctionKind::CryptoCipherFinal),
+                ("setAuthTag", BuiltinFunctionKind::CryptoSetAuthTag),
+            ],
+            Some(
+                CryptoObjectState::CipherActive { .. } | CryptoObjectState::CipherFinalized { .. },
+            ) => &[
+                ("update", BuiltinFunctionKind::CryptoCipherUpdate),
+                ("final", BuiltinFunctionKind::CryptoCipherFinal),
+            ],
+            _ => return Ok(()),
+        };
+        for &(name, kind) in methods {
+            let mut builtin = BuiltinFunction::new_kind(kind);
+            builtin.bound_object = Some(object_id.0);
+            self.set_object_property(object_id, name.to_string(), Value::BuiltinFunction(builtin))?;
+        }
+        Ok(())
+    }
+
     pub(super) fn crypto_receiver_id(
         &self,
         receiver: Option<Value>,

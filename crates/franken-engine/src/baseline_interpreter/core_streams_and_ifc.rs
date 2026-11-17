@@ -13668,7 +13668,7 @@ impl InterpreterCore {
     /// CommonJS mutations change the values read on first ESM initialization,
     /// but adding an arbitrary property cannot add a module export. Reuse the
     /// facade inventories where the provider itself is table-driven.
-    pub(super) fn native_builtin_export_names(native: NativeBuiltinModule) -> Vec<&'static str> {
+    pub(crate) fn native_builtin_export_names(native: NativeBuiltinModule) -> Vec<&'static str> {
         match native {
             NativeBuiltinModule::ChildProcess => CHILD_PROCESS_FUNCTIONS
                 .iter()
@@ -17009,6 +17009,14 @@ impl InterpreterCore {
             BuiltinFunctionKind::SetImmediate => "builtin:SetImmediate",
             BuiltinFunctionKind::ClearImmediate => "builtin:ClearImmediate",
             BuiltinFunctionKind::QueueMicrotask => "builtin:QueueMicrotask",
+            BuiltinFunctionKind::CryptoUpdate | BuiltinFunctionKind::CryptoCipherUpdate => {
+                "builtin:CryptoObjectUpdate"
+            }
+            BuiltinFunctionKind::CryptoDigest => "builtin:CryptoObjectDigest",
+            BuiltinFunctionKind::CryptoCopy => "builtin:CryptoObjectCopy",
+            BuiltinFunctionKind::CryptoCipherFinal => "builtin:CryptoObjectFinal",
+            BuiltinFunctionKind::CryptoGetAuthTag => "builtin:CryptoObjectGetAuthTag",
+            BuiltinFunctionKind::CryptoSetAuthTag => "builtin:CryptoObjectSetAuthTag",
             // StaticHostcall already gates its exact tag. Direct HostCall
             // dispatch does not enter this function and keeps its own gate.
             _ => return None,

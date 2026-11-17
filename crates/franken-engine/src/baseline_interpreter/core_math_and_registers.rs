@@ -12521,6 +12521,17 @@ impl InterpreterCore {
         self.gc_exit_builtin();
         let result = self.dispatch_builtin_hostcall(&tag, args, Some(module));
         self.gc_enter_builtin();
+        if let Ok(Value::Object(object_id)) = &result
+            && matches!(
+                tag.as_str(),
+                "builtin:CryptoCreateHash"
+                    | "builtin:CryptoCreateHmac"
+                    | "builtin:CryptoCreateCipheriv"
+                    | "builtin:CryptoCreateDecipheriv"
+            )
+        {
+            self.install_crypto_runtime_methods(*object_id)?;
+        }
         result
     }
 

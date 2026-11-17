@@ -139,3 +139,14 @@ fn super_in_generator_methods() {
         "1 2 4,5 3 g",
     );
 }
+
+#[test]
+fn super_property_assignment_writes_to_receiver_not_prototype() {
+    check(
+        "class A { set s(v) { this.seen = v * 2; } }\n\
+         A.prototype.x = 1;\n\
+         class B extends A { write() { super.x = 9; super.s = 5; return this.x + ':' + A.prototype.x + ':' + this.seen; } }\n\
+         new B().write();",
+        "9:1:10",
+    );
+}

@@ -2419,16 +2419,34 @@ fn is_eval_route_identifier_continue(ch: char) -> bool {
     is_eval_route_identifier_start(ch) || ch.is_alphanumeric()
 }
 
-fn infer_parse_goal(source: &str) -> ParseGoal {
+pub(crate) fn infer_parse_goal(source: &str) -> ParseGoal {
+    infer_parse_goal_with_tree(source).0
+}
+
+fn infer_parse_goal_with_tree(source: &str) -> (ParseGoal, Option<ast::SyntaxTree>) {
     match route_reason_for_source(source) {
-        RouteReason::ContainsImportKeyword | RouteReason::ContainsAwaitKeyword => ParseGoal::Module,
-        RouteReason::DirectEngineInvocation | RouteReason::DefaultQuickJsPath => ParseGoal::Script,
+        RouteReason::ContainsImportKeyword => (ParseGoal::Module, None),
+        RouteReason::ContainsAwaitKeyword => {
+            let parser = CanonicalEs2020Parser;
+            if let Ok(module_tree) =
+                parser.parse_with_options(source, ParseGoal::Module, &ParserOptions::default())
+                && module_tree.has_top_level_await()
+            {
+                (ParseGoal::Module, Some(module_tree))
+            } else {
+                (ParseGoal::Script, None)
+            }
+        }
+        RouteReason::DirectEngineInvocation | RouteReason::DefaultQuickJsPath => {
+            (ParseGoal::Script, None)
+        }
     }
 }
 
 struct PreparedEvalSource {
     prepared_source: String,
     parse_goal: ParseGoal,
+    preparsed_syntax_tree: Option<ast::SyntaxTree>,
     source_ingestion: SourceIngestionSummary,
     typed_hostcall_capabilities: Vec<String>,
     trace_id: String,
@@ -2480,7 +2498,8 @@ fn prepare_eval_source(source: &str, trace_scope: &str) -> EvalResult<PreparedEv
             policy_id.as_str(),
         )
     })?;
-    let parse_goal = infer_parse_goal(prepared.prepared_source.as_str());
+    let (parse_goal, preparsed_syntax_tree) =
+        infer_parse_goal_with_tree(prepared.prepared_source.as_str());
     let typed_hostcall_capabilities = prepared
         .normalization_output
         .as_ref()
@@ -2490,6 +2509,7 @@ fn prepare_eval_source(source: &str, trace_scope: &str) -> EvalResult<PreparedEv
     Ok(PreparedEvalSource {
         prepared_source: prepared.prepared_source,
         parse_goal,
+        preparsed_syntax_tree,
         source_ingestion: prepared.source_ingestion,
         typed_hostcall_capabilities,
         trace_id,
@@ -2596,22 +2616,27 @@ fn compile_prepared_eval_source(
     prepared: PreparedEvalSource,
     route_reason: RouteReason,
 ) -> EvalResult<PreparedHybridEval> {
-    let parser = CanonicalEs2020Parser;
-    let syntax_tree = parser
-        .parse_with_options(
-            prepared.prepared_source.as_str(),
-            prepared.parse_goal,
-            &ParserOptions::default(),
-        )
-        .map_err(map_parse_error)
-        .map_err(|error| {
-            attach_eval_correlation(
-                error,
-                prepared.trace_id.as_str(),
-                prepared.decision_id.as_str(),
-                prepared.policy_id.as_str(),
-            )
-        })?;
+    let syntax_tree = match prepared.preparsed_syntax_tree {
+        Some(syntax_tree) => syntax_tree,
+        None => {
+            let parser = CanonicalEs2020Parser;
+            parser
+                .parse_with_options(
+                    prepared.prepared_source.as_str(),
+                    prepared.parse_goal,
+                    &ParserOptions::default(),
+                )
+                .map_err(map_parse_error)
+                .map_err(|error| {
+                    attach_eval_correlation(
+                        error,
+                        prepared.trace_id.as_str(),
+                        prepared.decision_id.as_str(),
+                        prepared.policy_id.as_str(),
+                    )
+                })?
+        }
+    };
 
     // Static-semantics early errors (ES2020 §13.x-15.x EarlyErrors): enforce
     // all 18 true early-SyntaxError classes of `static_semantics`, using exact
@@ -3551,6 +3576,16 @@ mod tests {
         let route_reason = route_reason_for_source("await job()");
         assert_eq!(route_reason, RouteReason::ContainsAwaitKeyword);
         assert_eq!(infer_parse_goal("await job()"), ParseGoal::Module);
+    }
+
+    #[test]
+    fn hybrid_routes_nested_async_await_to_v8_script_goal() {
+        let source = "async function f(a) { await 0; return a; } f(1);";
+        assert_eq!(
+            route_reason_for_source(source),
+            RouteReason::ContainsAwaitKeyword
+        );
+        assert_eq!(infer_parse_goal(source), ParseGoal::Script);
     }
 
     #[test]

@@ -53,15 +53,30 @@ fn run_with_capabilities(
     .map_err(|error| error.to_string())
 }
 
+fn persistent_module_root() -> std::path::PathBuf {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time after unix epoch")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "bd_mgfhs_esm_pkg_{}_{nonce}_{seq}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).expect("persistent module root");
+    root
+}
+
 fn assert_output(files: &[(&str, &str)], expected: &[&str]) {
-    let root = tempfile::tempdir().expect("module root");
+    let root = persistent_module_root();
     for (name, source) in files {
-        let path = root.path().join(name);
+        let path = root.join(name);
         std::fs::create_dir_all(path.parent().expect("fixture parent")).expect("fixture directory");
         std::fs::write(path, source).expect("fixture file");
     }
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        let actual = run(root.path(), lane).unwrap_or_else(|error| panic!("{lane:?}: {error}"));
+        let actual = run(&root, lane).unwrap_or_else(|error| panic!("{lane:?}: {error}"));
         assert_eq!(actual, expected, "{lane:?}");
     }
 }
@@ -207,15 +222,15 @@ fn private_imports_select_native_modules_with_shared_namespace_identity() {
 
 #[test]
 fn native_package_imports_recheck_provider_capabilities() {
-    let root = tempfile::tempdir().expect("module root");
+    let root = persistent_module_root();
     std::fs::write(
-        root.path().join("package.json"),
+        root.join("package.json"),
         r##"{"type":"module","imports":{"#path":"path"}}"##,
     )
     .unwrap();
-    std::fs::write(root.path().join("app.mjs"), "import '#path';\n").unwrap();
+    std::fs::write(root.join("app.mjs"), "import '#path';\n").unwrap();
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        let error = run_with_capabilities(root.path(), lane, &["module_load"])
+        let error = run_with_capabilities(&root, lane, &["module_load"])
             .expect_err("selecting a native provider must require its builtin capability");
         assert!(error.contains("builtin"), "{lane:?}: {error}");
         assert!(
@@ -229,15 +244,15 @@ fn native_package_imports_recheck_provider_capabilities() {
 /// builtin. An invalid target is distinct from a valid bare builtin target.
 #[test]
 fn package_import_url_targets_stay_invalid() {
-    let root = tempfile::tempdir().expect("module root");
+    let root = persistent_module_root();
     std::fs::write(
-        root.path().join("package.json"),
+        root.join("package.json"),
         r##"{"type":"module","imports":{"#invalid":"node:path"}}"##,
     )
     .unwrap();
-    std::fs::write(root.path().join("app.mjs"), "import '#invalid';\n").unwrap();
+    std::fs::write(root.join("app.mjs"), "import '#invalid';\n").unwrap();
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        let error = run(root.path(), lane).expect_err("a URL target is not a package target");
+        let error = run(&root, lane).expect_err("a URL target is not a package target");
         assert!(
             error.contains("invalid package target"),
             "{lane:?}: {error}"

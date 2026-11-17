@@ -1621,15 +1621,31 @@ fn separate_key_handles_replay_without_live_entropy_bd_53l89() {
         recorded.host_effect_transcript.clone(),
     ));
     let never = Arc::new(ScriptedRandomHostIo::never());
-    let replayed = execute_crypto(source, never.clone(), replay.clone());
+    let replayed = execute_crypto(source, never.clone(), replay);
     assert_eq!(never.calls.load(Ordering::Acquire), 0);
     assert_eq!(
         replayed.host_effect_transcript,
         recorded.host_effect_transcript
     );
-    replay
-        .finish_execution()
-        .expect("the key lifecycle consumes exactly its recorded entropy");
+
+    // ExecutionOrchestrator::execute finalizes the replay transcript itself,
+    // so an unconsumed trailing entry must fail closed.
+    let mut padded = recorded.host_effect_transcript;
+    padded.push((
+        HostIoRequest::RandomRead { byte_len: 32 },
+        Ok(HostIoResponse::RandomRead {
+            bytes: vec![0x99; 32],
+        }),
+    ));
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator.set_host_io(
+        Arc::new(ScriptedRandomHostIo::never()),
+        Some(Arc::new(InMemoryHostIoTranscript::replaying(padded))),
+    );
+    assert!(
+        orchestrator.execute(&crypto_package(source, true)).is_err(),
+        "unused replay entropy suffix must be rejected"
+    );
 }
 
 /// Evaluate one crypto source with a never-serving random provider and return

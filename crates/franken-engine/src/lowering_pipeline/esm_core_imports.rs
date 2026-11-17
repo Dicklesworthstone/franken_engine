@@ -119,7 +119,19 @@ fn rewritten_module(statement: &Statement) -> Option<&str> {
     if !import.import_attributes.is_empty() {
         return None;
     }
-    handled_module(import.source.as_str()?)
+    let module = handled_module(import.source.as_str()?)?;
+    let all_published = match &import.clause {
+        ImportClause::SideEffect
+        | ImportClause::Default { .. }
+        | ImportClause::Namespace { .. }
+        | ImportClause::DefaultAndNamespace { .. } => true,
+        ImportClause::Named { specifiers } | ImportClause::DefaultAndNamed { specifiers, .. } => {
+            specifiers
+                .iter()
+                .all(|specifier| is_published_export(module, &specifier.import_name))
+        }
+    };
+    all_published.then_some(module)
 }
 
 /// `export { ... } from '<module>'` or `export * as ns from '<module>'` of a
@@ -142,6 +154,13 @@ fn reexported_module(
         return None;
     }
     let module = handled_module(clause.source()?.as_str()?)?;
+    if !head.starts_with("* as ")
+        && !super::parse_named_export_clause_bindings(head)
+            .into_iter()
+            .all(|(name, _)| is_published_export(module, &name))
+    {
+        return None;
+    }
     Some((export, clause, module))
 }
 
@@ -151,9 +170,41 @@ fn is_global_export(module: &str, name: &str) -> bool {
         .any(|(owner, names)| *owner == module && names.contains(&name))
 }
 
+fn is_published_export(module: &str, name: &str) -> bool {
+    if name == "default" || is_global_export(module, name) {
+        return true;
+    }
+    crate::module_resolver::NativeBuiltinModule::from_specifier(module).is_some_and(|native| {
+        crate::baseline_interpreter::InterpreterCore::native_builtin_export_names(native)
+            .contains(&name)
+    })
+}
+
+fn has_private_package_import(statement: &Statement) -> bool {
+    match statement {
+        Statement::Import(import) => import
+            .source
+            .as_str()
+            .is_some_and(|source| source.starts_with('#')),
+        Statement::Export(export) => match &export.kind {
+            ExportKind::NamedClause(clause) => clause
+                .source()
+                .and_then(|source| source.as_str())
+                .is_some_and(|source| source.starts_with('#')),
+            ExportKind::Default(_) => false,
+        },
+        _ => false,
+    }
+}
+
 /// `tree` with its imports of core modules rewritten, or `None` when it has
-/// none or binds `require` itself.
+/// none, uses `#...` package-imports (which may alias native core modules and
+/// must share their runtime namespace/default identity), or binds `require`
+/// itself.
 pub(super) fn rewrite_core_module_imports(tree: &SyntaxTree) -> Option<SyntaxTree> {
+    if tree.body.iter().any(has_private_package_import) {
+        return None;
+    }
     if !tree.body.iter().any(|statement| {
         rewritten_module(statement).is_some() || reexported_module(statement).is_some()
     }) {
@@ -177,9 +228,13 @@ pub(super) fn rewrite_core_module_imports(tree: &SyntaxTree) -> Option<SyntaxTre
         return None;
     }
     let (referenced, exported) = referenced_names(&tree.body);
+    let aliased_modules = default_or_namespace_imported_modules(&tree.body);
+    let direct_call_only = direct_call_only_locals(&tree.body, &referenced);
     let mut rewrite = Rewrite {
         referenced,
         exported,
+        aliased_modules,
+        direct_call_only,
         declarations: Vec::new(),
         renames: BTreeMap::new(),
         aliases: 0,
@@ -251,9 +306,127 @@ fn referenced_names(statements: &[Statement]) -> (BTreeSet<String>, BTreeSet<Str
     (referenced, exported)
 }
 
+fn default_or_namespace_imported_modules(statements: &[Statement]) -> BTreeSet<String> {
+    let mut modules = BTreeSet::new();
+    for statement in statements {
+        if let (Statement::Import(import), Some(module)) = (statement, rewritten_module(statement))
+        {
+            match &import.clause {
+                ImportClause::Default { .. }
+                | ImportClause::Namespace { .. }
+                | ImportClause::DefaultAndNamed { .. }
+                | ImportClause::DefaultAndNamespace { .. } => {
+                    modules.insert(module.to_string());
+                }
+                ImportClause::Named { specifiers }
+                    if specifiers
+                        .iter()
+                        .any(|specifier| specifier.import_name == "default") =>
+                {
+                    modules.insert(module.to_string());
+                }
+                _ => {}
+            }
+        }
+    }
+    modules
+}
+
+fn direct_call_only_locals(
+    statements: &[Statement],
+    referenced: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    struct DirectCallUses {
+        scopes: Vec<BTreeSet<String>>,
+        escaped: BTreeSet<String>,
+    }
+
+    impl DirectCallUses {
+        fn scoped(
+            &mut self,
+            names: BTreeSet<String>,
+            walk: impl FnOnce(&mut Self) -> Outcome,
+        ) -> Outcome {
+            self.scopes.push(names);
+            let outcome = walk(self);
+            self.scopes.pop();
+            outcome
+        }
+
+        fn shadowed(&self, name: &str) -> bool {
+            self.scopes.iter().any(|scope| scope.contains(name))
+        }
+    }
+
+    impl Walk for DirectCallUses {
+        scoped_walk!();
+
+        fn statement(&mut self, statement: &mut Statement) -> Outcome {
+            let names = |pattern: &BindingPattern| {
+                pattern
+                    .binding_names()
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect::<BTreeSet<_>>()
+            };
+            let head = match &*statement {
+                Statement::For(statement) => match statement.init.as_deref() {
+                    Some(Statement::VariableDeclaration(declaration)) => declaration
+                        .declarations
+                        .iter()
+                        .flat_map(|declarator| names(&declarator.pattern))
+                        .collect(),
+                    _ => BTreeSet::new(),
+                },
+                Statement::ForIn(statement) if statement.binding_kind.is_some() => {
+                    names(&statement.binding)
+                }
+                Statement::ForOf(statement) if statement.binding_kind.is_some() => {
+                    names(&statement.binding)
+                }
+                _ => BTreeSet::new(),
+            };
+            if head.is_empty() {
+                return walk_statement(self, statement);
+            }
+            self.scoped(head, |walker| walk_statement(walker, statement))
+        }
+
+        fn expression(&mut self, expression: &mut Expression) -> Outcome {
+            if let Expression::Call {
+                callee, arguments, ..
+            } = expression
+                && let Expression::Identifier(name) = callee.as_ref()
+                && !self.shadowed(name)
+            {
+                for argument in arguments {
+                    self.expression(argument)?;
+                }
+                return Ok(());
+            }
+            if let Expression::Identifier(name) = expression
+                && !self.shadowed(name)
+            {
+                self.escaped.insert(name.clone());
+            }
+            walk_expression(self, expression)
+        }
+    }
+
+    let mut uses = DirectCallUses {
+        scopes: Vec::new(),
+        escaped: BTreeSet::new(),
+    };
+    let mut body = statements.to_vec();
+    let _ = uses.statements(&mut body);
+    referenced.difference(&uses.escaped).cloned().collect()
+}
+
 struct Rewrite {
     referenced: BTreeSet<String>,
     exported: BTreeSet<String>,
+    aliased_modules: BTreeSet<String>,
+    direct_call_only: BTreeSet<String>,
     declarations: Vec<Statement>,
     /// A named import of a member module: local -> (alias, export name).
     renames: BTreeMap<String, (String, String)>,
@@ -388,9 +561,18 @@ impl Rewrite {
                         },
                     ));
                 }
-            } else if MEMBER_MODULES.contains(&module)
-                && is_identifier_name(name)
+            } else if is_identifier_name(name)
                 && !self.exported.contains(local)
+                && (MEMBER_MODULES.contains(&module)
+                    || (!self.aliased_modules.contains(module)
+                        && self.direct_call_only.contains(local)
+                        && ((module == "timers/promises"
+                            && matches!(
+                                name.as_str(),
+                                "setTimeout" | "setImmediate" | "setInterval"
+                            ))
+                            || (module == "zlib"
+                                && super::zlib_method_capability(name).is_some()))))
             {
                 let alias = member_alias
                     .get_or_insert_with(|| {

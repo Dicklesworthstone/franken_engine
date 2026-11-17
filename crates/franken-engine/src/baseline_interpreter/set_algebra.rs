@@ -417,13 +417,12 @@ impl InterpreterCore {
         receiver: &Value,
         key: &RuntimePropertyKey,
     ) -> Result<Value, InterpreterError> {
-        let object = self
-            .iterator_carrier_backing_id(receiver, "Set protocol object")?
-            .ok_or_else(|| InterpreterError::TypeError {
-                expected: "Set protocol object".to_string(),
-                got: receiver.type_name().to_string(),
-            })?;
-        let value = self.iterator_protocol_property(Some(module), object, key, receiver.clone())?;
+        let value = match self.iterator_carrier_backing_id(receiver, "Set protocol object")? {
+            Some(object) => {
+                self.iterator_protocol_property(Some(module), object, key, receiver.clone())?
+            }
+            None => self.get_v(module, receiver, key)?,
+        };
         self.observe_scoped_callback_result()?;
         Ok(value)
     }

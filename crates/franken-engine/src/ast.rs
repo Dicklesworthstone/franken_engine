@@ -264,6 +264,218 @@ impl SyntaxTree {
         let digest = Sha256::digest(self.canonical_bytes());
         format!("{}{}", Self::canonical_hash_prefix(), hex::encode(digest))
     }
+
+    /// Whether any `await` expression occurs in the top-level execution
+    /// context (outside nested function, arrow, and class-element bodies).
+    pub fn has_top_level_await(&self) -> bool {
+        self.body.iter().any(statement_has_top_level_await)
+    }
+}
+
+fn statement_has_top_level_await(statement: &Statement) -> bool {
+    match statement {
+        Statement::Import(_)
+        | Statement::Break(_)
+        | Statement::Continue(_)
+        | Statement::FunctionDeclaration(_) => false,
+        Statement::Export(export) => match &export.kind {
+            ExportKind::Default(expr) => expression_has_top_level_await(expr),
+            ExportKind::NamedClause(_) => false,
+        },
+        Statement::VariableDeclaration(decl) => decl.declarations.iter().any(|declarator| {
+            binding_pattern_has_top_level_await(&declarator.pattern)
+                || declarator
+                    .initializer
+                    .as_ref()
+                    .is_some_and(expression_has_top_level_await)
+        }),
+        Statement::Expression(stmt) => expression_has_top_level_await(&stmt.expression),
+        Statement::Block(block) => block.body.iter().any(statement_has_top_level_await),
+        Statement::If(stmt) => {
+            expression_has_top_level_await(&stmt.condition)
+                || statement_has_top_level_await(&stmt.consequent)
+                || stmt
+                    .alternate
+                    .as_deref()
+                    .is_some_and(statement_has_top_level_await)
+        }
+        Statement::For(stmt) => {
+            stmt.init
+                .as_deref()
+                .is_some_and(statement_has_top_level_await)
+                || stmt
+                    .condition
+                    .as_ref()
+                    .is_some_and(expression_has_top_level_await)
+                || stmt
+                    .update
+                    .as_ref()
+                    .is_some_and(expression_has_top_level_await)
+                || statement_has_top_level_await(&stmt.body)
+        }
+        Statement::While(stmt) => {
+            expression_has_top_level_await(&stmt.condition)
+                || statement_has_top_level_await(&stmt.body)
+        }
+        Statement::With(stmt) => {
+            expression_has_top_level_await(&stmt.object)
+                || statement_has_top_level_await(&stmt.body)
+        }
+        Statement::DoWhile(stmt) => {
+            statement_has_top_level_await(&stmt.body)
+                || expression_has_top_level_await(&stmt.condition)
+        }
+        Statement::Return(stmt) => stmt
+            .argument
+            .as_ref()
+            .is_some_and(expression_has_top_level_await),
+        Statement::Throw(stmt) => expression_has_top_level_await(&stmt.argument),
+        Statement::TryCatch(stmt) => {
+            stmt.block.body.iter().any(statement_has_top_level_await)
+                || stmt
+                    .handler
+                    .as_ref()
+                    .is_some_and(|catch| catch.body.body.iter().any(statement_has_top_level_await))
+                || stmt
+                    .finalizer
+                    .as_ref()
+                    .is_some_and(|fin| fin.body.iter().any(statement_has_top_level_await))
+        }
+        Statement::Switch(stmt) => {
+            expression_has_top_level_await(&stmt.discriminant)
+                || stmt.cases.iter().any(|case| {
+                    case.test
+                        .as_ref()
+                        .is_some_and(expression_has_top_level_await)
+                        || case.consequent.iter().any(statement_has_top_level_await)
+                })
+        }
+        Statement::ClassDeclaration(cls) => {
+            cls.super_class
+                .as_deref()
+                .is_some_and(expression_has_top_level_await)
+                || cls
+                    .body
+                    .iter()
+                    .any(|method| method.computed && expression_has_top_level_await(&method.key))
+        }
+        Statement::ForIn(stmt) => {
+            binding_pattern_has_top_level_await(&stmt.binding)
+                || expression_has_top_level_await(&stmt.object)
+                || statement_has_top_level_await(&stmt.body)
+        }
+        Statement::ForOf(stmt) => {
+            binding_pattern_has_top_level_await(&stmt.binding)
+                || expression_has_top_level_await(&stmt.iterable)
+                || statement_has_top_level_await(&stmt.body)
+        }
+        Statement::Labeled(stmt) => statement_has_top_level_await(&stmt.body),
+    }
+}
+
+fn binding_pattern_has_top_level_await(pattern: &BindingPattern) -> bool {
+    match pattern {
+        BindingPattern::Identifier(_) => false,
+        BindingPattern::ObjectPattern(props) => props.iter().any(|prop| {
+            (prop.computed && expression_has_top_level_await(&prop.key))
+                || binding_pattern_has_top_level_await(&prop.value)
+        }),
+        BindingPattern::ArrayPattern(elements) => elements
+            .iter()
+            .flatten()
+            .any(binding_pattern_has_top_level_await),
+        BindingPattern::Rest(inner) => binding_pattern_has_top_level_await(inner),
+        BindingPattern::AssignmentPattern { left, right } => {
+            binding_pattern_has_top_level_await(left) || expression_has_top_level_await(right)
+        }
+    }
+}
+
+fn expression_has_top_level_await(expression: &Expression) -> bool {
+    match expression {
+        Expression::Await(_) => true,
+        Expression::Identifier(_)
+        | Expression::StringLiteral(_)
+        | Expression::NumericLiteral(_)
+        | Expression::BigIntLiteral(_)
+        | Expression::FloatLiteral(_)
+        | Expression::BooleanLiteral(_)
+        | Expression::NullLiteral
+        | Expression::UndefinedLiteral
+        | Expression::This
+        | Expression::SloppyThis
+        | Expression::NewTarget
+        | Expression::ImportMeta
+        | Expression::ArrowFunction { .. }
+        | Expression::Function { .. }
+        | Expression::Raw(_)
+        | Expression::RegExpLiteral { .. }
+        | Expression::Super => false,
+        Expression::Yield { argument, .. } => argument
+            .as_deref()
+            .is_some_and(expression_has_top_level_await),
+        Expression::Binary { left, right, .. } | Expression::Assignment { left, right, .. } => {
+            expression_has_top_level_await(left) || expression_has_top_level_await(right)
+        }
+        Expression::Unary { argument, .. } | Expression::SpreadElement(argument) => {
+            expression_has_top_level_await(argument)
+        }
+        Expression::Conditional {
+            test,
+            consequent,
+            alternate,
+        } => {
+            expression_has_top_level_await(test)
+                || expression_has_top_level_await(consequent)
+                || expression_has_top_level_await(alternate)
+        }
+        Expression::Call {
+            callee, arguments, ..
+        }
+        | Expression::OptionalCall {
+            callee, arguments, ..
+        }
+        | Expression::New { callee, arguments } => {
+            expression_has_top_level_await(callee)
+                || arguments.iter().any(expression_has_top_level_await)
+        }
+        Expression::Member {
+            object,
+            property,
+            computed,
+            ..
+        }
+        | Expression::OptionalMember {
+            object,
+            property,
+            computed,
+            ..
+        } => {
+            expression_has_top_level_await(object)
+                || (*computed && expression_has_top_level_await(property))
+        }
+        Expression::ArrayLiteral(elements) => elements
+            .iter()
+            .flatten()
+            .any(expression_has_top_level_await),
+        Expression::ObjectLiteral(props) => props.iter().any(|prop| {
+            (prop.computed && expression_has_top_level_await(&prop.key))
+                || expression_has_top_level_await(&prop.value)
+        }),
+        Expression::TemplateLiteral { expressions, .. } => {
+            expressions.iter().any(expression_has_top_level_await)
+        }
+        Expression::ClassExpression {
+            super_class, body, ..
+        } => {
+            super_class
+                .as_deref()
+                .is_some_and(expression_has_top_level_await)
+                || body
+                    .iter()
+                    .any(|method| method.computed && expression_has_top_level_await(&method.key))
+        }
+    }
 }
 
 /// Statement hierarchy for the canonical AST.

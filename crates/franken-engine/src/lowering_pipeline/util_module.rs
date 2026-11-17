@@ -994,6 +994,8 @@ fn rewrite_module_objects_with_options(
     let mut claimed = events_claimed.clone();
     if !root.contains("require") {
         claimed.extend(zlib_module::claimed_declarators(&tree.body));
+        claimed.extend(facade_claimed_querystring_declarators(&tree.body));
+        claimed.extend(facade_claimed_timers_promises_declarators(&tree.body));
     }
     for (index, statement) in rewritten.body.iter_mut().enumerate() {
         let held = take_claimed_initializers(statement, index, &claimed);
@@ -1177,6 +1179,266 @@ fn facade_claimed_events_declarators(body: &[Statement]) -> BTreeSet<(usize, usi
         }
     }
     claimed
+}
+
+fn alias_only_direct_facade_calls(
+    body: &[Statement],
+    decl_stmt: usize,
+    decl_idx: usize,
+    local: &str,
+    valid_callee: impl Fn(&Expression) -> bool,
+) -> bool {
+    struct Checker<'a, F> {
+        local: &'a str,
+        valid_callee: F,
+        scopes: Vec<BTreeSet<String>>,
+        saw_call: bool,
+        escaped: bool,
+    }
+
+    impl<F: Fn(&Expression) -> bool> Checker<'_, F> {
+        fn scoped(
+            &mut self,
+            names: BTreeSet<String>,
+            walk: impl FnOnce(&mut Self) -> Outcome,
+        ) -> Outcome {
+            self.scopes.push(names);
+            let outcome = walk(self);
+            self.scopes.pop();
+            outcome
+        }
+
+        fn shadowed(&self) -> bool {
+            self.scopes.iter().any(|scope| scope.contains(self.local))
+        }
+    }
+
+    impl<F: Fn(&Expression) -> bool> Walk for Checker<'_, F> {
+        scoped_walk!();
+
+        fn statement(&mut self, statement: &mut Statement) -> Outcome {
+            let names = |pattern: &BindingPattern| {
+                pattern
+                    .binding_names()
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect::<BTreeSet<_>>()
+            };
+            let head = match &*statement {
+                Statement::For(statement) => match statement.init.as_deref() {
+                    Some(Statement::VariableDeclaration(declaration)) => declaration
+                        .declarations
+                        .iter()
+                        .flat_map(|declarator| names(&declarator.pattern))
+                        .collect(),
+                    _ => BTreeSet::new(),
+                },
+                Statement::ForIn(statement) if statement.binding_kind.is_some() => {
+                    names(&statement.binding)
+                }
+                Statement::ForOf(statement) if statement.binding_kind.is_some() => {
+                    names(&statement.binding)
+                }
+                _ => BTreeSet::new(),
+            };
+            if head.is_empty() {
+                return walk_statement(self, statement);
+            }
+            self.scoped(head, |walker| walk_statement(walker, statement))
+        }
+
+        fn expression(&mut self, expression: &mut Expression) -> Outcome {
+            if let Expression::Call {
+                callee, arguments, ..
+            } = expression
+                && !self.shadowed()
+                && (self.valid_callee)(callee)
+            {
+                self.saw_call = true;
+                for argument in arguments {
+                    self.expression(argument)?;
+                }
+                return Ok(());
+            }
+            if let Expression::Identifier(name) = expression
+                && name == self.local
+                && !self.shadowed()
+            {
+                self.escaped = true;
+                return Ok(());
+            }
+            walk_expression(self, expression)
+        }
+    }
+
+    let mut before_checker = Checker {
+        local,
+        valid_callee: |_: &Expression| false,
+        scopes: Vec::new(),
+        saw_call: false,
+        escaped: false,
+    };
+    for statement in &body[..decl_stmt] {
+        let mut copy = statement.clone();
+        if before_checker.statement(&mut copy).is_err() || before_checker.escaped {
+            return false;
+        }
+    }
+    if let Statement::VariableDeclaration(declaration) = &body[decl_stmt] {
+        for (index, declarator) in declaration.declarations.iter().enumerate() {
+            let mut pattern = declarator.pattern.clone();
+            if before_checker.pattern(&mut pattern).is_err() || before_checker.escaped {
+                return false;
+            }
+            if index <= decl_idx {
+                if let Some(initializer) = &declarator.initializer {
+                    let mut expr = initializer.clone();
+                    if before_checker.expression(&mut expr).is_err() || before_checker.escaped {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    let mut after_checker = Checker {
+        local,
+        valid_callee,
+        scopes: Vec::new(),
+        saw_call: false,
+        escaped: false,
+    };
+    if let Statement::VariableDeclaration(declaration) = &body[decl_stmt] {
+        for declarator in declaration.declarations.iter().skip(decl_idx + 1) {
+            let mut pattern = declarator.pattern.clone();
+            if after_checker.pattern(&mut pattern).is_err() || after_checker.escaped {
+                return false;
+            }
+            if let Some(initializer) = &declarator.initializer {
+                let mut expr = initializer.clone();
+                if after_checker.expression(&mut expr).is_err() || after_checker.escaped {
+                    return false;
+                }
+            }
+        }
+    }
+    for statement in &body[decl_stmt + 1..] {
+        let mut copy = statement.clone();
+        if after_checker.statement(&mut copy).is_err() || after_checker.escaped {
+            return false;
+        }
+    }
+    after_checker.saw_call && !after_checker.escaped
+}
+
+fn facade_claimed_querystring_declarators(body: &[Statement]) -> BTreeSet<(usize, usize)> {
+    struct Uses(usize);
+    impl Walk for Uses {
+        fn expression(&mut self, expression: &mut Expression) -> Outcome {
+            if matches!(
+                builtin_require_member(expression),
+                Some((PureModule::Querystring, None))
+            ) {
+                self.0 += 1;
+            }
+            walk_expression(self, expression)
+        }
+    }
+    let mut uses = Uses(0);
+    if uses.statements(&mut body.to_vec()).is_err() || uses.0 == 0 {
+        return BTreeSet::new();
+    }
+    let confirmed = super::confirmed_querystring_module_aliases(body, &BTreeMap::new());
+    let mut claimed = BTreeSet::new();
+    for (i, statement) in body.iter().enumerate() {
+        let Statement::VariableDeclaration(declaration) = statement else {
+            continue;
+        };
+        if declaration.kind != VariableDeclarationKind::Const {
+            continue;
+        }
+        for (j, declarator) in declaration.declarations.iter().enumerate() {
+            let BindingPattern::Identifier(local) = &declarator.pattern else {
+                continue;
+            };
+            let single: BTreeSet<String> = std::iter::once(local.clone()).collect();
+            if confirmed.contains(local)
+                && declarator.initializer.as_ref().is_some_and(|initializer| {
+                    matches!(
+                        builtin_require_member(initializer),
+                        Some((PureModule::Querystring, None))
+                    )
+                })
+                && alias_only_direct_facade_calls(body, i, j, local, |callee| {
+                    super::is_querystring_alias_method_callee(callee, &single)
+                })
+            {
+                claimed.insert((i, j));
+            }
+        }
+    }
+    if uses.0 == claimed.len() {
+        claimed
+    } else {
+        BTreeSet::new()
+    }
+}
+
+fn facade_claimed_timers_promises_declarators(body: &[Statement]) -> BTreeSet<(usize, usize)> {
+    struct Uses {
+        promises: usize,
+        timers: usize,
+    }
+    impl Walk for Uses {
+        fn expression(&mut self, expression: &mut Expression) -> Outcome {
+            match builtin_require_member(expression) {
+                Some((PureModule::Timers, Some("promises"))) => self.promises += 1,
+                Some((PureModule::Timers, None)) => self.timers += 1,
+                _ => {}
+            }
+            walk_expression(self, expression)
+        }
+    }
+    let mut uses = Uses {
+        promises: 0,
+        timers: 0,
+    };
+    if uses.statements(&mut body.to_vec()).is_err() || uses.promises == 0 || uses.timers > 0 {
+        return BTreeSet::new();
+    }
+    let confirmed = super::confirmed_timers_promises_module_aliases(body, &BTreeMap::new());
+    let mut claimed = BTreeSet::new();
+    for (i, statement) in body.iter().enumerate() {
+        let Statement::VariableDeclaration(declaration) = statement else {
+            continue;
+        };
+        if declaration.kind != VariableDeclarationKind::Const {
+            continue;
+        }
+        for (j, declarator) in declaration.declarations.iter().enumerate() {
+            let BindingPattern::Identifier(local) = &declarator.pattern else {
+                continue;
+            };
+            let single: BTreeSet<String> = std::iter::once(local.clone()).collect();
+            if confirmed.contains(local)
+                && declarator.initializer.as_ref().is_some_and(|initializer| {
+                    matches!(
+                        builtin_require_member(initializer),
+                        Some((PureModule::Timers, Some("promises")))
+                    )
+                })
+                && alias_only_direct_facade_calls(body, i, j, local, |callee| {
+                    super::is_timers_promises_alias_method_callee(callee, &single)
+                })
+            {
+                claimed.insert((i, j));
+            }
+        }
+    }
+    if uses.promises == claimed.len() {
+        claimed
+    } else {
+        BTreeSet::new()
+    }
 }
 
 /// Finite aliases cannot account for exports changed by generated code or a

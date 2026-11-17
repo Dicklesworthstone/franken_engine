@@ -7295,7 +7295,9 @@ pub(super) fn fs_promises_builtin_call_capability(
     callee: &Expression,
     binding_lookup: &BTreeMap<String, BindingId>,
 ) -> Option<FsBuiltinCall> {
-    if binding_lookup.contains_key(PRESERVE_RUNTIME_MODULE_LOADS_SENTINEL) {
+    if binding_lookup.contains_key(PRESERVE_RUNTIME_MODULE_LOADS_SENTINEL)
+        || require_is_commonjs_wrapper(binding_lookup)
+    {
         return None;
     }
     let Expression::Member {
@@ -7309,15 +7311,8 @@ pub(super) fn fs_promises_builtin_call_capability(
     };
     let receiver_is_fs_promises = match object.as_ref() {
         // inline `require('fs/promises')` / `require('node:fs/promises')` receiver.
-        Expression::Call {
-            callee: require_callee,
-            arguments: require_args,
-            ..
-        } => {
-            matches!(require_callee.as_ref(), Expression::Identifier(name) if name == "require")
-                && matches!(require_args.as_slice(), [spec]
-                    if well_formed_string_literal(spec)
-                        .is_some_and(is_fs_promises_module_specifier))
+        Expression::Call { .. } => {
+            is_require_fs_promises_module_initializer(object, binding_lookup)
         }
         // binding form: identifier aliased to the fs/promises module.
         Expression::Identifier(alias) => {
@@ -10129,7 +10124,10 @@ pub(super) fn hostcall_exception_is_operand_derived(
         // pure-compute contract — engine-owned compression over closed
         // inputs, exceptional outcomes are engine validation errors only.
         | "builtin:ZlibBrotliCompressSync"
-        | "builtin:ZlibBrotliDecompressSync" => all_inputs_are_closed(),
+        | "builtin:ZlibBrotliDecompressSync"
+        | "builtin:TimersPromisesSetTimeout"
+        | "builtin:TimersPromisesSetImmediate"
+        | "builtin:TimersPromisesSetInterval" => all_inputs_are_closed(),
         // These exact pure-compute entry points validate only primitive
         // arguments. Object inputs remain fail-high because their coercion or
         // transitive state does not yet have a complete static summary.
@@ -10202,6 +10200,9 @@ pub(super) fn hostcall_exception_is_operand_derived(
         // guest getters/coercions; argument labels still join the result and
         // the Internal exception floor, while fatal budget refusals stay fatal.
         "builtin:EventsAddAbortListener" => inputs.len() == 2,
+        // Destructuring's null/undefined check inspects only the immediate
+        // value tag without invoking guest getters, proxies, or coercions.
+        "builtin:RequireObjectCoercible" => inputs.len() == 1,
         // These constructors are intercepted only for the unshadowed native
         // globals. Closed direct inputs cover primitive lengths/offsets,
         // engine-owned ArrayBuffers/views, and fresh array literals without
@@ -11837,6 +11838,12 @@ pub(super) fn simulate_ir2_flow_labels<O: FlowOp>(
                         operation_exception_label_override = Some(Label::TopSecret);
                     }
                 }
+                if hostcall_is_operand_derived && capability == "builtin:RequireObjectCoercible" {
+                    if let [input] = inputs.as_slice() {
+                        result_shape = input.shape;
+                        result_origin = input.crypto_origin;
+                    }
+                }
                 if hostcall_is_operand_derived
                     && matches!(
                         capability.as_str(),
@@ -12546,6 +12553,7 @@ pub(crate) fn sink_clearance_from_capability(capability: &str) -> Label {
             | "builtin:ObjectPreventExtensions"
             | "builtin:ArrayPrototypeSome"
             | "builtin:StringPrototypeCharAt"
+            | "builtin:RequireObjectCoercible"
     ) {
         return Label::TopSecret;
     }
@@ -12608,11 +12616,14 @@ pub(crate) fn sink_clearance_from_capability(capability: &str) -> Label {
             // a boolean oracle on possibly-secret content, so it carries the
             // same TopSecret clearance as the other byte-observing methods.
             | "builtin:bufferobjectequals"
-            // bd-53l89 slice 2: Ed25519 sign/verify read the engine-private
-            // key table and return derived values whose labels already ride
-            // the operands (contract §6) — the call site itself is internal
-            // computation over that private state, not egress. Real sinks
-            // still see the Secret-floor signature label and refuse.
+            // bd-53l89: key generation and sign/verify allocate/read the
+            // engine-private key table and return derived values whose labels
+            // already ride the operands (contract §6) — the call site itself
+            // is internal computation over that private state, not egress
+            // (its name contains "key", so without this exact match it would
+            // fall into the generic Secret keyword heuristic below). Real
+            // sinks still see the Secret-floor handle/signature label.
+            | "builtin:cryptogeneratekeypairsync"
             | "builtin:cryptosign"
             | "builtin:cryptoverify"
     ) {

@@ -108,5 +108,8 @@ fn long_set_like_iterator_reads_result_fields_once_per_step() {
          } };\n\
          var result = new Set().union(like);\n\
          [result.size, result.has(0), result.has(limit - 1), nextCalls, doneReads, valueReads].join(' ');";
-    assert_eq!(eval(source), "4096 true true 4097 4097 4096");
+    let outcome = HybridRouter::default()
+        .eval_with_instruction_budget(source, 500_000)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}\nsource: {source}"));
+    assert_eq!(outcome.value, "4096 true true 4097 4097 4096");
 }

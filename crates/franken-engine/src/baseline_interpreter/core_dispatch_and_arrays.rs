@@ -4765,7 +4765,13 @@ impl InterpreterCore {
             BuiltinFunctionKind::CryptoDigest => {
                 self.crypto_digest(receiver, builtin, args)
             }
-            BuiltinFunctionKind::CryptoCopy => self.crypto_copy(receiver, builtin, args),
+            BuiltinFunctionKind::CryptoCopy => {
+                let copied = self.crypto_copy(receiver, builtin, args)?;
+                if let Value::Object(copy_id) = copied {
+                    self.install_crypto_runtime_methods(copy_id)?;
+                }
+                Ok(copied)
+            }
             BuiltinFunctionKind::CryptoCipherUpdate => {
                 self.crypto_cipher_update(receiver, builtin, args)
             }

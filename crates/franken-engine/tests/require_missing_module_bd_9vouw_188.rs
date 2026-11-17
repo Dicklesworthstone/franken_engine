@@ -15,17 +15,32 @@ use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig,
 };
 
+fn persistent_module_root() -> std::path::PathBuf {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time after unix epoch")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "bd_9vouw_188_missing_{}_{nonce}_{seq}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).expect("persistent module root");
+    root
+}
+
 #[test]
 fn failed_requires_throw_catchable_module_not_found_errors() {
-    let root = tempfile::tempdir().expect("module root");
-    let entry = root.path().join("app.cjs");
+    let root = persistent_module_root();
+    let entry = root.join("app.cjs");
     std::fs::write(&entry, "const out = [];\nfor (const spec of ['./nope', 'no-such-package-xyz', '../outside/x']) {\n  try {\n    require(spec);\n    out.push('loaded');\n  } catch (e) {\n    out.push(e.code + ' ' + e.message.split('\\n')[0]);\n  }\n}\ntry {\n  module.require('also-missing');\n} catch (e) {\n  out.push(e.code + ' ' + (e instanceof Error));\n}\nconsole.log(out.join(' | '));\n").expect("entry");
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
         let package = ExtensionPackage {
             extension_id: "require-missing".to_string(),
             source: std::fs::read_to_string(&entry).expect("entry source"),
             source_file: Some(entry.display().to_string()),
-            module_root: Some(root.path().display().to_string()),
+            module_root: Some(root.display().to_string()),
             capabilities: vec!["module_load".to_string(), "builtin".to_string()],
             version: "1.0.0".to_string(),
             metadata: Default::default(),

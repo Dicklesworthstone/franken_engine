@@ -208,7 +208,7 @@ fn containment_action_at_least_as_severe_transitive() {
 #[test]
 fn protocol_version_current_constant() {
     let current = ProtocolVersion::CURRENT;
-    assert_eq!(current.major, 1);
+    assert_eq!(current.major, 2);
     assert_eq!(current.minor, 0);
 }
 
@@ -972,7 +972,308 @@ fn protocol_error_serde_all_variants() {
     }
 }
 
-// ── FleetProtocolState ──────────────────────────────────────────────────────
+// ── FleetProtocolState & AuthenticatedFleetProtocolStateV2 ──────────────────
+
+struct EdgeAnchor {
+    id: frankenengine_engine::fleet_immune_protocol::FleetAuthorityId,
+    current: std::cell::RefCell<
+        Option<frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim>,
+    >,
+}
+
+impl frankenengine_engine::fleet_immune_protocol::FleetRegistryAnchorAuthority for EdgeAnchor {
+    fn fleet_authority_id(&self) -> frankenengine_engine::fleet_immune_protocol::FleetAuthorityId {
+        self.id
+    }
+
+    fn authenticate_current_registry_anchor(
+        &self,
+        claim: &frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim,
+    ) -> Result<String, frankenengine_engine::fleet_immune_protocol::FleetIdentityError> {
+        if self.current.borrow().as_ref() != Some(claim) {
+            return Err(
+                frankenengine_engine::fleet_immune_protocol::FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: "stale edge anchor".to_string(),
+                },
+            );
+        }
+        Ok(format!("edge-anchor-{}", claim.generation))
+    }
+
+    fn prepare_registry_anchor_advance(
+        &self,
+        expected: Option<
+            &frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim,
+        >,
+        next: &frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim,
+    ) -> Result<Vec<u8>, frankenengine_engine::fleet_immune_protocol::FleetIdentityError> {
+        if self.current.borrow().as_ref() != expected || next.fleet_authority_id != self.id {
+            return Err(
+                frankenengine_engine::fleet_immune_protocol::FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: "edge prepare mismatch".to_string(),
+                },
+            );
+        }
+        Ok(serde_json::to_vec(&(expected.cloned(), next.clone())).unwrap())
+    }
+
+    fn finalize_registry_anchor_advance(
+        &self,
+        permit: &[u8],
+        next: &frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim,
+    ) -> Result<String, frankenengine_engine::fleet_immune_protocol::FleetIdentityError> {
+        let (expected, authorized): (
+            Option<frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim>,
+            frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim,
+        ) = serde_json::from_slice(permit).unwrap();
+        let mut current = self.current.borrow_mut();
+        assert!(&authorized == next && (*current == expected || current.as_ref() == Some(next)));
+        *current = Some(next.clone());
+        Ok(format!("edge-finalized-{}", next.generation))
+    }
+}
+
+struct EdgeV2Driver {
+    authority_id: frankenengine_engine::fleet_immune_protocol::FleetAuthorityId,
+    config: GossipConfig,
+    local: frankenengine_engine::fleet_immune_protocol::AuthenticatedFleetProtocolStateV2,
+    peers: BTreeMap<
+        NodeId,
+        frankenengine_engine::fleet_immune_protocol::AuthenticatedFleetProtocolStateV2,
+    >,
+    signers: BTreeMap<NodeId, frankenengine_engine::fleet_immune_protocol::FleetSigner>,
+    electorate: BTreeSet<NodeId>,
+}
+
+impl EdgeV2Driver {
+    fn new(local_name: &str, config: GossipConfig) -> Self {
+        let authority_id =
+            frankenengine_engine::fleet_immune_protocol::FleetAuthorityId::from_provisioned_bytes(
+                [0xe2; 32],
+            )
+            .unwrap();
+        let local_id = NodeId::new(local_name);
+        let local =
+            frankenengine_engine::fleet_immune_protocol::AuthenticatedFleetProtocolStateV2::new(
+                authority_id,
+                local_id.clone(),
+                config.clone(),
+                SecurityEpoch::from_raw(1),
+            )
+            .unwrap();
+        let mut drv = Self {
+            authority_id,
+            config,
+            local,
+            peers: BTreeMap::new(),
+            signers: BTreeMap::new(),
+            electorate: BTreeSet::from([local_id.clone()]),
+        };
+        drv.ensure_node(&local_id);
+        drv
+    }
+
+    fn ensure_node(&mut self, node: &NodeId) {
+        if !self.signers.contains_key(node) {
+            let mut seed =
+                *ContentHash::compute(format!("edge-signer:{}", node.as_str()).as_bytes())
+                    .as_bytes();
+            if seed == [0u8; 32] {
+                seed[0] = 1;
+            }
+            let key =
+                frankenengine_engine::signature_preimage::SigningKey::from_bytes(seed).unwrap();
+            let signer = frankenengine_engine::fleet_immune_protocol::FleetSigner::new(
+                self.authority_id,
+                node.clone(),
+                1,
+                key,
+            )
+            .unwrap();
+            self.signers.insert(node.clone(), signer);
+        }
+        if node != &self.local.state().local_node_id && !self.peers.contains_key(node) {
+            let peer_state =
+                frankenengine_engine::fleet_immune_protocol::AuthenticatedFleetProtocolStateV2::new(
+                    self.authority_id,
+                    node.clone(),
+                    self.config.clone(),
+                    SecurityEpoch::from_raw(1),
+                )
+                .unwrap();
+            self.peers.insert(node.clone(), peer_state);
+        }
+    }
+
+    fn registry(
+        &self,
+        anchor: &EdgeAnchor,
+    ) -> frankenengine_engine::fleet_immune_protocol::DurableFleetVerificationRegistry {
+        use frankenengine_engine::fleet_immune_protocol::FleetVerificationRegistryPersistence;
+        use frankenengine_engine::storage_adapter::{EventContext, InMemoryStorageAdapter};
+
+        let mut iter = self.signers.values();
+        let first = iter.next().unwrap();
+        let mut storage = InMemoryStorageAdapter::new();
+        let ctx = EventContext::new("edge", "dec", "pol").unwrap();
+        let mut reg = FleetVerificationRegistryPersistence::new(&mut storage, &ctx)
+            .prepare_initial_registration(
+                first.identity().signer.clone(),
+                1,
+                first.verification_key().clone(),
+                SecurityEpoch::from_raw(1),
+                anchor,
+            )
+            .unwrap()
+            .finalize_and_publish(anchor)
+            .unwrap();
+        for signer in iter {
+            reg = FleetVerificationRegistryPersistence::new(&mut storage, &ctx)
+                .prepare_register_node(
+                    &reg,
+                    signer.identity().signer.clone(),
+                    1,
+                    signer.verification_key().clone(),
+                    SecurityEpoch::from_raw(1),
+                    anchor,
+                )
+                .unwrap()
+                .finalize_and_publish(anchor)
+                .unwrap();
+        }
+        reg
+    }
+
+    fn process_evidence(
+        &mut self,
+        packet: &EvidencePacket,
+    ) -> Result<(), frankenengine_engine::fleet_immune_protocol::FleetIngressV2Error> {
+        self.ensure_node(&packet.node_id);
+        let anchor = EdgeAnchor {
+            id: self.authority_id,
+            current: std::cell::RefCell::new(None),
+        };
+        let reg = self.registry(&anchor);
+        let mut signing_copy = packet.clone();
+        signing_copy.protocol_version = ProtocolVersion::V2;
+        let sig = self.signers[&packet.node_id].sign_detached_message_v2(&signing_copy)?;
+        self.local.process_evidence(packet, &sig, &reg, &anchor)?;
+        for peer in self.peers.values_mut() {
+            let _ = peer.process_evidence(packet, &sig, &reg, &anchor);
+        }
+        Ok(())
+    }
+
+    fn process_intent(
+        &mut self,
+        item: &ContainmentIntent,
+    ) -> Result<(), frankenengine_engine::fleet_immune_protocol::FleetIngressV2Error> {
+        self.ensure_node(&item.node_id);
+        let anchor = EdgeAnchor {
+            id: self.authority_id,
+            current: std::cell::RefCell::new(None),
+        };
+        let reg = self.registry(&anchor);
+        let mut signing_copy = item.clone();
+        signing_copy.protocol_version = ProtocolVersion::V2;
+        let sig = self.signers[&item.node_id].sign_detached_message_v2(&signing_copy)?;
+        self.local.process_intent(item, &sig, &reg, &anchor)?;
+        for peer in self.peers.values_mut() {
+            let _ = peer.process_intent(item, &sig, &reg, &anchor);
+        }
+        Ok(())
+    }
+
+    fn process_heartbeat(
+        &mut self,
+        hb: &HeartbeatLiveness,
+    ) -> Result<(), frankenengine_engine::fleet_immune_protocol::FleetIngressV2Error> {
+        self.ensure_node(&hb.node_id);
+        self.electorate.insert(hb.node_id.clone());
+        let anchor = EdgeAnchor {
+            id: self.authority_id,
+            current: std::cell::RefCell::new(None),
+        };
+        let reg = self.registry(&anchor);
+        let mut signing_copy = hb.clone();
+        signing_copy.protocol_version = ProtocolVersion::V2;
+        let sig = self.signers[&hb.node_id].sign_detached_message_v2(&signing_copy)?;
+        self.local.process_heartbeat(hb, &sig, &reg, &anchor)?;
+        for peer in self.peers.values_mut() {
+            let _ = peer.process_heartbeat(hb, &sig, &reg, &anchor);
+        }
+        Ok(())
+    }
+
+    fn build_checkpoint_v2(
+        &mut self,
+        timestamp_ns: u64,
+    ) -> Result<
+        QuorumCheckpoint,
+        frankenengine_engine::fleet_checkpoint_v2::FleetCheckpointV2Error,
+    > {
+        use frankenengine_engine::fleet_checkpoint_v2::FleetCheckpointQuorumV2;
+
+        let quorum = FleetCheckpointQuorumV2::new(
+            self.electorate.clone(),
+            self.config.quorum_threshold_millionths,
+        )?;
+        let anchor = EdgeAnchor {
+            id: self.authority_id,
+            current: std::cell::RefCell::new(None),
+        };
+        let reg = self.registry(&anchor);
+        let mut draft = self.local.draft_checkpoint_v2(timestamp_ns, &quorum)?;
+        let local_id = self.local.state().local_node_id.clone();
+        if draft.checkpoint().participating_nodes.contains(&local_id) {
+            let sig = self.local.sign_checkpoint_v2(
+                &draft,
+                &quorum,
+                &self.signers[&local_id],
+                &reg,
+                &anchor,
+            )?;
+            draft.add_signature(sig, &reg, &anchor)?;
+        }
+        let participants: Vec<NodeId> = draft
+            .checkpoint()
+            .participating_nodes
+            .iter()
+            .filter(|id| *id != &local_id)
+            .cloned()
+            .collect();
+        for peer_id in participants {
+            if let Some(peer) = self.peers.get_mut(&peer_id) {
+                let peer_draft = peer.import_checkpoint_proposal_v2(draft.checkpoint(), &quorum)?;
+                let sig = peer.sign_checkpoint_v2(
+                    &peer_draft,
+                    &quorum,
+                    &self.signers[&peer_id],
+                    &reg,
+                    &anchor,
+                )?;
+                draft.add_signature(sig, &reg, &anchor)?;
+            }
+        }
+        let signed = self
+            .local
+            .finalize_checkpoint_v2(&draft, &quorum, timestamp_ns, &reg, &anchor)?;
+        for (peer_id, peer) in &mut self.peers {
+            if signed.checkpoint.participating_nodes.contains(peer_id) {
+                let _ = peer.accept_checkpoint_v2(&signed, &quorum, timestamp_ns, &reg, &anchor);
+            }
+        }
+        Ok(signed.checkpoint)
+    }
+}
+
+impl std::ops::Deref for EdgeV2Driver {
+    type Target = FleetProtocolState;
+
+    fn deref(&self) -> &Self::Target {
+        self.local.state()
+    }
+}
 
 #[test]
 fn state_initial_values() {
@@ -995,38 +1296,53 @@ fn state_next_sequence_starts_at_one() {
 
 #[test]
 fn state_process_evidence_version_mismatch() {
-    let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+    use frankenengine_engine::fleet_immune_protocol::{FleetIdentityError, FleetIngressV2Error};
+
+    let mut state = EdgeV2Driver::new("local", GossipConfig::default());
     let mut p = evidence("remote", "ext-1", 1, 100);
     p.protocol_version = ProtocolVersion {
         major: 99,
         minor: 0,
     };
     let err = state.process_evidence(&p).unwrap_err();
-    assert!(matches!(err, ProtocolError::IncompatibleVersion { .. }));
+    assert!(matches!(
+        err,
+        FleetIngressV2Error::Identity(FleetIdentityError::NonCanonicalMessage { .. })
+    ));
 }
 
 #[test]
 fn state_process_intent_version_mismatch() {
-    let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+    use frankenengine_engine::fleet_immune_protocol::{FleetIdentityError, FleetIngressV2Error};
+
+    let mut state = EdgeV2Driver::new("local", GossipConfig::default());
     let mut i = intent("remote", "ext-1", ContainmentAction::Allow, 1, 1);
     i.protocol_version = ProtocolVersion {
         major: 99,
         minor: 0,
     };
     let err = state.process_intent(&i).unwrap_err();
-    assert!(matches!(err, ProtocolError::IncompatibleVersion { .. }));
+    assert!(matches!(
+        err,
+        FleetIngressV2Error::Identity(FleetIdentityError::NonCanonicalMessage { .. })
+    ));
 }
 
 #[test]
 fn state_process_heartbeat_version_mismatch() {
-    let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+    use frankenengine_engine::fleet_immune_protocol::{FleetIdentityError, FleetIngressV2Error};
+
+    let mut state = EdgeV2Driver::new("local", GossipConfig::default());
     let mut hb = heartbeat("remote", 1, 1_000);
     hb.protocol_version = ProtocolVersion {
         major: 99,
         minor: 0,
     };
     let err = state.process_heartbeat(&hb).unwrap_err();
-    assert!(matches!(err, ProtocolError::IncompatibleVersion { .. }));
+    assert!(matches!(
+        err,
+        FleetIngressV2Error::Identity(FleetIdentityError::NonCanonicalMessage { .. })
+    ));
 }
 
 #[test]
@@ -1037,7 +1353,7 @@ fn state_resolve_intents_unknown_extension() {
 
 #[test]
 fn state_resolve_intents_multiple_extensions() {
-    let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+    let mut state = EdgeV2Driver::new("local", GossipConfig::default());
     state
         .process_intent(&intent("n1", "ext-1", ContainmentAction::Sandbox, 1, 1))
         .unwrap();
@@ -1052,19 +1368,22 @@ fn state_resolve_intents_multiple_extensions() {
 
 #[test]
 fn state_build_checkpoint_quorum_failure() {
-    let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+    use frankenengine_engine::fleet_checkpoint_v2::FleetCheckpointV2Error;
+
+    let mut state = EdgeV2Driver::new("n1", GossipConfig::default());
     // Register one node at old timestamp
     state.process_heartbeat(&heartbeat("n1", 1, 1_000)).unwrap();
     // Try to build checkpoint at much later time → n1 is partitioned
-    let err = state
-        .build_checkpoint(100_000_000_000, sig("local"))
-        .unwrap_err();
-    assert!(matches!(err, ProtocolError::QuorumNotReached { .. }));
+    let err = state.build_checkpoint_v2(100_000_000_000).unwrap_err();
+    assert!(matches!(
+        err,
+        FleetCheckpointV2Error::InsufficientQuorum { .. }
+    ));
 }
 
 #[test]
 fn state_build_checkpoint_success() {
-    let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+    let mut state = EdgeV2Driver::new("n1", GossipConfig::default());
     let current_time = 10_000_000_000u64;
     // Register nodes with recent heartbeats
     state
@@ -1078,7 +1397,7 @@ fn state_build_checkpoint_success() {
         .process_intent(&intent("n1", "ext-1", ContainmentAction::Terminate, 2, 1))
         .unwrap();
 
-    let cp = state.build_checkpoint(current_time, sig("local")).unwrap();
+    let cp = state.build_checkpoint_v2(current_time).unwrap();
     assert_eq!(cp.checkpoint_seq, 1);
     assert_eq!(cp.participating_nodes.len(), 2);
     assert_eq!(cp.containment_decisions.len(), 1);
@@ -1090,28 +1409,26 @@ fn state_build_checkpoint_success() {
 
 #[test]
 fn state_build_checkpoint_increments_seq() {
-    let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+    let mut state = EdgeV2Driver::new("n1", GossipConfig::default());
     let current_time = 10_000_000_000u64;
     state
         .process_heartbeat(&heartbeat("n1", 1, current_time - 1_000))
         .unwrap();
 
-    let cp1 = state.build_checkpoint(current_time, sig("local")).unwrap();
+    let cp1 = state.build_checkpoint_v2(current_time).unwrap();
     assert_eq!(cp1.checkpoint_seq, 1);
 
     // Need to update heartbeat for n1 to keep it healthy for next checkpoint
     state
         .process_heartbeat(&heartbeat("n1", 2, current_time + 1_000))
         .unwrap();
-    let cp2 = state
-        .build_checkpoint(current_time + 2_000, sig("local"))
-        .unwrap();
+    let cp2 = state.build_checkpoint_v2(current_time + 2_000).unwrap();
     assert_eq!(cp2.checkpoint_seq, 2);
 }
 
 #[test]
 fn state_partitioned_nodes_empty_when_all_healthy() {
-    let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+    let mut state = EdgeV2Driver::new("local", GossipConfig::default());
     let now = 10_000_000_000u64;
     state
         .process_heartbeat(&heartbeat("n1", 1, now - 1_000))
@@ -1127,7 +1444,7 @@ fn state_partitioned_nodes_empty_when_all_healthy() {
 
 #[test]
 fn integration_evidence_accumulation_and_intent_resolution() {
-    let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+    let mut state = EdgeV2Driver::new("local", GossipConfig::default());
 
     // Multiple nodes submit evidence about ext-1
     state
@@ -1161,7 +1478,7 @@ fn integration_evidence_accumulation_and_intent_resolution() {
 
 #[test]
 fn integration_full_checkpoint_lifecycle() {
-    let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+    let mut state = EdgeV2Driver::new("n1", GossipConfig::default());
     let t0 = 10_000_000_000u64;
 
     // Register healthy nodes
@@ -1186,9 +1503,7 @@ fn integration_full_checkpoint_lifecycle() {
         .unwrap();
 
     // Build checkpoint just after heartbeats
-    let cp = state
-        .build_checkpoint(t0 + 1_000_000, sig("local"))
-        .unwrap();
+    let cp = state.build_checkpoint_v2(t0 + 1_000_000).unwrap();
     assert_eq!(cp.checkpoint_seq, 1);
     assert_eq!(cp.participating_nodes.len(), 3);
     assert_eq!(cp.containment_decisions.len(), 1);
@@ -1204,7 +1519,9 @@ fn integration_full_checkpoint_lifecycle() {
 
 #[test]
 fn integration_replay_protection_across_message_types() {
-    let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+    use frankenengine_engine::fleet_immune_protocol::FleetIngressV2Error;
+
+    let mut state = EdgeV2Driver::new("local", GossipConfig::default());
 
     // Same node sends evidence seq=1, then intent seq=2 → ok
     state
@@ -1217,7 +1534,10 @@ fn integration_replay_protection_across_message_types() {
     let err = state
         .process_heartbeat(&heartbeat("n1", 1, 1_000))
         .unwrap_err();
-    assert!(matches!(err, ProtocolError::ReplayDetected { .. }));
+    assert!(matches!(
+        err,
+        FleetIngressV2Error::Protocol(ProtocolError::ReplayDetected { .. })
+    ));
     // seq=3 → ok
     state.process_heartbeat(&heartbeat("n1", 3, 2_000)).unwrap();
 }
@@ -1227,7 +1547,7 @@ fn integration_replay_protection_across_message_types() {
 #[test]
 fn determinism_state_100x() {
     for _ in 0..100 {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+        let mut state = EdgeV2Driver::new("local", GossipConfig::default());
         state
             .process_evidence(&evidence("n1", "ext-1", 1, 100_000))
             .unwrap();
@@ -1237,7 +1557,7 @@ fn determinism_state_100x() {
         assert_eq!(state.evidence.posterior_delta("ext-1"), 300_000);
         assert_eq!(state.evidence.evidence_count("ext-1"), 2);
 
-        let json = serde_json::to_string(&state).unwrap();
+        let json = serde_json::to_string(&*state).unwrap();
         let back: FleetProtocolState = serde_json::from_str(&json).unwrap();
         assert_eq!(back.evidence.posterior_delta("ext-1"), 300_000);
     }

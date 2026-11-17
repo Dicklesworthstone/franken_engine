@@ -1490,8 +1490,104 @@ mod tests {
         .expect("lab receipt trust registry must be valid")
     }
 
-    fn test_fleet_state(node: &str) -> FleetProtocolState {
-        FleetProtocolState::new(NodeId::new(node), GossipConfig::default())
+    fn test_fleet_state(node: &str) -> TestAuthenticatedFleetState {
+        TestAuthenticatedFleetState::new(node)
+    }
+
+    struct TestAuthenticatedFleetState {
+        authority_id: crate::fleet_immune_protocol::FleetAuthorityId,
+        anchor: crate::fleet_immune_protocol::TestDurableAnchorAuthority,
+        state: crate::fleet_immune_protocol::AuthenticatedFleetProtocolStateV2,
+        signers: BTreeMap<NodeId, crate::fleet_immune_protocol::FleetSigner>,
+    }
+
+    impl TestAuthenticatedFleetState {
+        fn new(node: &str) -> Self {
+            let authority_id =
+                crate::fleet_immune_protocol::FleetAuthorityId::from_provisioned_bytes([0xb7; 32])
+                    .expect("valid test fleet authority id");
+            let mut instance = Self {
+                authority_id,
+                anchor: crate::fleet_immune_protocol::TestDurableAnchorAuthority::new(
+                    authority_id,
+                ),
+                state: crate::fleet_immune_protocol::AuthenticatedFleetProtocolStateV2::new(
+                    authority_id,
+                    NodeId::new(node),
+                    GossipConfig::default(),
+                    SecurityEpoch::from_raw(1),
+                )
+                .expect("valid test v2 state"),
+                signers: BTreeMap::new(),
+            };
+            instance.ensure_signer(&NodeId::new(node));
+            instance
+        }
+
+        fn ensure_signer(&mut self, node: &NodeId) {
+            if self.signers.contains_key(node) {
+                return;
+            }
+            let mut seed_bytes = *ContentHash::compute(
+                format!("fleet-convergence-v2-signer:{}", node.as_str()).as_bytes(),
+            )
+            .as_bytes();
+            if seed_bytes == [0u8; 32] {
+                seed_bytes[0] = 1;
+            }
+            let key = crate::signature_preimage::SigningKey::from_bytes(seed_bytes)
+                .expect("valid deterministic test key");
+            let signer =
+                crate::fleet_immune_protocol::FleetSigner::new(self.authority_id, node.clone(), 1, key)
+                    .expect("valid test fleet signer");
+            self.signers.insert(node.clone(), signer);
+        }
+
+        fn process_evidence(
+            &mut self,
+            packet: &EvidencePacket,
+        ) -> Result<(), crate::fleet_immune_protocol::FleetIngressV2Error> {
+            self.ensure_signer(&packet.node_id);
+            let anchor = crate::fleet_immune_protocol::TestDurableAnchorAuthority::new(
+                self.authority_id,
+            );
+            let registry = crate::fleet_immune_protocol::test_durable_registry_for_signers(
+                self.signers.values(),
+                SecurityEpoch::from_raw(1),
+                &anchor,
+            );
+            self.anchor = anchor;
+            let sig = self.signers[&packet.node_id].sign_detached_message_v2(packet)?;
+            self.state
+                .process_evidence(packet, &sig, &registry, &self.anchor)
+        }
+
+        fn process_heartbeat(
+            &mut self,
+            heartbeat: &HeartbeatLiveness,
+        ) -> Result<(), crate::fleet_immune_protocol::FleetIngressV2Error> {
+            self.ensure_signer(&heartbeat.node_id);
+            let anchor = crate::fleet_immune_protocol::TestDurableAnchorAuthority::new(
+                self.authority_id,
+            );
+            let registry = crate::fleet_immune_protocol::test_durable_registry_for_signers(
+                self.signers.values(),
+                SecurityEpoch::from_raw(1),
+                &anchor,
+            );
+            self.anchor = anchor;
+            let sig = self.signers[&heartbeat.node_id].sign_detached_message_v2(heartbeat)?;
+            self.state
+                .process_heartbeat(heartbeat, &sig, &registry, &self.anchor)
+        }
+    }
+
+    impl std::ops::Deref for TestAuthenticatedFleetState {
+        type Target = FleetProtocolState;
+
+        fn deref(&self) -> &Self::Target {
+            self.state.state()
+        }
     }
 
     fn test_signature(node: &str) -> MessageSignature {

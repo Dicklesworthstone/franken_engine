@@ -112,8 +112,353 @@ fn mk_heartbeat(node: &str, seq: u64, ts_ns: u64) -> HeartbeatLiveness {
     }
 }
 
-fn mk_fleet(node: &str) -> FleetProtocolState {
-    FleetProtocolState::new(NodeId::new(node), GossipConfig::default())
+fn mk_fleet(node: &str) -> IntegrationV2Driver {
+    IntegrationV2Driver::new(node, GossipConfig::default())
+}
+
+struct IntegrationAnchor {
+    id: frankenengine_engine::fleet_immune_protocol::FleetAuthorityId,
+    current: std::cell::RefCell<
+        Option<frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim>,
+    >,
+}
+
+impl frankenengine_engine::fleet_immune_protocol::FleetRegistryAnchorAuthority
+    for IntegrationAnchor
+{
+    fn fleet_authority_id(&self) -> frankenengine_engine::fleet_immune_protocol::FleetAuthorityId {
+        self.id
+    }
+
+    fn authenticate_current_registry_anchor(
+        &self,
+        claim: &frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim,
+    ) -> Result<String, frankenengine_engine::fleet_immune_protocol::FleetIdentityError> {
+        if self.current.borrow().as_ref() != Some(claim) {
+            return Err(
+                frankenengine_engine::fleet_immune_protocol::FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: "stale int anchor".to_string(),
+                },
+            );
+        }
+        Ok(format!("int-anchor-{}", claim.generation))
+    }
+
+    fn prepare_registry_anchor_advance(
+        &self,
+        expected: Option<
+            &frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim,
+        >,
+        next: &frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim,
+    ) -> Result<Vec<u8>, frankenengine_engine::fleet_immune_protocol::FleetIdentityError> {
+        if self.current.borrow().as_ref() != expected || next.fleet_authority_id != self.id {
+            return Err(
+                frankenengine_engine::fleet_immune_protocol::FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: "int prepare mismatch".to_string(),
+                },
+            );
+        }
+        Ok(serde_json::to_vec(&(expected.cloned(), next.clone())).unwrap())
+    }
+
+    fn finalize_registry_anchor_advance(
+        &self,
+        permit: &[u8],
+        next: &frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim,
+    ) -> Result<String, frankenengine_engine::fleet_immune_protocol::FleetIdentityError> {
+        let (expected, authorized): (
+            Option<frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim>,
+            frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim,
+        ) = serde_json::from_slice(permit).unwrap();
+        let mut current = self.current.borrow_mut();
+        assert!(&authorized == next && (*current == expected || current.as_ref() == Some(next)));
+        *current = Some(next.clone());
+        Ok(format!("int-finalized-{}", next.generation))
+    }
+}
+
+struct IntegrationV2Driver {
+    authority_id: frankenengine_engine::fleet_immune_protocol::FleetAuthorityId,
+    config: GossipConfig,
+    local: frankenengine_engine::fleet_immune_protocol::AuthenticatedFleetProtocolStateV2,
+    peers: BTreeMap<
+        NodeId,
+        frankenengine_engine::fleet_immune_protocol::AuthenticatedFleetProtocolStateV2,
+    >,
+    signers: BTreeMap<NodeId, frankenengine_engine::fleet_immune_protocol::FleetSigner>,
+    electorate: BTreeSet<NodeId>,
+}
+
+impl serde::Serialize for IntegrationV2Driver {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.local.state().serialize(serializer)
+    }
+}
+
+impl IntegrationV2Driver {
+    fn new(local_name: &str, config: GossipConfig) -> Self {
+        let authority_id =
+            frankenengine_engine::fleet_immune_protocol::FleetAuthorityId::from_provisioned_bytes(
+                [0xe3; 32],
+            )
+            .unwrap();
+        let local_id = NodeId::new(local_name);
+        let local =
+            frankenengine_engine::fleet_immune_protocol::AuthenticatedFleetProtocolStateV2::new(
+                authority_id,
+                local_id.clone(),
+                config.clone(),
+                SecurityEpoch::from_raw(1),
+            )
+            .unwrap();
+        let mut drv = Self {
+            authority_id,
+            config,
+            local,
+            peers: BTreeMap::new(),
+            signers: BTreeMap::new(),
+            electorate: BTreeSet::from([local_id.clone()]),
+        };
+        drv.ensure_node(&local_id);
+        drv
+    }
+
+    fn ensure_node(&mut self, node: &NodeId) {
+        if !self.signers.contains_key(node) {
+            let mut seed =
+                *ContentHash::compute(format!("int-signer:{}", node.as_str()).as_bytes())
+                    .as_bytes();
+            if seed == [0u8; 32] {
+                seed[0] = 1;
+            }
+            let key =
+                frankenengine_engine::signature_preimage::SigningKey::from_bytes(seed).unwrap();
+            let signer = frankenengine_engine::fleet_immune_protocol::FleetSigner::new(
+                self.authority_id,
+                node.clone(),
+                1,
+                key,
+            )
+            .unwrap();
+            self.signers.insert(node.clone(), signer);
+        }
+        if node != &self.local.state().local_node_id && !self.peers.contains_key(node) {
+            let peer_state =
+                frankenengine_engine::fleet_immune_protocol::AuthenticatedFleetProtocolStateV2::new(
+                    self.authority_id,
+                    node.clone(),
+                    self.config.clone(),
+                    SecurityEpoch::from_raw(1),
+                )
+                .unwrap();
+            self.peers.insert(node.clone(), peer_state);
+        }
+    }
+
+    fn registry(
+        &self,
+        anchor: &IntegrationAnchor,
+    ) -> frankenengine_engine::fleet_immune_protocol::DurableFleetVerificationRegistry {
+        use frankenengine_engine::fleet_immune_protocol::FleetVerificationRegistryPersistence;
+        use frankenengine_engine::storage_adapter::{EventContext, InMemoryStorageAdapter};
+
+        let mut iter = self.signers.values();
+        let first = iter.next().unwrap();
+        let mut storage = InMemoryStorageAdapter::new();
+        let ctx = EventContext::new("int", "dec", "pol").unwrap();
+        let mut reg = FleetVerificationRegistryPersistence::new(&mut storage, &ctx)
+            .prepare_initial_registration(
+                first.identity().signer.clone(),
+                1,
+                first.verification_key().clone(),
+                SecurityEpoch::from_raw(1),
+                anchor,
+            )
+            .unwrap()
+            .finalize_and_publish(anchor)
+            .unwrap();
+        for signer in iter {
+            reg = FleetVerificationRegistryPersistence::new(&mut storage, &ctx)
+                .prepare_register_node(
+                    &reg,
+                    signer.identity().signer.clone(),
+                    1,
+                    signer.verification_key().clone(),
+                    SecurityEpoch::from_raw(1),
+                    anchor,
+                )
+                .unwrap()
+                .finalize_and_publish(anchor)
+                .unwrap();
+        }
+        reg
+    }
+
+    fn process_evidence(
+        &mut self,
+        packet: &EvidencePacket,
+    ) -> Result<(), frankenengine_engine::fleet_immune_protocol::FleetIngressV2Error> {
+        self.ensure_node(&packet.node_id);
+        let anchor = IntegrationAnchor {
+            id: self.authority_id,
+            current: std::cell::RefCell::new(None),
+        };
+        let reg = self.registry(&anchor);
+        let mut signing_copy = packet.clone();
+        signing_copy.protocol_version = ProtocolVersion::V2;
+        let sig = self.signers[&packet.node_id].sign_detached_message_v2(&signing_copy)?;
+        self.local.process_evidence(packet, &sig, &reg, &anchor)?;
+        for peer in self.peers.values_mut() {
+            let _ = peer.process_evidence(packet, &sig, &reg, &anchor);
+        }
+        Ok(())
+    }
+
+    fn process_intent(
+        &mut self,
+        item: &ContainmentIntent,
+    ) -> Result<(), frankenengine_engine::fleet_immune_protocol::FleetIngressV2Error> {
+        self.ensure_node(&item.node_id);
+        let anchor = IntegrationAnchor {
+            id: self.authority_id,
+            current: std::cell::RefCell::new(None),
+        };
+        let reg = self.registry(&anchor);
+        let mut signing_copy = item.clone();
+        signing_copy.protocol_version = ProtocolVersion::V2;
+        let sig = self.signers[&item.node_id].sign_detached_message_v2(&signing_copy)?;
+        self.local.process_intent(item, &sig, &reg, &anchor)?;
+        for peer in self.peers.values_mut() {
+            let _ = peer.process_intent(item, &sig, &reg, &anchor);
+        }
+        Ok(())
+    }
+
+    fn process_heartbeat(
+        &mut self,
+        hb: &HeartbeatLiveness,
+    ) -> Result<(), frankenengine_engine::fleet_immune_protocol::FleetIngressV2Error> {
+        self.ensure_node(&hb.node_id);
+        self.electorate.insert(hb.node_id.clone());
+        let anchor = IntegrationAnchor {
+            id: self.authority_id,
+            current: std::cell::RefCell::new(None),
+        };
+        let reg = self.registry(&anchor);
+        let mut signing_copy = hb.clone();
+        signing_copy.protocol_version = ProtocolVersion::V2;
+        let sig = self.signers[&hb.node_id].sign_detached_message_v2(&signing_copy)?;
+        self.local.process_heartbeat(hb, &sig, &reg, &anchor)?;
+        for peer in self.peers.values_mut() {
+            let _ = peer.process_heartbeat(hb, &sig, &reg, &anchor);
+        }
+        Ok(())
+    }
+
+    fn encode_evidence_for_erasure_gossip_v2(
+        &mut self,
+        packet: &EvidencePacket,
+        current_time_ns: u64,
+    ) -> Result<
+        Vec<frankenengine_engine::fleet_immune_protocol::SignedErasureShardV2>,
+        frankenengine_engine::fleet_immune_protocol::FleetIngressV2Error,
+    > {
+        let anchor = IntegrationAnchor {
+            id: self.authority_id,
+            current: std::cell::RefCell::new(None),
+        };
+        let reg = self.registry(&anchor);
+        let local_id = self.local.state().local_node_id.clone();
+        self.local.encode_evidence_for_erasure_gossip_v2(
+            packet,
+            &self.signers[&local_id],
+            current_time_ns,
+            &reg,
+            &anchor,
+        )
+    }
+
+    fn process_erasure_shard_v2(
+        &mut self,
+        signed: &frankenengine_engine::fleet_immune_protocol::SignedErasureShardV2,
+    ) -> Result<(), frankenengine_engine::fleet_immune_protocol::FleetIngressV2Error> {
+        self.ensure_node(&signed.message.shard.origin_node);
+        let anchor = IntegrationAnchor {
+            id: self.authority_id,
+            current: std::cell::RefCell::new(None),
+        };
+        let reg = self.registry(&anchor);
+        self.local.process_erasure_shard_v2(signed, &reg, &anchor)
+    }
+
+    fn build_checkpoint_v2(
+        &mut self,
+        timestamp_ns: u64,
+    ) -> Result<
+        QuorumCheckpoint,
+        frankenengine_engine::fleet_checkpoint_v2::FleetCheckpointV2Error,
+    > {
+        use frankenengine_engine::fleet_checkpoint_v2::FleetCheckpointQuorumV2;
+
+        let quorum = FleetCheckpointQuorumV2::new(
+            self.electorate.clone(),
+            self.config.quorum_threshold_millionths,
+        )?;
+        let anchor = IntegrationAnchor {
+            id: self.authority_id,
+            current: std::cell::RefCell::new(None),
+        };
+        let reg = self.registry(&anchor);
+        let mut draft = self.local.draft_checkpoint_v2(timestamp_ns, &quorum)?;
+        let local_id = self.local.state().local_node_id.clone();
+        if draft.checkpoint().participating_nodes.contains(&local_id) {
+            let sig = self.local.sign_checkpoint_v2(
+                &draft,
+                &quorum,
+                &self.signers[&local_id],
+                &reg,
+                &anchor,
+            )?;
+            draft.add_signature(sig, &reg, &anchor)?;
+        }
+        let participants: Vec<NodeId> = draft
+            .checkpoint()
+            .participating_nodes
+            .iter()
+            .filter(|id| *id != &local_id)
+            .cloned()
+            .collect();
+        for peer_id in participants {
+            if let Some(peer) = self.peers.get_mut(&peer_id) {
+                let peer_draft = peer.import_checkpoint_proposal_v2(draft.checkpoint(), &quorum)?;
+                let sig = peer.sign_checkpoint_v2(
+                    &peer_draft,
+                    &quorum,
+                    &self.signers[&peer_id],
+                    &reg,
+                    &anchor,
+                )?;
+                draft.add_signature(sig, &reg, &anchor)?;
+            }
+        }
+        let signed = self
+            .local
+            .finalize_checkpoint_v2(&draft, &quorum, timestamp_ns, &reg, &anchor)?;
+        for (peer_id, peer) in &mut self.peers {
+            if signed.checkpoint.participating_nodes.contains(peer_id) {
+                let _ = peer.accept_checkpoint_v2(&signed, &quorum, timestamp_ns, &reg, &anchor);
+            }
+        }
+        Ok(signed.checkpoint)
+    }
+}
+
+impl std::ops::Deref for IntegrationV2Driver {
+    type Target = FleetProtocolState;
+
+    fn deref(&self) -> &Self::Target {
+        self.local.state()
+    }
 }
 
 // =========================================================================
@@ -209,13 +554,13 @@ fn containment_action_ord_matches_severity() {
 
 #[test]
 fn protocol_version_current() {
-    assert_eq!(ProtocolVersion::CURRENT.major, 1);
+    assert_eq!(ProtocolVersion::CURRENT.major, 2);
     assert_eq!(ProtocolVersion::CURRENT.minor, 0);
 }
 
 #[test]
 fn protocol_version_display() {
-    assert_eq!(ProtocolVersion::CURRENT.to_string(), "1.0");
+    assert_eq!(ProtocolVersion::CURRENT.to_string(), "2.0");
     let v = ProtocolVersion {
         major: 3,
         minor: 14,
@@ -1271,7 +1616,7 @@ fn protocol_error_serde_roundtrip_all_variants() {
 
 #[test]
 fn fleet_state_construction() {
-    let state = mk_fleet("local");
+    let state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
     assert_eq!(state.local_node_id, NodeId::new("local"));
     assert_eq!(state.protocol_version, ProtocolVersion::CURRENT);
     assert_eq!(state.current_epoch, SecurityEpoch::GENESIS);
@@ -1285,7 +1630,7 @@ fn fleet_state_construction() {
 
 #[test]
 fn fleet_state_next_sequence_monotonic() {
-    let mut state = mk_fleet("local");
+    let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
     assert_eq!(state.next_sequence(), 1);
     assert_eq!(state.next_sequence(), 2);
     assert_eq!(state.next_sequence(), 3);
@@ -1306,6 +1651,8 @@ fn fleet_state_process_evidence_success() {
 
 #[test]
 fn fleet_state_process_evidence_replay_rejected() {
+    use frankenengine_engine::fleet_immune_protocol::FleetIngressV2Error;
+
     let mut state = mk_fleet("local");
     state
         .process_evidence(&mk_evidence("r1", "ext-1", 1, 500_000))
@@ -1315,28 +1662,40 @@ fn fleet_state_process_evidence_replay_rejected() {
     let err = state
         .process_evidence(&mk_evidence("r1", "ext-2", 1, 100_000))
         .unwrap_err();
-    assert!(matches!(err, ProtocolError::ReplayDetected { .. }));
+    assert!(matches!(
+        err,
+        FleetIngressV2Error::Protocol(ProtocolError::ReplayDetected { .. })
+    ));
 }
 
 #[test]
 fn fleet_state_process_evidence_incompatible_version() {
+    use frankenengine_engine::fleet_immune_protocol::{FleetIdentityError, FleetIngressV2Error};
+
     let mut state = mk_fleet("local");
     let mut packet = mk_evidence("r1", "ext-1", 1, 500_000);
-    packet.protocol_version = ProtocolVersion { major: 2, minor: 0 };
+    packet.protocol_version = ProtocolVersion::V1;
 
     let err = state.process_evidence(&packet).unwrap_err();
-    assert!(matches!(err, ProtocolError::IncompatibleVersion { .. }));
+    assert!(matches!(
+        err,
+        FleetIngressV2Error::Identity(FleetIdentityError::NonCanonicalMessage { .. })
+    ));
 }
 
 #[test]
 fn fleet_state_process_evidence_higher_minor_version_rejected() {
+    use frankenengine_engine::fleet_immune_protocol::{FleetIdentityError, FleetIngressV2Error};
+
     let mut state = mk_fleet("local");
     let mut packet = mk_evidence("r1", "ext-1", 1, 500_000);
-    // Local is 1.0, remote is 1.1 → local cannot read messages with features it doesn't know
-    packet.protocol_version = ProtocolVersion { major: 1, minor: 1 };
+    packet.protocol_version = ProtocolVersion { major: 2, minor: 1 };
 
     let err = state.process_evidence(&packet).unwrap_err();
-    assert!(matches!(err, ProtocolError::IncompatibleVersion { .. }));
+    assert!(matches!(
+        err,
+        FleetIngressV2Error::Identity(FleetIdentityError::NonCanonicalMessage { .. })
+    ));
 }
 
 // =========================================================================
@@ -1355,13 +1714,18 @@ fn fleet_state_process_intent_success() {
 
 #[test]
 fn fleet_state_process_intent_replay_rejected() {
+    use frankenengine_engine::fleet_immune_protocol::FleetIngressV2Error;
+
     let mut state = mk_fleet("local");
     let i1 = mk_intent("r1", "ext-1", ContainmentAction::Sandbox, 1, 1);
     state.process_intent(&i1).unwrap();
 
     let i2 = mk_intent("r1", "ext-1", ContainmentAction::Terminate, 1, 1); // same seq
     let err = state.process_intent(&i2).unwrap_err();
-    assert!(matches!(err, ProtocolError::ReplayDetected { .. }));
+    assert!(matches!(
+        err,
+        FleetIngressV2Error::Protocol(ProtocolError::ReplayDetected { .. })
+    ));
 }
 
 #[test]
@@ -1398,6 +1762,8 @@ fn fleet_state_process_heartbeat_success() {
 
 #[test]
 fn fleet_state_process_heartbeat_replay_rejected() {
+    use frankenengine_engine::fleet_immune_protocol::FleetIngressV2Error;
+
     let mut state = mk_fleet("local");
     state
         .process_heartbeat(&mk_heartbeat("r1", 1, 5_000_000_000))
@@ -1406,11 +1772,16 @@ fn fleet_state_process_heartbeat_replay_rejected() {
     let err = state
         .process_heartbeat(&mk_heartbeat("r1", 1, 6_000_000_000))
         .unwrap_err();
-    assert!(matches!(err, ProtocolError::ReplayDetected { .. }));
+    assert!(matches!(
+        err,
+        FleetIngressV2Error::Protocol(ProtocolError::ReplayDetected { .. })
+    ));
 }
 
 #[test]
 fn fleet_state_process_heartbeat_incompatible_version() {
+    use frankenengine_engine::fleet_immune_protocol::{FleetIdentityError, FleetIngressV2Error};
+
     let mut state = mk_fleet("local");
     let mut hb = mk_heartbeat("r1", 1, 5_000_000_000);
     hb.protocol_version = ProtocolVersion {
@@ -1419,7 +1790,10 @@ fn fleet_state_process_heartbeat_incompatible_version() {
     };
 
     let err = state.process_heartbeat(&hb).unwrap_err();
-    assert!(matches!(err, ProtocolError::IncompatibleVersion { .. }));
+    assert!(matches!(
+        err,
+        FleetIngressV2Error::Identity(FleetIdentityError::NonCanonicalMessage { .. })
+    ));
 }
 
 // =========================================================================
@@ -1458,7 +1832,7 @@ fn fleet_state_resolve_intents_none_for_unknown() {
 
 #[test]
 fn fleet_state_build_checkpoint_success() {
-    let mut state = mk_fleet("local");
+    let mut state = mk_fleet("n1");
 
     // Need healthy nodes for quorum
     state
@@ -1476,8 +1850,7 @@ fn fleet_state_build_checkpoint_success() {
         .process_intent(&mk_intent("n2", "ext-1", ContainmentAction::Sandbox, 3, 1))
         .unwrap();
 
-    let sig = mk_sig("local");
-    let checkpoint = state.build_checkpoint(6_000_000_000, sig).unwrap();
+    let checkpoint = state.build_checkpoint_v2(6_000_000_000).unwrap();
 
     assert_eq!(checkpoint.checkpoint_seq, 1);
     assert_eq!(checkpoint.participating_nodes.len(), 2);
@@ -1490,7 +1863,9 @@ fn fleet_state_build_checkpoint_success() {
 
 #[test]
 fn fleet_state_build_checkpoint_quorum_not_reached() {
-    let mut state = mk_fleet("local");
+    use frankenengine_engine::fleet_checkpoint_v2::FleetCheckpointV2Error;
+
+    let mut state = mk_fleet("n1");
 
     // Register nodes with old heartbeat
     state
@@ -1498,27 +1873,27 @@ fn fleet_state_build_checkpoint_quorum_not_reached() {
         .unwrap();
 
     // At time 20s with 15s timeout, node is partitioned → 0 healthy < 1 required
-    let sig = mk_sig("local");
-    let err = state.build_checkpoint(20_000_000_000, sig).unwrap_err();
-    assert!(matches!(err, ProtocolError::QuorumNotReached { .. }));
+    let err = state.build_checkpoint_v2(20_000_000_000).unwrap_err();
+    assert!(matches!(
+        err,
+        FleetCheckpointV2Error::InsufficientQuorum { .. }
+    ));
 }
 
 #[test]
 fn fleet_state_build_checkpoint_increments_seq() {
-    let mut state = mk_fleet("local");
+    let mut state = mk_fleet("n1");
 
     state
         .process_heartbeat(&mk_heartbeat("n1", 1, 5_000_000_000))
         .unwrap();
 
-    let sig1 = mk_sig("local");
-    let c1 = state.build_checkpoint(6_000_000_000, sig1).unwrap();
+    let c1 = state.build_checkpoint_v2(6_000_000_000).unwrap();
 
     state
         .process_heartbeat(&mk_heartbeat("n1", 2, 7_000_000_000))
         .unwrap();
-    let sig2 = mk_sig("local");
-    let c2 = state.build_checkpoint(8_000_000_000, sig2).unwrap();
+    let c2 = state.build_checkpoint_v2(8_000_000_000).unwrap();
 
     assert_eq!(c1.checkpoint_seq, 1);
     assert_eq!(c2.checkpoint_seq, 2);
@@ -1630,7 +2005,7 @@ fn deterministic_replay_intent_resolution_same_winner() {
 
 #[test]
 fn e2e_evidence_accumulation_to_checkpoint() {
-    let mut state = mk_fleet("local");
+    let mut state = mk_fleet("n1");
 
     // Register healthy nodes
     state
@@ -1656,9 +2031,8 @@ fn e2e_evidence_accumulation_to_checkpoint() {
         .process_intent(&mk_intent("n2", "ext-1", ContainmentAction::Sandbox, 4, 1))
         .unwrap();
 
-    // Build checkpoint
-    let sig = mk_sig("local");
-    let checkpoint = state.build_checkpoint(6_000_000_000, sig).unwrap();
+    // Build authenticated quorum checkpoint
+    let checkpoint = state.build_checkpoint_v2(6_000_000_000).unwrap();
 
     assert_eq!(checkpoint.checkpoint_seq, 1);
     assert!(!checkpoint.participating_nodes.is_empty());
@@ -1750,7 +2124,12 @@ fn e2e_sequence_tracking_across_message_types() {
     let err = state
         .process_evidence(&mk_evidence("n1", "ext-2", 2, 50_000))
         .unwrap_err();
-    assert!(matches!(err, ProtocolError::ReplayDetected { .. }));
+    assert!(matches!(
+        err,
+        frankenengine_engine::fleet_immune_protocol::FleetIngressV2Error::Protocol(
+            ProtocolError::ReplayDetected { .. }
+        )
+    ));
 }
 
 #[test]
@@ -1959,17 +2338,17 @@ fn erasure_encoding_rejects_sequence_overflow_without_output_or_state_mutation()
         Err(ProtocolError::ErasureDecodeFailed { .. })
     ));
 
-    let mut state = mk_fleet("coordinator");
-    state.local_sequence = u64::MAX;
-    let before = state.local_sequence;
+    let mut legacy = FleetProtocolState::new(NodeId::new("coordinator"), GossipConfig::default());
+    legacy.protocol_version = ProtocolVersion::V1;
+    legacy.local_sequence = u64::MAX;
     assert!(matches!(
-        state.encode_evidence_for_erasure_gossip(
+        legacy.encode_evidence_for_erasure_gossip(
             &mk_evidence("node-a", "ext-overflow", 1, 1),
             800_000,
         ),
-        Err(ProtocolError::ErasureDecodeFailed { .. })
+        Err(ProtocolError::AuthenticatedV2Required { .. })
     ));
-    assert_eq!(state.local_sequence, before);
+    assert_eq!(legacy.local_sequence, u64::MAX);
 }
 
 #[test]
@@ -1992,49 +2371,50 @@ fn legacy_erasure_encoder_is_pinned_to_exact_protocol_v1_0() {
 }
 
 #[test]
-fn non_v1_0_state_cannot_downgrade_to_legacy_erasure_gossip() {
+fn legacy_state_erasure_gossip_is_unconditionally_disabled_after_v2_cutover() {
     let packet = mk_evidence("node-a", "ext-no-downgrade", 1, 1);
     for version in [
+        ProtocolVersion::V1,
         ProtocolVersion { major: 1, minor: 1 },
         ProtocolVersion::V2,
         ProtocolVersion { major: 2, minor: 1 },
     ] {
-        let mut state = mk_fleet("coordinator");
+        let mut state =
+            FleetProtocolState::new(NodeId::new("coordinator"), GossipConfig::default());
         state.protocol_version = version;
         state.local_sequence = 17;
 
         assert!(matches!(
             state.encode_evidence_for_erasure_gossip(&packet, 850_000),
-            Err(ProtocolError::ErasureDecodeFailed { ref reason, .. })
-                if reason.contains("cannot emit legacy erasure gossip")
+            Err(ProtocolError::AuthenticatedV2Required { .. })
         ));
         assert_eq!(state.local_sequence, 17);
     }
 }
 
 #[test]
-fn non_v1_0_evidence_cannot_tunnel_through_legacy_erasure_gossip() {
+fn v2_state_erasure_gossip_rejects_non_v2_evidence_without_advancing_sequence() {
     for version in [
+        ProtocolVersion::V1,
         ProtocolVersion { major: 1, minor: 1 },
-        ProtocolVersion::V2,
         ProtocolVersion { major: 2, minor: 1 },
     ] {
         let mut packet = mk_evidence("node-a", "ext-no-tunnel", 1, 1);
         packet.protocol_version = version;
         let mut state = mk_fleet("coordinator");
-        state.local_sequence = 23;
+        let before = state.local_sequence;
 
-        assert!(matches!(
-            state.encode_evidence_for_erasure_gossip(&packet, 875_000),
-            Err(ProtocolError::ErasureDecodeFailed { ref reason, .. })
-                if reason.contains("cannot emit legacy erasure gossip")
-        ));
-        assert_eq!(state.local_sequence, 23);
+        assert!(
+            state
+                .encode_evidence_for_erasure_gossip_v2(&packet, 875_000)
+                .is_err()
+        );
+        assert_eq!(state.local_sequence, before);
     }
 }
 
 #[test]
-fn erasure_state_rejects_wrong_legacy_tag_before_replay_mutation() {
+fn erasure_state_rejects_legacy_and_tampered_v2_before_replay_mutation() {
     let mut shard = encode_erasure_shards(
         "payload-wrong-tag",
         NodeId::new("origin"),
@@ -2047,21 +2427,42 @@ fn erasure_state_rejects_wrong_legacy_tag_before_replay_mutation() {
     .remove(0);
     shard.signature.hash =
         AuthenticityHash::compute_keyed(b"wrong-key", shard.shard_hash.as_bytes());
-    let mut state = mk_fleet("receiver");
-    let before = state.sequence_tracker.last_sequence(&shard.origin_node);
+    let mut legacy_state =
+        FleetProtocolState::new(NodeId::new("receiver"), GossipConfig::default());
+    legacy_state.protocol_version = ProtocolVersion::V1;
+    let before = legacy_state
+        .sequence_tracker
+        .last_sequence(&shard.origin_node);
 
     assert!(matches!(
-        state.process_erasure_shard(&shard),
-        Err(ProtocolError::ErasureDecodeFailed { .. })
+        legacy_state.process_erasure_shard(&shard),
+        Err(ProtocolError::AuthenticatedV2Required { .. })
     ));
     assert_eq!(
-        state.sequence_tracker.last_sequence(&shard.origin_node),
+        legacy_state
+            .sequence_tracker
+            .last_sequence(&shard.origin_node),
         before
+    );
+
+    let mut sender = mk_fleet("origin");
+    let mut signed = sender
+        .encode_evidence_for_erasure_gossip_v2(&mk_evidence("origin", "ext-1", 1, 100), 900_000)
+        .unwrap()
+        .remove(0);
+    signed.signature.signature.lower[0] ^= 1;
+    let mut receiver = mk_fleet("receiver");
+    assert!(receiver.process_erasure_shard_v2(&signed).is_err());
+    assert_eq!(
+        receiver
+            .sequence_tracker
+            .last_sequence(&NodeId::new("origin")),
+        0
     );
 }
 
 #[test]
-fn erasure_state_rejects_every_non_v1_0_version_before_replay_mutation() {
+fn erasure_state_rejects_every_legacy_shard_version_after_cutover() {
     let legacy = encode_erasure_shards(
         "payload-v2-state-gate",
         NodeId::new("origin"),
@@ -2074,6 +2475,7 @@ fn erasure_state_rejects_every_non_v1_0_version_before_replay_mutation() {
     .remove(0);
 
     for version in [
+        ProtocolVersion::V1,
         ProtocolVersion { major: 1, minor: 1 },
         ProtocolVersion::V2,
         ProtocolVersion { major: 2, minor: 1 },
@@ -2081,14 +2483,13 @@ fn erasure_state_rejects_every_non_v1_0_version_before_replay_mutation() {
         let mut shard = legacy.clone();
         shard.protocol_version = version;
         reauthenticate_erasure_shard(&mut shard);
-        let mut state = mk_fleet("receiver");
+        let mut state = FleetProtocolState::new(NodeId::new("receiver"), GossipConfig::default());
         state.protocol_version = version;
         let before = state.sequence_tracker.last_sequence(&shard.origin_node);
 
         assert!(matches!(
             state.process_erasure_shard(&shard),
-            Err(ProtocolError::ErasureDecodeFailed { ref reason, .. })
-                if reason.contains("non-v1.0")
+            Err(ProtocolError::AuthenticatedV2Required { .. })
         ));
         assert_eq!(
             state.sequence_tracker.last_sequence(&shard.origin_node),
@@ -2098,7 +2499,7 @@ fn erasure_state_rejects_every_non_v1_0_version_before_replay_mutation() {
 }
 
 #[test]
-fn fleet_state_encodes_evidence_for_erasure_gossip_and_advances_sequence() {
+fn fleet_state_encodes_evidence_for_erasure_gossip_v2_and_advances_sequence() {
     let mut state = mk_fleet("coordinator");
     let now = 10_000_000_000;
     for i in 0..6 {
@@ -2107,18 +2508,22 @@ fn fleet_state_encodes_evidence_for_erasure_gossip_and_advances_sequence() {
             .unwrap();
     }
 
-    let messages = state
-        .encode_evidence_for_erasure_gossip(&mk_evidence("node-0", "ext-coded", 2, 250_000), now)
+    let signed_shards = state
+        .encode_evidence_for_erasure_gossip_v2(
+            &mk_evidence("node-0", "ext-coded", 2, 250_000),
+            now,
+        )
         .unwrap();
-    assert_eq!(messages.len(), 6);
+    assert_eq!(signed_shards.len(), 6);
     assert_eq!(state.local_sequence, 6);
     assert!(
-        messages
+        signed_shards
             .iter()
-            .all(|msg| msg.node_id() == &NodeId::new("coordinator"))
+            .all(|s| s.message.shard.origin_node == NodeId::new("coordinator")
+                && s.signature.signer == NodeId::new("coordinator"))
     );
-    assert_eq!(messages[0].sequence(), Some(1));
-    assert_eq!(messages[5].sequence(), Some(6));
+    assert_eq!(signed_shards[0].message.shard.sequence, 1);
+    assert_eq!(signed_shards[5].message.shard.sequence, 6);
 }
 
 #[test]
@@ -2312,8 +2717,9 @@ fn self_stabilization_checkpoint_clears_unresolved_transition() {
     );
 
     state
-        .build_checkpoint(3_000_000_000, mk_sig("local"))
+        .process_heartbeat(&mk_heartbeat("remote", 3, 1_000_000_000))
         .unwrap();
+    state.build_checkpoint_v2(3_000_000_000).unwrap();
     let after = state.self_stabilization_snapshot(4_000_000_000);
     assert!(after.legitimacy.legitimate);
     assert_eq!(

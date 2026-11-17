@@ -2,7 +2,7 @@
   "scenario": "three-instance signed quarantine mesh",
   "zone": "fleet-quarantine-mesh",
   "extension_id": "demo:compromised-module",
-  "protocol_version": "1.0",
+  "protocol_version": "2.0",
   "bounded_convergence_slo_ns": 1000000000,
   "quarantine_goal": "fleet-wide revocation and quarantine checkpoint convergence",
   "revocation": {

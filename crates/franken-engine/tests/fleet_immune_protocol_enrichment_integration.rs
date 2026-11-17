@@ -104,6 +104,301 @@ fn heartbeat(node: &str, seq: u64, ts_ns: u64) -> HeartbeatLiveness {
     }
 }
 
+struct EnrAnchor {
+    id: frankenengine_engine::fleet_immune_protocol::FleetAuthorityId,
+    current: std::cell::RefCell<
+        Option<frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim>,
+    >,
+}
+
+impl frankenengine_engine::fleet_immune_protocol::FleetRegistryAnchorAuthority for EnrAnchor {
+    fn fleet_authority_id(&self) -> frankenengine_engine::fleet_immune_protocol::FleetAuthorityId {
+        self.id
+    }
+
+    fn authenticate_current_registry_anchor(
+        &self,
+        claim: &frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim,
+    ) -> Result<String, frankenengine_engine::fleet_immune_protocol::FleetIdentityError> {
+        if self.current.borrow().as_ref() != Some(claim) {
+            return Err(
+                frankenengine_engine::fleet_immune_protocol::FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: "stale enr anchor".to_string(),
+                },
+            );
+        }
+        Ok(format!("enr-anchor-{}", claim.generation))
+    }
+
+    fn prepare_registry_anchor_advance(
+        &self,
+        expected: Option<
+            &frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim,
+        >,
+        next: &frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim,
+    ) -> Result<Vec<u8>, frankenengine_engine::fleet_immune_protocol::FleetIdentityError> {
+        if self.current.borrow().as_ref() != expected || next.fleet_authority_id != self.id {
+            return Err(
+                frankenengine_engine::fleet_immune_protocol::FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: "enr prepare mismatch".to_string(),
+                },
+            );
+        }
+        Ok(serde_json::to_vec(&(expected.cloned(), next.clone())).unwrap())
+    }
+
+    fn finalize_registry_anchor_advance(
+        &self,
+        permit: &[u8],
+        next: &frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim,
+    ) -> Result<String, frankenengine_engine::fleet_immune_protocol::FleetIdentityError> {
+        let (expected, authorized): (
+            Option<frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim>,
+            frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim,
+        ) = serde_json::from_slice(permit).unwrap();
+        let mut current = self.current.borrow_mut();
+        assert!(&authorized == next && (*current == expected || current.as_ref() == Some(next)));
+        *current = Some(next.clone());
+        Ok(format!("enr-finalized-{}", next.generation))
+    }
+}
+
+struct TestFleetV2Driver {
+    authority_id: frankenengine_engine::fleet_immune_protocol::FleetAuthorityId,
+    config: GossipConfig,
+    local: frankenengine_engine::fleet_immune_protocol::AuthenticatedFleetProtocolStateV2,
+    peers: BTreeMap<
+        NodeId,
+        frankenengine_engine::fleet_immune_protocol::AuthenticatedFleetProtocolStateV2,
+    >,
+    signers: BTreeMap<NodeId, frankenengine_engine::fleet_immune_protocol::FleetSigner>,
+    electorate: BTreeSet<NodeId>,
+}
+
+impl TestFleetV2Driver {
+    fn new(local_name: &str, config: GossipConfig) -> Self {
+        let authority_id =
+            frankenengine_engine::fleet_immune_protocol::FleetAuthorityId::from_provisioned_bytes(
+                [0xe1; 32],
+            )
+            .unwrap();
+        let local_id = NodeId::new(local_name);
+        let local =
+            frankenengine_engine::fleet_immune_protocol::AuthenticatedFleetProtocolStateV2::new(
+                authority_id,
+                local_id.clone(),
+                config.clone(),
+                SecurityEpoch::from_raw(1),
+            )
+            .unwrap();
+        let mut drv = Self {
+            authority_id,
+            config,
+            local,
+            peers: BTreeMap::new(),
+            signers: BTreeMap::new(),
+            electorate: BTreeSet::from([local_id.clone()]),
+        };
+        drv.ensure_node(&local_id);
+        drv
+    }
+
+    fn ensure_node(&mut self, node: &NodeId) {
+        if !self.signers.contains_key(node) {
+            let mut seed =
+                *ContentHash::compute(format!("enr-signer:{}", node.as_str()).as_bytes())
+                    .as_bytes();
+            if seed == [0u8; 32] {
+                seed[0] = 1;
+            }
+            let key =
+                frankenengine_engine::signature_preimage::SigningKey::from_bytes(seed).unwrap();
+            let signer = frankenengine_engine::fleet_immune_protocol::FleetSigner::new(
+                self.authority_id,
+                node.clone(),
+                1,
+                key,
+            )
+            .unwrap();
+            self.signers.insert(node.clone(), signer);
+        }
+        if node != &self.local.state().local_node_id && !self.peers.contains_key(node) {
+            let peer_state =
+                frankenengine_engine::fleet_immune_protocol::AuthenticatedFleetProtocolStateV2::new(
+                    self.authority_id,
+                    node.clone(),
+                    self.config.clone(),
+                    SecurityEpoch::from_raw(1),
+                )
+                .unwrap();
+            self.peers.insert(node.clone(), peer_state);
+        }
+    }
+
+    fn registry(
+        &self,
+        anchor: &EnrAnchor,
+    ) -> frankenengine_engine::fleet_immune_protocol::DurableFleetVerificationRegistry {
+        use frankenengine_engine::fleet_immune_protocol::FleetVerificationRegistryPersistence;
+        use frankenengine_engine::storage_adapter::{EventContext, InMemoryStorageAdapter};
+
+        let mut iter = self.signers.values();
+        let first = iter.next().unwrap();
+        let mut storage = InMemoryStorageAdapter::new();
+        let ctx = EventContext::new("enr", "dec", "pol").unwrap();
+        let mut reg = FleetVerificationRegistryPersistence::new(&mut storage, &ctx)
+            .prepare_initial_registration(
+                first.identity().signer.clone(),
+                1,
+                first.verification_key().clone(),
+                SecurityEpoch::from_raw(1),
+                anchor,
+            )
+            .unwrap()
+            .finalize_and_publish(anchor)
+            .unwrap();
+        for signer in iter {
+            reg = FleetVerificationRegistryPersistence::new(&mut storage, &ctx)
+                .prepare_register_node(
+                    &reg,
+                    signer.identity().signer.clone(),
+                    1,
+                    signer.verification_key().clone(),
+                    SecurityEpoch::from_raw(1),
+                    anchor,
+                )
+                .unwrap()
+                .finalize_and_publish(anchor)
+                .unwrap();
+        }
+        reg
+    }
+
+    fn process_evidence(
+        &mut self,
+        packet: &EvidencePacket,
+    ) -> Result<(), frankenengine_engine::fleet_immune_protocol::FleetIngressV2Error> {
+        self.ensure_node(&packet.node_id);
+        let anchor = EnrAnchor {
+            id: self.authority_id,
+            current: std::cell::RefCell::new(None),
+        };
+        let reg = self.registry(&anchor);
+        let sig = self.signers[&packet.node_id].sign_detached_message_v2(packet)?;
+        self.local.process_evidence(packet, &sig, &reg, &anchor)?;
+        for peer in self.peers.values_mut() {
+            let _ = peer.process_evidence(packet, &sig, &reg, &anchor);
+        }
+        Ok(())
+    }
+
+    fn process_intent(
+        &mut self,
+        item: &ContainmentIntent,
+    ) -> Result<(), frankenengine_engine::fleet_immune_protocol::FleetIngressV2Error> {
+        self.ensure_node(&item.node_id);
+        let anchor = EnrAnchor {
+            id: self.authority_id,
+            current: std::cell::RefCell::new(None),
+        };
+        let reg = self.registry(&anchor);
+        let sig = self.signers[&item.node_id].sign_detached_message_v2(item)?;
+        self.local.process_intent(item, &sig, &reg, &anchor)?;
+        for peer in self.peers.values_mut() {
+            let _ = peer.process_intent(item, &sig, &reg, &anchor);
+        }
+        Ok(())
+    }
+
+    fn process_heartbeat(
+        &mut self,
+        hb: &HeartbeatLiveness,
+    ) -> Result<(), frankenengine_engine::fleet_immune_protocol::FleetIngressV2Error> {
+        self.ensure_node(&hb.node_id);
+        self.electorate.insert(hb.node_id.clone());
+        let anchor = EnrAnchor {
+            id: self.authority_id,
+            current: std::cell::RefCell::new(None),
+        };
+        let reg = self.registry(&anchor);
+        let sig = self.signers[&hb.node_id].sign_detached_message_v2(hb)?;
+        self.local.process_heartbeat(hb, &sig, &reg, &anchor)?;
+        for peer in self.peers.values_mut() {
+            let _ = peer.process_heartbeat(hb, &sig, &reg, &anchor);
+        }
+        Ok(())
+    }
+
+    fn build_checkpoint_v2(
+        &mut self,
+        timestamp_ns: u64,
+    ) -> Result<
+        QuorumCheckpoint,
+        frankenengine_engine::fleet_checkpoint_v2::FleetCheckpointV2Error,
+    > {
+        use frankenengine_engine::fleet_checkpoint_v2::FleetCheckpointQuorumV2;
+
+        let quorum = FleetCheckpointQuorumV2::new(
+            self.electorate.clone(),
+            self.config.quorum_threshold_millionths,
+        )?;
+        let anchor = EnrAnchor {
+            id: self.authority_id,
+            current: std::cell::RefCell::new(None),
+        };
+        let reg = self.registry(&anchor);
+        let mut draft = self.local.draft_checkpoint_v2(timestamp_ns, &quorum)?;
+        let local_id = self.local.state().local_node_id.clone();
+        if draft.checkpoint().participating_nodes.contains(&local_id) {
+            let sig = self.local.sign_checkpoint_v2(
+                &draft,
+                &quorum,
+                &self.signers[&local_id],
+                &reg,
+                &anchor,
+            )?;
+            draft.add_signature(sig, &reg, &anchor)?;
+        }
+        let participants: Vec<NodeId> = draft
+            .checkpoint()
+            .participating_nodes
+            .iter()
+            .filter(|id| *id != &local_id)
+            .cloned()
+            .collect();
+        for peer_id in participants {
+            if let Some(peer) = self.peers.get_mut(&peer_id) {
+                let peer_draft = peer.import_checkpoint_proposal_v2(draft.checkpoint(), &quorum)?;
+                let sig = peer.sign_checkpoint_v2(
+                    &peer_draft,
+                    &quorum,
+                    &self.signers[&peer_id],
+                    &reg,
+                    &anchor,
+                )?;
+                draft.add_signature(sig, &reg, &anchor)?;
+            }
+        }
+        let signed = self
+            .local
+            .finalize_checkpoint_v2(&draft, &quorum, timestamp_ns, &reg, &anchor)?;
+        for (peer_id, peer) in &mut self.peers {
+            if signed.checkpoint.participating_nodes.contains(peer_id) {
+                let _ = peer.accept_checkpoint_v2(&signed, &quorum, timestamp_ns, &reg, &anchor);
+            }
+        }
+        Ok(signed.checkpoint)
+    }
+}
+
+impl std::ops::Deref for TestFleetV2Driver {
+    type Target = FleetProtocolState;
+
+    fn deref(&self) -> &Self::Target {
+        self.local.state()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Multi-node fleet scenarios (5+ nodes)
 // ---------------------------------------------------------------------------
@@ -141,7 +436,7 @@ fn enrichment_seven_node_intent_resolution_highest_severity_wins() {
 
 #[test]
 fn enrichment_five_node_fleet_state_full_lifecycle() {
-    let mut state = FleetProtocolState::new(NodeId::new("coordinator"), GossipConfig::default());
+    let mut state = TestFleetV2Driver::new("fleet-0", GossipConfig::default());
 
     let now = 10_000_000_000u64;
     // Register 5 nodes via heartbeats
@@ -191,10 +486,8 @@ fn enrichment_five_node_fleet_state_full_lifecycle() {
     let winner = state.resolve_intents("ext-alpha").unwrap();
     assert_eq!(winner.proposed_action, ContainmentAction::Terminate);
 
-    // Build checkpoint with all nodes healthy
-    let checkpoint = state
-        .build_checkpoint(now + 1_000_000_000, sig("coordinator"))
-        .unwrap();
+    // Build authenticated quorum checkpoint with all nodes healthy
+    let checkpoint = state.build_checkpoint_v2(now + 1_000_000_000).unwrap();
     assert_eq!(checkpoint.participating_nodes.len(), 5);
     assert_eq!(checkpoint.containment_decisions.len(), 1);
     assert_eq!(
@@ -305,7 +598,7 @@ fn enrichment_checkpoint_with_100_percent_quorum_needs_all_nodes() {
         quorum_threshold_millionths: 1_000_000, // 100%
         ..GossipConfig::default()
     };
-    let mut state = FleetProtocolState::new(NodeId::new("local"), config);
+    let mut state = TestFleetV2Driver::new("n1", config);
     let now = 10_000_000_000u64;
 
     state.process_heartbeat(&heartbeat("n1", 1, now)).unwrap();
@@ -315,23 +608,31 @@ fn enrichment_checkpoint_with_100_percent_quorum_needs_all_nodes() {
         .unwrap(); // old, will be partitioned
 
     // At now+1s with 15s timeout, n3 is still healthy (9s old < 15s)
-    let result = state.build_checkpoint(now + 1_000_000_000, sig("local"));
+    let result = state.build_checkpoint_v2(now + 1_000_000_000);
     assert!(result.is_ok(), "all 3 nodes still within timeout");
 
-    // Now make n3 definitely partitioned
+    // Now make n3 definitely partitioned while n1 and n2 stay fresh
     let far_future = now + 20_000_000_000;
-    let result = state.build_checkpoint(far_future, sig("local"));
+    state
+        .process_heartbeat(&heartbeat("n1", 2, far_future - 1_000))
+        .unwrap();
+    state
+        .process_heartbeat(&heartbeat("n2", 2, far_future - 1_000))
+        .unwrap();
+    let result = state.build_checkpoint_v2(far_future);
     assert!(result.is_err(), "only 2 of 3 nodes healthy, need 100%");
 }
 
 #[test]
 fn enrichment_checkpoint_with_zero_known_nodes_requires_one() {
-    let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
-    let result = state.build_checkpoint(10_000_000_000, sig("local"));
-    // With 0 known nodes, required = 1, actual = 0
+    use frankenengine_engine::fleet_checkpoint_v2::FleetCheckpointV2Error;
+
+    let mut state = TestFleetV2Driver::new("local", GossipConfig::default());
+    let result = state.build_checkpoint_v2(10_000_000_000);
+    // With 0 healthy nodes, required = 1, actual = 0
     assert!(matches!(
         result,
-        Err(ProtocolError::QuorumNotReached {
+        Err(FleetCheckpointV2Error::InsufficientQuorum {
             required: 1,
             actual: 0
         })
@@ -340,7 +641,7 @@ fn enrichment_checkpoint_with_zero_known_nodes_requires_one() {
 
 #[test]
 fn enrichment_checkpoint_multiple_extensions_resolved() {
-    let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+    let mut state = TestFleetV2Driver::new("n1", GossipConfig::default());
     let now = 10_000_000_000u64;
     state.process_heartbeat(&heartbeat("n1", 1, now)).unwrap();
 
@@ -355,9 +656,7 @@ fn enrichment_checkpoint_multiple_extensions_resolved() {
         .process_intent(&intent("n1", "ext-c", ContainmentAction::Quarantine, 4, 1))
         .unwrap();
 
-    let checkpoint = state
-        .build_checkpoint(now + 1_000_000_000, sig("local"))
-        .unwrap();
+    let checkpoint = state.build_checkpoint_v2(now + 1_000_000_000).unwrap();
     assert_eq!(checkpoint.containment_decisions.len(), 3);
 
     // Verify decisions are for distinct extensions
@@ -436,7 +735,7 @@ fn enrichment_resolve_all_with_10_intents_various_severities() {
 
 #[test]
 fn enrichment_intents_for_different_extensions_resolve_independently() {
-    let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+    let mut state = TestFleetV2Driver::new("local", GossipConfig::default());
 
     // ext-a: Sandbox from node-1, Terminate from node-2
     state
@@ -540,7 +839,7 @@ fn enrichment_sequence_range_serde_roundtrip_edge_values() {
 
 #[test]
 fn enrichment_full_lifecycle_evidence_intent_heartbeat_checkpoint() {
-    let mut state = FleetProtocolState::new(NodeId::new("me"), GossipConfig::default());
+    let mut state = TestFleetV2Driver::new("peer-0", GossipConfig::default());
     let now = 10_000_000_000u64;
 
     // Step 1: Register nodes via heartbeats
@@ -577,10 +876,8 @@ fn enrichment_full_lifecycle_evidence_intent_heartbeat_checkpoint() {
     let winner = state.resolve_intents("ext-x").unwrap();
     assert_eq!(winner.proposed_action, ContainmentAction::Terminate);
 
-    // Step 5: Build checkpoint
-    let cp = state
-        .build_checkpoint(now + 1_000_000_000, sig("me"))
-        .unwrap();
+    // Step 5: Build authenticated quorum checkpoint
+    let cp = state.build_checkpoint_v2(now + 1_000_000_000).unwrap();
     assert_eq!(cp.checkpoint_seq, 1);
     assert!(cp.participating_nodes.len() >= 3);
     assert_eq!(

@@ -65,84 +65,328 @@ fn reauthenticate_legacy_receipt(receipt: &mut ReconstructionReceipt) {
     );
 }
 
-// ── fleet-state integration ─────────────────────────────────────────────────
+// ── fleet-state integration (authenticated protocol-v2) ──────────────────────
+
+struct ReceiptV2StateFixture {
+    authority_id: frankenengine_engine::fleet_immune_protocol::FleetAuthorityId,
+    anchor: ReceiptTestAuthority,
+    registry: frankenengine_engine::fleet_immune_protocol::DurableFleetVerificationRegistry,
+    signers: std::collections::BTreeMap<NodeId, frankenengine_engine::fleet_immune_protocol::FleetSigner>,
+}
+
+struct ReceiptTestAuthority {
+    id: frankenengine_engine::fleet_immune_protocol::FleetAuthorityId,
+    current: std::cell::RefCell<
+        Option<frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim>,
+    >,
+}
+
+impl frankenengine_engine::fleet_immune_protocol::FleetRegistryAnchorAuthority
+    for ReceiptTestAuthority
+{
+    fn fleet_authority_id(&self) -> frankenengine_engine::fleet_immune_protocol::FleetAuthorityId {
+        self.id
+    }
+
+    fn authenticate_current_registry_anchor(
+        &self,
+        claim: &frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim,
+    ) -> Result<String, frankenengine_engine::fleet_immune_protocol::FleetIdentityError> {
+        if self.current.borrow().as_ref() != Some(claim) {
+            return Err(
+                frankenengine_engine::fleet_immune_protocol::FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: "stale receipt test anchor".to_string(),
+                },
+            );
+        }
+        Ok(format!("receipt-anchor-{}", claim.generation))
+    }
+
+    fn prepare_registry_anchor_advance(
+        &self,
+        expected: Option<
+            &frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim,
+        >,
+        next: &frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim,
+    ) -> Result<Vec<u8>, frankenengine_engine::fleet_immune_protocol::FleetIdentityError> {
+        if self.current.borrow().as_ref() != expected || next.fleet_authority_id != self.id {
+            return Err(
+                frankenengine_engine::fleet_immune_protocol::FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: "receipt test prepare mismatch".to_string(),
+                },
+            );
+        }
+        Ok(serde_json::to_vec(&(expected.cloned(), next.clone())).unwrap())
+    }
+
+    fn finalize_registry_anchor_advance(
+        &self,
+        permit: &[u8],
+        next: &frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim,
+    ) -> Result<String, frankenengine_engine::fleet_immune_protocol::FleetIdentityError> {
+        let (expected, authorized): (
+            Option<frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim>,
+            frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim,
+        ) = serde_json::from_slice(permit).unwrap();
+        let mut current = self.current.borrow_mut();
+        assert!(&authorized == next && (*current == expected || current.as_ref() == Some(next)));
+        *current = Some(next.clone());
+        Ok(format!("receipt-finalized-{}", next.generation))
+    }
+}
+
+impl ReceiptV2StateFixture {
+    fn new(nodes: &[&str]) -> Self {
+        use frankenengine_engine::fleet_immune_protocol::{
+            FleetAuthorityId, FleetSigner, FleetVerificationRegistryPersistence,
+        };
+        use frankenengine_engine::security_epoch::SecurityEpoch;
+        use frankenengine_engine::signature_preimage::SigningKey;
+        use frankenengine_engine::storage_adapter::{EventContext, InMemoryStorageAdapter};
+
+        let authority_id = FleetAuthorityId::from_provisioned_bytes([0x6d; 32]).unwrap();
+        let anchor = ReceiptTestAuthority {
+            id: authority_id,
+            current: std::cell::RefCell::new(None),
+        };
+        let mut signers = std::collections::BTreeMap::new();
+        for (idx, name) in nodes.iter().enumerate() {
+            let key = SigningKey::from_bytes([u8::try_from(idx + 31).unwrap(); 32]).unwrap();
+            let signer = FleetSigner::new(authority_id, node(name), 1, key).unwrap();
+            signers.insert(node(name), signer);
+        }
+        let mut iter = signers.values();
+        let first = iter.next().unwrap();
+        let mut storage = InMemoryStorageAdapter::new();
+        let ctx = EventContext::new("receipt-v2", "dec", "pol").unwrap();
+        let epoch = SecurityEpoch::from_raw(1);
+        let mut registry = FleetVerificationRegistryPersistence::new(&mut storage, &ctx)
+            .prepare_initial_registration(
+                first.identity().signer.clone(),
+                1,
+                first.verification_key().clone(),
+                epoch,
+                &anchor,
+            )
+            .unwrap()
+            .finalize_and_publish(&anchor)
+            .unwrap();
+        for signer in iter {
+            registry = FleetVerificationRegistryPersistence::new(&mut storage, &ctx)
+                .prepare_register_node(
+                    &registry,
+                    signer.identity().signer.clone(),
+                    1,
+                    signer.verification_key().clone(),
+                    epoch,
+                    &anchor,
+                )
+                .unwrap()
+                .finalize_and_publish(&anchor)
+                .unwrap();
+        }
+        Self {
+            authority_id,
+            anchor,
+            registry,
+            signers,
+        }
+    }
+
+    fn state(
+        &self,
+        local: &str,
+    ) -> frankenengine_engine::fleet_immune_protocol::AuthenticatedFleetProtocolStateV2 {
+        frankenengine_engine::fleet_immune_protocol::AuthenticatedFleetProtocolStateV2::new(
+            self.authority_id,
+            node(local),
+            GossipConfig::default(),
+            frankenengine_engine::security_epoch::SecurityEpoch::from_raw(1),
+        )
+        .unwrap()
+    }
+
+    fn signer(&self, name: &str) -> &frankenengine_engine::fleet_immune_protocol::FleetSigner {
+        &self.signers[&node(name)]
+    }
+
+    fn encode_v2_data_shards(
+        &self,
+        payload: &[u8],
+        data_shards_cnt: u16,
+        total_shards: u16,
+        origin: &str,
+    ) -> Vec<frankenengine_engine::fleet_immune_protocol::SignedErasureShardV2> {
+        let plan = ErasureCodingPlan::new(data_shards_cnt, total_shards).unwrap();
+        frankenengine_engine::fleet_immune_protocol::encode_erasure_shards_v2(
+            format!("set-{origin}"),
+            node(origin),
+            1_000,
+            50_000,
+            frankenengine_engine::security_epoch::SecurityEpoch::from_raw(1),
+            payload,
+            plan,
+        )
+        .unwrap()
+        .into_iter()
+        .filter(|s| s.shard.is_data())
+        .map(|s| self.signer(origin).sign_erasure_shard_v2(s).unwrap())
+        .collect()
+    }
+}
 
 #[test]
-fn fleet_state_reconstructs_and_tags_legacy_receipt() {
-    let state = fresh_state("node-alpha");
-    let shards = encode(b"fleet gossip evidence payload", 3, 4, "origin-a");
-    let (payload, receipt) = state
-        .reconstruct_gossip_payload_with_receipt(&data_shards(&shards), 60_000)
+fn fleet_state_reconstructs_and_signs_authenticated_v2_receipt_while_rejecting_legacy() {
+    use frankenengine_engine::erasure_reconstruction_receipts::RECONSTRUCTION_RECEIPT_SCHEMA_ID_V2;
+
+    let legacy_state = fresh_state("node-alpha");
+    let legacy_shards = encode(b"fleet gossip evidence payload", 3, 4, "origin-a");
+    assert!(
+        legacy_state
+            .reconstruct_gossip_payload_with_receipt(&data_shards(&legacy_shards), 60_000)
+            .is_err()
+    );
+
+    let fixture = ReceiptV2StateFixture::new(&["node-alpha", "origin-a"]);
+    let state = fixture.state("node-alpha");
+    let shards = fixture.encode_v2_data_shards(b"fleet gossip evidence payload", 3, 4, "origin-a");
+    let (payload, signed) = state
+        .reconstruct_gossip_payload_with_receipt_v2(
+            &shards,
+            fixture.signer("node-alpha"),
+            60_000,
+            &fixture.registry,
+            &fixture.anchor,
+        )
         .unwrap();
     assert_eq!(payload, b"fleet gossip evidence payload");
-    assert_eq!(receipt.reconstructing_node, node("node-alpha"));
-    assert_eq!(receipt.schema_id, RECONSTRUCTION_RECEIPT_SCHEMA_ID);
-    assert_eq!(receipt.coding_scheme, XOR_SINGLE_PARITY_SCHEME);
-    receipt.verify().unwrap();
+    assert_eq!(signed.receipt.reconstructing_node, node("node-alpha"));
+    assert_eq!(signed.receipt.schema_id, RECONSTRUCTION_RECEIPT_SCHEMA_ID_V2);
+    assert_eq!(signed.receipt.coding_scheme, XOR_SINGLE_PARITY_SCHEME);
+    signed
+        .verify_live(
+            &fixture.registry,
+            frankenengine_engine::security_epoch::SecurityEpoch::from_raw(1),
+            &fixture.anchor,
+        )
+        .unwrap();
 }
 
 #[test]
 fn fleet_state_receipt_claimed_signer_is_local_node() {
-    let state = fresh_state("node-bravo");
-    let shards = encode(b"signer attribution", 2, 3, "origin-b");
-    let (_p, receipt) = state
-        .reconstruct_gossip_payload_with_receipt(&data_shards(&shards), 61_000)
+    let fixture = ReceiptV2StateFixture::new(&["node-bravo", "origin-b"]);
+    let state = fixture.state("node-bravo");
+    let shards = fixture.encode_v2_data_shards(b"signer attribution", 2, 3, "origin-b");
+    let (_p, signed) = state
+        .reconstruct_gossip_payload_with_receipt_v2(
+            &shards,
+            fixture.signer("node-bravo"),
+            61_000,
+            &fixture.registry,
+            &fixture.anchor,
+        )
         .unwrap();
-    assert_eq!(receipt.signature.signer, node("node-bravo"));
-    assert_eq!(receipt.reconstructing_node, receipt.signature.signer);
+    assert_eq!(signed.signature.signer, node("node-bravo"));
+    assert_eq!(signed.receipt.reconstructing_node, signed.signature.signer);
 }
 
 #[test]
 fn fleet_state_reconstruct_is_read_only() {
-    let state = fresh_state("node-charlie");
-    let before = state.local_sequence;
-    let shards = encode(b"read only check", 2, 3, "origin-c");
+    let fixture = ReceiptV2StateFixture::new(&["node-charlie", "origin-c"]);
+    let state = fixture.state("node-charlie");
+    let before = state.state().local_sequence;
+    let shards = fixture.encode_v2_data_shards(b"read only check", 2, 3, "origin-c");
     let _ = state
-        .reconstruct_gossip_payload_with_receipt(&data_shards(&shards), 62_000)
+        .reconstruct_gossip_payload_with_receipt_v2(
+            &shards,
+            fixture.signer("node-charlie"),
+            62_000,
+            &fixture.registry,
+            &fixture.anchor,
+        )
         .unwrap();
     assert_eq!(
-        state.local_sequence, before,
+        state.state().local_sequence,
+        before,
         "reconstruction must not mutate state"
     );
 }
 
 #[test]
 fn fleet_state_rejects_empty_shards() {
-    let state = fresh_state("node-delta");
+    use frankenengine_engine::erasure_reconstruction_receipts::ReceiptV2Error;
+
+    let fixture = ReceiptV2StateFixture::new(&["node-delta"]);
+    let state = fixture.state("node-delta");
     let err = state
-        .reconstruct_gossip_payload_with_receipt(&[], 63_000)
+        .reconstruct_gossip_payload_with_receipt_v2(
+            &[],
+            fixture.signer("node-delta"),
+            63_000,
+            &fixture.registry,
+            &fixture.anchor,
+        )
         .unwrap_err();
-    assert_eq!(err, ReceiptError::EmptyShardSet);
+    assert_eq!(err, ReceiptV2Error::Receipt(ReceiptError::EmptyShardSet));
 }
 
-// ── cross-node intrinsic validation (no shards, no payload) ──────────────────
+// ── cross-node authenticated validation (no shards, no payload) ──────────────
 
 #[test]
-fn other_node_intrinsically_validates_receipt_without_shards() {
-    let producer = fresh_state("producer");
-    let shards = encode(b"cross-node verification payload", 3, 4, "origin-x");
-    let (_p, receipt) = producer
-        .reconstruct_gossip_payload_with_receipt(&data_shards(&shards), 64_000)
+fn other_node_authenticates_v2_receipt_without_shards() {
+    use frankenengine_engine::erasure_reconstruction_receipts::SignedReconstructionReceiptV2;
+
+    let fixture = ReceiptV2StateFixture::new(&["producer", "origin-x"]);
+    let producer = fixture.state("producer");
+    let shards =
+        fixture.encode_v2_data_shards(b"cross-node verification payload", 3, 4, "origin-x");
+    let (_p, signed) = producer
+        .reconstruct_gossip_payload_with_receipt_v2(
+            &shards,
+            fixture.signer("producer"),
+            64_000,
+            &fixture.registry,
+            &fixture.anchor,
+        )
         .unwrap();
-    // A different node holds only the receipt — no shards, no original data.
-    let json = serde_json::to_string(&receipt).unwrap();
-    let received: ReconstructionReceipt = serde_json::from_str(&json).unwrap();
+    // A different node holds only the signed receipt and trust registry — no shards, no original data.
+    let json = serde_json::to_string(&signed).unwrap();
+    let received: SignedReconstructionReceiptV2 = serde_json::from_str(&json).unwrap();
     received
-        .verify()
-        .expect("independent node can validate intrinsic receipt consistency");
+        .verify_live(
+            &fixture.registry,
+            frankenengine_engine::security_epoch::SecurityEpoch::from_raw(1),
+            &fixture.anchor,
+        )
+        .expect("independent node validates Ed25519 signature and receipt structure");
 }
 
 #[test]
-fn cross_node_intrinsic_validation_survives_transport_round_trip() {
-    let producer = fresh_state("producer-2");
-    let shards = encode(b"transport round trip", 4, 5, "origin-y");
-    let (_p, receipt) = producer
-        .reconstruct_gossip_payload_with_receipt(&data_shards(&shards), 65_000)
+fn cross_node_authenticated_validation_survives_transport_round_trip() {
+    use frankenengine_engine::erasure_reconstruction_receipts::SignedReconstructionReceiptV2;
+
+    let fixture = ReceiptV2StateFixture::new(&["producer-2", "origin-y"]);
+    let producer = fixture.state("producer-2");
+    let shards = fixture.encode_v2_data_shards(b"transport round trip", 4, 5, "origin-y");
+    let (_p, signed) = producer
+        .reconstruct_gossip_payload_with_receipt_v2(
+            &shards,
+            fixture.signer("producer-2"),
+            65_000,
+            &fixture.registry,
+            &fixture.anchor,
+        )
         .unwrap();
-    let bytes = serde_json::to_vec(&receipt).unwrap();
-    let received: ReconstructionReceipt = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(received, receipt);
-    received.verify().unwrap();
+    let bytes = serde_json::to_vec(&signed).unwrap();
+    let received: SignedReconstructionReceiptV2 = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(received, signed);
+    received
+        .verify_live(
+            &fixture.registry,
+            frankenengine_engine::security_epoch::SecurityEpoch::from_raw(1),
+            &fixture.anchor,
+        )
+        .unwrap();
 }
 
 // ── parity recovery ─────────────────────────────────────────────────────────
@@ -491,14 +735,32 @@ fn ledger_deserialization_rejects_duplicate_json_and_hides_index() {
 
 #[test]
 fn ledger_from_multiple_nodes_coexist() {
-    let mut ledger = ReconstructionReceiptLedger::new();
+    use frankenengine_engine::erasure_reconstruction_receipts::TrustedReconstructionReceiptLedger;
+
+    let fixture = ReceiptV2StateFixture::new(&["origin-shared", "node-1", "node-2", "node-3"]);
+    let shards = fixture.encode_v2_data_shards(b"shared payload same bytes", 2, 3, "origin-shared");
+    let mut ledger = TrustedReconstructionReceiptLedger::new();
     for who in ["node-1", "node-2", "node-3"] {
-        let shards = encode(b"shared payload same bytes", 2, 3, "origin-shared");
-        let state = fresh_state(who);
-        let (_p, receipt) = state
-            .reconstruct_gossip_payload_with_receipt(&data_shards(&shards), 84_000)
+        let state = fixture.state(who);
+        let (_p, signed) = state
+            .reconstruct_gossip_payload_with_receipt_v2(
+                &shards,
+                fixture.signer(who),
+                84_000,
+                &fixture.registry,
+                &fixture.anchor,
+            )
             .unwrap();
-        assert!(ledger.record(receipt).unwrap());
+        assert!(
+            ledger
+                .record_live(
+                    signed,
+                    &fixture.registry,
+                    frankenengine_engine::security_epoch::SecurityEpoch::from_raw(1),
+                    &fixture.anchor,
+                )
+                .unwrap()
+        );
     }
     // Same payload, distinct reconstructing nodes → distinct commitments.
     assert_eq!(ledger.len(), 3);

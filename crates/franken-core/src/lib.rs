@@ -26,6 +26,7 @@ pub mod execution_orchestrator;
 pub mod execution_task_group;
 pub mod execution_work_budget;
 pub mod expected_loss_selector;
+pub mod fleet_checkpoint_v2;
 pub mod fleet_convergence;
 pub mod fleet_immune_protocol;
 pub mod flow_lattice;

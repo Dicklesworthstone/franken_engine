@@ -13,17 +13,100 @@
 //!
 //! Plan reference: bd-cixqu.2.1
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Mutex;
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
+use crate::fleet_checkpoint_v2::{FleetCheckpointQuorumV2, FleetCheckpointV2Error};
 use crate::fleet_convergence::{ContainmentThresholds, PartitionMode};
 use crate::fleet_immune_protocol::{
-    FleetProtocolState, GossipConfig, MessageSignature, NodeId, ProtocolError,
+    AuthenticatedFleetProtocolStateV2, DurableFleetVerificationRegistry, FleetAuthorityId,
+    FleetIdentityError, FleetRegistryAnchorAuthority, FleetRegistryPersistenceError,
+    FleetRegistrySnapshotAnchorClaim, FleetSigner, FleetVerificationRegistryPersistence,
+    GossipConfig, HeartbeatLiveness, MessageSignature, NodeId, ProtocolError, ProtocolVersion,
 };
 use crate::fleet_simulator::{FleetSimulator, FleetSimulatorError, QuarantineStats};
-use crate::hash_tiers::AuthenticityHash;
+use crate::hash_tiers::{AuthenticityHash, ContentHash};
+use crate::security_epoch::SecurityEpoch;
+use crate::signature_preimage::SigningKey;
+use crate::storage_adapter::{EventContext, InMemoryStorageAdapter};
+
+#[derive(Debug)]
+struct HarnessAnchorAuthority {
+    authority_id: FleetAuthorityId,
+    current: Mutex<Option<FleetRegistrySnapshotAnchorClaim>>,
+}
+
+impl HarnessAnchorAuthority {
+    fn new(authority_id: FleetAuthorityId) -> Self {
+        Self {
+            authority_id,
+            current: Mutex::new(None),
+        }
+    }
+}
+
+impl FleetRegistryAnchorAuthority for HarnessAnchorAuthority {
+    fn fleet_authority_id(&self) -> FleetAuthorityId {
+        self.authority_id
+    }
+
+    fn authenticate_current_registry_anchor(
+        &self,
+        claim: &FleetRegistrySnapshotAnchorClaim,
+    ) -> Result<String, FleetIdentityError> {
+        let guard = self.current.lock().expect("harness anchor lock");
+        if guard.as_ref() != Some(claim) {
+            return Err(FleetIdentityError::UnverifiedRegistryAnchor {
+                detail: "harness anchor is no longer current".to_string(),
+            });
+        }
+        Ok(format!("harness-anchor-{}", claim.generation))
+    }
+
+    fn prepare_registry_anchor_advance(
+        &self,
+        expected: Option<&FleetRegistrySnapshotAnchorClaim>,
+        next: &FleetRegistrySnapshotAnchorClaim,
+    ) -> Result<Vec<u8>, FleetIdentityError> {
+        let guard = self.current.lock().expect("harness anchor lock");
+        if guard.as_ref() != expected || next.fleet_authority_id != self.authority_id {
+            return Err(FleetIdentityError::UnverifiedRegistryAnchor {
+                detail: "harness anchor prepare CAS mismatch".to_string(),
+            });
+        }
+        serde_json::to_vec(&(expected.cloned(), next.clone())).map_err(|error| {
+            FleetIdentityError::UnverifiedRegistryAnchor {
+                detail: error.to_string(),
+            }
+        })
+    }
+
+    fn finalize_registry_anchor_advance(
+        &self,
+        permit: &[u8],
+        next: &FleetRegistrySnapshotAnchorClaim,
+    ) -> Result<String, FleetIdentityError> {
+        let (expected, authorized): (
+            Option<FleetRegistrySnapshotAnchorClaim>,
+            FleetRegistrySnapshotAnchorClaim,
+        ) = serde_json::from_slice(permit).map_err(|error| {
+            FleetIdentityError::UnverifiedRegistryAnchor {
+                detail: error.to_string(),
+            }
+        })?;
+        let mut guard = self.current.lock().expect("harness anchor lock");
+        if &authorized != next || (*guard != expected && guard.as_ref() != Some(next)) {
+            return Err(FleetIdentityError::UnverifiedRegistryAnchor {
+                detail: "harness anchor finalize CAS mismatch".to_string(),
+            });
+        }
+        *guard = Some(next.clone());
+        Ok(format!("harness-anchor-finalized-{}", next.generation))
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Core types
@@ -34,8 +117,20 @@ use crate::hash_tiers::AuthenticityHash;
 pub struct FleetConvergenceHarness {
     /// Underlying fleet simulator managing instances.
     fleet_simulator: FleetSimulator,
-    /// Protocol state for convergence verification.
-    protocol_state: FleetProtocolState,
+    /// Authenticated protocol-V2 states per node.
+    peer_states: Vec<AuthenticatedFleetProtocolStateV2>,
+    /// Provisioned Ed25519 signing keys per node.
+    signers: BTreeMap<NodeId, FleetSigner>,
+    /// Durable externally anchored verification registry.
+    registry: DurableFleetVerificationRegistry,
+    /// Anchor authority backing `registry`.
+    anchor: HarnessAnchorAuthority,
+    /// Configured protocol-V2 checkpoint electorate and quorum threshold.
+    quorum: FleetCheckpointQuorumV2,
+    /// Reachable node count under current simulated partition mode (`None` = uninitialized).
+    active_partition_reachability: Option<usize>,
+    /// Monotonic heartbeat round counter for deterministic liveness updates.
+    heartbeat_round: u64,
     /// Configuration for convergence testing.
     config: ConvergenceHarnessConfig,
     /// Simulation start time for measurements.
@@ -162,15 +257,117 @@ impl FleetConvergenceHarness {
             config.containment_thresholds.clone(),
         )?;
 
-        // Use the first instance node ID for protocol state
         let node_ids = fleet_simulator.instance_ids();
-        let local_node_id = node_ids.first().cloned().unwrap_or_default();
+        let authority_id = FleetAuthorityId::from_provisioned_bytes([0xd4; 32]).map_err(|err| {
+            ConvergenceHarnessError::Protocol(ProtocolError::SerializationFailed {
+                message_type: "FleetAuthorityId".to_string(),
+                detail: err.to_string(),
+            })
+        })?;
+        let anchor = HarnessAnchorAuthority::new(authority_id);
+        let mut signers = BTreeMap::new();
+        for (idx, node_id) in node_ids.iter().enumerate() {
+            let mut seed =
+                *ContentHash::compute(format!("harness-v2-signer:{idx}:{node_id}").as_bytes())
+                    .as_bytes();
+            if seed == [0u8; 32] {
+                seed[0] = 1;
+            }
+            let key = SigningKey::from_bytes(seed).map_err(|err| {
+                ConvergenceHarnessError::Protocol(ProtocolError::SerializationFailed {
+                    message_type: "SigningKey".to_string(),
+                    detail: err.to_string(),
+                })
+            })?;
+            let signer = FleetSigner::new(authority_id, node_id.clone(), 1, key).map_err(|err| {
+                ConvergenceHarnessError::Protocol(ProtocolError::SerializationFailed {
+                    message_type: "FleetSigner".to_string(),
+                    detail: err.to_string(),
+                })
+            })?;
+            signers.insert(node_id.clone(), signer);
+        }
 
-        let protocol_state = FleetProtocolState::new(local_node_id, config.gossip_config.clone());
+        let map_reg_err = |err: FleetRegistryPersistenceError| {
+            ConvergenceHarnessError::Protocol(ProtocolError::SerializationFailed {
+                message_type: "DurableFleetVerificationRegistry".to_string(),
+                detail: err.to_string(),
+            })
+        };
+        let mut storage = InMemoryStorageAdapter::new();
+        let context = EventContext::new("harness-trace", "harness-decision", "harness-policy")
+            .map_err(|err| {
+                ConvergenceHarnessError::Protocol(ProtocolError::SerializationFailed {
+                    message_type: "EventContext".to_string(),
+                    detail: err.to_string(),
+                })
+            })?;
+        let first_id = &node_ids[0];
+        let first_signer = &signers[first_id];
+        let mut registry = FleetVerificationRegistryPersistence::new(&mut storage, &context)
+            .prepare_initial_registration(
+                first_id.clone(),
+                1,
+                first_signer.verification_key().clone(),
+                SecurityEpoch::GENESIS,
+                &anchor,
+            )
+            .map_err(map_reg_err)?
+            .finalize_and_publish(&anchor)
+            .map_err(map_reg_err)?;
+        for node_id in &node_ids[1..] {
+            let signer = &signers[node_id];
+            registry = FleetVerificationRegistryPersistence::new(&mut storage, &context)
+                .prepare_register_node(
+                    &registry,
+                    node_id.clone(),
+                    1,
+                    signer.verification_key().clone(),
+                    SecurityEpoch::GENESIS,
+                    &anchor,
+                )
+                .map_err(map_reg_err)?
+                .finalize_and_publish(&anchor)
+                .map_err(map_reg_err)?;
+        }
+
+        let peer_states = node_ids
+            .iter()
+            .map(|node_id| {
+                AuthenticatedFleetProtocolStateV2::new(
+                    authority_id,
+                    node_id.clone(),
+                    config.gossip_config.clone(),
+                    SecurityEpoch::GENESIS,
+                )
+                .map_err(|err| {
+                    ConvergenceHarnessError::Protocol(ProtocolError::SerializationFailed {
+                        message_type: "AuthenticatedFleetProtocolStateV2".to_string(),
+                        detail: err.to_string(),
+                    })
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let quorum = FleetCheckpointQuorumV2::new(
+            node_ids.into_iter().collect::<BTreeSet<_>>(),
+            config.gossip_config.quorum_threshold_millionths,
+        )
+        .map_err(|err| {
+            ConvergenceHarnessError::Protocol(ProtocolError::SerializationFailed {
+                message_type: "FleetCheckpointQuorumV2".to_string(),
+                detail: err.to_string(),
+            })
+        })?;
 
         Ok(Self {
             fleet_simulator,
-            protocol_state,
+            peer_states,
+            signers,
+            registry,
+            anchor,
+            quorum,
+            active_partition_reachability: None,
+            heartbeat_round: 0,
             config,
             start_time: Instant::now(),
             convergence_attempts: 0,
@@ -190,6 +387,23 @@ impl FleetConvergenceHarness {
 
     /// Set network partition mode for testing different scenarios.
     pub fn set_partition_mode(&mut self, mode: PartitionMode, success_rate: u8) {
+        self.active_partition_reachability = Some(match &mode {
+            PartitionMode::Normal => {
+                if success_rate == 0 {
+                    1
+                } else {
+                    self.node_count()
+                }
+            }
+            PartitionMode::Degraded(info) => {
+                if success_rate == 0 {
+                    info.local_partition_size.min(self.node_count())
+                } else {
+                    info.local_partition_size.max(1).min(self.node_count())
+                }
+            }
+            PartitionMode::Healing(_) => self.node_count(),
+        });
         self.fleet_simulator.set_partition_mode(mode, success_rate);
     }
 
@@ -236,35 +450,159 @@ impl FleetConvergenceHarness {
     pub fn verify_convergence(&mut self) -> Result<ConvergenceResult, ConvergenceHarnessError> {
         self.convergence_attempts = self.convergence_attempts.saturating_add(1);
         let attempt_start = self.elapsed_time_ms();
+        let base_time_ns = self
+            .config
+            .gossip_config
+            .partition_timeout_ns
+            .saturating_mul(2)
+            .saturating_add(attempt_start.saturating_mul(1_000_000))
+            .saturating_add(self.convergence_attempts.saturating_mul(1_000_000));
 
-        // Create a test signature for checkpoint building
-        let test_signature = MessageSignature {
-            signer: self.protocol_state.local_node_id.clone(),
-            hash: AuthenticityHash::compute_keyed(
-                self.protocol_state.local_node_id.as_str().as_bytes(),
-                b"convergence-test",
-            ),
-        };
+        if let Some(reachable_count) = self.active_partition_reachability {
+            self.heartbeat_round = self.heartbeat_round.saturating_add(1);
+            let round = self.heartbeat_round;
+            let node_ids = self.node_ids();
+            let stale_ts = 1_000_000;
+            for (sender_idx, sender_id) in node_ids.iter().enumerate() {
+                let ts_ns = if sender_idx < reachable_count {
+                    base_time_ns
+                } else {
+                    stale_ts
+                };
+                let hb = HeartbeatLiveness {
+                    node_id: sender_id.clone(),
+                    policy_version: 1,
+                    evidence_frontier_hash: ContentHash::compute(
+                        format!("harness-hb:{sender_id}:{round}").as_bytes(),
+                    ),
+                    local_health: BTreeMap::new(),
+                    epoch: SecurityEpoch::GENESIS,
+                    sequence: round,
+                    timestamp_ns: ts_ns,
+                    signature: MessageSignature {
+                        signer: sender_id.clone(),
+                        hash: AuthenticityHash([0; 32]),
+                    },
+                    protocol_version: ProtocolVersion::V2,
+                    extensions: BTreeMap::new(),
+                };
+                let sig = self.signers[sender_id]
+                    .sign_detached_message_v2(&hb)
+                    .map_err(|err| {
+                        ConvergenceHarnessError::Protocol(ProtocolError::InvalidSignature {
+                            node_id: sender_id.clone(),
+                            message_type: err.to_string(),
+                        })
+                    })?;
+                for peer_state in &mut self.peer_states {
+                    peer_state
+                        .process_heartbeat(&hb, &sig, &self.registry, &self.anchor)
+                        .map_err(|err| {
+                            ConvergenceHarnessError::Protocol(ProtocolError::InvalidSignature {
+                                node_id: sender_id.clone(),
+                                message_type: err.to_string(),
+                            })
+                        })?;
+                }
+            }
+        }
 
-        let current_time_ns = attempt_start.saturating_mul(1_000_000); // ms to ns
-
-        // Get quarantine stats before attempting convergence
         let quarantine_stats = self.fleet_simulator.get_quarantine_stats();
         let total_node_count = self.fleet_simulator.instance_count();
+        let node_ids = self.node_ids();
 
-        // Attempt to build checkpoint (this is where convergence is verified)
-        let result = match self
-            .protocol_state
-            .build_checkpoint(current_time_ns, test_signature)
-        {
-            Ok(checkpoint) => ConvergenceResult::Converged {
-                checkpoint_seq: checkpoint.checkpoint_seq,
-                participating_nodes: checkpoint.participating_nodes.len(),
-                decisions_resolved: checkpoint.containment_decisions.len(),
-            },
-            Err(ProtocolError::QuorumNotReached { required, actual }) => {
-                // This is the NEGATIVE test - REFUSES convergence under partition
-                let partitioned_nodes = self.protocol_state.partitioned_nodes(current_time_ns);
+        let result = match self.peer_states[0].draft_checkpoint_v2(base_time_ns, &self.quorum) {
+            Ok(mut draft) => {
+                let mut cosign_error: Option<FleetCheckpointV2Error> = None;
+                for (peer_idx, peer_id) in node_ids.iter().enumerate() {
+                    if !draft.checkpoint().participating_nodes.contains(peer_id) {
+                        continue;
+                    }
+                    let signer = &self.signers[peer_id];
+                    let vote_res = if peer_idx == 0 {
+                        self.peer_states[0].sign_checkpoint_v2(
+                            &draft,
+                            &self.quorum,
+                            signer,
+                            &self.registry,
+                            &self.anchor,
+                        )
+                    } else {
+                        self.peer_states[peer_idx]
+                            .import_checkpoint_proposal_v2(draft.checkpoint(), &self.quorum)
+                            .and_then(|peer_draft| {
+                                self.peer_states[peer_idx].sign_checkpoint_v2(
+                                    &peer_draft,
+                                    &self.quorum,
+                                    signer,
+                                    &self.registry,
+                                    &self.anchor,
+                                )
+                            })
+                    };
+                    match vote_res.and_then(|sig| {
+                        draft.add_signature(sig, &self.registry, &self.anchor)
+                    }) {
+                        Ok(()) => {}
+                        Err(err) => {
+                            cosign_error = Some(err);
+                            break;
+                        }
+                    }
+                }
+
+                if let Some(err) = cosign_error {
+                    ConvergenceResult::ProtocolError {
+                        error: err.to_string(),
+                    }
+                } else {
+                    match self.peer_states[0].finalize_checkpoint_v2(
+                        &draft,
+                        &self.quorum,
+                        base_time_ns,
+                        &self.registry,
+                        &self.anchor,
+                    ) {
+                        Ok(signed) => {
+                            for peer_state in &mut self.peer_states[1..] {
+                                if signed
+                                    .checkpoint
+                                    .participating_nodes
+                                    .contains(&peer_state.state().local_node_id)
+                                {
+                                    let _ = peer_state.accept_checkpoint_v2(
+                                        &signed,
+                                        &self.quorum,
+                                        base_time_ns,
+                                        &self.registry,
+                                        &self.anchor,
+                                    );
+                                }
+                            }
+                            ConvergenceResult::Converged {
+                                checkpoint_seq: signed.checkpoint.checkpoint_seq,
+                                participating_nodes: signed.checkpoint.participating_nodes.len(),
+                                decisions_resolved: signed.checkpoint.containment_decisions.len(),
+                            }
+                        }
+                        Err(FleetCheckpointV2Error::InsufficientQuorum { required, actual }) => {
+                            let partitioned_nodes =
+                                self.peer_states[0].state().partitioned_nodes(base_time_ns);
+                            ConvergenceResult::QuorumNotReached {
+                                required_nodes: required,
+                                available_nodes: actual,
+                                partition_detected: !partitioned_nodes.is_empty(),
+                            }
+                        }
+                        Err(other) => ConvergenceResult::ProtocolError {
+                            error: other.to_string(),
+                        },
+                    }
+                }
+            }
+            Err(FleetCheckpointV2Error::InsufficientQuorum { required, actual }) => {
+                let partitioned_nodes =
+                    self.peer_states[0].state().partitioned_nodes(base_time_ns);
                 ConvergenceResult::QuorumNotReached {
                     required_nodes: required,
                     available_nodes: actual,
@@ -517,18 +855,17 @@ mod tests {
             .test_convergence_no_partition(test_extension_id("no_partition"))
             .expect("Convergence test should execute");
 
-        match result {
-            ConvergenceResult::Converged { .. } => {
-                // Success expected under no partition
-            }
-            ConvergenceResult::QuorumNotReached { .. } => {
-                // May happen if nodes haven't exchanged heartbeats yet
-                // This is acceptable for the test
-            }
-            other => {
-                panic!("Unexpected result under no partition: {:?}", other);
-            }
-        }
+        assert!(
+            matches!(
+                result,
+                ConvergenceResult::Converged {
+                    checkpoint_seq: 1,
+                    participating_nodes: 3,
+                    ..
+                }
+            ),
+            "expected authenticated V2 quorum convergence under no partition, got {result:?}"
+        );
     }
 
     #[test]
@@ -541,26 +878,17 @@ mod tests {
             .expect("Convergence test should execute");
 
         // CRITICAL TEST: Must refuse convergence under permanent partition
-        match result {
-            ConvergenceResult::QuorumNotReached {
-                partition_detected, ..
-            } => {
-                // This is the expected NEGATIVE result
-                assert!(partition_detected || true); // Accept either detection state
-            }
-            ConvergenceResult::ProtocolError { .. } => {
-                // Also acceptable - protocol error due to partition
-            }
-            ConvergenceResult::Converged { .. } => {
-                panic!(
-                    "CRITICAL: Harness incorrectly declared convergence under permanent partition!"
-                );
-            }
-            other => {
-                // Other results are also acceptable as long as convergence is not declared
-                eprintln!("Permanent partition result: {:?}", other);
-            }
-        }
+        assert!(
+            matches!(
+                result,
+                ConvergenceResult::QuorumNotReached {
+                    required_nodes: 2,
+                    available_nodes: 1,
+                    partition_detected: true,
+                }
+            ),
+            "expected fail-closed QuorumNotReached under permanent partition, got {result:?}"
+        );
     }
 
     #[test]

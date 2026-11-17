@@ -89,7 +89,7 @@ pub struct ProtocolVersion {
 impl ProtocolVersion {
     pub const V1: Self = Self { major: 1, minor: 0 };
     pub const V2: Self = Self { major: 2, minor: 0 };
-    pub const CURRENT: Self = Self::V1;
+    pub const CURRENT: Self = Self::V2;
 
     /// Two versions are compatible if they share the same major version
     /// and the reader's minor version is >= the writer's.
@@ -4568,6 +4568,7 @@ pub struct AuthenticatedFleetProtocolStateV2 {
     pub(crate) state: FleetProtocolState,
     pub(crate) evidence_commitments: BTreeMap<String, BTreeMap<String, ContentHash>>,
     pub(crate) pending_intent_commitments: BTreeMap<String, ContentHash>,
+    pub(crate) checkpoint_vote: Option<(SecurityEpoch, u64, ContentHash)>,
     exact_evidence_totals: BTreeMap<String, i128>,
     pending_intent_bytes: usize,
 }
@@ -4589,9 +4590,25 @@ impl AuthenticatedFleetProtocolStateV2 {
             state,
             evidence_commitments: BTreeMap::new(),
             pending_intent_commitments: BTreeMap::new(),
+            checkpoint_vote: None,
             exact_evidence_totals: BTreeMap::new(),
             pending_intent_bytes: 0,
         })
+    }
+
+    pub(crate) fn sync_pending_intent_bytes(&mut self) {
+        self.pending_intent_bytes = self
+            .state
+            .pending_intents
+            .iter()
+            .map(|(extension, intents)| {
+                extension.len()
+                    + intents
+                        .iter()
+                        .map(|intent| intent.intent_id.len())
+                        .sum::<usize>()
+            })
+            .sum();
     }
 
     pub fn fleet_authority_id(&self) -> FleetAuthorityId {
@@ -4616,6 +4633,7 @@ impl AuthenticatedFleetProtocolStateV2 {
         if epoch > self.state.current_epoch {
             self.state.pending_intents.clear();
             self.pending_intent_commitments.clear();
+            self.checkpoint_vote = None;
             self.pending_intent_bytes = 0;
             self.state.current_epoch = epoch;
         }
@@ -4781,6 +4799,24 @@ impl AuthenticatedFleetProtocolStateV2 {
             .record_accepted(&heartbeat.node_id, heartbeat.sequence);
         Ok(())
     }
+
+    pub fn process_reconciliation<A: FleetRegistryAnchorAuthority>(
+        &mut self,
+        request: &ReconciliationRequest,
+        signature: &FleetSignatureV2,
+        registry: &AnchoredFleetVerificationRegistry,
+        authority: &A,
+    ) -> Result<(), FleetIngressV2Error> {
+        self.verify_message(request, signature, registry, authority)?;
+        self.state
+            .sequence_tracker
+            .validate_sequence(&request.node_id, request.sequence)?;
+        registry.ensure_current(authority)?;
+        self.state
+            .sequence_tracker
+            .record_accepted(&request.node_id, request.sequence);
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -4838,100 +4874,31 @@ impl FleetProtocolState {
         self.local_sequence
     }
 
-    /// Process an incoming evidence packet.
-    ///
-    /// Validates replay protection and accumulates the evidence delta.
-    pub fn process_evidence(&mut self, packet: &EvidencePacket) -> Result<(), ProtocolError> {
-        // Version check.
-        if !self
-            .protocol_version
-            .is_compatible_with(&packet.protocol_version)
-        {
-            return Err(ProtocolError::IncompatibleVersion {
-                local: self.protocol_version,
-                remote: packet.protocol_version,
-            });
-        }
-        self.require_legacy_ingress("evidence")?;
-
-        // Preserve replay-before-duplicate error precedence, but complete both
-        // read-only checks before publishing evidence or the replay frontier.
-        // A rejected duplicate at a higher sequence must not block later
-        // legitimate evidence, heartbeats, or intents from that actor.
-        self.sequence_tracker
-            .validate_sequence(&packet.node_id, packet.sequence)?;
-        self.evidence.validate_packet(packet)?;
-
-        self.evidence.record_validated(packet);
-        self.sequence_tracker
-            .record_accepted(&packet.node_id, packet.sequence);
-
-        Ok(())
+    /// Legacy unauthenticated evidence ingress is permanently disabled after
+    /// the atomic protocol-V2 cutover (`bd-q8x8x.6`).
+    pub fn process_evidence(&mut self, _packet: &EvidencePacket) -> Result<(), ProtocolError> {
+        self.require_legacy_ingress("evidence")
     }
 
-    /// Process an incoming containment intent.
-    ///
-    /// Validates replay protection and adds to pending intents.
-    pub fn process_intent(&mut self, intent: &ContainmentIntent) -> Result<(), ProtocolError> {
-        // Version check.
-        if !self
-            .protocol_version
-            .is_compatible_with(&intent.protocol_version)
-        {
-            return Err(ProtocolError::IncompatibleVersion {
-                local: self.protocol_version,
-                remote: intent.protocol_version,
-            });
-        }
-        self.require_legacy_ingress("containment-intent")?;
-
-        // Replay protection.
-        self.sequence_tracker
-            .accept(&intent.node_id, intent.sequence)?;
-
-        // Store the intent.
-        self.pending_intents
-            .entry(intent.extension_id.clone())
-            .or_default()
-            .push(intent.clone());
-
-        Ok(())
+    /// Legacy unauthenticated containment-intent ingress is permanently
+    /// disabled after the atomic protocol-V2 cutover (`bd-q8x8x.6`).
+    pub fn process_intent(&mut self, _intent: &ContainmentIntent) -> Result<(), ProtocolError> {
+        self.require_legacy_ingress("containment-intent")
     }
 
-    /// Process an incoming heartbeat.
+    /// Legacy unauthenticated heartbeat ingress is permanently disabled after
+    /// the atomic protocol-V2 cutover (`bd-q8x8x.6`).
     pub fn process_heartbeat(
         &mut self,
-        heartbeat: &HeartbeatLiveness,
+        _heartbeat: &HeartbeatLiveness,
     ) -> Result<(), ProtocolError> {
-        // Version check.
-        if !self
-            .protocol_version
-            .is_compatible_with(&heartbeat.protocol_version)
-        {
-            return Err(ProtocolError::IncompatibleVersion {
-                local: self.protocol_version,
-                remote: heartbeat.protocol_version,
-            });
-        }
-        self.require_legacy_ingress("heartbeat")?;
-
-        // Replay protection.
-        self.sequence_tracker
-            .accept(&heartbeat.node_id, heartbeat.sequence)?;
-
-        // Update health.
-        self.health.record_heartbeat(heartbeat);
-
-        Ok(())
+        self.require_legacy_ingress("heartbeat")
     }
 
     fn require_legacy_ingress(&self, message_type: &str) -> Result<(), ProtocolError> {
-        if self.protocol_version.major != ProtocolVersion::V1.major {
-            return Err(ProtocolError::AuthenticatedV2Required {
-                message_type: message_type.to_string(),
-            });
-        }
-        Ok(())
+        Err(ProtocolError::AuthenticatedV2Required {
+            message_type: message_type.to_string(),
+        })
     }
 
     /// Resolve all pending intents for a given extension using
@@ -4942,72 +4909,17 @@ impl FleetProtocolState {
             .and_then(|intents| DeterministicPrecedence::resolve_all(intents))
     }
 
-    /// Build a quorum checkpoint from current state.
-    ///
-    /// Returns `Err` if insufficient healthy nodes for quorum. V2 callers
-    /// must use authenticated checkpoint drafting and finalization.
+    /// Legacy unauthenticated checkpoint construction is permanently disabled
+    /// after the atomic protocol-V2 cutover (`bd-q8x8x.6`). Use
+    /// [`AuthenticatedFleetProtocolStateV2::draft_checkpoint_v2`] and
+    /// [`AuthenticatedFleetProtocolStateV2::finalize_checkpoint_v2`].
     pub fn build_checkpoint(
         &mut self,
-        current_time_ns: u64,
-        local_signature: MessageSignature,
+        _current_time_ns: u64,
+        _local_signature: MessageSignature,
     ) -> Result<QuorumCheckpoint, ProtocolError> {
-        self.require_legacy_ingress("checkpoint")?;
-        let healthy = self
-            .health
-            .healthy_nodes(current_time_ns, self.config.partition_timeout_ns);
-
-        let total_known = self.health.known_node_count();
-        let required = if total_known == 0 {
-            1
-        } else {
-            // quorum_threshold_millionths / 1_000_000 * total_known, rounded up.
-            let threshold = self.config.quorum_threshold_millionths;
-            (threshold as u128 * total_known as u128).div_ceil(1_000_000) as usize
-        };
-
-        if healthy.len() < required {
-            return Err(ProtocolError::QuorumNotReached {
-                required,
-                actual: healthy.len(),
-            });
-        }
-
-        // Resolve containment decisions for all extensions with pending intents.
-        let mut decisions = Vec::new();
-        for (ext_id, intents) in &self.pending_intents {
-            if let Some(winner) = DeterministicPrecedence::resolve_all(intents) {
-                let contributing_intent_ids = intents
-                    .iter()
-                    .map(|intent| intent.intent_id.clone())
-                    .collect::<Vec<_>>();
-                decisions.push(ResolvedContainmentDecision {
-                    extension_id: ext_id.clone(),
-                    resolved_action: winner.proposed_action,
-                    contributing_intent_ids,
-                    epoch: self.current_epoch,
-                });
-            }
-        }
-
-        self.last_checkpoint_seq = self.last_checkpoint_seq.saturating_add(1);
-
-        let mut quorum_sigs = BTreeMap::new();
-        quorum_sigs.insert(self.local_node_id.clone(), local_signature);
-
-        // Clear resolved pending intents to prevent duplicate containment
-        // decisions in subsequent checkpoints.
-        self.pending_intents.clear();
-
-        Ok(QuorumCheckpoint {
-            checkpoint_seq: self.last_checkpoint_seq,
-            epoch: self.current_epoch,
-            participating_nodes: healthy,
-            evidence_summary_hash: self.evidence.summary_hash(),
-            containment_decisions: decisions,
-            quorum_signatures: quorum_sigs,
-            timestamp_ns: current_time_ns,
-            protocol_version: self.protocol_version,
-            extensions: BTreeMap::new(),
+        Err(ProtocolError::AuthenticatedV2Required {
+            message_type: "checkpoint".to_string(),
         })
     }
 
@@ -5016,6 +4928,34 @@ impl FleetProtocolState {
         self.health
             .suspected_partitioned(current_time_ns, self.config.partition_timeout_ns)
     }
+}
+
+#[cfg(test)]
+pub(crate) fn test_anchored_registry_for_signers<'a, I, A>(
+    fleet_authority_id: FleetAuthorityId,
+    signers: I,
+    epoch: SecurityEpoch,
+    authority: &A,
+) -> AnchoredFleetVerificationRegistry
+where
+    I: IntoIterator<Item = &'a FleetSigner>,
+    A: FleetRegistryAnchorAuthority,
+{
+    let mut registry = FleetVerificationRegistry::for_authority(fleet_authority_id);
+    for (idx, signer) in signers.into_iter().enumerate() {
+        registry
+            .register_at(
+                signer.identity().signer.clone(),
+                signer.identity().key_sequence,
+                signer.verification_key().clone(),
+                epoch,
+                idx as u64,
+            )
+            .expect("register test signer");
+    }
+    let snapshot = registry.snapshot();
+    AnchoredFleetVerificationRegistry::restore(&snapshot, ContentHash::default(), authority)
+        .expect("restore anchored test registry")
 }
 
 // ---------------------------------------------------------------------------
@@ -5133,7 +5073,7 @@ mod tests {
 
     #[test]
     fn protocol_version_display() {
-        assert_eq!(ProtocolVersion::CURRENT.to_string(), "1.0");
+        assert_eq!(ProtocolVersion::CURRENT.to_string(), "2.0");
     }
 
     // -- SequenceRange tests --
@@ -5404,83 +5344,168 @@ mod tests {
         assert!(!healthy.contains(&NodeId::new("node-2")));
     }
 
-    // -- FleetProtocolState tests --
+    // -- AuthenticatedFleetProtocolStateV2 & legacy V1 cutoff tests --
+
+    struct TestV2Harness {
+        signers: BTreeMap<NodeId, FleetSigner>,
+        registry: AnchoredFleetVerificationRegistry,
+        anchor: TestFleetRegistryAnchorAuthority,
+    }
+
+    impl TestV2Harness {
+        fn new(nodes: &[&str]) -> Self {
+            let mut signers = BTreeMap::new();
+            for (idx, name) in nodes.iter().enumerate() {
+                let seed = u8::try_from(idx + 17).expect("small test node index");
+                let signer = v2_test_signer(name, 1, seed);
+                signers.insert(NodeId::new(*name), signer);
+            }
+            let anchor = TestFleetRegistryAnchorAuthority;
+            let registry = test_anchored_registry_for_signers(
+                test_fleet_authority_id(),
+                signers.values(),
+                SecurityEpoch::from_raw(1),
+                &anchor,
+            );
+            Self {
+                signers,
+                registry,
+                anchor,
+            }
+        }
+
+        fn state(&self, local: &str, config: GossipConfig) -> AuthenticatedFleetProtocolStateV2 {
+            AuthenticatedFleetProtocolStateV2::new(
+                test_fleet_authority_id(),
+                NodeId::new(local),
+                config,
+                SecurityEpoch::from_raw(1),
+            )
+            .expect("authenticated state")
+        }
+
+        fn signer(&self, node: &str) -> &FleetSigner {
+            self.signers
+                .get(&NodeId::new(node))
+                .expect("registered test signer")
+        }
+
+        fn admit_evidence(
+            &self,
+            state: &mut AuthenticatedFleetProtocolStateV2,
+            packet: &EvidencePacket,
+        ) -> Result<(), FleetIngressV2Error> {
+            let sig = self
+                .signer(packet.node_id.as_str())
+                .sign_detached_message_v2(packet)?;
+            state.process_evidence(packet, &sig, &self.registry, &self.anchor)
+        }
+
+        fn admit_intent(
+            &self,
+            state: &mut AuthenticatedFleetProtocolStateV2,
+            intent: &ContainmentIntent,
+        ) -> Result<(), FleetIngressV2Error> {
+            let sig = self
+                .signer(intent.node_id.as_str())
+                .sign_detached_message_v2(intent)?;
+            state.process_intent(intent, &sig, &self.registry, &self.anchor)
+        }
+
+        fn admit_heartbeat(
+            &self,
+            state: &mut AuthenticatedFleetProtocolStateV2,
+            hb: &HeartbeatLiveness,
+        ) -> Result<(), FleetIngressV2Error> {
+            let sig = self
+                .signer(hb.node_id.as_str())
+                .sign_detached_message_v2(hb)?;
+            state.process_heartbeat(hb, &sig, &self.registry, &self.anchor)
+        }
+    }
 
     #[test]
     fn state_process_evidence_success() {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+        let harness = TestV2Harness::new(&["local", "remote-1"]);
+        let mut state = harness.state("local", GossipConfig::default());
         let packet = test_evidence("remote-1", "ext-1", 1, 500_000);
 
-        state.process_evidence(&packet).unwrap();
-        assert_eq!(state.evidence.posterior_delta("ext-1"), 500_000);
+        harness.admit_evidence(&mut state, &packet).unwrap();
+        assert_eq!(state.state().evidence.posterior_delta("ext-1"), 500_000);
     }
 
     #[test]
     fn state_process_evidence_replay_rejected() {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+        let harness = TestV2Harness::new(&["local", "remote-1"]);
+        let mut state = harness.state("local", GossipConfig::default());
 
         let p1 = test_evidence("remote-1", "ext-1", 1, 500_000);
-        state.process_evidence(&p1).unwrap();
+        harness.admit_evidence(&mut state, &p1).unwrap();
 
-        // Same node, lower sequence → replay.
         let p2 = test_evidence("remote-1", "ext-2", 1, 100_000);
-        let err = state.process_evidence(&p2).unwrap_err();
-        assert!(matches!(err, ProtocolError::ReplayDetected { .. }));
+        let err = harness.admit_evidence(&mut state, &p2).unwrap_err();
+        assert!(matches!(
+            err,
+            FleetIngressV2Error::Protocol(ProtocolError::ReplayDetected { .. })
+        ));
     }
 
     #[test]
     fn state_duplicate_evidence_cannot_poison_actor_sequence() {
         for rejected_node in ["remote-1", "previously-unseen"] {
-            let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+            let harness = TestV2Harness::new(&["local", "remote-1", "observer", "previously-unseen"]);
+            let mut state = harness.state("local", GossipConfig::default());
             let original = test_evidence("remote-1", "ext-1", 1, 500_000);
-            state.process_evidence(&original).unwrap();
-            state
-                .process_heartbeat(&test_heartbeat("observer", 1, 1_000))
+            harness.admit_evidence(&mut state, &original).unwrap();
+            harness
+                .admit_heartbeat(&mut state, &test_heartbeat("observer", 1, 1_000))
                 .unwrap();
-            state
-                .process_intent(&test_intent(
-                    "observer",
-                    "ext-1",
-                    ContainmentAction::Sandbox,
-                    2,
-                    1,
-                ))
+            harness
+                .admit_intent(
+                    &mut state,
+                    &test_intent("observer", "ext-1", ContainmentAction::Sandbox, 2, 1),
+                )
                 .unwrap();
 
             let mut duplicate = original.clone();
             duplicate.node_id = NodeId::new(rejected_node);
             duplicate.sequence = u64::MAX;
             duplicate.posterior_delta_millionths = i64::MAX;
-            duplicate.signature = test_signature(rejected_node);
-            let before = serde_json::to_value(&state).unwrap();
+            let before = serde_json::to_value(state.state()).unwrap();
             assert!(matches!(
-                state.process_evidence(&duplicate),
-                Err(ProtocolError::DuplicateEvidence { .. })
+                harness.admit_evidence(&mut state, &duplicate),
+                Err(FleetIngressV2Error::Protocol(
+                    ProtocolError::DuplicateEvidence { .. }
+                ))
             ));
-            assert_eq!(serde_json::to_value(&state).unwrap(), before);
+            assert_eq!(serde_json::to_value(state.state()).unwrap(), before);
 
-            // A rejected frame must not reserve any sequence, even for an
-            // actor that has never been admitted. Every normal ingress lane
-            // must remain usable at that actor's next legitimate sequence.
             let next_sequence = if rejected_node == "remote-1" { 2 } else { 1 };
             let fresh = test_evidence(rejected_node, "ext-2", next_sequence, 200_000);
-            state.process_evidence(&fresh).unwrap();
-            state
-                .process_heartbeat(&test_heartbeat(rejected_node, next_sequence + 1, 2_000))
+            harness.admit_evidence(&mut state, &fresh).unwrap();
+            harness
+                .admit_heartbeat(
+                    &mut state,
+                    &test_heartbeat(rejected_node, next_sequence + 1, 2_000),
+                )
                 .unwrap();
-            state
-                .process_intent(&test_intent(
-                    rejected_node,
-                    "ext-2",
-                    ContainmentAction::Quarantine,
-                    next_sequence + 2,
-                    1,
-                ))
+            harness
+                .admit_intent(
+                    &mut state,
+                    &test_intent(
+                        rejected_node,
+                        "ext-2",
+                        ContainmentAction::Quarantine,
+                        next_sequence + 2,
+                        1,
+                    ),
+                )
                 .unwrap();
-            assert_eq!(state.evidence.posterior_delta("ext-1"), 500_000);
-            assert_eq!(state.evidence.evidence_count("ext-2"), 1);
+            assert_eq!(state.state().evidence.posterior_delta("ext-1"), 500_000);
+            assert_eq!(state.state().evidence.evidence_count("ext-2"), 1);
             assert_eq!(
                 state
+                    .state()
                     .sequence_tracker
                     .last_sequence(&NodeId::new(rejected_node)),
                 next_sequence + 2
@@ -5490,92 +5515,89 @@ mod tests {
 
     #[test]
     fn state_rejected_evidence_preserves_trace_and_error_precedence() {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+        let harness = TestV2Harness::new(&["local", "remote-1"]);
+        let mut state = harness.state("local", GossipConfig::default());
         let original = test_evidence("remote-1", "ext-1", 2, 500_000);
-        state.process_evidence(&original).unwrap();
-        let before = serde_json::to_value(&state).unwrap();
+        harness.admit_evidence(&mut state, &original).unwrap();
+        let before = serde_json::to_value(state.state()).unwrap();
 
-        // A packet that is both a replay and a duplicate keeps the established
-        // replay error, and a fresh trace on a stale sequence is not consumed.
         assert!(matches!(
-            state.process_evidence(&original),
-            Err(ProtocolError::ReplayDetected { .. })
+            harness.admit_evidence(&mut state, &original),
+            Err(FleetIngressV2Error::Protocol(
+                ProtocolError::ReplayDetected { .. }
+            ))
         ));
-        assert_eq!(serde_json::to_value(&state).unwrap(), before);
+        assert_eq!(serde_json::to_value(state.state()).unwrap(), before);
         let mut fresh = test_evidence("remote-1", "ext-2", 2, 200_000);
         assert!(matches!(
-            state.process_evidence(&fresh),
-            Err(ProtocolError::ReplayDetected { .. })
+            harness.admit_evidence(&mut state, &fresh),
+            Err(FleetIngressV2Error::Protocol(
+                ProtocolError::ReplayDetected { .. }
+            ))
         ));
-        assert_eq!(serde_json::to_value(&state).unwrap(), before);
+        assert_eq!(serde_json::to_value(state.state()).unwrap(), before);
 
-        fresh.protocol_version = ProtocolVersion::V2;
-        assert!(matches!(
-            state.process_evidence(&fresh),
-            Err(ProtocolError::IncompatibleVersion { .. })
-        ));
-        assert_eq!(serde_json::to_value(&state).unwrap(), before);
+        fresh.protocol_version = ProtocolVersion::V1;
+        assert!(harness.admit_evidence(&mut state, &fresh).is_err());
+        assert_eq!(serde_json::to_value(state.state()).unwrap(), before);
         fresh.protocol_version = ProtocolVersion::CURRENT;
         fresh.sequence = 3;
-        state.process_evidence(&fresh).unwrap();
-        assert_eq!(state.evidence.posterior_delta("ext-2"), 200_000);
-        assert_eq!(state.evidence.evidence_count("ext-2"), 1);
+        harness.admit_evidence(&mut state, &fresh).unwrap();
+        assert_eq!(state.state().evidence.posterior_delta("ext-2"), 200_000);
+        assert_eq!(state.state().evidence.evidence_count("ext-2"), 1);
     }
 
     #[test]
     fn state_process_intent_success() {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+        let harness = TestV2Harness::new(&["local", "remote-1"]);
+        let mut state = harness.state("local", GossipConfig::default());
         let intent = test_intent("remote-1", "ext-1", ContainmentAction::Sandbox, 1, 1);
 
-        state.process_intent(&intent).unwrap();
-        assert_eq!(state.pending_intents.len(), 1);
+        harness.admit_intent(&mut state, &intent).unwrap();
+        assert_eq!(state.state().pending_intents.len(), 1);
     }
 
     #[test]
     fn state_resolve_intents() {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+        let harness = TestV2Harness::new(&["local", "node-a", "node-b"]);
+        let mut state = harness.state("local", GossipConfig::default());
 
-        state
-            .process_intent(&test_intent(
-                "node-a",
-                "ext-1",
-                ContainmentAction::Sandbox,
-                1,
-                1,
-            ))
+        harness
+            .admit_intent(
+                &mut state,
+                &test_intent("node-a", "ext-1", ContainmentAction::Sandbox, 1, 1),
+            )
             .unwrap();
-        state
-            .process_intent(&test_intent(
-                "node-b",
-                "ext-1",
-                ContainmentAction::Terminate,
-                1,
-                1,
-            ))
+        harness
+            .admit_intent(
+                &mut state,
+                &test_intent("node-b", "ext-1", ContainmentAction::Terminate, 1, 1),
+            )
             .unwrap();
 
-        let winner = state.resolve_intents("ext-1").unwrap();
+        let winner = state.state().resolve_intents("ext-1").unwrap();
         assert_eq!(winner.proposed_action, ContainmentAction::Terminate);
     }
 
     #[test]
     fn state_process_heartbeat() {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+        let harness = TestV2Harness::new(&["local", "remote-1"]);
+        let mut state = harness.state("local", GossipConfig::default());
         let hb = test_heartbeat("remote-1", 1, 5_000_000_000);
 
-        state.process_heartbeat(&hb).unwrap();
-        assert_eq!(state.health.known_node_count(), 1);
+        harness.admit_heartbeat(&mut state, &hb).unwrap();
+        assert_eq!(state.state().health.known_node_count(), 1);
     }
 
     #[test]
     fn state_incompatible_version_rejected() {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+        let harness = TestV2Harness::new(&["local", "remote-1"]);
+        let mut state = harness.state("local", GossipConfig::default());
 
         let mut packet = test_evidence("remote-1", "ext-1", 1, 500_000);
-        packet.protocol_version = ProtocolVersion { major: 2, minor: 0 };
+        packet.protocol_version = ProtocolVersion::V1;
 
-        let err = state.process_evidence(&packet).unwrap_err();
-        assert!(matches!(err, ProtocolError::IncompatibleVersion { .. }));
+        assert!(harness.admit_evidence(&mut state, &packet).is_err());
     }
 
     #[test]
@@ -5592,15 +5614,72 @@ mod tests {
 
     #[test]
     fn state_partitioned_nodes() {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+        let harness = TestV2Harness::new(&["local", "node-1"]);
+        let mut state = harness.state("local", GossipConfig::default());
 
-        state
-            .process_heartbeat(&test_heartbeat("node-1", 1, 1_000_000_000))
+        harness
+            .admit_heartbeat(&mut state, &test_heartbeat("node-1", 1, 1_000_000_000))
             .unwrap();
 
-        // At time 20s with default 15s timeout → node-1 partitioned.
-        let partitioned = state.partitioned_nodes(20_000_000_000);
+        let partitioned = state.state().partitioned_nodes(20_000_000_000);
         assert!(partitioned.contains(&NodeId::new("node-1")));
+    }
+
+    #[test]
+    fn state_process_reconciliation_authenticates_and_tracks_replay() {
+        let harness = TestV2Harness::new(&["local", "remote-1", "remote-2"]);
+        let mut state = harness.state("local", GossipConfig::default());
+        let mut ranges = BTreeMap::new();
+        ranges.insert(NodeId::new("local"), SequenceRange::new(1, 5));
+        let req = ReconciliationRequest {
+            node_id: NodeId::new("remote-1"),
+            known_frontier_hash: ContentHash::compute(b"frontier-r1"),
+            requested_ranges: ranges,
+            epoch: SecurityEpoch::from_raw(1),
+            sequence: 3,
+            timestamp_ns: 4_000_000_000,
+            signature: test_signature("remote-1"),
+            protocol_version: ProtocolVersion::V2,
+        };
+        let sig = harness
+            .signer("remote-1")
+            .sign_detached_message_v2(&req)
+            .unwrap();
+
+        // Wrong signer signature must fail closed before replay mutation.
+        let mut bad_sig = sig.clone();
+        bad_sig.signer = NodeId::new("remote-2");
+        assert!(
+            state
+                .process_reconciliation(&req, &bad_sig, &harness.registry, &harness.anchor)
+                .is_err()
+        );
+        assert_eq!(
+            state
+                .state()
+                .sequence_tracker
+                .last_sequence(&NodeId::new("remote-1")),
+            0
+        );
+
+        state
+            .process_reconciliation(&req, &sig, &harness.registry, &harness.anchor)
+            .unwrap();
+        assert_eq!(
+            state
+                .state()
+                .sequence_tracker
+                .last_sequence(&NodeId::new("remote-1")),
+            3
+        );
+
+        // Replaying the same sequence fails closed without state change.
+        assert!(matches!(
+            state.process_reconciliation(&req, &sig, &harness.registry, &harness.anchor),
+            Err(FleetIngressV2Error::Protocol(
+                ProtocolError::ReplayDetected { .. }
+            ))
+        ));
     }
 
     // -- Serialization round-trip tests --
@@ -5707,15 +5786,16 @@ mod tests {
 
     #[test]
     fn state_serde_round_trip() {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
-        state
-            .process_evidence(&test_evidence("remote-1", "ext-1", 1, 500_000))
+        let harness = TestV2Harness::new(&["local", "remote-1", "remote-2"]);
+        let mut state = harness.state("local", GossipConfig::default());
+        harness
+            .admit_evidence(&mut state, &test_evidence("remote-1", "ext-1", 1, 500_000))
             .unwrap();
-        state
-            .process_heartbeat(&test_heartbeat("remote-2", 1, 5_000_000_000))
+        harness
+            .admit_heartbeat(&mut state, &test_heartbeat("remote-2", 1, 5_000_000_000))
             .unwrap();
 
-        let json = serde_json::to_string(&state).unwrap();
+        let json = serde_json::to_string(state.state()).unwrap();
         let decoded: FleetProtocolState = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.evidence.posterior_delta("ext-1"), 500_000);
     }
@@ -5950,7 +6030,8 @@ mod tests {
 
     #[test]
     fn protocol_version_current_is_1_0() {
-        assert_eq!(ProtocolVersion::CURRENT.major, 1);
+        assert_eq!(ProtocolVersion::CURRENT, ProtocolVersion::V2);
+        assert_eq!(ProtocolVersion::CURRENT.major, 2);
         assert_eq!(ProtocolVersion::CURRENT.minor, 0);
     }
 
@@ -6215,224 +6296,290 @@ mod tests {
         assert_eq!(msg.sequence(), Some(5));
     }
 
-    // ── Enrichment: build_checkpoint ───────────────────────────────
+    // ── Enrichment: authenticated V2 checkpoints & legacy rejection ──
 
     #[test]
     fn build_checkpoint_success_with_healthy_nodes() {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+        use crate::fleet_checkpoint_v2::FleetCheckpointQuorumV2;
 
-        // Register some healthy nodes via heartbeats
+        let harness = TestV2Harness::new(&["node-1", "node-2"]);
+        let mut s1 = harness.state("node-1", GossipConfig::default());
+        let mut s2 = harness.state("node-2", GossipConfig::default());
         let now = 10_000_000_000u64;
-        state
-            .process_heartbeat(&test_heartbeat("node-1", 1, now))
+        for state in [&mut s1, &mut s2] {
+            harness
+                .admit_heartbeat(state, &test_heartbeat("node-1", 1, now))
+                .unwrap();
+            harness
+                .admit_heartbeat(state, &test_heartbeat("node-2", 1, now))
+                .unwrap();
+            harness
+                .admit_intent(
+                    state,
+                    &test_intent("node-1", "ext-1", ContainmentAction::Sandbox, 2, 1),
+                )
+                .unwrap();
+        }
+        let quorum = FleetCheckpointQuorumV2::new(
+            BTreeSet::from([NodeId::new("node-1"), NodeId::new("node-2")]),
+            500_000,
+        )
+        .unwrap();
+        let mut draft = s1.draft_checkpoint_v2(now + 1_000_000_000, &quorum).unwrap();
+        let sig1 = s1
+            .sign_checkpoint_v2(
+                &draft,
+                &quorum,
+                harness.signer("node-1"),
+                &harness.registry,
+                &harness.anchor,
+            )
             .unwrap();
-        state
-            .process_heartbeat(&test_heartbeat("node-2", 1, now))
+        draft
+            .add_signature(sig1, &harness.registry, &harness.anchor)
+            .unwrap();
+        let peer_draft = s2
+            .import_checkpoint_proposal_v2(draft.checkpoint(), &quorum)
+            .unwrap();
+        let sig2 = s2
+            .sign_checkpoint_v2(
+                &peer_draft,
+                &quorum,
+                harness.signer("node-2"),
+                &harness.registry,
+                &harness.anchor,
+            )
+            .unwrap();
+        draft
+            .add_signature(sig2, &harness.registry, &harness.anchor)
+            .unwrap();
+        let signed = s1
+            .finalize_checkpoint_v2(
+                &draft,
+                &quorum,
+                now + 1_000_000_000,
+                &harness.registry,
+                &harness.anchor,
+            )
             .unwrap();
 
-        // Add an intent so there's something to resolve
-        state
-            .process_intent(&test_intent(
-                "node-1",
-                "ext-1",
-                ContainmentAction::Sandbox,
-                2,
-                1,
-            ))
-            .unwrap();
-
-        let sig = test_signature("local");
-        let checkpoint = state.build_checkpoint(now + 1_000_000_000, sig).unwrap();
-
-        assert_eq!(checkpoint.checkpoint_seq, 1);
-        assert_eq!(checkpoint.participating_nodes.len(), 2);
-        assert!(!checkpoint.containment_decisions.is_empty());
+        assert_eq!(signed.checkpoint.checkpoint_seq, 1);
+        assert_eq!(signed.checkpoint.participating_nodes.len(), 2);
+        assert!(!signed.checkpoint.containment_decisions.is_empty());
         assert_eq!(
-            checkpoint.containment_decisions[0].resolved_action,
+            signed.checkpoint.containment_decisions[0].resolved_action,
             ContainmentAction::Sandbox
         );
+        assert_eq!(signed.signatures.len(), 2);
+        assert!(s1.state().pending_intents.is_empty());
     }
 
     #[test]
     fn legacy_checkpoint_rejects_v2_atomically_without_changing_v1() {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
-        let now = 10_000_000_000u64;
-        state
-            .process_heartbeat(&test_heartbeat("node-1", 1, now))
-            .expect("record healthy node");
-        state.protocol_version = ProtocolVersion::V2;
+        for forged_version in [ProtocolVersion::V1, ProtocolVersion::V2] {
+            let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+            state.protocol_version = forged_version;
+            let now = 10_000_000_000u64;
+            let before = serde_json::to_value(&state).unwrap();
 
-        let mut intent_z = test_intent("node-1", "ext-1", ContainmentAction::Sandbox, 2, 1);
-        intent_z.intent_id = "intent-z".to_string();
-        let mut intent_a = test_intent("node-2", "ext-1", ContainmentAction::Sandbox, 1, 1);
-        intent_a.intent_id = "intent-a".to_string();
-        let mut colliding_intent_a =
-            test_intent("node-3", "ext-1", ContainmentAction::Suspend, 1, 1);
-        colliding_intent_a.intent_id = "intent-a".to_string();
-        state.pending_intents.insert(
-            "ext-1".to_string(),
-            vec![intent_z, intent_a, colliding_intent_a],
-        );
-
-        let pending_before = state.pending_intents.clone();
-        let checkpoint_seq_before = state.last_checkpoint_seq;
-        let error = state
-            .build_checkpoint(now, test_signature("local"))
-            .expect_err("legacy checkpoint API cannot emit V2");
-        assert_eq!(
-            error,
-            ProtocolError::AuthenticatedV2Required {
-                message_type: "checkpoint".to_string(),
-            }
-        );
-        assert_eq!(state.last_checkpoint_seq, checkpoint_seq_before);
-        assert_eq!(state.pending_intents, pending_before);
-
-        state.protocol_version = ProtocolVersion::V1;
-        let checkpoint = state
-            .build_checkpoint(now, test_signature("local"))
-            .expect("v1 preserves legacy contributor ordering and collisions");
-        assert_eq!(
-            checkpoint.containment_decisions[0].contributing_intent_ids,
-            vec![
-                "intent-z".to_string(),
-                "intent-a".to_string(),
-                "intent-a".to_string(),
-            ]
-        );
-
-        let mut unique_intent_z = test_intent("node-1", "ext-1", ContainmentAction::Sandbox, 3, 1);
-        unique_intent_z.intent_id = "intent-z".to_string();
-        let mut unique_intent_a = test_intent("node-2", "ext-1", ContainmentAction::Sandbox, 2, 1);
-        unique_intent_a.intent_id = "intent-a".to_string();
-        state.protocol_version = ProtocolVersion::V2;
-        state
-            .pending_intents
-            .insert("ext-1".to_string(), vec![unique_intent_z, unique_intent_a]);
-        let pending_before = state.pending_intents.clone();
-        let checkpoint_seq_before = state.last_checkpoint_seq;
-        let error = state
-            .build_checkpoint(now, test_signature("local"))
-            .expect_err("even structurally valid V2 checkpoints need trusted signatures");
-        assert_eq!(
-            error,
-            ProtocolError::AuthenticatedV2Required {
-                message_type: "checkpoint".to_string(),
-            }
-        );
-        assert_eq!(state.last_checkpoint_seq, checkpoint_seq_before);
-        assert_eq!(state.pending_intents, pending_before);
+            assert_eq!(
+                state.process_evidence(&test_evidence("node-1", "ext-1", 1, 100)),
+                Err(ProtocolError::AuthenticatedV2Required {
+                    message_type: "evidence".to_string(),
+                })
+            );
+            assert_eq!(
+                state.process_intent(&test_intent(
+                    "node-1",
+                    "ext-1",
+                    ContainmentAction::Sandbox,
+                    1,
+                    1,
+                )),
+                Err(ProtocolError::AuthenticatedV2Required {
+                    message_type: "containment-intent".to_string(),
+                })
+            );
+            assert_eq!(
+                state.process_heartbeat(&test_heartbeat("node-1", 1, now)),
+                Err(ProtocolError::AuthenticatedV2Required {
+                    message_type: "heartbeat".to_string(),
+                })
+            );
+            assert_eq!(
+                state.build_checkpoint(now, test_signature("local")),
+                Err(ProtocolError::AuthenticatedV2Required {
+                    message_type: "checkpoint".to_string(),
+                })
+            );
+            assert_eq!(serde_json::to_value(&state).unwrap(), before);
+        }
     }
 
     #[test]
     fn build_checkpoint_quorum_not_reached() {
+        use crate::fleet_checkpoint_v2::{FleetCheckpointQuorumV2, FleetCheckpointV2Error};
+
         let config = GossipConfig {
-            quorum_threshold_millionths: 750_000, // 75%
+            quorum_threshold_millionths: 750_000,
             ..GossipConfig::default()
         };
-        let mut state = FleetProtocolState::new(NodeId::new("local"), config);
+        let harness = TestV2Harness::new(&["node-1", "node-2", "node-3", "node-4"]);
+        let mut state = harness.state("node-4", config);
 
-        // Register 4 nodes but only 1 is healthy
         let old = 1_000_000_000u64;
-        let now = 20_000_000_000u64; // 20s later
+        let now = 20_000_000_000u64;
 
-        state
-            .process_heartbeat(&test_heartbeat("node-1", 1, old))
+        harness
+            .admit_heartbeat(&mut state, &test_heartbeat("node-1", 1, old))
             .unwrap();
-        state
-            .process_heartbeat(&test_heartbeat("node-2", 1, old))
+        harness
+            .admit_heartbeat(&mut state, &test_heartbeat("node-2", 1, old))
             .unwrap();
-        state
-            .process_heartbeat(&test_heartbeat("node-3", 1, old))
+        harness
+            .admit_heartbeat(&mut state, &test_heartbeat("node-3", 1, old))
             .unwrap();
-        state
-            .process_heartbeat(&test_heartbeat("node-4", 1, now))
+        harness
+            .admit_heartbeat(&mut state, &test_heartbeat("node-4", 1, now))
             .unwrap();
 
-        let sig = test_signature("local");
-        let err = state.build_checkpoint(now, sig).unwrap_err();
-        assert!(matches!(err, ProtocolError::QuorumNotReached { .. }));
+        let quorum = FleetCheckpointQuorumV2::new(
+            BTreeSet::from([
+                NodeId::new("node-1"),
+                NodeId::new("node-2"),
+                NodeId::new("node-3"),
+                NodeId::new("node-4"),
+            ]),
+            750_000,
+        )
+        .unwrap();
+        let err = state.draft_checkpoint_v2(now, &quorum).unwrap_err();
+        assert!(matches!(err, FleetCheckpointV2Error::InsufficientQuorum { .. }));
     }
 
     #[test]
     fn build_checkpoint_increments_sequence() {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+        use crate::fleet_checkpoint_v2::FleetCheckpointQuorumV2;
+
+        let harness = TestV2Harness::new(&["node-1"]);
+        let mut state = harness.state("node-1", GossipConfig::default());
         let now = 10_000_000_000u64;
-        state
-            .process_heartbeat(&test_heartbeat("node-1", 1, now))
+        harness
+            .admit_heartbeat(&mut state, &test_heartbeat("node-1", 1, now))
+            .unwrap();
+        let quorum =
+            FleetCheckpointQuorumV2::new(BTreeSet::from([NodeId::new("node-1")]), 500_000).unwrap();
+
+        let mut d1 = state.draft_checkpoint_v2(now + 1_000_000, &quorum).unwrap();
+        let sig1 = state
+            .sign_checkpoint_v2(
+                &d1,
+                &quorum,
+                harness.signer("node-1"),
+                &harness.registry,
+                &harness.anchor,
+            )
+            .unwrap();
+        d1.add_signature(sig1, &harness.registry, &harness.anchor)
+            .unwrap();
+        let cp1 = state
+            .finalize_checkpoint_v2(
+                &d1,
+                &quorum,
+                now + 1_000_000,
+                &harness.registry,
+                &harness.anchor,
+            )
             .unwrap();
 
-        let cp1 = state
-            .build_checkpoint(now + 1_000_000, test_signature("local"))
+        let mut d2 = state.draft_checkpoint_v2(now + 2_000_000, &quorum).unwrap();
+        let sig2 = state
+            .sign_checkpoint_v2(
+                &d2,
+                &quorum,
+                harness.signer("node-1"),
+                &harness.registry,
+                &harness.anchor,
+            )
+            .unwrap();
+        d2.add_signature(sig2, &harness.registry, &harness.anchor)
             .unwrap();
         let cp2 = state
-            .build_checkpoint(now + 2_000_000, test_signature("local"))
+            .finalize_checkpoint_v2(
+                &d2,
+                &quorum,
+                now + 2_000_000,
+                &harness.registry,
+                &harness.anchor,
+            )
             .unwrap();
 
-        assert_eq!(cp1.checkpoint_seq, 1);
-        assert_eq!(cp2.checkpoint_seq, 2);
+        assert_eq!(cp1.checkpoint.checkpoint_seq, 1);
+        assert_eq!(cp2.checkpoint.checkpoint_seq, 2);
     }
 
     // ── Enrichment: process_intent version rejection ──────────────
 
     #[test]
     fn state_process_intent_incompatible_version() {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+        let harness = TestV2Harness::new(&["local", "node-a"]);
+        let mut state = harness.state("local", GossipConfig::default());
         let mut intent = test_intent("node-a", "ext-1", ContainmentAction::Sandbox, 1, 1);
         intent.protocol_version = ProtocolVersion { major: 3, minor: 0 };
 
-        let err = state.process_intent(&intent).unwrap_err();
-        assert!(matches!(err, ProtocolError::IncompatibleVersion { .. }));
+        assert!(harness.admit_intent(&mut state, &intent).is_err());
     }
 
     #[test]
     fn state_process_intent_replay_rejected() {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
-        state
-            .process_intent(&test_intent(
-                "node-a",
-                "ext-1",
-                ContainmentAction::Sandbox,
-                5,
-                1,
-            ))
+        let harness = TestV2Harness::new(&["local", "node-a"]);
+        let mut state = harness.state("local", GossipConfig::default());
+        harness
+            .admit_intent(
+                &mut state,
+                &test_intent("node-a", "ext-1", ContainmentAction::Sandbox, 5, 1),
+            )
             .unwrap();
 
-        let err = state
-            .process_intent(&test_intent(
-                "node-a",
-                "ext-2",
-                ContainmentAction::Terminate,
-                3,
-                1,
-            ))
+        let err = harness
+            .admit_intent(
+                &mut state,
+                &test_intent("node-a", "ext-2", ContainmentAction::Terminate, 3, 1),
+            )
             .unwrap_err();
-        assert!(matches!(err, ProtocolError::ReplayDetected { .. }));
+        assert!(matches!(
+            err,
+            FleetIngressV2Error::Protocol(ProtocolError::ReplayDetected { .. })
+        ));
     }
 
     // ── Enrichment: process_heartbeat version rejection ───────────
 
     #[test]
     fn state_process_heartbeat_incompatible_version() {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+        let harness = TestV2Harness::new(&["local", "node-1"]);
+        let mut state = harness.state("local", GossipConfig::default());
         let mut hb = test_heartbeat("node-1", 1, 5_000_000_000);
-        hb.protocol_version = ProtocolVersion { major: 2, minor: 0 };
+        hb.protocol_version = ProtocolVersion::V1;
 
-        let err = state.process_heartbeat(&hb).unwrap_err();
-        assert!(matches!(err, ProtocolError::IncompatibleVersion { .. }));
+        assert!(harness.admit_heartbeat(&mut state, &hb).is_err());
     }
 
     #[test]
     fn state_process_heartbeat_replay_rejected() {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
-        state
-            .process_heartbeat(&test_heartbeat("node-1", 5, 5_000_000_000))
+        let harness = TestV2Harness::new(&["local", "node-1"]);
+        let mut state = harness.state("local", GossipConfig::default());
+        harness
+            .admit_heartbeat(&mut state, &test_heartbeat("node-1", 5, 5_000_000_000))
             .unwrap();
 
-        let err = state
-            .process_heartbeat(&test_heartbeat("node-1", 3, 6_000_000_000))
+        let err = harness
+            .admit_heartbeat(&mut state, &test_heartbeat("node-1", 3, 6_000_000_000))
             .unwrap_err();
-        assert!(matches!(err, ProtocolError::ReplayDetected { .. }));
+        assert!(matches!(
+            err,
+            FleetIngressV2Error::Protocol(ProtocolError::ReplayDetected { .. })
+        ));
     }
 
     // ── Enrichment: NodeSequenceTracker edge cases ─────────────────
@@ -6584,57 +6731,48 @@ mod tests {
 
     #[test]
     fn state_multiple_extensions_intent_resolution() {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+        let harness = TestV2Harness::new(&["local", "node-a", "node-b"]);
+        let mut state = harness.state("local", GossipConfig::default());
 
-        state
-            .process_intent(&test_intent(
-                "node-a",
-                "ext-1",
-                ContainmentAction::Sandbox,
-                1,
-                1,
-            ))
+        harness
+            .admit_intent(
+                &mut state,
+                &test_intent("node-a", "ext-1", ContainmentAction::Sandbox, 1, 1),
+            )
             .unwrap();
-        state
-            .process_intent(&test_intent(
-                "node-b",
-                "ext-2",
-                ContainmentAction::Quarantine,
-                1,
-                1,
-            ))
+        harness
+            .admit_intent(
+                &mut state,
+                &test_intent("node-b", "ext-2", ContainmentAction::Quarantine, 1, 1),
+            )
             .unwrap();
 
-        let w1 = state.resolve_intents("ext-1").unwrap();
+        let w1 = state.state().resolve_intents("ext-1").unwrap();
         assert_eq!(w1.proposed_action, ContainmentAction::Sandbox);
 
-        let w2 = state.resolve_intents("ext-2").unwrap();
+        let w2 = state.state().resolve_intents("ext-2").unwrap();
         assert_eq!(w2.proposed_action, ContainmentAction::Quarantine);
 
-        assert!(state.resolve_intents("ext-unknown").is_none());
+        assert!(state.state().resolve_intents("ext-unknown").is_none());
     }
 
     #[test]
     fn state_evidence_and_intent_separate_sequence_spaces() {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+        let harness = TestV2Harness::new(&["local", "node-a"]);
+        let mut state = harness.state("local", GossipConfig::default());
 
-        // node-a sends evidence seq=1, then intent seq=2
-        state
-            .process_evidence(&test_evidence("node-a", "ext-1", 1, 100_000))
+        harness
+            .admit_evidence(&mut state, &test_evidence("node-a", "ext-1", 1, 100_000))
             .unwrap();
-        state
-            .process_intent(&test_intent(
-                "node-a",
-                "ext-1",
-                ContainmentAction::Sandbox,
-                2,
-                1,
-            ))
+        harness
+            .admit_intent(
+                &mut state,
+                &test_intent("node-a", "ext-1", ContainmentAction::Sandbox, 2, 1),
+            )
             .unwrap();
 
-        // Verify both accumulated
-        assert_eq!(state.evidence.posterior_delta("ext-1"), 100_000);
-        assert_eq!(state.pending_intents["ext-1"].len(), 1);
+        assert_eq!(state.state().evidence.posterior_delta("ext-1"), 100_000);
+        assert_eq!(state.state().pending_intents["ext-1"].len(), 1);
     }
 
     mod authenticated_ingress_v2 {
@@ -8138,7 +8276,8 @@ mod tests {
     fn v2_signing_rejects_v1_and_noncanonical_structures() {
         let signer = v2_test_signer("node-a", 1, 23);
 
-        let v1_evidence = test_evidence("node-a", "ext-a", 1, 100_000);
+        let mut v1_evidence = test_evidence("node-a", "ext-a", 1, 100_000);
+        v1_evidence.protocol_version = ProtocolVersion::V1;
         assert!(matches!(
             signer.sign_detached_message_v2(&v1_evidence),
             Err(FleetIdentityError::NonCanonicalMessage { .. })

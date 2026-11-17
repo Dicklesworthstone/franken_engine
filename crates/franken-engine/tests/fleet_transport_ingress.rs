@@ -9,10 +9,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use frankenengine_engine::fleet_checkpoint_v2::{FleetCheckpointQuorumV2, FleetCheckpointV2Error};
 use frankenengine_engine::fleet_immune_protocol::{
     AuthenticatedFleetProtocolStateV2, ContainmentAction, ContainmentIntent,
-    DurableFleetVerificationRegistry, EvidencePacket, FLEET_V2_MAX_FRAME_BYTES,
+    DurableFleetVerificationRegistry, ErasureCodingPlan, EvidencePacket, FLEET_V2_MAX_FRAME_BYTES,
     FLEET_V2_MAX_VALUE_BYTES, FleetAuthorityId, FleetIdentityError, FleetRegistryAnchorAuthority,
     FleetRegistrySnapshotAnchorClaim, FleetSigner, FleetVerificationRegistryPersistence,
     GossipConfig, HeartbeatLiveness, MessageSignature, NodeId, ProtocolVersion,
+    ReconciliationRequest, SequenceRange, encode_erasure_shards_v2,
 };
 use frankenengine_engine::fleet_transport::{
     FLEET_TRANSPORT_MAX_DEPTH, FLEET_TRANSPORT_SCHEMA, FleetTransportContext, FleetTransportError,
@@ -863,4 +864,110 @@ fn outbound_encoding_refuses_legacy_versions_and_escaped_frames_over_the_raw_cap
             FleetIdentityError::NonCanonicalMessage { message_type, detail }
         )) if message_type == "fleet-v2-frame" && detail.contains("frame_bytes")
     ));
+}
+
+#[test]
+fn raw_reconciliation_and_erasure_shard_frames_roundtrip_and_authenticate() {
+    let fleet = Fleet::new(2);
+    let mut receiver = fleet.state(1);
+
+    let sender_id = fleet.signers[0].identity().signer.clone();
+    let peer_id = fleet.signers[1].identity().signer.clone();
+    let req = ReconciliationRequest {
+        node_id: sender_id.clone(),
+        known_frontier_hash: ContentHash::compute(b"wire-reconcile-frontier"),
+        requested_ranges: BTreeMap::from([
+            (sender_id.clone(), SequenceRange::new(1, 3)),
+            (peer_id, SequenceRange::new(4, 8)),
+        ]),
+        epoch: fleet.epoch,
+        sequence: 1,
+        timestamp_ns: 100,
+        signature: marker(sender_id.clone()),
+        protocol_version: ProtocolVersion::V2,
+    };
+    let req_sig = fleet.signers[0].sign_detached_message_v2(&req).unwrap();
+    let req_frame = FleetTransportMessage::Reconciliation {
+        message: req,
+        signature: req_sig,
+    }
+    .encode()
+    .unwrap();
+    assert_roundtrip(&req_frame);
+    assert!(matches!(
+        receiver
+            .process_frame_v2(&req_frame, &fleet.context(), None)
+            .unwrap(),
+        FleetTransportOutcome::ReconciliationAccepted { sequence: 1, .. }
+    ));
+
+    // Unsorted / duplicate requested_ranges on wire are rejected atomically.
+    let mut unsorted: Value = serde_json::from_slice(&req_frame).unwrap();
+    unsorted["message"]["payload"]["requested_ranges"]
+        .as_array_mut()
+        .unwrap()
+        .reverse();
+    let before = image(&receiver);
+    assert!(
+        receiver
+            .process_frame_v2(
+                &serde_json::to_vec(&unsorted).unwrap(),
+                &fleet.context(),
+                None
+            )
+            .is_err()
+    );
+    assert_eq!(image(&receiver), before);
+
+    // Authenticated erasure shards over the bounded transport wire:
+    let shards = encode_erasure_shards_v2(
+        "wire-shard-set",
+        sender_id,
+        2,
+        100,
+        fleet.epoch,
+        &vec![0x5a; 3_000],
+        ErasureCodingPlan::new(2, 3).unwrap(),
+    )
+    .unwrap();
+    let signed_shards: Vec<_> = shards
+        .into_iter()
+        .map(|shard| fleet.signers[0].sign_erasure_shard_v2(shard).unwrap())
+        .collect();
+    for signed in &signed_shards {
+        let frame = FleetTransportMessage::ErasureShard(signed.clone())
+            .encode()
+            .unwrap();
+        assert_roundtrip(&frame);
+        let expected_seq = signed.message.shard.sequence;
+        let expected_idx = signed.message.shard.shard_index;
+        assert!(matches!(
+            receiver
+                .process_frame_v2(&frame, &fleet.context(), None)
+                .unwrap(),
+            FleetTransportOutcome::ErasureShardAccepted {
+                shard_index,
+                sequence,
+                ..
+            } if shard_index == expected_idx && sequence == expected_seq
+        ));
+    }
+    assert_eq!(
+        receiver
+            .state()
+            .sequence_tracker
+            .last_sequence(&fleet.signers[0].identity().signer),
+        4
+    );
+    let (reconstructed, receipt) = receiver
+        .reconstruct_gossip_payload_with_receipt_v2(
+            &signed_shards[1..],
+            &fleet.signers[1],
+            150,
+            &fleet.registry,
+            &fleet.authority,
+        )
+        .unwrap();
+    assert_eq!(reconstructed, vec![0x5a; 3_000]);
+    assert_eq!(receipt.receipt.recovered_shard_index, Some(0));
 }

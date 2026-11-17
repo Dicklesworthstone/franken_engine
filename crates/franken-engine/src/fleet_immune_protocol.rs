@@ -97,7 +97,7 @@ pub struct ProtocolVersion {
 impl ProtocolVersion {
     pub const V1: Self = Self { major: 1, minor: 0 };
     pub const V2: Self = Self { major: 2, minor: 0 };
-    pub const CURRENT: Self = Self::V1;
+    pub const CURRENT: Self = Self::V2;
 
     /// Two versions are compatible if they share the same major version
     /// and the reader's minor version is >= the writer's.
@@ -3841,12 +3841,19 @@ impl ErasureShard {
             timestamp_ns,
             protocol_version,
         );
-        let signature = MessageSignature {
-            signer: origin_node.clone(),
-            hash: AuthenticityHash::compute_keyed(
-                origin_node.as_str().as_bytes(),
-                shard_hash.as_bytes(),
-            ),
+        let signature = if protocol_version == ProtocolVersion::V1 {
+            MessageSignature {
+                signer: origin_node.clone(),
+                hash: AuthenticityHash::compute_keyed(
+                    origin_node.as_str().as_bytes(),
+                    shard_hash.as_bytes(),
+                ),
+            }
+        } else {
+            MessageSignature {
+                signer: origin_node.clone(),
+                hash: AuthenticityHash([0; 32]),
+            }
         };
         Self {
             shard_set_id,
@@ -4302,15 +4309,20 @@ fn validate_erasure_shard_compatibility(
             reason: "shard hash mismatch".to_string(),
         });
     }
-    let expected_legacy_tag = AuthenticityHash::compute_keyed(
-        shard.origin_node.as_str().as_bytes(),
-        shard.shard_hash.as_bytes(),
-    );
-    if shard.signature.signer != shard.origin_node || shard.signature.hash != expected_legacy_tag {
-        return Err(ProtocolError::ErasureDecodeFailed {
-            shard_set_id: first.shard_set_id.clone(),
-            reason: "legacy shard signature is inconsistent with canonical provenance".to_string(),
-        });
+    if shard.protocol_version == ProtocolVersion::V1 {
+        let expected_legacy_tag = AuthenticityHash::compute_keyed(
+            shard.origin_node.as_str().as_bytes(),
+            shard.shard_hash.as_bytes(),
+        );
+        if shard.signature.signer != shard.origin_node
+            || shard.signature.hash != expected_legacy_tag
+        {
+            return Err(ProtocolError::ErasureDecodeFailed {
+                shard_set_id: first.shard_set_id.clone(),
+                reason: "legacy shard signature is inconsistent with canonical provenance"
+                    .to_string(),
+            });
+        }
     }
     Ok(())
 }
@@ -6693,6 +6705,184 @@ impl AuthenticatedFleetProtocolStateV2 {
             .record_accepted(&heartbeat.node_id, heartbeat.sequence);
         Ok(())
     }
+
+    pub fn process_reconciliation<A: FleetRegistryAnchorAuthority>(
+        &mut self,
+        request: &ReconciliationRequest,
+        signature: &FleetSignatureV2,
+        registry: &DurableFleetVerificationRegistry,
+        authority: &A,
+    ) -> Result<(), FleetIngressV2Error> {
+        self.verify_message(request, signature, registry, authority)?;
+        self.state
+            .sequence_tracker
+            .validate_sequence(&request.node_id, request.sequence)?;
+        registry.ensure_current(authority)?;
+        self.state
+            .sequence_tracker
+            .record_accepted(&request.node_id, request.sequence);
+        Ok(())
+    }
+
+    pub fn process_erasure_shard_v2<A: FleetRegistryAnchorAuthority>(
+        &mut self,
+        signed_shard: &SignedErasureShardV2,
+        registry: &DurableFleetVerificationRegistry,
+        authority: &A,
+    ) -> Result<(), FleetIngressV2Error> {
+        self.verify_message(
+            &signed_shard.message,
+            &signed_shard.signature,
+            registry,
+            authority,
+        )?;
+        self.state.sequence_tracker.validate_sequence(
+            &signed_shard.message.shard.origin_node,
+            signed_shard.message.shard.sequence,
+        )?;
+        registry.ensure_current(authority)?;
+        self.state.sequence_tracker.record_accepted(
+            &signed_shard.message.shard.origin_node,
+            signed_shard.message.shard.sequence,
+        );
+        Ok(())
+    }
+
+    /// Encode a protocol-V2 evidence packet into detached Ed25519-signed
+    /// erasure shards, verifying local signing authority and shard-set
+    /// provenance before advancing `local_sequence`.
+    pub fn encode_evidence_for_erasure_gossip_v2<A: FleetRegistryAnchorAuthority>(
+        &mut self,
+        packet: &EvidencePacket,
+        signer: &FleetSigner,
+        current_time_ns: u64,
+        registry: &DurableFleetVerificationRegistry,
+        authority: &A,
+    ) -> Result<Vec<SignedErasureShardV2>, FleetIngressV2Error> {
+        ensure_fleet_authority_matches(
+            "erasure-gossip-state",
+            self.fleet_authority_id,
+            registry.fleet_authority_id(),
+        )?;
+        ensure_fleet_authority_matches(
+            "erasure-gossip-signer",
+            self.fleet_authority_id,
+            signer.identity().fleet_authority_id,
+        )?;
+        validate_exact_message_signer(
+            "evidence-erasure-gossip",
+            &self.state.local_node_id,
+            &signer.identity().signer,
+        )?;
+        packet.validate_fleet_ingress_limits()?;
+        packet.validate_fleet_structure()?;
+        if packet.epoch != self.state.current_epoch {
+            return Err(FleetIdentityError::UntrustedMessageEpoch {
+                message_epoch: packet.epoch,
+                trusted_epoch: self.state.current_epoch,
+            }
+            .into());
+        }
+        let mut normalized = packet.clone();
+        normalized.signature = MessageSignature {
+            signer: packet.node_id.clone(),
+            hash: AuthenticityHash([0; 32]),
+        };
+        let payload = serde_json::to_vec(&normalized).map_err(|err| {
+            ProtocolError::SerializationFailed {
+                message_type: "EvidencePacket".to_string(),
+                detail: err.to_string(),
+            }
+        })?;
+        let plan = self.state.erasure_coding_plan(current_time_ns);
+        let shard_set_id = format!("{}:{}", packet.node_id, packet.trace_id);
+        let first_sequence = self.state.local_sequence.checked_add(1).ok_or_else(|| {
+            ProtocolError::ErasureDecodeFailed {
+                shard_set_id: shard_set_id.clone(),
+                reason: "shard sequence range overflows u64".to_string(),
+            }
+        })?;
+        let next_local_sequence = self
+            .state
+            .local_sequence
+            .checked_add(u64::from(plan.total_shards))
+            .ok_or_else(|| ProtocolError::ErasureDecodeFailed {
+                shard_set_id: shard_set_id.clone(),
+                reason: "shard sequence range overflows u64".to_string(),
+            })?;
+        let unsigned_shards = encode_erasure_shards_v2(
+            shard_set_id,
+            self.state.local_node_id.clone(),
+            first_sequence,
+            current_time_ns,
+            self.state.current_epoch,
+            &payload,
+            plan,
+        )?;
+        let signed_shards: Vec<SignedErasureShardV2> = unsigned_shards
+            .into_iter()
+            .map(|message| signer.sign_erasure_shard_v2(message))
+            .collect::<Result<Vec<_>, _>>()?;
+        registry
+            .verify_live_erasure_shard_set_v2(&signed_shards, self.state.current_epoch, authority)
+            .map_err(|error| match error {
+                FleetErasureV2Error::Identity(error) => FleetIngressV2Error::Identity(error),
+                FleetErasureV2Error::Protocol(error) => FleetIngressV2Error::Protocol(error),
+            })?;
+        self.state.local_sequence = next_local_sequence;
+        Ok(signed_shards)
+    }
+
+    /// Reconstruct an authenticated protocol-V2 erasure shard set and emit an
+    /// Ed25519-signed [`crate::erasure_reconstruction_receipts::SignedReconstructionReceiptV2`]
+    /// bound to this node's trusted signing key and current security epoch.
+    pub fn reconstruct_gossip_payload_with_receipt_v2<A: FleetRegistryAnchorAuthority>(
+        &self,
+        signed_shards: &[SignedErasureShardV2],
+        signer: &FleetSigner,
+        current_time_ns: u64,
+        registry: &DurableFleetVerificationRegistry,
+        authority: &A,
+    ) -> Result<
+        (
+            Vec<u8>,
+            crate::erasure_reconstruction_receipts::SignedReconstructionReceiptV2,
+        ),
+        crate::erasure_reconstruction_receipts::ReceiptV2Error,
+    > {
+        ensure_fleet_authority_matches(
+            "reconstruction-receipt-state",
+            self.fleet_authority_id,
+            registry.fleet_authority_id(),
+        )?;
+        ensure_fleet_authority_matches(
+            "reconstruction-receipt-signer",
+            self.fleet_authority_id,
+            signer.identity().fleet_authority_id,
+        )?;
+        validate_exact_message_signer(
+            "reconstruction-receipt",
+            &self.state.local_node_id,
+            &signer.identity().signer,
+        )?;
+        if let Some(first) = signed_shards.first()
+            && first.message.epoch != self.state.current_epoch
+        {
+            return Err(FleetIdentityError::UntrustedMessageEpoch {
+                message_epoch: first.message.epoch,
+                trusted_epoch: self.state.current_epoch,
+            }
+            .into());
+        }
+        crate::erasure_reconstruction_receipts::reconstruct_live_with_receipt_v2(
+            signed_shards,
+            signer,
+            current_time_ns,
+            registry,
+            self.state.current_epoch,
+            authority,
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -6750,127 +6940,37 @@ impl FleetProtocolState {
         self.local_sequence
     }
 
-    /// Process an incoming evidence packet.
-    ///
-    /// Validates replay protection and accumulates the evidence delta.
-    pub fn process_evidence(&mut self, packet: &EvidencePacket) -> Result<(), ProtocolError> {
-        // Version check.
-        if !self
-            .protocol_version
-            .is_compatible_with(&packet.protocol_version)
-        {
-            return Err(ProtocolError::IncompatibleVersion {
-                local: self.protocol_version,
-                remote: packet.protocol_version,
-            });
-        }
-        self.require_legacy_ingress("evidence")?;
-
-        // Preserve replay-before-duplicate error precedence, but complete both
-        // read-only checks before publishing evidence or the replay frontier.
-        // A rejected duplicate at a higher sequence must not block later
-        // legitimate evidence, heartbeats, or intents from that actor.
-        self.sequence_tracker
-            .validate_sequence(&packet.node_id, packet.sequence)?;
-        self.evidence.validate_packet(packet)?;
-
-        self.evidence.record_validated(packet);
-        self.sequence_tracker
-            .record_accepted(&packet.node_id, packet.sequence);
-
-        Ok(())
+    /// Legacy unauthenticated evidence ingress is permanently disabled after
+    /// the atomic protocol-V2 cutover (`bd-q8x8x.6`).
+    pub fn process_evidence(&mut self, _packet: &EvidencePacket) -> Result<(), ProtocolError> {
+        self.require_legacy_ingress("evidence")
     }
 
-    /// Process an incoming exact protocol-v1.0 erasure-coded gossip shard.
-    ///
-    /// The additive v2 carrier is deliberately rejected until the atomic v2
-    /// cutover routes it through the verified-set capability.
-    pub fn process_erasure_shard(&mut self, shard: &ErasureShard) -> Result<(), ProtocolError> {
-        if !self
-            .protocol_version
-            .is_compatible_with(&shard.protocol_version)
-        {
-            return Err(ProtocolError::IncompatibleVersion {
-                local: self.protocol_version,
-                remote: shard.protocol_version,
-            });
-        }
-        if shard.protocol_version != ProtocolVersion::V1 {
-            return Err(ProtocolError::ErasureDecodeFailed {
-                shard_set_id: shard.shard_set_id.clone(),
-                reason: "non-v1.0 shards require trusted registry verification".to_string(),
-            });
-        }
-        canonicalize_erasure_shard_set(std::slice::from_ref(shard))?;
-
-        self.sequence_tracker
-            .accept(&shard.origin_node, shard.sequence)?;
-        Ok(())
+    /// Legacy unauthenticated erasure-shard ingress is permanently disabled
+    /// after the atomic protocol-V2 cutover (`bd-q8x8x.6`).
+    pub fn process_erasure_shard(&mut self, _shard: &ErasureShard) -> Result<(), ProtocolError> {
+        self.require_legacy_ingress("erasure-shard")
     }
 
-    /// Process an incoming containment intent.
-    ///
-    /// Validates replay protection and adds to pending intents.
-    pub fn process_intent(&mut self, intent: &ContainmentIntent) -> Result<(), ProtocolError> {
-        // Version check.
-        if !self
-            .protocol_version
-            .is_compatible_with(&intent.protocol_version)
-        {
-            return Err(ProtocolError::IncompatibleVersion {
-                local: self.protocol_version,
-                remote: intent.protocol_version,
-            });
-        }
-        self.require_legacy_ingress("containment-intent")?;
-
-        // Replay protection.
-        self.sequence_tracker
-            .accept(&intent.node_id, intent.sequence)?;
-
-        // Store the intent.
-        self.pending_intents
-            .entry(intent.extension_id.clone())
-            .or_default()
-            .push(intent.clone());
-
-        Ok(())
+    /// Legacy unauthenticated containment-intent ingress is permanently
+    /// disabled after the atomic protocol-V2 cutover (`bd-q8x8x.6`).
+    pub fn process_intent(&mut self, _intent: &ContainmentIntent) -> Result<(), ProtocolError> {
+        self.require_legacy_ingress("containment-intent")
     }
 
-    /// Process an incoming heartbeat.
+    /// Legacy unauthenticated heartbeat ingress is permanently disabled after
+    /// the atomic protocol-V2 cutover (`bd-q8x8x.6`).
     pub fn process_heartbeat(
         &mut self,
-        heartbeat: &HeartbeatLiveness,
+        _heartbeat: &HeartbeatLiveness,
     ) -> Result<(), ProtocolError> {
-        // Version check.
-        if !self
-            .protocol_version
-            .is_compatible_with(&heartbeat.protocol_version)
-        {
-            return Err(ProtocolError::IncompatibleVersion {
-                local: self.protocol_version,
-                remote: heartbeat.protocol_version,
-            });
-        }
-        self.require_legacy_ingress("heartbeat")?;
-
-        // Replay protection.
-        self.sequence_tracker
-            .accept(&heartbeat.node_id, heartbeat.sequence)?;
-
-        // Update health.
-        self.health.record_heartbeat(heartbeat);
-
-        Ok(())
+        self.require_legacy_ingress("heartbeat")
     }
 
     fn require_legacy_ingress(&self, message_type: &str) -> Result<(), ProtocolError> {
-        if self.protocol_version.major != ProtocolVersion::V1.major {
-            return Err(ProtocolError::AuthenticatedV2Required {
-                message_type: message_type.to_string(),
-            });
-        }
-        Ok(())
+        Err(ProtocolError::AuthenticatedV2Required {
+            message_type: message_type.to_string(),
+        })
     }
 
     /// Resolve all pending intents for a given extension using
@@ -6881,72 +6981,17 @@ impl FleetProtocolState {
             .and_then(|intents| DeterministicPrecedence::resolve_all(intents))
     }
 
-    /// Build a quorum checkpoint from current state.
-    ///
-    /// Returns `Err` if insufficient healthy nodes for quorum. V2 callers
-    /// must use authenticated checkpoint drafting and finalization.
+    /// Legacy unauthenticated checkpoint construction is permanently disabled
+    /// after the atomic protocol-V2 cutover (`bd-q8x8x.6`). Use
+    /// [`AuthenticatedFleetProtocolStateV2::draft_checkpoint_v2`] and
+    /// [`AuthenticatedFleetProtocolStateV2::finalize_checkpoint_v2`].
     pub fn build_checkpoint(
         &mut self,
-        current_time_ns: u64,
-        local_signature: MessageSignature,
+        _current_time_ns: u64,
+        _local_signature: MessageSignature,
     ) -> Result<QuorumCheckpoint, ProtocolError> {
-        self.require_legacy_ingress("checkpoint")?;
-        let healthy = self
-            .health
-            .healthy_nodes(current_time_ns, self.config.partition_timeout_ns);
-
-        let total_known = self.health.known_node_count();
-        let required = if total_known == 0 {
-            1
-        } else {
-            // quorum_threshold_millionths / 1_000_000 * total_known, rounded up.
-            let threshold = self.config.quorum_threshold_millionths;
-            (threshold as u128 * total_known as u128).div_ceil(1_000_000) as usize
-        };
-
-        if healthy.len() < required {
-            return Err(ProtocolError::QuorumNotReached {
-                required,
-                actual: healthy.len(),
-            });
-        }
-
-        // Resolve containment decisions for all extensions with pending intents.
-        let mut decisions = Vec::new();
-        for (ext_id, intents) in &self.pending_intents {
-            if let Some(winner) = DeterministicPrecedence::resolve_all(intents) {
-                let contributing_intent_ids = intents
-                    .iter()
-                    .map(|intent| intent.intent_id.clone())
-                    .collect::<Vec<_>>();
-                decisions.push(ResolvedContainmentDecision {
-                    extension_id: ext_id.clone(),
-                    resolved_action: winner.proposed_action,
-                    contributing_intent_ids,
-                    epoch: self.current_epoch,
-                });
-            }
-        }
-
-        self.last_checkpoint_seq = self.last_checkpoint_seq.saturating_add(1);
-
-        let mut quorum_sigs = BTreeMap::new();
-        quorum_sigs.insert(self.local_node_id.clone(), local_signature);
-
-        // Clear resolved pending intents to prevent duplicate containment
-        // decisions in subsequent checkpoints.
-        self.pending_intents.clear();
-
-        Ok(QuorumCheckpoint {
-            checkpoint_seq: self.last_checkpoint_seq,
-            epoch: self.current_epoch,
-            participating_nodes: healthy,
-            evidence_summary_hash: self.evidence.summary_hash(),
-            containment_decisions: decisions,
-            quorum_signatures: quorum_sigs,
-            timestamp_ns: current_time_ns,
-            protocol_version: self.protocol_version,
-            extensions: BTreeMap::new(),
+        Err(ProtocolError::AuthenticatedV2Required {
+            message_type: "checkpoint".to_string(),
         })
     }
 
@@ -6963,72 +7008,27 @@ impl FleetProtocolState {
         ErasureCodingPlan::tuned(total_known, partitioned)
     }
 
-    /// Encode an evidence packet for exact protocol-v1.0 erasure gossip.
-    ///
-    /// A non-v1.0 state must use the trusted outbound carrier owned by the
-    /// atomic v2 cutover; silently emitting this legacy carrier would be a
-    /// protocol downgrade.
+    /// Legacy unauthenticated erasure gossip emission is permanently disabled
+    /// after the atomic protocol-V2 cutover (`bd-q8x8x.6`). Use
+    /// [`AuthenticatedFleetProtocolStateV2::encode_evidence_for_erasure_gossip_v2`].
     pub fn encode_evidence_for_erasure_gossip(
         &mut self,
-        packet: &EvidencePacket,
-        current_time_ns: u64,
+        _packet: &EvidencePacket,
+        _current_time_ns: u64,
     ) -> Result<Vec<FleetMessage>, ProtocolError> {
-        if self.protocol_version != ProtocolVersion::V1
-            || packet.protocol_version != ProtocolVersion::V1
-        {
-            return Err(ProtocolError::ErasureDecodeFailed {
-                shard_set_id: format!("{}:{}", packet.node_id, packet.trace_id),
-                reason: "non-v1.0 fleet state or evidence cannot emit legacy erasure gossip"
-                    .to_string(),
-            });
-        }
-        let payload =
-            serde_json::to_vec(packet).map_err(|err| ProtocolError::SerializationFailed {
-                message_type: "EvidencePacket".to_string(),
-                detail: err.to_string(),
-            })?;
-        let plan = self.erasure_coding_plan(current_time_ns);
-        let first_sequence = self.local_sequence.checked_add(1).ok_or_else(|| {
-            ProtocolError::ErasureDecodeFailed {
-                shard_set_id: format!("{}:{}", packet.node_id, packet.trace_id),
-                reason: "shard sequence range overflows u64".to_string(),
-            }
-        })?;
-        let next_local_sequence = self
-            .local_sequence
-            .checked_add(u64::from(plan.total_shards))
-            .ok_or_else(|| ProtocolError::ErasureDecodeFailed {
-                shard_set_id: format!("{}:{}", packet.node_id, packet.trace_id),
-                reason: "shard sequence range overflows u64".to_string(),
-            })?;
-        let shard_set_id = format!("{}:{}", packet.node_id, packet.trace_id);
-        let messages = encode_erasure_shards(
-            shard_set_id,
-            self.local_node_id.clone(),
-            first_sequence,
-            current_time_ns,
-            &payload,
-            plan,
-        )
-        .map(|shards| shards.into_iter().map(FleetMessage::ErasureShard).collect())?;
-        self.local_sequence = next_local_sequence;
-        Ok(messages)
+        Err(ProtocolError::AuthenticatedV2Required {
+            message_type: "evidence-erasure-gossip".to_string(),
+        })
     }
 
-    /// Reconstruct an erasure-coded gossip payload and emit a legacy-v1.0
-    /// reconstruction receipt attributed to this node (`bd-cixqu.35.2`).
-    ///
-    /// The returned [`ReconstructionReceipt`] binds which shards fed the
-    /// reconstruction, but its legacy public-NodeId tag does not prove who
-    /// performed it. Trusted Ed25519 admission is deferred to `bd-q8x8x.6`.
-    /// Callers persist the intrinsic record into a
-    /// [`crate::erasure_reconstruction_receipts::ReconstructionReceiptLedger`]
-    /// (the audit ledger) for later independent intrinsic validation. This
-    /// method is read-only: it does not mutate protocol state.
+    /// Legacy unauthenticated reconstruction receipt emission on live protocol
+    /// state is permanently disabled after the atomic protocol-V2 cutover
+    /// (`bd-q8x8x.6`). Use
+    /// [`AuthenticatedFleetProtocolStateV2::reconstruct_gossip_payload_with_receipt_v2`].
     pub fn reconstruct_gossip_payload_with_receipt(
         &self,
         shards: &[ErasureShard],
-        current_time_ns: u64,
+        _current_time_ns: u64,
     ) -> Result<
         (
             Vec<u8>,
@@ -7036,10 +7036,14 @@ impl FleetProtocolState {
         ),
         crate::erasure_reconstruction_receipts::ReceiptError,
     > {
-        crate::erasure_reconstruction_receipts::reconstruct_with_receipt(
-            shards,
-            self.local_node_id.clone(),
-            current_time_ns,
+        Err(
+            crate::erasure_reconstruction_receipts::ReceiptError::ReconstructionFailed {
+                shard_set_id: shards
+                    .first()
+                    .map(|shard| shard.shard_set_id.clone())
+                    .unwrap_or_default(),
+                reason: "authenticated protocol-v2 receipt verification required; use AuthenticatedFleetProtocolStateV2::reconstruct_gossip_payload_with_receipt_v2".to_string(),
+            },
         )
     }
 
@@ -7210,6 +7214,128 @@ impl FleetProtocolState {
     }
 }
 
+#[cfg(test)]
+pub(crate) struct TestDurableAnchorAuthority {
+    fleet_authority_id: FleetAuthorityId,
+    current: std::cell::RefCell<Option<FleetRegistrySnapshotAnchorClaim>>,
+}
+
+#[cfg(test)]
+impl TestDurableAnchorAuthority {
+    pub(crate) fn new(fleet_authority_id: FleetAuthorityId) -> Self {
+        Self {
+            fleet_authority_id,
+            current: std::cell::RefCell::new(None),
+        }
+    }
+}
+
+#[cfg(test)]
+impl FleetRegistryAnchorAuthority for TestDurableAnchorAuthority {
+    fn fleet_authority_id(&self) -> FleetAuthorityId {
+        self.fleet_authority_id
+    }
+
+    fn authenticate_current_registry_anchor(
+        &self,
+        claim: &FleetRegistrySnapshotAnchorClaim,
+    ) -> Result<String, FleetIdentityError> {
+        if self.current.borrow().as_ref() != Some(claim) {
+            return Err(FleetIdentityError::UnverifiedRegistryAnchor {
+                detail: "test durable anchor is no longer current".to_string(),
+            });
+        }
+        Ok(format!("test-durable-anchor-{}", claim.generation))
+    }
+
+    fn prepare_registry_anchor_advance(
+        &self,
+        expected: Option<&FleetRegistrySnapshotAnchorClaim>,
+        next: &FleetRegistrySnapshotAnchorClaim,
+    ) -> Result<Vec<u8>, FleetIdentityError> {
+        if self.current.borrow().as_ref() != expected
+            || next.fleet_authority_id != self.fleet_authority_id
+        {
+            return Err(FleetIdentityError::UnverifiedRegistryAnchor {
+                detail: "test durable anchor prepare CAS mismatch".to_string(),
+            });
+        }
+        serde_json::to_vec(&(expected.cloned(), next.clone())).map_err(|error| {
+            FleetIdentityError::UnverifiedRegistryAnchor {
+                detail: error.to_string(),
+            }
+        })
+    }
+
+    fn finalize_registry_anchor_advance(
+        &self,
+        permit: &[u8],
+        next: &FleetRegistrySnapshotAnchorClaim,
+    ) -> Result<String, FleetIdentityError> {
+        let (expected, authorized): (
+            Option<FleetRegistrySnapshotAnchorClaim>,
+            FleetRegistrySnapshotAnchorClaim,
+        ) = serde_json::from_slice(permit).map_err(|error| {
+            FleetIdentityError::UnverifiedRegistryAnchor {
+                detail: error.to_string(),
+            }
+        })?;
+        let mut current = self.current.borrow_mut();
+        if &authorized != next || (*current != expected && current.as_ref() != Some(next)) {
+            return Err(FleetIdentityError::UnverifiedRegistryAnchor {
+                detail: "test durable anchor finalize CAS mismatch".to_string(),
+            });
+        }
+        *current = Some(next.clone());
+        Ok(format!("test-durable-finalized-{}", next.generation))
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_durable_registry_for_signers<'a, I>(
+    signers: I,
+    epoch: SecurityEpoch,
+    authority: &TestDurableAnchorAuthority,
+) -> DurableFleetVerificationRegistry
+where
+    I: IntoIterator<Item = &'a FleetSigner>,
+{
+    let mut iter = signers.into_iter();
+    let first = iter
+        .next()
+        .expect("at least one test signer required for durable registry");
+    let mut storage = crate::storage_adapter::InMemoryStorageAdapter::new();
+    let context =
+        EventContext::new("test-fleet-trace", "test-fleet-decision", "test-fleet-pol")
+            .expect("valid test event context");
+    let mut registry = FleetVerificationRegistryPersistence::new(&mut storage, &context)
+        .prepare_initial_registration(
+            first.identity().signer.clone(),
+            first.identity().key_sequence,
+            first.verification_key().clone(),
+            epoch,
+            authority,
+        )
+        .expect("prepare initial test signer")
+        .finalize_and_publish(authority)
+        .expect("publish initial test signer");
+    for signer in iter {
+        registry = FleetVerificationRegistryPersistence::new(&mut storage, &context)
+            .prepare_register_node(
+                &registry,
+                signer.identity().signer.clone(),
+                signer.identity().key_sequence,
+                signer.verification_key().clone(),
+                epoch,
+                authority,
+            )
+            .expect("prepare additional test signer")
+            .finalize_and_publish(authority)
+            .expect("publish additional test signer");
+    }
+    registry
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -7340,7 +7466,7 @@ mod tests {
 
     #[test]
     fn protocol_version_display() {
-        assert_eq!(ProtocolVersion::CURRENT.to_string(), "1.0");
+        assert_eq!(ProtocolVersion::CURRENT.to_string(), "2.0");
     }
 
     // -- SequenceRange tests --
@@ -7645,53 +7771,129 @@ mod tests {
         assert!(!healthy.contains(&NodeId::new("node-2")));
     }
 
-    // -- FleetProtocolState tests --
+    // -- AuthenticatedFleetProtocolStateV2 & legacy V1 cutoff tests --
+
+    struct TestV2Harness {
+        signers: BTreeMap<NodeId, FleetSigner>,
+        registry: DurableFleetVerificationRegistry,
+        anchor: TestDurableAnchorAuthority,
+    }
+
+    impl TestV2Harness {
+        fn new(nodes: &[&str]) -> Self {
+            let mut signers = BTreeMap::new();
+            for (idx, name) in nodes.iter().enumerate() {
+                let seed = u8::try_from(idx + 17).expect("small test node index");
+                let signer = v2_test_signer(name, 1, seed);
+                signers.insert(NodeId::new(*name), signer);
+            }
+            let anchor = TestDurableAnchorAuthority::new(test_fleet_authority_id());
+            let registry = test_durable_registry_for_signers(
+                signers.values(),
+                SecurityEpoch::from_raw(1),
+                &anchor,
+            );
+            Self {
+                signers,
+                registry,
+                anchor,
+            }
+        }
+
+        fn state(&self, local: &str, config: GossipConfig) -> AuthenticatedFleetProtocolStateV2 {
+            AuthenticatedFleetProtocolStateV2::new(
+                test_fleet_authority_id(),
+                NodeId::new(local),
+                config,
+                SecurityEpoch::from_raw(1),
+            )
+            .expect("valid v2 state")
+        }
+
+        fn signer(&self, node: &str) -> &FleetSigner {
+            &self.signers[&NodeId::new(node)]
+        }
+
+        fn accept_evidence(
+            &self,
+            state: &mut AuthenticatedFleetProtocolStateV2,
+            packet: &EvidencePacket,
+        ) -> Result<(), FleetIngressV2Error> {
+            let sig = self
+                .signer(packet.node_id.as_str())
+                .sign_detached_message_v2(packet)?;
+            state.process_evidence(packet, &sig, &self.registry, &self.anchor)
+        }
+
+        fn accept_intent(
+            &self,
+            state: &mut AuthenticatedFleetProtocolStateV2,
+            intent: &ContainmentIntent,
+        ) -> Result<(), FleetIngressV2Error> {
+            let sig = self
+                .signer(intent.node_id.as_str())
+                .sign_detached_message_v2(intent)?;
+            state.process_intent(intent, &sig, &self.registry, &self.anchor)
+        }
+
+        fn accept_heartbeat(
+            &self,
+            state: &mut AuthenticatedFleetProtocolStateV2,
+            heartbeat: &HeartbeatLiveness,
+        ) -> Result<(), FleetIngressV2Error> {
+            let sig = self
+                .signer(heartbeat.node_id.as_str())
+                .sign_detached_message_v2(heartbeat)?;
+            state.process_heartbeat(heartbeat, &sig, &self.registry, &self.anchor)
+        }
+    }
 
     #[test]
     fn state_process_evidence_success() {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+        let harness = TestV2Harness::new(&["local", "remote-1"]);
+        let mut state = harness.state("local", GossipConfig::default());
         let packet = test_evidence("remote-1", "ext-1", 1, 500_000);
 
-        // SAFETY: Test processes valid evidence packet; process_evidence succeeds in controlled test environment.
-        state
-            .process_evidence(&packet)
+        harness
+            .accept_evidence(&mut state, &packet)
             .expect("operation should succeed for valid inputs");
-        assert_eq!(state.evidence.posterior_delta("ext-1"), 500_000);
+        assert_eq!(state.state().evidence.posterior_delta("ext-1"), 500_000);
     }
 
     #[test]
     fn state_process_evidence_replay_rejected() {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+        let harness = TestV2Harness::new(&["local", "remote-1"]);
+        let mut state = harness.state("local", GossipConfig::default());
 
         let p1 = test_evidence("remote-1", "ext-1", 1, 500_000);
-        // SAFETY: Test processes valid evidence packet; process_evidence succeeds in controlled test environment.
-        state
-            .process_evidence(&p1)
+        harness
+            .accept_evidence(&mut state, &p1)
             .expect("operation should succeed for valid inputs");
 
-        // Same node, lower sequence → replay.
+        // Same node, lower/equal sequence → replay.
         let p2 = test_evidence("remote-1", "ext-2", 1, 100_000);
-        let err = state.process_evidence(&p2).unwrap_err();
-        assert!(matches!(err, ProtocolError::ReplayDetected { .. }));
+        let err = harness.accept_evidence(&mut state, &p2).unwrap_err();
+        assert!(matches!(
+            err,
+            FleetIngressV2Error::Protocol(ProtocolError::ReplayDetected { .. })
+        ));
     }
 
     #[test]
     fn state_duplicate_evidence_cannot_poison_actor_sequence() {
+        let harness = TestV2Harness::new(&["local", "remote-1", "observer", "previously-unseen"]);
         for rejected_node in ["remote-1", "previously-unseen"] {
-            let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+            let mut state = harness.state("local", GossipConfig::default());
             let original = test_evidence("remote-1", "ext-1", 1, 500_000);
-            state.process_evidence(&original).unwrap();
-            state
-                .process_heartbeat(&test_heartbeat("observer", 1, 1_000))
+            harness.accept_evidence(&mut state, &original).unwrap();
+            harness
+                .accept_heartbeat(&mut state, &test_heartbeat("observer", 1, 1_000))
                 .unwrap();
-            state
-                .process_intent(&test_intent(
-                    "observer",
-                    "ext-1",
-                    ContainmentAction::Sandbox,
-                    2,
-                    1,
-                ))
+            harness
+                .accept_intent(
+                    &mut state,
+                    &test_intent("observer", "ext-1", ContainmentAction::Sandbox, 2, 1),
+                )
                 .unwrap();
 
             let mut duplicate = original.clone();
@@ -7699,35 +7901,41 @@ mod tests {
             duplicate.sequence = u64::MAX;
             duplicate.posterior_delta_millionths = i64::MAX;
             duplicate.signature = test_signature(rejected_node);
-            let before = serde_json::to_value(&state).unwrap();
+            let before = serde_json::to_value(state.state()).unwrap();
             assert!(matches!(
-                state.process_evidence(&duplicate),
-                Err(ProtocolError::DuplicateEvidence { .. })
+                harness.accept_evidence(&mut state, &duplicate),
+                Err(FleetIngressV2Error::Protocol(
+                    ProtocolError::DuplicateEvidence { .. }
+                ))
             ));
-            assert_eq!(serde_json::to_value(&state).unwrap(), before);
+            assert_eq!(serde_json::to_value(state.state()).unwrap(), before);
 
-            // A rejected frame must not reserve any sequence, even for an
-            // actor that has never been admitted. Every normal ingress lane
-            // must remain usable at that actor's next legitimate sequence.
             let next_sequence = if rejected_node == "remote-1" { 2 } else { 1 };
             let fresh = test_evidence(rejected_node, "ext-2", next_sequence, 200_000);
-            state.process_evidence(&fresh).unwrap();
-            state
-                .process_heartbeat(&test_heartbeat(rejected_node, next_sequence + 1, 2_000))
+            harness.accept_evidence(&mut state, &fresh).unwrap();
+            harness
+                .accept_heartbeat(
+                    &mut state,
+                    &test_heartbeat(rejected_node, next_sequence + 1, 2_000),
+                )
                 .unwrap();
-            state
-                .process_intent(&test_intent(
-                    rejected_node,
-                    "ext-2",
-                    ContainmentAction::Quarantine,
-                    next_sequence + 2,
-                    1,
-                ))
+            harness
+                .accept_intent(
+                    &mut state,
+                    &test_intent(
+                        rejected_node,
+                        "ext-2",
+                        ContainmentAction::Quarantine,
+                        next_sequence + 2,
+                        1,
+                    ),
+                )
                 .unwrap();
-            assert_eq!(state.evidence.posterior_delta("ext-1"), 500_000);
-            assert_eq!(state.evidence.evidence_count("ext-2"), 1);
+            assert_eq!(state.state().evidence.posterior_delta("ext-1"), 500_000);
+            assert_eq!(state.state().evidence.evidence_count("ext-2"), 1);
             assert_eq!(
                 state
+                    .state()
                     .sequence_tracker
                     .last_sequence(&NodeId::new(rejected_node)),
                 next_sequence + 2
@@ -7737,77 +7945,79 @@ mod tests {
 
     #[test]
     fn state_rejected_evidence_preserves_trace_and_error_precedence() {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+        let harness = TestV2Harness::new(&["local", "remote-1"]);
+        let mut state = harness.state("local", GossipConfig::default());
         let original = test_evidence("remote-1", "ext-1", 2, 500_000);
-        state.process_evidence(&original).unwrap();
-        let before = serde_json::to_value(&state).unwrap();
+        harness.accept_evidence(&mut state, &original).unwrap();
+        let before = serde_json::to_value(state.state()).unwrap();
 
-        // A packet that is both a replay and a duplicate keeps the established
-        // replay error, and a fresh trace on a stale sequence is not consumed.
         assert!(matches!(
-            state.process_evidence(&original),
-            Err(ProtocolError::ReplayDetected { .. })
+            harness.accept_evidence(&mut state, &original),
+            Err(FleetIngressV2Error::Protocol(
+                ProtocolError::ReplayDetected { .. }
+            ))
         ));
-        assert_eq!(serde_json::to_value(&state).unwrap(), before);
+        assert_eq!(serde_json::to_value(state.state()).unwrap(), before);
         let mut fresh = test_evidence("remote-1", "ext-2", 2, 200_000);
         assert!(matches!(
-            state.process_evidence(&fresh),
-            Err(ProtocolError::ReplayDetected { .. })
+            harness.accept_evidence(&mut state, &fresh),
+            Err(FleetIngressV2Error::Protocol(
+                ProtocolError::ReplayDetected { .. }
+            ))
         ));
-        assert_eq!(serde_json::to_value(&state).unwrap(), before);
+        assert_eq!(serde_json::to_value(state.state()).unwrap(), before);
 
-        fresh.protocol_version = ProtocolVersion::V2;
+        let dummy_sig = harness
+            .signer("remote-1")
+            .sign_detached_message_v2(&fresh)
+            .unwrap();
+        fresh.protocol_version = ProtocolVersion::V1;
         assert!(matches!(
-            state.process_evidence(&fresh),
-            Err(ProtocolError::IncompatibleVersion { .. })
+            state.process_evidence(&fresh, &dummy_sig, &harness.registry, &harness.anchor),
+            Err(FleetIngressV2Error::Identity(
+                FleetIdentityError::NonCanonicalMessage { .. }
+            ))
         ));
-        assert_eq!(serde_json::to_value(&state).unwrap(), before);
+        assert_eq!(serde_json::to_value(state.state()).unwrap(), before);
         fresh.protocol_version = ProtocolVersion::CURRENT;
         fresh.sequence = 3;
-        state.process_evidence(&fresh).unwrap();
-        assert_eq!(state.evidence.posterior_delta("ext-2"), 200_000);
-        assert_eq!(state.evidence.evidence_count("ext-2"), 1);
+        harness.accept_evidence(&mut state, &fresh).unwrap();
+        assert_eq!(state.state().evidence.posterior_delta("ext-2"), 200_000);
+        assert_eq!(state.state().evidence.evidence_count("ext-2"), 1);
     }
 
     #[test]
     fn state_process_intent_success() {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+        let harness = TestV2Harness::new(&["local", "remote-1"]);
+        let mut state = harness.state("local", GossipConfig::default());
         let intent = test_intent("remote-1", "ext-1", ContainmentAction::Sandbox, 1, 1);
 
-        // SAFETY: Test processes valid containment intent; process_intent succeeds in controlled test environment.
-        state
-            .process_intent(&intent)
+        harness
+            .accept_intent(&mut state, &intent)
             .expect("operation should succeed for valid inputs");
-        assert_eq!(state.pending_intents.len(), 1);
+        assert_eq!(state.state().pending_intents.len(), 1);
     }
 
     #[test]
     fn state_resolve_intents() {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+        let harness = TestV2Harness::new(&["local", "node-a", "node-b"]);
+        let mut state = harness.state("local", GossipConfig::default());
 
-        // SAFETY: Test processes valid containment intent; process_intent succeeds in controlled test environment.
-        state
-            .process_intent(&test_intent(
-                "node-a",
-                "ext-1",
-                ContainmentAction::Sandbox,
-                1,
-                1,
-            ))
+        harness
+            .accept_intent(
+                &mut state,
+                &test_intent("node-a", "ext-1", ContainmentAction::Sandbox, 1, 1),
+            )
             .expect("operation should succeed for valid inputs");
-        // SAFETY: Test processes valid containment intent; process_intent succeeds in controlled test environment.
-        state
-            .process_intent(&test_intent(
-                "node-b",
-                "ext-1",
-                ContainmentAction::Terminate,
-                1,
-                1,
-            ))
+        harness
+            .accept_intent(
+                &mut state,
+                &test_intent("node-b", "ext-1", ContainmentAction::Terminate, 1, 1),
+            )
             .expect("operation should succeed for valid inputs");
 
-        // SAFETY: Test resolves valid extension intents; resolve_intents succeeds in controlled test environment.
         let winner = state
+            .state()
             .resolve_intents("ext-1")
             .expect("operation should succeed for valid inputs");
         assert_eq!(winner.proposed_action, ContainmentAction::Terminate);
@@ -7815,25 +8025,42 @@ mod tests {
 
     #[test]
     fn state_process_heartbeat() {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+        let harness = TestV2Harness::new(&["local", "remote-1"]);
+        let mut state = harness.state("local", GossipConfig::default());
         let hb = test_heartbeat("remote-1", 1, 5_000_000_000);
 
-        // SAFETY: Test processes valid heartbeat; process_heartbeat succeeds in controlled test environment.
-        state
-            .process_heartbeat(&hb)
+        harness
+            .accept_heartbeat(&mut state, &hb)
             .expect("operation should succeed for valid inputs");
-        assert_eq!(state.health.known_node_count(), 1);
+        assert_eq!(state.state().health.known_node_count(), 1);
     }
 
     #[test]
     fn state_incompatible_version_rejected() {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+        let harness = TestV2Harness::new(&["local", "remote-1"]);
+        let mut state = harness.state("local", GossipConfig::default());
 
         let mut packet = test_evidence("remote-1", "ext-1", 1, 500_000);
-        packet.protocol_version = ProtocolVersion { major: 2, minor: 0 };
+        let sig = harness
+            .signer("remote-1")
+            .sign_detached_message_v2(&packet)
+            .unwrap();
+        packet.protocol_version = ProtocolVersion::V1;
 
-        let err = state.process_evidence(&packet).unwrap_err();
-        assert!(matches!(err, ProtocolError::IncompatibleVersion { .. }));
+        let err = state
+            .process_evidence(&packet, &sig, &harness.registry, &harness.anchor)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            FleetIngressV2Error::Identity(FleetIdentityError::NonCanonicalMessage { .. })
+        ));
+
+        let mut legacy = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+        legacy.protocol_version = ProtocolVersion::V1;
+        assert!(matches!(
+            legacy.process_evidence(&packet),
+            Err(ProtocolError::AuthenticatedV2Required { .. })
+        ));
     }
 
     #[test]
@@ -7850,14 +8077,15 @@ mod tests {
 
     #[test]
     fn state_partitioned_nodes() {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+        let harness = TestV2Harness::new(&["local", "node-1"]);
+        let mut state = harness.state("local", GossipConfig::default());
 
-        state
-            .process_heartbeat(&test_heartbeat("node-1", 1, 1_000_000_000))
+        harness
+            .accept_heartbeat(&mut state, &test_heartbeat("node-1", 1, 1_000_000_000))
             .expect("operation should succeed for valid inputs");
 
         // At time 20s with default 15s timeout → node-1 partitioned.
-        let partitioned = state.partitioned_nodes(20_000_000_000);
+        let partitioned = state.state().partitioned_nodes(20_000_000_000);
         assert!(partitioned.contains(&NodeId::new("node-1")));
     }
 
@@ -7975,15 +8203,16 @@ mod tests {
 
     #[test]
     fn state_serde_round_trip() {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
-        state
-            .process_evidence(&test_evidence("remote-1", "ext-1", 1, 500_000))
+        let harness = TestV2Harness::new(&["local", "remote-1", "remote-2"]);
+        let mut state = harness.state("local", GossipConfig::default());
+        harness
+            .accept_evidence(&mut state, &test_evidence("remote-1", "ext-1", 1, 500_000))
             .expect("operation should succeed for valid inputs");
-        state
-            .process_heartbeat(&test_heartbeat("remote-2", 1, 5_000_000_000))
+        harness
+            .accept_heartbeat(&mut state, &test_heartbeat("remote-2", 1, 5_000_000_000))
             .expect("operation should succeed for valid inputs");
 
-        let json = serde_json::to_string(&state).expect("serialize derived Serialize");
+        let json = serde_json::to_string(state.state()).expect("serialize derived Serialize");
         let decoded: FleetProtocolState =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decoded.evidence.posterior_delta("ext-1"), 500_000);
@@ -8235,8 +8464,8 @@ mod tests {
     // ── Enrichment: ProtocolVersion ────────────────────────────────
 
     #[test]
-    fn protocol_version_current_is_1_0() {
-        assert_eq!(ProtocolVersion::CURRENT.major, 1);
+    fn protocol_version_current_is_2_0() {
+        assert_eq!(ProtocolVersion::CURRENT.major, 2);
         assert_eq!(ProtocolVersion::CURRENT.minor, 0);
     }
 
@@ -8520,222 +8749,354 @@ mod tests {
 
     #[test]
     fn build_checkpoint_success_with_healthy_nodes() {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+        use crate::fleet_checkpoint_v2::FleetCheckpointQuorumV2;
 
-        // Register some healthy nodes via heartbeats
+        let harness = TestV2Harness::new(&["node-1", "node-2"]);
+        let mut s1 = harness.state("node-1", GossipConfig::default());
+        let mut s2 = harness.state("node-2", GossipConfig::default());
+
         let now = 10_000_000_000u64;
-        state
-            .process_heartbeat(&test_heartbeat("node-1", 1, now))
-            .expect("operation should succeed for valid inputs");
-        state
-            .process_heartbeat(&test_heartbeat("node-2", 1, now))
-            .expect("operation should succeed for valid inputs");
+        for state in [&mut s1, &mut s2] {
+            harness
+                .accept_heartbeat(state, &test_heartbeat("node-1", 1, now))
+                .expect("heartbeat node-1");
+            harness
+                .accept_heartbeat(state, &test_heartbeat("node-2", 1, now))
+                .expect("heartbeat node-2");
+            harness
+                .accept_intent(
+                    state,
+                    &test_intent("node-1", "ext-1", ContainmentAction::Sandbox, 2, 1),
+                )
+                .expect("intent node-1");
+        }
 
-        // Add an intent so there's something to resolve
-        state
-            .process_intent(&test_intent(
-                "node-1",
-                "ext-1",
-                ContainmentAction::Sandbox,
-                2,
-                1,
-            ))
-            .expect("operation should succeed for valid inputs");
+        let quorum = FleetCheckpointQuorumV2::new(
+            BTreeSet::from([NodeId::new("node-1"), NodeId::new("node-2")]),
+            500_000,
+        )
+        .unwrap();
+        let mut draft = s1
+            .draft_checkpoint_v2(now + 1_000_000_000, &quorum)
+            .unwrap();
+        let sig1 = s1
+            .sign_checkpoint_v2(
+                &draft,
+                &quorum,
+                harness.signer("node-1"),
+                &harness.registry,
+                &harness.anchor,
+            )
+            .unwrap();
+        let peer_draft = s2
+            .import_checkpoint_proposal_v2(draft.checkpoint(), &quorum)
+            .unwrap();
+        let sig2 = s2
+            .sign_checkpoint_v2(
+                &peer_draft,
+                &quorum,
+                harness.signer("node-2"),
+                &harness.registry,
+                &harness.anchor,
+            )
+            .unwrap();
+        draft
+            .add_signature(sig1, &harness.registry, &harness.anchor)
+            .unwrap();
+        draft
+            .add_signature(sig2, &harness.registry, &harness.anchor)
+            .unwrap();
+        let signed = s1
+            .finalize_checkpoint_v2(
+                &draft,
+                &quorum,
+                now + 1_000_000_000,
+                &harness.registry,
+                &harness.anchor,
+            )
+            .unwrap();
 
-        let sig = test_signature("local");
-        let checkpoint = state
-            .build_checkpoint(now + 1_000_000_000, sig)
-            .expect("operation should succeed for valid inputs");
-
-        assert_eq!(checkpoint.checkpoint_seq, 1);
-        assert_eq!(checkpoint.participating_nodes.len(), 2);
-        assert!(!checkpoint.containment_decisions.is_empty());
+        assert_eq!(signed.checkpoint.checkpoint_seq, 1);
+        assert_eq!(signed.checkpoint.participating_nodes.len(), 2);
+        assert!(!signed.checkpoint.containment_decisions.is_empty());
         assert_eq!(
-            checkpoint.containment_decisions[0].resolved_action,
+            signed.checkpoint.containment_decisions[0].resolved_action,
             ContainmentAction::Sandbox
         );
     }
 
     #[test]
-    fn legacy_checkpoint_rejects_v2_atomically_without_changing_v1() {
+    fn legacy_checkpoint_rejects_v2_and_v1_unconditionally_after_cutover() {
         let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
         let now = 10_000_000_000u64;
         state
-            .process_heartbeat(&test_heartbeat("node-1", 1, now))
-            .expect("record healthy node");
-        state.protocol_version = ProtocolVersion::V2;
+            .health
+            .record_heartbeat(&test_heartbeat("node-1", 1, now));
 
-        let mut intent_z = test_intent("node-1", "ext-1", ContainmentAction::Sandbox, 2, 1);
-        intent_z.intent_id = "intent-z".to_string();
-        let mut intent_a = test_intent("node-2", "ext-1", ContainmentAction::Sandbox, 1, 1);
-        intent_a.intent_id = "intent-a".to_string();
-        let mut colliding_intent_a =
-            test_intent("node-3", "ext-1", ContainmentAction::Suspend, 1, 1);
-        colliding_intent_a.intent_id = "intent-a".to_string();
-        state.pending_intents.insert(
-            "ext-1".to_string(),
-            vec![intent_z, intent_a, colliding_intent_a],
-        );
-
-        let pending_before = state.pending_intents.clone();
-        let checkpoint_seq_before = state.last_checkpoint_seq;
-        let error = state
-            .build_checkpoint(now, test_signature("local"))
-            .expect_err("legacy checkpoint API cannot emit V2");
-        assert_eq!(
-            error,
-            ProtocolError::AuthenticatedV2Required {
-                message_type: "checkpoint".to_string(),
-            }
-        );
-        assert_eq!(state.last_checkpoint_seq, checkpoint_seq_before);
-        assert_eq!(state.pending_intents, pending_before);
-
-        state.protocol_version = ProtocolVersion::V1;
-        let checkpoint = state
-            .build_checkpoint(now, test_signature("local"))
-            .expect("v1 preserves legacy contributor ordering and collisions");
-        assert_eq!(
-            checkpoint.containment_decisions[0].contributing_intent_ids,
-            vec![
-                "intent-z".to_string(),
-                "intent-a".to_string(),
-                "intent-a".to_string(),
-            ]
-        );
-
-        let mut unique_intent_z = test_intent("node-1", "ext-1", ContainmentAction::Sandbox, 3, 1);
-        unique_intent_z.intent_id = "intent-z".to_string();
-        let mut unique_intent_a = test_intent("node-2", "ext-1", ContainmentAction::Sandbox, 2, 1);
-        unique_intent_a.intent_id = "intent-a".to_string();
-        state.protocol_version = ProtocolVersion::V2;
-        state
-            .pending_intents
-            .insert("ext-1".to_string(), vec![unique_intent_z, unique_intent_a]);
-        let pending_before = state.pending_intents.clone();
-        let checkpoint_seq_before = state.last_checkpoint_seq;
-        let error = state
-            .build_checkpoint(now, test_signature("local"))
-            .expect_err("even structurally valid V2 checkpoints need trusted signatures");
-        assert_eq!(
-            error,
-            ProtocolError::AuthenticatedV2Required {
-                message_type: "checkpoint".to_string(),
-            }
-        );
-        assert_eq!(state.last_checkpoint_seq, checkpoint_seq_before);
-        assert_eq!(state.pending_intents, pending_before);
+        for version in [ProtocolVersion::V1, ProtocolVersion::V2] {
+            state.protocol_version = version;
+            let before = serde_json::to_value(&state).unwrap();
+            assert_eq!(
+                state
+                    .build_checkpoint(now, test_signature("local"))
+                    .unwrap_err(),
+                ProtocolError::AuthenticatedV2Required {
+                    message_type: "checkpoint".to_string(),
+                }
+            );
+            assert_eq!(
+                state
+                    .process_evidence(&test_evidence("node-1", "ext-1", 1, 100_000))
+                    .unwrap_err(),
+                ProtocolError::AuthenticatedV2Required {
+                    message_type: "evidence".to_string(),
+                }
+            );
+            assert_eq!(
+                state
+                    .process_intent(&test_intent(
+                        "node-1",
+                        "ext-1",
+                        ContainmentAction::Sandbox,
+                        2,
+                        1
+                    ))
+                    .unwrap_err(),
+                ProtocolError::AuthenticatedV2Required {
+                    message_type: "containment-intent".to_string(),
+                }
+            );
+            assert_eq!(
+                state
+                    .process_heartbeat(&test_heartbeat("node-1", 3, now))
+                    .unwrap_err(),
+                ProtocolError::AuthenticatedV2Required {
+                    message_type: "heartbeat".to_string(),
+                }
+            );
+            let legacy_shards = encode_erasure_shards(
+                "legacy-set",
+                NodeId::new("node-1"),
+                4,
+                now,
+                b"legacy-payload",
+                ErasureCodingPlan::new(2, 3).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                state.process_erasure_shard(&legacy_shards[0]).unwrap_err(),
+                ProtocolError::AuthenticatedV2Required {
+                    message_type: "erasure-shard".to_string(),
+                }
+            );
+            assert_eq!(
+                state
+                    .encode_evidence_for_erasure_gossip(
+                        &test_evidence("local", "ext-1", 1, 100_000),
+                        now,
+                    )
+                    .unwrap_err(),
+                ProtocolError::AuthenticatedV2Required {
+                    message_type: "evidence-erasure-gossip".to_string(),
+                }
+            );
+            assert!(
+                state
+                    .reconstruct_gossip_payload_with_receipt(&legacy_shards, now)
+                    .is_err()
+            );
+            assert_eq!(serde_json::to_value(&state).unwrap(), before);
+        }
     }
 
     #[test]
     fn build_checkpoint_quorum_not_reached() {
+        use crate::fleet_checkpoint_v2::{FleetCheckpointQuorumV2, FleetCheckpointV2Error};
+
         let config = GossipConfig {
             quorum_threshold_millionths: 750_000, // 75%
             ..GossipConfig::default()
         };
-        let mut state = FleetProtocolState::new(NodeId::new("local"), config);
+        let harness = TestV2Harness::new(&["node-1", "node-2", "node-3", "node-4"]);
+        let mut state = harness.state("node-4", config);
 
-        // Register 4 nodes but only 1 is healthy
         let old = 1_000_000_000u64;
         let now = 20_000_000_000u64; // 20s later
 
-        state
-            .process_heartbeat(&test_heartbeat("node-1", 1, old))
-            .expect("operation should succeed for valid inputs");
-        state
-            .process_heartbeat(&test_heartbeat("node-2", 1, old))
-            .expect("operation should succeed for valid inputs");
-        state
-            .process_heartbeat(&test_heartbeat("node-3", 1, old))
-            .expect("operation should succeed for valid inputs");
-        state
-            .process_heartbeat(&test_heartbeat("node-4", 1, now))
-            .expect("operation should succeed for valid inputs");
+        harness
+            .accept_heartbeat(&mut state, &test_heartbeat("node-1", 1, old))
+            .unwrap();
+        harness
+            .accept_heartbeat(&mut state, &test_heartbeat("node-2", 1, old))
+            .unwrap();
+        harness
+            .accept_heartbeat(&mut state, &test_heartbeat("node-3", 1, old))
+            .unwrap();
+        harness
+            .accept_heartbeat(&mut state, &test_heartbeat("node-4", 1, now))
+            .unwrap();
 
-        let sig = test_signature("local");
-        let err = state.build_checkpoint(now, sig).unwrap_err();
-        assert!(matches!(err, ProtocolError::QuorumNotReached { .. }));
+        let quorum = FleetCheckpointQuorumV2::new(
+            BTreeSet::from([
+                NodeId::new("node-1"),
+                NodeId::new("node-2"),
+                NodeId::new("node-3"),
+                NodeId::new("node-4"),
+            ]),
+            750_000,
+        )
+        .unwrap();
+        let err = state.draft_checkpoint_v2(now, &quorum).unwrap_err();
+        assert!(matches!(
+            err,
+            FleetCheckpointV2Error::InsufficientQuorum { .. }
+        ));
     }
 
     #[test]
     fn build_checkpoint_increments_sequence() {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+        use crate::fleet_checkpoint_v2::FleetCheckpointQuorumV2;
+
+        let harness = TestV2Harness::new(&["node-1"]);
+        let mut state = harness.state("node-1", GossipConfig::default());
         let now = 10_000_000_000u64;
-        state
-            .process_heartbeat(&test_heartbeat("node-1", 1, now))
-            .expect("operation should succeed for valid inputs");
+        harness
+            .accept_heartbeat(&mut state, &test_heartbeat("node-1", 1, now))
+            .unwrap();
 
+        let quorum =
+            FleetCheckpointQuorumV2::new(BTreeSet::from([NodeId::new("node-1")]), 500_000).unwrap();
+
+        let mut d1 = state.draft_checkpoint_v2(now + 1_000_000, &quorum).unwrap();
+        let sig1 = state
+            .sign_checkpoint_v2(
+                &d1,
+                &quorum,
+                harness.signer("node-1"),
+                &harness.registry,
+                &harness.anchor,
+            )
+            .unwrap();
+        d1.add_signature(sig1, &harness.registry, &harness.anchor)
+            .unwrap();
         let cp1 = state
-            .build_checkpoint(now + 1_000_000, test_signature("local"))
-            .expect("operation should succeed for valid inputs");
-        let cp2 = state
-            .build_checkpoint(now + 2_000_000, test_signature("local"))
-            .expect("operation should succeed for valid inputs");
+            .finalize_checkpoint_v2(
+                &d1,
+                &quorum,
+                now + 1_000_000,
+                &harness.registry,
+                &harness.anchor,
+            )
+            .unwrap();
 
-        assert_eq!(cp1.checkpoint_seq, 1);
-        assert_eq!(cp2.checkpoint_seq, 2);
+        let mut d2 = state.draft_checkpoint_v2(now + 2_000_000, &quorum).unwrap();
+        let sig2 = state
+            .sign_checkpoint_v2(
+                &d2,
+                &quorum,
+                harness.signer("node-1"),
+                &harness.registry,
+                &harness.anchor,
+            )
+            .unwrap();
+        d2.add_signature(sig2, &harness.registry, &harness.anchor)
+            .unwrap();
+        let cp2 = state
+            .finalize_checkpoint_v2(
+                &d2,
+                &quorum,
+                now + 2_000_000,
+                &harness.registry,
+                &harness.anchor,
+            )
+            .unwrap();
+
+        assert_eq!(cp1.checkpoint.checkpoint_seq, 1);
+        assert_eq!(cp2.checkpoint.checkpoint_seq, 2);
     }
 
     // ── Enrichment: process_intent version rejection ──────────────
 
     #[test]
     fn state_process_intent_incompatible_version() {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+        let harness = TestV2Harness::new(&["local", "node-a"]);
+        let mut state = harness.state("local", GossipConfig::default());
         let mut intent = test_intent("node-a", "ext-1", ContainmentAction::Sandbox, 1, 1);
+        let sig = harness
+            .signer("node-a")
+            .sign_detached_message_v2(&intent)
+            .unwrap();
         intent.protocol_version = ProtocolVersion { major: 3, minor: 0 };
 
-        let err = state.process_intent(&intent).unwrap_err();
-        assert!(matches!(err, ProtocolError::IncompatibleVersion { .. }));
+        let err = state
+            .process_intent(&intent, &sig, &harness.registry, &harness.anchor)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            FleetIngressV2Error::Identity(FleetIdentityError::NonCanonicalMessage { .. })
+        ));
     }
 
     #[test]
     fn state_process_intent_replay_rejected() {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
-        state
-            .process_intent(&test_intent(
-                "node-a",
-                "ext-1",
-                ContainmentAction::Sandbox,
-                5,
-                1,
-            ))
+        let harness = TestV2Harness::new(&["local", "node-a"]);
+        let mut state = harness.state("local", GossipConfig::default());
+        harness
+            .accept_intent(
+                &mut state,
+                &test_intent("node-a", "ext-1", ContainmentAction::Sandbox, 5, 1),
+            )
             .expect("operation should succeed for valid inputs");
 
-        let err = state
-            .process_intent(&test_intent(
-                "node-a",
-                "ext-2",
-                ContainmentAction::Terminate,
-                3,
-                1,
-            ))
+        let err = harness
+            .accept_intent(
+                &mut state,
+                &test_intent("node-a", "ext-2", ContainmentAction::Terminate, 3, 1),
+            )
             .unwrap_err();
-        assert!(matches!(err, ProtocolError::ReplayDetected { .. }));
+        assert!(matches!(
+            err,
+            FleetIngressV2Error::Protocol(ProtocolError::ReplayDetected { .. })
+        ));
     }
 
     // ── Enrichment: process_heartbeat version rejection ───────────
 
     #[test]
     fn state_process_heartbeat_incompatible_version() {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+        let harness = TestV2Harness::new(&["local", "node-1"]);
+        let mut state = harness.state("local", GossipConfig::default());
         let mut hb = test_heartbeat("node-1", 1, 5_000_000_000);
-        hb.protocol_version = ProtocolVersion { major: 2, minor: 0 };
+        let sig = harness
+            .signer("node-1")
+            .sign_detached_message_v2(&hb)
+            .unwrap();
+        hb.protocol_version = ProtocolVersion::V1;
 
-        let err = state.process_heartbeat(&hb).unwrap_err();
-        assert!(matches!(err, ProtocolError::IncompatibleVersion { .. }));
+        let err = state
+            .process_heartbeat(&hb, &sig, &harness.registry, &harness.anchor)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            FleetIngressV2Error::Identity(FleetIdentityError::NonCanonicalMessage { .. })
+        ));
     }
 
     #[test]
     fn state_process_heartbeat_replay_rejected() {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
-        state
-            .process_heartbeat(&test_heartbeat("node-1", 5, 5_000_000_000))
+        let harness = TestV2Harness::new(&["local", "node-1"]);
+        let mut state = harness.state("local", GossipConfig::default());
+        harness
+            .accept_heartbeat(&mut state, &test_heartbeat("node-1", 5, 5_000_000_000))
             .expect("operation should succeed for valid inputs");
 
-        let err = state
-            .process_heartbeat(&test_heartbeat("node-1", 3, 6_000_000_000))
+        let err = harness
+            .accept_heartbeat(&mut state, &test_heartbeat("node-1", 3, 6_000_000_000))
             .unwrap_err();
-        assert!(matches!(err, ProtocolError::ReplayDetected { .. }));
+        assert!(matches!(
+            err,
+            FleetIngressV2Error::Protocol(ProtocolError::ReplayDetected { .. })
+        ));
     }
 
     // ── Enrichment: NodeSequenceTracker edge cases ─────────────────
@@ -8894,61 +9255,209 @@ mod tests {
 
     #[test]
     fn state_multiple_extensions_intent_resolution() {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+        let harness = TestV2Harness::new(&["local", "node-a", "node-b"]);
+        let mut state = harness.state("local", GossipConfig::default());
 
-        state
-            .process_intent(&test_intent(
-                "node-a",
-                "ext-1",
-                ContainmentAction::Sandbox,
-                1,
-                1,
-            ))
+        harness
+            .accept_intent(
+                &mut state,
+                &test_intent("node-a", "ext-1", ContainmentAction::Sandbox, 1, 1),
+            )
             .expect("operation should succeed for valid inputs");
-        state
-            .process_intent(&test_intent(
-                "node-b",
-                "ext-2",
-                ContainmentAction::Quarantine,
-                1,
-                1,
-            ))
+        harness
+            .accept_intent(
+                &mut state,
+                &test_intent("node-b", "ext-2", ContainmentAction::Quarantine, 1, 1),
+            )
             .expect("operation should succeed for valid inputs");
 
         let w1 = state
+            .state()
             .resolve_intents("ext-1")
             .expect("operation should succeed for valid inputs");
         assert_eq!(w1.proposed_action, ContainmentAction::Sandbox);
 
         let w2 = state
+            .state()
             .resolve_intents("ext-2")
             .expect("operation should succeed for valid inputs");
         assert_eq!(w2.proposed_action, ContainmentAction::Quarantine);
 
-        assert!(state.resolve_intents("ext-unknown").is_none());
+        assert!(state.state().resolve_intents("ext-unknown").is_none());
     }
 
     #[test]
     fn state_evidence_and_intent_separate_sequence_spaces() {
-        let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
+        let harness = TestV2Harness::new(&["local", "node-a"]);
+        let mut state = harness.state("local", GossipConfig::default());
 
-        // node-a sends evidence seq=1, then intent seq=2
-        state
-            .process_evidence(&test_evidence("node-a", "ext-1", 1, 100_000))
+        harness
+            .accept_evidence(&mut state, &test_evidence("node-a", "ext-1", 1, 100_000))
             .expect("operation should succeed for valid inputs");
-        state
-            .process_intent(&test_intent(
-                "node-a",
-                "ext-1",
-                ContainmentAction::Sandbox,
-                2,
-                1,
+        harness
+            .accept_intent(
+                &mut state,
+                &test_intent("node-a", "ext-1", ContainmentAction::Sandbox, 2, 1),
+            )
+            .expect("operation should succeed for valid inputs");
+
+        assert_eq!(state.state().evidence.posterior_delta("ext-1"), 100_000);
+        assert_eq!(state.state().pending_intents["ext-1"].len(), 1);
+    }
+
+    #[test]
+    fn state_reconciliation_erasure_and_receipt_v2_are_authenticated_and_atomic() {
+        use crate::erasure_reconstruction_receipts::TrustedReconstructionReceiptLedger;
+
+        let harness = TestV2Harness::new(&["node-a", "node-b", "node-c"]);
+        let mut sender = harness.state("node-a", GossipConfig::default());
+        let mut receiver = harness.state("node-b", GossipConfig::default());
+
+        for state in [&mut sender, &mut receiver] {
+            harness
+                .accept_heartbeat(state, &test_heartbeat("node-a", 1, 1_000))
+                .unwrap();
+            harness
+                .accept_heartbeat(state, &test_heartbeat("node-b", 1, 1_000))
+                .unwrap();
+            harness
+                .accept_heartbeat(state, &test_heartbeat("node-c", 1, 1_000))
+                .unwrap();
+        }
+
+        let mut req = ReconciliationRequest {
+            node_id: NodeId::new("node-a"),
+            known_frontier_hash: ContentHash::compute(b"frontier"),
+            requested_ranges: BTreeMap::from([(NodeId::new("node-b"), SequenceRange::new(1, 3))]),
+            epoch: SecurityEpoch::from_raw(1),
+            sequence: 2,
+            timestamp_ns: 2_000,
+            signature: test_signature("forged"),
+            protocol_version: ProtocolVersion::V2,
+        };
+        let req_sig = harness
+            .signer("node-a")
+            .sign_detached_message_v2(&req)
+            .unwrap();
+        let mut tampered_req = req.clone();
+        tampered_req.timestamp_ns += 1;
+        let before_receiver = serde_json::to_value(receiver.state()).unwrap();
+        assert!(
+            receiver
+                .process_reconciliation(
+                    &tampered_req,
+                    &req_sig,
+                    &harness.registry,
+                    &harness.anchor
+                )
+                .is_err()
+        );
+        assert_eq!(serde_json::to_value(receiver.state()).unwrap(), before_receiver);
+        receiver
+            .process_reconciliation(&req, &req_sig, &harness.registry, &harness.anchor)
+            .unwrap();
+        assert_eq!(
+            receiver
+                .state()
+                .sequence_tracker
+                .last_sequence(&NodeId::new("node-a")),
+            2
+        );
+        req.sequence = 2;
+        let replay_sig = harness
+            .signer("node-a")
+            .sign_detached_message_v2(&req)
+            .unwrap();
+        assert!(matches!(
+            receiver.process_reconciliation(&req, &replay_sig, &harness.registry, &harness.anchor),
+            Err(FleetIngressV2Error::Protocol(
+                ProtocolError::ReplayDetected { .. }
             ))
-            .expect("operation should succeed for valid inputs");
+        ));
 
-        // Verify both accumulated
-        assert_eq!(state.evidence.posterior_delta("ext-1"), 100_000);
-        assert_eq!(state.pending_intents["ext-1"].len(), 1);
+        let evidence = test_evidence("node-a", "ext-1", 10, 350_000);
+        // Wrong signer cannot emit erasure shards for sender ("node-a").
+        let before_sender_seq = sender.state().local_sequence;
+        assert!(
+            sender
+                .encode_evidence_for_erasure_gossip_v2(
+                    &evidence,
+                    harness.signer("node-b"),
+                    3_000,
+                    &harness.registry,
+                    &harness.anchor,
+                )
+                .is_err()
+        );
+        assert_eq!(sender.state().local_sequence, before_sender_seq);
+
+        sender.state.local_sequence = 10;
+        let signed_shards = sender
+            .encode_evidence_for_erasure_gossip_v2(
+                &evidence,
+                harness.signer("node-a"),
+                3_000,
+                &harness.registry,
+                &harness.anchor,
+            )
+            .unwrap();
+        assert!(signed_shards.len() >= 2);
+        // No public-NodeId MAC is placed in V2 shards:
+        for signed in &signed_shards {
+            assert_eq!(signed.message.shard.signature.hash, AuthenticityHash([0; 32]));
+            receiver
+                .process_erasure_shard_v2(signed, &harness.registry, &harness.anchor)
+                .unwrap();
+        }
+        // Replay of shard rejected:
+        assert!(matches!(
+            receiver.process_erasure_shard_v2(
+                &signed_shards[0],
+                &harness.registry,
+                &harness.anchor
+            ),
+            Err(FleetIngressV2Error::Protocol(
+                ProtocolError::ReplayDetected { .. }
+            ))
+        ));
+
+        // Reconstruct losing data shard 0 (recovered via parity) with Ed25519 receipt:
+        let subset: Vec<SignedErasureShardV2> = signed_shards[1..].to_vec();
+        assert!(
+            receiver
+                .reconstruct_gossip_payload_with_receipt_v2(
+                    &subset,
+                    harness.signer("node-a"),
+                    4_000,
+                    &harness.registry,
+                    &harness.anchor,
+                )
+                .is_err()
+        );
+        let (reconstructed_bytes, signed_receipt) = receiver
+            .reconstruct_gossip_payload_with_receipt_v2(
+                &subset,
+                harness.signer("node-b"),
+                4_000,
+                &harness.registry,
+                &harness.anchor,
+            )
+            .unwrap();
+        let decoded_packet: EvidencePacket =
+            serde_json::from_slice(&reconstructed_bytes).unwrap();
+        assert_eq!(decoded_packet.trace_id, evidence.trace_id);
+        assert_eq!(decoded_packet.signature.hash, AuthenticityHash([0; 32]));
+        let mut ledger = TrustedReconstructionReceiptLedger::new();
+        assert!(
+            ledger
+                .record_live(
+                    signed_receipt,
+                    &harness.registry,
+                    SecurityEpoch::from_raw(1),
+                    &harness.anchor,
+                )
+                .unwrap()
+        );
     }
 
     mod authenticated_ingress_v2 {
@@ -11815,13 +12324,29 @@ mod tests {
             .quorum_signatures
             .insert(NodeId::new("node-a"), test_signature("legacy-mutated"));
         assert_v2_legacy_carrier_excluded(&signer, &registry, &checkpoint, &changed_checkpoint);
+
+        let erasure = encode_erasure_shards_v2(
+            "v2-legacy-excluded",
+            NodeId::new("node-a"),
+            10,
+            40_000,
+            SecurityEpoch::from_raw(1),
+            b"erasure-payload",
+            ErasureCodingPlan::new(2, 3).unwrap(),
+        )
+        .unwrap()
+        .remove(0);
+        let mut changed_erasure = erasure.clone();
+        changed_erasure.shard.signature = test_signature("legacy-mutated");
+        assert_v2_legacy_carrier_excluded(&signer, &registry, &erasure, &changed_erasure);
     }
 
     #[test]
     fn v2_signing_rejects_v1_and_noncanonical_structures() {
         let signer = v2_test_signer("node-a", 1, 23);
 
-        let v1_evidence = test_evidence("node-a", "ext-a", 1, 100_000);
+        let mut v1_evidence = test_evidence("node-a", "ext-a", 1, 100_000);
+        v1_evidence.protocol_version = ProtocolVersion::V1;
         assert!(matches!(
             signer.sign_detached_message_v2(&v1_evidence),
             Err(FleetIdentityError::NonCanonicalMessage { .. })

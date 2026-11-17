@@ -1433,7 +1433,10 @@ mod tests {
     use super::*;
     use crate::evidence_ledger::EvidenceTrustRegistry;
     use crate::fleet_immune_protocol::{
-        EvidencePacket, GossipConfig, HeartbeatLiveness, MessageSignature, ProtocolVersion,
+        AuthenticatedFleetProtocolStateV2, EvidencePacket, FleetAuthorityId, FleetIdentityError,
+        FleetIngressV2Error, FleetRegistryAnchorAuthority, FleetRegistrySnapshotAnchorClaim,
+        FleetSigner, GossipConfig, HeartbeatLiveness, MessageSignature, ProtocolVersion,
+        test_anchored_registry_for_signers,
     };
     use crate::hash_tiers::AuthenticityHash;
     use crate::signature_preimage::SigningKey;
@@ -1487,8 +1490,105 @@ mod tests {
         .expect("lab receipt trust registry must be valid")
     }
 
-    fn test_fleet_state(node: &str) -> FleetProtocolState {
-        FleetProtocolState::new(NodeId::new(node), GossipConfig::default())
+    struct ConvergenceTestAnchor {
+        authority_id: FleetAuthorityId,
+    }
+
+    impl FleetRegistryAnchorAuthority for ConvergenceTestAnchor {
+        fn fleet_authority_id(&self) -> FleetAuthorityId {
+            self.authority_id
+        }
+
+        fn authenticate_current_registry_anchor(
+            &self,
+            claim: &FleetRegistrySnapshotAnchorClaim,
+        ) -> Result<String, FleetIdentityError> {
+            Ok(format!("convergence-anchor-{}", claim.generation))
+        }
+    }
+
+    struct TestAuthenticatedFleetState {
+        authority_id: FleetAuthorityId,
+        anchor: ConvergenceTestAnchor,
+        signers: BTreeMap<NodeId, FleetSigner>,
+        state: AuthenticatedFleetProtocolStateV2,
+    }
+
+    impl TestAuthenticatedFleetState {
+        fn ensure_signer(&mut self, node: &NodeId) {
+            if self.signers.contains_key(node) {
+                return;
+            }
+            let mut seed_bytes = *ContentHash::compute(
+                format!("franken-core.convergence-test-signer.v2:{}", node.as_str()).as_bytes(),
+            )
+            .as_bytes();
+            if seed_bytes == [0u8; 32] {
+                seed_bytes[0] = 1;
+            }
+            let key = SigningKey::from_bytes(seed_bytes).expect("valid deterministic test key");
+            let signer = FleetSigner::new(self.authority_id, node.clone(), 1, key)
+                .expect("valid test fleet signer");
+            self.signers.insert(node.clone(), signer);
+        }
+
+        fn process_evidence(
+            &mut self,
+            packet: &EvidencePacket,
+        ) -> Result<(), FleetIngressV2Error> {
+            self.ensure_signer(&packet.node_id);
+            let registry = test_anchored_registry_for_signers(
+                self.authority_id,
+                self.signers.values(),
+                SecurityEpoch::from_raw(1),
+                &self.anchor,
+            );
+            let sig = self.signers[&packet.node_id].sign_detached_message_v2(packet)?;
+            self.state
+                .process_evidence(packet, &sig, &registry, &self.anchor)
+        }
+
+        fn process_heartbeat(
+            &mut self,
+            heartbeat: &HeartbeatLiveness,
+        ) -> Result<(), FleetIngressV2Error> {
+            self.ensure_signer(&heartbeat.node_id);
+            let registry = test_anchored_registry_for_signers(
+                self.authority_id,
+                self.signers.values(),
+                SecurityEpoch::from_raw(1),
+                &self.anchor,
+            );
+            let sig = self.signers[&heartbeat.node_id].sign_detached_message_v2(heartbeat)?;
+            self.state
+                .process_heartbeat(heartbeat, &sig, &registry, &self.anchor)
+        }
+    }
+
+    impl std::ops::Deref for TestAuthenticatedFleetState {
+        type Target = FleetProtocolState;
+
+        fn deref(&self) -> &Self::Target {
+            self.state.state()
+        }
+    }
+
+    fn test_fleet_state(node: &str) -> TestAuthenticatedFleetState {
+        let authority_id = FleetAuthorityId::from_provisioned_bytes([0xb7; 32])
+            .expect("non-zero convergence test fleet authority");
+        let state = AuthenticatedFleetProtocolStateV2::new(
+            authority_id,
+            NodeId::new(node),
+            GossipConfig::default(),
+            SecurityEpoch::from_raw(1),
+        )
+        .expect("authenticated test fleet state");
+        TestAuthenticatedFleetState {
+            authority_id,
+            anchor: ConvergenceTestAnchor { authority_id },
+            signers: BTreeMap::new(),
+            state,
+        }
     }
 
     fn test_signature(node: &str) -> MessageSignature {

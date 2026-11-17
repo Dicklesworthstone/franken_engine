@@ -170,8 +170,195 @@ fn checkpoint(
 
 use frankenengine_engine::fleet_immune_protocol::FleetProtocolState;
 
-fn fleet(n: &str) -> FleetProtocolState {
-    FleetProtocolState::new(node(n), GossipConfig::default())
+fn fleet(n: &str) -> TestAuthenticatedFleetState {
+    TestAuthenticatedFleetState::new(n)
+}
+
+struct TestEdgeAnchorAuthority {
+    authority_id: frankenengine_engine::fleet_immune_protocol::FleetAuthorityId,
+    current: std::cell::RefCell<
+        Option<frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim>,
+    >,
+}
+
+impl frankenengine_engine::fleet_immune_protocol::FleetRegistryAnchorAuthority
+    for TestEdgeAnchorAuthority
+{
+    fn fleet_authority_id(&self) -> frankenengine_engine::fleet_immune_protocol::FleetAuthorityId {
+        self.authority_id
+    }
+
+    fn authenticate_current_registry_anchor(
+        &self,
+        claim: &frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim,
+    ) -> Result<String, frankenengine_engine::fleet_immune_protocol::FleetIdentityError> {
+        if self.current.borrow().as_ref() != Some(claim) {
+            return Err(
+                frankenengine_engine::fleet_immune_protocol::FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: "test anchor mismatch".to_string(),
+                },
+            );
+        }
+        Ok(format!("test-edge-anchor-{}", claim.generation))
+    }
+
+    fn prepare_registry_anchor_advance(
+        &self,
+        expected: Option<
+            &frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim,
+        >,
+        next: &frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim,
+    ) -> Result<Vec<u8>, frankenengine_engine::fleet_immune_protocol::FleetIdentityError> {
+        if self.current.borrow().as_ref() != expected || next.fleet_authority_id != self.authority_id
+        {
+            return Err(
+                frankenengine_engine::fleet_immune_protocol::FleetIdentityError::UnverifiedRegistryAnchor {
+                    detail: "test prepare mismatch".to_string(),
+                },
+            );
+        }
+        Ok(serde_json::to_vec(&(expected.cloned(), next.clone())).unwrap())
+    }
+
+    fn finalize_registry_anchor_advance(
+        &self,
+        permit: &[u8],
+        next: &frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim,
+    ) -> Result<String, frankenengine_engine::fleet_immune_protocol::FleetIdentityError> {
+        let (expected, authorized): (
+            Option<frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim>,
+            frankenengine_engine::fleet_immune_protocol::FleetRegistrySnapshotAnchorClaim,
+        ) = serde_json::from_slice(permit).unwrap();
+        let mut current = self.current.borrow_mut();
+        assert!(&authorized == next && (*current == expected || current.as_ref() == Some(next)));
+        *current = Some(next.clone());
+        Ok(format!("test-edge-finalized-{}", next.generation))
+    }
+}
+
+struct TestAuthenticatedFleetState {
+    authority_id: frankenengine_engine::fleet_immune_protocol::FleetAuthorityId,
+    state: frankenengine_engine::fleet_immune_protocol::AuthenticatedFleetProtocolStateV2,
+    signers: BTreeMap<NodeId, frankenengine_engine::fleet_immune_protocol::FleetSigner>,
+}
+
+impl TestAuthenticatedFleetState {
+    fn new(name: &str) -> Self {
+        let authority_id =
+            frankenengine_engine::fleet_immune_protocol::FleetAuthorityId::from_provisioned_bytes(
+                [0xc8; 32],
+            )
+            .unwrap();
+        let mut s = Self {
+            authority_id,
+            state: frankenengine_engine::fleet_immune_protocol::AuthenticatedFleetProtocolStateV2::new(
+                authority_id,
+                node(name),
+                GossipConfig::default(),
+                SecurityEpoch::from_raw(1),
+            )
+            .unwrap(),
+            signers: BTreeMap::new(),
+        };
+        s.ensure_signer(&node(name));
+        s
+    }
+
+    fn ensure_signer(&mut self, n: &NodeId) {
+        if self.signers.contains_key(n) {
+            return;
+        }
+        let mut seed =
+            *ContentHash::compute(format!("conv-edge-signer:{}", n.as_str()).as_bytes())
+                .as_bytes();
+        if seed == [0u8; 32] {
+            seed[0] = 1;
+        }
+        let key = frankenengine_engine::signature_preimage::SigningKey::from_bytes(seed).unwrap();
+        let signer = frankenengine_engine::fleet_immune_protocol::FleetSigner::new(
+            self.authority_id,
+            n.clone(),
+            1,
+            key,
+        )
+        .unwrap();
+        self.signers.insert(n.clone(), signer);
+    }
+
+    fn registry(
+        &self,
+        anchor: &TestEdgeAnchorAuthority,
+    ) -> frankenengine_engine::fleet_immune_protocol::DurableFleetVerificationRegistry {
+        use frankenengine_engine::fleet_immune_protocol::FleetVerificationRegistryPersistence;
+        use frankenengine_engine::storage_adapter::{EventContext, InMemoryStorageAdapter};
+
+        let mut iter = self.signers.values();
+        let first = iter.next().unwrap();
+        let mut storage = InMemoryStorageAdapter::new();
+        let ctx = EventContext::new("conv-edge", "dec", "pol").unwrap();
+        let mut reg = FleetVerificationRegistryPersistence::new(&mut storage, &ctx)
+            .prepare_initial_registration(
+                first.identity().signer.clone(),
+                1,
+                first.verification_key().clone(),
+                SecurityEpoch::from_raw(1),
+                anchor,
+            )
+            .unwrap()
+            .finalize_and_publish(anchor)
+            .unwrap();
+        for signer in iter {
+            reg = FleetVerificationRegistryPersistence::new(&mut storage, &ctx)
+                .prepare_register_node(
+                    &reg,
+                    signer.identity().signer.clone(),
+                    1,
+                    signer.verification_key().clone(),
+                    SecurityEpoch::from_raw(1),
+                    anchor,
+                )
+                .unwrap()
+                .finalize_and_publish(anchor)
+                .unwrap();
+        }
+        reg
+    }
+
+    fn process_evidence(
+        &mut self,
+        packet: &EvidencePacket,
+    ) -> Result<(), frankenengine_engine::fleet_immune_protocol::FleetIngressV2Error> {
+        self.ensure_signer(&packet.node_id);
+        let anchor = TestEdgeAnchorAuthority {
+            authority_id: self.authority_id,
+            current: std::cell::RefCell::new(None),
+        };
+        let reg = self.registry(&anchor);
+        let sig = self.signers[&packet.node_id].sign_detached_message_v2(packet)?;
+        self.state.process_evidence(packet, &sig, &reg, &anchor)
+    }
+
+    fn process_heartbeat(
+        &mut self,
+        hb: &HeartbeatLiveness,
+    ) -> Result<(), frankenengine_engine::fleet_immune_protocol::FleetIngressV2Error> {
+        self.ensure_signer(&hb.node_id);
+        let anchor = TestEdgeAnchorAuthority {
+            authority_id: self.authority_id,
+            current: std::cell::RefCell::new(None),
+        };
+        let reg = self.registry(&anchor);
+        let sig = self.signers[&hb.node_id].sign_detached_message_v2(hb)?;
+        self.state.process_heartbeat(hb, &sig, &reg, &anchor)
+    }
+}
+
+impl std::ops::Deref for TestAuthenticatedFleetState {
+    type Target = FleetProtocolState;
+
+    fn deref(&self) -> &Self::Target {
+        self.state.state()
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

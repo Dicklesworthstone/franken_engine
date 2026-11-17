@@ -19,11 +19,13 @@ use crate::fleet_checkpoint_v2::{
 };
 use crate::fleet_immune_protocol::{
     AuthenticatedFleetProtocolStateV2, ContainmentAction, ContainmentIntent,
-    DurableFleetVerificationRegistry, EvidencePacket, FLEET_V2_MAX_COLLECTION_ITEMS,
-    FLEET_V2_MAX_IDENTIFIER_BYTES, FLEET_V2_MAX_VALUE_BYTES, FleetAuthorityId, FleetIdentityError,
-    FleetIngressV2Error, FleetKeyId, FleetRegistryAnchorAuthority, FleetSignaturePreimageV2,
-    FleetSignatureV2, HeartbeatLiveness, MessageSignature, NodeId, ProtocolVersion,
-    QuorumCheckpoint, ResolvedContainmentDecision, validate_fleet_v2_frame_len,
+    DurableFleetVerificationRegistry, ErasureCodingPlan, ErasureShard, ErasureShardRole,
+    ErasureShardV2, EvidencePacket, FLEET_V2_MAX_COLLECTION_ITEMS, FLEET_V2_MAX_DYNAMIC_BYTES,
+    FLEET_V2_MAX_IDENTIFIER_BYTES, FLEET_V2_MAX_MAP_ENTRIES, FLEET_V2_MAX_VALUE_BYTES,
+    FleetAuthorityId, FleetIdentityError, FleetIngressV2Error, FleetKeyId,
+    FleetRegistryAnchorAuthority, FleetSignaturePreimageV2, FleetSignatureV2, HeartbeatLiveness,
+    MessageSignature, NodeId, ProtocolVersion, QuorumCheckpoint, ReconciliationRequest,
+    ResolvedContainmentDecision, SequenceRange, SignedErasureShardV2, validate_fleet_v2_frame_len,
 };
 use crate::hash_tiers::{AuthenticityHash, ContentHash};
 use crate::security_epoch::SecurityEpoch;
@@ -54,6 +56,11 @@ pub enum FleetTransportMessage {
         message: HeartbeatLiveness,
         signature: FleetSignatureV2,
     },
+    Reconciliation {
+        message: ReconciliationRequest,
+        signature: FleetSignatureV2,
+    },
+    ErasureShard(SignedErasureShardV2),
     CheckpointProposal {
         checkpoint: QuorumCheckpoint,
         signature: FleetSignatureV2,
@@ -88,6 +95,7 @@ impl FleetTransportMessage {
         let value = BoundedValue {
             depth: 0,
             remaining: &mut remaining,
+            max_string_bytes: FLEET_V2_MAX_VALUE_BYTES,
         }
         .deserialize(&mut deserializer)
         .map_err(malformed)?;
@@ -108,6 +116,10 @@ impl FleetTransportMessage {
             Self::Evidence { message, signature } => validate_signed_shape(message, signature),
             Self::Intent { message, signature } => validate_signed_shape(message, signature),
             Self::Heartbeat { message, signature } => validate_signed_shape(message, signature),
+            Self::Reconciliation { message, signature } => {
+                validate_signed_shape(message, signature)
+            }
+            Self::ErasureShard(signed) => validate_signed_shape(&signed.message, &signed.signature),
             Self::CheckpointProposal {
                 checkpoint,
                 signature,
@@ -151,11 +163,33 @@ pub struct FleetTransportContext<'a, A: FleetRegistryAnchorAuthority> {
 /// A successful state change or authenticated checkpoint proposal.
 #[derive(Debug)]
 pub enum FleetTransportOutcome {
-    EvidenceAccepted { node_id: NodeId, sequence: u64 },
-    IntentAccepted { node_id: NodeId, sequence: u64 },
-    HeartbeatAccepted { node_id: NodeId, sequence: u64 },
+    EvidenceAccepted {
+        node_id: NodeId,
+        sequence: u64,
+    },
+    IntentAccepted {
+        node_id: NodeId,
+        sequence: u64,
+    },
+    HeartbeatAccepted {
+        node_id: NodeId,
+        sequence: u64,
+    },
+    ReconciliationAccepted {
+        node_id: NodeId,
+        sequence: u64,
+    },
+    ErasureShardAccepted {
+        origin_node: NodeId,
+        shard_set_id: String,
+        shard_index: u16,
+        sequence: u64,
+    },
     CheckpointProposed(FleetCheckpointDraftV2),
-    CheckpointVoteAdded { signer: NodeId, checkpoint_seq: u64 },
+    CheckpointVoteAdded {
+        signer: NodeId,
+        checkpoint_seq: u64,
+    },
     CheckpointFinalized(SignedFleetCheckpointV2),
 }
 
@@ -201,6 +235,27 @@ impl AuthenticatedFleetProtocolStateV2 {
                 Ok(FleetTransportOutcome::HeartbeatAccepted {
                     node_id: message.node_id,
                     sequence: message.sequence,
+                })
+            }
+            FleetTransportMessage::Reconciliation { message, signature } => {
+                self.process_reconciliation(
+                    &message,
+                    &signature,
+                    context.registry,
+                    context.authority,
+                )?;
+                Ok(FleetTransportOutcome::ReconciliationAccepted {
+                    node_id: message.node_id,
+                    sequence: message.sequence,
+                })
+            }
+            FleetTransportMessage::ErasureShard(signed) => {
+                self.process_erasure_shard_v2(&signed, context.registry, context.authority)?;
+                Ok(FleetTransportOutcome::ErasureShardAccepted {
+                    origin_node: signed.message.shard.origin_node,
+                    shard_set_id: signed.message.shard.shard_set_id,
+                    shard_index: signed.message.shard.shard_index,
+                    sequence: signed.message.shard.sequence,
                 })
             }
             FleetTransportMessage::CheckpointProposal {
@@ -335,6 +390,14 @@ enum WireMessage {
         payload: HeartbeatPayload,
         signature: SignaturePayload,
     },
+    Reconciliation {
+        payload: ReconciliationPayload,
+        signature: SignaturePayload,
+    },
+    ErasureShard {
+        payload: ErasureShardPayload,
+        signature: SignaturePayload,
+    },
     CheckpointProposal {
         payload: CheckpointPayload,
         signature: SignaturePayload,
@@ -363,6 +426,14 @@ impl WireMessage {
             FleetTransportMessage::Heartbeat { message, signature } => Self::Heartbeat {
                 payload: message.clone().into(),
                 signature: signature.clone().into(),
+            },
+            FleetTransportMessage::Reconciliation { message, signature } => Self::Reconciliation {
+                payload: message.clone().into(),
+                signature: signature.clone().into(),
+            },
+            FleetTransportMessage::ErasureShard(signed) => Self::ErasureShard {
+                payload: signed.message.clone().into(),
+                signature: signed.signature.clone().into(),
             },
             FleetTransportMessage::CheckpointProposal {
                 checkpoint,
@@ -404,6 +475,16 @@ impl WireMessage {
                 message: payload.into(),
                 signature: signature.into(),
             },
+            Self::Reconciliation { payload, signature } => FleetTransportMessage::Reconciliation {
+                message: payload.try_into()?,
+                signature: signature.into(),
+            },
+            Self::ErasureShard { payload, signature } => {
+                FleetTransportMessage::ErasureShard(SignedErasureShardV2 {
+                    message: payload.into(),
+                    signature: signature.into(),
+                })
+            }
             Self::CheckpointProposal { payload, signature } => {
                 FleetTransportMessage::CheckpointProposal {
                     checkpoint: payload.try_into()?,
@@ -495,6 +576,142 @@ semantic_payload!(HeartbeatPayload, HeartbeatLiveness, {
     timestamp_ns: u64,
     extensions: BTreeMap<String, String>,
 });
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RequestedRangePayload {
+    node_id: NodeId,
+    start: u64,
+    end: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReconciliationPayload {
+    node_id: NodeId,
+    known_frontier_hash: ContentHash,
+    requested_ranges: Vec<RequestedRangePayload>,
+    epoch: SecurityEpoch,
+    sequence: u64,
+    timestamp_ns: u64,
+}
+
+impl From<ReconciliationRequest> for ReconciliationPayload {
+    fn from(message: ReconciliationRequest) -> Self {
+        Self {
+            node_id: message.node_id,
+            known_frontier_hash: message.known_frontier_hash,
+            requested_ranges: message
+                .requested_ranges
+                .into_iter()
+                .map(|(node_id, range)| RequestedRangePayload {
+                    node_id,
+                    start: range.start,
+                    end: range.end,
+                })
+                .collect(),
+            epoch: message.epoch,
+            sequence: message.sequence,
+            timestamp_ns: message.timestamp_ns,
+        }
+    }
+}
+
+impl TryFrom<ReconciliationPayload> for ReconciliationRequest {
+    type Error = FleetTransportError;
+
+    fn try_from(message: ReconciliationPayload) -> Result<Self, Self::Error> {
+        if message.requested_ranges.len() > FLEET_V2_MAX_MAP_ENTRIES
+            || !message
+                .requested_ranges
+                .windows(2)
+                .all(|pair| pair[0].node_id < pair[1].node_id)
+        {
+            return Err(invalid(
+                "reconciliation requested_ranges must be bounded, strictly sorted, and distinct",
+            ));
+        }
+        let signature = legacy_marker(message.node_id.clone());
+        Ok(Self {
+            node_id: message.node_id,
+            known_frontier_hash: message.known_frontier_hash,
+            requested_ranges: message
+                .requested_ranges
+                .into_iter()
+                .map(|entry| (entry.node_id, SequenceRange::new(entry.start, entry.end)))
+                .collect(),
+            epoch: message.epoch,
+            sequence: message.sequence,
+            timestamp_ns: message.timestamp_ns,
+            signature,
+            protocol_version: ProtocolVersion::V2,
+        })
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ErasureShardPayload {
+    epoch: SecurityEpoch,
+    shard_set_id: String,
+    origin_node: NodeId,
+    sequence: u64,
+    shard_index: u16,
+    plan: ErasureCodingPlan,
+    role: ErasureShardRole,
+    payload_len: u64,
+    payload_hash: ContentHash,
+    shard_hash: ContentHash,
+    shard_payload_hex: HexDynamicBytes,
+    timestamp_ns: u64,
+    extensions: BTreeMap<String, String>,
+}
+
+impl From<ErasureShardV2> for ErasureShardPayload {
+    fn from(message: ErasureShardV2) -> Self {
+        let shard = message.shard;
+        Self {
+            epoch: message.epoch,
+            shard_set_id: shard.shard_set_id,
+            origin_node: shard.origin_node,
+            sequence: shard.sequence,
+            shard_index: shard.shard_index,
+            plan: shard.plan,
+            role: shard.role,
+            payload_len: shard.payload_len,
+            payload_hash: shard.payload_hash,
+            shard_hash: shard.shard_hash,
+            shard_payload_hex: HexDynamicBytes(shard.shard_payload),
+            timestamp_ns: shard.timestamp_ns,
+            extensions: shard.extensions,
+        }
+    }
+}
+
+impl From<ErasureShardPayload> for ErasureShardV2 {
+    fn from(payload: ErasureShardPayload) -> Self {
+        let signature = legacy_marker(payload.origin_node.clone());
+        Self {
+            epoch: payload.epoch,
+            shard: ErasureShard {
+                shard_set_id: payload.shard_set_id,
+                origin_node: payload.origin_node,
+                sequence: payload.sequence,
+                shard_index: payload.shard_index,
+                plan: payload.plan,
+                role: payload.role,
+                payload_len: payload.payload_len,
+                payload_hash: payload.payload_hash,
+                shard_hash: payload.shard_hash,
+                shard_payload: payload.shard_payload_hex.0,
+                timestamp_ns: payload.timestamp_ns,
+                signature,
+                protocol_version: ProtocolVersion::V2,
+                extensions: payload.extensions,
+            },
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -648,11 +865,38 @@ impl<'de> Deserialize<'de> for HexSignature {
     }
 }
 
+struct HexDynamicBytes(Vec<u8>);
+
+impl Serialize for HexDynamicBytes {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&hex::encode(&self.0))
+    }
+}
+
+impl<'de> Deserialize<'de> for HexDynamicBytes {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        if !value.len().is_multiple_of(2)
+            || value.len() > FLEET_V2_MAX_DYNAMIC_BYTES * 2
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(serde::de::Error::custom(
+                "shard_payload_hex must be bounded even-length lowercase hexadecimal digits",
+            ));
+        }
+        let bytes = hex::decode(&value).map_err(serde::de::Error::custom)?;
+        Ok(Self(bytes))
+    }
+}
+
 /// This first pass keeps duplicate keys visible. Parsing through ordinary
 /// `Value` or `BTreeMap` deserialization first would silently overwrite them.
 struct BoundedValue<'a> {
     depth: usize,
     remaining: &'a mut usize,
+    max_string_bytes: usize,
 }
 
 impl<'de> DeserializeSeed<'de> for BoundedValue<'_> {
@@ -692,14 +936,14 @@ impl<'de> Visitor<'de> for BoundedValue<'_> {
     }
 
     fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Value, E> {
-        if value.len() > FLEET_V2_MAX_VALUE_BYTES {
+        if value.len() > self.max_string_bytes {
             return Err(E::custom("fleet JSON string exceeds its byte limit"));
         }
         Ok(Value::String(value.to_string()))
     }
 
     fn visit_string<E: serde::de::Error>(self, value: String) -> Result<Value, E> {
-        if value.len() > FLEET_V2_MAX_VALUE_BYTES {
+        if value.len() > self.max_string_bytes {
             return Err(E::custom("fleet JSON string exceeds its byte limit"));
         }
         Ok(Value::String(value))
@@ -714,6 +958,7 @@ impl<'de> Visitor<'de> for BoundedValue<'_> {
         while let Some(value) = sequence.next_element_seed(BoundedValue {
             depth: self.depth + 1,
             remaining: self.remaining,
+            max_string_bytes: FLEET_V2_MAX_VALUE_BYTES,
         })? {
             if values.len() == MAX_JSON_CONTAINER_ITEMS {
                 return Err(serde::de::Error::custom(
@@ -741,9 +986,15 @@ impl<'de> Visitor<'de> for BoundedValue<'_> {
             if values.contains_key(&key) {
                 return Err(serde::de::Error::custom("duplicate fleet JSON object key"));
             }
+            let max_string_bytes = if key == "shard_payload_hex" {
+                FLEET_V2_MAX_DYNAMIC_BYTES * 2
+            } else {
+                FLEET_V2_MAX_VALUE_BYTES
+            };
             let value = map.next_value_seed(BoundedValue {
                 depth: self.depth + 1,
                 remaining: self.remaining,
+                max_string_bytes,
             })?;
             values.insert(key, value);
         }

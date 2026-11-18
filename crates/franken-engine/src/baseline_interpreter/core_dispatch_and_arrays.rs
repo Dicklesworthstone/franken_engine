@@ -1509,9 +1509,11 @@ impl InterpreterCore {
                 if start < end {
                     let was_dense = self.array_cache_is_dense(arr_id);
                     for i in start..end {
+                        self.charge_native_hole_read()?;
                         self.set_object_property(arr_id, i.to_string(), fill_value.clone())?;
                     }
-                    self.refresh_dense_length_cache(arr_id, len, was_dense);
+                    let fills_whole_array = start == 0 && end == len;
+                    self.refresh_dense_length_cache(arr_id, len, was_dense || fills_whole_array);
                 }
                 Ok(Value::Object(arr_id))
             }

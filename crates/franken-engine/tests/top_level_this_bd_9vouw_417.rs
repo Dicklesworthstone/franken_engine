@@ -13,6 +13,9 @@
 use std::path::Path;
 use std::process::Command;
 
+#[path = "support/persistent_scratch_dir.rs"]
+mod persistent_scratch_dir;
+
 fn run(dir: &Path, file: &str, goal: Option<&str>) -> Vec<String> {
     let report = dir.join(format!("{file}.report.json"));
     let mut args = vec![
@@ -48,7 +51,7 @@ fn run(dir: &Path, file: &str, goal: Option<&str>) -> Vec<String> {
 
 #[test]
 fn script_top_level_this_is_the_global_object() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_417");
     std::fs::write(
         root.path().join("sloppy.js"),
         r#"console.log(this === globalThis, (() => this)() === globalThis, (() => () => this)()() === globalThis);
@@ -68,7 +71,7 @@ console.log(viaThis, typeof this.Math);
 
 #[test]
 fn strict_script_top_level_this_is_the_global_object() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_417");
     std::fs::write(
         root.path().join("strict.js"),
         r#"'use strict';
@@ -90,7 +93,7 @@ console.log(viaThis);
 
 #[test]
 fn module_top_level_this_is_undefined() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_417");
     std::fs::write(
         root.path().join("dep.mjs"),
         r#"export const depThis = this === undefined;
@@ -116,7 +119,7 @@ console.log(B.s === B, new B().m() instanceof B);
 
 #[test]
 fn commonjs_top_level_this_is_module_exports() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_417");
     std::fs::write(
         root.path().join("main.cjs"),
         r#"exports.k = 1;

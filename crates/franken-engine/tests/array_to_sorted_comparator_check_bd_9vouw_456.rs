@@ -7,6 +7,9 @@
 
 use std::process::Command;
 
+#[path = "support/persistent_scratch_dir.rs"]
+mod persistent_scratch_dir;
+
 const PROGRAM: &str = r#"const getLengthThrow = {
   get length() {
     throw new Error('length was read before the comparator was checked');
@@ -43,7 +46,7 @@ const EXPECTED: &[&str] = &[
 
 #[test]
 fn to_sorted_rejects_a_non_callable_comparator_first() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_456");
     let entry = root.path().join("to_sorted.js");
     std::fs::write(&entry, PROGRAM).expect("write program");
     let report = root.path().join("report.json");

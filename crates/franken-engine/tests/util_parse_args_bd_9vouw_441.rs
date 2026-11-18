@@ -8,6 +8,9 @@
 
 use std::process::Command;
 
+#[path = "support/persistent_scratch_dir.rs"]
+mod persistent_scratch_dir;
+
 const PROGRAM: &str = r#"import util from 'node:util';
 const cases = [
   { args: ['-f', '--bar', 'b'], options: { f: { type: 'boolean', short: 'f' }, bar: { type: 'string' } } },
@@ -82,7 +85,7 @@ const EXPECTED: &[&str] = &[
 
 #[test]
 fn util_parse_args_matches_node() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_441");
     let entry = root.path().join("parse_args.mjs");
     std::fs::write(&entry, PROGRAM).expect("write program");
     let report = root.path().join("report.json");

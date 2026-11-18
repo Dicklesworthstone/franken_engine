@@ -14,6 +14,9 @@
 use std::path::Path;
 use std::process::Command;
 
+#[path = "support/persistent_scratch_dir.rs"]
+mod persistent_scratch_dir;
+
 fn run(root: &Path, name: &str, source: &str) -> Vec<String> {
     let entry = root.join(name);
     std::fs::write(&entry, source).expect("write entry");
@@ -49,7 +52,7 @@ fn run(root: &Path, name: &str, source: &str) -> Vec<String> {
 
 #[test]
 fn semicolonless_fields_with_modifiers_run() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_432");
     assert_eq!(
         run(
             root.path(),
@@ -62,7 +65,7 @@ fn semicolonless_fields_with_modifiers_run() {
 
 #[test]
 fn a_generic_call_in_a_field_initializer_does_not_end_it() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_432");
     assert_eq!(
         run(
             root.path(),

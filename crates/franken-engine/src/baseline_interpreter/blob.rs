@@ -371,19 +371,26 @@ impl InterpreterCore {
                 if let Some(backing) = backing {
                     self.join_object_mutation_label(backing, &label)?;
                 }
-                let promise = self.create_fulfilled_promise(
-                    Self::value_to_js_value(&Value::Object(buffer)),
-                    label.clone(),
-                )?;
                 if method == "bytes" {
                     // Node's async byte-view operation observes completion of
                     // the binary read before resolving its public promise.
-                    // Use native promise adoption, not synchronous settlement
-                    // or a guest-replaceable Promise/Uint8Array constructor.
+                    // Register native adoption while `promise` is still pending
+                    // so resolution queues one microtask hop instead of settling
+                    // synchronously, without guest-replaceable constructors.
+                    let promise = self.create_promise()?;
                     let read = self.create_promise()?;
-                    self.resolve_promise_to_native(read, promise, label)?;
+                    self.resolve_promise_to_native(read, promise, label.clone())?;
+                    self.fulfill_promise(
+                        promise,
+                        Self::value_to_js_value(&Value::Object(buffer)),
+                        label,
+                    )?;
                     Ok(Value::Promise(read.0))
                 } else {
+                    let promise = self.create_fulfilled_promise(
+                        Self::value_to_js_value(&Value::Object(buffer)),
+                        label,
+                    )?;
                     Ok(Value::Promise(promise.0))
                 }
             }

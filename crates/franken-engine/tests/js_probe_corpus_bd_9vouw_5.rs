@@ -115,6 +115,7 @@ const LEDGER: &[(&str, Expect)] = &[
     ("53_test262_assert_sta_prelude", Expect::Pass),
     ("54_strict_frozen_function_rejects_write", Expect::Pass),
     ("55_direct_ambient_require_fs", Expect::DeniedByDesign),
+    ("56_private_field_getter_bd_dtitb", Expect::Pass),
 ];
 
 #[derive(Debug, Clone)]

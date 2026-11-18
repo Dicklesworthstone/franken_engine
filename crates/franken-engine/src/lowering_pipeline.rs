@@ -6038,9 +6038,21 @@ fn collect_lexical_names_in_statement(stmt: &Statement, out: &mut BTreeSet<Strin
                 collect_finalizer_lexical_names(&finalizer.body, out);
             }
         }
-        // VariableDeclaration(var), function declarations (own scope), and
-        // leaf statements introduce no colliding lexical name here.
+        Statement::FunctionDeclaration(func) => {
+            if let Some(name) = &func.name {
+                out.insert(name.clone());
+            }
+        }
+        // VariableDeclaration(var) and leaf statements introduce no colliding
+        // lexical name here.
         _ => {}
+    }
+}
+
+fn nested_statement_scope(scope_id: ScopeId) -> ScopeId {
+    ScopeId {
+        depth: scope_id.depth.saturating_add(1),
+        index: scope_id.index,
     }
 }
 
@@ -6074,6 +6086,7 @@ fn lower_finalizer_body_isolated(
     collect_finalizer_lexical_names(&finalizer.body, &mut lexical_names);
     let saved = binding_entry_snapshot(binding_lookup, &lexical_names);
     reserve_and_mark_source_scope_bindings(&finalizer.body, binding_lookup, binding_index);
+    let inner_scope = nested_statement_scope(scope_id);
     for inner in &finalizer.body {
         lower_statement_to_ir1_with_flow(
             inner,
@@ -6081,7 +6094,7 @@ fn lower_finalizer_body_isolated(
             bindings,
             binding_lookup,
             binding_index,
-            scope_id,
+            inner_scope,
             label_counter,
             span_table,
             control_flow,
@@ -6594,6 +6607,7 @@ fn lower_statement_to_ir1_with_flow(
             // ES2020 13.2.14 BlockDeclarationInstantiation creates a block's
             // function objects on entry, so a call that precedes the
             // declaration in the block works (bd-9vouw.242).
+            let inner_scope = nested_statement_scope(scope_id);
             for inner in hoisted_statement_order(&block.body) {
                 lower_statement_to_ir1_with_flow(
                     inner,
@@ -6601,7 +6615,7 @@ fn lower_statement_to_ir1_with_flow(
                     bindings,
                     binding_lookup,
                     binding_index,
-                    scope_id,
+                    inner_scope,
                     label_counter,
                     span_table,
                     control_flow,
@@ -6657,13 +6671,14 @@ fn lower_statement_to_ir1_with_flow(
                 });
                 ops.push(Ir1Op::Pop);
             }
+            let branch_scope = nested_statement_scope(scope_id);
             lower_statement_to_ir1_with_flow(
                 &if_stmt.consequent,
                 ops,
                 bindings,
                 binding_lookup,
                 binding_index,
-                scope_id,
+                branch_scope,
                 label_counter,
                 span_table,
                 control_flow,
@@ -6684,7 +6699,7 @@ fn lower_statement_to_ir1_with_flow(
                     bindings,
                     binding_lookup,
                     binding_index,
-                    scope_id,
+                    branch_scope,
                     label_counter,
                     span_table,
                     control_flow,
@@ -6708,14 +6723,20 @@ fn lower_statement_to_ir1_with_flow(
                     binding_index,
                 );
             }
+            let loop_scope = nested_statement_scope(scope_id);
             if let Some(init) = &for_stmt.init {
+                let init_scope = if lexical_names.is_empty() {
+                    scope_id
+                } else {
+                    loop_scope
+                };
                 lower_statement_to_ir1_with_flow(
                     init,
                     ops,
                     bindings,
                     binding_lookup,
                     binding_index,
-                    scope_id,
+                    init_scope,
                     label_counter,
                     span_table,
                     control_flow,
@@ -6771,7 +6792,7 @@ fn lower_statement_to_ir1_with_flow(
                 bindings,
                 binding_lookup,
                 binding_index,
-                scope_id,
+                loop_scope,
                 label_counter,
                 span_table,
                 ControlFlowTargets {
@@ -7029,7 +7050,7 @@ fn lower_statement_to_ir1_with_flow(
                 bindings,
                 binding_lookup,
                 binding_index,
-                scope_id,
+                nested_statement_scope(scope_id),
                 label_counter,
                 span_table,
                 ControlFlowTargets {
@@ -7315,7 +7336,7 @@ fn lower_statement_to_ir1_with_flow(
                 bindings,
                 binding_lookup,
                 binding_index,
-                scope_id,
+                nested_statement_scope(scope_id),
                 label_counter,
                 span_table,
                 ControlFlowTargets {
@@ -7452,7 +7473,7 @@ fn lower_statement_to_ir1_with_flow(
                 bindings,
                 binding_lookup,
                 binding_index,
-                scope_id,
+                nested_statement_scope(scope_id),
                 label_counter,
                 span_table,
                 ControlFlowTargets {
@@ -7488,7 +7509,7 @@ fn lower_statement_to_ir1_with_flow(
                 bindings,
                 binding_lookup,
                 binding_index,
-                scope_id,
+                nested_statement_scope(scope_id),
                 label_counter,
                 span_table,
                 ControlFlowTargets {
@@ -7660,6 +7681,7 @@ fn lower_statement_to_ir1_with_flow(
                 catch_label,
                 finally_label,
             });
+            let try_scope = nested_statement_scope(scope_id);
             for inner in &tc.block.body {
                 lower_statement_to_ir1_with_flow(
                     inner,
@@ -7667,7 +7689,7 @@ fn lower_statement_to_ir1_with_flow(
                     bindings,
                     binding_lookup,
                     binding_index,
-                    scope_id,
+                    try_scope,
                     label_counter,
                     span_table,
                     try_control_flow,
@@ -7837,6 +7859,7 @@ fn lower_statement_to_ir1_with_flow(
                         // We must pop it so the stack remains balanced.
                         ops.push(Ir1Op::Pop);
                     }
+                    let catch_scope = nested_statement_scope(scope_id);
                     for inner in &handler.body.body {
                         lower_statement_to_ir1_with_flow(
                             inner,
@@ -7844,7 +7867,7 @@ fn lower_statement_to_ir1_with_flow(
                             bindings,
                             binding_lookup,
                             binding_index,
-                            scope_id,
+                            catch_scope,
                             label_counter,
                             span_table,
                             catch_control_flow,
@@ -8171,7 +8194,7 @@ fn lower_statement_to_ir1_with_flow(
                 binding_index,
                 scope_id,
                 &name,
-                BindingKind::Var,
+                BindingKind::FunctionDecl,
             )
             .map_err(LoweringPipelineError::SemanticViolation)?;
 
@@ -8984,6 +9007,7 @@ fn lower_switch_to_ir1(
         break_label: Some(end_label),
         continue_label: control_flow.continue_label,
     };
+    let switch_scope = nested_statement_scope(scope_id);
     for (case, case_label) in switch_stmt.cases.iter().zip(case_labels.iter().copied()) {
         ops.push(Ir1Op::Label { id: case_label });
         for body_stmt in &case.consequent {
@@ -8993,7 +9017,7 @@ fn lower_switch_to_ir1(
                 bindings,
                 binding_lookup,
                 binding_index,
-                scope_id,
+                switch_scope,
                 label_counter,
                 span_table,
                 switch_flow,
@@ -9893,7 +9917,10 @@ fn lower_ir2_to_ir3_with_input_hash(
         .filter(|binding| {
             matches!(
                 binding.kind,
-                BindingKind::Let | BindingKind::Const | BindingKind::Var
+                BindingKind::Let
+                    | BindingKind::Const
+                    | BindingKind::Var
+                    | BindingKind::FunctionDecl
             )
         })
         .map(|binding| binding.binding_id)
@@ -10002,9 +10029,9 @@ fn lower_ir2_to_ir3_with_input_hash(
         .map(|id| {
             let kind = match binding_kind_by_id.get(id) {
                 Some(BindingKind::Const) => 2,
-                // A spilled `var` is hoisted: declared initialized to
-                // undefined, never in a temporal dead zone (bd-9vouw.23).
-                Some(BindingKind::Var) => 0,
+                // Spilled or exported `var` / `function` bindings are hoisted:
+                // declared initialized, never in a temporal dead zone (bd-9vouw.23).
+                Some(BindingKind::Var | BindingKind::FunctionDecl) => 0,
                 Some(BindingKind::Import) => RUNTIME_IMPORT_BINDING_KIND,
                 _ => 1,
             };
@@ -10051,10 +10078,10 @@ fn lower_ir2_to_ir3_with_input_hash(
                 kind: if runtime_lexical_binding_ids.contains(binding_id) {
                     match binding_kind_by_id.get(binding_id) {
                         Some(BindingKind::Const) => 2,
-                        // An exported `var` a closure captures
+                        // An exported `var` or `function` a closure captures
                         // (`export var n = 0; export function inc() { n++; }`)
                         // is hoisted too, never in a temporal dead zone.
-                        Some(BindingKind::Var) => 0,
+                        Some(BindingKind::Var | BindingKind::FunctionDecl) => 0,
                         Some(BindingKind::Import) => RUNTIME_IMPORT_BINDING_KIND,
                         _ => 1,
                     }

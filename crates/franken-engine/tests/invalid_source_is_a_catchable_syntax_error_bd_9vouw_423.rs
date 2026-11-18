@@ -6,9 +6,12 @@
 
 use std::process::Command;
 
+#[path = "support/persistent_scratch_dir.rs"]
+mod persistent_scratch_dir;
+
 #[test]
 fn invalid_function_bodies_throw_catchable_syntax_errors() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_423");
     let input = root.path().join("catchable.js");
     let report = root.path().join("report.json");
     std::fs::write(

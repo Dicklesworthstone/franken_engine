@@ -8,6 +8,9 @@
 
 use std::process::Command;
 
+#[path = "support/persistent_scratch_dir.rs"]
+mod persistent_scratch_dir;
+
 const PROGRAM: &str = r#"const values = [0, -0, 1, -1, 0.0004, -0.0004, 1234.5678, -1234.5678, 123456, 0.000123456, 99.95, 999.95, NaN, Infinity, -Infinity];
 const optsList = [
   { signDisplay: 'always' },
@@ -69,7 +72,7 @@ const EXPECTED: &[&str] = &[
 
 #[test]
 fn sign_display_and_significant_digits_match_node() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_463");
     let entry = root.path().join("number_format.js");
     std::fs::write(&entry, PROGRAM).expect("write program");
     let report = root.path().join("report.json");

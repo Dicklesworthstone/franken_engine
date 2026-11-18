@@ -27,7 +27,10 @@ use frankenengine_engine::{EngineKind, HybridRouter};
 mod native_stream_kernels;
 
 fn console_output(source: &str) -> String {
-    let source = native_stream_kernels::source(source);
+    // Preserve strict mode without `export {};` forcing HybridRouter onto the
+    // V8 module lane (500,000-object heap) when probing QuickJS's 100,000 cap.
+    let source =
+        native_stream_kernels::source(source).replacen("export {};\n", "\"use strict\";\n", 1);
     let outcome = HybridRouter::default()
         .eval_with_instruction_budget(&source, 1_000_000_000)
         .unwrap_or_else(|error| panic!("evaluation failed: {error}\nsource: {source}"));

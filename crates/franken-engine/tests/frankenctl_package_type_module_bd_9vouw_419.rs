@@ -7,9 +7,12 @@
 
 use std::process::Command;
 
+#[path = "support/persistent_scratch_dir.rs"]
+mod persistent_scratch_dir;
+
 #[test]
 fn a_js_entry_of_a_module_package_runs_as_an_es_module() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_419");
     let package = root.path().join("esm-app");
     std::fs::create_dir_all(&package).expect("create package");
     std::fs::write(

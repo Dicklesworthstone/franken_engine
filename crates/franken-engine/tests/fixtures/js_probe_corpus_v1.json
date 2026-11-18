@@ -282,6 +282,11 @@
       "id": "55_direct_ambient_require_fs",
       "source": "const fs = require('fs'); console.log(fs.readFileSync('/dev/null', 'utf8').length);",
       "node_output": "0"
+    },
+    {
+      "id": "56_private_field_getter_bd_dtitb",
+      "source": "class A { #x = 1; get x() { return this.#x; } } class B { #v = 5; static #s = 6; static out = \"\"; static { B.out = \"static:\" + this.#s; } get val() { return this.#v; } read() { return this.#v + B.#s; } } const b = new B(); console.log(\"class:\" + new A().x, b.val, b.read(), B.out);",
+      "node_output": "class:1 5 11 static:6"
     }
   ]
 }

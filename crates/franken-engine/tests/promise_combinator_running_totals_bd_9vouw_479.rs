@@ -8,6 +8,9 @@
 
 use std::process::Command;
 
+#[path = "support/persistent_scratch_dir.rs"]
+mod persistent_scratch_dir;
+
 const PROGRAM: &str = r#"var log = [];
 function later(value, fail) {
   return new Promise(function (resolve, reject) {
@@ -56,7 +59,7 @@ const EXPECTED: &[&str] = &[
 
 #[test]
 fn promise_combinators_match_node_with_running_totals() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_479");
     let entry = root
         .path()
         .join("promise_combinator_running_totals_bd_9vouw_479.js");

@@ -14,6 +14,9 @@
 use std::path::Path;
 use std::process::Command;
 
+#[path = "support/persistent_scratch_dir.rs"]
+mod persistent_scratch_dir;
+
 use frankenengine_engine::ast::ParseGoal;
 use frankenengine_engine::parser::{CanonicalEs2020Parser, Es2020Parser, ParseErrorCode};
 
@@ -50,7 +53,7 @@ fn run_module(root: &Path, entry: &str) -> Vec<String> {
 
 #[test]
 fn string_export_names_link_through_exports_reexports_and_imports() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_429");
     for (name, source) in [
         (
             "fixture.mjs",
@@ -78,7 +81,7 @@ fn string_export_names_link_through_exports_reexports_and_imports() {
 
 #[test]
 fn export_from_takes_import_attributes_and_with_continues_the_line() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_429");
     std::fs::write(
         root.path().join("fixture.mjs"),
         "export function Mercury() {}\n",

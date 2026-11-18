@@ -10,6 +10,9 @@
 
 use std::path::Path;
 
+#[path = "support/persistent_scratch_dir.rs"]
+mod persistent_scratch_dir;
+
 use frankenengine_engine::ast::ParseGoal;
 use frankenengine_engine::execution_orchestrator::LabFixtureExecutionOrchestratorExt as _;
 use frankenengine_engine::execution_orchestrator::{
@@ -44,7 +47,7 @@ fn run(root: &Path, entry: &str) -> Result<Vec<String>, String> {
 
 #[test]
 fn duplicate_exports_and_nested_module_declarations_are_syntax_errors() {
-    let root = tempfile::tempdir().expect("module root");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_392_export");
     let files: &[(&str, &str)] = &[
         (
             "ok.mjs",

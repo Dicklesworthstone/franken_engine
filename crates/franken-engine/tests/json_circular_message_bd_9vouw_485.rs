@@ -8,6 +8,9 @@
 
 use std::process::Command;
 
+#[path = "support/persistent_scratch_dir.rs"]
+mod persistent_scratch_dir;
+
 const PROGRAM: &str = r#"var a = {}; a.self = a;
 try { JSON.stringify(a); } catch (e) { console.log(e.name, e instanceof TypeError, e.message.split("\n")[0], /circular structure/i.test(e.message)); }
 var arr = [1]; arr.push([arr]);
@@ -29,7 +32,7 @@ const EXPECTED: &[&str] = &[
 
 #[test]
 fn json_circular_messages_match_node() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_485");
     let entry = root.path().join("json_circular_message_bd_9vouw_485.js");
     std::fs::write(&entry, PROGRAM).expect("write program");
     let report = root.path().join("report.json");

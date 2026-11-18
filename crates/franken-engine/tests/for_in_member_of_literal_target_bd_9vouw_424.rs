@@ -8,9 +8,12 @@
 
 use std::process::Command;
 
+#[path = "support/persistent_scratch_dir.rs"]
+mod persistent_scratch_dir;
+
 #[test]
 fn literal_member_heads_assign_and_invalid_bindings_are_syntax_errors() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_424");
     let input = root.path().join("forin_member.js");
     let report = root.path().join("report.json");
     std::fs::write(

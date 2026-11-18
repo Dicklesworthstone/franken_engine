@@ -554,30 +554,33 @@ fn usage_only_inside_function_body_gets_the_path_module() {
 }
 
 #[test]
-fn unrecognized_method_does_not_confirm_the_alias() {
-    // `path.win32.dirname` is outside the recognized win32 subset; with no
-    // other usage the alias stays unconfirmed and the require is denied.
-    let err = eval_err("const path = require('path');\nconsole.log(path.win32.dirname('a\\\\b'));");
+fn win32_dirname_routes_through_the_pure_path_module() {
+    // `path.win32.dirname` is outside the direct hostcall facade subset; since
+    // bd-9vouw.181 and 8e1db2a03, non-facade `require('path')` member uses
+    // route through the engine's pure `path` module and match Node ("a"),
+    // while calling an unknown member throws a runtime TypeError.
+    assert_eq!(
+        eval_console("const path = require('path');\nconsole.log(path.win32.dirname('a\\\\b'));"),
+        "a"
+    );
+    let err = eval_err("const path = require('path');\nconsole.log(path.notARealPathMethod('a'));");
     assert!(
-        err.contains("ambient authority violation"),
-        "expected ambient-authority denial for unrecognized-method-only usage, got: {err}"
+        err.contains("type error"),
+        "expected runtime TypeError for unknown path member, got: {err}"
     );
 }
 
 #[test]
 fn shadowed_require_is_not_recognized_as_path_module() {
-    // A user binding named `require` must not be treated as the CJS loader:
-    // the path recognizers decline (fail-closed), so nothing lowers to
-    // `builtin:Path*`. The program still fails at lowering because the
-    // engine's PRE-EXISTING bare-identifier ambient gate hardening denies
-    // `require` references regardless of shadowing (red-team containment —
-    // an ambient name cannot be laundered through a local binding).
-    let err = eval_err(
-        "const require = (name) => ({ join: () => 'shadowed:' + name });\nconst path = require('path');\nconsole.log(path.join('a', 'b'));",
-    );
-    assert!(
-        err.contains("ambient authority violation"),
-        "expected the pre-existing ambient denial for shadowed require, got: {err}"
+    // A user lexical binding named `require` must not be treated as the CJS
+    // loader (`path_module.rs` excludes shadowed `require` from facade and
+    // module rewrites), so `path.join('a', 'b')` invokes the user's binding
+    // ("shadowed:path") instead of `builtin:PathJoin` ("a/b").
+    assert_eq!(
+        eval_console(
+            "const require = (name) => ({ join: () => 'shadowed:' + name });\nconst path = require('path');\nconsole.log(path.join('a', 'b'));",
+        ),
+        "shadowed:path"
     );
 }
 

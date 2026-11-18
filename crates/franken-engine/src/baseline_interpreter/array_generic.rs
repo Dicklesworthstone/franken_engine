@@ -1595,6 +1595,16 @@ impl InterpreterCore {
                     self.generic_create_data_property(m, result, filtered, element)?;
                     filtered += 1;
                 }
+                K::ArrayFilter => {
+                    // A rejected predicate still decides whether any existing
+                    // property at `filtered` on a custom species result survives
+                    // without being overwritten.
+                    let result = result.expect("filter allocates its result");
+                    self.generic_species_admit_output_label(
+                        result,
+                        &Self::generic_index_key(filtered),
+                    )?;
+                }
                 K::ArraySome if outcome.is_truthy() => return Ok(Value::Bool(true)),
                 K::ArrayEvery if !outcome.is_truthy() => return Ok(Value::Bool(false)),
                 K::ArrayFind | K::ArrayFindLast if outcome.is_truthy() => return Ok(element),

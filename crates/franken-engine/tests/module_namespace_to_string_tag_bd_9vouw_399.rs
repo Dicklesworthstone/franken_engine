@@ -5,6 +5,9 @@
 
 use std::path::Path;
 
+#[path = "support/persistent_scratch_dir.rs"]
+mod persistent_scratch_dir;
+
 use frankenengine_engine::ast::ParseGoal;
 use frankenengine_engine::execution_orchestrator::LabFixtureExecutionOrchestratorExt as _;
 use frankenengine_engine::execution_orchestrator::{
@@ -39,7 +42,7 @@ fn run(root: &Path, entry: &str) -> Result<Vec<String>, String> {
 
 #[test]
 fn module_namespace_objects_are_tagged_module() {
-    let root = tempfile::tempdir().expect("module root");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_399");
     let files: &[(&str, &str)] = &[
         (
             "dep.mjs",
@@ -72,7 +75,7 @@ import("./dep.mjs").then((m) => console.log(m === ns, m[Symbol.toStringTag]));
 }
 
 fn assert_module_output(files: &[(&str, &str)], expected: &[&str]) {
-    let root = tempfile::tempdir().expect("module root");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_399");
     for (name, source) in files {
         std::fs::write(root.path().join(name), source).expect("fixture file");
     }

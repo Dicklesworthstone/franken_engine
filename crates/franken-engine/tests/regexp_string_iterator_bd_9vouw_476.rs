@@ -11,6 +11,9 @@
 
 use std::process::Command;
 
+#[path = "support/persistent_scratch_dir.rs"]
+mod persistent_scratch_dir;
+
 const PROGRAM: &str = r#"var s = ""; for (var i = 0; i < 5000; i++) s += "x" + i + " ";
 var n = 0, sum = 0; for (const m of s.matchAll(/x(\d+)/g)) { n++; sum += +m[1]; }
 console.log(s.length, n, sum);
@@ -101,7 +104,7 @@ const OBSERVABLE_EXPECTED: &[&str] = &[
 ];
 
 fn console_lines(name: &str, program: &str) -> Vec<String> {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_476");
     let entry = root.path().join(format!("{name}.js"));
     std::fs::write(&entry, program).expect("write program");
     let report = root.path().join("report.json");

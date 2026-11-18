@@ -19,6 +19,9 @@
 
 use std::process::Command;
 
+#[path = "support/persistent_scratch_dir.rs"]
+mod persistent_scratch_dir;
+
 const PROGRAM: &str = r#"var q = [];
 for (var i = 0; i < 3000; i++) q.push(i);
 var sum = 0, n = 0;
@@ -185,7 +188,7 @@ const EXPECTED: &[&str] = &[
 
 #[test]
 fn array_shift_unshift_and_splice_match_node_on_both_paths() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_472");
     let entry = root
         .path()
         .join("array_shift_dense_in_place_bd_9vouw_472.js");

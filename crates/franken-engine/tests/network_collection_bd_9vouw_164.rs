@@ -11,6 +11,7 @@ use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::ir_contract::Ir0Module;
 use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
+use frankenengine_extension_host::host_io::HostIoExceptionProvenance;
 
 fn run(source: &'static str, expected: &'static str) {
     std::thread::Builder::new()
@@ -29,7 +30,8 @@ fn run(source: &'static str, expected: &'static str) {
                 .expect("network collection fixture parses");
             let module = lower_ir0_to_ir3(
                 &Ir0Module::from_syntax_tree(tree, "network-collection.js"),
-                &LoweringContext::new("network-collection", "bounded-heap", "builtin-only"),
+                &LoweringContext::new("network-collection", "bounded-heap", "builtin-only")
+                    .with_host_io_exception_provenance(HostIoExceptionProvenance::ProviderInternal),
             )
             .expect("network collection fixture lowers")
             .ir3;
@@ -46,6 +48,7 @@ fn run(source: &'static str, expected: &'static str) {
                     RuntimeCapability::HeapAllocate,
                     RuntimeCapability::Builtin,
                     RuntimeCapability::Console,
+                    RuntimeCapability::NetworkEgress,
                 ]
                 .into_iter()
                 .collect();

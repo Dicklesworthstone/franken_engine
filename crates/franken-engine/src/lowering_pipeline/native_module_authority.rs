@@ -159,8 +159,13 @@ fn exports(ir1: &Ir1Module) -> Option<Exports> {
         .scopes
         .iter()
         .filter(|scope| matches!(scope.kind, ScopeKind::Global | ScopeKind::StrictGlobal))
-        .flat_map(|scope| &scope.bindings)
-        .filter(|binding| matches!(binding.kind, BindingKind::Var | BindingKind::FunctionDecl))
+        .flat_map(|scope| {
+            scope.bindings.iter().filter(move |binding| {
+                binding.kind == BindingKind::Var
+                    || (binding.kind == BindingKind::FunctionDecl
+                        && binding.scope == scope.scope_id)
+            })
+        })
         .map(|binding| (binding.name.clone(), binding.binding_id))
         .collect();
     let module_bindings: BTreeSet<_> = ir1

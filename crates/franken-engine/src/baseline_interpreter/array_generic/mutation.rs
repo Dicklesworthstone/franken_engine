@@ -66,7 +66,15 @@ impl InterpreterCore {
                 let Some(end) = primitive_index(self.builtin_arg(args, 2)?, length, length) else {
                     return Ok(true);
                 };
-                Ok(!plain_writable_range(object, start, end))
+                let allow_holes = u64::from(end.saturating_sub(start))
+                    <= super::iteration::MIN_SPARSE_INTERVAL
+                    && self.array_mutation_plain_prototypes(array)?;
+                Ok(!plain_writable_or_absent_range(
+                    object,
+                    start,
+                    end,
+                    allow_holes,
+                ))
             }
             _ => {
                 // Bulk moves already visit O(n) elements. An accessor or hole
@@ -141,7 +149,16 @@ fn primitive_index(value: Option<Value>, length: u32, default: u32) -> Option<u3
 }
 
 pub(super) fn plain_writable_range(object: &HeapObject, start: u32, end: u32) -> bool {
-    range_with_keys(object, start, end, |index| {
+    plain_writable_or_absent_range(object, start, end, false)
+}
+
+fn plain_writable_or_absent_range(
+    object: &HeapObject,
+    start: u32,
+    end: u32,
+    allow_holes: bool,
+) -> bool {
+    range_with_keys(object, start, end, allow_holes, |index| {
         InterpreterCore::generic_index_key(u64::from(index))
     })
 }
@@ -150,6 +167,7 @@ fn range_with_keys(
     object: &HeapObject,
     start: u32,
     end: u32,
+    allow_holes: bool,
     mut key: impl FnMut(u32) -> RuntimePropertyKey,
 ) -> bool {
     if start >= end {
@@ -164,11 +182,13 @@ fn range_with_keys(
     // allocating a property name per element. Decorated objects retain point
     // lookups: even a one-element fill must not scan a huge named dictionary.
     let default_attributes = object.property_attributes.is_empty();
-    (start..end).all(|index| {
-        !matches!(
-            object.properties.get_index(index),
-            None | Some(Value::Accessor { .. })
-        ) && (default_attributes || object.own_property_attributes(&key(index)).writable)
+    (start..end).all(|index| match object.properties.get_index(index) {
+        None => {
+            allow_holes
+                && (default_attributes || !object.property_attributes.contains_key(&key(index)))
+        }
+        Some(Value::Accessor { .. }) => false,
+        Some(_) => default_attributes || object.own_property_attributes(&key(index)).writable,
     })
 }
 
@@ -1293,12 +1313,15 @@ mod tests {
                 .properties
                 .insert(index.to_string(), Value::Int(index));
         }
-        assert!(range_with_keys(&object, 0, 16_384, |_| {
+        assert!(range_with_keys(&object, 0, 16_384, false, |_| {
             panic!("ordinary numeric storage needs no property-name allocation")
         }));
-        assert!(range_with_keys(&object, 8_192, 8_193, |_| {
+        assert!(range_with_keys(&object, 8_192, 8_193, false, |_| {
             panic!("a narrow fill needs no property-name allocation either")
         }));
+        let holey = array(10_000);
+        assert!(plain_writable_or_absent_range(&holey, 0, 10_000, true));
+        assert!(!plain_writable_or_absent_range(&holey, 0, 10_000, false));
         // After metadata appears, only the touched index is looked up even
         // when a large unrelated descriptor dictionary is present.
         for index in 0..16_384 {
@@ -1308,7 +1331,7 @@ mod tests {
             object.property_attributes.insert(key, attributes);
         }
         let mut requests = Vec::new();
-        assert!(range_with_keys(&object, 8_192, 8_193, |index| {
+        assert!(range_with_keys(&object, 8_192, 8_193, false, |index| {
             requests.push(index);
             InterpreterCore::generic_index_key(u64::from(index))
         }));

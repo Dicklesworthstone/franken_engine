@@ -9,6 +9,9 @@
 
 use std::process::Command;
 
+#[path = "support/persistent_scratch_dir.rs"]
+mod persistent_scratch_dir;
+
 const PROGRAM: &str = "var o = new(function () { this.a = 1; });\nfunction F(x) { this.b = x; }\nvar p = new(F)(2);\nvar q = new(F)(3).b;\nconsole.log(o.a, p.b, q);\nvar d_tab = delete\u{9}0;\nvar t_tab = typeof\u{9}o;\nconsole.log('tab', d_tab, t_tab);\nvar d_vt = delete\u{b}0;\nvar t_vt = typeof\u{b}o;\nconsole.log('vt', d_vt, t_vt);\nvar d_ff = delete\u{c}0;\nvar t_ff = typeof\u{c}o;\nconsole.log('ff', d_ff, t_ff);\nvar d_nbsp = delete\u{a0}0;\nvar t_nbsp = typeof\u{a0}o;\nconsole.log('nbsp', d_nbsp, t_nbsp);\nvar d_mixed = delete\u{9}\u{b}\u{c} \u{a0}\n\u{2028}\u{2029}0;\nvar t_mixed = typeof\u{9}\u{b}\u{c} \u{a0}\n\u{2028}\u{2029}o;\nconsole.log('mixed', d_mixed, t_mixed);\n";
 
 const EXPECTED: &[&str] = &[
@@ -22,7 +25,7 @@ const EXPECTED: &[&str] = &[
 
 #[test]
 fn keyword_operators_end_at_any_white_space_and_new_takes_a_parenthesized_callee() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_454");
     let entry = root.path().join("keyword_spacing.js");
     std::fs::write(&entry, PROGRAM).expect("write program");
     let report = root.path().join("report.json");

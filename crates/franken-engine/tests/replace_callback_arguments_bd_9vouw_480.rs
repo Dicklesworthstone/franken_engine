@@ -8,6 +8,9 @@
 
 use std::process::Command;
 
+#[path = "support/persistent_scratch_dir.rs"]
+mod persistent_scratch_dir;
+
 const PROGRAM: &str = r#"var s = "";
 for (var i = 0; i < 20000; i++) s += "x" + i + " ";
 var calls = 0, offsetSum = 0, lastLen = 0;
@@ -37,7 +40,7 @@ const EXPECTED: &[&str] = &[
 
 #[test]
 fn replace_callback_arguments_match_node() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_480");
     let entry = root
         .path()
         .join("replace_callback_arguments_bd_9vouw_480.js");

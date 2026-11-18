@@ -8,6 +8,9 @@
 
 use std::process::Command;
 
+#[path = "support/persistent_scratch_dir.rs"]
+mod persistent_scratch_dir;
+
 const PROGRAM: &str = r#"var global = this;
 function attempt(label, f) {
   try {
@@ -90,7 +93,7 @@ const EXPECTED: &[&str] = &[
 
 #[test]
 fn strict_global_assignments_throw_as_node_does() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_466");
     let entry = root.path().join("strict_global_put.js");
     std::fs::write(&entry, PROGRAM).expect("write program");
     let report = root.path().join("report.json");

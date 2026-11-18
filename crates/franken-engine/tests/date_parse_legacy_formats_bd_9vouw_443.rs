@@ -11,6 +11,9 @@
 
 use std::process::Command;
 
+#[path = "support/persistent_scratch_dir.rs"]
+mod persistent_scratch_dir;
+
 const PROGRAM: &str = r#"const inputs = [
   'Feb 29, 2024 UTC',
   'February 29, 2024 13:05:09 GMT',
@@ -93,7 +96,7 @@ const EXPECTED: &[&str] = &[
 
 #[test]
 fn date_parse_accepts_v8_legacy_formats() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_443");
     let entry = root.path().join("date_parse.mjs");
     std::fs::write(&entry, PROGRAM).expect("write program");
     let report = root.path().join("report.json");

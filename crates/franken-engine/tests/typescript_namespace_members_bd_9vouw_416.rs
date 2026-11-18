@@ -7,9 +7,12 @@
 
 use std::process::Command;
 
+#[path = "support/persistent_scratch_dir.rs"]
+mod persistent_scratch_dir;
+
 #[test]
 fn namespace_members_are_in_scope_in_the_namespace_body() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_416");
     let input = root.path().join("geometry.ts");
     let report = root.path().join("report.json");
     std::fs::write(

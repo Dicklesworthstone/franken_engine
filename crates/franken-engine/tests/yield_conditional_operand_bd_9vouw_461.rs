@@ -9,6 +9,9 @@
 
 use std::process::Command;
 
+#[path = "support/persistent_scratch_dir.rs"]
+mod persistent_scratch_dir;
+
 const PROGRAM: &str = r#"const out = [];
 function run(gen, inputs) { const it = gen(); const seen = []; let r = it.next(); let i = 0; while (!r.done) { seen.push(JSON.stringify(r.value)); r = it.next(inputs[i++]); } seen.push('ret=' + JSON.stringify(r.value)); return seen.join(','); }
 out.push(run(function* () { const a = yield 1; const b = yield a + 1; return [a, b]; }, [10, 20]));
@@ -47,7 +50,7 @@ const EXPECTED: &[&str] = &[
 
 #[test]
 fn yield_operands_and_placements_match_node() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_461");
     let entry = root.path().join("yield_battery.js");
     std::fs::write(&entry, PROGRAM).expect("write program");
     let report = root.path().join("report.json");

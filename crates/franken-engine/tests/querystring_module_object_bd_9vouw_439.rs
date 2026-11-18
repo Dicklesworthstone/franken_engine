@@ -9,6 +9,9 @@
 
 use std::process::Command;
 
+#[path = "support/persistent_scratch_dir.rs"]
+mod persistent_scratch_dir;
+
 const PROGRAM: &str = r#"const qs = require('querystring');
 qs.escape('warm');
 const h = () => qs.escape('a b');
@@ -31,7 +34,7 @@ const EXPECTED: &[&str] = &[
 
 #[test]
 fn querystring_module_object_serves_functions() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_439");
     let entry = root.path().join("querystring.cjs");
     std::fs::write(&entry, PROGRAM).expect("write program");
     let report = root.path().join("report.json");

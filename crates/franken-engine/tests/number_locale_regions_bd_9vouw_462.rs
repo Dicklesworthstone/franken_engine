@@ -8,6 +8,9 @@
 
 use std::process::Command;
 
+#[path = "support/persistent_scratch_dir.rs"]
+mod persistent_scratch_dir;
+
 const PROGRAM: &str = r#"const lines = [];
 const decimalLocales = ['en-IN', 'en-GB', 'en-CA', 'en-AU', 'zh-TW', 'zh-Hant', 'ja-JP', 'ko-KR', 'de-LU', 'en-PH'];
 for (const locale of decimalLocales) {
@@ -44,7 +47,7 @@ const EXPECTED: &[&str] = &[
 
 #[test]
 fn regional_number_and_currency_formats_match_icu() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_462");
     let entry = root.path().join("number_locale.js");
     std::fs::write(&entry, PROGRAM).expect("write program");
     let report = root.path().join("report.json");

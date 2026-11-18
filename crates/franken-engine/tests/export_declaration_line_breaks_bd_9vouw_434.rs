@@ -13,6 +13,9 @@
 use std::path::Path;
 use std::process::Command;
 
+#[path = "support/persistent_scratch_dir.rs"]
+mod persistent_scratch_dir;
+
 fn run(root: &Path, name: &str, source: &str) -> Vec<String> {
     let entry = root.join(name);
     std::fs::write(&entry, source).expect("write entry");
@@ -48,7 +51,7 @@ fn run(root: &Path, name: &str, source: &str) -> Vec<String> {
 
 #[test]
 fn exported_declaration_headers_continue_onto_the_next_line() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_434");
     assert_eq!(
         run(
             root.path(),
@@ -61,7 +64,7 @@ fn exported_declaration_headers_continue_onto_the_next_line() {
 
 #[test]
 fn exported_functions_with_multi_line_type_parameters_run() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_434");
     assert_eq!(
         run(
             root.path(),

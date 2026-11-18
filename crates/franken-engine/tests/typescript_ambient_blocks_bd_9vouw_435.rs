@@ -9,9 +9,12 @@
 
 use std::process::Command;
 
+#[path = "support/persistent_scratch_dir.rs"]
+mod persistent_scratch_dir;
+
 #[test]
 fn ambient_blocks_and_modifier_named_parameters_run() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_435");
     let entry = root.path().join("ambient.ts");
     std::fs::write(
         &entry,

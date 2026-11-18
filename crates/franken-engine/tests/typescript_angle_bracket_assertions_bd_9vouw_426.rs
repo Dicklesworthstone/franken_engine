@@ -8,9 +8,12 @@
 
 use std::process::Command;
 
+#[path = "support/persistent_scratch_dir.rs"]
+mod persistent_scratch_dir;
+
 #[test]
 fn prefix_type_assertions_run_in_a_ts_file() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_426");
     let input = root.path().join("casts.ts");
     let report = root.path().join("report.json");
     std::fs::write(

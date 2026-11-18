@@ -9,6 +9,9 @@
 
 use std::process::Command;
 
+#[path = "support/persistent_scratch_dir.rs"]
+mod persistent_scratch_dir;
+
 const PROGRAM: &str = r#"function nest(depth) { var x = [1]; for (var i = 0; i < depth; i++) x = [x]; return x; }
 function forms(x) { return [String(x), x.join(), "" + x, x.toString()].join("|"); }
 function deep(depth) { try { return forms(nest(depth)); } catch (e) { return e.constructor.name + ": " + e.message; } }
@@ -41,7 +44,7 @@ const EXPECTED: &[&str] = &[
 
 #[test]
 fn array_conversion_hooks_match_node() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_481_hooks");
     let entry = root.path().join("array_conversion_hooks_bd_9vouw_481.js");
     std::fs::write(&entry, PROGRAM).expect("write program");
     let report = root.path().join("report.json");

@@ -8,6 +8,9 @@
 
 use std::process::Command;
 
+#[path = "support/persistent_scratch_dir.rs"]
+mod persistent_scratch_dir;
+
 const PROGRAM: &str = r#"var s = "";
 for (var i = 0; i < 30000; i++) s += "abcdefg";
 var t = "";
@@ -55,7 +58,7 @@ const EXPECTED: &[&str] = &[
 
 #[test]
 fn string_concatenation_nodes_match_node() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_468");
     let entry = root.path().join("string_concat.js");
     std::fs::write(&entry, PROGRAM).expect("write program");
     let report = root.path().join("report.json");

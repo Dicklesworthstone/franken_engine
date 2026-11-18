@@ -8,6 +8,9 @@
 
 use std::path::Path;
 
+#[path = "support/persistent_scratch_dir.rs"]
+mod persistent_scratch_dir;
+
 use frankenengine_engine::ast::ParseGoal;
 use frankenengine_engine::execution_orchestrator::LabFixtureExecutionOrchestratorExt as _;
 use frankenengine_engine::execution_orchestrator::{
@@ -42,7 +45,7 @@ fn run(root: &Path, entry: &str) -> Result<Vec<String>, String> {
 
 #[test]
 fn slash_after_await_starts_a_regular_expression() {
-    let root = tempfile::tempdir().expect("module root");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_391");
     let files: &[(&str, &str)] = &[(
         "main.mjs",
         r#"var r = [typeof await /x.y/g, String(await /a/.exec("a"))];

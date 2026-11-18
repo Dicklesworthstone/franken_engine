@@ -12,6 +12,9 @@
 
 use std::process::Command;
 
+#[path = "support/persistent_scratch_dir.rs"]
+mod persistent_scratch_dir;
+
 const PROGRAM: &str = r#"var s = "";
 for (var i = 0; i < 3000; i++) s += "word" + (i % 10) + " ";
 var re = /(\w)(\w*)/g, m, count = 0, lastIdx = 0, indexSum = 0;
@@ -66,7 +69,7 @@ const EXPECTED: &[&str] = &[
 
 #[test]
 fn regexp_exec_and_index_of_scans_match_node() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_475");
     let entry = root.path().join("string_scan_loops_bd_9vouw_475.js");
     std::fs::write(&entry, PROGRAM).expect("write program");
     let report = root.path().join("report.json");

@@ -8,6 +8,9 @@
 
 use std::path::Path;
 
+#[path = "support/persistent_scratch_dir.rs"]
+mod persistent_scratch_dir;
+
 use frankenengine_engine::ast::ParseGoal;
 use frankenengine_engine::execution_orchestrator::LabFixtureExecutionOrchestratorExt as _;
 use frankenengine_engine::execution_orchestrator::{
@@ -42,7 +45,7 @@ fn run(root: &Path) -> Result<Vec<String>, String> {
 
 #[test]
 fn an_anonymous_default_function_is_callable_through_an_import_cycle() {
-    let root = tempfile::tempdir().expect("module root");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_412");
     let root = root.path().canonicalize().expect("canonical root");
     let files: &[(&str, &str)] = &[
         (

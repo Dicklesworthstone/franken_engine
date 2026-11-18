@@ -10,6 +10,9 @@
 
 use std::process::Command;
 
+#[path = "support/persistent_scratch_dir.rs"]
+mod persistent_scratch_dir;
+
 const PROGRAM: &str = r#"import events, { EventEmitter } from 'node:events';
 const out = [];
 const t = (name, f) => {
@@ -61,7 +64,7 @@ const EXPECTED: &[&str] = &[
 
 #[test]
 fn events_static_helpers_match_node() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_438");
     let entry = root.path().join("events_statics.mjs");
     std::fs::write(&entry, PROGRAM).expect("write program");
     let report = root.path().join("report.json");
@@ -108,7 +111,7 @@ fn native_commonjs_events_helpers_share_cached_state_across_sources() {
         ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig,
     };
 
-    let root = tempfile::tempdir().expect("native events root");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_438_native");
     let helper = r#"
 const E = require('node:events');
 const { once } = require('events');

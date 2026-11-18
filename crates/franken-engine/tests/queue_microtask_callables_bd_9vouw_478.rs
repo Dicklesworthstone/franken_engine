@@ -16,6 +16,9 @@
 
 use std::process::Command;
 
+#[path = "support/persistent_scratch_dir.rs"]
+mod persistent_scratch_dir;
+
 const PROGRAM: &str = r#"var order = [];
 new Promise(function (resolve) { queueMicrotask(resolve); }).then(function () { order.push("resolved"); });
 queueMicrotask(console.log.bind(console, "bound log runs"));
@@ -83,7 +86,7 @@ fn run_frankenctl(
 
 #[test]
 fn a_throwing_callback_ends_the_run_before_the_next_job() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_478");
     let (output, _) = run_frankenctl(root.path(), THROWING_PROGRAM);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -98,7 +101,7 @@ fn a_throwing_callback_ends_the_run_before_the_next_job() {
 
 #[test]
 fn queue_microtask_takes_any_callable_like_node() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_478");
     let (output, report) = run_frankenctl(root.path(), PROGRAM);
     assert!(
         output.status.success(),

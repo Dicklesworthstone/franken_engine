@@ -8,6 +8,9 @@
 
 use std::process::Command;
 
+#[path = "support/persistent_scratch_dir.rs"]
+mod persistent_scratch_dir;
+
 const PROGRAM: &str = r#"function t(name, f) { try { console.log(name, f()); } catch (e) { console.log(name, "threw", e instanceof RangeError ? "RangeError" : String(e)); } }
 var a = [1, 2]; a.push(a);
 console.log(a.toString(), a.join(), String(a), "" + a, Array.prototype.join.call(a, "|"));
@@ -40,7 +43,7 @@ const EXPECTED: &[&str] = &[
 
 #[test]
 fn cyclic_array_joins_match_node() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_481_cyclic");
     let entry = root.path().join("cyclic_array_join_stack_bd_9vouw_481.js");
     std::fs::write(&entry, PROGRAM).expect("write program");
     let report = root.path().join("report.json");

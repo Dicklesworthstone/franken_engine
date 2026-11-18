@@ -8,9 +8,12 @@
 
 use std::process::Command;
 
+#[path = "support/persistent_scratch_dir.rs"]
+mod persistent_scratch_dir;
+
 #[test]
 fn quotes_inside_regular_expressions_do_not_hide_later_declarations() {
-    let root = tempfile::tempdir().expect("temp dir");
+    let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_436");
     let entry = root.path().join("regex.ts");
     std::fs::write(
         &entry,

@@ -69,8 +69,14 @@ fn builtin_prototypes_chain_to_object_prototype() {
          Object.getPrototypeOf(Map.prototype) === Object.prototype, \
          Object.getPrototypeOf(Set.prototype) === Object.prototype, \
          Object.getPrototypeOf(Function.prototype) === Object.prototype, \
-         Object.getPrototypeOf(TypeError.prototype) === Error.prototype].join()",
-        "true,true,true,true,true,true,true,true,true",
+         Object.getPrototypeOf(TypeError.prototype) === Error.prototype, \
+         Object.getPrototypeOf(EvalError.prototype) === Error.prototype, \
+         Object.getPrototypeOf(RangeError.prototype) === Error.prototype, \
+         Object.getPrototypeOf(ReferenceError.prototype) === Error.prototype, \
+         Object.getPrototypeOf(SyntaxError.prototype) === Error.prototype, \
+         Object.getPrototypeOf(URIError.prototype) === Error.prototype, \
+         Object.getPrototypeOf(AggregateError.prototype) === Error.prototype].join()",
+        "true,true,true,true,true,true,true,true,true,true,true,true,true,true,true",
     );
 }
 

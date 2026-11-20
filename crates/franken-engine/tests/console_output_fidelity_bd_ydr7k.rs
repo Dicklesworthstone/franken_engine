@@ -59,8 +59,7 @@ fn ten_thousand_console_lines_are_delivered_intact_without_head_truncation() {
 
 #[test]
 fn zero_console_cap_counts_exact_dropped_entries_on_orchestrator_result() {
-    let mut orchestrator =
-        orchestrator_with_budget(50_000_000).with_max_console_entries(Some(0));
+    let mut orchestrator = orchestrator_with_budget(50_000_000).with_max_console_entries(Some(0));
     let pkg = package(
         "console-10k-zero-cap",
         "for (let i = 0; i < 10000; i++) { console.log('line' + i); }",
@@ -74,8 +73,7 @@ fn zero_console_cap_counts_exact_dropped_entries_on_orchestrator_result() {
 
 #[test]
 fn positive_console_cap_fails_closed_instead_of_silently_dropping_oldest_lines() {
-    let mut orchestrator =
-        orchestrator_with_budget(5_000_000).with_max_console_entries(Some(5));
+    let mut orchestrator = orchestrator_with_budget(5_000_000).with_max_console_entries(Some(5));
     let pkg = package(
         "console-cap-exceeded",
         "for (let i = 0; i < 10; i++) { console.log('line' + i); }",

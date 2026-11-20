@@ -2315,8 +2315,7 @@ impl FunctionSourceMap {
             return None;
         }
         let line_terminators = source_line_terminator_ranges(original);
-        let (start_line, start_column) =
-            source_position_at_offset(start_offset, &line_terminators);
+        let (start_line, start_column) = source_position_at_offset(start_offset, &line_terminators);
         let (end_line, end_column) = source_position_at_offset(end_offset, &line_terminators);
         Some(SourceSpan::new(
             start_offset as u64,
@@ -8757,10 +8756,7 @@ fn try_parse_assignment(
                     },
                 };
             if assignment_target_has_optional_chain(&left) {
-                let lhs_span = context
-                    .function_sources
-                    .span_of_slice(lhs)
-                    .unwrap_or(*span);
+                let lhs_span = context.function_sources.span_of_slice(lhs).unwrap_or(*span);
                 return Some(Err(ParseError::new(
                     ParseErrorCode::InvalidSyntax,
                     "optional chaining cannot be used as an assignment target",
@@ -8769,7 +8765,7 @@ fn try_parse_assignment(
                 )));
             }
             if let Err(error) = reject_strict_eval_arguments_target(&left, span, context) {
-                return Some(Err(refine_error_span(Err(error), lhs, span, context).unwrap_err()));
+                return Some(refine_error_span(Err(error), lhs, span, context));
             }
             // A parenthesized object or array literal is a value, not a
             // destructuring pattern: `({}) = 1`, `([a]) = b` (ES2020
@@ -8780,10 +8776,7 @@ fn try_parse_assignment(
                     Expression::ArrayLiteral(_) | Expression::ObjectLiteral(_)
                 )
             {
-                let lhs_span = context
-                    .function_sources
-                    .span_of_slice(lhs)
-                    .unwrap_or(*span);
+                let lhs_span = context.function_sources.span_of_slice(lhs).unwrap_or(*span);
                 return Some(Err(invalid_syntax_error(
                     "a parenthesized literal is not an assignment target",
                     &lhs_span,

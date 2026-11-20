@@ -162,7 +162,7 @@ fn parse_error_positions_point_at_offending_token_inside_multiline_wrappers() {
     let source = lines.join("\n");
 
     let err = CanonicalEs2020Parser
-        .parse(&source, ParseGoal::Script)
+        .parse(source.as_str(), ParseGoal::Script)
         .expect_err("`1 + 2 = 3` on line 148 must fail to parse");
     let span = err.span.expect("parse error must carry a SourceSpan");
     assert_eq!(

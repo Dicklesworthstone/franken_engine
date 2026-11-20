@@ -1273,26 +1273,12 @@ impl InterpreterCore {
         value: &Value,
         visited: &mut BTreeSet<ObjectId>,
     ) -> Label {
-        let Value::Object(object_id) = value else {
-            return Label::Public;
-        };
-        if !visited.insert(*object_id) {
-            return Label::Public;
-        }
-        let mut label = self
-            .object_mutation_labels
-            .get(object_id)
+        // Label::join is the maximum under Label::Ord, including Custom's
+        // same-level tiebreak. Share the stack-safe borrowed traversal and
+        // clone only the final winner instead of cloning it at every edge.
+        self.process_dynamic_value_label_ref(value, visited)
             .cloned()
             .unwrap_or(Label::Public)
-            .join(&self.binary_storage_label(*object_id));
-        if let Some(object) = self.heap.get(object_id.0 as usize) {
-            // A join is order-insensitive: no per-key lookup for creation
-            // order (bd-9vouw.333).
-            for property in object.properties.values_unordered() {
-                label = label.join(&self.process_dynamic_value_label(property, visited));
-            }
-        }
-        label
     }
 
     pub(super) fn join_arg_range_with_object_mutation_label(

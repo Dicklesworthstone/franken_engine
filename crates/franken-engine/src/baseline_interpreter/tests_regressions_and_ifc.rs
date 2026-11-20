@@ -2,6 +2,247 @@
 use super::*;
 
 #[cfg(test)]
+mod dynamic_value_label_tests {
+    use super::*;
+
+    fn test_core() -> InterpreterCore {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]
+        .into_iter()
+        .collect();
+        InterpreterCore::new(config, "dynamic-value-label")
+    }
+
+    fn deep_graph(core: &mut InterpreterCore, depth: usize) -> (ObjectId, ObjectId) {
+        let leaf = core
+            .alloc_object_with_prototype(None)
+            .expect("allocate graph leaf");
+        let mut root = leaf;
+        for _ in 0..depth {
+            root = core
+                .alloc_object_with_properties(&[("next", Value::Object(root))])
+                .expect("allocate graph link within ordinary heap budget");
+        }
+        (root, leaf)
+    }
+
+    #[test]
+    fn deep_graph_label_traversal_uses_no_native_recursion() {
+        let mut core = test_core();
+        let depth = 32_768;
+        let (root, leaf) = deep_graph(&mut core, depth);
+        core.join_direct_object_mutation_label(leaf, &Label::Secret)
+            .expect("label the deepest object");
+        let value = Value::Object(root);
+        let before_bytes = core.estimated_memory_bytes();
+
+        let mut borrowed_visited = BTreeSet::new();
+        let borrowed = core
+            .process_dynamic_value_label_ref(&value, &mut borrowed_visited)
+            .expect("deep leaf must remain visible to IFC");
+        assert_eq!(borrowed, &Label::Secret);
+        assert!(std::ptr::eq(
+            borrowed,
+            core.object_mutation_labels.get(&leaf).unwrap(),
+        ));
+        assert_eq!(borrowed_visited.len(), depth + 1);
+
+        let mut owned_visited = BTreeSet::new();
+        assert_eq!(
+            core.process_dynamic_value_label(&value, &mut owned_visited),
+            Label::Secret,
+        );
+        assert_eq!(owned_visited, borrowed_visited);
+        assert_eq!(core.estimated_memory_bytes(), before_bytes);
+        assert_eq!(before_bytes, core.recompute_estimated_memory_bytes());
+    }
+
+    #[test]
+    fn dense_cyclic_graph_keeps_shared_children_and_labels_above_top_secret() {
+        let mut core = test_core();
+        let nodes = (0..64)
+            .map(|_| core.alloc_object_with_prototype(None).unwrap())
+            .collect::<Vec<_>>();
+        // Every node shares every child, including itself and its ancestors.
+        // Scheduling on discovery must keep only one pending copy of each.
+        for node in &nodes {
+            for (index, child) in nodes.iter().enumerate() {
+                core.set_object_property(*node, index.to_string(), Value::Object(*child))
+                    .unwrap();
+            }
+        }
+        core.join_direct_object_mutation_label(nodes[0], &Label::TopSecret)
+            .unwrap();
+        let winner = Label::Custom {
+            name: "above-top-secret".to_string(),
+            level: 9,
+        };
+        core.join_direct_object_mutation_label(nodes[32], &winner)
+            .unwrap();
+        let expected_visited = nodes.iter().copied().collect::<BTreeSet<_>>();
+        let mut borrowed_visited = BTreeSet::new();
+        let borrowed = core
+            .process_dynamic_value_label_ref(&Value::Object(nodes[0]), &mut borrowed_visited)
+            .unwrap();
+        assert_eq!(borrowed, &winner);
+        assert!(std::ptr::eq(
+            borrowed,
+            core.object_mutation_labels.get(&nodes[32]).unwrap(),
+        ));
+        assert_eq!(borrowed_visited, expected_visited);
+
+        let mut owned_visited = BTreeSet::new();
+        assert_eq!(
+            core.process_dynamic_value_label(&Value::Object(nodes[0]), &mut owned_visited),
+            winner,
+        );
+        assert_eq!(owned_visited, expected_visited);
+    }
+
+    #[test]
+    fn traversal_preserves_previsited_subtree_and_non_object_behavior() {
+        let mut core = test_core();
+        let secret = core.alloc_object_with_prototype(None).unwrap();
+        core.join_direct_object_mutation_label(secret, &Label::Secret)
+            .unwrap();
+        let excluded = core
+            .alloc_object_with_properties(&[("secret", Value::Object(secret))])
+            .unwrap();
+        let root = core
+            .alloc_object_with_properties(&[("excluded", Value::Object(excluded))])
+            .unwrap();
+
+        let mut borrowed_visited = BTreeSet::from([excluded]);
+        assert!(
+            core.process_dynamic_value_label_ref(&Value::Object(root), &mut borrowed_visited)
+                .is_none()
+        );
+        assert_eq!(borrowed_visited, BTreeSet::from([root, excluded]));
+        let mut owned_visited = BTreeSet::from([excluded]);
+        assert_eq!(
+            core.process_dynamic_value_label(&Value::Object(root), &mut owned_visited),
+            Label::Public,
+        );
+        assert_eq!(owned_visited, borrowed_visited);
+
+        for value in [Value::Object(root), Value::Undefined, Value::Int(42)] {
+            let before = borrowed_visited.clone();
+            assert!(
+                core.process_dynamic_value_label_ref(&value, &mut borrowed_visited)
+                    .is_none()
+            );
+            assert_eq!(borrowed_visited, before);
+            assert_eq!(
+                core.process_dynamic_value_label(&value, &mut owned_visited),
+                Label::Public,
+            );
+            assert_eq!(owned_visited, before);
+        }
+    }
+
+    #[test]
+    fn borrowed_binary_and_mutation_labels_keep_full_custom_order_and_identity() {
+        let custom = |name: &str, level| Label::Custom {
+            name: name.to_string(),
+            level,
+        };
+        for (mutation_label, storage_label, storage_wins) in [
+            (Label::Public, custom("public-custom", 0), true),
+            (Label::Secret, custom("same-level", 3), true),
+            (custom("zulu", 3), custom("alpha", 3), false),
+            (custom("alpha", 3), custom("zulu", 3), true),
+            (Label::TopSecret, custom("low-level", 0), false),
+            (Label::TopSecret, custom("higher-level", 8), true),
+        ] {
+            let mut core = test_core();
+            let buffer = core.alloc_buffer_from_bytes(b"payload").unwrap();
+            core.join_binary_storage_label(buffer, &storage_label)
+                .unwrap();
+            let backing = core.array_buffer_id_for_object(buffer).unwrap();
+            let alias = core.alloc_buffer_view_object(backing, 1, 3).unwrap();
+            let root = core
+                .alloc_object_with_properties(&[("nested", Value::Object(alias))])
+                .unwrap();
+            core.join_direct_object_mutation_label(root, &mutation_label)
+                .unwrap();
+            let expected = if storage_wins {
+                core.binary_storage_label_ref(alias).unwrap()
+            } else {
+                core.object_mutation_labels.get(&root).unwrap()
+            };
+            let mut visited = BTreeSet::new();
+            let borrowed = core
+                .process_dynamic_value_label_ref(&Value::Object(root), &mut visited)
+                .unwrap();
+            assert_eq!(borrowed, expected);
+            assert!(std::ptr::eq(borrowed, expected));
+            assert_eq!(visited, BTreeSet::from([root, alias, backing]));
+            assert_eq!(
+                core.process_dynamic_value_label(&Value::Object(root), &mut BTreeSet::new()),
+                *expected,
+            );
+        }
+    }
+
+    #[test]
+    fn object_assign_preserves_a_deep_leafs_confidentiality() {
+        let mut core = test_core();
+        let (root, leaf) = deep_graph(&mut core, 16_384);
+        core.join_direct_object_mutation_label(leaf, &Label::Secret)
+            .unwrap();
+        let target = core.alloc_object_with_prototype(None).unwrap();
+        let copied = core
+            .execute_builtin_call(
+                "builtin:ObjectAssign",
+                vec![Value::Object(target), Value::Object(root)],
+            )
+            .expect("Object.assign must not overflow the native stack during IFC preflight");
+        assert_eq!(copied, Value::Object(target));
+        assert_eq!(
+            core.object_mutation_labels.get(&target),
+            Some(&Label::Secret),
+        );
+        assert_eq!(
+            core.heap
+                .get(target.0 as usize)
+                .unwrap()
+                .properties
+                .get("next"),
+            core.heap
+                .get(root.0 as usize)
+                .unwrap()
+                .properties
+                .get("next"),
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+        );
+    }
+
+    #[test]
+    fn object_assign_executes_a_guest_constructed_deep_graph() {
+        let mut engine = crate::HybridRouter::default();
+        // Exercise graph depth independently of the default instruction-fuel limit.
+        let result = engine
+            .eval_with_instruction_budget(
+                concat!(
+                    "let graph = {}; ",
+                    "for (let i = 0; i < 4096; i++) { graph = { next: graph }; } ",
+                    "const copy = Object.assign({}, graph); copy.next === graph.next;",
+                ),
+                1_000_000,
+            )
+            .expect("ordinary guest graph construction and Object.assign must execute");
+        assert_eq!(result.value, "true");
+    }
+}
+
+#[cfg(test)]
 mod class_feature_bd_bg9l1_16_tests {
     #[allow(unused_imports)]
     use super::*;

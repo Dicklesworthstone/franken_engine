@@ -451,6 +451,17 @@ jobs:
           cargo test --locked -j1 -p frankenengine-engine --lib \
             live_export_ -- --nocapture --test-threads=1 \
             2>&1 | tee native-buffer-live-export-tests.log
+      - name: Execute deep reachable-label and hostcall provenance regressions
+        if: always()
+        run: |
+          set -euo pipefail
+          cargo test --locked -j1 -p frankenengine-engine --lib \
+            dynamic_value_label_tests -- --nocapture --test-threads=1 \
+            2>&1 | tee native-buffer-dynamic-label-tests.log
+          RUST_MIN_STACK=2097152 cargo test --locked -j1 -p frankenengine-engine --lib \
+            deep_graph_label_traversal_uses_no_native_recursion \
+            -- --nocapture --test-threads=1 \
+            2>&1 | tee -a native-buffer-dynamic-label-tests.log
       - name: Execute containment admission and lifecycle regressions
         if: always()
         run: |
@@ -607,6 +618,7 @@ jobs:
           status=0
           for log in native-buffer-inputs.log native-buffer-test-list.log native-buffer-tests.log \
             native-buffer-esm-live-bindings-tests.log native-buffer-live-export-tests.log \
+            native-buffer-dynamic-label-tests.log \
             native-buffer-containment-admission-tests.log \
             native-buffer-execution-attempt-admission-tests.log \
             native-buffer-json-tests.log \

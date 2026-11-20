@@ -13058,6 +13058,11 @@ impl InterpreterCore {
     /// Borrow the dominant label reachable through a value without allocating
     /// a temporary `Custom` label. Delegation preflight uses this to reserve
     /// the exact carrier before the one clone retained in the scratch frame.
+    ///
+    /// Guest code can construct an arbitrarily deep graph without recursive
+    /// guest calls. Walk it iteratively so a builtin's IFC preflight cannot
+    /// exhaust the native stack. Mark objects when scheduling them: cycles
+    /// and shared children then require at most one pending entry per object.
     pub(super) fn process_dynamic_value_label_ref<'a>(
         &'a self,
         value: &Value,
@@ -13069,19 +13074,30 @@ impl InterpreterCore {
         if !visited.insert(*object_id) {
             return None;
         }
-        let mut winner = self.object_mutation_labels.get(object_id);
-        if let Some(candidate) = self.binary_storage_label_ref(*object_id)
-            && winner.is_none_or(|current| candidate > current)
-        {
-            winner = Some(candidate);
-        }
-        if let Some(object) = self.heap.get(object_id.0 as usize) {
-            // The largest label wins whatever the order (bd-9vouw.333).
-            for property in object.properties.values_unordered() {
-                if let Some(candidate) = self.process_dynamic_value_label_ref(property, visited)
-                    && winner.is_none_or(|current| candidate > current)
-                {
+        // Keep the next object inline: leaves and single-child chains do not
+        // need a separate worklist allocation in this hot preflight path.
+        let mut next = Some(*object_id);
+        let mut pending = Vec::new();
+        let mut winner = None;
+        while let Some(object_id) = next.take().or_else(|| pending.pop()) {
+            for candidate in self
+                .object_mutation_labels
+                .get(&object_id)
+                .into_iter()
+                .chain(self.binary_storage_label_ref(object_id))
+            {
+                if winner.is_none_or(|current| candidate > current) {
                     winner = Some(candidate);
+                }
+            }
+            if let Some(object) = self.heap.get(object_id.0 as usize) {
+                // The largest label wins whatever the order (bd-9vouw.333).
+                for property in object.properties.values_unordered() {
+                    if let Value::Object(child_id) = property
+                        && visited.insert(*child_id)
+                    {
+                        pending.extend(next.replace(*child_id));
+                    }
                 }
             }
         }

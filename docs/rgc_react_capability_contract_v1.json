@@ -337,7 +337,7 @@
       "user_visible_diagnostic": {
         "error_code": "FE-RGC-016A-CAP-0008",
         "diagnostic_surface": "frankenctl react build",
-        "message_template": "The client-build preview compiles bounded local JS/JSX/TS/TSX ES-module graphs with source maps and explicit external runtime providers. CommonJS bundling, dynamic imports, SSR, and hydration are outside this preview.",
+        "message_template": "The client-build preview compiles bounded local JS/JSX/TS/TSX ES-module graphs with static imports, re-exports, literal dynamic imports, source maps, and explicit external runtime providers. Local JSON dependencies require type: 'json' and expose only default. CommonJS bundling, computed imports, dynamic import options, other non-code assets, SSR, and hydration are outside this preview.",
         "remediation_bead": "bd-1lsy.10.11.2"
       },
       "unsupported_surface_policy": {

@@ -4,8 +4,9 @@
 //! Modules remain ESM, so the browser owns live bindings, cycles, top-level
 //! await, and evaluation order. No guest code or external provider is executed
 //! while building. Literal dynamic imports retain lazy ESM execution and share
-//! the bounded graph with static imports. Computed imports, CommonJS, import
-//! attributes, and non-code assets are refused.
+//! the bounded graph with static imports. Local JSON dependencies with the
+//! explicit `type: "json"` attribute become default-only ESM assets. Computed
+//! imports, CommonJS, other attributes, and other non-code assets are refused.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
@@ -18,10 +19,12 @@ use serde::{Deserialize, Serialize};
 use crate::ast::{ExportKind, Expression, ImportClause, Statement};
 use crate::capability::RuntimeCapability;
 use crate::hash_tiers::ContentHash;
+use crate::import_attributes::ImportAttributes;
 use crate::jsx_tsx_parser::import_call_candidates;
 use crate::module_resolver::{
     CapabilityPolicyHook, DeterministicModuleResolver, ImportStyle, ModuleDefinition,
     ModuleDependency, ModuleRequest, ModuleResolver, ModuleSyntax, ResolutionContext,
+    validate_import_attributes,
 };
 use crate::parser::{CanonicalEs2020Parser, Es2020Parser};
 use crate::react_compilation_pipeline::{
@@ -179,6 +182,10 @@ struct SourceImport {
     /// A declaration prefix for static imports; None edits only the literal
     /// argument of import(), retaining comments and lazy execution.
     declaration: Option<String>,
+    attributes: ImportAttributes,
+    /// JSON module namespaces expose only `default`. Namespace and star edges
+    /// are valid; named imports and reexports must name that one export.
+    json_exports_valid: bool,
 }
 
 #[derive(Debug)]
@@ -211,6 +218,12 @@ pub fn build_react_client(config: &ReactClientBuildConfig) -> BuildResult<ReactC
         ));
     }
     let entry = confined_file(&config.entry, &root)?;
+    if source_language(&entry)?.is_none() {
+        return Err(ReactClientBuildError::new(
+            "FE-REACT-BUILD-FORMAT",
+            "the client entry must be JavaScript or TypeScript; import JSON dependencies with type: 'json'",
+        ));
+    }
     let entry_name = source_name(&entry, &root)?;
     let mut queue = VecDeque::from([entry.clone()]);
     let mut queued = BTreeSet::from([entry]);
@@ -226,41 +239,67 @@ pub fn build_react_client(config: &ReactClientBuildConfig) -> BuildResult<ReactC
         source_bytes += source.len();
         let mut compile_config = config.compile.clone();
         compile_config.lowering_config.source_file = Some(name.clone());
-        let compiled =
-            compile_react_module(&source, language, &compile_config).map_err(|error| {
-                ReactClientBuildError::new("FE-REACT-BUILD-COMPILE", format!("{name}: {error}"))
-            })?;
+        let (generated_code, source_map, syntax) = match language {
+            Some(language) => {
+                let compiled =
+                    compile_react_module(&source, language, &compile_config).map_err(|error| {
+                        ReactClientBuildError::new(
+                            "FE-REACT-BUILD-COMPILE",
+                            format!("{name}: {error}"),
+                        )
+                    })?;
+                (
+                    compiled.generated_code,
+                    compiled.source_map,
+                    ModuleSyntax::EsModule,
+                )
+            }
+            None => {
+                let (code, map) = compile_json_module(
+                    &source,
+                    &name,
+                    compile_config.generate_source_maps,
+                    config.max_output_bytes - output_bytes,
+                )?;
+                (code, map, ModuleSyntax::Json)
+            }
+        };
         let tree = CanonicalEs2020Parser
-            .parse(
-                compiled.generated_code.as_str(),
-                crate::ast::ParseGoal::Module,
-            )
+            .parse(generated_code.as_str(), crate::ast::ParseGoal::Module)
             .map_err(|error| {
                 ReactClientBuildError::new("FE-REACT-BUILD-PARSE", format!("{name}: {error}"))
             })?;
         let mut expected_ast = serde_json::to_value(&tree).map_err(serialization_error)?;
-        let mut imports = bounded_dynamic_imports(&compiled.generated_code, &expected_ast, &name)?;
+        let mut imports = bounded_dynamic_imports(&generated_code, &expected_ast, &name)?;
         let mut edits = Vec::new();
         let mut dynamic_edits = Vec::new();
         let mut dynamic_targets = BTreeMap::new();
         let mut dependencies = Vec::new();
-        let mut definition =
-            ModuleDefinition::new(ModuleSyntax::EsModule, compiled.generated_code.clone())
-                .require_capability(RuntimeCapability::ModuleLoad)
-                .with_provenance(name.clone());
+        let mut definition = ModuleDefinition::new(
+            syntax,
+            if syntax == ModuleSyntax::Json {
+                source.clone()
+            } else {
+                generated_code.clone()
+            },
+        )
+        .require_capability(RuntimeCapability::ModuleLoad)
+        .with_provenance(name.clone());
 
         for statement in &tree.body {
-            let (specifier, declaration, attributes) = match statement {
+            let (specifier, declaration, attributes, json_exports_valid) = match statement {
                 Statement::Import(import) => (
                     import.source.as_str(),
                     Some(import_prefix(&import.clause)?),
                     &import.import_attributes,
+                    json_import_exports_valid(&import.clause),
                 ),
                 Statement::Export(export) => match &export.kind {
                     ExportKind::NamedClause(clause) if clause.source().is_some() => (
                         clause.source().and_then(|source| source.as_str()),
                         Some(format!("export {} from ", clause.canonical_head())),
                         clause.import_attributes(),
+                        json_reexport_exports_valid(clause.canonical_head()),
                     ),
                     _ => continue,
                 },
@@ -272,20 +311,14 @@ pub fn build_react_client(config: &ReactClientBuildConfig) -> BuildResult<ReactC
                     format!("{name}: module specifier is not valid UTF-8"),
                 )
             })?;
-            if !attributes.is_empty() {
-                return Err(ReactClientBuildError::new(
-                    "FE-REACT-BUILD-FORMAT",
-                    format!(
-                        "{name}: import attributes require non-code module support ({specifier})",
-                    ),
-                ));
-            }
             let span = statement.span();
             imports.push(SourceImport {
                 specifier: specifier.to_string(),
                 span: usize::try_from(span.start_offset).map_err(|_| invalid_span())?
                     ..usize::try_from(span.end_offset).map_err(|_| invalid_span())?,
                 declaration,
+                attributes: attributes.clone(),
+                json_exports_valid,
             });
         }
         imports.sort_unstable_by_key(|import| import.span.start);
@@ -293,14 +326,23 @@ pub fn build_react_client(config: &ReactClientBuildConfig) -> BuildResult<ReactC
             let specifier = import.specifier.as_str();
             let (target, emitted_specifier, external) =
                 if let Some(url) = config.externals.get(specifier) {
+                    // We do not capture or verify external provider formats.
+                    // Never erase an attribute on an unverified external edge.
+                    validate_client_import(ModuleSyntax::EsModule, &import, &name)?;
                     (url.clone(), specifier.to_string(), true)
                 } else {
                     let dependency = resolve_local_source(&path, specifier, &root)?;
+                    let dependency_syntax = if source_language(&dependency)?.is_none() {
+                        ModuleSyntax::Json
+                    } else {
+                        ModuleSyntax::EsModule
+                    };
+                    validate_client_import(dependency_syntax, &import, &name)?;
                     let dependency_name = source_name(&dependency, &root)?;
-                    definition.dependencies.push(ModuleDependency::new(
-                        format!("/{dependency_name}"),
-                        ImportStyle::Import,
-                    ));
+                    definition.dependencies.push(
+                        ModuleDependency::new(format!("/{dependency_name}"), ImportStyle::Import)
+                            .with_import_attributes(import.attributes.clone()),
+                    );
                     if queued.insert(dependency.clone()) {
                         if queued.len() > config.max_modules {
                             return Err(ReactClientBuildError::new(
@@ -322,8 +364,7 @@ pub fn build_react_client(config: &ReactClientBuildConfig) -> BuildResult<ReactC
                 target,
                 external,
             });
-            let original = compiled
-                .generated_code
+            let original = generated_code
                 .get(import.span.clone())
                 .ok_or_else(invalid_span)?;
             let newlines = line_offsets(original).len() - 1;
@@ -351,18 +392,17 @@ pub fn build_react_client(config: &ReactClientBuildConfig) -> BuildResult<ReactC
         }
         if !dynamic_edits.is_empty() {
             verify_dynamic_import_edits(
-                &compiled.generated_code,
+                &generated_code,
                 &mut expected_ast,
                 &dynamic_edits,
                 &dynamic_targets,
             )?;
         }
-        let mut code = apply_edits(&compiled.generated_code, &edits)?;
+        let mut code = apply_edits(&generated_code, &edits)?;
         let asset = asset_path(&name);
-        let source_map = compiled
-            .source_map
+        let source_map = source_map
             .as_deref()
-            .map(|map| remap_source_map(map, &compiled.generated_code, &code, &edits, &asset))
+            .map(|map| remap_source_map(map, &generated_code, &code, &edits, &asset))
             .transpose()?;
         if source_map.is_some() {
             code.push_str(&format!(
@@ -537,7 +577,7 @@ fn confined_file(path: &Path, root: &Path) -> BuildResult<PathBuf> {
             "module source must be a regular file",
         ));
     }
-    source_language(&canonical)?;
+    let _ = source_language(&canonical)?;
     Ok(canonical)
 }
 
@@ -548,14 +588,168 @@ fn outside_root() -> ReactClientBuildError {
     )
 }
 
-fn source_language(path: &Path) -> BuildResult<ReactInputLanguage> {
+fn validate_client_import(
+    syntax: ModuleSyntax,
+    import: &SourceImport,
+    referrer: &str,
+) -> BuildResult<()> {
+    validate_import_attributes(ImportStyle::Import, syntax, &import.attributes).map_err(
+        |error| {
+            ReactClientBuildError::new(
+                "FE-REACT-BUILD-ATTRIBUTES",
+                format!("{referrer}: {}: {error}", import.specifier),
+            )
+        },
+    )?;
+    if syntax == ModuleSyntax::Json && !import.json_exports_valid {
+        return Err(ReactClientBuildError::new(
+            "FE-REACT-BUILD-EXPORT",
+            format!(
+                "{referrer}: JSON module '{}' exports only default",
+                import.specifier
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn json_import_exports_valid(clause: &ImportClause) -> bool {
+    match clause {
+        ImportClause::Named { specifiers } | ImportClause::DefaultAndNamed { specifiers, .. } => {
+            specifiers
+                .iter()
+                .all(|specifier| specifier.import_name == "default")
+        }
+        _ => true,
+    }
+}
+
+fn json_reexport_exports_valid(head: &str) -> bool {
+    if head == "*" || head.starts_with("* as ") {
+        return true;
+    }
+    // This is a parser-validated canonical head. Encoded string export names
+    // contain no commas or spaces, as documented by encode_module_export_name.
+    head.strip_prefix('{')
+        .and_then(|head| head.strip_suffix('}'))
+        .is_some_and(|head| {
+            head.split(',').all(|specifier| {
+                specifier
+                    .split_whitespace()
+                    .next()
+                    .is_none_or(|name| crate::parser::decode_module_export_name(name) == "default")
+            })
+        })
+}
+
+/// Validate data without materializing a serde value tree, then preserve its
+/// literal spellings in a default-only ES module. JSON string escapes may
+/// contain lone surrogates, numbers may overflow to infinity, and `-0` must
+/// retain its sign. Roundtripping through serde_json::Value would lose those
+/// distinctions. Computed property keys give every JSON object member ordinary
+/// data-property semantics, including duplicate and escaped `__proto__` keys.
+/// No mutable guest JSON.parse/Object helper participates in evaluation.
+fn compile_json_module(
+    source: &str,
+    name: &str,
+    generate_source_maps: bool,
+    output_budget: usize,
+) -> BuildResult<(String, Option<String>)> {
+    let mut decoder = serde_json::Deserializer::from_str(source);
+    serde::de::IgnoredAny::deserialize(&mut decoder)
+        .and_then(|_| decoder.end())
+        .map_err(|error| {
+            ReactClientBuildError::new("FE-REACT-BUILD-JSON", format!("{name}: {error}"))
+        })?;
+
+    let append = |output: &mut String, text: &str| -> BuildResult<()> {
+        if text.len() > output_budget.saturating_sub(output.len()) {
+            return Err(ReactClientBuildError::new(
+                "FE-REACT-BUILD-LIMIT",
+                "generated JSON module exceeds the build budget",
+            ));
+        }
+        output.push_str(text);
+        Ok(())
+    };
+    let mut code = String::new();
+    append(&mut code, "const __franken_json = (\n")?;
+    let bytes = source.as_bytes();
+    let mut cursor = 0;
+    let mut copied = 0;
+    while cursor < bytes.len() {
+        if bytes[cursor] != b'"' {
+            cursor += 1;
+            continue;
+        }
+        let start = cursor;
+        cursor += 1;
+        while bytes[cursor] != b'"' {
+            cursor += if bytes[cursor] == b'\\' { 2 } else { 1 };
+        }
+        cursor += 1;
+        let mut following = cursor;
+        while bytes
+            .get(following)
+            .is_some_and(|byte| matches!(byte, b' ' | b'\t' | b'\r' | b'\n'))
+        {
+            following += 1;
+        }
+        if bytes.get(following) == Some(&b':') {
+            append(&mut code, &source[copied..start])?;
+            append(&mut code, "[")?;
+            append(&mut code, &source[start..cursor])?;
+            append(&mut code, "]")?;
+            copied = cursor;
+        }
+    }
+    append(&mut code, &source[copied..])?;
+    append(&mut code, "\n);\nexport default __franken_json;\n")?;
+
+    let map = generate_source_maps
+        .then(|| {
+            // The wrapper has no source location. Line-start mappings point into
+            // the unchanged JSON lines; inserted key brackets map to the same key.
+            let mut mappings = String::from(";AAAA");
+            for offset in line_offsets(source).into_iter().skip(1) {
+                // EOF after a terminator has no source character to map.
+                // In particular, a trailing CR combines with the wrapper's
+                // leading LF; mapping that empty line would mark `);` as JSON.
+                if offset == source.len() {
+                    break;
+                }
+                mappings.push_str(";AACA");
+            }
+            serde_json::to_string(&serde_json::json!({
+                "version": 3,
+                "sources": [name],
+                "sourcesContent": [source],
+                "names": [],
+                "mappings": mappings,
+            }))
+            .map_err(serialization_error)
+        })
+        .transpose()?;
+    if map.as_ref().map_or(0, String::len) > output_budget.saturating_sub(code.len()) {
+        return Err(ReactClientBuildError::new(
+            "FE-REACT-BUILD-LIMIT",
+            "generated JSON source map exceeds the build budget",
+        ));
+    }
+    Ok((code, map))
+}
+
+/// `None` is a JSON data module, which bypasses JavaScript/TypeScript parsing
+/// until its validated data has been emitted as a default-only ESM asset.
+fn source_language(path: &Path) -> BuildResult<Option<ReactInputLanguage>> {
     match path.extension().and_then(|extension| extension.to_str()) {
-        Some("ts" | "tsx" | "mts") => Ok(ReactInputLanguage::Tsx),
-        Some("js" | "jsx" | "mjs") => Ok(ReactInputLanguage::Jsx),
+        Some("ts" | "tsx" | "mts") => Ok(Some(ReactInputLanguage::Tsx)),
+        Some("js" | "jsx" | "mjs") => Ok(Some(ReactInputLanguage::Jsx)),
+        Some("json") => Ok(None),
         _ => Err(ReactClientBuildError::new(
             "FE-REACT-BUILD-FORMAT",
             format!(
-                "{}: client builds accept local ESM JS/JSX/TS/TSX modules; CommonJS and non-code assets are unsupported",
+                "{}: client builds accept local ESM JS/JSX/TS/TSX and explicitly typed JSON dependencies; CommonJS and other non-code assets are unsupported",
                 path.display(),
             ),
         )),
@@ -728,6 +922,8 @@ fn bounded_dynamic_imports(
             specifier: specifier.to_string(),
             span: range.start + literal.start..range.start + literal.end,
             declaration: None,
+            attributes: ImportAttributes::default(),
+            json_exports_valid: true,
         });
     }
     if observed != expected {
@@ -1528,6 +1724,249 @@ export const describe = async () => `loaded:${(await import('./lazy.js')).value}
                 .contains("export { value as current } from")
         );
         assert_eq!(build.modules[1].dependencies[0].target, build.entry_asset);
+    }
+
+    #[test]
+    fn client_build_emits_shared_default_only_json_modules_and_maps() {
+        let source = r#"{"__proto__":{"safe":true},"x":1,"x":2,"neg":-0,"large":1e400,"lone":"\ud800","\udfff":"\u2028\u2029","quote\"key":"a:b"}"#;
+        let (directory, mut config) = fixture(&[
+            (
+                "app.js",
+                "import data, { default as same } from './data.json' with { type: 'json' }; import * as ns from './data.json' with { type: 'json' }; export { default as config } from './data.json' with { type: 'json' }; export * as values from './data.json' with { type: 'json' }; export const shared = data === same && data === ns.default;",
+            ),
+            ("data.json", source),
+        ]);
+        config.compile.generate_source_maps = true;
+        let build = build_react_client(&config).unwrap();
+        assert_eq!(build.modules.len(), 2);
+        assert_eq!(build.modules[0].dependencies.len(), 4);
+        assert!(
+            build.modules[0]
+                .dependencies
+                .iter()
+                .all(|edge| { edge.target == build.modules[1].asset_path && !edge.external })
+        );
+        assert!(!build.modules[0].code.contains("with {"));
+        let json = &build.modules[1];
+        assert_eq!(json.source_hash, ContentHash::compute(source.as_bytes()));
+        assert!(json.code.contains(r#"["__proto__"]"#));
+        assert!(json.code.contains(r#"["\udfff"]"#));
+        assert!(json.code.contains(r#""\ud800""#));
+        assert!(json.code.contains("-0"));
+        assert!(json.code.contains("1e400"));
+        assert!(!json.code.contains("JSON.parse"));
+        assert!(json.dependencies.is_empty());
+        let map: serde_json::Value =
+            serde_json::from_str(json.source_map.as_ref().unwrap()).unwrap();
+        assert_eq!(map["sourcesContent"][0], source);
+        assert_eq!(map["sources"][0], "data.json");
+        assert_eq!(build, build_react_client(&config).unwrap());
+        build.verify_integrity().unwrap();
+
+        fs::write(directory.path().join("data.json"), r#"{"x":3}"#).unwrap();
+        let changed = build_react_client(&config).unwrap();
+        assert_ne!(build.graph_hash, changed.graph_hash);
+        assert_ne!(json.output_hash, changed.modules[1].output_hash);
+        assert_eq!(json.asset_path, changed.modules[1].asset_path);
+    }
+
+    #[test]
+    fn client_build_checks_json_attributes_and_default_only_exports_on_every_edge() {
+        let (_directory, mut config) = fixture(&[
+            (
+                "app.js",
+                "import data from './data.json' with { type: 'json' };",
+            ),
+            ("data.json", "{}"),
+            ("code.js", "export default {};"),
+        ]);
+        for (source, code) in [
+            ("import './data.json';", "FE-REACT-BUILD-ATTRIBUTES"),
+            (
+                "import './data.json' with { type: 'css' };",
+                "FE-REACT-BUILD-ATTRIBUTES",
+            ),
+            (
+                "import './data.json' with { type: 'json', integrity: 'unchecked' };",
+                "FE-REACT-BUILD-ATTRIBUTES",
+            ),
+            (
+                "import './code.js' with { type: 'json' };",
+                "FE-REACT-BUILD-ATTRIBUTES",
+            ),
+            (
+                "import { x } from './data.json' with { type: 'json' };",
+                "FE-REACT-BUILD-EXPORT",
+            ),
+            (
+                "import data, { x as other } from './data.json' with { type: 'json' };",
+                "FE-REACT-BUILD-EXPORT",
+            ),
+            (
+                "export { x as default } from './data.json' with { type: 'json' };",
+                "FE-REACT-BUILD-EXPORT",
+            ),
+            (
+                "export { 'not,default' as x } from './data.json' with { type: 'json' };",
+                "FE-REACT-BUILD-EXPORT",
+            ),
+            (
+                "import './data.json' with { type: 'json' }; import './data.json';",
+                "FE-REACT-BUILD-ATTRIBUTES",
+            ),
+            (
+                "export const load = () => import('./data.json');",
+                "FE-REACT-BUILD-ATTRIBUTES",
+            ),
+            (
+                "export const load = () => import('./data.json', { with: { type: 'json' } });",
+                "FE-REACT-BUILD-DYNAMIC",
+            ),
+        ] {
+            fs::write(&config.entry, source).unwrap();
+            assert_eq!(
+                build_react_client(&config).unwrap_err().code,
+                code,
+                "{source}"
+            );
+        }
+        fs::write(
+            &config.entry,
+            "import './data.json' with { type: 'json', type: 'json' };",
+        )
+        .unwrap();
+        assert!(
+            build_react_client(&config).is_err(),
+            "duplicate attributes must fail parsing"
+        );
+        for source in [
+            "import './data.json' with { type: 'json' };",
+            "import * as data from './data.json' with { type: 'json' };",
+            "import { 'default' as data } from './data.json' with { type: 'json' };",
+            "export { 'default' as 'a,b' } from './data.json' with { type: 'json' };",
+            "export * from './data.json' with { type: 'json' };",
+        ] {
+            fs::write(&config.entry, source).unwrap();
+            build_react_client(&config).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+        config.externals.insert(
+            "typed-provider".into(),
+            "https://example.invalid/data.json".into(),
+        );
+        fs::write(
+            &config.entry,
+            "import data from 'typed-provider' with { type: 'json' };",
+        )
+        .unwrap();
+        assert_eq!(
+            build_react_client(&config).unwrap_err().code,
+            "FE-REACT-BUILD-ATTRIBUTES"
+        );
+    }
+
+    #[test]
+    fn client_build_json_validation_rejects_javascript_and_keeps_primitive_spellings() {
+        let (directory, config) = fixture(&[
+            (
+                "app.js",
+                "import data from './data.json' with { type: 'json' }; export default data;",
+            ),
+            ("data.json", "null"),
+        ]);
+        for source in [
+            "",
+            "undefined",
+            "NaN",
+            "[1,]",
+            "{\"x\":1,}",
+            "{x:1}",
+            "01",
+            "true false",
+            "/* comment */0",
+            r#""\x41""#,
+            r#""unterminated"#,
+        ] {
+            fs::write(directory.path().join("data.json"), source).unwrap();
+            assert_eq!(
+                build_react_client(&config).unwrap_err().code,
+                "FE-REACT-BUILD-JSON",
+                "{source}"
+            );
+        }
+        for source in [
+            "null",
+            "false",
+            "true",
+            "-0",
+            "1e400",
+            "9007199254740993",
+            r#""\ud800""#,
+            "\"\u{2028}\u{2029}\"",
+            "[]",
+            "{}",
+        ] {
+            fs::write(directory.path().join("data.json"), source).unwrap();
+            let build =
+                build_react_client(&config).unwrap_or_else(|error| panic!("{source}: {error}"));
+            assert!(build.modules[1].code.contains(source), "{source}");
+        }
+
+        let mut config = config;
+        config.compile.generate_source_maps = true;
+        for source in ["0\r", "0\r\n", "0\n"] {
+            fs::write(directory.path().join("data.json"), source).unwrap();
+            let build = build_react_client(&config).unwrap();
+            let map: serde_json::Value =
+                serde_json::from_str(build.modules[1].source_map.as_ref().unwrap()).unwrap();
+            let mapped_lines: Vec<_> = map["mappings"]
+                .as_str()
+                .unwrap()
+                .split(';')
+                .enumerate()
+                .filter_map(|(line, mapping)| (!mapping.is_empty()).then_some(line))
+                .collect();
+            assert_eq!(
+                mapped_lines,
+                vec![1],
+                "generated wrappers must stay unmapped: {source:?}"
+            );
+            assert_eq!(map["sourcesContent"][0], source);
+        }
+    }
+
+    #[test]
+    fn client_build_json_assets_obey_existing_graph_and_byte_limits() {
+        let entry = "import data from './data.json' with { type: 'json' }; export default data;";
+        let data = r#"{"nested":[1,2,3],"__proto__":true}"#;
+        let (_directory, mut config) = fixture(&[("app.js", entry), ("data.json", data)]);
+        config.compile.generate_source_maps = true;
+        config.max_modules = 2;
+        config.max_source_bytes = entry.len() + data.len();
+        let build = build_react_client(&config).unwrap();
+        config.max_output_bytes = build
+            .modules
+            .iter()
+            .map(|module| module.code.len() + module.source_map.as_ref().map_or(0, String::len))
+            .sum();
+        build_react_client(&config).expect("exact delivered byte budget");
+        let exact = config.clone();
+        config.max_output_bytes -= 1;
+        assert_eq!(
+            build_react_client(&config).unwrap_err().code,
+            "FE-REACT-BUILD-LIMIT"
+        );
+        config = exact.clone();
+        config.max_source_bytes -= 1;
+        assert_eq!(
+            build_react_client(&config).unwrap_err().code,
+            "FE-REACT-BUILD-LIMIT"
+        );
+        config = exact;
+        config.max_modules = 1;
+        assert_eq!(
+            build_react_client(&config).unwrap_err().code,
+            "FE-REACT-BUILD-LIMIT"
+        );
     }
 
     #[test]

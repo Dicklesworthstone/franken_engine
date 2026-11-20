@@ -135,8 +135,80 @@ try {
   writeFileSync(escaping, "export const load = () => import('../lazy.js');\n");
   expectRefusal(escaping, join(project, "escaping-dist"), "FE-REACT-BUILD-ROOT", confined);
 
+  const jsonSources = {
+    "json-entry.js": [
+      "import './json-poison.js';",
+      "import data, { default as again } from './config.json' with { type: 'json' };",
+      "import * as ns from './config.json' with { type: 'json' };",
+      "import { config, values } from './json-reexport.js';",
+      "console.log(data === again && data === ns.default && data === config && data === values.default);",
+      "console.log(Object.keys(ns).join(','));",
+      "console.log(Object.getPrototypeOf(data) === Object.prototype, Object.hasOwn(data, '__proto__'), data.__proto__.safe);",
+      "console.log(data.duplicate, 1 / data.negativeZero, data.overflow, data.rounded);",
+      "console.log(data.lone.charCodeAt(0), data['\\udfff'].charCodeAt(0), data['\\udfff'].charCodeAt(1));",
+      "console.log(data.separators.charCodeAt(0), data.separators.charCodeAt(1));",
+      "data.shared = 7; console.log(config.shared, ns.default.shared);",
+      "",
+    ].join("\n"),
+    "json-poison.js": "JSON.parse = () => { throw new Error('a JSON module must not call a replaced JSON.parse'); };\n",
+    "json-reexport.js": [
+      "export { default as config } from './config.json' with { type: 'json' };",
+      "export * as values from './config.json' with { type: 'json' };",
+      "",
+    ].join("\n"),
+    "config.json": String.raw`{"__proto__":{"safe":true},"duplicate":1,"duplicate":2,"negativeZero":-0,"overflow":1e400,"rounded":9007199254740993,"lone":"\ud800","\udfff":"\u2028\u2029","separators":"` + "\u2028\u2029" + '"}\n',
+  };
+  for (const [name, source] of Object.entries(jsonSources)) {
+    writeFileSync(join(project, name), source);
+  }
+  const jsonEntry = join(project, "json-entry.js");
+  const jsonOut = join(project, "json-dist");
+  const jsonReport = JSON.parse(expectSuccess(build(jsonEntry, jsonOut), "typed JSON client build"));
+  assert.equal(jsonReport.build.modules.length, 4);
+  assert.deepEqual(
+    JSON.parse(expectSuccess(build(jsonEntry, jsonOut), "repeat typed JSON build")).build,
+    jsonReport.build,
+    "JSON data and compiler output must rebuild deterministically",
+  );
+  const jsonAsset = jsonReport.build.modules.find((module) => module.source_path === "config.json");
+  assert.ok(jsonAsset);
+  assert.equal(JSON.parse(jsonAsset.source_map).sourcesContent[0], jsonSources["config.json"]);
+  assert.equal(readFileSync(join(jsonReport.build_directory, jsonAsset.asset_path), "utf8"), jsonAsset.code);
+  assert.equal(readFileSync(join(jsonReport.build_directory, `${jsonAsset.asset_path}.map`), "utf8"), jsonAsset.source_map);
+  const jsonExpected = [
+    "true",
+    "default",
+    "true true true",
+    "2 -Infinity Infinity 9007199254740992",
+    "55296 8232 8233",
+    "8232 8233",
+    "7 7",
+    "",
+  ].join("\n");
+  const nativeJson = expectSuccess(run(process.execPath, [jsonEntry]), "Node JSON module loader");
+  const compiledJson = expectSuccess(
+    run(process.execPath, [join(jsonReport.build_directory, jsonReport.build.entry_asset)]),
+    "emitted JSON modules",
+  );
+  assert.equal(nativeJson, jsonExpected);
+  assert.equal(compiledJson, nativeJson, "JSON values, namespaces or data-property semantics changed");
+
+  for (const [name, source, code] of [
+    ["untyped-json.js", "import './config.json';", "FE-REACT-BUILD-ATTRIBUTES"],
+    ["named-json.js", "import { duplicate } from './config.json' with { type: 'json' };", "FE-REACT-BUILD-EXPORT"],
+    ["wrong-json-type.js", "import './json-poison.js' with { type: 'json' };", "FE-REACT-BUILD-ATTRIBUTES"],
+    ["unknown-json-attribute.js", "import './config.json' with { type: 'json', integrity: 'unchecked' };", "FE-REACT-BUILD-ATTRIBUTES"],
+    ["malformed-json.js", "import './invalid.json' with { type: 'json' };", "FE-REACT-BUILD-JSON"],
+  ]) {
+    writeFileSync(join(project, name), source);
+    writeFileSync(join(project, "invalid.json"), '{"x":1,}\n');
+    expectRefusal(join(project, name), join(project, `${name}-dist`), code);
+  }
+
   console.log("PASS: emitted client ESM preserves lazy order, module caching, nested calls and template substitutions.");
   console.log("PASS: computed, missing and escaping imports are refused before publication.");
+  console.log("PASS: typed JSON modules match Node for shared defaults, __proto__, duplicate keys, exact UTF-16 and numeric edges.");
+  console.log("PASS: malformed JSON, named JSON exports and incorrect import attributes are refused before publication.");
   console.log(`Fixtures: ${project}`);
 } catch (error) {
   console.error(`React client dynamic-import check failed; fixtures retained at ${project}`);

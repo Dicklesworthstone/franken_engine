@@ -42,6 +42,10 @@ on:
       - 'crates/franken-engine/tests/async_generator_execution.rs'
       - 'crates/franken-engine/tests/esm_function_exports.rs'
       - 'crates/franken-engine/tests/esm_live_bindings_bd_1lsy_4_10_1.rs'
+      - 'crates/franken-engine/tests/frankenctl_run_commonjs_bd_rff5g.rs'
+      - 'crates/franken-engine/tests/dynamic_import.rs'
+      - 'crates/franken-engine/tests/util_module_bd_9vouw_109.rs'
+      - 'crates/franken-engine/tests/ifc_runtime_sink_labels_bd_9vouw_8.rs'
       - 'crates/franken-engine/tests/generator_next_bd_v6cv1_regression.rs'
       - 'crates/franken-engine/tests/array_species_bd_9vouw_94.rs'
       - 'crates/franken-engine/tests/proxy_descriptor_traps_bd_9vouw_147.rs'
@@ -451,6 +455,22 @@ jobs:
           cargo test --locked -j1 -p frankenengine-engine --lib \
             live_export_ -- --nocapture --test-threads=1 \
             2>&1 | tee native-buffer-live-export-tests.log
+      - name: Execute CommonJS recovery and custom inspection confidentiality regressions
+        if: always()
+        run: |
+          set -euo pipefail
+          cargo test --locked -j1 -p frankenengine-engine --no-fail-fast \
+            --test frankenctl_run_commonjs_bd_rff5g --test dynamic_import \
+            --test util_module_bd_9vouw_109 --test ifc_runtime_sink_labels_bd_9vouw_8 \
+            -- --nocapture --test-threads=1 \
+            2>&1 | tee native-buffer-commonjs-inspection-tests.log
+      - name: Execute Promise reachable-label and scratch accounting regressions
+        if: always()
+        run: |
+          set -euo pipefail
+          cargo test --locked -j1 -p frankenengine-engine --lib \
+            baseline_interpreter::json_parse::reachable::tests:: -- --nocapture --test-threads=1 \
+            2>&1 | tee native-buffer-promise-reachable-tests.log
       - name: Execute deep reachable-label and hostcall provenance regressions
         if: always()
         run: |
@@ -618,6 +638,7 @@ jobs:
           status=0
           for log in native-buffer-inputs.log native-buffer-test-list.log native-buffer-tests.log \
             native-buffer-esm-live-bindings-tests.log native-buffer-live-export-tests.log \
+            native-buffer-commonjs-inspection-tests.log native-buffer-promise-reachable-tests.log \
             native-buffer-dynamic-label-tests.log \
             native-buffer-containment-admission-tests.log \
             native-buffer-execution-attempt-admission-tests.log \

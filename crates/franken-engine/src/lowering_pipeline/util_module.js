@@ -64,16 +64,30 @@
     }
     return target;
   }
+  var inspectAssign = Object.assign;
+  function inspectStylizePlain(text) { return text; }
+  function inspectStylizeColor(text, kind) {
+    var color = inspect.colors[inspect.styles[kind]];
+    return color === undefined ? text : '\u001b[' + color[0] + 'm' + text + '\u001b[' + color[1] + 'm';
+  }
   function inspect(value, options) {
-    var depth = inspect.defaultOptions.depth;
-    if (typeof options === 'boolean') {
-      if (arguments.length > 2 && arguments[2] !== undefined) {
-        depth = arguments[2];
-      }
-    } else if (options !== null && typeof options === 'object' && options.depth !== undefined) {
-      depth = options.depth;
+    // Keep a private snapshot for this call. Native traversal gives every
+    // custom hook its own copy, so one hook cannot rewrite a sibling's options.
+    var settings = inspectAssign({ stylize: inspectStylizePlain }, inspect.defaultOptions);
+    if (arguments.length > 2 && arguments[2] !== undefined) {
+      settings.depth = arguments[2];
     }
-    return __franken_util_inspect(value, depth === null ? Infinity : depth);
+    if (arguments.length > 3 && arguments[3] !== undefined) {
+      settings.colors = arguments[3];
+    }
+    if (typeof options === 'boolean') {
+      settings.showHidden = options;
+    } else if (options !== null && typeof options === 'object') {
+      inspectAssign(settings, options);
+    }
+    if (settings.colors) { settings.stylize = inspectStylizeColor; }
+    return __franken_util_inspect(value, settings.depth === null ? Infinity : settings.depth,
+      settings, inspect);
   }
   inspect.custom = Symbol.for('nodejs.util.inspect.custom');
 
@@ -125,6 +139,11 @@
     bgMagentaBright: [105, 49],
     bgCyanBright: [106, 49],
     bgWhiteBright: [107, 49]
+  });
+  inspect.styles = Object.assign(Object.create(null), {
+    special: 'cyan', number: 'yellow', bigint: 'yellow', boolean: 'yellow',
+    undefined: 'grey', null: 'bold', string: 'green', symbol: 'green',
+    date: 'magenta', regexp: 'red', module: 'underline'
   });
   [
     ['grey', 'gray'],

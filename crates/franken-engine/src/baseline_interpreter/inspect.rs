@@ -9,12 +9,14 @@
 //! breakLength 80, compact 3, at most 100 entries per array or collection
 //! and 10000 characters per string) for the value kinds the engine has.
 //!
-//! Rendering is read-only and runs no guest code. Accessors print as
-//! `[Getter]`/`[Setter]`. A Proxy prints its target, as Node does without
+//! Ordinary rendering runs no guest code. Explicit `util.inspect` calls also
+//! honor `util.inspect.custom`; those getters and callbacks run under the
+//! formatter's monotone IFC context and their results join its output label.
+//! Ordinary accessors still print as `[Getter]`/`[Setter]`. A Proxy prints its target, as Node does without
 //! `showProxy`. `constructor` names are read off the prototype chain
-//! without `Symbol.hasInstance`. `check_console_confidentiality` has already
-//! walked every value reachable from the arguments, so nothing printed here
-//! escapes the sink check. Every rendered value is charged as native work.
+//! without `Symbol.hasInstance`. Console preflights reachable argument labels;
+//! explicit `util.inspect` gathers that same provenance for its return value
+//! and for data exposed by hooks. Rendered containers are charged as native work.
 //!
 //! Known differences from Node:
 //! - the engine unboxes `new Number(1)`;
@@ -23,6 +25,9 @@
 //! - `%d`/`%i`/`%f` convert objects to `NaN` instead of calling `valueOf`;
 //! - `%j` serializes plain data (objects, arrays, primitives, Dates)
 //!   without calling user `toJSON` methods;
+//! - a custom hook's direct string result preserves exact UTF-16, but raw
+//!   hook strings nested inside ordinary containers still pass through the
+//!   renderer's UTF-8 projection;
 //! - error stacks carry the engine's own frames.
 
 use super::*;
@@ -173,6 +178,7 @@ enum InspectIdentity {
     Object(u32),
     Function(u32),
     Closure(u32),
+    Promise(u32),
 }
 
 struct InspectState<'m> {
@@ -189,6 +195,18 @@ struct InspectState<'m> {
     indentation: usize,
     current_depth: i64,
     level_budget: BTreeMap<usize, usize>,
+    custom: Option<CustomInspect>,
+    /// Custom hooks can return another custom-inspectable value without
+    /// descending an ordinary object edge. Bound that native recursion too.
+    custom_depth: usize,
+}
+
+#[derive(Clone)]
+struct CustomInspect {
+    options: ObjectId,
+    inspect: Value,
+    symbol: SymbolId,
+    depth: Value,
 }
 
 impl<'m> InspectState<'m> {
@@ -203,6 +221,8 @@ impl<'m> InspectState<'m> {
             indentation: 0,
             current_depth: 0,
             level_budget: BTreeMap::new(),
+            custom: None,
+            custom_depth: 0,
         }
     }
 
@@ -694,8 +714,10 @@ impl InterpreterCore {
         }
     }
 
-    /// `util.inspect(value, { depth })` for `require('util')`
-    /// (bd-9vouw.109). args = (value, depth); `Infinity` has no limit.
+    /// `util.inspect` for `require('util')` (bd-9vouw.109).
+    /// args = (value, depth, normalized options, canonical inspect function).
+    /// Legacy direct hostcalls keep the original value/depth contract. Console
+    /// and util.format still use their ordinary, non-callback formatter.
     pub(super) fn util_inspect_builtin(
         &mut self,
         module: Option<&Ir3Module>,
@@ -704,13 +726,200 @@ impl InterpreterCore {
         let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
         let depth = match self.builtin_arg(args, 1)? {
             Some(Value::Int(depth)) => depth,
-            Some(Value::Float(depth)) if depth.inner() == f64::INFINITY => i64::MAX,
-            Some(Value::Float(depth)) if depth.inner().is_finite() => depth.inner() as i64,
+            Some(Value::Float(depth)) if depth.inner().is_nan() => i64::MAX,
+            Some(Value::Float(depth)) => depth.inner().floor() as i64,
             _ => INSPECT_DEPTH,
         };
-        self.util_format_labelled(args, std::slice::from_ref(&value), |core| {
-            core.inspect_with_depth(module, &value, depth)
+        let options = self.builtin_arg(args, 2)?.unwrap_or(Value::Undefined);
+        let inspect = self.builtin_arg(args, 3)?.unwrap_or(Value::Undefined);
+        self.util_format_exact_labelled(args, &[value.clone(), options.clone()], |core| {
+            let mut state = InspectState::new(module, depth);
+            if let Value::Object(options) = options
+                && inspect.is_callable()
+                && module.is_some()
+            {
+                let enabled = core.iterator_protocol_property(
+                    module,
+                    options,
+                    &RuntimePropertyKey::String(JsString::from("customInspect")),
+                    Value::Object(options),
+                )?;
+                if enabled.is_truthy() {
+                    let requested_depth = core.iterator_protocol_property(
+                        module,
+                        options,
+                        &RuntimePropertyKey::String(JsString::from("depth")),
+                        Value::Object(options),
+                    )?;
+                    state.custom = Some(CustomInspect {
+                        options,
+                        inspect,
+                        symbol: core
+                            .intern_global_symbol(JsString::from("nodejs.util.inspect.custom"))?,
+                        depth: requested_depth,
+                    });
+                }
+            }
+            core.inspect_value_exact(&mut state, &value, 0)
         })
+    }
+
+    /// Look up hooks on a Proxy's target without running its `get` trap, but
+    /// call the hook with the original Proxy as receiver, matching inspect's
+    /// diagnostic view. Ordinary property getters on the target are observable.
+    fn inspect_custom_value(
+        &mut self,
+        state: &mut InspectState<'_>,
+        value: &Value,
+        recurse_times: i64,
+    ) -> Result<Option<JsString>, InterpreterError> {
+        let Some(custom) = state.custom.clone() else {
+            return Ok(None);
+        };
+        if !value.is_object_like() {
+            return Ok(None);
+        }
+        let Some(module) = state.module else {
+            return Ok(None);
+        };
+        let mut target = value.clone();
+        for _ in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
+            let proxy = match &target {
+                Value::Object(id) => Some(*id),
+                Value::BuiltinFunction(builtin)
+                    if builtin.kind == BuiltinFunctionKind::CallableProxy =>
+                {
+                    Some(Self::callable_proxy_record_id(builtin)?)
+                }
+                _ => None,
+            };
+            let Some(proxy) = proxy else { break };
+            match self.proxy_record(proxy)? {
+                Some((_, _, true)) => return Ok(None),
+                Some((object, _, false)) => {
+                    target = self
+                        .proxy_call_target(proxy)
+                        .unwrap_or(Value::Object(object));
+                }
+                None => break,
+            }
+        }
+        self.json_charge_work()?;
+        let key = RuntimePropertyKey::Symbol(custom.symbol);
+        let backing = self.own_property_holder(Some(module), &target, true)?;
+        let method = match backing {
+            Some(backing) => {
+                self.iterator_protocol_property(Some(module), backing, &key, target.clone())?
+            }
+            None => self.get_v(module, &target, &key)?,
+        };
+        self.observe_scoped_callback_result()?;
+        if !method.is_callable() || method == custom.inspect {
+            return Ok(None);
+        }
+        // Do not call an inherited instance hook on the constructor's own
+        // prototype. Reading an accessor named constructor is not necessary.
+        let constructor = backing.and_then(|backing| {
+            self.heap.get(backing.0 as usize).and_then(|object| {
+                object
+                    .properties
+                    .get("constructor")
+                    .filter(|value| !matches!(value, Value::Accessor { .. }))
+                    .cloned()
+            })
+        });
+        if let Some(constructor) = constructor
+            && constructor.is_object_like()
+        {
+            let prototype = self.get_v(
+                module,
+                &constructor,
+                &RuntimePropertyKey::String(JsString::from("prototype")),
+            )?;
+            self.observe_scoped_callback_result()?;
+            if prototype == target {
+                return Ok(None);
+            }
+        }
+        let max = self.config.max_call_depth.min(MAX_NATIVE_RUN_LOOP_DEPTH);
+        if state.custom_depth >= max {
+            return Err(InterpreterError::StackOverflow {
+                depth: state.custom_depth.saturating_add(1),
+                max,
+            });
+        }
+        let prototype = self.ensure_builtin_prototype("Object")?;
+        let options = self.alloc_object_with_prototype(Some(prototype))?;
+        self.copy_data_properties(
+            Some(module),
+            options,
+            Value::Object(custom.options),
+            &BTreeSet::new(),
+            false,
+        )?;
+        let remaining_depth = match custom.depth {
+            Value::Null => Value::Null,
+            Value::Int(depth) => Value::Int(depth.saturating_sub(recurse_times)),
+            Value::Float(number) => {
+                Value::Float(Float64::new(number.inner() - recurse_times as f64))
+            }
+            _ => Value::Int(state.depth.saturating_sub(recurse_times)),
+        };
+        let context = self.json_parse_context_label()?;
+        let (result, label) = self.invoke_inline_method_call_with_argument_label(
+            Some(module),
+            method,
+            value.clone(),
+            vec![remaining_depth, Value::Object(options), custom.inspect],
+            Some(context),
+        )?;
+        self.json_observe_label(label)?;
+        // A hook can return data that was not reachable from the original
+        // argument, including a public carrier of a deeply secret property.
+        self.console_observe_reachable_value(&result)?;
+        if result == *value {
+            return Ok(None);
+        }
+        if let Value::Str(text) = result {
+            self.check_string_limit(text.len())?;
+            if state.indentation == 0 {
+                return Ok(Some(text));
+            }
+            let mut newlines = 0usize;
+            for unit in text.encode_utf16() {
+                self.json_charge_work()?;
+                newlines += usize::from(unit == 10);
+            }
+            if newlines == 0 {
+                return Ok(Some(text));
+            }
+            let extra = newlines.saturating_mul(state.indentation);
+            let bytes = text.len().saturating_add(extra);
+            self.check_string_limit(bytes)?;
+            let units = text.utf16_len().saturating_add(extra);
+            // Admit the expanded buffer, exact-unit backing and UTF-8
+            // projection before allocating; depth × newlines can amplify a
+            // small callback result. The direct result needs no conversion.
+            let temporary = (units as u64)
+                .saturating_mul(4)
+                .saturating_add((bytes as u64).saturating_mul(2));
+            self.json_reserve_temporary(temporary)?;
+            let mut expanded = Vec::with_capacity(units);
+            for unit in text.encode_utf16() {
+                expanded.push(unit);
+                if unit == 10 {
+                    expanded.extend(std::iter::repeat_n(32, state.indentation));
+                }
+            }
+            let result = JsString::from_code_units(&expanded);
+            drop(expanded);
+            self.json_release_temporary(temporary);
+            return Ok(Some(result));
+        }
+        state.custom_depth += 1;
+        let result = self.inspect_value_exact(state, &result, recurse_times);
+        state.custom_depth -= 1;
+        result.map(Some)
     }
 
     /// `util.format(...values)` for `require('util')`: args = (values array).
@@ -736,6 +945,15 @@ impl InterpreterCore {
         values: &[Value],
         format: impl FnOnce(&mut Self) -> Result<String, InterpreterError>,
     ) -> Result<Value, InterpreterError> {
+        self.util_format_exact_labelled(args, values, |core| format(core).map(JsString::from))
+    }
+
+    fn util_format_exact_labelled(
+        &mut self,
+        args: RegRange,
+        values: &[Value],
+        format: impl FnOnce(&mut Self) -> Result<JsString, InterpreterError>,
+    ) -> Result<Value, InterpreterError> {
         let context = self.join_arg_range_label(args)?;
         let context_bytes = Self::estimate_label_bytes(&context);
         let previous_bytes = self
@@ -757,6 +975,16 @@ impl InterpreterCore {
             self.check_string_limit(text.len())?;
             Ok(text)
         })();
+        if let Err(error) = self.observe_scoped_callback_result() {
+            outcome = Err(error);
+        }
+        if let Err(error) = &outcome
+            && Self::js_catchable_error_name(error).is_some()
+        {
+            outcome = match self.scoped_native_error(error) {
+                Ok(error) | Err(error) => Err(error),
+            };
+        }
         let context = self
             .active_inline_callback_context_label
             .take()
@@ -774,6 +1002,10 @@ impl InterpreterCore {
             {
                 outcome = Err(error);
             }
+        } else if matches!(outcome, Err(InterpreterError::UncaughtException { .. }))
+            && let Err(error) = self.join_pending_exception_label(&context)
+        {
+            outcome = Err(error);
         }
         self.active_inline_callback_context_label = previous;
         self.estimated_memory_bytes = self
@@ -781,7 +1013,7 @@ impl InterpreterCore {
             .saturating_sub(Self::estimate_label_bytes(&context))
             .saturating_add(previous_bytes);
         self.json_release_temporary(previous_bytes);
-        outcome.map(Value::str)
+        outcome.map(Value::Str)
     }
 
     /// The internal type `util.types` tests: the engine's tag of a native
@@ -980,6 +1212,31 @@ impl InterpreterCore {
         value: &Value,
         recurse_times: i64,
     ) -> Result<String, InterpreterError> {
+        if let Some(rendered) = self.inspect_custom_value(state, value, recurse_times)? {
+            return Ok(rendered.to_string());
+        }
+        self.inspect_ordinary_value(state, value, recurse_times)
+    }
+
+    fn inspect_value_exact(
+        &mut self,
+        state: &mut InspectState<'_>,
+        value: &Value,
+        recurse_times: i64,
+    ) -> Result<JsString, InterpreterError> {
+        if let Some(rendered) = self.inspect_custom_value(state, value, recurse_times)? {
+            return Ok(rendered);
+        }
+        self.inspect_ordinary_value(state, value, recurse_times)
+            .map(JsString::from)
+    }
+
+    fn inspect_ordinary_value(
+        &mut self,
+        state: &mut InspectState<'_>,
+        value: &Value,
+        recurse_times: i64,
+    ) -> Result<String, InterpreterError> {
         // Containers are charged as native work (their cost grows with their
         // size); primitives are O(1) and were already charged by the
         // confidentiality walk, so logging them keeps instruction counts
@@ -1058,10 +1315,21 @@ impl InterpreterCore {
         handle: u32,
         recurse_times: i64,
     ) -> Result<String, InterpreterError> {
+        let identity = InspectIdentity::Promise(handle);
+        if state.seen.contains(&identity) {
+            let index = state.circular_index(identity);
+            return Ok(format!("[Circular *{index}]"));
+        }
         if recurse_times > state.depth {
             return Ok("[Promise]".to_string());
         }
+        // An earlier hook can settle a promise after the formatter's initial
+        // reachable walk. Observe the value again at the point it is shown.
+        if self.active_inline_callback_context_label.is_some() {
+            self.console_observe_reachable_value(&Value::Promise(handle))?;
+        }
         let recurse_times = recurse_times + 1;
+        state.seen.push(identity);
         state.current_depth = recurse_times;
         let settled = self
             .promise_store
@@ -1085,10 +1353,15 @@ impl InterpreterCore {
             }
             _ => "<pending>".to_string(),
         };
+        state.seen.pop();
+        let base = match state.circular.iter().position(|seen| *seen == identity) {
+            Some(index) => format!("<ref *{}>", index + 1),
+            None => String::new(),
+        };
         Ok(Self::reduce_to_single_string(
             state,
             vec![entry],
-            "",
+            &base,
             ("Promise {".to_string(), "}"),
             EntryKind::Object,
             recurse_times,

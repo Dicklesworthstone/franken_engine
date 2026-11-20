@@ -23,16 +23,19 @@
 //! - one module object for every call, destructuring, inline and nested
 //!   `require` calls.
 //!
-//! No-claim: inspect options other than depth (colors, showHidden, compact,
-//! breakLength, sorted, ...) and `[util.inspect.custom]` methods are not
-//! honoured; deprecate prints no DeprecationWarning (Node writes it to
+//! Explicit util.inspect calls honor custom hooks and their depth/options
+//! contract. Console/format do not yet invoke those hooks. Ordinary rendering
+//! options other than depth (colors, showHidden, compact, breakLength, sorted,
+//! ...) are not honoured; deprecate prints no DeprecationWarning (Node writes it to
 //! stderr); Map and Set members that are objects compare by identity in
 //! isDeepStrictEqual; `import ... from 'util'` is not covered.
 
 #![forbid(unsafe_code)]
 
 use frankenengine_engine::ast::ParseGoal;
-use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore, Value};
+use frankenengine_engine::baseline_interpreter::{
+    InterpreterConfig, InterpreterCore, InterpreterError, Value,
+};
 use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::ifc_artifacts::Label;
 use frankenengine_engine::ir_contract::{
@@ -367,4 +370,408 @@ fn engine_module_functions_print_as_native_code() {
     )
     .expect("the program runs");
     assert_eq!(output, "function format() { [native code] }\nfalse");
+}
+
+#[test]
+fn custom_inspect_receives_receiver_depth_options_and_canonical_inspector() {
+    let source = r#"
+        const util = require('util');
+        const seen = [];
+        const item = {
+            tag: 'item',
+            [util.inspect.custom](depth, options, inspect) {
+                seen.push([this === item, depth, options.depth, options.customInspect,
+                    inspect === util.inspect, typeof options.stylize, options.extra].join(':'));
+                options.extra = 99;
+                return 'Item<' + this.tag + '>';
+            }
+        };
+        console.log(util.inspect(item, { depth: 3, extra: 7 }));
+        console.log(util.inspect({ item, other: item }, { depth: 0, extra: 7 }));
+        console.log(seen.join('|'));
+        const unlimited = {
+            [util.inspect.custom](depth, options) {
+                return String(depth) + ':' + String(options.depth);
+            }
+        };
+        console.log(util.inspect(unlimited, { depth: null }),
+            util.inspect(unlimited, { depth: Infinity }));
+    "#;
+    assert_eq!(
+        console_output(source).as_deref(),
+        Ok(concat!(
+            "Item<item>\n",
+            "{ item: Item<item>, other: Item<item> }\n",
+            "true:3:3:true:true:function:7|true:-1:0:true:true:function:7|",
+            "true:-1:0:true:true:function:7\n",
+            "null:null Infinity:Infinity"
+        ))
+    );
+}
+
+#[test]
+fn custom_inspect_preserves_fractional_and_nonfinite_depth_options() {
+    let source = r#"
+        const util = require('util');
+        const value = {
+            [util.inspect.custom](depth, options) {
+                return String(depth) + ':' + String(options.depth);
+            }
+        };
+        for (const depth of [1.5, NaN, -Infinity, Infinity, null, -0.5]) {
+            console.log(util.inspect(value, { depth }), util.inspect({ value }, { depth }));
+        }
+    "#;
+    assert_eq!(
+        console_output(source).as_deref(),
+        Ok(concat!(
+            "1.5:1.5 { value: 0.5:1.5 }\n",
+            "NaN:NaN { value: NaN:NaN }\n",
+            "-Infinity:-Infinity [Object]\n",
+            "Infinity:Infinity { value: Infinity:Infinity }\n",
+            "null:null { value: null:null }\n",
+            "-0.5:-0.5 [Object]"
+        ))
+    );
+}
+
+#[test]
+fn custom_inspect_options_stylize_honors_colors_and_runtime_style_overrides() {
+    let source = r#"
+        const util = require('util');
+        const value = {
+            [util.inspect.custom](depth, options) {
+                return options.stylize('42', 'number') + '|' + options.stylize('name', 'name');
+            }
+        };
+        console.log(JSON.stringify(util.inspect(value)),
+            JSON.stringify(util.inspect(value, { colors: true })));
+        util.inspect.styles.number = 'red';
+        console.log(JSON.stringify(util.inspect(value, { colors: true })));
+        util.inspect.colors.red = [91, 39];
+        console.log(JSON.stringify(util.inspect(value, { colors: true })));
+    "#;
+    assert_eq!(
+        console_output(source).as_deref(),
+        Ok(concat!(
+            "\"42|name\" \"\\u001b[33m42\\u001b[39m|name\"\n",
+            "\"\\u001b[31m42\\u001b[39m|name\"\n",
+            "\"\\u001b[91m42\\u001b[39m|name\""
+        ))
+    );
+}
+
+#[test]
+fn custom_inspect_can_be_disabled_and_observes_getters_and_inherited_hooks() {
+    let source = r#"
+        const util = require('node:util');
+        let reads = 0;
+        const value = { plain: 1 };
+        Object.defineProperty(value, util.inspect.custom, {
+            get() { reads++; return function() { return 'hook'; }; }
+        });
+        console.log(util.inspect(value, { customInspect: false }), reads);
+        console.log(util.inspect(value), reads);
+        util.inspect.defaultOptions.customInspect = false;
+        console.log(util.inspect(value), reads);
+        util.inspect.defaultOptions.customInspect = true;
+        const inherited = Object.create({
+            [util.inspect.custom](depth) { return 'inherited:' + depth; }
+        });
+        console.log(util.inspect(inherited));
+        const delegated = {
+            [util.inspect.custom](depth, options, inspect) {
+                return 'wrapped ' + inspect({ a: 1 }, options);
+            }
+        };
+        console.log(util.inspect(delegated));
+    "#;
+    assert_eq!(
+        console_output(source).as_deref(),
+        Ok(concat!(
+            "{ plain: 1 } 0\nhook 1\n{ plain: 1 } 1\n",
+            "inherited:2\nwrapped { a: 1 }"
+        ))
+    );
+}
+
+#[test]
+fn custom_inspect_preserves_replacement_cycles_self_returns_and_guest_exceptions() {
+    let source = r#"
+        const util = require('util');
+        const replacement = { visible: 2 };
+        replacement.self = replacement;
+        console.log(util.inspect({ [util.inspect.custom]() { return replacement; } }));
+        console.log(util.inspect({ value: { [util.inspect.custom]() { return 'one\ntwo'; } } }));
+        let count = 0;
+        const self = { visible: 3, [util.inspect.custom]() { count++; return this; } };
+        const rendered = util.inspect(self);
+        console.log(rendered.includes('visible: 3'), count);
+        const marker = { code: 7 };
+        try { util.inspect({ [util.inspect.custom]() { throw marker; } }); }
+        catch (error) { console.log(error === marker); }
+        const getter = {};
+        Object.defineProperty(getter, util.inspect.custom, { get() { throw marker; } });
+        try { util.inspect(getter); } catch (error) { console.log(error === marker); }
+        console.log(util.inspect({ after: 1 }));
+    "#;
+    assert_eq!(
+        console_output(source).as_deref(),
+        Ok(concat!(
+            "<ref *1> { visible: 2, self: [Circular *1] }\n",
+            "{\n  value: one\n  two\n}\n",
+            "true 1\ntrue\ntrue\n{ after: 1 }"
+        ))
+    );
+}
+
+#[test]
+fn custom_inspect_uses_proxy_target_hooks_and_skips_constructor_prototypes() {
+    let source = r#"
+        const util = require('util');
+        let traps = 0;
+        let receiver;
+        const target = { [util.inspect.custom]() { return this === receiver ? 'proxy' : 'target'; } };
+        receiver = new Proxy(target, { get(target, key, receiver) {
+            traps++; return Reflect.get(target, key, receiver);
+        } });
+        console.log(util.inspect(receiver), traps);
+        function Example() {}
+        let calls = 0;
+        Example.prototype[util.inspect.custom] = function() { calls++; return 'instance'; };
+        util.inspect(Example.prototype);
+        console.log(calls, util.inspect(new Example()), calls);
+        const revoked = Proxy.revocable(target, {});
+        revoked.revoke();
+        console.log(util.inspect(revoked.proxy));
+    "#;
+    assert_eq!(
+        console_output(source).as_deref(),
+        Ok("proxy 0\n0 instance 1\n<Revoked Proxy>")
+    );
+}
+
+#[test]
+fn custom_inspect_returned_data_keeps_its_confidentiality_label() {
+    for (result_expression, expected) in [
+        ("globalThis.__inspectPayload", "classified payload"),
+        (
+            "{ nested: { value: globalThis.__inspectPayload } }",
+            "{ nested: { value: 'classified payload' } }",
+        ),
+        ("settled", "Promise { 'classified payload' }"),
+    ] {
+        for label in [Label::Public, Label::Secret] {
+            let source = format!(
+                r#"
+                const util = require('util');
+                globalThis.__inspectPayload = '__inspect_callback_payload__';
+                let resolve;
+                const settled = new Promise(done => {{ resolve = done; }});
+                resolve(globalThis.__inspectPayload);
+                const value = {{ [util.inspect.custom]() {{ return {result_expression}; }} }};
+                util.inspect(value);
+            "#
+            );
+            assert_eq!(
+                custom_inspect_seeded_value(&source, label.clone()),
+                (Value::str(expected), label)
+            );
+        }
+    }
+}
+
+#[test]
+fn custom_inspect_observes_promise_settlement_after_an_earlier_hook() {
+    let source = r#"
+        const util = require('util');
+        globalThis.__inspectPayload = '__inspect_callback_payload__';
+        let resolve;
+        const settled = new Promise(done => { resolve = done; });
+        const value = {
+            first: { [util.inspect.custom]() {
+                resolve(globalThis.__inspectPayload);
+                return 'ready';
+            } },
+            settled
+        };
+        util.inspect(value);
+    "#;
+    for label in [Label::Public, Label::Secret] {
+        assert_eq!(
+            custom_inspect_seeded_value(source, label.clone()),
+            (
+                Value::str("{ first: ready, settled: Promise { 'classified payload' } }"),
+                label
+            )
+        );
+    }
+}
+
+#[test]
+fn custom_inspect_caught_guest_and_native_errors_keep_their_labels() {
+    for (operation, caught, expected) in [
+        (
+            "throw globalThis.__inspectPayload",
+            "error",
+            "classified payload",
+        ),
+        (
+            "throw { value: globalThis.__inspectPayload }",
+            "error.value",
+            "classified payload",
+        ),
+        (
+            "return JSON.parse(globalThis.__inspectPayload)",
+            "error.name",
+            "SyntaxError",
+        ),
+        (
+            "return globalThis.__inspectPayload.repeat(-1)",
+            "error.name",
+            "RangeError",
+        ),
+    ] {
+        for label in [Label::Public, Label::Secret] {
+            let source = format!(
+                r#"
+                const util = require('util');
+                globalThis.__inspectPayload = '__inspect_callback_payload__';
+                const value = {{ [util.inspect.custom]() {{ {operation}; }} }};
+                let caught;
+                try {{ util.inspect(value); }} catch (error) {{ caught = {caught}; }}
+                caught;
+            "#
+            );
+            assert_eq!(
+                custom_inspect_seeded_value(&source, label.clone()),
+                (Value::str(expected), label)
+            );
+        }
+    }
+}
+
+#[test]
+fn custom_inspect_direct_string_result_preserves_exact_utf16() {
+    let source = r#"
+        const util = require('util');
+        for (const text of [String.fromCharCode(0xd800), String.fromCharCode(0xdc00),
+            String.fromCharCode(0xd800, 10, 0xdc00), 'pair:' + String.fromCodePoint(0x1f600)]) {
+            const result = util.inspect({ [util.inspect.custom]() { return text; } });
+            console.log(result === text, result.length, result.charCodeAt(0));
+        }
+        const raw = String.fromCharCode(0xd800);
+        console.log(util.inspect({ [util.inspect.custom]() {
+            return { [util.inspect.custom]() { return raw; } };
+        } }) === raw);
+    "#;
+    assert_eq!(
+        console_output(source).as_deref(),
+        Ok("true 1 55296\ntrue 1 56320\ntrue 3 55296\ntrue 7 112\ntrue")
+    );
+}
+
+#[test]
+fn custom_inspect_multiline_indentation_obeys_the_string_limit() {
+    let source = r#"
+        const util = require('util');
+        const value = { nested: { [util.inspect.custom]() { return '\n'.repeat(200); } } };
+        util.inspect(value);
+    "#;
+    let module = lower(source).expect("custom inspector lowers");
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.max_string_size = 512;
+    config.granted_capabilities = [
+        RuntimeCapability::VmDispatch,
+        RuntimeCapability::HeapAllocate,
+        RuntimeCapability::Builtin,
+    ]
+    .into_iter()
+    .collect();
+    let mut core = InterpreterCore::new(config, "inspect-custom-string-limit");
+    assert!(matches!(
+        core.execute(&module),
+        Err(InterpreterError::StringLimitExceeded {
+            length: 600,
+            max: 512
+        })
+    ));
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+}
+
+#[test]
+fn inspected_promises_detect_self_mutual_and_object_cycles_at_unlimited_depth() {
+    let source = r#"
+        const util = require('util');
+        let reject;
+        const self = new Promise((_, fail) => { reject = fail; });
+        self.catch(() => {});
+        reject(self);
+        console.log(util.inspect(self, { depth: null }));
+        console.log(util.inspect({ [util.inspect.custom]() { return self; } }, { depth: null }));
+        let rejectA;
+        let rejectB;
+        const a = new Promise((_, fail) => { rejectA = fail; });
+        const b = new Promise((_, fail) => { rejectB = fail; });
+        a.catch(() => {});
+        b.catch(() => {});
+        rejectA(b);
+        rejectB(a);
+        console.log(util.inspect(a, { depth: null }));
+        console.log(util.inspect(a, { depth: 0 }));
+        let resolve;
+        const q = new Promise(done => { resolve = done; });
+        resolve({ q });
+        console.log(util.inspect(q, { depth: null }));
+        console.log(util.inspect(q, { depth: 0 }));
+    "#;
+    assert_eq!(
+        console_output(source).as_deref(),
+        Ok(concat!(
+            "<ref *1> Promise { <rejected> [Circular *1] }\n",
+            "<ref *1> Promise { <rejected> [Circular *1] }\n",
+            "<ref *1> Promise { <rejected> Promise { <rejected> [Circular *1] } }\n",
+            "Promise { <rejected> [Promise] }\n",
+            "<ref *1> Promise { { q: [Circular *1] } }\n",
+            "Promise { [Object] }"
+        ))
+    );
+}
+
+/// Inject only the input label into otherwise production-lowered source, so
+/// success, return values and caught errors exercise the real callback path.
+fn custom_inspect_seeded_value(source: &str, label: Label) -> (Value, Label) {
+    let mut module = lower(source).expect("custom inspector lowers");
+    let mut patched = 0;
+    for instruction in &mut module.instructions {
+        if let Ir3Instruction::LoadStr { dst, pool_index } = *instruction
+            && module.constant_pool[pool_index as usize].as_str()
+                == Some("__inspect_callback_payload__")
+        {
+            *instruction = Ir3Instruction::Move { dst, src: 255 };
+            patched += 1;
+        }
+    }
+    assert_eq!(patched, 1, "seed the input, not the hook result");
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.granted_capabilities = [
+        RuntimeCapability::VmDispatch,
+        RuntimeCapability::HeapAllocate,
+        RuntimeCapability::Builtin,
+    ]
+    .into_iter()
+    .collect();
+    let mut core = InterpreterCore::new(config, "inspect-custom-label");
+    core.seed_register(255, Value::str("classified payload"))
+        .unwrap();
+    core.set_register_label(255, label).unwrap();
+    let outcome = core.execute(&module).expect("custom inspector executes");
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+    (outcome.value, outcome.completion_label)
 }

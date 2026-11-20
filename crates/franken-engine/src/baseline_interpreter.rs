@@ -10671,6 +10671,12 @@ struct ModuleRuntimeRecord {
     /// of a name they still re-export publishes it from them too.
     star_reexporters: BTreeSet<String>,
     cjs_module_object: Option<ObjectId>,
+    /// A guest failure during CommonJS loading invalidates its wrapper cache,
+    /// but retained code must survive for closures that escaped before the
+    /// failure. A later require retries that same authenticated program in a
+    /// fresh wrapper; failed ESM translations and terminal engine refusals
+    /// stay sticky through the separately retained evaluation exception.
+    retryable_cjs_failure: bool,
     /// The executable program that owns every closure created while this
     /// module is evaluated. Imported closures carry only an index into this
     /// program; retaining one shared `Arc` prevents that index from being
@@ -10678,8 +10684,9 @@ struct ModuleRuntimeRecord {
     compiled_module: Option<Arc<Ir3Module>>,
     /// Promise representing completion of this module's async evaluation.
     evaluation_promise: Option<crate::promise_model::PromiseHandle>,
-    /// The original guest throw completion. Failed ESM evaluation is sticky:
-    /// later imports must observe the same value, identity, and IFC label.
+    /// The original guest throw completion. Failed ESM evaluation or CommonJS
+    /// translation is sticky: later imports observe the same value, identity,
+    /// and IFC label even if require subsequently retries a CommonJS wrapper.
     evaluation_exception: Option<(Value, Label)>,
     /// Owned activation parked while an imported module is asynchronously
     /// evaluating. Entry-module execution remains installed in the core.

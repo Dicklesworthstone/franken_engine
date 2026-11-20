@@ -9547,7 +9547,7 @@ impl InterpreterCore {
                 .clone()
                 .unwrap_or_else(|| module.header.source_label.clone());
             self.gc_set_cjs_entry_pending(true);
-            let result = self.evaluate_cjs_ir3(module, &entry);
+            let result = self.evaluate_cjs_ir3(module, &entry, false);
             self.gc_set_cjs_entry_pending(false);
             result.map(|()| LabeledReturn {
                 value: Value::Undefined,
@@ -12033,6 +12033,7 @@ impl InterpreterCore {
                 import_bindings: BTreeMap::new(),
                 star_reexporters: BTreeSet::new(),
                 cjs_module_object: None,
+                retryable_cjs_failure: false,
                 compiled_module,
                 evaluation_promise: None,
                 evaluation_exception: None,
@@ -12424,6 +12425,23 @@ impl InterpreterCore {
                 None => {}
             }
             let namespace = record.namespace_object;
+            let for_import = !matches!(load_kind, ModuleLoadKind::Require);
+            // The ESM loader remembers a failed CommonJS translation even
+            // after require successfully reloads the wrapper. Keep its exact
+            // completion independently of the CommonJS cache status.
+            if for_import && record.evaluation_exception.is_some() {
+                return self.rethrow_cached_module_exception(resolved);
+            }
+            if record.retryable_cjs_failure {
+                let program = record.compiled_module.clone().ok_or_else(|| {
+                    InterpreterError::ModuleEvaluationFailed {
+                        specifier: resolved.to_string(),
+                        reason: "retryable CommonJS module has no retained program".to_string(),
+                    }
+                })?;
+                self.retry_failed_cjs_module(&program, resolved, for_import)?;
+                return Ok(Value::Object(namespace));
+            }
             let async_promise = match &record.status {
                 ModuleRuntimeStatus::AsyncEvaluating => {
                     Some(record.evaluation_promise.ok_or_else(|| {
@@ -12765,8 +12783,12 @@ impl InterpreterCore {
             .inspect_err(|error| self.fail_module_record(resolved, &error.to_string()))?;
         self.retain_module_program(resolved, &lowering_output.ir3)?;
         let eval_result = if is_cjs {
-            self.evaluate_cjs_ir3(&lowering_output.ir3, resolved)
-                .map(|()| false)
+            self.evaluate_cjs_ir3(
+                &lowering_output.ir3,
+                resolved,
+                !matches!(load_kind, ModuleLoadKind::Require),
+            )
+            .map(|()| false)
         } else {
             self.evaluate_module_ir3(&lowering_output.ir3, resolved)
         };
@@ -12799,13 +12821,57 @@ impl InterpreterCore {
             Err(err) => {
                 if let Some(record) = self.module_state.modules.get_mut(resolved) {
                     record.status = ModuleRuntimeStatus::Failed(err.to_string());
+                    record.retryable_cjs_failure = is_cjs
+                        && (matches!(err, InterpreterError::UncaughtException { .. })
+                            || Self::js_catchable_error_name(&err).is_some());
                 }
-                if !is_cjs && matches!(&err, InterpreterError::UncaughtException { .. }) {
+                if (!is_cjs || !matches!(load_kind, ModuleLoadKind::Require))
+                    && matches!(&err, InterpreterError::UncaughtException { .. })
+                {
                     self.cache_pending_module_exception(resolved)?;
                 }
                 Err(err)
             }
         }
+    }
+
+    /// Recreate a failed CommonJS wrapper without removing its executable
+    /// owner record. Closures published to another module before the throw
+    /// still need that immutable code. The ordinary load path has already
+    /// rechecked resolution authority, content identity and the flow bound.
+    fn retry_failed_cjs_module(
+        &mut self,
+        program: &Ir3Module,
+        specifier: &str,
+        for_import: bool,
+    ) -> Result<(), InterpreterError> {
+        let record = self
+            .module_state
+            .modules
+            .get_mut(specifier)
+            .ok_or_else(|| InterpreterError::ModuleEvaluationFailed {
+                specifier: specifier.to_string(),
+                reason: "CommonJS module disappeared before retry".to_string(),
+            })?;
+        record.retryable_cjs_failure = false;
+        record.status = ModuleRuntimeStatus::Evaluating;
+        let result = self.evaluate_cjs_ir3(program, specifier, for_import);
+        if let Some(record) = self.module_state.modules.get_mut(specifier) {
+            match &result {
+                Ok(()) => record.status = ModuleRuntimeStatus::Evaluated,
+                Err(error) => {
+                    record.status = ModuleRuntimeStatus::Failed(error.to_string());
+                    record.retryable_cjs_failure =
+                        matches!(error, InterpreterError::UncaughtException { .. })
+                            || Self::js_catchable_error_name(error).is_some();
+                }
+            }
+        }
+        if for_import && matches!(&result, Err(InterpreterError::UncaughtException { .. })) {
+            self.cache_pending_module_exception(specifier)?;
+        }
+        result?;
+        self.sort_module_namespace_keys(specifier)
     }
 
     /// Retain an ESM evaluation's first guest throw without consuming the

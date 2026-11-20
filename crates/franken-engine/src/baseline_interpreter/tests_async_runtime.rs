@@ -11955,6 +11955,7 @@ fn weakmap_and_module_export_duplicates_are_atomic_and_exact_bd_zpn45() {
                 import_bindings: BTreeMap::new(),
                 star_reexporters: BTreeSet::new(),
                 cjs_module_object: None,
+                retryable_cjs_failure: false,
                 compiled_module: None,
                 evaluation_promise: None,
                 evaluation_exception: None,

@@ -5012,6 +5012,7 @@ impl InterpreterCore {
         &mut self,
         module: &Ir3Module,
         specifier: &str,
+        materialize_guest_errors: bool,
     ) -> Result<(), InterpreterError> {
         let snapshot = self.snapshot_module_execution()?;
         let previous_cjs_context = self.active_cjs_context.take();
@@ -5036,16 +5037,18 @@ impl InterpreterCore {
         }
         self.active_cjs_context = Some(cjs_context.clone());
         let gc_armed = self.gc_arm_cjs_entry(&snapshot);
-        let eval_outcome = self.run_nested_module_execution(module, false);
+        // An imported CommonJS failure must be published before queued jobs
+        // can consume its pending throw or re-import its still-loading record,
+        // just like a failed ESM evaluation. Export-accessor faults below also
+        // need materialization while this module's provenance remains active.
+        let eval_outcome = self.run_nested_module_execution(module, materialize_guest_errors);
         if let Some(previous) = gc_armed {
             self.gc_restore_safe_depth(previous);
         }
-        let finalize_outcome = if eval_outcome.is_ok() {
-            self.finalize_cjs_exports(Some(module), &cjs_context)
-        } else {
-            Ok(())
-        };
-        let loaded_outcome = if eval_outcome.is_ok() && finalize_outcome.is_ok() {
+        // Node marks the wrapper loaded before reading module.exports for
+        // its ESM snapshot. An exports getter may observe this flag, including
+        // when it re-enters require() for its own now-completed module.
+        let loaded_outcome = if eval_outcome.is_ok() {
             self.set_object_property(
                 cjs_context.module_object,
                 "loaded".to_string(),
@@ -5054,7 +5057,17 @@ impl InterpreterCore {
         } else {
             Ok(())
         };
-        let outcome = eval_outcome.and(finalize_outcome).and(loaded_outcome);
+        let finalize_outcome = if eval_outcome.is_ok() && loaded_outcome.is_ok() {
+            self.finalize_cjs_exports(Some(module), &cjs_context)
+        } else {
+            Ok(())
+        };
+        let outcome = eval_outcome.and(loaded_outcome).and(finalize_outcome);
+        let outcome = if materialize_guest_errors {
+            self.materialize_module_guest_exception(outcome)
+        } else {
+            outcome
+        };
         let thrown = self.take_nested_module_throw(&outcome);
         self.restore_module_execution(snapshot, true);
         self.active_cjs_context = previous_cjs_context;

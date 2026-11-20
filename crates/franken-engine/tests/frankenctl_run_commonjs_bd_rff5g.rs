@@ -390,6 +390,347 @@ Object.defineProperty(module, 'exports', { enumerable: true, get: make })
     assert_eq!(lines, ["2,4 true"]);
 }
 
+/// Node v22.2.0's Module.prototype.load sets loaded before consuming the
+/// exports accessor for its ESM snapshot. Avoid counting accessor reads here:
+/// Node also reads exports while checking its circular-require warning proxy.
+#[test]
+fn commonjs_exports_getters_observe_loaded_wrappers_and_partial_cycles() {
+    let lines = run_tree(
+        "fe_run_cjs_exports_loaded",
+        &[
+            (
+                "lib/getter.cjs",
+                r#"
+Object.defineProperty(module, 'exports', { get() {
+    if (!module.loaded) throw new Error('exports consumed before wrapper loaded');
+    return { loaded: module.loaded, owner: this === module };
+} });
+"#,
+            ),
+            (
+                "lib/a.cjs",
+                r#"
+Object.defineProperty(module, 'exports', { get() {
+    return module.loaded ? 'ready' : 'partial';
+} });
+const observed = require('./b.cjs');
+console.log('cycle', observed);
+"#,
+            ),
+            ("lib/b.cjs", "module.exports = require('./a.cjs');"),
+            (
+                "app.js",
+                r#"
+const first = require('./lib/getter.cjs');
+const second = require('./lib/getter.cjs');
+console.log(first.loaded, first.owner, second.loaded, first !== second);
+console.log('complete', require('./lib/a.cjs'), require('./lib/b.cjs'));
+Object.defineProperty(module, 'exports', { get() {
+    if (!module.loaded) throw new Error('entry exports consumed before loaded');
+    return 42;
+} });
+"#,
+            ),
+        ],
+    );
+    assert_eq!(
+        lines,
+        [
+            "true true true true",
+            "cycle partial",
+            "complete ready partial"
+        ]
+    );
+}
+
+#[test]
+fn commonjs_wrapper_throw_retries_with_fresh_bindings_and_retained_closures() {
+    let lines = run_tree(
+        "fe_run_cjs_wrapper_retry",
+        &[
+            (
+                "state.cjs",
+                "module.exports = { attempts: 0, saved: [], modules: [], failure: { code: 'retry' } };",
+            ),
+            (
+                "retry.cjs",
+                r#"
+const state = require('./state.cjs');
+state.attempts += 1;
+const ownAttempt = state.attempts;
+state.saved.push(function () { return ownAttempt + ':' + (module === state.modules[ownAttempt - 1]); });
+state.modules.push(module);
+if (ownAttempt === 1) throw state.failure;
+module.exports = { attempt: ownAttempt };
+"#,
+            ),
+            (
+                "app.js",
+                r#"
+const state = require('./state.cjs');
+try { require('./retry.cjs'); } catch (error) { console.log('caught', error === state.failure); }
+console.log('escaped before retry', state.saved[0]());
+const result = require('./retry.cjs');
+console.log('retry', result.attempt, state.attempts, state.saved[0](), state.saved[1]());
+console.log('wrappers', state.modules[0] !== state.modules[1], state.modules[0].loaded, state.modules[1].loaded);
+console.log('cached', require('./retry.cjs') === result, state.attempts);
+"#,
+            ),
+        ],
+    );
+    assert_eq!(
+        lines,
+        [
+            "caught true",
+            "escaped before retry 1:true",
+            "retry 2 2 1:true 2:true",
+            "wrappers true false true",
+            "cached true 2",
+        ]
+    );
+}
+
+#[test]
+fn commonjs_exports_snapshot_failure_retries_without_poisoning_cached_getters() {
+    let lines = run_tree(
+        "fe_run_cjs_exports_retry",
+        &[
+            (
+                "state.cjs",
+                "module.exports = { attempts: 0, fail: true, modules: [], failure: { code: 'exports' } };",
+            ),
+            (
+                "getter.cjs",
+                r#"
+const state = require('./state.cjs');
+state.attempts += 1;
+state.modules.push(module);
+Object.defineProperty(module, 'exports', { get() {
+    if (!module.loaded) throw new Error('early exports read');
+    if (state.fail) throw state.failure;
+    return { attempt: state.attempts, owner: this === module };
+} });
+"#,
+            ),
+            (
+                "app.js",
+                r#"
+const state = require('./state.cjs');
+try { require('./getter.cjs'); } catch (error) { console.log('snapshot failed', error === state.failure); }
+state.fail = false;
+const value = require('./getter.cjs');
+console.log('retry', value.attempt, value.owner, state.modules[0] !== state.modules[1]);
+console.log('loaded', state.modules[0].loaded, state.modules[1].loaded);
+state.fail = true;
+try { require('./getter.cjs'); } catch (error) { console.log('cached getter failed', error === state.failure); }
+state.fail = false;
+console.log('same wrapper', require('./getter.cjs').attempt, state.attempts);
+"#,
+            ),
+        ],
+    );
+    assert_eq!(
+        lines,
+        [
+            "snapshot failed true",
+            "retry 2 true true",
+            "loaded true true",
+            "cached getter failed true",
+            "same wrapper 2 2",
+        ]
+    );
+}
+
+#[test]
+fn commonjs_native_guest_error_can_retry_the_same_program() {
+    let lines = run_tree(
+        "fe_run_cjs_native_error_retry",
+        &[
+            ("state.cjs", "module.exports = { attempts: 0 };"),
+            (
+                "retry.cjs",
+                r#"
+const state = require('./state.cjs');
+state.attempts += 1;
+if (state.attempts === 1) { const absent = null; absent.value; }
+module.exports = state.attempts;
+"#,
+            ),
+            (
+                "app.js",
+                r#"
+try { require('./retry.cjs'); } catch (error) { console.log(error.name); }
+console.log(require('./retry.cjs'), require('./retry.cjs'));
+"#,
+            ),
+        ],
+    );
+    assert_eq!(lines, ["TypeError", "2 2"]);
+}
+
+#[test]
+fn commonjs_esm_snapshot_stays_at_successful_wrapper_completion() {
+    let lines = run_tree(
+        "fe_run_cjs_esm_exports_snapshot",
+        &[
+            ("state.cjs", "module.exports = { value: 1 };"),
+            (
+                "getter.cjs",
+                r#"
+const state = require('./state.cjs');
+Object.defineProperty(module, 'exports', { get() {
+    if (!module.loaded) throw new Error('early exports read');
+    return state.value;
+} });
+"#,
+            ),
+            (
+                "app.js",
+                r#"
+const state = require('./state.cjs');
+console.log('initial', require('./getter.cjs'));
+state.value = 2;
+console.log('live', require('./getter.cjs'));
+import('./getter.cjs').then(function (namespace) {
+    console.log('snapshot', namespace.default, require('./getter.cjs'));
+    state.value = 3;
+    return import('./getter.cjs').then(function (again) {
+        console.log('stable', again === namespace, again.default, require('./getter.cjs'));
+    });
+});
+"#,
+            ),
+        ],
+    );
+    assert_eq!(
+        lines,
+        ["initial 1", "live 2", "snapshot 1 2", "stable true 1 3"]
+    );
+}
+
+#[test]
+fn failed_commonjs_import_keeps_its_exception_after_require_recovers() {
+    let lines = run_tree(
+        "fe_run_cjs_import_retry_separation",
+        &[
+            (
+                "state.cjs",
+                "module.exports = { attempts: 0, nativeAttempts: 0, failure: { code: 'first' } };",
+            ),
+            (
+                "throw.cjs",
+                r#"
+const state = require('./state.cjs');
+state.attempts += 1;
+if (state.attempts === 1) throw state.failure;
+module.exports = state.attempts;
+"#,
+            ),
+            (
+                "native.cjs",
+                r#"
+const state = require('./state.cjs');
+state.nativeAttempts += 1;
+if (state.nativeAttempts === 1) { const absent = null; absent.value; }
+module.exports = state.nativeAttempts;
+"#,
+            ),
+            (
+                "app.js",
+                r#"
+const state = require('./state.cjs');
+import('./throw.cjs').then(function () {
+    console.log('unexpected first success');
+}, function (first) {
+    console.log('first throw', first === state.failure);
+    console.log('require recovered', require('./throw.cjs'), state.attempts);
+    return import('./throw.cjs').then(function () {
+        console.log('unexpected cached success');
+    }, function (again) {
+        console.log('same throw', again === first, state.attempts);
+    });
+}).then(function () {
+    return import('./native.cjs').then(function () {
+        console.log('unexpected native success');
+    }, function (first) {
+        console.log('native throw', first.name);
+        console.log('native require recovered', require('./native.cjs'), state.nativeAttempts);
+        return import('./native.cjs').then(function () {
+            console.log('unexpected native cached success');
+        }, function (again) {
+            console.log('same native throw', again === first, again.name, state.nativeAttempts);
+        });
+    });
+});
+"#,
+            ),
+        ],
+    );
+    assert_eq!(
+        lines,
+        [
+            "first throw true",
+            "require recovered 2 2",
+            "same throw true 2",
+            "native throw TypeError",
+            "native require recovered 2 2",
+            "same native throw true TypeError 2",
+        ]
+    );
+}
+
+#[test]
+fn handled_reactions_cannot_replace_a_cached_commonjs_import_failure() {
+    for (fault, expected) in [
+        ("throw { tag: 'original' };", "original"),
+        ("null.field;", "TypeError"),
+    ] {
+        let failed = format!(
+            "console.log('evaluate once');
+const state = require('./state.cjs');
+Promise.resolve().then(function () {{ throw {{ tag: 'other' }}; }}).catch(function () {{
+    state.nestedHandled = true;
+}});
+{fault}"
+        );
+        let lines = run_tree(
+            "fe_run_cjs_import_failure_checkpoint",
+            &[
+                ("state.cjs", "module.exports = { nestedHandled: false };"),
+                ("failed.cjs", &failed),
+                (
+                    "app.js",
+                    r#"
+const state = require('./state.cjs');
+async function main() {
+    let first;
+    try { await import('./failed.cjs'); } catch (error) {
+        first = error;
+        console.log(error.tag || error.name);
+    }
+    try { await import('./failed.cjs'); } catch (error) {
+        console.log(error === first, error.tag || error.name);
+    }
+    await Promise.resolve();
+    console.log(state.nestedHandled);
+}
+main();
+"#,
+                ),
+            ],
+        );
+        assert_eq!(
+            lines,
+            [
+                "evaluate once".to_string(),
+                expected.to_string(),
+                format!("true {expected}"),
+                "true".to_string(),
+            ]
+        );
+    }
+}
+
 /// `require('buffer')` is Node's buffer module over the engine's `Buffer`,
 /// `atob` and `btoa` (bd-9vouw.193): safe-buffer, under jws and
 /// jsonwebtoken, reads `require('buffer').Buffer`. It was "Cannot find module

@@ -441,7 +441,11 @@ fn streamed_edges_match_original_for_maps_errors_symbols_and_exact_keys() {
     for index in 0..core.heap.len() {
         let object = ObjectId(index as u32);
         for edges in [ReachableEdges::Data, ReachableEdges::Inspect] {
-            let expected = core.reference_children(object, edges);
+            let expected: Vec<_> = core
+                .reference_children(object, edges)
+                .into_iter()
+                .map(ReachableNode::Object)
+                .collect();
             let mut actual = Vec::new();
             core.visit_reachable_children(object, edges, |child| {
                 actual.push(child);
@@ -950,4 +954,108 @@ fn compressed_frontier_does_not_deduplicate_observable_json_getters() {
     let result = core.execute(&lowered.ir3).unwrap();
     assert_eq!(result.value, Value::str("1024|1|512|513|1024"));
     assert_accounted(&core, 0);
+}
+
+#[test]
+fn inspect_walk_follows_promise_settlement_cycles_in_distinct_id_arenas() {
+    let mut core = core();
+    let object = core.alloc_object_with_prototype(None).unwrap();
+    let promise = core.create_promise().unwrap();
+    assert_eq!(
+        object.0, promise.0,
+        "exercise independent equal numeric IDs"
+    );
+    let secret = core.alloc_object_with_prototype(None).unwrap();
+    core.set_object_property(object, "promise".into(), Value::Promise(promise.0))
+        .unwrap();
+    core.set_object_property(object, "nested".into(), Value::Object(secret))
+        .unwrap();
+    core.join_direct_object_mutation_label(secret, &Label::Secret)
+        .unwrap();
+    core.fulfill_promise(
+        promise,
+        crate::object_model::JsValue::Object(crate::object_model::ObjectHandle(object.0)),
+        Label::Public,
+    )
+    .unwrap();
+    // A rejection can retain another Promise as its reason without adopting
+    // it. That edge uses the private value-carrier table, not an ObjectId.
+    let reason = core.promise_value(&Value::Promise(promise.0)).unwrap();
+    let rejected = core.create_rejected_promise(reason, Label::Public).unwrap();
+    core.console_observe_reachable_value(&Value::Promise(rejected.0))
+        .unwrap();
+    assert_eq!(
+        core.active_inline_callback_context_label,
+        Some(Label::Secret)
+    );
+    assert_accounted(&core, 0);
+}
+
+#[test]
+fn inspect_observes_promise_labels_without_tainting_opaque_json_data() {
+    for rejected in [false, true] {
+        let mut core = core();
+        let settled = crate::object_model::JsValue::Str("classified".into());
+        let promise = if rejected {
+            core.create_rejected_promise(settled, Label::Secret)
+                .unwrap()
+        } else {
+            core.create_fulfilled_promise(settled, Label::Secret)
+                .unwrap()
+        };
+        core.json_observe_reachable_value(&Value::Promise(promise.0))
+            .unwrap();
+        assert!(core.active_inline_callback_context_label.is_none());
+        core.console_observe_reachable_value(&Value::Promise(promise.0))
+            .unwrap();
+        assert_eq!(
+            core.active_inline_callback_context_label,
+            Some(Label::Secret)
+        );
+        assert_accounted(&core, 0);
+    }
+}
+
+#[test]
+fn promise_walk_releases_scratch_after_memory_and_work_refusals() {
+    for (headroom, work) in [
+        (0, 10_000),
+        (4, 10_000),
+        (68, 10_000),
+        (256, 10_000),
+        (1024, 10_000),
+        (1_000_000, 1),
+        (1_000_000, 5),
+        (1_000_000, 50),
+    ] {
+        let mut core = core();
+        let nodes: Vec<_> = (0..64)
+            .map(|_| core.alloc_object_with_prototype(None).unwrap())
+            .collect();
+        for pair in nodes.windows(2) {
+            let promise = core
+                .create_fulfilled_promise(
+                    crate::object_model::JsValue::Object(crate::object_model::ObjectHandle(
+                        pair[1].0,
+                    )),
+                    Label::Public,
+                )
+                .unwrap();
+            core.set_object_property(pair[0], "next".into(), Value::Promise(promise.0))
+                .unwrap();
+        }
+        core.json_reserve_temporary(777).unwrap();
+        let before = core.estimated_memory_bytes();
+        core.config.max_total_memory_bytes = before + headroom;
+        core.config.instruction_budget = core.instructions_executed + work;
+        assert!(matches!(
+            core.console_observe_reachable_value(&Value::Object(nodes[0])),
+            Err(InterpreterError::MemoryBudgetExceeded { .. }
+                | InterpreterError::BudgetExhausted { .. })
+        ));
+        assert_accounted(&core, 777);
+        assert_eq!(core.estimated_memory_bytes(), before);
+        core.json_release_temporary(777);
+        assert_accounted(&core, 0);
+    }
 }

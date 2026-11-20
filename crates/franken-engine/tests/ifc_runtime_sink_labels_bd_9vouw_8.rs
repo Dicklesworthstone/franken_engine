@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 
 use frankenengine_engine::ast::ParseGoal;
 use frankenengine_engine::baseline_interpreter::{
-    InterpreterConfig, InterpreterCore, InterpreterError, Value,
+    ExecutionResult, InterpreterConfig, InterpreterCore, InterpreterError, Value,
 };
 use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::execution_orchestrator::{
@@ -792,4 +792,122 @@ fn runtime_sink_label_check_overhead_measured_ns_per_call() {
          net_request_secret_deny={net_deny_ns_per_call:.1} ns/call (iters={ITERS})"
     );
     assert!(fs_ns_per_call.is_finite() && net_ns_per_call.is_finite());
+}
+
+fn run_settled_public_promise_alias(
+    consumer: &str,
+    label: Label,
+    rejected: bool,
+) -> (Result<ExecutionResult, InterpreterError>, InterpreterCore) {
+    let settle = if rejected {
+        "promise.catch(() => undefined); reject(payload);"
+    } else {
+        "resolve(payload);"
+    };
+    let mut module = lower(&format!(
+        r#"
+        const util = require('util');
+        const payload = '__promise_inspection_payload__';
+        let resolve;
+        let reject;
+        const promise = new Promise((done, fail) => {{ resolve = done; reject = fail; }});
+        const alias = promise;
+        {settle}
+        {consumer}
+        "#
+    ));
+    let mut patched = 0;
+    for instruction in &mut module.instructions {
+        if let Ir3Instruction::LoadStr { dst, pool_index } = *instruction
+            && module.constant_pool[pool_index as usize].as_str()
+                == Some("__promise_inspection_payload__")
+        {
+            *instruction = Ir3Instruction::Move { dst, src: 255 };
+            patched += 1;
+        }
+    }
+    assert_eq!(
+        patched, 1,
+        "only the settlement payload receives a source label"
+    );
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.granted_capabilities = [
+        RuntimeCapability::VmDispatch,
+        RuntimeCapability::HeapAllocate,
+        RuntimeCapability::Builtin,
+        RuntimeCapability::Console,
+    ]
+    .into_iter()
+    .collect();
+    let mut core = InterpreterCore::new(config, "promise-inspection-confidentiality");
+    core.seed_register(255, Value::str("classified settlement"))
+        .unwrap();
+    core.set_register_label(255, label).unwrap();
+    let outcome = core.execute(&module);
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes(),
+        "Promise inspection must release its traversal scratch on every exit"
+    );
+    (outcome, core)
+}
+
+#[test]
+fn formatting_public_promise_aliases_retains_settlement_labels() {
+    for consumer in [
+        "util.inspect(alias, { customInspect: false });",
+        "util.format('%O', { nested: alias });",
+        "util.inspect({ [Symbol('settled')]: alias });",
+        "util.inspect(new Map([[alias, 'key']]));",
+    ] {
+        for rejected in [false, true] {
+            for label in [Label::Public, Label::Secret] {
+                let (outcome, _) =
+                    run_settled_public_promise_alias(consumer, label.clone(), rejected);
+                let result = outcome.expect("formatting returns labelled text without a sink");
+                assert!(
+                    matches!(&result.value, Value::Str(text) if text.to_string().contains("classified settlement")),
+                    "{consumer}, rejected={rejected}: {:?}",
+                    result.value
+                );
+                assert_eq!(
+                    result.completion_label, label,
+                    "{consumer}, rejected={rejected}: the pre-settlement alias cannot launder data"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn console_denies_secret_promise_settlements_before_capturing_output() {
+    for consumer in [
+        "console.log(alias);",
+        "console.log({ nested: [alias] });",
+        "console.log({ [Symbol('settled')]: alias });",
+        "console.log(new Map([[alias, 'key']]));",
+    ] {
+        for rejected in [false, true] {
+            let (outcome, core) =
+                run_settled_public_promise_alias(consumer, Label::Secret, rejected);
+            assert!(
+                matches!(outcome, Err(InterpreterError::CapabilityDenied { ref capability })
+                    if capability == "console:log:confidentiality"),
+                "{consumer}, rejected={rejected}: {outcome:?}"
+            );
+            assert!(
+                core.console_output().is_empty(),
+                "secret text reached console capture"
+            );
+            let (outcome, core) =
+                run_settled_public_promise_alias(consumer, Label::Public, rejected);
+            outcome.expect("public settlements remain printable through public aliases");
+            assert_eq!(core.console_output().len(), 1);
+            assert!(
+                core.console_output()[0]
+                    .message
+                    .contains("classified settlement")
+            );
+        }
+    }
 }

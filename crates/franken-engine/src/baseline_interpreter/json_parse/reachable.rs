@@ -38,6 +38,16 @@ impl ReachablePending {
         object: ObjectId,
         committed: u64,
     ) -> Result<(), InterpreterError> {
+        self.push_with_temporary(core, object, committed, 0)
+    }
+
+    fn push_with_temporary(
+        &mut self,
+        core: &InterpreterCore,
+        object: ObjectId,
+        committed: u64,
+        other_uncommitted: u64,
+    ) -> Result<(), InterpreterError> {
         if self.objects.last() == Some(&object) {
             let index = self.objects.len() - 1;
             if self.run_count != 0 && self.runs[self.run_count - 1].index == index {
@@ -65,7 +75,9 @@ impl ReachablePending {
                 .and_then(|slots| slots.checked_mul(std::mem::size_of::<ObjectId>() as u64))
                 .ok_or_else(error)?;
             let requested = self.bytes.checked_add(growth).ok_or_else(error)?;
-            core.check_temporary_memory_budget(requested - committed)?;
+            core.check_temporary_memory_budget(
+                other_uncommitted.saturating_add(requested - committed),
+            )?;
             self.objects
                 .try_reserve_exact(additional)
                 .map_err(|_| error())?;
@@ -76,7 +88,9 @@ impl ReachablePending {
             // Vec may expose more capacity than requested. It too belongs to
             // this walk, and must be admitted before any further operation.
             if retained > requested {
-                core.check_temporary_memory_budget(retained - committed)?;
+                core.check_temporary_memory_budget(
+                    other_uncommitted.saturating_add(retained - committed),
+                )?;
             }
             self.bytes = retained;
         }
@@ -125,6 +139,16 @@ impl ReachableVisited {
         core: &mut InterpreterCore,
         object: ObjectId,
     ) -> Result<bool, InterpreterError> {
+        let arena_len = core.heap.len();
+        self.insert_in_arena(core, object, arena_len)
+    }
+
+    fn insert_in_arena(
+        &mut self,
+        core: &mut InterpreterCore,
+        object: ObjectId,
+        arena_len: usize,
+    ) -> Result<bool, InterpreterError> {
         let word = object.0 as usize / 64;
         if let Some(index) = word.checked_sub(self.first_word)
             && let Some(bits) = self.dense.get_mut(index)
@@ -147,8 +171,7 @@ impl ReachableVisited {
             && (64..=MAX_REACHABLE_BITMAP_MIGRATION).contains(&count)
             && count.is_power_of_two()
         {
-            let heap_len = core.heap.len();
-            self.try_promote(core, heap_len)?;
+            self.try_promote(core, arena_len)?;
         }
         Ok(true)
     }
@@ -156,7 +179,7 @@ impl ReachableVisited {
     fn try_promote(
         &mut self,
         core: &mut InterpreterCore,
-        heap_len: usize,
+        arena_len: usize,
     ) -> Result<(), InterpreterError> {
         if !self.dense.is_empty() || self.sparse.len() > MAX_REACHABLE_BITMAP_MIGRATION {
             return Ok(());
@@ -168,7 +191,7 @@ impl ReachableVisited {
         // slots. The window starts at its lowest observed word; earlier IDs
         // discovered later still use sparse membership.
         let first_word = first.0 as usize / 64;
-        let end_word = heap_len.div_ceil(64);
+        let end_word = arena_len.div_ceil(64);
         let Some(words) = end_word.checked_sub(first_word) else {
             return Ok(());
         };
@@ -241,6 +264,22 @@ impl ReachableVisited {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReachableNode {
+    Object(ObjectId),
+    Promise(u32),
+}
+
+impl ReachableNode {
+    fn inspected_value(value: &Value) -> Option<Self> {
+        match value {
+            Value::Object(object) => Some(Self::Object(*object)),
+            Value::Promise(promise) => Some(Self::Promise(*promise)),
+            _ => None,
+        }
+    }
+}
+
 impl InterpreterCore {
     /// Enumerate the original edge sets in their original order, without a
     /// child vector or a counting pass. This reads storage only, never Get,
@@ -249,7 +288,7 @@ impl InterpreterCore {
         &self,
         object: ObjectId,
         edges: ReachableEdges,
-        mut visit: impl FnMut(ObjectId) -> Result<(), InterpreterError>,
+        mut visit: impl FnMut(ReachableNode) -> Result<(), InterpreterError>,
     ) -> Result<(), InterpreterError> {
         let Some(heap_object) = self.heap.get(object.0 as usize) else {
             return Ok(());
@@ -258,30 +297,32 @@ impl InterpreterCore {
         // contents from either confidentiality walk. Follow the same heap
         // edge explicitly, without invoking guest getters or Proxy traps.
         if let Some(storage) = heap_object.collection_storage.as_deref() {
-            visit(*storage)?;
+            visit(ReachableNode::Object(*storage))?;
         }
         if let Some(target) = heap_object.weak_ref_target.as_deref()
             && let Value::Object(child) = &target.value
         {
-            visit(*child)?;
+            visit(ReachableNode::Object(*child))?;
         }
         match edges {
             ReachableEdges::Data => {
                 for value in heap_object.properties.values_unordered() {
                     if let Value::Object(child) = value {
-                        visit(*child)?;
+                        visit(ReachableNode::Object(*child))?;
                     }
                 }
             }
             ReachableEdges::Inspect => {
                 for value in heap_object.properties.all_data_values() {
-                    if let Value::Object(child) = value {
-                        visit(*child)?;
+                    if let Some(child) = ReachableNode::inspected_value(value) {
+                        visit(child)?;
                     }
                 }
                 for (_, property) in heap_object.properties.baseline_symbol_properties() {
-                    if let BaselineSymbolProperty::Data(Value::Object(child)) = property {
-                        visit(*child)?;
+                    if let BaselineSymbolProperty::Data(value) = property
+                        && let Some(child) = ReachableNode::inspected_value(value)
+                    {
+                        visit(child)?;
                     }
                 }
                 // Console inspection also prints object-valued Map keys.
@@ -289,7 +330,9 @@ impl InterpreterCore {
                     && let Some(storage) = self.heap.get(storage_id.0 as usize)
                 {
                     for repr in storage.properties.keys() {
-                        if let Value::Object(child) = Self::collection_key_from_repr(repr) {
+                        if let Some(child) =
+                            ReachableNode::inspected_value(&Self::collection_key_from_repr(repr))
+                        {
                             visit(child)?;
                         }
                     }
@@ -299,7 +342,7 @@ impl InterpreterCore {
                 if self.inspect_is_error(object)
                     && let Some(prototype) = heap_object.prototype
                 {
-                    visit(prototype)?;
+                    visit(ReachableNode::Object(prototype))?;
                 }
             }
         }
@@ -311,20 +354,91 @@ impl InterpreterCore {
         value: &Value,
         edges: ReachableEdges,
     ) -> Result<(), InterpreterError> {
-        let Value::Object(root) = value else {
+        let root = match (value, edges) {
+            (Value::Object(root), _) => Some(ReachableNode::Object(*root)),
+            (Value::Promise(root), ReachableEdges::Inspect) => Some(ReachableNode::Promise(*root)),
+            _ => None,
+        };
+        let Some(root) = root else {
             return Ok(());
         };
         let mut pending = ReachablePending::default();
         let mut visited = ReachableVisited::default();
+        // Promise handles and heap IDs have independent arenas. Reuse the
+        // bounded u32 frontier and visited bitmap in a separate namespace,
+        // preserving the exact scratch cost of ordinary object-only walks.
+        let mut promise_pending = ReachablePending::default();
+        let mut promise_visited = ReachableVisited::default();
         let mut charged = 0_u64;
         let outcome = (|| {
-            pending.push(self, *root, 0)?;
-            self.json_reserve_temporary(pending.bytes)?;
-            charged += pending.bytes;
-            while let Some(object) = pending.pop() {
+            match root {
+                ReachableNode::Object(object) => pending.push(self, object, 0)?,
+                ReachableNode::Promise(promise) => {
+                    promise_pending.push(self, ObjectId(promise), 0)?;
+                }
+            }
+            let bytes = pending.bytes + promise_pending.bytes;
+            self.json_reserve_temporary(bytes)?;
+            charged += bytes;
+            while let Some(node) = pending
+                .pop()
+                .map(ReachableNode::Object)
+                .or_else(|| promise_pending.pop().map(|id| ReachableNode::Promise(id.0)))
+            {
                 // Charge every popped edge, including duplicates, exactly as
                 // before. No deduplication moves work past the budget gate.
                 self.json_charge_work()?;
+                if let ReachableNode::Promise(promise) = node {
+                    let arena_len = self.promise_store.slot_count();
+                    if !promise_visited.insert_in_arena(self, ObjectId(promise), arena_len)? {
+                        continue;
+                    }
+                    let Ok(record) = self
+                        .promise_store
+                        .get(crate::promise_model::PromiseHandle(promise))
+                    else {
+                        continue;
+                    };
+                    self.check_temporary_memory_budget(Self::estimate_label_bytes(&record.label))?;
+                    let label = record.label.clone();
+                    // Inspect prints only the settlement, never reaction
+                    // closures or pending jobs. Read carrier identity without
+                    // cloning a potentially large settled string or function.
+                    let child = match &record.state {
+                        crate::promise_model::PromiseState::Fulfilled(value)
+                        | crate::promise_model::PromiseState::Rejected(value) => match value {
+                            crate::object_model::JsValue::Object(object) => {
+                                Some(ReachableNode::Object(ObjectId(object.0)))
+                            }
+                            crate::object_model::JsValue::Function(carrier) => self
+                                .promise_value_carriers
+                                .get(carrier)
+                                .and_then(ReachableNode::inspected_value),
+                            _ => None,
+                        },
+                        crate::promise_model::PromiseState::Pending => None,
+                    };
+                    if label != Label::Public {
+                        self.json_observe_label(label)?;
+                    }
+                    if let Some(child) = child {
+                        let frontier = match child {
+                            ReachableNode::Object(object) => (&mut pending, object),
+                            ReachableNode::Promise(promise) => {
+                                (&mut promise_pending, ObjectId(promise))
+                            }
+                        };
+                        let committed = frontier.0.bytes;
+                        frontier.0.push(self, frontier.1, committed)?;
+                        let growth = frontier.0.bytes - committed;
+                        self.json_reserve_temporary(growth)?;
+                        charged += growth;
+                    }
+                    continue;
+                }
+                let ReachableNode::Object(object) = node else {
+                    unreachable!("Promise nodes were handled above");
+                };
                 if !visited.insert(self, object)? {
                     continue;
                 }
@@ -346,10 +460,22 @@ impl InterpreterCore {
                     self.json_observe_label(label)?;
                 }
                 let committed = pending.bytes;
-                self.visit_reachable_children(object, edges, |child| {
-                    pending.push(self, child, committed)
+                let promises_committed = promise_pending.bytes;
+                self.visit_reachable_children(object, edges, |child| match child {
+                    ReachableNode::Object(child) => pending.push_with_temporary(
+                        self,
+                        child,
+                        committed,
+                        promise_pending.bytes - promises_committed,
+                    ),
+                    ReachableNode::Promise(child) => promise_pending.push_with_temporary(
+                        self,
+                        ObjectId(child),
+                        promises_committed,
+                        pending.bytes - committed,
+                    ),
                 })?;
-                let growth = pending.bytes - committed;
+                let growth = pending.bytes - committed + promise_pending.bytes - promises_committed;
                 if growth != 0 {
                     // The immutable enumeration checked this entire growth
                     // before allocation. Publish it before the next label or
@@ -361,9 +487,12 @@ impl InterpreterCore {
             Ok(())
         })();
         drop(pending);
+        drop(promise_pending);
         let visited_bytes = visited.bytes;
         drop(visited);
-        self.json_release_temporary(visited_bytes);
+        let promise_visited_bytes = promise_visited.bytes;
+        drop(promise_visited);
+        self.json_release_temporary(visited_bytes + promise_visited_bytes);
         self.json_release_temporary(charged);
         outcome
     }

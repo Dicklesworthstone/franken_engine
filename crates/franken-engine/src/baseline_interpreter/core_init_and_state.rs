@@ -1063,6 +1063,7 @@ impl InterpreterCore {
             active_generated_function_artifact: None,
             entry_module_specifier: None,
             console_output: Vec::new(),
+            dropped_console_entries: 0,
             console_output_bytes: 0,
             console_group_depth: 0,
             console_counts: BTreeMap::new(),

@@ -424,12 +424,22 @@ fn text(lexed: &Lexed, index: usize) -> &str {
         .map_or("", |token| token.text.as_str())
 }
 
-fn is_namespace(lexed: &Lexed, index: usize) -> bool {
+fn has_line_terminator(source: &str, start: usize, end: usize) -> bool {
+    source
+        .get(start..end)
+        .is_some_and(|gap| gap.contains(['\n', '\r', '\u{2028}', '\u{2029}']))
+}
+
+fn is_namespace(source: &str, lexed: &Lexed, index: usize) -> bool {
     text(lexed, index) == "namespace"
         && !matches!(
             index.checked_sub(1).map(|i| text(lexed, i)),
             Some("." | "?.")
         )
+        && !index.checked_sub(1).is_some_and(|prev| {
+            text(lexed, prev) == "declare"
+                && !has_line_terminator(source, lexed.tokens[prev].end, lexed.tokens[index].start)
+        })
         && (text(lexed, index + 1) == "{"
             || (lexed
                 .tokens
@@ -437,6 +447,58 @@ fn is_namespace(lexed: &Lexed, index: usize) -> bool {
                 .is_some_and(|token| token.kind == TokenKind::Word)
                 && !matches!(text(lexed, index + 1), "in" | "instanceof")
                 && matches!(text(lexed, index + 2), "{" | "." | "")))
+}
+
+fn ambient_block_end(source: &str, lexed: &Lexed, cursor: usize) -> Option<usize> {
+    if cursor > 0 && matches!(text(lexed, cursor - 1), "." | "?.") {
+        return None;
+    }
+    let exported = text(lexed, cursor) == "export";
+    let declare = cursor + usize::from(exported);
+    if text(lexed, declare) != "declare" {
+        return None;
+    }
+    if exported
+        && has_line_terminator(
+            source,
+            lexed.tokens[cursor].end,
+            lexed.tokens.get(declare)?.start,
+        )
+    {
+        return None;
+    }
+    let kind = lexed.tokens.get(declare + 1)?;
+    if has_line_terminator(source, lexed.tokens[declare].end, kind.start) {
+        return None;
+    }
+    let mut body = match kind.text.as_str() {
+        "global" => declare + 2,
+        "module" | "namespace" => {
+            if !lexed
+                .tokens
+                .get(declare + 2)
+                .is_some_and(|token| matches!(token.kind, TokenKind::Word | TokenKind::Literal))
+            {
+                return None;
+            }
+            let mut next = declare + 3;
+            while text(lexed, next) == "."
+                && lexed
+                    .tokens
+                    .get(next + 1)
+                    .is_some_and(|token| token.kind == TokenKind::Word)
+            {
+                next += 2;
+            }
+            next
+        }
+        _ => return None,
+    };
+    if text(lexed, body) != "{" {
+        return None;
+    }
+    body = lexed.pairs[body]? + 1;
+    Some(body + usize::from(text(lexed, body) == ";"))
 }
 
 #[derive(Debug)]
@@ -562,7 +624,7 @@ fn namespace_site(
 ) -> Result<Option<(Site, usize)>, &'static str> {
     let exported = text(lexed, cursor) == "export";
     let declaration = cursor + usize::from(exported);
-    if !is_namespace(lexed, declaration) {
+    if !is_namespace(source, lexed, declaration) {
         return Ok(None);
     }
     if depth >= MAX_NESTING {
@@ -772,6 +834,10 @@ fn body(
     let mut bindings = BTreeSet::new();
     let mut cursor = 0;
     while cursor < lexed.tokens.len() {
+        if let Some(finish) = ambient_block_end(&source, &lexed, cursor) {
+            cursor = finish;
+            continue;
+        }
         if let Some((site, finish)) = namespace_site(
             &source,
             &lexed,
@@ -884,7 +950,7 @@ fn body(
         }
         if matches!(text(&lexed, cursor), "(" | "[" | "{" | "\x24{") {
             let end = lexed.pairs[cursor].unwrap();
-            if (cursor + 1..end).any(|index| is_namespace(&lexed, index)) {
+            if (cursor + 1..end).any(|index| is_namespace(&source, &lexed, index)) {
                 return Err("namespace declarations require module or namespace scope");
             }
             cursor = end + 1;
@@ -1178,6 +1244,10 @@ pub fn lower(source: &str, erase_types: fn(&str) -> String) -> Result<String, &'
         if let Some((name, _)) = local_publication(&lexed, cursor) {
             named_exports.insert(name);
         }
+        if let Some(finish) = ambient_block_end(source, &lexed, cursor) {
+            cursor = finish;
+            continue;
+        }
         if let Some((site, finish)) =
             namespace_site(source, &lexed, cursor, erase_types, &mut lowering, None, 0)?
         {
@@ -1204,7 +1274,7 @@ pub fn lower(source: &str, erase_types: fn(&str) -> String) -> Result<String, &'
         }
         if matches!(text(&lexed, cursor), "(" | "[" | "{" | "\x24{") {
             let end = lexed.pairs[cursor].unwrap();
-            if (cursor + 1..end).any(|index| is_namespace(&lexed, index)) {
+            if (cursor + 1..end).any(|index| is_namespace(source, &lexed, index)) {
                 return Err("namespace declarations require module or namespace scope");
             }
             cursor = end + 1;
@@ -1494,5 +1564,15 @@ mod tests {
         .unwrap();
         assert!(actual.contains("object.return / __franken_namespace_0.divisor / 3"));
         assert!(actual.contains("object?.in / __franken_namespace_0.divisor / 3"));
+    }
+
+    #[test]
+    fn ambient_namespace_and_global_blocks_stay_untouched_for_type_erasure() {
+        let ambient = "declare global {\n  namespace NodeJS {\n    const env: string;\n  }\n}\ndeclare namespace NS.Inner {\n  const v: number;\n}\nexport declare namespace PublicNS {\n  export const x: number;\n}\n";
+        assert_eq!(lower(ambient, str::to_owned).unwrap(), ambient);
+
+        let newline_after_declare = "declare\nnamespace Runtime {\n  export const x = 1;\n}\n";
+        let lowered = lower(newline_after_declare, str::to_owned).unwrap();
+        assert!(lowered.contains("__franken_namespace_0.x = 1;"));
     }
 }

@@ -1199,6 +1199,8 @@ pub struct OrchestratorResult {
     /// evidence, and the engine<->core differential oracle.
     pub completion_label: crate::ifc_artifacts::Label,
     pub console_output: Vec<ConsoleEntry>,
+    /// Console entries omitted because `max_console_entries == 0` (`bd-ydr7k`).
+    pub dropped_console_entries: u64,
     /// Exit status the program set through `process.exit(n)` or
     /// `process.exitCode = n` (bd-my9hk); `None` when it set none.
     pub exit_code: Option<i32>,
@@ -2485,6 +2487,20 @@ impl ExecutionOrchestrator {
         self.data_contract_ingress = Some(ingress);
     }
 
+    /// Configure the maximum number of captured console entries per execution
+    /// (`bd-ydr7k`). `Some(0)` disables capture while counting dropped entries
+    /// in [`OrchestratorResult::dropped_console_entries`]; `Some(n)` (`n > 0`)
+    /// fails closed with `InterpreterError::ConsoleBudgetExceeded` past `n`.
+    pub fn with_max_console_entries(mut self, max_console_entries: Option<usize>) -> Self {
+        self.runtime_config.execution.max_console_entries = max_console_entries;
+        self
+    }
+
+    /// Mutable setter counterpart to [`Self::with_max_console_entries`].
+    pub fn set_max_console_entries(&mut self, max_console_entries: Option<usize>) {
+        self.runtime_config.execution.max_console_entries = max_console_entries;
+    }
+
     /// Install a signed PLAS [`CapabilityWitness`] (`frankenctl run --witness`).
     ///
     /// Every subsequent `execute` verifies content integrity, proof coverage,
@@ -3468,6 +3484,7 @@ impl ExecutionOrchestrator {
             let execution_value = format!("{}", exec_result.value);
             let completion_label = exec_result.completion_label.clone();
             let console_output = exec_result.console_output.clone();
+            let dropped_console_entries = exec_result.dropped_console_entries;
             let exit_code = exec_result.exit_code;
             let instructions_executed = exec_result.instructions_executed;
             let tier_i_instructions_executed = exec_result.tier_i_instructions_executed;
@@ -3619,6 +3636,7 @@ impl ExecutionOrchestrator {
                 execution_value,
                 completion_label,
                 console_output,
+                dropped_console_entries,
                 exit_code,
                 instructions_executed,
                 tier_i_instructions_executed,
@@ -8570,6 +8588,7 @@ mod tests {
             witness_events: Vec::new(),
             events: Vec::new(),
             console_output: Vec::new(),
+            dropped_console_entries: 0,
             iteration_traces: Vec::new(),
             nondeterminism_trace: crate::deterministic_replay::NondeterminismTrace::new(
                 "orchestrator-test-stub",
@@ -11326,6 +11345,7 @@ mod tests {
             witness_events: Vec::new(),
             events: Vec::new(),
             console_output: Vec::new(),
+            dropped_console_entries: 0,
             iteration_traces: Vec::new(),
             nondeterminism_trace: crate::deterministic_replay::NondeterminismTrace::new(
                 "orchestrator-test-stub",
@@ -11766,6 +11786,7 @@ mod tests {
             witness_events: Vec::new(),
             events: Vec::new(),
             console_output: Vec::new(),
+            dropped_console_entries: 0,
             iteration_traces: Vec::new(),
             nondeterminism_trace: crate::deterministic_replay::NondeterminismTrace::new(
                 "orchestrator-test-stub",
@@ -11803,6 +11824,7 @@ mod tests {
             witness_events: Vec::new(),
             events: Vec::new(),
             console_output: Vec::new(),
+            dropped_console_entries: 0,
             iteration_traces: Vec::new(),
             nondeterminism_trace: crate::deterministic_replay::NondeterminismTrace::new(
                 "orchestrator-test-stub",
@@ -11853,6 +11875,7 @@ mod tests {
             witness_events: Vec::new(),
             events: Vec::new(),
             console_output: Vec::new(),
+            dropped_console_entries: 0,
             iteration_traces: Vec::new(),
             nondeterminism_trace: crate::deterministic_replay::NondeterminismTrace::new(
                 "orchestrator-test-stub",
@@ -11913,6 +11936,7 @@ mod tests {
             witness_events: Vec::new(),
             events: Vec::new(),
             console_output: Vec::new(),
+            dropped_console_entries: 0,
             iteration_traces: Vec::new(),
             nondeterminism_trace: crate::deterministic_replay::NondeterminismTrace::new(
                 "orchestrator-test-stub",
@@ -12104,6 +12128,7 @@ mod tests {
             witness_events: Vec::new(),
             events: Vec::new(),
             console_output: Vec::new(),
+            dropped_console_entries: 0,
             iteration_traces: Vec::new(),
             nondeterminism_trace: crate::deterministic_replay::NondeterminismTrace::new(
                 "orchestrator-test-stub",
@@ -12153,6 +12178,7 @@ mod tests {
             witness_events: Vec::new(),
             events: Vec::new(),
             console_output: Vec::new(),
+            dropped_console_entries: 0,
             iteration_traces: Vec::new(),
             nondeterminism_trace: crate::deterministic_replay::NondeterminismTrace::new(
                 "orchestrator-test-stub",
@@ -12188,6 +12214,7 @@ mod tests {
             witness_events: Vec::new(),
             events: Vec::new(),
             console_output: Vec::new(),
+            dropped_console_entries: 0,
             iteration_traces: Vec::new(),
             nondeterminism_trace: crate::deterministic_replay::NondeterminismTrace::new(
                 "orchestrator-test-stub",
@@ -12224,6 +12251,7 @@ mod tests {
             witness_events: Vec::new(),
             events: Vec::new(),
             console_output: Vec::new(),
+            dropped_console_entries: 0,
             iteration_traces: Vec::new(),
             nondeterminism_trace: crate::deterministic_replay::NondeterminismTrace::new(
                 "orchestrator-test-stub",
@@ -12420,6 +12448,7 @@ mod tests {
             witness_events: Vec::new(),
             events: Vec::new(),
             console_output: Vec::new(),
+            dropped_console_entries: 0,
             iteration_traces: Vec::new(),
             nondeterminism_trace: crate::deterministic_replay::NondeterminismTrace::new(
                 "orchestrator-test-stub",

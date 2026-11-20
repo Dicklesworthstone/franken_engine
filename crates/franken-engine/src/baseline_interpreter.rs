@@ -13999,6 +13999,9 @@ pub struct ExecutionResult {
     pub events: Vec<InterpreterEvent>,
     /// Console output captured from console.log/error/warn calls.
     pub console_output: Vec<ConsoleEntry>,
+    /// Console entries omitted because `config.max_console_entries == 0`
+    /// (`bd-ydr7k`); zero whenever console capture is enabled.
+    pub dropped_console_entries: u64,
     /// Replay-visible iterator protocol traces emitted by production execution.
     pub iteration_traces: Vec<IterationTrace>,
     /// Nondeterminism trace captured during this execution, finalised and ready
@@ -17389,6 +17392,8 @@ pub struct InterpreterCore {
     entry_module_specifier: Option<String>,
     /// Console output captured for deterministic replay.
     console_output: Vec<ConsoleEntry>,
+    /// Console entries dropped when `config.max_console_entries == 0` (`bd-ydr7k`).
+    dropped_console_entries: u64,
     /// Total message bytes in `console_output`, held under
     /// `config.max_console_bytes`.
     console_output_bytes: usize,

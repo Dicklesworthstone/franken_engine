@@ -986,16 +986,18 @@ fn rewrite_module_objects_with_options(
     // cannot prove the methods, iterator protocol or lifecycle a stream will
     // need later, so withholding direct destructures split equivalent
     // programs between incompatible implementations (bd-305gi.2).
-    let events_claimed = if root.contains("require") {
+    let events_claimed = if root.contains("require") || preserve_runtime_requires {
         BTreeSet::new()
     } else {
         facade_claimed_events_declarators(&tree.body)
     };
     let mut claimed = events_claimed.clone();
-    if !root.contains("require") {
+    if !root.contains("require") && !preserve_runtime_requires {
         claimed.extend(zlib_module::claimed_declarators(&tree.body));
-        claimed.extend(facade_claimed_querystring_declarators(&tree.body));
-        claimed.extend(facade_claimed_timers_promises_declarators(&tree.body));
+        if tree.goal == crate::ast::ParseGoal::Module {
+            claimed.extend(facade_claimed_querystring_declarators(&tree.body));
+            claimed.extend(facade_claimed_timers_promises_declarators(&tree.body));
+        }
     }
     for (index, statement) in rewritten.body.iter_mut().enumerate() {
         let held = take_claimed_initializers(statement, index, &claimed);
@@ -1360,6 +1362,9 @@ fn facade_claimed_querystring_declarators(body: &[Statement]) -> BTreeSet<(usize
             let BindingPattern::Identifier(local) = &declarator.pattern else {
                 continue;
             };
+            if !local.starts_with("%core_import_") {
+                continue;
+            }
             let single: BTreeSet<String> = std::iter::once(local.clone()).collect();
             if confirmed.contains(local)
                 && declarator.initializer.as_ref().is_some_and(|initializer| {
@@ -1418,6 +1423,9 @@ fn facade_claimed_timers_promises_declarators(body: &[Statement]) -> BTreeSet<(u
             let BindingPattern::Identifier(local) = &declarator.pattern else {
                 continue;
             };
+            if !local.starts_with("%core_import_") {
+                continue;
+            }
             let single: BTreeSet<String> = std::iter::once(local.clone()).collect();
             if confirmed.contains(local)
                 && declarator.initializer.as_ref().is_some_and(|initializer| {
@@ -1809,7 +1817,11 @@ impl BuiltinRewriter {
                     | PureModule::Assert
                     | PureModule::Timers
                     | PureModule::StringDecoder
+                    | PureModule::Readline
                     | PureModule::Buffer
+                    | PureModule::Querystring
+                    | PureModule::Zlib
+                    | PureModule::DiagnosticsChannel
                     | PureModule::Stream
                     | PureModule::StreamConsumers
                     | PureModule::WebStreams

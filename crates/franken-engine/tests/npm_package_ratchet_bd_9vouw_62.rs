@@ -136,3 +136,51 @@ fn real_npm_packages_ratchet_against_node() {
     }
     assert!(problems.is_empty(), "{}", problems.join("\n"));
 }
+
+#[test]
+fn parse_error_positions_point_at_offending_token_inside_multiline_wrappers() {
+    use frankenengine_engine::ast::ParseGoal;
+    use frankenengine_engine::parser::{CanonicalEs2020Parser, Es2020Parser};
+
+    // Reproduce the exact bd-9vouw.62 multi-line CommonJS function + nested
+    // conditional shape where an invalid assignment target on line 148
+    // previously reported the enclosing function/if start line (line 1 or 23).
+    let mut lines = Vec::with_capacity(152);
+    lines.push("module.exports = function (args) {".to_string()); // line 1
+    for n in 2..23 {
+        lines.push(format!("  var v{n} = {n};"));
+    }
+    lines.push("  if (".to_string()); // line 23
+    for n in 24..148 {
+        lines.push(format!("    args.length !== {n} &&"));
+    }
+    lines.push("    1 + 2 = 3".to_string()); // line 148, col 5 (`1 + 2`)
+    lines.push("  ) {".to_string()); // line 149
+    lines.push("    return args;".to_string()); // line 150
+    lines.push("  }".to_string()); // line 151
+    lines.push("};".to_string()); // line 152
+    let source = lines.join("\n");
+
+    let err = CanonicalEs2020Parser
+        .parse(&source, ParseGoal::Script)
+        .expect_err("`1 + 2 = 3` on line 148 must fail to parse");
+    let span = err.span.expect("parse error must carry a SourceSpan");
+    assert_eq!(
+        (span.start_line, span.start_column),
+        (148, 5),
+        "expected offending target span at line 148 col 5, got {err}"
+    );
+
+    // Also verify statement-level errors inside multi-line function bodies
+    // report the offending statement's line/column rather than line 1.
+    let uninitialized_const = "function wrapper() {\n  let ok = 1;\n  let ok2 = 2;\n  let ok3 = 3;\n  let ok4 = 4;\n  const missingInit;\n}\n";
+    let stmt_err = CanonicalEs2020Parser
+        .parse(uninitialized_const, ParseGoal::Script)
+        .expect_err("uninitialized const on line 6 must fail to parse");
+    let stmt_span = stmt_err.span.expect("statement parse error span");
+    assert_eq!(
+        (stmt_span.start_line, stmt_span.start_column),
+        (6, 3),
+        "expected offending const statement at line 6 col 3, got {stmt_err}"
+    );
+}

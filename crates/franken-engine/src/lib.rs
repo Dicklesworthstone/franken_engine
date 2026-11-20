@@ -1724,6 +1724,9 @@ pub struct EvalOutcome {
     pub route_reason: RouteReason,
     #[serde(default)]
     pub console_output: Vec<baseline_interpreter::ConsoleEntry>,
+    /// Console entries omitted because `max_console_entries == 0` (`bd-ydr7k`).
+    #[serde(default)]
+    pub dropped_console_entries: u64,
     #[serde(default)]
     pub source_ingestion: SourceIngestionSummary,
     /// Audit trail for `Function`-constructor-generated code executed during
@@ -2582,6 +2585,7 @@ fn eval_outcome_from_native_output(
         completion_label: Some(output.completion_label),
         route_reason: prepared.route_reason,
         console_output: output.console_output,
+        dropped_console_entries: output.dropped_console_entries,
         source_ingestion: prepared.source_ingestion.clone(),
         generated_code_audit: output.generated_code_audit,
         instructions_executed: output.instructions_executed,
@@ -2603,6 +2607,7 @@ struct NativeEvalOutput {
     value_wtf16: Option<Vec<u16>>,
     completion_label: crate::ifc_artifacts::Label,
     console_output: Vec<baseline_interpreter::ConsoleEntry>,
+    dropped_console_entries: u64,
     generated_code_audit: Vec<baseline_interpreter::GeneratedCodeAuditEntry>,
     instructions_executed: u64,
     tier_i_instructions_executed: u64,
@@ -2791,6 +2796,7 @@ fn execute_prepared_eval(
             folded_hostcall_decisions,
             events,
             console_output,
+            dropped_console_entries,
             iteration_traces,
             nondeterminism_trace,
             generated_code_audit,
@@ -2806,6 +2812,7 @@ fn execute_prepared_eval(
             folded_hostcall_decisions,
             events,
             console_output,
+            dropped_console_entries,
             iteration_traces,
             nondeterminism_trace,
             generated_code_audit,
@@ -2835,6 +2842,7 @@ fn execute_prepared_eval(
         value_wtf16,
         completion_label: routed.result.completion_label,
         console_output: routed.result.console_output,
+        dropped_console_entries: routed.result.dropped_console_entries,
         generated_code_audit: routed.result.generated_code_audit,
         instructions_executed: routed.result.instructions_executed,
         tier_i_instructions_executed: routed.result.tier_i_instructions_executed,
@@ -4050,6 +4058,7 @@ mod tests {
             completion_label: Some(crate::ifc_artifacts::Label::Public),
             route_reason: RouteReason::ContainsAwaitKeyword,
             console_output: Vec::new(),
+            dropped_console_entries: 0,
             source_ingestion: SourceIngestionSummary::default(),
             generated_code_audit: Vec::new(),
             instructions_executed: 7,

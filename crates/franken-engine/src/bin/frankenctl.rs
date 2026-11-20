@@ -1105,6 +1105,8 @@ struct RunCommandOutput {
     replay_input: RunReplayInput,
     replay_input_signature: EvidenceSignatureEnvelope,
     console_output: Vec<ConsoleEntry>,
+    #[serde(default)]
+    dropped_console_entries: u64,
     observability_mode: ObservabilityModeOutput,
 }
 
@@ -1201,6 +1203,12 @@ struct UnsignedExecutionContent {
     execution_value: String,
     instructions_executed: u64,
     console_output: Vec<ConsoleEntry>,
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    dropped_console_entries: u64,
+}
+
+fn is_zero_u64(value: &u64) -> bool {
+    *value == 0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1216,6 +1224,8 @@ struct ReplayableRunReport {
     execution_value: String,
     instructions_executed: u64,
     console_output: Vec<ConsoleEntry>,
+    #[serde(default)]
+    dropped_console_entries: u64,
     replay_input: RunReplayInput,
     // Older reports still support unauthenticated deterministic re-execution,
     // but authenticated replay requires the complete signed input envelope.
@@ -5869,6 +5879,7 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         execution_value: result.execution_value.clone(),
         instructions_executed: result.instructions_executed,
         console_output: result.console_output.clone(),
+        dropped_console_entries: result.dropped_console_entries,
     };
     let replay_input = RunReplayInput {
         source: package.source.clone(),
@@ -5937,6 +5948,7 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         replay_input,
         replay_input_signature,
         console_output: result.console_output.clone(),
+        dropped_console_entries: result.dropped_console_entries,
         observability_mode: default_capture_observability_mode(),
     };
 
@@ -6265,6 +6277,7 @@ fn execute_agent_sandbox(args: AgentSandboxArgs) -> Result<i32, String> {
         execution_value: result.execution_value.clone(),
         instructions_executed: result.instructions_executed,
         console_output: result.console_output.clone(),
+        dropped_console_entries: result.dropped_console_entries,
     };
     let replay_input = RunReplayInput {
         source: package.source.clone(),
@@ -6315,6 +6328,7 @@ fn execute_agent_sandbox(args: AgentSandboxArgs) -> Result<i32, String> {
         execution_value: result.execution_value.clone(),
         instructions_executed: result.instructions_executed,
         console_output: result.console_output.clone(),
+        dropped_console_entries: result.dropped_console_entries,
         replay_input,
         replay_input_signature: Some(replay_input_signature),
         lane: result.lane.to_string(),
@@ -10958,6 +10972,7 @@ fn execute_run_report_replay(args: ReplayArgs) -> Result<i32, String> {
         execution_value: report.execution_value.clone(),
         instructions_executed: report.instructions_executed,
         console_output: report.console_output.clone(),
+        dropped_console_entries: report.dropped_console_entries,
     };
     let mut divergences = Vec::new();
     if report.extension_id != input.extension_id {
@@ -11121,6 +11136,7 @@ fn execute_run_report_replay(args: ReplayArgs) -> Result<i32, String> {
         execution_value: replayed.execution_value.clone(),
         instructions_executed: replayed.instructions_executed,
         console_output: replayed.console_output.clone(),
+        dropped_console_entries: replayed.dropped_console_entries,
     };
     let ir3_hash_match = input.ir3_hash == replayed.ir4_witness.executed_ir3_hash.to_hex();
     let unsigned_execution_content_match = input.unsigned_execution_content == actual_unsigned;

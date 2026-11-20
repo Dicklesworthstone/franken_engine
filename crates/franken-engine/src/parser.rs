@@ -2299,6 +2299,50 @@ impl FunctionSourceMap {
             function_text_through_body(tail)?,
         )
     }
+
+    /// Resolve the exact `SourceSpan` of a slice cut from the active
+    /// `SourceFrame` chain (`bd-9vouw.62`). Computed lazily on cold error paths
+    /// so AST spans on valid parses remain bit-identical.
+    fn span_of_slice(&self, slice: &str) -> Option<SourceSpan> {
+        let original = self.original.as_ref()?;
+        let slice = slice.trim();
+        let last_char = slice.chars().next_back()?;
+        let start = slice.as_ptr() as usize;
+        let last_address = start + slice.len() - last_char.len_utf8();
+        let start_offset = self.offset_of(start)?;
+        let end_offset = self.offset_of(last_address)? + last_char.len_utf8();
+        if start_offset > end_offset || end_offset > original.len() {
+            return None;
+        }
+        let line_terminators = source_line_terminator_ranges(original);
+        let (start_line, start_column) =
+            source_position_at_offset(start_offset, &line_terminators);
+        let (end_line, end_column) = source_position_at_offset(end_offset, &line_terminators);
+        Some(SourceSpan::new(
+            start_offset as u64,
+            end_offset as u64,
+            start_line,
+            start_column,
+            end_line,
+            end_column,
+        ))
+    }
+}
+
+fn refine_error_span<T>(
+    result: ParseResult<T>,
+    slice: &str,
+    enclosing_span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<T> {
+    result.map_err(|mut err| {
+        if err.span.as_ref() == Some(enclosing_span)
+            && let Some(refined) = context.function_sources.span_of_slice(slice)
+        {
+            err.span = Some(refined);
+        }
+        err
+    })
 }
 
 /// The prefix of `text` (`[*][name](params) { body }` followed by anything)
@@ -5090,7 +5134,7 @@ fn parse_statement(
     }
     let result = parse_statement_inner(statement, goal, span, context);
     context.statement_depth -= 1;
-    result
+    refine_error_span(result, statement, &span, context)
 }
 
 fn parse_statement_inner(
@@ -6966,6 +7010,16 @@ fn parse_expression(
     context: &mut ParseExecutionContext<'_>,
     recursion_depth: u64,
 ) -> ParseResult<Expression> {
+    let result = parse_expression_inner(expression, span, context, recursion_depth);
+    refine_error_span(result, expression, span, context)
+}
+
+fn parse_expression_inner(
+    expression: &str,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+    recursion_depth: u64,
+) -> ParseResult<Expression> {
     context.next_depth(recursion_depth);
     if recursion_depth > context.options.budget.max_recursion_depth {
         return Err(ParseError::with_witness(
@@ -8683,9 +8737,13 @@ fn try_parse_assignment(
             let lhs = expr[..i].trim();
             let rhs = expr[i + len..].trim();
             if lhs.is_empty() || rhs.is_empty() {
+                let op_span = context
+                    .function_sources
+                    .span_of_slice(&expr[i..i + len])
+                    .unwrap_or(*span);
                 return Some(Err(invalid_syntax_error(
                     "assignment requires a target and a value",
-                    span,
+                    &op_span,
                     context,
                 )));
             }
@@ -8699,15 +8757,19 @@ fn try_parse_assignment(
                     },
                 };
             if assignment_target_has_optional_chain(&left) {
+                let lhs_span = context
+                    .function_sources
+                    .span_of_slice(lhs)
+                    .unwrap_or(*span);
                 return Some(Err(ParseError::new(
                     ParseErrorCode::InvalidSyntax,
                     "optional chaining cannot be used as an assignment target",
                     context.source_label.to_string(),
-                    Some(span.clone()),
+                    Some(lhs_span),
                 )));
             }
             if let Err(error) = reject_strict_eval_arguments_target(&left, span, context) {
-                return Some(Err(error));
+                return Some(Err(refine_error_span(Err(error), lhs, span, context).unwrap_err()));
             }
             // A parenthesized object or array literal is a value, not a
             // destructuring pattern: `({}) = 1`, `([a]) = b` (ES2020
@@ -8718,9 +8780,13 @@ fn try_parse_assignment(
                     Expression::ArrayLiteral(_) | Expression::ObjectLiteral(_)
                 )
             {
+                let lhs_span = context
+                    .function_sources
+                    .span_of_slice(lhs)
+                    .unwrap_or(*span);
                 return Some(Err(invalid_syntax_error(
                     "a parenthesized literal is not an assignment target",
-                    span,
+                    &lhs_span,
                     context,
                 )));
             }
@@ -10986,6 +11052,16 @@ fn find_last_top_level_optional_chain(s: &str) -> Option<usize> {
 /// assignment target. An initialized shorthand (`{x = value}`) must never be
 /// accepted as an ordinary object expression or in the default's RHS.
 fn parse_assignment_target_expression(
+    source: &str,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+    recursion_depth: u64,
+) -> ParseResult<Expression> {
+    let result = parse_assignment_target_expression_inner(source, span, context, recursion_depth);
+    refine_error_span(result, source, span, context)
+}
+
+fn parse_assignment_target_expression_inner(
     source: &str,
     span: &SourceSpan,
     context: &mut ParseExecutionContext<'_>,

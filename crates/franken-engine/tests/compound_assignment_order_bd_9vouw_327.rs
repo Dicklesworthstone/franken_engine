@@ -95,16 +95,20 @@ fn top_level_ir3(source: &str) -> Vec<frankenengine_engine::ir_contract::Ir3Inst
         .collect()
 }
 
-/// `s += Math.max(i, 1)` in a top-level loop: the Add reads and writes s's
-/// register, with no copy of s before the call and no Move of the result
-/// after it (bd-9vouw.327's read-first order had added three Moves per
-/// iteration here). `x += (x = 5)` still adds to a copy of x.
+/// `s += Math.max(i, 1)` in a top-level loop over a register-resident binding:
+/// the Add reads and writes s's register, with no copy of s before the call
+/// and no Move of the result after it (bd-9vouw.327's read-first order had
+/// added three Moves per iteration here). `x += (x = 5)` still adds to a copy
+/// of x. Script-level `var` bindings instantiate on `globalThis` via
+/// `LoadName`/`PutName` since fcdf131ee, while script-level `let` bindings
+/// remain register-resident and exercise `compound_left_operand_reads_in_place`
+/// (6d9c8dcc3).
 #[test]
 fn top_level_compound_operator_reads_an_unwritten_target_in_place() {
     use frankenengine_engine::ir_contract::Ir3Instruction;
 
     let looped =
-        top_level_ir3("var s = 0; for (var i = 0; i < 9000; i++) { s += Math.max(i, 1); }");
+        top_level_ir3("let s = 0; for (let i = 0; i < 9000; i++) { s += Math.max(i, 1); }");
     let adds: Vec<_> = looped
         .iter()
         .filter_map(|instruction| match instruction {
@@ -151,7 +155,7 @@ fn top_level_compound_operator_reads_an_unwritten_target_in_place() {
     // The Add's left operand is the copy of x taken before `x = 5`, not x's
     // register, and the sum goes to x's register: the Add writes it directly
     // (bd-9vouw.494; a Move after the Add copied the sum there before).
-    let hazard = top_level_ir3("var x = 1; x += (x = 5);");
+    let hazard = top_level_ir3("let x = 1; x += (x = 5);");
     let add_index = hazard
         .iter()
         .position(|instruction| matches!(instruction, Ir3Instruction::Add { .. }))

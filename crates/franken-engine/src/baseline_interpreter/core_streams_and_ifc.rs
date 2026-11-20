@@ -8803,6 +8803,7 @@ impl InterpreterCore {
     ) -> Result<(), InterpreterError> {
         let max_entries = self.config.max_console_entries;
         if max_entries == 0 {
+            self.dropped_console_entries = self.dropped_console_entries.saturating_add(1);
             return Ok(());
         }
 
@@ -8908,6 +8909,7 @@ impl InterpreterCore {
             folded_hostcall_decisions: std::mem::take(&mut self.folded_hostcall_decisions),
             events: std::mem::take(&mut self.events),
             console_output: std::mem::take(&mut self.console_output),
+            dropped_console_entries: std::mem::take(&mut self.dropped_console_entries),
             iteration_traces: std::mem::take(&mut self.iteration_traces),
             nondeterminism_trace,
             generated_code_audit: std::mem::take(&mut self.generated_code_audit),

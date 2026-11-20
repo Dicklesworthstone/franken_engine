@@ -2104,6 +2104,7 @@ impl InterpreterCore {
             active_generated_function_artifact: _,
             entry_module_specifier: _,
             console_output: _,
+            dropped_console_entries: _,
             console_output_bytes: _,
             // Labels, counts and timer ticks: no heap references.
             console_group_depth: _,

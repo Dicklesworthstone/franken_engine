@@ -29,15 +29,17 @@ pub enum NetworkEgressPolicy {
     /// Block loopback, RFC1918 private, link-local / cloud metadata
     /// (`169.254.0.0/16`, `fe80::/10`), unique-local (`fc00::/7`), CGNAT
     /// (`100.64.0.0/10`), unspecified, multicast, broadcast, documentation/test
-    /// ranges, and IPv4-mapped IPv6 equivalents (`::ffff:...`).
+    /// ranges, and IPv6 transition addresses carrying a forbidden IPv4
+    /// destination (mapped IPv4, well-known NAT64, 6to4, and Teredo).
     PublicInternetOnly,
 }
 
 impl NetworkEgressPolicy {
     /// Returns `true` when `ip` is non-public (loopback, private, link-local /
     /// cloud-metadata, CGNAT, unique-local, unspecified, multicast, broadcast,
-    /// or reserved documentation/benchmarking space), unwrapping IPv4-mapped
-    /// IPv6 addresses via `to_canonical()`.
+    /// or reserved documentation/benchmarking space). IPv4-mapped IPv6
+    /// addresses are canonicalized; standard translation and tunnel prefixes
+    /// receive the same checks on their embedded IPv4 destinations.
     #[must_use]
     pub fn is_forbidden_public_egress_ip(ip: IpAddr) -> bool {
         match ip.to_canonical() {
@@ -63,15 +65,60 @@ impl NetworkEgressPolicy {
             }
             IpAddr::V6(v6) => {
                 let segs = v6.segments();
+                let forbidden_ipv4 = |high: u16, low: u16| {
+                    Self::is_forbidden_public_egress_ip(IpAddr::V4(std::net::Ipv4Addr::from(
+                        (u32::from(high) << 16) | u32::from(low),
+                    )))
+                };
+                // RFC 6052, sections 3.1 and 5.3: the well-known NAT64
+                // prefix must apply the embedded IPv4 destination's filters.
+                if segs[..6] == [0x64, 0xff9b, 0, 0, 0, 0] {
+                    return forbidden_ipv4(segs[6], segs[7]);
+                }
+                // RFC 3964, section 5.3.1: 6to4 encodes its IPv4 tunnel
+                // endpoint immediately after 2002::/16, not in the suffix.
+                if segs[0] == 0x2002 {
+                    return forbidden_ipv4(segs[1], segs[2]);
+                }
+                // RFC 4380, section 4: Teredo carries both a server IPv4
+                // address and a bitwise-complemented client IPv4 address.
+                if segs[0] == 0x2001 && segs[1] == 0 {
+                    return forbidden_ipv4(segs[2], segs[3]) || forbidden_ipv4(!segs[6], !segs[7]);
+                }
+                // IANA's IPv6 Special-Purpose Address Registry reserves
+                // 2001::/23 for protocol assignments. Preserve its explicitly
+                // globally reachable anycast, AMT, AS112, ORCHIDv2, and DET
+                // allocations, but reject unassigned and non-public space.
+                // https://www.iana.org/assignments/iana-ipv6-special-registry
+                if segs[0] == 0x2001 && segs[1] < 0x0200 {
+                    return !matches!(
+                        segs,
+                        [0x2001, 1, 0, 0, 0, 0, 0, 1..=3]
+                            | [0x2001, 3, ..]
+                            | [0x2001, 4, 0x112, ..]
+                            | [0x2001, 0x20..=0x3f, ..]
+                    );
+                }
                 v6.is_loopback()
                     || v6.is_unspecified()
                     || v6.is_multicast()
                     || v6.is_unique_local()
                     || v6.is_unicast_link_local()
+                    // Deprecated IPv4-compatible ::/96 and site-local
+                    // fec0::/10 (RFC 4291, sections 2.5.5.1 and 2.5.7).
+                    || segs[..6] == [0; 6]
+                    || (segs[0] & 0xffc0) == 0xfec0
+                    // Local-use translation prefix (RFC 8215).
+                    || segs[..3] == [0x64, 0xff9b, 1]
                     // 2001:db8::/32 documentation
                     || (segs[0] == 0x2001 && segs[1] == 0x0db8)
-                    // 100::/64 discard-only (RFC 6666)
-                    || (segs[0] == 0x0100 && segs[1] == 0 && segs[2] == 0 && segs[3] == 0)
+                    // 3fff::/20 documentation (RFC 9637).
+                    || (segs[0] == 0x3fff && (segs[1] & 0xf000) == 0)
+                    // 5f00::/16 SRv6 SIDs have local-domain scope (RFC 9602).
+                    || segs[0] == 0x5f00
+                    // 100::/64 discard-only (RFC 6666) and
+                    // 100:0:0:1::/64 dummy IPv6 prefix (RFC 9780).
+                    || (segs[..3] == [0x0100, 0, 0] && segs[3] <= 1)
             }
         }
     }
@@ -1263,6 +1310,156 @@ mod pinned_tests {
         assert!(
             format!("{err:?}").contains("SSRF egress policy blocked non-public destination"),
             "unexpected error: {err:?}"
+        );
+        listener.set_nonblocking(true).unwrap();
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            io::ErrorKind::WouldBlock,
+            "denied loopback egress must not establish a socket"
+        );
+    }
+
+    #[test]
+    fn public_egress_only_rejects_nonpublic_ipv6_ranges_and_keeps_global_exceptions() {
+        // IANA IPv6 Special-Purpose Address Registry plus the deprecated
+        // IPv4-compatible and site-local ranges from RFC 4291. Boundaries
+        // matter: a /20 or /28 must not become an over-broad /16 or /23.
+        for raw in [
+            "::8.8.8.8",
+            "::127.0.0.1",
+            "64:ff9b:1::",
+            "64:ff9b:1:ffff:ffff:ffff:ffff:ffff",
+            "100::",
+            "100::ffff:ffff:ffff:ffff",
+            "100:0:0:1::",
+            "100:0:0:1:ffff:ffff:ffff:ffff",
+            "2001:1::",
+            "2001:1::4",
+            "2001:2::",
+            "2001:2:0:ffff:ffff:ffff:ffff:ffff",
+            "2001:4:111:ffff:ffff:ffff:ffff:ffff",
+            "2001:4:113::",
+            "2001:1f:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:40::",
+            "2001:1ff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:db8::",
+            "3fff::",
+            "3fff:fff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "5f00::",
+            "5f00:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "fec0::",
+            "feff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+        ] {
+            assert!(
+                NetworkEgressPolicy::is_forbidden_public_egress_ip(raw.parse().unwrap()),
+                "non-public IPv6 destination {raw} escaped classification"
+            );
+        }
+        for raw in [
+            "2001:1::1",
+            "2001:1::2",
+            "2001:1::3",
+            "2001:3::",
+            "2001:3:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:4:112::",
+            "2001:4:112:ffff:ffff:ffff:ffff:ffff",
+            "2001:20::",
+            "2001:2f:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:30::",
+            "2001:3f:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:200::",
+            "2001:db7:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:db9::",
+            "2606:4700:4700::1111",
+            "2607:f8b0:4004:80b::200e",
+            "2a00:1450:4001:81b::200e",
+            "3fff:1000::",
+        ] {
+            assert!(
+                !NetworkEgressPolicy::is_forbidden_public_egress_ip(raw.parse().unwrap()),
+                "public IPv6 destination {raw} was over-blocked"
+            );
+        }
+    }
+
+    #[test]
+    fn public_egress_only_applies_ipv4_policy_to_transition_endpoints() {
+        use std::net::{Ipv4Addr, Ipv6Addr};
+
+        // RFC 6052 /96, RFC 3056 /16, and RFC 4380's server and complemented
+        // client addresses all encode destinations that need the same IPv4
+        // check as a direct connection. A public suffix is not enough when
+        // the Teredo server itself is private.
+        for (raw, forbidden) in [
+            ("127.0.0.1", true),
+            ("10.0.0.1", true),
+            ("172.16.0.1", true),
+            ("192.168.1.1", true),
+            ("169.254.169.254", true),
+            ("100.64.0.1", true),
+            ("198.18.0.1", true),
+            ("192.0.2.1", true),
+            ("0.0.0.0", true),
+            ("224.0.0.1", true),
+            ("255.255.255.255", true),
+            ("1.1.1.1", false),
+            ("8.8.8.8", false),
+            ("100.63.255.255", false),
+            ("100.128.0.0", false),
+            ("172.15.255.255", false),
+            ("172.32.0.0", false),
+        ] {
+            let ipv4: Ipv4Addr = raw.parse().unwrap();
+            let [a, b, c, d] = ipv4.octets();
+            let high = u16::from_be_bytes([a, b]);
+            let low = u16::from_be_bytes([c, d]);
+            for encoded in [
+                ipv4.to_ipv6_mapped(),
+                Ipv6Addr::new(0x64, 0xff9b, 0, 0, 0, 0, high, low),
+                Ipv6Addr::new(0x2002, high, low, 0, 0, 0, 0, 1),
+                Ipv6Addr::new(0x2001, 0, 0x0808, 0x0808, 0, 0xffff, !high, !low),
+                Ipv6Addr::new(0x2001, 0, high, low, 0, 0xffff, !0x0101, !0x0101),
+            ] {
+                assert_eq!(
+                    NetworkEgressPolicy::is_forbidden_public_egress_ip(IpAddr::V6(encoded)),
+                    forbidden,
+                    "embedded IPv4 destination {raw} in {encoded}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn public_egress_only_validates_the_whole_resolved_set_before_dialing() {
+        let public: SocketAddr = "[2606:4700:4700::1111]:443".parse().unwrap();
+        for forbidden in [
+            "[fec0::1]:443",
+            "[64:ff9b::169.254.169.254]:443",
+            "[2002:7f00:1::1]:443",
+            "[2001:0:808:808:0:ffff:5601:5601]:443",
+        ] {
+            let forbidden: SocketAddr = forbidden.parse().unwrap();
+            for addresses in [[public, forbidden], [forbidden, public]] {
+                // A deliberately expired transport deadline prevents even a
+                // public dial if classification regresses. PermissionDenied
+                // proves the full DNS result was rejected before the socket
+                // path, whose first observable result would be TimedOut.
+                let mut deadline = NetworkDeadline::at(Instant::now());
+                deadline.egress_policy = NetworkEgressPolicy::PublicInternetOnly;
+                let error = DeadlineTcpStream::connect_approved_addresses(&addresses, deadline)
+                    .unwrap_err();
+                assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+                assert!(error.to_string().contains(&forbidden.ip().to_string()));
+            }
+        }
+        let mut deadline = NetworkDeadline::at(Instant::now());
+        deadline.egress_policy = NetworkEgressPolicy::PublicInternetOnly;
+        assert_eq!(
+            DeadlineTcpStream::connect_approved_addresses(&[public], deadline)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::TimedOut,
+            "an ordinary public address must reach transport admission"
         );
     }
 }

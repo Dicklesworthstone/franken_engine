@@ -8,6 +8,7 @@
 //! survivor-to-survivor masks without disclosing any participant's net mask to
 //! the coordinator.
 
+use rand::distributions::{Distribution, Open01};
 use rand::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -661,9 +662,9 @@ impl SecureAggregationSession {
 }
 
 fn uniform_open01<R: RngCore + CryptoRng>(rng: &mut R) -> f64 {
-    // 53-bit dyadic rational strictly in (0, 1) so ln(u) is always finite.
-    let raw = (rng.next_u64() >> 11) as f64;
-    (raw + 0.5) * (1.0 / ((1u64 << 53) as f64))
+    // Open01 uses representable interior values. Adding a half to a 53-bit
+    // integer can round up to 2^53, accidentally admitting the endpoint 1.
+    Open01.sample(rng)
 }
 
 fn sample_geometric_zero_based<R: RngCore + CryptoRng>(alpha: f64, rng: &mut R) -> Result<i64> {
@@ -676,7 +677,9 @@ fn sample_geometric_zero_based<R: RngCore + CryptoRng>(alpha: f64, rng: &mut R) 
     let u = uniform_open01(rng);
     // For P[G >= k] = exp(-alpha * k), floor(-ln(u) / alpha) is exact geometric.
     let draw = (-u.ln() / alpha).floor();
-    if !draw.is_finite() || draw < 0.0 || draw > (i64::MAX as f64) {
+    // i64::MAX rounds up to 2^63 as f64, so this is an exclusive bound.
+    // Accepting equality would silently saturate the sampled value on cast.
+    if !draw.is_finite() || draw < 0.0 || draw >= (i64::MAX as f64) {
         return Err(SecureAggregationError::ProtocolViolation(
             "Discrete Laplace geometric sample overflowed i64".into(),
         ));
@@ -743,11 +746,16 @@ pub fn sample_discrete_gaussian<R: RngCore + CryptoRng>(sigma: f64, rng: &mut R)
     }
     let t = sigma.floor() + 1.0;
     let alpha = 1.0 / t;
-    let two_sigma_sq = 2.0 * sigma * sigma;
     loop {
         let y = sample_discrete_laplace(alpha, 1, rng)?;
-        let diff = (y.unsigned_abs() as f64) - (sigma * sigma / t);
-        let log_accept = -(diff * diff) / two_sigma_sq;
+        // Normalize before squaring: (|y| - sigma^2/t)^2 / (2*sigma^2)
+        // equals (|y|/sigma - sigma/t)^2 / 2. Computing sigma^2 first
+        // underflows for small valid scales, making even y=0 yield NaN and
+        // preventing the rejection loop from ever accepting a proposal.
+        // An infinite normalized nonzero proposal gives -infinity here and
+        // is correctly rejected; zero stays finite for every valid sigma.
+        let scaled_diff = (y.unsigned_abs() as f64) / sigma - sigma / t;
+        let log_accept = -0.5 * scaled_diff * scaled_diff;
         let u = uniform_open01(rng);
         if u.ln() <= log_accept {
             return Ok(y);
@@ -759,6 +767,121 @@ pub fn sample_discrete_gaussian<R: RngCore + CryptoRng>(sigma: f64, rng: &mut R)
 mod tests {
     use super::*;
     use rand::thread_rng;
+
+    /// A finite random tape makes a non-terminating rejection loop fail on the
+    /// first unexpected draw instead of leaving the regression test hanging.
+    struct NoiseTestRng<'a> {
+        words: std::iter::Copied<std::slice::Iter<'a, u64>>,
+    }
+
+    impl<'a> NoiseTestRng<'a> {
+        fn new(words: &'a [u64]) -> Self {
+            Self {
+                words: words.iter().copied(),
+            }
+        }
+    }
+
+    impl RngCore for NoiseTestRng<'_> {
+        fn next_u32(&mut self) -> u32 {
+            self.next_u64() as u32
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            self.words
+                .next()
+                .expect("noise sampler exhausted the finite random tape")
+        }
+
+        fn fill_bytes(&mut self, dest: &mut [u8]) {
+            for chunk in dest.chunks_mut(8) {
+                let word = self.next_u64().to_le_bytes();
+                chunk.copy_from_slice(&word[..chunk.len()]);
+            }
+        }
+
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> std::result::Result<(), rand::Error> {
+            self.fill_bytes(dest);
+            Ok(())
+        }
+    }
+
+    // Test-only deterministic tape; never used as a production entropy source.
+    impl CryptoRng for NoiseTestRng<'_> {}
+
+    #[test]
+    fn noise_uniform_draws_are_strictly_inside_unit_interval() {
+        for word in [0, 1, 1 << 63, u64::MAX - 1, u64::MAX] {
+            let draw = uniform_open01(&mut NoiseTestRng::new(&[word]));
+            assert!(draw > 0.0 && draw < 1.0, "word={word}, draw={draw}");
+            assert!(draw.ln().is_finite() && draw.ln() < 0.0);
+        }
+    }
+
+    #[test]
+    fn geometric_draws_reject_the_exclusive_signed_integer_boundary() {
+        let word = 1u64 << 63;
+        let draw_log = -uniform_open01(&mut NoiseTestRng::new(&[word])).ln();
+        let upper_exclusive = (1u64 << 63) as f64;
+        let alpha = draw_log / upper_exclusive;
+        assert!(sample_geometric_zero_based(alpha, &mut NoiseTestRng::new(&[word])).is_err());
+
+        let largest_representable = f64::from_bits(upper_exclusive.to_bits() - 1);
+        let alpha = draw_log / largest_representable;
+        assert_eq!(
+            sample_geometric_zero_based(alpha, &mut NoiseTestRng::new(&[word])).unwrap(),
+            9_223_372_036_854_774_784
+        );
+    }
+
+    #[test]
+    fn discrete_gaussian_accepts_zero_at_underflowing_scales() {
+        for sigma in [f64::from_bits(1), f64::MIN_POSITIVE, 1e-200, 1e-162] {
+            // Equal geometric proposals produce zero, which must be accepted.
+            // Squaring sigma first made this acceptance probability NaN.
+            let mut rng = NoiseTestRng::new(&[0, 0, u64::MAX]);
+            assert_eq!(sample_discrete_gaussian(sigma, &mut rng).unwrap(), 0);
+            assert_eq!(rng.words.len(), 0);
+        }
+    }
+
+    #[test]
+    fn discrete_gaussian_rejects_nonzero_proposals_at_tiny_scale() {
+        let mut rng = NoiseTestRng::new(&[0, u64::MAX, 0, 0, 0, u64::MAX]);
+        assert_eq!(sample_discrete_gaussian(1e-200, &mut rng).unwrap(), 0);
+        assert_eq!(
+            rng.words.len(),
+            0,
+            "must reject the first, nonzero proposal"
+        );
+    }
+
+    #[test]
+    fn discrete_gaussian_preserves_signed_proposals_and_rejection() {
+        let low = 1u64 << 62;
+        let high = 3u64 << 62;
+        let middle = 1u64 << 63;
+        for (words, expected) in [([low, high, middle], 4), ([high, low, middle], -4)] {
+            let mut rng = NoiseTestRng::new(&words);
+            assert_eq!(sample_discrete_gaussian(3.0, &mut rng).unwrap(), expected);
+            assert_eq!(rng.words.len(), 0);
+        }
+        let words = [low, high, u64::MAX, 0, 0, 0];
+        let mut rng = NoiseTestRng::new(&words);
+        assert_eq!(sample_discrete_gaussian(3.0, &mut rng).unwrap(), 0);
+        assert_eq!(rng.words.len(), 0, "must reject the first proposal");
+    }
+
+    #[test]
+    fn discrete_gaussian_rejects_invalid_or_unrepresentable_scales() {
+        for sigma in [0.0, -0.0, -1.0, f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+            assert!(sample_discrete_gaussian(sigma, &mut NoiseTestRng::new(&[])).is_err());
+        }
+        // An out-of-range geometric proposal remains a typed refusal.
+        for sigma in [1e100, f64::MAX] {
+            assert!(sample_discrete_gaussian(sigma, &mut NoiseTestRng::new(&[0])).is_err());
+        }
+    }
 
     #[test]
     fn signed_net_masks_unmask_without_overflow_or_negative_residues() {

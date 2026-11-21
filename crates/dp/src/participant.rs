@@ -21,12 +21,17 @@ impl ParticipantId {
     }
 }
 
-/// A participant in the secure aggregation protocol
+/// Legacy local arithmetic participant, retained for compatibility.
+///
+/// Its identity hash is not a cryptographic verification key and its share
+/// disclosure API does not hide individual updates from the coordinator. Use
+/// [`crate::key_exchange::ParticipantKeySetup`] for independent authenticated
+/// participants with private masking state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Participant {
     /// Unique participant identifier
     pub id: ParticipantId,
-    /// Public key for this participant (simplified representation)
+    /// Legacy deterministic identity hash; not an authentication key.
     pub public_key: Vec<u8>,
     /// Status of this participant in the current aggregation
     pub status: ParticipantStatus,
@@ -67,9 +72,9 @@ pub struct SecretShare {
 }
 
 impl Participant {
-    /// Create a new participant with a generated public key
+    /// Create a local arithmetic participant with a deterministic identity hash.
     pub fn new(id: ParticipantId) -> Self {
-        // In a real implementation, this would generate actual cryptographic keys
+        // Real signing and agreement keys belong to ParticipantKeySetup.
         let public_key = Self::generate_public_key(&id);
 
         Self {

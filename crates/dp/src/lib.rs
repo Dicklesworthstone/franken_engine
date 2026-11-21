@@ -2,11 +2,17 @@
 //! Secure aggregation (Bonawitz et al. 2017 pairwise-cancelling masks) and
 //! discrete differential-privacy mechanisms (`DiscreteLaplace`, `DiscreteGaussian`).
 //!
-//! Legacy [`Participant::get_unmasking_values`] is retained only for arithmetic
-//! compatibility tests; production callers MUST use [`PairwiseMaskParticipant`]
-//! and [`SecureAggregationSession::complete_pairwise_aggregation`], which cancel
-//! survivor-to-survivor masks without disclosing any participant's net mask to
-//! the coordinator.
+//! Independent participants use [`key_exchange::ParticipantKeySetup`] and a
+//! trusted [`key_exchange::AuthenticatedAggregationRound`] to agree pairwise
+//! masks with signed ephemeral X25519 keys. The coordinator verifies and sums
+//! signed masked vectors without receiving any participant's secrets. This
+//! complete-roster protocol rejects missing participants.
+//!
+//! [`PairwiseMaskParticipant`] exposes the lower-level masking arithmetic; its
+//! shared-seed helper holds both participants' private states in one process.
+//! Legacy [`Participant::get_unmasking_values`] and [`SecureAggregationSession`]
+//! are retained for compatibility. Neither central setup nor disclosure of a
+//! participant's net mask provides confidentiality from the coordinator.
 
 use rand::distributions::{Distribution, Open01};
 use rand::{CryptoRng, RngCore};
@@ -15,6 +21,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub mod error;
+pub mod key_exchange;
 pub mod participant;
 pub mod protocol;
 
@@ -401,7 +408,10 @@ impl PairwiseMaskParticipant {
         }
     }
 
-    /// Establish a symmetric pairwise seed between `a` and `b`.
+    /// Establish a symmetric pairwise seed between `a` and `b` locally.
+    ///
+    /// The caller sees both secret states. Independent participants should use
+    /// [`key_exchange::ParticipantKeySetup`] for authenticated key agreement.
     pub fn establish_shared_seed<R: RngCore + CryptoRng>(
         a: &mut Self,
         b: &mut Self,

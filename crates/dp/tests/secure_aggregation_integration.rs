@@ -10,6 +10,85 @@ use dp::{
 };
 use rand::{SeedableRng, rngs::StdRng, thread_rng};
 
+#[test]
+fn authenticated_round_refuses_a_split_view_of_one_peers_signed_keys() {
+    use std::collections::BTreeMap;
+
+    use dp::key_exchange::{AuthenticatedAggregationRound, ParticipantKeySetup};
+    use ed25519_dalek::SigningKey;
+
+    let identities = ["alice", "bob", "carol"];
+    let signing_keys: Vec<_> = (1..=3)
+        .map(|seed| SigningKey::from_bytes(&[seed; 32]))
+        .collect();
+    let trusted: BTreeMap<_, _> = identities
+        .iter()
+        .zip(&signing_keys)
+        .map(|(id, key)| (ParticipantId((*id).into()), key.verifying_key().to_bytes()))
+        .collect();
+    let round = AuthenticatedAggregationRound::new(
+        "signed-transcript-fork".into(),
+        trusted,
+        2,
+        2_147_483_647,
+    )
+    .unwrap();
+    let setups: Vec<_> = identities
+        .iter()
+        .enumerate()
+        .map(|(index, id)| {
+            ParticipantKeySetup::new(
+                &round,
+                ParticipantId((*id).into()),
+                signing_keys[index].clone(),
+                &mut StdRng::seed_from_u64(index as u64 + 10),
+            )
+            .unwrap()
+        })
+        .collect();
+    let announcements: Vec<_> = setups
+        .iter()
+        .map(|setup| setup.announcement().clone())
+        .collect();
+    let original = round.verify_announcements(&announcements).unwrap();
+
+    // A malicious member can validly sign two setups. A coordinator shows
+    // Alice one transcript and Bob another while retaining their own keys.
+    let alternate_carol = ParticipantKeySetup::new(
+        &round,
+        ParticipantId("carol".into()),
+        signing_keys[2].clone(),
+        &mut StdRng::seed_from_u64(99),
+    )
+    .unwrap();
+    let mut forked_announcements = announcements;
+    forked_announcements[2] = alternate_carol.announcement().clone();
+    let fork = round.verify_announcements(&forked_announcements).unwrap();
+    assert_ne!(original.binding(), fork.binding());
+
+    let mixed: Vec<_> = setups
+        .into_iter()
+        .enumerate()
+        .map(|(index, setup)| {
+            let view = if index == 1 { &fork } else { &original };
+            setup.complete(view).unwrap().mask(&[1, 2]).unwrap()
+        })
+        .collect();
+    assert!(original.aggregate(&mixed).is_err());
+    assert!(fork.aggregate(&mixed).is_err());
+
+    // Rewriting public transcript identifiers cannot repair the mixed batch:
+    // each participant's signature authenticates the transcript it accepted.
+    let mut rebound = mixed;
+    for message in &mut rebound {
+        message.key_set_binding = original.binding();
+    }
+    assert!(matches!(
+        original.aggregate(&rebound),
+        Err(SecureAggregationError::CryptographicError(_))
+    ));
+}
+
 fn pairwise_participants() -> Vec<PairwiseMaskParticipant> {
     let mut rng = StdRng::seed_from_u64(20261115);
     let mut participants: Vec<_> = ["alice", "bob", "carol"]

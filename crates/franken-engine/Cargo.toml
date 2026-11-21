@@ -3777,6 +3777,11 @@ path = "tests/scheduler_replay_metamorphic.rs"
 required-features = ["governance-surfaces"]
 
 [[test]]
+name = "secure_aggregation_authenticated_integration"
+path = "tests/secure_aggregation_authenticated_integration.rs"
+required-features = ["governance-surfaces"]
+
+[[test]]
 name = "secure_aggregation_protocol_integration"
 path = "tests/secure_aggregation_protocol_integration.rs"
 required-features = ["governance-surfaces"]

@@ -1,9 +1,9 @@
 //! QQ.2 (`bd-cixqu.43.2`) integration tests for the secure aggregation
-//! protocol module. Exercises the full Bonawitz 2017 round-trip end-to-end via
-//! the engine's [`secure_aggregation`] orchestration over the `dp` primitive,
-//! with N ∈ {3, 7, 25}, asserting both the cryptographic correctness (the
-//! aggregator learns only the field sum) and the fail-closed failure modes
-//! (dropped / malicious / malformed peers reject rather than degrade).
+//! protocol module. Exercises the legacy local arithmetic driver over the `dp`
+//! primitive with N ∈ {3, 7, 25} and its fail-closed failure modes. This driver
+//! centrally receives plaintext; confidentiality is exercised separately in
+//! `secure_aggregation_authenticated_integration.rs` through independent peer
+//! setup and the authenticated public transcript API.
 
 use frankenengine_engine::secure_aggregation::{
     DEFAULT_FIELD_MODULUS, HONEST_MAJORITY_MIN_PARTICIPANTS, PeerInput, SecureAggregationEvent,

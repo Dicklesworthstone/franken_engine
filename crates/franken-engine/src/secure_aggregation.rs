@@ -1,29 +1,29 @@
 #![forbid(unsafe_code)]
 //! QQ.2 — Secure aggregation protocol (Bonawitz et al. 2017).
 //!
-//! This module is the engine-side *protocol orchestration* layer for
-//! privacy-preserving fleet learning (Track T / Track QQ). It wraps the vetted
-//! [`dp`] sibling crate — which implements the Bonawitz 2017 pairwise-masking
-//! primitive (T.3, `bd-cixqu.20.3`) — and never inlines ad-hoc cryptography of
-//! its own. The cryptographic share generation, masking, and aggregation
-//! arithmetic all live in `dp`; this module supplies the round driver, the
-//! fail-closed admission policy, the honest-majority threshold computation, and
-//! the `bd-cixqu.45` structured logging.
+//! This module is the engine-side protocol boundary for privacy-preserving
+//! fleet learning (Track T / Track QQ). Cryptographic key agreement, signatures,
+//! masking and aggregation live in [`dp`]. The engine binds that protocol to its
+//! expected participant roster, round identifier and security epoch.
 //!
 //! ## Cryptographic property
-//! With Bonawitz 2017 pairwise additive masking, peer `i` adds a fresh random
-//! mask `s_{i→j}` for every ordered pair `(i, j)` and subtracts the symmetric
-//! mask `s_{j→i}` it received. Summed across the fleet, every mask term appears
-//! once with each sign and cancels, so the aggregator observes **only the sum**
-//! of peer contributions — never an individual contribution — even when the
-//! aggregator colludes with up to `k` peers (see [`collusion_threshold_k`]).
+//! [`SecureAggregationRound::run_authenticated`] accepts only signed public
+//! announcements and signed masked contributions. Participant-local X25519
+//! agreement and HKDF derive pairwise masks, which cancel in the complete sum.
+//! The trusted identity roster must be independently provisioned, and privacy
+//! requires at least two non-colluding participants. This is a complete-roster
+//! protocol, not a claim of implemented Bonawitz threshold dropout recovery.
 //!
-//! ## Honest-majority assumption (operator runbook)
-//! The privacy guarantee rests on an honest-majority assumption: at most
-//! `k = floor((n - 1) / 3)` of the `n` participants may collude. If the fleet
-//! is *fully* byzantine, no secure-aggregation scheme — Bonawitz 2017 included —
-//! can protect individual contributions. Operators MUST treat `k` as the hard
-//! collusion budget and provision the fleet so the honest set exceeds it.
+//! The older [`SecureAggregationRound::run`] entry point accepts plaintext and
+//! creates every participant centrally. It remains a local arithmetic driver;
+//! it does not provide confidentiality from its caller or coordinator.
+//!
+//! ## Collusion policy (operator runbook)
+//! Fleet policy declares `k = floor((n - 1) / 3)` as its maximum colluding
+//! participant count. This is a conservative deployment assumption, not a
+//! property that signatures can enforce. Pairwise masking requires at least
+//! two non-colluding participants; signatures authenticate membership but do
+//! not prove that a malicious member supplied an honest update.
 //!
 //! ## Fail-closed failure modes
 //! Per the acceptance contract, protocol failure modes do **not** silently
@@ -34,6 +34,7 @@
 //! dropout-recovery unmasking path is intentionally *not* used to paper over a
 //! missing peer; a missing peer is a rejection.
 
+use dp::key_exchange::{AuthenticatedAggregationRound, KeyAnnouncement, SignedMaskedContribution};
 use dp::participant::SecretShare;
 use dp::protocol::SecurityParameters;
 use dp::{AggregationProtocol, MaskedContribution, Participant, ParticipantId};
@@ -49,9 +50,8 @@ use crate::security_epoch::SecurityEpoch;
 /// `docs/secure_aggregation_v1.json`.
 pub const SECURE_AGGREGATION_SCHEMA_VERSION: &str = "franken-engine.secure-aggregation.v1";
 
-/// Honest-majority floor: a round with fewer participants than this cannot
-/// offer a meaningful privacy guarantee (with two parties the aggregator can
-/// trivially difference out either contribution), so it is rejected outright.
+/// Minimum roster size required by fleet policy. Confidentiality additionally
+/// requires at least two non-colluding participants in the accepted roster.
 pub const HONEST_MAJORITY_MIN_PARTICIPANTS: usize = 3;
 
 /// Default finite-field modulus used for the masking arithmetic
@@ -75,9 +75,10 @@ pub fn collusion_threshold_k(participant_count: usize) -> u32 {
 
 /// A single peer's cleartext contribution to a secure-aggregation round.
 ///
-/// In production the `update` vector is a fixed-point (millionths) model
-/// delta; the masking arithmetic is field arithmetic over [`DEFAULT_FIELD_MODULUS`]
-/// so every coordinate must already be a non-negative field element.
+/// Used by the local arithmetic driver, which necessarily sees every input.
+/// The masking arithmetic is field arithmetic over [`DEFAULT_FIELD_MODULUS`],
+/// so every coordinate must already be a non-negative field element. Use the
+/// authenticated entry point for participant-local confidential contributions.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PeerInput {
     /// Stable participant identifier.
@@ -260,7 +261,8 @@ impl SecureAggregationReject {
 /// Outcome of running a secure-aggregation round.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SecureAggregationOutcome {
-    /// The round completed; the aggregator learned only the field sum.
+    /// The round produced a field sum. Coordinator confidentiality requires
+    /// the authenticated entry point, rather than the plaintext local driver.
     Aggregated {
         round_id: String,
         epoch: SecurityEpoch,
@@ -323,8 +325,8 @@ impl SecureAggregationOutcome {
 }
 
 /// A secure-aggregation round coordinator. Holds the round-level policy
-/// (expected participant set, dimension, field modulus, epoch) and drives the
-/// Bonawitz round-trip through the [`dp`] primitive.
+/// (expected participant set, dimension, field modulus, epoch) and validates
+/// the authenticated public transcript through the [`dp`] primitive.
 #[derive(Debug, Clone)]
 pub struct SecureAggregationRound {
     round_id: String,
@@ -382,11 +384,118 @@ impl SecureAggregationRound {
         collusion_threshold_k(self.expected_participants.len())
     }
 
-    /// Run a secure-aggregation round over the submitted peer inputs.
+    /// Build the public configuration shared by independent participants.
+    ///
+    /// Identity verification keys must come from a trusted provisioning path,
+    /// never from the announcements being authenticated. Their roster must
+    /// exactly match this round's expected participants. The security epoch,
+    /// round identifier, dimensions, modulus, and trusted keys are all bound
+    /// into the signed transcript and the derived pairwise masks.
+    pub fn authenticated_configuration(
+        &self,
+        trusted_identity_keys: &BTreeMap<ParticipantId, [u8; 32]>,
+    ) -> Result<AuthenticatedAggregationRound, SecureAggregationReject> {
+        if self.round_id.trim().is_empty() {
+            return Err(SecureAggregationReject::EmptyRoundId);
+        }
+        if self.expected_participants.is_empty() {
+            return Err(SecureAggregationReject::EmptyExpectedSet);
+        }
+        if self.expected_count() < HONEST_MAJORITY_MIN_PARTICIPANTS {
+            return Err(SecureAggregationReject::HonestMajorityViolated {
+                participant_count: self.expected_count(),
+            });
+        }
+        for id in &self.expected_participants {
+            if !trusted_identity_keys.contains_key(&ParticipantId(id.clone())) {
+                return Err(SecureAggregationReject::DroppedPeer {
+                    participant_id: id.clone(),
+                });
+            }
+        }
+        for id in trusted_identity_keys.keys() {
+            if !self.expected_participants.contains(&id.0) {
+                return Err(SecureAggregationReject::UnexpectedPeer {
+                    participant_id: id.0.clone(),
+                });
+            }
+        }
+        // The byte length makes the epoch/round encoding unambiguous even
+        // when an application round identifier itself contains separators.
+        let session_id = format!(
+            "franken-engine.secagg.v1:{}:{}:{}",
+            self.epoch.as_u64(),
+            self.round_id.len(),
+            self.round_id
+        );
+        AuthenticatedAggregationRound::new(
+            session_id,
+            trusted_identity_keys.clone(),
+            self.dimension,
+            self.field_modulus,
+        )
+        .map_err(|error| SecureAggregationReject::PrimitiveError {
+            detail: error.to_string(),
+        })
+    }
+
+    /// Aggregate a complete authenticated transcript from independent peers.
+    ///
+    /// The coordinator receives only public keys, signatures and masked
+    /// vectors. It never receives a peer's plaintext update, private key, or
+    /// pairwise masking seed. All announcements and contributions must pass
+    /// authentication and roster checks before any aggregate is released.
+    /// A missing peer rejects the round; there is no partial-sum recovery.
+    ///
+    /// Applications must charge their privacy accountant before releasing an
+    /// aggregate and use a fresh round identifier for each new release. This
+    /// method verifies a transcript; it does not persist a replay ledger.
+    #[must_use]
+    pub fn run_authenticated(
+        &self,
+        trusted_identity_keys: &BTreeMap<ParticipantId, [u8; 32]>,
+        announcements: &[KeyAnnouncement],
+        contributions: &[SignedMaskedContribution],
+    ) -> SecureAggregationOutcome {
+        let aggregate = self
+            .authenticated_configuration(trusted_identity_keys)
+            .and_then(|configuration| {
+                configuration
+                    .verify_announcements(announcements)
+                    .and_then(|key_set| key_set.aggregate(contributions))
+                    .map_err(|error| SecureAggregationReject::PrimitiveError {
+                        detail: error.to_string(),
+                    })
+            });
+        let expected_count = self.expected_count() as u32;
+        match aggregate {
+            Ok(aggregate) => SecureAggregationOutcome::Aggregated {
+                round_id: self.round_id.clone(),
+                epoch: self.epoch,
+                participant_count: expected_count,
+                expected_count,
+                collusion_threshold_k: self.collusion_threshold_k(),
+                aggregate,
+            },
+            Err(reject) => SecureAggregationOutcome::Rejected {
+                round_id: self.round_id.clone(),
+                epoch: self.epoch,
+                // Admission is atomic: a rejected batch has no accepted peers.
+                participant_count: 0,
+                expected_count,
+                collusion_threshold_k: self.collusion_threshold_k(),
+                reject,
+            },
+        }
+    }
+
+    /// Run the local arithmetic driver over plaintext peer inputs.
     ///
     /// Returns [`SecureAggregationOutcome::Aggregated`] with the field sum when
     /// every expected peer submits a well-formed contribution; otherwise
     /// returns [`SecureAggregationOutcome::Rejected`] fail-closed.
+    /// This convenience driver creates all private participant states in one
+    /// process; use [`Self::run_authenticated`] for coordinator confidentiality.
     pub fn run<R: RngCore + CryptoRng>(
         &self,
         inputs: &[PeerInput],

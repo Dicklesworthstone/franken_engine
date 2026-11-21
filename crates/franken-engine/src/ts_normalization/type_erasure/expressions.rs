@@ -5,6 +5,21 @@ mod tests {
     use super::super::tests::check;
 
     #[test]
+    fn regex_values_and_jsx_closing_tags_are_not_type_arguments() {
+        for source in [
+            "const result = value < /pattern/ > (other);",
+            "const invalid: /pattern/ = value;",
+            "<div><span>Stable</span></div>",
+            "export function Card() { return <main><p>window.location Date.now() Math.random() module.exports</p></main>; }",
+            "const view = <><p>Text</p></>;",
+        ] {
+            check(source);
+        }
+        // Real literal types remain valid generic arguments.
+        check("const value = factory⟦<'ready' | 42 | `prefix${number}`>⟧(input);");
+    }
+
+    #[test]
     fn ambient_variables_never_create_runtime_bindings() {
         check("⟦declare const host: {read(path: string): string};⟧ host.read('a');");
         check("⟦declare let count: number, name: string;⟧ const local = 3;");

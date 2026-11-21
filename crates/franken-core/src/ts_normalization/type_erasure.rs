@@ -434,6 +434,12 @@ impl Eraser<'_> {
             }
         }
         let token = self.tokens.get(cursor)?;
+        // Regular expressions are runtime values, never TypeScript literal
+        // types. The shared JS lexer can also read adjacent JSX closing tags
+        // as a regex token; accepting it here erases the tags as type arguments.
+        if token.kind == Kind::Literal && token.text.starts_with('/') {
+            return None;
+        }
         let mut type_arguments = token.kind == Kind::Word
             && !matches!(
                 token.text,

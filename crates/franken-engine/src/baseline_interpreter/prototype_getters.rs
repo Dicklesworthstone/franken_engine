@@ -212,7 +212,7 @@ impl InterpreterCore {
             ("set", setter),
             (
                 "enumerable",
-                Value::Bool(matches!(owner, "TextEncoder" | "TextDecoder")),
+                Value::Bool(matches!(*owner, "TextEncoder" | "TextDecoder")),
             ),
             ("configurable", Value::Bool(true)),
         ])?;

@@ -33,9 +33,9 @@ fn package(id: &str, source: &str) -> ExtensionPackage {
 
 fn orchestrator_with_budget(instruction_budget: u64) -> ExecutionOrchestrator {
     let mut runtime = RuntimeConfig::default();
-    runtime.execution.deterministic_instruction_budget = Some(instruction_budget);
-    runtime.execution.throughput_instruction_budget = Some(instruction_budget);
-    ExecutionOrchestrator::with_runtime_config(OrchestratorConfig::default(), runtime)
+    runtime.execution.deterministic_budget = instruction_budget;
+    runtime.execution.throughput_budget = instruction_budget;
+    ExecutionOrchestrator::new_lab_with_runtime_config(OrchestratorConfig::default(), runtime)
 }
 
 #[test]
@@ -81,9 +81,19 @@ fn positive_console_cap_fails_closed_instead_of_silently_dropping_oldest_lines()
     let err = orchestrator
         .execute(&pkg)
         .expect_err("exceeding positive max_console_entries must fail closed");
+    let primary = match &err {
+        OrchestratorError::PostCellFailure(failure) => {
+            assert!(
+                failure.committed_evidence_chain.is_some(),
+                "console budget refusal must preserve committed evidence chain"
+            );
+            failure.primary_error.as_ref()
+        }
+        other => other,
+    };
     assert!(
         matches!(
-            err,
+            primary,
             OrchestratorError::Interpreter(InterpreterError::ConsoleBudgetExceeded {
                 entries: 6,
                 max_entries: 5,

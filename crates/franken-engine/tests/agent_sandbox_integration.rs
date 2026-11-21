@@ -45,6 +45,7 @@ fn manifest() -> AgentSandboxManifest {
         trust_level: None,
         host_io_root: None,
         host_io_max_bytes: None,
+        network_allowlist: None,
         acknowledge_unfiltered_network: false,
         purpose: Some(DEFAULT_DATA_CONTRACT_PURPOSE.to_string()),
         metadata: BTreeMap::new(),

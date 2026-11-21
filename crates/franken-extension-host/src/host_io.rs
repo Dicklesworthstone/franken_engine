@@ -27,7 +27,7 @@ mod network_deadline;
 pub use control::{HostIoControl, UnrestrictedHostIoControl};
 pub use http_response::{ParsedHttpResponse, parse_http_response};
 use network_deadline::{DeadlineTcpStream, NetworkDeadline};
-pub use network_deadline::{NetworkEgressPolicy, NetworkRevocation};
+pub use network_deadline::{NetworkDestinationAllowlist, NetworkEgressPolicy, NetworkRevocation};
 
 /// Capability a guest must hold for the host to perform a given I/O request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -857,19 +857,14 @@ impl SandboxFdTable {
 /// by [`SANDBOXED_HOST_IO_NETWORK_TIMEOUT`] so a slow/unreachable peer fails
 /// closed instead of hanging.
 ///
-/// SECURITY INVARIANT — the provider is the network *mechanism*, not the network
-/// *policy*. It deliberately performs **no** SSRF / egress-allowlist / DNS-rebind
-/// check: endpoint authorization is the product layer's responsibility
-/// (`franken_node` `security::ssrf_policy` / `network_guard`) and MUST gate the
-/// endpoint *before* a `NetworkSend` / `NetworkRecv` request is ever issued to
-/// this provider. Duplicating a weaker check here would invite drift; the engine
-/// trusts that a request which reaches it has already been authorized. Guest JS
-/// does reach this mechanism: `http.get` / `fetch` lower to the engine's
-/// `net:request` hostcall and `ClientRequest.end()` issues the same
-/// `NetworkRequest`, so an embedder that installs this provider without a
-/// destination-policy gate in front of it (franken_node installs
-/// `SsrfGatedHostIo`) grants unrestricted egress to any extension holding the
-/// network capability (ADR-0015, bd-9vouw.14).
+/// The default network policy is unrestricted for embedders that already
+/// authorize destinations through a product gate such as `SsrfGatedHostIo`.
+/// Embedders can instead install [`NetworkEgressPolicy::PublicInternetOnly`]
+/// or an exact [`NetworkDestinationAllowlist`]. Both policies check every
+/// resolved candidate before connecting and use that same address set for I/O,
+/// including the DNS-free pinned entrypoints. Guest `http`/`fetch` calls reach
+/// this provider through capability-gated hostcalls, so the embedder must
+/// explicitly choose its destination authority (ADR-0015, bd-9vouw.14).
 #[derive(Debug, Clone)]
 pub struct SandboxedHostIo {
     root: PathBuf,

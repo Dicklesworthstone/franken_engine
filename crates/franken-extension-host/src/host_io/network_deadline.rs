@@ -6,6 +6,7 @@
 
 use super::control::OperationControl;
 use super::{HostIoControl, UnrestrictedHostIoControl};
+use std::collections::BTreeSet;
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Shutdown, SocketAddr, TcpStream};
 use std::sync::Arc;
@@ -20,7 +21,7 @@ use revocation::REVOCATION_POLL_INTERVAL;
 
 /// Destination IP policy enforced after DNS resolution and before any socket
 /// connect (`[RC-C2]` / `g2vrp.9`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum NetworkEgressPolicy {
     /// Raw mechanism mode for embedders that wrap `SandboxedHostIo` in their
     /// own product-level egress filter or run local `127.0.0.1` tests.
@@ -32,6 +33,64 @@ pub enum NetworkEgressPolicy {
     /// ranges, and IPv6 transition addresses carrying a forbidden IPv4
     /// destination (mapped IPv4, well-known NAT64, 6to4, and Teredo).
     PublicInternetOnly,
+    /// Permit only the exact numeric IP addresses and ports approved by the
+    /// host. Every resolved candidate must be listed before any socket opens.
+    /// This may explicitly authorize a private service without granting the
+    /// rest of its network or the public Internet.
+    Allowlist(NetworkDestinationAllowlist),
+}
+
+/// Bounded, immutable destination authority, shared by provider clones.
+/// Hostnames and wildcard ports are deliberately not authority: resolution
+/// happens once and the resulting socket addresses are checked exactly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetworkDestinationAllowlist(Arc<BTreeSet<SocketAddr>>);
+
+impl NetworkDestinationAllowlist {
+    pub const MAX_DESTINATIONS: usize = 256;
+
+    /// Validate explicit destinations before installing a policy. An empty
+    /// list denies all network connections. Duplicate, unspecified, multicast,
+    /// broadcast, and port-zero entries are rejected rather than broadened.
+    pub fn new(destinations: impl IntoIterator<Item = SocketAddr>) -> io::Result<Self> {
+        let mut approved = BTreeSet::new();
+        for destination in destinations {
+            let ip = destination.ip().to_canonical();
+            if destination.port() == 0
+                || ip.is_unspecified()
+                || ip.is_multicast()
+                || matches!(ip, IpAddr::V4(ip) if ip.is_broadcast())
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "network allowlist requires a concrete unicast IP and nonzero port: {destination}"
+                    ),
+                ));
+            }
+            if !approved.insert(destination) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("duplicate network allowlist destination: {destination}"),
+                ));
+            }
+            if approved.len() > Self::MAX_DESTINATIONS {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "network allowlist exceeds {} destinations",
+                        Self::MAX_DESTINATIONS
+                    ),
+                ));
+            }
+        }
+        Ok(Self(Arc::new(approved)))
+    }
+
+    #[must_use]
+    pub fn contains(&self, destination: &SocketAddr) -> bool {
+        self.0.contains(destination)
+    }
 }
 
 impl NetworkEgressPolicy {
@@ -123,10 +182,10 @@ impl NetworkEgressPolicy {
         }
     }
 
-    pub(super) fn validate_addresses(self, addresses: &[SocketAddr]) -> io::Result<()> {
-        if self == Self::PublicInternetOnly {
-            for addr in addresses {
-                if Self::is_forbidden_public_egress_ip(addr.ip()) {
+    pub(super) fn validate_addresses(&self, addresses: &[SocketAddr]) -> io::Result<()> {
+        for addr in addresses {
+            match self {
+                Self::PublicInternetOnly if Self::is_forbidden_public_egress_ip(addr.ip()) => {
                     return Err(io::Error::new(
                         io::ErrorKind::PermissionDenied,
                         format!(
@@ -135,6 +194,13 @@ impl NetworkEgressPolicy {
                         ),
                     ));
                 }
+                Self::Allowlist(approved) if !approved.contains(addr) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        format!("network allowlist blocked destination {addr}"),
+                    ));
+                }
+                _ => {}
             }
         }
         Ok(())
@@ -376,7 +442,7 @@ impl super::SandboxedHostIo {
     pub(super) fn network_deadline(&self) -> io::Result<NetworkDeadline> {
         let mut deadline = NetworkDeadline::new(self.network_timeout)?;
         deadline.revocation = Some(self.network_revocation.clone());
-        deadline.egress_policy = self.egress_policy;
+        deadline.egress_policy = self.egress_policy.clone();
         deadline.remaining()?;
         Ok(deadline)
     }
@@ -1460,6 +1526,189 @@ mod pinned_tests {
                 .kind(),
             io::ErrorKind::TimedOut,
             "an ordinary public address must reach transport admission"
+        );
+    }
+
+    #[test]
+    fn network_allowlist_rejects_ambiguous_and_unbounded_authority() {
+        for raw in [
+            "127.0.0.1:0",
+            "0.0.0.0:80",
+            "[::]:80",
+            "[::ffff:0.0.0.0]:80",
+            "224.0.0.1:80",
+            "[ff02::1]:80",
+            "255.255.255.255:80",
+        ] {
+            assert_eq!(
+                NetworkDestinationAllowlist::new([raw.parse().unwrap()])
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::InvalidInput,
+                "{raw} must not become wildcard authority"
+            );
+        }
+        let address: SocketAddr = "127.0.0.1:8080".parse().unwrap();
+        assert!(NetworkDestinationAllowlist::new([address, address]).is_err());
+        let entries = (1..=NetworkDestinationAllowlist::MAX_DESTINATIONS)
+            .map(|port| SocketAddr::new(address.ip(), port as u16));
+        assert!(NetworkDestinationAllowlist::new(entries.clone()).is_ok());
+        assert!(
+            NetworkDestinationAllowlist::new(entries.chain([address])).is_err(),
+            "the destination bound must not silently truncate authority"
+        );
+    }
+
+    #[test]
+    fn network_allowlist_matches_exact_addresses_ports_and_ipv6_scopes() {
+        let destinations: Vec<SocketAddr> = ["127.0.0.1:8080", "[fe80::1%3]:443"]
+            .iter()
+            .map(|raw| raw.parse().unwrap())
+            .collect();
+        let policy = NetworkEgressPolicy::Allowlist(
+            NetworkDestinationAllowlist::new(destinations.clone()).unwrap(),
+        );
+        policy.validate_addresses(&destinations).unwrap();
+        for raw in [
+            "127.0.0.1:8081",
+            "127.0.0.2:8080",
+            "8.8.8.8:8080",
+            "[::ffff:127.0.0.1]:8080",
+            "[fe80::1%4]:443",
+            "[fe80::1%3]:444",
+        ] {
+            assert_eq!(
+                policy
+                    .validate_addresses(&[raw.parse().unwrap()])
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::PermissionDenied,
+                "{raw} must not inherit another destination's approval"
+            );
+        }
+        let empty = NetworkEgressPolicy::Allowlist(NetworkDestinationAllowlist::new([]).unwrap());
+        assert!(empty.validate_addresses(&destinations).is_err());
+    }
+
+    #[test]
+    fn network_allowlist_performs_approved_io_and_keeps_capability_and_revocation_gates() {
+        use crate::host_io::HostIoProvider;
+
+        let dir = tempfile::tempdir().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let provider = SandboxedHostIo::with_root(dir.path())
+            .unwrap()
+            .with_egress_policy(NetworkEgressPolicy::Allowlist(
+                NetworkDestinationAllowlist::new([address]).unwrap(),
+            ));
+        let request = HostIoRequest::NetworkSend {
+            endpoint: address.to_string(),
+            payload: b"authorized service request".to_vec(),
+        };
+        assert!(matches!(
+            provider.perform(&request, &[]),
+            Err(crate::host_io::HostIoError::CapabilityMissing { .. })
+        ));
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+
+        let cloned = provider.clone();
+        for provider in [&provider, &cloned] {
+            provider
+                .perform(&request, &[HostIoCapability::NetworkSend])
+                .unwrap();
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(1)))
+                .unwrap();
+            let mut received = Vec::new();
+            stream.read_to_end(&mut received).unwrap();
+            assert_eq!(received, b"authorized service request");
+        }
+
+        provider.network_revocation().revoke();
+        assert!(
+            provider
+                .perform(&request, &[HostIoCapability::NetworkSend])
+                .is_err()
+        );
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+    }
+
+    #[test]
+    fn network_allowlist_rejects_every_unlisted_candidate_before_opening_a_socket() {
+        use crate::host_io::HostIoProvider;
+
+        let dir = tempfile::tempdir().unwrap();
+        let allowed = TcpListener::bind("127.0.0.1:0").unwrap();
+        let denied = TcpListener::bind("127.0.0.1:0").unwrap();
+        allowed.set_nonblocking(true).unwrap();
+        denied.set_nonblocking(true).unwrap();
+        let address = allowed.local_addr().unwrap();
+        let other = denied.local_addr().unwrap();
+        let provider = SandboxedHostIo::with_root(dir.path())
+            .unwrap()
+            .with_egress_policy(NetworkEgressPolicy::Allowlist(
+                NetworkDestinationAllowlist::new([address]).unwrap(),
+            ));
+        let request = HostIoRequest::NetworkSend {
+            endpoint: other.to_string(),
+            payload: b"must never be sent".to_vec(),
+        };
+        let error = provider
+            .perform(&request, &[HostIoCapability::NetworkSend])
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("network allowlist blocked destination")
+        );
+
+        // The pinned API models a hostname with a mixed DNS result. Validation
+        // must examine even a later denied candidate before dialing an earlier
+        // allowed one. An expired deadline prevents accidental I/O even if a
+        // regression bypasses validation; the error must still be policy denial.
+        let unlisted: SocketAddr = SocketAddr::new("127.0.0.2".parse().unwrap(), address.port());
+        for candidates in [[address, unlisted], [unlisted, address]] {
+            let mut deadline = NetworkDeadline::at(Instant::now());
+            deadline.egress_policy = provider.egress_policy.clone();
+            let error =
+                DeadlineTcpStream::connect_approved_addresses(&candidates, deadline).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+            assert!(error.to_string().contains(&unlisted.to_string()));
+
+            let pinned_request = HostIoRequest::NetworkSend {
+                endpoint: format!("approved-service.invalid:{}", address.port()),
+                payload: b"must never reach an unapproved candidate set".to_vec(),
+            };
+            let error = provider
+                .perform_pinned_network_candidates(
+                    &pinned_request,
+                    &[HostIoCapability::NetworkSend],
+                    &candidates,
+                    Instant::now() + Duration::from_secs(1),
+                )
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("network allowlist blocked destination")
+            );
+        }
+        assert_eq!(
+            allowed.accept().unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        assert_eq!(
+            denied.accept().unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
         );
     }
 }

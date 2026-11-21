@@ -2317,9 +2317,7 @@ impl FunctionSourceMap {
         let last_address = start + slice.len() - last_char.len_utf8();
         let start_offset = self.offset_of(start)?;
         let end_offset = self.offset_of(last_address)? + last_char.len_utf8();
-        if start_offset > end_offset || end_offset > original.len() {
-            return None;
-        }
+        original.get(start_offset..end_offset)?;
         let line_terminators = source_line_terminator_ranges(original);
         let (start_line, start_column) = source_position_at_offset(start_offset, &line_terminators);
         let (end_line, end_column) = source_position_at_offset(end_offset, &line_terminators);

@@ -215,4 +215,67 @@ fn assignments_and_updates_parse_as_identifier_references() {
         })();",
         Value::Bool(true),
     );
+
+    // Script-level `var` declarations of immutable globals bind to the
+    // non-writable global property rather than shadowing it (ES2020 §15.1.8).
+    assert_value(
+        "let side = 0; \
+         var NaN = (side += 1, 1); \
+         var undefined = (side += 2, 2); \
+         var Infinity = (side += 4, 3); \
+         if (true) { var NaN = (side += 8, 4); } \
+         side === 15 && NaN !== NaN && undefined === void 0 && Infinity === 1 / 0;",
+        Value::Bool(true),
+    );
+    assert_value(
+        "'use strict'; \
+         var NaN; var undefined; var Infinity; \
+         let ran = 0; \
+         let caught = false; \
+         try { var NaN = (ran += 1, 7); } catch (e) { caught = e.name === 'TypeError' && ran === 1; } \
+         caught && NaN !== NaN && undefined === void 0 && Infinity === 1 / 0;",
+        Value::Bool(true),
+    );
+
+    // Script-level `for-in` and `for-of` loops with `var` or bare identifier
+    // targets write to the non-writable global property instead of shadowing it.
+    assert_value(
+        "let count = 0; \
+         for (var NaN in { a: 1, b: 2 }) { count += 1; } \
+         for (undefined in { c: 3 }) { count += 10; } \
+         for (var Infinity of [1, 2]) { count += 100; } \
+         for (NaN of [3]) { count += 1000; } \
+         count === 1212 && NaN !== NaN && undefined === void 0 && Infinity === 1 / 0;",
+        Value::Bool(true),
+    );
+    assert_value(
+        "'use strict'; \
+         let ok = true; \
+         for (var NaN in {}) { ok = false; } \
+         for (var undefined of []) { ok = false; } \
+         let caughtIn = false; \
+         try { for (var NaN in { a: 1 }) { ok = false; } } catch (e) { caughtIn = e.name === 'TypeError'; } \
+         let closed = false; \
+         let iterable = { \
+             [Symbol.iterator]() { \
+                 let done = false; \
+                 return { \
+                     next() { if (done) return { done: true }; done = true; return { value: 1, done: false }; }, \
+                     return() { closed = true; return { done: true }; } \
+                 }; \
+             } \
+         }; \
+         let caughtOf = false; \
+         try { for (var Infinity of iterable) { ok = false; } } catch (e) { caughtOf = e.name === 'TypeError'; } \
+         ok && caughtIn && caughtOf && closed && NaN !== NaN && undefined === void 0 && Infinity === 1 / 0;",
+        Value::Bool(true),
+    );
+    assert_value(
+        "(function () { \
+             for (var NaN in { x: 1 }) {} \
+             for (var Infinity of [42]) {} \
+             return NaN === 'x' && Infinity === 42; \
+         })() && NaN !== NaN && Infinity === 1 / 0;",
+        Value::Bool(true),
+    );
 }

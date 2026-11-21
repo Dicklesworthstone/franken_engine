@@ -1719,12 +1719,18 @@ pub fn lower_ir0_to_ir1(
     if ir0.tree.goal == ParseGoal::Module || has_use_strict_directive(&ir0.tree.body) {
         binding_lookup.insert(STRICT_MODE_CONTEXT.to_string(), 0);
     }
-    let mut declared_root_bindings =
-        reserve_root_scope_bindings(&ir0.tree.body, &mut binding_lookup, &mut binding_index);
+    let skip_script_immutable_var_globals = ir0.tree.goal == ParseGoal::Script;
+    let mut declared_root_bindings = reserve_root_scope_bindings(
+        &ir0.tree.body,
+        &mut binding_lookup,
+        &mut binding_index,
+        skip_script_immutable_var_globals,
+    );
     declared_root_bindings.extend(reserve_hoisted_var_bindings(
         &ir0.tree.body,
         &mut binding_lookup,
         &mut binding_index,
+        skip_script_immutable_var_globals,
     ));
     // bd-tu0c3: record path-module binding aliases (`const path =
     // require('path')` that are actually used as a recognized pure-compute
@@ -2270,6 +2276,7 @@ fn reserve_root_scope_bindings(
     statements: &[Statement],
     binding_lookup: &mut BTreeMap<String, BindingId>,
     binding_index: &mut BindingId,
+    skip_script_immutable_var_globals: bool,
 ) -> BTreeSet<String> {
     let mut declared = BTreeSet::new();
 
@@ -2284,6 +2291,12 @@ fn reserve_root_scope_bindings(
             Statement::VariableDeclaration(variable_declaration) => {
                 for declarator in &variable_declaration.declarations {
                     for binding_name in declarator.pattern.binding_names() {
+                        if skip_script_immutable_var_globals
+                            && variable_declaration.kind == VariableDeclarationKind::Var
+                            && GLOBAL_VALUE_NAMES.contains(&binding_name)
+                        {
+                            continue;
+                        }
                         reserve_binding_id(binding_lookup, binding_index, binding_name);
                         declared.insert(binding_name.to_string());
                     }
@@ -2318,12 +2331,14 @@ fn reserve_hoisted_var_bindings(
     statements: &[Statement],
     binding_lookup: &mut BTreeMap<String, BindingId>,
     binding_index: &mut BindingId,
+    skip_script_immutable_var_globals: bool,
 ) -> BTreeSet<String> {
     fn visit(
         statement: &Statement,
         binding_lookup: &mut BTreeMap<String, BindingId>,
         binding_index: &mut BindingId,
         declared: &mut BTreeSet<String>,
+        skip_script_immutable_var_globals: bool,
     ) {
         match statement {
             Statement::VariableDeclaration(declaration)
@@ -2331,6 +2346,9 @@ fn reserve_hoisted_var_bindings(
             {
                 for declarator in &declaration.declarations {
                     for name in declarator.pattern.binding_names() {
+                        if skip_script_immutable_var_globals && GLOBAL_VALUE_NAMES.contains(&name) {
+                            continue;
+                        }
                         reserve_binding_id(binding_lookup, binding_index, name);
                         declared.insert(name.to_string());
                     }
@@ -2338,7 +2356,13 @@ fn reserve_hoisted_var_bindings(
             }
             Statement::Block(block) => {
                 for nested in &block.body {
-                    visit(nested, binding_lookup, binding_index, declared);
+                    visit(
+                        nested,
+                        binding_lookup,
+                        binding_index,
+                        declared,
+                        skip_script_immutable_var_globals,
+                    );
                 }
             }
             Statement::If(if_statement) => {
@@ -2347,68 +2371,140 @@ fn reserve_hoisted_var_bindings(
                     binding_lookup,
                     binding_index,
                     declared,
+                    skip_script_immutable_var_globals,
                 );
                 if let Some(alternate) = &if_statement.alternate {
-                    visit(alternate, binding_lookup, binding_index, declared);
+                    visit(
+                        alternate,
+                        binding_lookup,
+                        binding_index,
+                        declared,
+                        skip_script_immutable_var_globals,
+                    );
                 }
             }
             Statement::For(for_statement) => {
                 if let Some(initializer) = &for_statement.init {
-                    visit(initializer, binding_lookup, binding_index, declared);
+                    visit(
+                        initializer,
+                        binding_lookup,
+                        binding_index,
+                        declared,
+                        skip_script_immutable_var_globals,
+                    );
                 }
-                visit(&for_statement.body, binding_lookup, binding_index, declared);
+                visit(
+                    &for_statement.body,
+                    binding_lookup,
+                    binding_index,
+                    declared,
+                    skip_script_immutable_var_globals,
+                );
             }
             Statement::ForIn(for_in) => {
                 if for_in.binding_kind == Some(VariableDeclarationKind::Var) {
                     for name in for_in.binding.binding_names() {
+                        if skip_script_immutable_var_globals && GLOBAL_VALUE_NAMES.contains(&name) {
+                            continue;
+                        }
                         reserve_binding_id(binding_lookup, binding_index, name);
                         declared.insert(name.to_string());
                     }
                 }
-                visit(&for_in.body, binding_lookup, binding_index, declared);
+                visit(
+                    &for_in.body,
+                    binding_lookup,
+                    binding_index,
+                    declared,
+                    skip_script_immutable_var_globals,
+                );
             }
             Statement::ForOf(for_of) => {
                 if for_of.binding_kind == Some(VariableDeclarationKind::Var) {
                     for name in for_of.binding.binding_names() {
+                        if skip_script_immutable_var_globals && GLOBAL_VALUE_NAMES.contains(&name) {
+                            continue;
+                        }
                         reserve_binding_id(binding_lookup, binding_index, name);
                         declared.insert(name.to_string());
                     }
                 }
-                visit(&for_of.body, binding_lookup, binding_index, declared);
+                visit(
+                    &for_of.body,
+                    binding_lookup,
+                    binding_index,
+                    declared,
+                    skip_script_immutable_var_globals,
+                );
             }
             Statement::While(while_statement) => visit(
                 &while_statement.body,
                 binding_lookup,
                 binding_index,
                 declared,
+                skip_script_immutable_var_globals,
             ),
-            Statement::DoWhile(do_while) => {
-                visit(&do_while.body, binding_lookup, binding_index, declared)
-            }
+            Statement::DoWhile(do_while) => visit(
+                &do_while.body,
+                binding_lookup,
+                binding_index,
+                declared,
+                skip_script_immutable_var_globals,
+            ),
             Statement::TryCatch(try_catch) => {
                 for nested in &try_catch.block.body {
-                    visit(nested, binding_lookup, binding_index, declared);
+                    visit(
+                        nested,
+                        binding_lookup,
+                        binding_index,
+                        declared,
+                        skip_script_immutable_var_globals,
+                    );
                 }
                 if let Some(handler) = &try_catch.handler {
                     for nested in &handler.body.body {
-                        visit(nested, binding_lookup, binding_index, declared);
+                        visit(
+                            nested,
+                            binding_lookup,
+                            binding_index,
+                            declared,
+                            skip_script_immutable_var_globals,
+                        );
                     }
                 }
                 if let Some(finalizer) = &try_catch.finalizer {
                     for nested in &finalizer.body {
-                        visit(nested, binding_lookup, binding_index, declared);
+                        visit(
+                            nested,
+                            binding_lookup,
+                            binding_index,
+                            declared,
+                            skip_script_immutable_var_globals,
+                        );
                     }
                 }
             }
             Statement::Switch(switch_statement) => {
                 for case in &switch_statement.cases {
                     for nested in &case.consequent {
-                        visit(nested, binding_lookup, binding_index, declared);
+                        visit(
+                            nested,
+                            binding_lookup,
+                            binding_index,
+                            declared,
+                            skip_script_immutable_var_globals,
+                        );
                     }
                 }
             }
             Statement::Labeled(labeled) => {
-                visit(&labeled.body, binding_lookup, binding_index, declared);
+                visit(
+                    &labeled.body,
+                    binding_lookup,
+                    binding_index,
+                    declared,
+                    skip_script_immutable_var_globals,
+                );
             }
             Statement::FunctionDeclaration(_) | Statement::ClassDeclaration(_) => {}
             _ => {}
@@ -2417,7 +2513,13 @@ fn reserve_hoisted_var_bindings(
 
     let mut declared = BTreeSet::new();
     for statement in statements {
-        visit(statement, binding_lookup, binding_index, &mut declared);
+        visit(
+            statement,
+            binding_lookup,
+            binding_index,
+            &mut declared,
+            skip_script_immutable_var_globals,
+        );
     }
     declared
 }
@@ -2712,11 +2814,13 @@ fn prepare_function_body_bindings(
             statements,
             body_lookup,
             body_binding_index,
+            false,
         ));
         declared_names.extend(reserve_hoisted_var_bindings(
             statements,
             body_lookup,
             body_binding_index,
+            false,
         ));
     }
     declared_names
@@ -3770,6 +3874,31 @@ fn lower_statement_to_ir1_with_flow(
                 }
             }
             for d in &vd.declarations {
+                if vd.kind == VariableDeclarationKind::Var
+                    && let BindingPattern::Identifier(name) = &d.pattern
+                    && unshadowed_global_value(binding_lookup, name).is_some()
+                {
+                    // Script-level `var undefined/NaN/Infinity` binds to the
+                    // non-writable global property (ES2020 §15.1.8) rather than
+                    // creating a shadowing local: a bare declaration is a no-op,
+                    // while an initializer evaluates RHS and either ignores the
+                    // write (sloppy) or throws TypeError (strict).
+                    if let Some(init) = &d.initializer {
+                        lower_expression_to_ir1(
+                            init,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            label_counter,
+                        )?;
+                        emit_immutable_global_write_strict_check(ops, binding_lookup, name);
+                        ops.push(Ir1Op::Pop);
+                    }
+                    continue;
+                }
+
                 // Allocate all bindings referenced by the pattern first.
                 let primary_bid = alloc_pattern_primary_binding(
                     bindings,
@@ -4021,6 +4150,22 @@ fn lower_statement_to_ir1_with_flow(
                 BTreeMap::new()
             };
 
+            let immutable_global_target = if matches!(
+                for_in_stmt.binding_kind,
+                None | Some(VariableDeclarationKind::Var)
+            ) {
+                match &for_in_stmt.binding {
+                    BindingPattern::Identifier(name)
+                        if unshadowed_global_value(binding_lookup, name).is_some() =>
+                    {
+                        Some(name.as_str())
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
+
             let pre_loop_binding_id = if let Some(initializer) = &for_in_stmt.pre_loop_initializer {
                 if for_in_stmt.binding_kind != Some(VariableDeclarationKind::Var)
                     || !matches!(&for_in_stmt.binding, BindingPattern::Identifier(_))
@@ -4029,30 +4174,45 @@ fn lower_statement_to_ir1_with_flow(
                         detail: "for-in pre-loop initializer requires a var identifier binding",
                     });
                 }
-                // Annex B resolves the hoisted `var` binding before evaluating
-                // the initializer, then performs PutValue before touching the
-                // RHS. The later key assignment reuses this exact binding ID.
-                let binding_id = alloc_pattern_primary_binding(
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    scope_id,
-                    &for_in_stmt.binding,
-                    BindingKind::Var,
-                )
-                .map_err(LoweringPipelineError::SemanticViolation)?;
-                lower_expression_to_ir1(
-                    initializer,
-                    ops,
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    scope_id,
-                    label_counter,
-                )?;
-                ops.push(Ir1Op::StoreBinding { binding_id });
-                ops.push(Ir1Op::Pop);
-                Some(binding_id)
+                if let Some(global_name) = immutable_global_target {
+                    lower_expression_to_ir1(
+                        initializer,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        label_counter,
+                    )?;
+                    emit_immutable_global_write_strict_check(ops, binding_lookup, global_name);
+                    ops.push(Ir1Op::Pop);
+                    None
+                } else {
+                    // Annex B resolves the hoisted `var` binding before evaluating
+                    // the initializer, then performs PutValue before touching the
+                    // RHS. The later key assignment reuses this exact binding ID.
+                    let binding_id = alloc_pattern_primary_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        &for_in_stmt.binding,
+                        BindingKind::Var,
+                    )
+                    .map_err(LoweringPipelineError::SemanticViolation)?;
+                    lower_expression_to_ir1(
+                        initializer,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        label_counter,
+                    )?;
+                    ops.push(Ir1Op::StoreBinding { binding_id });
+                    ops.push(Ir1Op::Pop);
+                    Some(binding_id)
+                }
             } else {
                 None
             };
@@ -4082,84 +4242,90 @@ fn lower_statement_to_ir1_with_flow(
                 done_label: end_label,
             });
 
-            // Bind the yielded key to the loop variable.
-            let bid = if let Some(binding_id) = pre_loop_binding_id {
-                binding_id
+            if let Some(global_name) = immutable_global_target {
+                emit_immutable_global_write_strict_check(ops, binding_lookup, global_name);
+                ops.push(Ir1Op::Pop);
             } else {
-                match for_in_stmt.binding_kind {
-                    None => resolve_assignment_pattern_primary_binding(
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        scope_id,
-                        &for_in_stmt.binding,
-                    ),
-                    Some(kind) => alloc_pattern_primary_binding(
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        scope_id,
-                        &for_in_stmt.binding,
-                        binding_kind_for_variable_declaration(kind),
-                    ),
-                }
-                .map_err(LoweringPipelineError::SemanticViolation)?
-            };
-            // For simple identifier patterns, store to the primary binding.
-            // For destructuring patterns, use a dedicated internal source binding.
-            let source_binding_id = if matches!(for_in_stmt.binding, BindingPattern::Identifier(_))
-            {
-                bid
-            } else {
-                // Allocate a dedicated internal binding to avoid source-overwrite bugs
-                let source_name = make_internal_binding_name("for_in_source", *binding_index);
-                alloc_binding(
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    scope_id,
-                    &source_name,
-                    BindingKind::Let,
-                )
-                .map_err(LoweringPipelineError::SemanticViolation)?
-            };
-
-            if for_in_stmt.binding_kind.is_none()
-                && matches!(for_in_stmt.binding, BindingPattern::Identifier(_))
-            {
-                ops.push(Ir1Op::AssignOp {
-                    binding_id: source_binding_id,
-                    operator: AssignmentOperator::Assign,
-                });
-            } else {
-                ops.push(Ir1Op::StoreBinding {
-                    binding_id: source_binding_id,
-                });
-            }
-            ops.push(Ir1Op::Pop);
-            if !matches!(for_in_stmt.binding, BindingPattern::Identifier(_)) {
-                if for_in_stmt.binding_kind.is_none() {
-                    lower_destructuring_assignment_to_ir1(
-                        &for_in_stmt.binding,
-                        source_binding_id,
-                        ops,
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        scope_id,
-                        label_counter,
-                    )?;
+                // Bind the yielded key to the loop variable.
+                let bid = if let Some(binding_id) = pre_loop_binding_id {
+                    binding_id
                 } else {
-                    lower_destructuring_to_ir1(
-                        &for_in_stmt.binding,
-                        source_binding_id,
-                        ops,
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        scope_id,
-                        label_counter,
-                    )?;
+                    match for_in_stmt.binding_kind {
+                        None => resolve_assignment_pattern_primary_binding(
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            &for_in_stmt.binding,
+                        ),
+                        Some(kind) => alloc_pattern_primary_binding(
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            &for_in_stmt.binding,
+                            binding_kind_for_variable_declaration(kind),
+                        ),
+                    }
+                    .map_err(LoweringPipelineError::SemanticViolation)?
+                };
+                // For simple identifier patterns, store to the primary binding.
+                // For destructuring patterns, use a dedicated internal source binding.
+                let source_binding_id =
+                    if matches!(for_in_stmt.binding, BindingPattern::Identifier(_)) {
+                        bid
+                    } else {
+                        // Allocate a dedicated internal binding to avoid source-overwrite bugs
+                        let source_name =
+                            make_internal_binding_name("for_in_source", *binding_index);
+                        alloc_binding(
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            &source_name,
+                            BindingKind::Let,
+                        )
+                        .map_err(LoweringPipelineError::SemanticViolation)?
+                    };
+
+                if for_in_stmt.binding_kind.is_none()
+                    && matches!(for_in_stmt.binding, BindingPattern::Identifier(_))
+                {
+                    ops.push(Ir1Op::AssignOp {
+                        binding_id: source_binding_id,
+                        operator: AssignmentOperator::Assign,
+                    });
+                } else {
+                    ops.push(Ir1Op::StoreBinding {
+                        binding_id: source_binding_id,
+                    });
+                }
+                ops.push(Ir1Op::Pop);
+                if !matches!(for_in_stmt.binding, BindingPattern::Identifier(_)) {
+                    if for_in_stmt.binding_kind.is_none() {
+                        lower_destructuring_assignment_to_ir1(
+                            &for_in_stmt.binding,
+                            source_binding_id,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            label_counter,
+                        )?;
+                    } else {
+                        lower_destructuring_to_ir1(
+                            &for_in_stmt.binding,
+                            source_binding_id,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            label_counter,
+                        )?;
+                    }
                 }
             }
 
@@ -4254,80 +4420,102 @@ fn lower_statement_to_ir1_with_flow(
                 finally_label: Some(throw_close_label),
             });
 
-            // Bind the yielded value to the loop variable.
-            let bid = match for_of_stmt.binding_kind {
-                None => resolve_assignment_pattern_primary_binding(
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    scope_id,
-                    &for_of_stmt.binding,
-                ),
-                Some(kind) => alloc_pattern_primary_binding(
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    scope_id,
-                    &for_of_stmt.binding,
-                    binding_kind_for_variable_declaration(kind),
-                ),
-            };
-            let bid = bid.map_err(LoweringPipelineError::SemanticViolation)?;
-            // For simple identifier patterns, store to the primary binding.
-            // For destructuring patterns, use a dedicated internal source binding.
-            let source_binding_id = if matches!(for_of_stmt.binding, BindingPattern::Identifier(_))
-            {
-                bid
+            let immutable_global_target = if matches!(
+                for_of_stmt.binding_kind,
+                None | Some(VariableDeclarationKind::Var)
+            ) {
+                match &for_of_stmt.binding {
+                    BindingPattern::Identifier(name)
+                        if unshadowed_global_value(binding_lookup, name).is_some() =>
+                    {
+                        Some(name.as_str())
+                    }
+                    _ => None,
+                }
             } else {
-                // Allocate a dedicated internal binding to avoid source-overwrite bugs
-                let source_name = make_internal_binding_name("for_of_source", *binding_index);
-                alloc_binding(
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    scope_id,
-                    &source_name,
-                    BindingKind::Let,
-                )
-                .map_err(LoweringPipelineError::SemanticViolation)?
+                None
             };
 
-            if for_of_stmt.binding_kind.is_none()
-                && matches!(for_of_stmt.binding, BindingPattern::Identifier(_))
-            {
-                ops.push(Ir1Op::AssignOp {
-                    binding_id: source_binding_id,
-                    operator: AssignmentOperator::Assign,
-                });
+            if let Some(global_name) = immutable_global_target {
+                emit_immutable_global_write_strict_check(ops, binding_lookup, global_name);
+                ops.push(Ir1Op::Pop);
             } else {
-                ops.push(Ir1Op::StoreBinding {
-                    binding_id: source_binding_id,
-                });
-            }
-            ops.push(Ir1Op::Pop);
-            if !matches!(for_of_stmt.binding, BindingPattern::Identifier(_)) {
-                if for_of_stmt.binding_kind.is_none() {
-                    lower_destructuring_assignment_to_ir1(
-                        &for_of_stmt.binding,
-                        source_binding_id,
-                        ops,
+                // Bind the yielded value to the loop variable.
+                let bid = match for_of_stmt.binding_kind {
+                    None => resolve_assignment_pattern_primary_binding(
                         bindings,
                         binding_lookup,
                         binding_index,
                         scope_id,
-                        label_counter,
-                    )?;
+                        &for_of_stmt.binding,
+                    ),
+                    Some(kind) => alloc_pattern_primary_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        &for_of_stmt.binding,
+                        binding_kind_for_variable_declaration(kind),
+                    ),
+                };
+                let bid = bid.map_err(LoweringPipelineError::SemanticViolation)?;
+                // For simple identifier patterns, store to the primary binding.
+                // For destructuring patterns, use a dedicated internal source binding.
+                let source_binding_id =
+                    if matches!(for_of_stmt.binding, BindingPattern::Identifier(_)) {
+                        bid
+                    } else {
+                        // Allocate a dedicated internal binding to avoid source-overwrite bugs
+                        let source_name =
+                            make_internal_binding_name("for_of_source", *binding_index);
+                        alloc_binding(
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            &source_name,
+                            BindingKind::Let,
+                        )
+                        .map_err(LoweringPipelineError::SemanticViolation)?
+                    };
+
+                if for_of_stmt.binding_kind.is_none()
+                    && matches!(for_of_stmt.binding, BindingPattern::Identifier(_))
+                {
+                    ops.push(Ir1Op::AssignOp {
+                        binding_id: source_binding_id,
+                        operator: AssignmentOperator::Assign,
+                    });
                 } else {
-                    lower_destructuring_to_ir1(
-                        &for_of_stmt.binding,
-                        source_binding_id,
-                        ops,
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        scope_id,
-                        label_counter,
-                    )?;
+                    ops.push(Ir1Op::StoreBinding {
+                        binding_id: source_binding_id,
+                    });
+                }
+                ops.push(Ir1Op::Pop);
+                if !matches!(for_of_stmt.binding, BindingPattern::Identifier(_)) {
+                    if for_of_stmt.binding_kind.is_none() {
+                        lower_destructuring_assignment_to_ir1(
+                            &for_of_stmt.binding,
+                            source_binding_id,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            label_counter,
+                        )?;
+                    } else {
+                        lower_destructuring_to_ir1(
+                            &for_of_stmt.binding,
+                            source_binding_id,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            label_counter,
+                        )?;
+                    }
                 }
             }
 

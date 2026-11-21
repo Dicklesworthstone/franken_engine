@@ -1828,7 +1828,8 @@ impl HeapObject {
     fn contains_own_runtime_property(&self, key: &RuntimePropertyKey) -> bool {
         match key {
             RuntimePropertyKey::String(key) => {
-                self.properties.contains_exact_key(key)
+                (self.is_array && key.as_str() == Some("length"))
+                    || self.properties.contains_exact_key(key)
                     || match key.as_str() {
                         Some(key) => self.accessors.contains_key(key),
                         None => self

@@ -12257,7 +12257,7 @@ impl InterpreterCore {
                         if matches!(
                             cell.opcode,
                             CompactTier1Opcode::Baseline | CompactTier1Opcode::Halt
-                        ) || self.compact_operator_needs_to_primitive(&cell)
+                        ) || self.compact_instruction_needs_baseline(&cell)
                         {
                             break;
                         }
@@ -12304,7 +12304,7 @@ impl InterpreterCore {
             {
                 let mut ran_any = false;
                 for &cell in block {
-                    if self.compact_operator_needs_to_primitive(&cell) {
+                    if self.compact_instruction_needs_baseline(&cell) {
                         break;
                     }
                     let ip_before = self.ip;
@@ -12328,9 +12328,9 @@ impl InterpreterCore {
             let compact_instruction = if self.profiling_data.is_none() {
                 compact_tier1
                     .and_then(|program| program.instruction_at(self.ip))
-                    // Observable coercions retain the canonical,
-                    // reentrant Tier-R handler.
-                    .filter(|compact| !self.compact_operator_needs_to_primitive(compact))
+                    // Observable coercions and non-static property reads
+                    // retain the canonical, reentrant Tier-R handler.
+                    .filter(|compact| !self.compact_instruction_needs_baseline(compact))
             } else {
                 None
             };

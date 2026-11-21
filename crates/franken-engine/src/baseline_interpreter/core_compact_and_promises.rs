@@ -68,6 +68,34 @@ impl InterpreterCore {
                 }
                 self.ip += 1;
             }
+            Op::GetProperty => {
+                // The dispatch loop checks this guard before accounting for
+                // the cell, including inside hoisted blocks and loop quanta.
+                // Only instruction counters change between that same-IP
+                // proof and this read. No guest code, register write, or
+                // mutable VM operation can invalidate the proven labels,
+                // object exclusions, or static destination. Keep those
+                // metadata checks out of the executor.
+                let Value::Object(object_id) = &self.registers[self.register_base + lhs as usize]
+                else {
+                    unreachable!("compact property receiver was checked before dispatch")
+                };
+                let object_id = *object_id;
+                let Value::Str(key) = &self.registers[self.register_base + rhs as usize] else {
+                    unreachable!("compact property key was checked before dispatch")
+                };
+                let value = self.heap[object_id.0 as usize]
+                    .properties
+                    .get_exact(key)
+                    .expect("compact own data property was checked before dispatch")
+                    .clone();
+                let key = RuntimePropertyKey::String(key.clone());
+                let slot = StaticWriteSlot(self.register_base + dst as usize);
+                self.capture_property_resolution_found(&key, object_id, 0);
+                self.write_static_slot(slot, value);
+                self.record_tier_i_specialization();
+                self.ip += 1;
+            }
             Op::Add => {
                 if let Some((result, slot)) =
                     self.compact_public_number_arithmetic(dst, lhs, rhs, Op::Add)
@@ -450,11 +478,11 @@ impl InterpreterCore {
         true
     }
 
-    /// Store a compact operator's Public primitive result in the slot
-    /// the compact numeric operand guards found eligible: the write
+    /// Store a compact operator's Public static result in the slot
+    /// the compact operand guards found eligible: the write
     /// `write_reg_with_label` makes on its static path, without checking
-    /// eligibility a second time (bd-9vouw.504). Nothing runs between the
-    /// check and this write but the operator's primitive numeric arithmetic.
+    /// eligibility a second time (bd-9vouw.504). No guest code or register
+    /// mutation may run between the eligibility check and this write.
     #[inline(always)]
     pub(super) fn write_static_slot(&mut self, slot: StaticWriteSlot, value: Value) {
         debug_assert!(Self::static_register_value(&value));
@@ -6378,6 +6406,55 @@ impl InterpreterCore {
         Some((value, Some(label)))
     }
 
+    /// Check an own data property only when its read is entirely static.
+    /// Reuse the ordinary-object exclusions used by Tier R; keys requiring
+    /// conversion, accessors, exotic objects, and additional IFC provenance
+    /// must enter the canonical handler before any instruction is charged.
+    fn check_compact_own_data_property_read(&self, dst: u32, obj: u32, key: u32) -> Option<()> {
+        if dst >= self.config.max_registers
+            || obj >= self.config.max_registers
+            || key >= self.config.max_registers
+            || self.pending_hostcall_result_label.is_some()
+            || self.legacy_regexp_read_label.is_some()
+            || self
+                .hook
+                .as_ref()
+                .is_some_and(|hook| hook.instruction_hooks_enabled())
+            || self
+                .seeded_register_label(dst)
+                .is_some_and(|label| !matches!(label, Label::Public))
+        {
+            return None;
+        }
+        let actual_obj = self.register_base.checked_add(obj as usize)?;
+        let actual_key = self.register_base.checked_add(key as usize)?;
+        let actual_dst = self.register_base.checked_add(dst as usize)?;
+        if !matches!(self.register_labels.get(actual_obj), Some(Label::Public))
+            || !matches!(self.register_labels.get(actual_key), Some(Label::Public))
+        {
+            return None;
+        }
+        let Value::Object(object_id) = self.registers.get(actual_obj)? else {
+            return None;
+        };
+        let Value::Str(key) = self.registers.get(actual_key)? else {
+            return None;
+        };
+        let runtime_key = RuntimePropertyKey::String(key.clone());
+        let object = self.ordinary_own_property_read_object(*object_id, &runtime_key)?;
+        let value = object.properties.get_exact(key)?;
+        if !Self::static_register_value(value)
+            // A closure's method metadata can add its definition label even
+            // when the property and operand labels are all Public.
+            || matches!(value, Value::Closure(_))
+            || !matches!(object.property_labels.get_exact(key), None | Some(Label::Public))
+            || !self.static_register_write_eligible(actual_dst, value, &Label::Public)
+        {
+            return None;
+        }
+        Some(())
+    }
+
     pub(super) fn capture_property_resolution_found(
         &mut self,
         key: &RuntimePropertyKey,
@@ -9933,10 +10010,10 @@ impl InterpreterCore {
         })
     }
 
-    /// Compact tier-1 counterpart of the operand-conversion checks for `+`
-    /// and the numeric operators (bd-9vouw.37). Unary cells keep their source
-    /// in `lhs`.
-    pub(super) fn compact_operator_needs_to_primitive(
+    /// Check dynamic Tier-I preconditions before charging a compact cell.
+    /// Observable coercions and non-static property reads must reenter the
+    /// canonical handler at the same IP, including within hoisted runs.
+    pub(super) fn compact_instruction_needs_baseline(
         &self,
         compact: &CompactTier1Instruction,
     ) -> bool {
@@ -9944,6 +10021,13 @@ impl InterpreterCore {
         let needs =
             |register: u16| self.register_needs_observable_to_primitive(u32::from(register));
         match compact.opcode {
+            Op::GetProperty => self
+                .check_compact_own_data_property_read(
+                    u32::from(compact.dst),
+                    u32::from(compact.lhs),
+                    u32::from(compact.rhs),
+                )
+                .is_none(),
             Op::Add
             | Op::Sub
             | Op::Mul

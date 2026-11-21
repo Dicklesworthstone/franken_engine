@@ -8582,8 +8582,8 @@ fn engine_symbol_id(symbol: CoreSymbolId) -> SymbolId {
 
 const UPPER_HEX: &[u8; 16] = b"0123456789ABCDEF";
 
-/// A physical register the compact numeric operand guards found eligible for
-/// a static write; only those checks make one (bd-9vouw.504).
+/// A physical register the compact operand guards proved eligible for a
+/// static write (bd-9vouw.504).
 #[derive(Debug, Clone, Copy)]
 struct StaticWriteSlot(usize);
 
@@ -14390,6 +14390,7 @@ enum CompactTier1Opcode {
     LoadNull,
     LoadUndefined,
     Move,
+    GetProperty,
     Add,
     Sub,
     Mul,
@@ -15216,6 +15217,9 @@ impl CompactTier1Program {
             }
             Ir3Instruction::Move { dst, src } => {
                 CompactTier1Instruction::with_unary(Op::Move, *dst, *src)
+            }
+            Ir3Instruction::GetProperty { obj, key, dst } => {
+                CompactTier1Instruction::with_binary(Op::GetProperty, *dst, *obj, *key)
             }
             Ir3Instruction::Add { dst, lhs, rhs } => {
                 CompactTier1Instruction::with_binary(Op::Add, *dst, *lhs, *rhs)

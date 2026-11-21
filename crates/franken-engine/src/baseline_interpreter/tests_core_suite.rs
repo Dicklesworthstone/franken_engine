@@ -6,6 +6,8 @@ use std::sync::{Arc, Mutex};
 
 #[path = "tests_core_suite/compact_constants.rs"]
 mod compact_constants;
+#[path = "tests_core_suite/compact_properties.rs"]
+mod compact_properties;
 
 // -- helpers --------------------------------------------------------
 

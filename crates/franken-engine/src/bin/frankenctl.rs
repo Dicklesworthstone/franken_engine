@@ -13,7 +13,7 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{NaiveDate, NaiveDateTime, SecondsFormat, Utc};
-use frankenengine_engine::ast::ParseGoal;
+use frankenengine_engine::ast::{self, ParseGoal};
 use frankenengine_engine::authority_footprint::{
     AuthorityFootprintReport, CheckOutcome, analyze_authority_footprint,
 };
@@ -13862,8 +13862,26 @@ fn analyze_react_doctor_input_path(
         );
         config.lowering_config.source_file = Some(file_path.display().to_string());
 
+        let mut hazards = ReactDoctorSourceHazards::default();
         match compile_react_module(&source, language, &config) {
             Ok(compiled) => {
+                // Inspect the same normalized TS / lowered JSX program that
+                // the compiler validated. Source text searches mistake prose
+                // for code and let one unrelated effect hide an entire file.
+                let tree = CanonicalEs2020Parser
+                    .parse_with_options(
+                        compiled.generated_code.as_str(),
+                        ParseGoal::Module,
+                        &ParserOptions::default(),
+                    )
+                    .map_err(|error| {
+                        format!(
+                            "failed to analyze compiled React source `{}`: {error}",
+                            file_path.display()
+                        )
+                    })?;
+                hazards = ReactDoctorSourceAnalysis::analyze(&tree);
+                hazards.nondeterministic_render &= compiled.jsx_elements > 0;
                 for (diag_idx, diag) in compiled.diagnostics.iter().enumerate() {
                     let severity = match diag.severity {
                         LoweringDiagnosticSeverity::Info => continue,
@@ -13930,12 +13948,7 @@ fn analyze_react_doctor_input_path(
             }
         }
 
-        let uses_effect_guard = source.contains("useEffect") || source.contains("typeof window");
-        if !uses_effect_guard
-            && (source.contains("window.")
-                || source.contains("document.")
-                || source.contains("localStorage."))
-        {
+        if hazards.browser_global {
             let entry_id = format!("ast-ssr-dom-boundary-{idx}");
             let _ = catalog.add_entry(MismatchEntry {
                 entry_id: entry_id.clone(),
@@ -13943,14 +13956,14 @@ fn analyze_react_doctor_input_path(
                 severity: ReactMismatchSeverity::Error,
                 target: ReactComparisonTarget::NodeJs,
                 summary: format!(
-                    "Unguarded browser DOM access during render in `{}` breaks SSR",
+                    "Potential SSR browser-global access in `{}` outside a recognized effect or availability guard",
                     file_path.display()
                 ),
                 expected_behavior:
                     "Render body must remain pure of window/document/localStorage for SSR parity"
                         .to_string(),
                 actual_behavior:
-                    "Direct window/document/localStorage access outside useEffect or typeof guard"
+                    "Browser-global expression outside a React effect callback or the matching typeof-guarded branch"
                         .to_string(),
                 reproduction: format!("frankenctl react doctor --input {}", file_path.display()),
                 remediation: ReactRemediationStatus::Workaround,
@@ -13958,16 +13971,14 @@ fn analyze_react_doctor_input_path(
                     "Move browser global reads into useEffect or guard with `typeof window !== 'undefined'`."
                         .to_string(),
                 react_version_range: ">=18".to_string(),
-                evidence_hash: ContentHash::compute(entry_id.as_bytes()),
+                evidence_hash: ContentHash::compute(source.as_bytes()),
                 detected_epoch: epoch,
                 verified_epoch: epoch,
                 tags: BTreeSet::from(["react".to_string(), "ssr".to_string(), "dom".to_string()]),
             });
         }
 
-        if (source.contains("Date.now()") || source.contains("Math.random()"))
-            && (source.contains('<') && source.contains('>'))
-        {
+        if hazards.nondeterministic_render {
             let entry_id = format!("ast-hydration-nondet-{idx}");
             let _ = catalog.add_entry(MismatchEntry {
                 entry_id: entry_id.clone(),
@@ -13975,14 +13986,14 @@ fn analyze_react_doctor_input_path(
                 severity: ReactMismatchSeverity::Error,
                 target: ReactComparisonTarget::NodeJs,
                 summary: format!(
-                    "Nondeterministic render expression (`Date.now()`/`Math.random()`) in `{}` causes hydration mismatch",
+                    "Potential hydration mismatch from a clock or PRNG call in `{}` outside a React effect callback",
                     file_path.display()
                 ),
                 expected_behavior:
                     "Deterministic server/client initial render output across hydration boundary"
                         .to_string(),
                 actual_behavior:
-                    "Nondeterministic clock/PRNG call observed inside JSX component module"
+                    "Date.now or Math.random call observed in the JSX module AST outside a recognized deferred effect"
                         .to_string(),
                 reproduction: format!("frankenctl react doctor --input {}", file_path.display()),
                 remediation: ReactRemediationStatus::Workaround,
@@ -13990,7 +14001,7 @@ fn analyze_react_doctor_input_path(
                     "Pass deterministic props/seeds or defer clock/random values to a post-mount useEffect."
                         .to_string(),
                 react_version_range: ">=18".to_string(),
-                evidence_hash: ContentHash::compute(entry_id.as_bytes()),
+                evidence_hash: ContentHash::compute(source.as_bytes()),
                 detected_epoch: epoch,
                 verified_epoch: epoch,
                 tags: BTreeSet::from([
@@ -14001,10 +14012,7 @@ fn analyze_react_doctor_input_path(
             });
         }
 
-        if matches!(ext, "cjs" | "cts")
-            || source.contains("module.exports")
-            || source.contains("require(")
-        {
+        if matches!(ext, "cjs" | "cts") || hazards.common_js {
             let entry_id = format!("ast-cjs-module-graph-{idx}");
             let _ = catalog.add_entry(MismatchEntry {
                 entry_id: entry_id.clone(),
@@ -14026,7 +14034,7 @@ fn analyze_react_doctor_input_path(
                 advisory: "Convert React component modules to ESM (`import`/`export`) and map external runtime providers via `--external`."
                     .to_string(),
                 react_version_range: ">=18".to_string(),
-                evidence_hash: ContentHash::compute(entry_id.as_bytes()),
+                evidence_hash: ContentHash::compute(source.as_bytes()),
                 detected_epoch: epoch,
                 verified_epoch: epoch,
                 tags: BTreeSet::from(["react".to_string(), "cjs".to_string(), "esm".to_string()]),
@@ -14034,6 +14042,811 @@ fn analyze_react_doctor_input_path(
         }
     }
     Ok(())
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ReactDoctorSourceHazards {
+    browser_global: bool,
+    nondeterministic_render: bool,
+    common_js: bool,
+}
+
+#[derive(Clone, Copy)]
+enum ReactDoctorBinding {
+    Local,
+    Effect,
+    ReactNamespace,
+}
+
+#[derive(Clone, Copy, Default)]
+struct ReactDoctorExpressionContext {
+    available_browser_globals: u8,
+    deferred: bool,
+}
+
+/// A conservative source diagnostic, not a whole-program execution proof.
+/// Only an imported React effect's inline callback is known to be deferred;
+/// dependency expressions and other callbacks still receive normal analysis.
+/// Availability facts belong to their control-flow branch, never to a file.
+#[derive(Default)]
+struct ReactDoctorSourceAnalysis {
+    hazards: ReactDoctorSourceHazards,
+    scopes: Vec<BTreeMap<String, ReactDoctorBinding>>,
+    // AST nodes have one lexical owner and remain borrowed for this analysis.
+    // Addresses are identity keys only; no pointer is ever dereferenced.
+    // Memoization keeps flat logical chains linear rather than repeatedly
+    // rediscovering every preceding guard at each short-circuit expression.
+    guard_cache: std::cell::RefCell<BTreeMap<*const ast::Expression, (u8, u8)>>,
+}
+
+impl ReactDoctorSourceAnalysis {
+    fn analyze(tree: &ast::SyntaxTree) -> ReactDoctorSourceHazards {
+        let mut analysis = Self::default();
+        let mut scope = BTreeMap::new();
+        for statement in &tree.body {
+            Self::hoisted_vars(statement, &mut scope);
+        }
+        analysis.scopes.push(scope);
+        analysis.body(&tree.body, ReactDoctorExpressionContext::default());
+        analysis.hazards
+    }
+
+    fn binding(&self, name: &str) -> Option<ReactDoctorBinding> {
+        self.scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(name).copied())
+    }
+
+    fn bind_pattern(
+        pattern: &ast::BindingPattern,
+        scope: &mut BTreeMap<String, ReactDoctorBinding>,
+    ) {
+        for name in pattern.binding_names() {
+            scope.insert(name.to_string(), ReactDoctorBinding::Local);
+        }
+    }
+
+    fn statement_bindings(
+        statement: &ast::Statement,
+        scope: &mut BTreeMap<String, ReactDoctorBinding>,
+    ) {
+        use ast::{ImportClause, Statement};
+        match statement {
+            Statement::VariableDeclaration(declaration) => {
+                for declarator in &declaration.declarations {
+                    Self::bind_pattern(&declarator.pattern, scope);
+                }
+            }
+            Statement::FunctionDeclaration(function) => {
+                if let Some(name) = &function.name {
+                    scope.insert(name.clone(), ReactDoctorBinding::Local);
+                }
+            }
+            Statement::ClassDeclaration(class) => {
+                if let Some(name) = &class.name {
+                    scope.insert(name.clone(), ReactDoctorBinding::Local);
+                }
+            }
+            Statement::Import(import) => {
+                for name in import.clause.binding_names() {
+                    scope.insert(name.to_string(), ReactDoctorBinding::Local);
+                }
+                if import.source.as_str() != Some("react") {
+                    return;
+                }
+                match &import.clause {
+                    ImportClause::Default { local } | ImportClause::Namespace { local } => {
+                        scope.insert(local.clone(), ReactDoctorBinding::ReactNamespace);
+                    }
+                    ImportClause::DefaultAndNamespace { default, namespace } => {
+                        for name in [default, namespace] {
+                            scope.insert(name.clone(), ReactDoctorBinding::ReactNamespace);
+                        }
+                    }
+                    ImportClause::Named { specifiers }
+                    | ImportClause::DefaultAndNamed { specifiers, .. } => {
+                        if let ImportClause::DefaultAndNamed { default, .. } = &import.clause {
+                            scope.insert(default.clone(), ReactDoctorBinding::ReactNamespace);
+                        }
+                        for specifier in specifiers {
+                            if matches!(
+                                specifier.import_name.as_str(),
+                                "useEffect" | "useLayoutEffect"
+                            ) {
+                                scope.insert(
+                                    specifier.local_name.clone(),
+                                    ReactDoctorBinding::Effect,
+                                );
+                            }
+                        }
+                    }
+                    ImportClause::SideEffect => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // var declarations are function-scoped even inside a nested branch.
+    // Do not descend into nested function or class execution contexts.
+    fn hoisted_vars(statement: &ast::Statement, scope: &mut BTreeMap<String, ReactDoctorBinding>) {
+        use ast::{Statement, VariableDeclarationKind};
+        match statement {
+            Statement::VariableDeclaration(declaration)
+                if declaration.kind == VariableDeclarationKind::Var =>
+            {
+                Self::statement_bindings(statement, scope);
+            }
+            Statement::Block(block) => {
+                for statement in &block.body {
+                    Self::hoisted_vars(statement, scope);
+                }
+            }
+            Statement::If(statement) => {
+                Self::hoisted_vars(&statement.consequent, scope);
+                if let Some(alternate) = &statement.alternate {
+                    Self::hoisted_vars(alternate, scope);
+                }
+            }
+            Statement::For(statement) => {
+                if let Some(init) = &statement.init {
+                    Self::hoisted_vars(init, scope);
+                }
+                Self::hoisted_vars(&statement.body, scope);
+            }
+            Statement::ForIn(statement) => {
+                if statement.binding_kind == Some(VariableDeclarationKind::Var) {
+                    Self::bind_pattern(&statement.binding, scope);
+                }
+                Self::hoisted_vars(&statement.body, scope);
+            }
+            Statement::ForOf(statement) => {
+                if statement.binding_kind == Some(VariableDeclarationKind::Var) {
+                    Self::bind_pattern(&statement.binding, scope);
+                }
+                Self::hoisted_vars(&statement.body, scope);
+            }
+            Statement::While(statement) => Self::hoisted_vars(&statement.body, scope),
+            Statement::DoWhile(statement) => Self::hoisted_vars(&statement.body, scope),
+            Statement::With(statement) => Self::hoisted_vars(&statement.body, scope),
+            Statement::Labeled(statement) => Self::hoisted_vars(&statement.body, scope),
+            Statement::TryCatch(statement) => {
+                for statement in &statement.block.body {
+                    Self::hoisted_vars(statement, scope);
+                }
+                if let Some(handler) = &statement.handler {
+                    for statement in &handler.body.body {
+                        Self::hoisted_vars(statement, scope);
+                    }
+                }
+                if let Some(finalizer) = &statement.finalizer {
+                    for statement in &finalizer.body {
+                        Self::hoisted_vars(statement, scope);
+                    }
+                }
+            }
+            Statement::Switch(statement) => {
+                for case in &statement.cases {
+                    for statement in &case.consequent {
+                        Self::hoisted_vars(statement, scope);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn body(&mut self, statements: &[ast::Statement], mut context: ReactDoctorExpressionContext) {
+        let mut scope = BTreeMap::new();
+        for statement in statements {
+            Self::statement_bindings(statement, &mut scope);
+        }
+        self.scopes.push(scope);
+        let declaration_context = context;
+        for statement in statements {
+            // A declaration can be called before its source position. Later
+            // early-return guards must not protect its hoisted function body.
+            let statement_context = if matches!(statement, ast::Statement::FunctionDeclaration(_)) {
+                declaration_context
+            } else {
+                context
+            };
+            self.statement(statement, statement_context);
+            if let ast::Statement::If(branch) = statement {
+                if Self::exits(&branch.consequent) {
+                    context = self.guarded(context, &branch.condition, false);
+                }
+                if branch.alternate.as_deref().is_some_and(Self::exits) {
+                    context = self.guarded(context, &branch.condition, true);
+                }
+            }
+        }
+        self.scopes.pop();
+    }
+
+    fn exits(statement: &ast::Statement) -> bool {
+        match statement {
+            ast::Statement::Return(_) | ast::Statement::Throw(_) => true,
+            ast::Statement::Block(block) => {
+                for statement in &block.body {
+                    if Self::exits(statement) {
+                        return true;
+                    }
+                    // A break, continue, or nested control transfer can skip a
+                    // later return. Only simple preceding statements establish
+                    // the early-exit fact without a full control-flow graph.
+                    if !matches!(
+                        statement,
+                        ast::Statement::Expression(_)
+                            | ast::Statement::VariableDeclaration(_)
+                            | ast::Statement::FunctionDeclaration(_)
+                            | ast::Statement::ClassDeclaration(_)
+                    ) {
+                        return false;
+                    }
+                }
+                false
+            }
+            ast::Statement::If(branch) => {
+                Self::exits(&branch.consequent)
+                    && branch.alternate.as_deref().is_some_and(Self::exits)
+            }
+            _ => false,
+        }
+    }
+
+    fn function_scope(&mut self, params: &[ast::FunctionParam], name: Option<&str>) {
+        let mut scope = BTreeMap::new();
+        if let Some(name) = name {
+            scope.insert(name.to_string(), ReactDoctorBinding::Local);
+        }
+        for parameter in params {
+            Self::bind_pattern(&parameter.pattern, &mut scope);
+        }
+        self.scopes.push(scope);
+    }
+
+    fn function(
+        &mut self,
+        params: &[ast::FunctionParam],
+        body: &ast::BlockStatement,
+        name: Option<&str>,
+        context: ReactDoctorExpressionContext,
+    ) {
+        self.function_scope(params, name);
+        for parameter in params {
+            self.pattern(&parameter.pattern, context);
+        }
+        // Default initializers execute in the parameter environment. Body
+        // var declarations must not hide globals referenced by those defaults.
+        let mut vars = BTreeMap::new();
+        for statement in &body.body {
+            Self::hoisted_vars(statement, &mut vars);
+        }
+        self.scopes.push(vars);
+        self.body(&body.body, context);
+        self.scopes.pop();
+        self.scopes.pop();
+    }
+
+    fn pattern(&mut self, pattern: &ast::BindingPattern, context: ReactDoctorExpressionContext) {
+        use ast::BindingPattern;
+        match pattern {
+            BindingPattern::Identifier(_) => {}
+            BindingPattern::ObjectPattern(properties) => {
+                for property in properties {
+                    if property.computed {
+                        self.expression(&property.key, context);
+                    }
+                    self.pattern(&property.value, context);
+                }
+            }
+            BindingPattern::ArrayPattern(elements) => {
+                for element in elements.iter().flatten() {
+                    self.pattern(element, context);
+                }
+            }
+            BindingPattern::Rest(inner) => self.pattern(inner, context),
+            BindingPattern::AssignmentPattern { left, right } => {
+                self.pattern(left, context);
+                self.expression(right, context);
+            }
+        }
+    }
+
+    fn statement(&mut self, statement: &ast::Statement, context: ReactDoctorExpressionContext) {
+        use ast::{ExportKind, Statement};
+        match statement {
+            Statement::Import(_) | Statement::Break(_) | Statement::Continue(_) => {}
+            Statement::Export(export) => {
+                if let ExportKind::Default(expression) = &export.kind {
+                    self.expression(expression, context);
+                }
+            }
+            Statement::VariableDeclaration(declaration) => {
+                for declarator in &declaration.declarations {
+                    self.pattern(&declarator.pattern, context);
+                    if let Some(initializer) = &declarator.initializer {
+                        self.expression(initializer, context);
+                    }
+                }
+            }
+            Statement::Expression(statement) => self.expression(&statement.expression, context),
+            Statement::Block(block) => self.body(&block.body, context),
+            Statement::If(statement) => {
+                self.expression(&statement.condition, context);
+                self.statement(
+                    &statement.consequent,
+                    self.guarded(context, &statement.condition, true),
+                );
+                if let Some(alternate) = &statement.alternate {
+                    self.statement(
+                        alternate,
+                        self.guarded(context, &statement.condition, false),
+                    );
+                }
+            }
+            Statement::For(statement) => {
+                let mut scope = BTreeMap::new();
+                if let Some(init) = &statement.init {
+                    Self::statement_bindings(init, &mut scope);
+                }
+                self.scopes.push(scope);
+                if let Some(init) = &statement.init {
+                    self.statement(init, context);
+                }
+                let mut iteration = context;
+                if let Some(condition) = &statement.condition {
+                    self.expression(condition, context);
+                    iteration = self.guarded(context, condition, true);
+                }
+                self.statement(&statement.body, iteration);
+                if let Some(update) = &statement.update {
+                    self.expression(update, iteration);
+                }
+                self.scopes.pop();
+            }
+            Statement::ForIn(statement) => {
+                self.expression(&statement.object, context);
+                let mut scope = BTreeMap::new();
+                if statement.binding_kind.is_some() {
+                    Self::bind_pattern(&statement.binding, &mut scope);
+                }
+                self.scopes.push(scope);
+                self.pattern(&statement.binding, context);
+                self.statement(&statement.body, context);
+                self.scopes.pop();
+            }
+            Statement::ForOf(statement) => {
+                self.expression(&statement.iterable, context);
+                let mut scope = BTreeMap::new();
+                if statement.binding_kind.is_some() {
+                    Self::bind_pattern(&statement.binding, &mut scope);
+                }
+                self.scopes.push(scope);
+                self.pattern(&statement.binding, context);
+                self.statement(&statement.body, context);
+                self.scopes.pop();
+            }
+            Statement::While(statement) => {
+                self.expression(&statement.condition, context);
+                self.statement(
+                    &statement.body,
+                    self.guarded(context, &statement.condition, true),
+                );
+            }
+            Statement::DoWhile(statement) => {
+                self.statement(&statement.body, context);
+                self.expression(&statement.condition, context);
+            }
+            Statement::With(statement) => {
+                self.expression(&statement.object, context);
+                self.statement(&statement.body, context);
+            }
+            Statement::Return(statement) => {
+                if let Some(argument) = &statement.argument {
+                    self.expression(argument, context);
+                }
+            }
+            Statement::Throw(statement) => self.expression(&statement.argument, context),
+            Statement::TryCatch(statement) => {
+                self.body(&statement.block.body, context);
+                if let Some(handler) = &statement.handler {
+                    let mut scope = BTreeMap::new();
+                    if let Some(parameter) = &handler.parameter {
+                        scope.insert(parameter.clone(), ReactDoctorBinding::Local);
+                    }
+                    self.scopes.push(scope);
+                    self.body(&handler.body.body, context);
+                    self.scopes.pop();
+                }
+                if let Some(finalizer) = &statement.finalizer {
+                    self.body(&finalizer.body, context);
+                }
+            }
+            Statement::Switch(statement) => {
+                self.expression(&statement.discriminant, context);
+                let mut scope = BTreeMap::new();
+                for case in &statement.cases {
+                    for statement in &case.consequent {
+                        Self::statement_bindings(statement, &mut scope);
+                    }
+                }
+                self.scopes.push(scope);
+                for case in &statement.cases {
+                    if let Some(test) = &case.test {
+                        self.expression(test, context);
+                    }
+                    self.body(&case.consequent, context);
+                }
+                self.scopes.pop();
+            }
+            Statement::FunctionDeclaration(function) => {
+                self.function(
+                    &function.params,
+                    &function.body,
+                    function.name.as_deref(),
+                    context,
+                );
+            }
+            Statement::ClassDeclaration(class) => {
+                self.class(
+                    class.name.as_deref(),
+                    class.super_class.as_deref(),
+                    &class.body,
+                    context,
+                );
+            }
+            Statement::Labeled(statement) => self.statement(&statement.body, context),
+        }
+    }
+
+    fn class(
+        &mut self,
+        name: Option<&str>,
+        super_class: Option<&ast::Expression>,
+        methods: &[ast::MethodDefinition],
+        context: ReactDoctorExpressionContext,
+    ) {
+        let mut scope = BTreeMap::new();
+        if let Some(name) = name {
+            scope.insert(name.to_string(), ReactDoctorBinding::Local);
+        }
+        self.scopes.push(scope);
+        if let Some(super_class) = super_class {
+            self.expression(super_class, context);
+        }
+        for method in methods {
+            if method.computed {
+                self.expression(&method.key, context);
+            }
+            self.function(&method.params, &method.body, None, context);
+        }
+        self.scopes.pop();
+    }
+
+    fn member(expression: &ast::Expression) -> Option<(&ast::Expression, &str)> {
+        use ast::Expression;
+        let (Expression::Member {
+            object,
+            property,
+            computed,
+            ..
+        }
+        | Expression::OptionalMember {
+            object,
+            property,
+            computed,
+            ..
+        }) = expression
+        else {
+            return None;
+        };
+        let property = match property.as_ref() {
+            Expression::Identifier(name) if !computed => name.as_str(),
+            Expression::StringLiteral(name) if *computed => name.as_str()?,
+            _ => return None,
+        };
+        Some((object, property))
+    }
+
+    fn global_name<'a>(&self, expression: &'a ast::Expression) -> Option<&'a str> {
+        use ast::Expression;
+        match expression {
+            Expression::Identifier(name) if self.binding(name).is_none() => Some(name.as_str()),
+            _ => match Self::member(expression) {
+                Some((Expression::Identifier(global), name))
+                    if global == "globalThis" && self.binding(global).is_none() =>
+                {
+                    Some(name)
+                }
+                _ => None,
+            },
+        }
+    }
+
+    fn browser_global(&self, expression: &ast::Expression) -> u8 {
+        match self.global_name(expression) {
+            Some("window") => 1,
+            Some("document") => 2,
+            Some("localStorage") => 4,
+            _ => 0,
+        }
+    }
+
+    fn effect(&self, expression: &ast::Expression) -> bool {
+        use ast::Expression;
+        match expression {
+            Expression::Identifier(name) => {
+                matches!(self.binding(name), Some(ReactDoctorBinding::Effect))
+            }
+            _ => {
+                matches!(Self::member(expression), Some((Expression::Identifier(name), "useEffect" | "useLayoutEffect")) if matches!(self.binding(name), Some(ReactDoctorBinding::ReactNamespace)))
+            }
+        }
+    }
+
+    fn branch_guards(&self, expression: &ast::Expression) -> (u8, u8) {
+        use ast::{BinaryOperator, Expression, UnaryOperator};
+        let mut cache = self.guard_cache.borrow_mut();
+        let mut work = vec![(expression, false)];
+        while let Some((expression, expanded)) = work.pop() {
+            let key = std::ptr::from_ref(expression);
+            if cache.contains_key(&key) {
+                continue;
+            }
+            let guards = match expression {
+                Expression::Unary {
+                    operator: UnaryOperator::LogicalNot,
+                    argument,
+                } => {
+                    if !expanded {
+                        work.push((expression, true));
+                        work.push((argument, false));
+                        continue;
+                    }
+                    let (yes, no) = cache[&std::ptr::from_ref(argument.as_ref())];
+                    (no, yes)
+                }
+                Expression::Binary {
+                    operator: operator @ (BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr),
+                    left,
+                    right,
+                } => {
+                    if !expanded {
+                        work.push((expression, true));
+                        work.push((right, false));
+                        work.push((left, false));
+                        continue;
+                    }
+                    let (left_yes, left_no) = cache[&std::ptr::from_ref(left.as_ref())];
+                    let (right_yes, right_no) = cache[&std::ptr::from_ref(right.as_ref())];
+                    if *operator == BinaryOperator::LogicalAnd {
+                        (left_yes | right_yes, left_no & right_no)
+                    } else {
+                        (left_yes & right_yes, left_no | right_no)
+                    }
+                }
+                Expression::Binary {
+                    operator:
+                        operator @ (BinaryOperator::Equal
+                        | BinaryOperator::StrictEqual
+                        | BinaryOperator::NotEqual
+                        | BinaryOperator::StrictNotEqual),
+                    left,
+                    right,
+                } => {
+                    let operand = match (left.as_ref(), right.as_ref()) {
+                        (
+                            Expression::Unary {
+                                operator: UnaryOperator::Typeof,
+                                argument,
+                            },
+                            Expression::StringLiteral(value),
+                        )
+                        | (
+                            Expression::StringLiteral(value),
+                            Expression::Unary {
+                                operator: UnaryOperator::Typeof,
+                                argument,
+                            },
+                        ) if value.as_str() == Some("undefined") => Some(argument),
+                        _ => None,
+                    };
+                    let available = operand.map_or(0, |operand| self.browser_global(operand));
+                    // window availability is the conventional browser-environment
+                    // check. Other checks establish only their named global.
+                    let available = if available == 1 { 7 } else { available };
+                    if matches!(
+                        operator,
+                        BinaryOperator::NotEqual | BinaryOperator::StrictNotEqual
+                    ) {
+                        (available, 0)
+                    } else {
+                        (0, available)
+                    }
+                }
+                _ => (0, 0),
+            };
+            cache.insert(key, guards);
+        }
+        cache[&std::ptr::from_ref(expression)]
+    }
+
+    fn guarded(
+        &self,
+        mut context: ReactDoctorExpressionContext,
+        condition: &ast::Expression,
+        truthy: bool,
+    ) -> ReactDoctorExpressionContext {
+        let (yes, no) = self.branch_guards(condition);
+        context.available_browser_globals |= if truthy { yes } else { no };
+        context
+    }
+
+    fn expression(&mut self, expression: &ast::Expression, context: ReactDoctorExpressionContext) {
+        use ast::{ArrowBody, BinaryOperator, Expression, UnaryOperator};
+        // Flat expression chains can be much deeper than the parser's nesting
+        // budget. Walk them iteratively rather than consuming the host stack.
+        let mut work = vec![(expression, context)];
+        while let Some((expression, context)) = work.pop() {
+            if !context.deferred
+                && self.browser_global(expression) & !context.available_browser_globals != 0
+            {
+                self.hazards.browser_global = true;
+            }
+            if matches!(
+                self.global_name(expression),
+                Some("require" | "module" | "exports")
+            ) {
+                self.hazards.common_js = true;
+            }
+            match expression {
+                Expression::Identifier(_) => {}
+                Expression::Unary {
+                    operator: UnaryOperator::Typeof,
+                    argument,
+                } if self.browser_global(argument) != 0 => {}
+                Expression::Unary { argument, .. }
+                | Expression::Await(argument)
+                | Expression::SpreadElement(argument) => work.push((argument, context)),
+                Expression::Yield { argument, .. } => {
+                    if let Some(argument) = argument {
+                        work.push((argument, context));
+                    }
+                }
+                Expression::Binary {
+                    operator,
+                    left,
+                    right,
+                } => {
+                    let rhs = match operator {
+                        BinaryOperator::LogicalAnd => self.guarded(context, left, true),
+                        BinaryOperator::LogicalOr => self.guarded(context, left, false),
+                        _ => context,
+                    };
+                    work.push((right, rhs));
+                    work.push((left, context));
+                }
+                Expression::Assignment { left, right, .. } => {
+                    work.push((right, context));
+                    work.push((left, context));
+                }
+                Expression::Conditional {
+                    test,
+                    consequent,
+                    alternate,
+                } => {
+                    work.push((alternate, self.guarded(context, test, false)));
+                    work.push((consequent, self.guarded(context, test, true)));
+                    work.push((test, context));
+                }
+                Expression::Call {
+                    callee, arguments, ..
+                }
+                | Expression::OptionalCall {
+                    callee, arguments, ..
+                } => {
+                    if !context.deferred
+                        && matches!(Self::member(callee), Some((object, member)) if matches!((self.global_name(object), member), (Some("Date"), "now") | (Some("Math"), "random")))
+                    {
+                        self.hazards.nondeterministic_render = true;
+                    }
+                    let effect = self.effect(callee);
+                    for (index, argument) in arguments.iter().enumerate().rev() {
+                        let mut argument_context = context;
+                        if effect
+                            && index == 0
+                            && matches!(
+                                argument,
+                                Expression::Function { .. } | Expression::ArrowFunction { .. }
+                            )
+                        {
+                            argument_context.deferred = true;
+                        }
+                        work.push((argument, argument_context));
+                    }
+                    work.push((callee, context));
+                }
+                Expression::New { callee, arguments } => {
+                    for argument in arguments.iter().rev() {
+                        work.push((argument, context));
+                    }
+                    work.push((callee, context));
+                }
+                Expression::Member {
+                    object,
+                    property,
+                    computed,
+                    ..
+                }
+                | Expression::OptionalMember {
+                    object,
+                    property,
+                    computed,
+                    ..
+                } => {
+                    if *computed {
+                        work.push((property, context));
+                    }
+                    work.push((object, context));
+                }
+                Expression::ArrayLiteral(elements) => {
+                    for element in elements.iter().rev().flatten() {
+                        work.push((element, context));
+                    }
+                }
+                Expression::ObjectLiteral(properties) => {
+                    for property in properties.iter().rev() {
+                        work.push((&property.value, context));
+                        if property.computed {
+                            work.push((&property.key, context));
+                        }
+                    }
+                }
+                Expression::TemplateLiteral { expressions, .. } => {
+                    for expression in expressions.iter().rev() {
+                        work.push((expression, context));
+                    }
+                }
+                Expression::ArrowFunction { params, body, .. } => match body {
+                    ArrowBody::Block(body) => self.function(params, body, None, context),
+                    ArrowBody::Expression(body) => {
+                        self.function_scope(params, None);
+                        for parameter in params {
+                            self.pattern(&parameter.pattern, context);
+                        }
+                        self.expression(body, context);
+                        self.scopes.pop();
+                    }
+                },
+                Expression::Function {
+                    name, params, body, ..
+                } => self.function(params, body, name.as_deref(), context),
+                Expression::ClassExpression {
+                    name,
+                    super_class,
+                    body,
+                    ..
+                } => self.class(name.as_deref(), super_class.as_deref(), body, context),
+                Expression::StringLiteral(_)
+                | Expression::NumericLiteral(_)
+                | Expression::BigIntLiteral(_)
+                | Expression::FloatLiteral(_)
+                | Expression::BooleanLiteral(_)
+                | Expression::NullLiteral
+                | Expression::UndefinedLiteral
+                | Expression::This
+                | Expression::SloppyThis
+                | Expression::NewTarget
+                | Expression::ImportMeta
+                | Expression::Raw(_)
+                | Expression::RegExpLiteral { .. }
+                | Expression::Super => {}
+            }
+        }
+    }
 }
 
 fn execute_react_contract(args: ReactContractArgs) -> Result<i32, String> {
@@ -18732,7 +19545,7 @@ mod tests {
         let clean_file = temp_dir.join("CleanCard.tsx");
         fs::write(
             &clean_file,
-            "<div><span>Deterministic Clean Component</span></div>\n",
+            "// Date.now() Math.random() window.location require('fs')\n<div><span>window.location Date.now() Math.random() module.exports</span></div>\n",
         )
         .expect("clean component should write");
         let clean_out = temp_dir.join("clean_doctor.json");
@@ -18756,7 +19569,7 @@ mod tests {
         let hazard_file = temp_dir.join("HydrationHazard.jsx");
         fs::write(
             &hazard_file,
-            "<div>{window.location.href}<span>{Date.now()}</span></div>\n",
+            "import { useEffect } from 'react';\nexport function Card() { useEffect(() => {}, []); return <div>{window.location.href}<span>{Date.now()}</span></div>; }\n",
         )
         .expect("hazard component should write");
         let hazard_out = temp_dir.join("hazard_doctor.json");
@@ -18784,6 +19597,262 @@ mod tests {
                 .is_some_and(|n| n >= 2),
             "expected SSR + hydration entries in doctor scan"
         );
+    }
+
+    fn react_doctor_source_hazards(
+        source: &str,
+        language: ReactPipelineInputLanguage,
+    ) -> ReactDoctorSourceHazards {
+        let config = react_compile_config(
+            ReactSourceForm::Tsx,
+            Some(ReactRuntimeMode::JsxDev),
+            Some(ReactBuildMode::Development),
+            true,
+        );
+        let compiled = compile_react_module(source, language, &config)
+            .expect("doctor fixture must compile through the production JSX/TS pipeline");
+        let tree = CanonicalEs2020Parser
+            .parse_with_options(
+                compiled.generated_code.as_str(),
+                ParseGoal::Module,
+                &ParserOptions::default(),
+            )
+            .expect("compiled doctor fixture must parse");
+        let mut hazards = ReactDoctorSourceAnalysis::analyze(&tree);
+        hazards.nondeterministic_render &= compiled.jsx_elements > 0;
+        hazards
+    }
+
+    #[test]
+    fn react_doctor_ast_ignores_comments_literals_jsx_text_and_types() {
+        let hazards = react_doctor_source_hazards(
+            r#"
+            type Props = { label: string };
+            // window.location Date.now() Math.random() require('fs') module.exports
+            const prose = "window.location Date.now() Math.random() require('fs') module.exports";
+            const template = `document.title Date.now() Math.random()`;
+            export function Card(props: Props) {
+                return <div title={prose}>{props.label}{template}window.location Date.now() Math.random() require('fs') module.exports</div>;
+            }
+            "#,
+            ReactPipelineInputLanguage::Tsx,
+        );
+        assert_eq!(hazards, ReactDoctorSourceHazards::default());
+    }
+
+    #[test]
+    fn react_doctor_ast_detects_computed_and_trivia_separated_operations() {
+        let hazards = react_doctor_source_hazards(
+            r#"
+            const dependency = require /* load */ ('package');
+            export function Card() {
+                return <div>{window /* browser */ ['location']['href']}{Date['now'] /* clock */ ()}{Math /* rng */ . random ( )}{dependency}</div>;
+            }
+            "#,
+            ReactPipelineInputLanguage::Jsx,
+        );
+        assert!(hazards.browser_global);
+        assert!(hazards.nondeterministic_render);
+        assert!(hazards.common_js);
+
+        let qualified = react_doctor_source_hazards(
+            r#"
+            const dependency = globalThis['require']('package');
+            export function Card() {
+                return <div>{globalThis['window'].location.href}{globalThis.Date['now']()}{globalThis.Math.random()}{dependency}</div>;
+            }
+            "#,
+            ReactPipelineInputLanguage::Jsx,
+        );
+        assert!(qualified.browser_global);
+        assert!(qualified.nondeterministic_render);
+        assert!(qualified.common_js);
+    }
+
+    #[test]
+    fn react_doctor_ast_unrelated_effect_and_typeof_do_not_hide_render_hazards() {
+        let hazards = react_doctor_source_hazards(
+            r#"
+            import { useEffect } from 'react';
+            function isBrowser() { return typeof window !== 'undefined'; }
+            export function Card() {
+                useEffect(() => {}, []);
+                return <div>{window.location.href}{Date.now()}</div>;
+            }
+            "#,
+            ReactPipelineInputLanguage::Jsx,
+        );
+        assert!(hazards.browser_global);
+        assert!(hazards.nondeterministic_render);
+        assert!(!hazards.common_js);
+    }
+
+    #[test]
+    fn react_doctor_ast_imported_effect_callbacks_are_deferred() {
+        let hazards = react_doctor_source_hazards(
+            r#"
+            import React, { useEffect as afterPaint } from 'react';
+            export function Card() {
+                afterPaint(() => {
+                    window.document.title = String(Date.now() + Math.random());
+                }, []);
+                React['useLayoutEffect'](function () { document.title = 'mounted'; }, []);
+                return <div>Stable</div>;
+            }
+            "#,
+            ReactPipelineInputLanguage::Jsx,
+        );
+        assert_eq!(hazards, ReactDoctorSourceHazards::default());
+    }
+
+    #[test]
+    fn react_doctor_ast_effect_dependencies_and_common_js_remain_checked() {
+        let hazards = react_doctor_source_hazards(
+            r#"
+            import { useEffect } from 'react';
+            export function Card() {
+                useEffect(() => { require('browser-helper'); }, [window.location.href, Date.now()]);
+                return <div>Stable</div>;
+            }
+            "#,
+            ReactPipelineInputLanguage::Jsx,
+        );
+        assert!(hazards.browser_global);
+        assert!(hazards.nondeterministic_render);
+        assert!(hazards.common_js);
+    }
+
+    #[test]
+    fn react_doctor_ast_guards_apply_only_to_the_protected_branch() {
+        let clean = react_doctor_source_hazards(
+            r#"
+            export function Card() {
+                const title = typeof window !== 'undefined' ? document.title : 'server';
+                const available = typeof window === 'undefined' || window.location.href;
+                if ('undefined' !== typeof localStorage) { localStorage.getItem('key'); }
+                return <div>{title}{available}</div>;
+            }
+            "#,
+            ReactPipelineInputLanguage::Jsx,
+        );
+        assert_eq!(clean, ReactDoctorSourceHazards::default());
+
+        let early_return = react_doctor_source_hazards(
+            r#"
+            export function Card() {
+                if (typeof window === 'undefined') return null;
+                return <div>{document.title}{window.location.href}</div>;
+            }
+            "#,
+            ReactPipelineInputLanguage::Jsx,
+        );
+        assert_eq!(early_return, ReactDoctorSourceHazards::default());
+
+        for source in [
+            "export function Card() { if (typeof window === 'undefined') { return <div>{window.location.href}</div>; } return null; }",
+            "export function Card() { return <div>{typeof window !== 'undefined' || window.location.href}</div>; }",
+            "export function Card() { typeof window; return <div>{window.location.href}</div>; }",
+            "export function Card() { if (typeof window !== 'undefined') { window.location.href; } return <div>{window.location.href}</div>; }",
+            "export function Card() { return render(); function render() { return <div>{window.location.href}</div>; } }",
+            "export function Card() { const title = readTitle(); if (typeof window === 'undefined') return null; function readTitle() { return window.location.href; } return <div>{title}</div>; }",
+        ] {
+            assert!(
+                react_doctor_source_hazards(source, ReactPipelineInputLanguage::Jsx).browser_global,
+                "unguarded branch must be diagnosed: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn react_doctor_ast_handles_long_logical_guard_chains() {
+        for (operator, literal, expected_hazard) in [("&&", "true", false), ("||", "false", true)] {
+            let mut condition = "typeof window !== 'undefined'".to_string();
+            for _ in 0..512 {
+                condition.push_str(&format!(" {operator} {literal}"));
+            }
+            condition.push_str(&format!(" {operator} window.location.href"));
+            let source = format!(
+                "export function Card() {{ const title = {condition}; return <div>{{title}}</div>; }}"
+            );
+            assert_eq!(
+                react_doctor_source_hazards(&source, ReactPipelineInputLanguage::Jsx)
+                    .browser_global,
+                expected_hazard,
+                "long {operator} chains preserve guard polarity"
+            );
+        }
+    }
+
+    #[test]
+    fn react_doctor_ast_local_bindings_do_not_impersonate_globals_or_react_effects() {
+        let clean = react_doctor_source_hazards(
+            r#"
+            export function Card(window, document, localStorage, Date, Math, require, module, globalThis) {
+                return <div>{window.title}{document.title}{localStorage.value}{Date.now()}{Math.random()}{require('value')}{module.exports}{globalThis.window.title}{globalThis.Date.now()}{globalThis.require('value')}</div>;
+            }
+            "#,
+            ReactPipelineInputLanguage::Jsx,
+        );
+        assert_eq!(clean, ReactDoctorSourceHazards::default());
+
+        for source in [
+            "export function Card(useEffect) { useEffect(() => window.location.href); return <div/>; }",
+            "import { useEffect } from 'another-library'; export function Card() { useEffect(() => window.location.href); return <div/>; }",
+            "import { useEffect } from 'react'; export function Card(useEffect) { useEffect(() => window.location.href); return <div/>; }",
+            "import React from 'react'; export function Card(React) { React.useEffect(() => window.location.href); return <div/>; }",
+        ] {
+            assert!(
+                react_doctor_source_hazards(source, ReactPipelineInputLanguage::Jsx).browser_global,
+                "only the actual imported React effect can defer a callback: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn react_doctor_ast_template_interpolations_and_destructuring_defaults_are_code() {
+        let hazards = react_doctor_source_hazards(
+            r#"
+            export function Card({ title = document.title } = {}) {
+                const message = `rendered at ${Date.now()}`;
+                return <div>{title}{message}</div>;
+            }
+            "#,
+            ReactPipelineInputLanguage::Jsx,
+        );
+        assert!(hazards.browser_global);
+        assert!(hazards.nondeterministic_render);
+        assert!(!hazards.common_js);
+    }
+
+    #[test]
+    fn react_doctor_ast_parameter_defaults_cannot_see_body_var_bindings() {
+        let hazards = react_doctor_source_hazards(
+            r#"
+            export function Card(title = window.location.href, stamp = Date.now(), data = require('data')) {
+                var window = { location: { href: 'local' } };
+                var Date = { now: () => 123 };
+                var require = () => 'local';
+                return <div>{title}{stamp}{data}</div>;
+            }
+            "#,
+            ReactPipelineInputLanguage::Jsx,
+        );
+        assert!(hazards.browser_global);
+        assert!(hazards.nondeterministic_render);
+        assert!(hazards.common_js);
+
+        let body = react_doctor_source_hazards(
+            r#"
+            export function Card() {
+                var window = { location: { href: 'local' } };
+                var Date = { now: () => 123 };
+                var require = () => 'local';
+                return <div>{window.location.href}{Date.now()}{require('data')}</div>;
+            }
+            "#,
+            ReactPipelineInputLanguage::Jsx,
+        );
+        assert_eq!(body, ReactDoctorSourceHazards::default());
     }
 
     #[test]

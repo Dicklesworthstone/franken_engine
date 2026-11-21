@@ -1763,6 +1763,17 @@ The full soundness capstone gate emits a content-addressed bundle via
 unavailable) and replays preserved bundles via
 `./scripts/e2e/dw_non_use_certificate_replay.sh bundle <run_dir>`.
 
+Sandbox manifests can restrict network tool grants to exact services with
+`"network_allowlist": ["127.0.0.1:8080", "[::1]:8080"]`. Each entry authorizes
+one numeric IP address and port; all addresses returned by DNS must be listed
+before any connection opens. An empty list denies all connections, and an
+allowlist never grants the `network` capability or replaces `host_io_root`.
+Without an allowlist, the existing `acknowledge_unfiltered_network: true` opt-in
+uses the public-Internet-only destination filter. An allowlist takes precedence
+over that legacy flag, so approving a local service does not approve other
+private destinations or the public Internet. The manifest, including its
+allowlist, remains part of the signed replay input; replay uses recorded I/O.
+
 **Status & threat-model boundary:** certificates cover **explicit data flows only**
 (`explicit_flow_ifc_v1`) within the v1 analyzed subset—never covert, timing,
 control-flow-implicit, or hardware side channels, and never a noninterference

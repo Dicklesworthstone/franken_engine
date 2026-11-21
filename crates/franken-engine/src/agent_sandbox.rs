@@ -29,19 +29,19 @@
 //!   (`RuntimeCapability::from_tag_str` drops unknown tags at the membrane;
 //!   the manifest validator refuses them up front so an agent cannot believe
 //!   it holds authority it does not).
-//! - Host I/O stays [`DenyAll`-postured] unless the manifest declares a
-//!   sandbox filesystem root; the network mechanism carries no egress policy
-//!   in this repository (that gate lives in the `franken_node` product
-//!   layer), so network tool grants remain capability-gated but
-//!   policy-unfiltered — the manifest validator requires an explicit
-//!   acknowledgement flag before granting network egress.
+//! - Host I/O stays deny-all unless the manifest declares a sandbox filesystem
+//!   root. Network grants require explicit host intent: an exact destination
+//!   allowlist, or the existing acknowledgement flag for public-Internet-only
+//!   access. Destination policies check all resolved addresses before dialing.
 //! - Guardplane instruction hooks are always enabled for sandbox runs: the
 //!   agent is the untrusted principal, so its trust level defaults to
 //!   `provisional` and the behavior firewall cannot be opted out of.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::net::SocketAddr;
 
+use frankenengine_extension_host::host_io::{NetworkDestinationAllowlist, NetworkEgressPolicy};
 use serde::{Deserialize, Serialize};
 
 use crate::capability::RuntimeCapability;
@@ -86,6 +86,9 @@ pub enum AgentSandboxError {
     NetworkGrantWithoutAcknowledgement {
         tool_name: String,
     },
+    InvalidNetworkAllowlist {
+        detail: String,
+    },
     DeniedCapabilityAlsoGranted {
         capability_tag: String,
     },
@@ -124,10 +127,13 @@ impl fmt::Display for AgentSandboxError {
             ),
             Self::NetworkGrantWithoutAcknowledgement { tool_name } => write!(
                 f,
-                "tool `{tool_name}` grants network egress but the manifest does not set \
-                 `acknowledge_unfiltered_network: true`; the engine ships the network \
-                 mechanism without an egress policy layer, so the grant must be explicit"
+                "tool `{tool_name}` grants network egress but the manifest supplies neither \
+                 `network_allowlist` nor `acknowledge_unfiltered_network: true`; \
+                 destination authority must be explicit"
             ),
+            Self::InvalidNetworkAllowlist { detail } => {
+                write!(f, "invalid agent-sandbox network allowlist: {detail}")
+            }
             Self::DeniedCapabilityAlsoGranted { capability_tag } => write!(
                 f,
                 "capability tag `{capability_tag}` appears in both the effective \
@@ -186,9 +192,16 @@ pub struct AgentSandboxManifest {
     /// Byte ceiling for sandboxed host I/O.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_io_max_bytes: Option<u64>,
-    /// Must be `true` for any network-egress tool grant: acknowledges that
-    /// the engine-side sandbox provides the network mechanism without an
-    /// egress-policy filter (SSRF/allowlist gating is product-layer scope).
+    /// Exact numeric IP:port destinations the host authorizes. When present,
+    /// only these destinations are allowed, including explicitly listed local
+    /// services; an empty list denies every connection. DNS names must resolve
+    /// entirely to listed addresses. The list never grants a capability.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network_allowlist: Option<Vec<SocketAddr>>,
+    /// Existing explicit network opt-in when no allowlist is supplied. The
+    /// historical field name is retained in the manifest schema, but the CLI
+    /// applies PublicInternetOnly, never unrestricted egress. An allowlist
+    /// takes precedence even when this flag is true.
     #[serde(default)]
     pub acknowledge_unfiltered_network: bool,
     /// Data-contract purpose the run binds to (defaults to the data-contract
@@ -225,6 +238,7 @@ impl AgentSandboxManifest {
         if self.agent_id.trim().is_empty() {
             return Err(AgentSandboxError::EmptyField { field: "agent_id" });
         }
+        self.network_egress_policy()?;
 
         let mut seen_tools = BTreeSet::new();
         for grant in &self.tool_grants {
@@ -250,6 +264,7 @@ impl AgentSandboxManifest {
                 });
             };
             if capability == RuntimeCapability::NetworkEgress
+                && self.network_allowlist.is_none()
                 && !self.acknowledge_unfiltered_network
             {
                 return Err(AgentSandboxError::NetworkGrantWithoutAcknowledgement {
@@ -274,6 +289,20 @@ impl AgentSandboxManifest {
             });
         }
         Ok(())
+    }
+
+    /// Construct the destination policy used by the sandbox provider. This
+    /// validates the list independently so an embedder cannot accidentally
+    /// turn an invalid configuration into unrestricted network access.
+    pub fn network_egress_policy(&self) -> Result<NetworkEgressPolicy, AgentSandboxError> {
+        match &self.network_allowlist {
+            Some(destinations) => NetworkDestinationAllowlist::new(destinations.iter().copied())
+                .map(NetworkEgressPolicy::Allowlist)
+                .map_err(|error| AgentSandboxError::InvalidNetworkAllowlist {
+                    detail: error.to_string(),
+                }),
+            None => Ok(NetworkEgressPolicy::PublicInternetOnly),
+        }
     }
 
     /// The typed capability set the tool grants denote (before the forced VM
@@ -572,6 +601,7 @@ mod tests {
             trust_level: None,
             host_io_root: Some("/tmp/agent-root".to_string()),
             host_io_max_bytes: Some(1 << 20),
+            network_allowlist: None,
             acknowledge_unfiltered_network: false,
             purpose: Some("agent_sandbox".to_string()),
             metadata: BTreeMap::new(),
@@ -646,6 +676,85 @@ mod tests {
         acknowledged
             .validate()
             .expect("acknowledged network grant validates");
+    }
+
+    #[test]
+    fn network_allowlist_is_explicit_authority_and_never_grants_a_capability() {
+        let mut limited = manifest();
+        let destination: SocketAddr = "127.0.0.1:8080".parse().unwrap();
+        limited.network_allowlist = Some(vec![destination]);
+        limited.validate().unwrap();
+        assert!(
+            !limited
+                .effective_runtime_capabilities(false)
+                .unwrap()
+                .contains(&RuntimeCapability::NetworkEgress)
+        );
+        limited.tool_grants.push(AgentToolGrant {
+            tool_name: "local_service".to_string(),
+            capability_tag: "network".to_string(),
+            description: None,
+        });
+        limited
+            .validate()
+            .expect("an exact allowlist is explicit network intent");
+        for acknowledgement in [false, true] {
+            limited.acknowledge_unfiltered_network = acknowledgement;
+            let NetworkEgressPolicy::Allowlist(approved) = limited.network_egress_policy().unwrap()
+            else {
+                panic!("the legacy flag must never broaden an explicit allowlist")
+            };
+            assert!(approved.contains(&destination));
+            assert!(!approved.contains(&"127.0.0.1:8081".parse().unwrap()));
+            assert!(!approved.contains(&"8.8.8.8:443".parse().unwrap()));
+        }
+        limited.network_allowlist = Some(vec![]);
+        let NetworkEgressPolicy::Allowlist(approved) = limited.network_egress_policy().unwrap()
+        else {
+            panic!("an empty list must remain deny-all")
+        };
+        assert!(!approved.contains(&destination));
+    }
+
+    #[test]
+    fn invalid_network_allowlist_fails_manifest_validation_before_execution() {
+        for destinations in [
+            vec!["127.0.0.1:0"],
+            vec!["0.0.0.0:80"],
+            vec!["[::]:80"],
+            vec!["127.0.0.1:8080", "127.0.0.1:8080"],
+        ] {
+            let mut invalid = manifest();
+            invalid.network_allowlist = Some(
+                destinations
+                    .iter()
+                    .map(|value| value.parse().unwrap())
+                    .collect(),
+            );
+            assert!(matches!(
+                invalid.to_extension_package("console.log('never')".into(), None, "test", false),
+                Err(AgentSandboxError::InvalidNetworkAllowlist { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn network_allowlist_round_trips_without_changing_historical_manifest_bytes() {
+        let original = serde_json::to_value(manifest()).unwrap();
+        assert!(original.get("network_allowlist").is_none());
+        let restored: AgentSandboxManifest = serde_json::from_value(original).unwrap();
+        assert_eq!(restored.network_allowlist, None);
+        assert_eq!(
+            restored.network_egress_policy().unwrap(),
+            NetworkEgressPolicy::PublicInternetOnly
+        );
+
+        let mut configured = restored;
+        configured.network_allowlist = Some(vec!["[::1]:8080".parse().unwrap()]);
+        let json = serde_json::to_value(&configured).unwrap();
+        assert_eq!(json["network_allowlist"], serde_json::json!(["[::1]:8080"]));
+        let restored: AgentSandboxManifest = serde_json::from_value(json).unwrap();
+        assert_eq!(restored, configured);
     }
 
     #[test]

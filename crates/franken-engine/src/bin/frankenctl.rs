@@ -6197,7 +6197,11 @@ fn execute_agent_sandbox(args: AgentSandboxArgs) -> Result<i32, String> {
             None => SandboxedHostIo::with_root(PathBuf::from(root)),
         }
         .map_err(|error| format!("failed to open agent-sandbox host I/O root `{root}`: {error}"))?
-        .with_public_egress_only();
+        .with_egress_policy(
+            manifest
+                .network_egress_policy()
+                .map_err(|error| format!("agent-sandbox network policy rejected: {error}"))?,
+        );
         orchestrator.set_host_io(
             Arc::new(provider),
             Some(Arc::new(InMemoryHostIoTranscript::recording())),
@@ -15481,9 +15485,10 @@ fn agent_sandbox_usage() -> String {
         "  quarantine) that cannot be opted out of.",
         "",
         "  Host I/O stays deny-all unless the manifest declares host_io_root;",
-        "  network tool grants additionally require",
-        "  acknowledge_unfiltered_network: true (the engine ships the network",
-        "  mechanism without a product-layer egress policy).",
+        "  network tool grants additionally require network_allowlist (exact",
+        "  numeric IP:port destinations), or acknowledge_unfiltered_network:",
+        "  true for public-Internet-only egress. An allowlist takes precedence;",
+        "  [] denies all connections. Every DNS candidate must be approved.",
         "",
         "  With --data-contract and --certificate-out, the signed E8",
         "  certificate bundle is written on exit with the agent's effective",

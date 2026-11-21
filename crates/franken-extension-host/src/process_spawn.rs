@@ -10,7 +10,8 @@
 //! provider is suitable only when the product layer has installed an explicit
 //! policy: it clears the ambient environment, confines working directories,
 //! opens and verifies the canonical executable once, launches that same open
-//! file identity instead of resolving the pathname twice, bounds
+//! file identity instead of resolving the pathname twice, pins working
+//! directories beneath an owned jail descriptor through launch, bounds
 //! input/output/runtime, and exposes only provider-scoped opaque handles (never
 //! native process identifiers).
 
@@ -761,6 +762,8 @@ pub struct ProcessSpawnPolicy {
     #[serde(default)]
     pub fixed_env: BTreeMap<String, String>,
     /// Canonical directory that contains every permitted working directory.
+    /// Provider installation pins its directory identity; replacing this
+    /// pathname does not replace the provider's working-directory authority.
     pub jailed_cwd_root: String,
     pub limits: ProcessSpawnLimits,
     #[serde(default)]
@@ -1070,6 +1073,8 @@ type ChildMap = BTreeMap<String, LifecycleChild>;
 /// even if the guest never sends `wait` or `kill`.
 pub struct NativeProcessSpawn {
     policy: ProcessSpawnPolicy,
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    cwd_root: File,
     scope: String,
     next_handle: AtomicU64,
     active_children: Arc<AtomicUsize>,
@@ -1116,8 +1121,10 @@ impl NativeProcessSpawn {
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         {
             validate_policy(&policy)?;
+            let cwd_root = open_working_directory_root(Path::new(&policy.jailed_cwd_root))?;
             Ok(Self {
                 policy,
+                cwd_root,
                 scope: fresh_scope(),
                 next_handle: AtomicU64::new(0),
                 active_children: Arc::new(AtomicUsize::new(0)),
@@ -1374,6 +1381,11 @@ impl NativeProcessSpawn {
                 ),
             ));
         }
+        // Canonicalization preserves permitted in-jail symlinks, but does not
+        // confer authority on a pathname that can change before spawn. Walk
+        // the canonical components beneath the installed root without following
+        // any further symlink and retain that exact directory through launch.
+        let cwd_file = self.pin_working_directory(&cwd, control)?;
 
         let mut env = self.policy.fixed_env.clone();
         for (key, value) in &launch.env {
@@ -1407,8 +1419,31 @@ impl NativeProcessSpawn {
             argv: launch.argv.clone(),
             env,
             cwd,
+            cwd_file: Some(cwd_file),
             stdio: launch.stdio,
         })
+    }
+
+    fn pin_working_directory(
+        &self,
+        cwd: &Path,
+        control: &dyn ProcessSpawnControl,
+    ) -> Result<File, ProcessSpawnError> {
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        {
+            let relative = cwd
+                .strip_prefix(&self.policy.jailed_cwd_root)
+                .map_err(|_| policy_error("cwd_escape", "working directory escapes jail"))?;
+            open_working_directory_components(&self.cwd_root, relative, control)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+        {
+            let _ = (cwd, control);
+            Err(ProcessSpawnError::NotImplemented {
+                what: "descriptor-pinned working directories are unavailable on this platform"
+                    .to_string(),
+            })
+        }
     }
 
     #[cfg(test)]
@@ -1554,12 +1589,18 @@ impl NativeProcessSpawn {
                 .ok_or_else(|| ProcessSpawnError::InvalidState {
                     detail: "validated launch is missing its verified executable file".to_string(),
                 })?;
-        let mut command = Command::new(pinned_executable_path(executable_file)?);
+        let cwd_file = launch
+            .cwd_file
+            .as_ref()
+            .ok_or_else(|| ProcessSpawnError::InvalidState {
+                detail: "validated launch is missing its verified working directory".to_string(),
+            })?;
+        let mut command = Command::new(pinned_process_file_path(executable_file)?);
         #[cfg(unix)]
         command.arg0(&launch.executable);
         command
             .args(&launch.argv)
-            .current_dir(&launch.cwd)
+            .current_dir(pinned_process_file_path(cwd_file)?)
             .env_clear()
             .envs(&launch.env)
             .stdin(to_stdio(launch.stdio.stdin))
@@ -2126,6 +2167,7 @@ struct ValidatedLaunch {
     argv: Vec<String>,
     env: BTreeMap<String, String>,
     cwd: PathBuf,
+    cwd_file: Option<File>,
     stdio: ProcessStdio,
 }
 
@@ -2333,6 +2375,69 @@ fn canonical_directory(path: &Path, operation: &str) -> Result<PathBuf, ProcessS
     Ok(canonical)
 }
 
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn working_directory_flags() -> rustix::fs::OFlags {
+    // O_PATH pins identity without requiring directory-read permission. The
+    // DIRECTORY check also rejects a final symlink under O_PATH | NOFOLLOW.
+    rustix::fs::OFlags::PATH
+        | rustix::fs::OFlags::DIRECTORY
+        | rustix::fs::OFlags::NOFOLLOW
+        | rustix::fs::OFlags::CLOEXEC
+}
+
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn open_working_directory_components(
+    anchor: &File,
+    relative: &Path,
+    control: &dyn ProcessSpawnControl,
+) -> Result<File, ProcessSpawnError> {
+    control.checkpoint()?;
+    let mut directory = anchor.try_clone().map_err(|error| ProcessSpawnError::Io {
+        operation: "duplicate working-directory authority".to_string(),
+        detail: error.to_string(),
+    })?;
+    for component in relative.components() {
+        control.checkpoint()?;
+        let std::path::Component::Normal(name) = component else {
+            return Err(policy_error(
+                "cwd_escape",
+                "working-directory identity requires canonical relative components",
+            ));
+        };
+        directory = rustix::fs::openat(
+            &directory,
+            name,
+            working_directory_flags(),
+            rustix::fs::Mode::empty(),
+        )
+        .map(File::from)
+        .map_err(|error| ProcessSpawnError::Io {
+            operation: "open working-directory identity".to_string(),
+            detail: error.to_string(),
+        })?;
+    }
+    control.checkpoint()?;
+    Ok(directory)
+}
+
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn open_working_directory_root(root: &Path) -> Result<File, ProcessSpawnError> {
+    // Start at / so a swapped ancestor of the validated jail pathname cannot
+    // redirect provider installation either. No caller pathname is reopened
+    // after this component walk establishes the root's authority.
+    let relative = root
+        .strip_prefix("/")
+        .map_err(|_| policy_error("noncanonical_cwd_root", "jailed cwd root must be absolute"))?;
+    let filesystem_root =
+        rustix::fs::open("/", working_directory_flags(), rustix::fs::Mode::empty())
+            .map(File::from)
+            .map_err(|error| ProcessSpawnError::Io {
+                operation: "open working-directory root authority".to_string(),
+                detail: error.to_string(),
+            })?;
+    open_working_directory_components(&filesystem_root, relative, &UnrestrictedProcessSpawnControl)
+}
+
 fn path_string(path: &Path) -> Result<String, ProcessSpawnError> {
     path.to_str()
         .map(str::to_owned)
@@ -2461,7 +2566,7 @@ fn open_verified_executable(
 }
 
 #[cfg(target_os = "linux")]
-fn pinned_executable_path(image: &File) -> Result<PathBuf, ProcessSpawnError> {
+fn pinned_process_file_path(image: &File) -> Result<PathBuf, ProcessSpawnError> {
     Ok(PathBuf::from(format!(
         "/proc/self/fd/{}",
         image.as_raw_fd()
@@ -2469,14 +2574,14 @@ fn pinned_executable_path(image: &File) -> Result<PathBuf, ProcessSpawnError> {
 }
 
 #[cfg(target_os = "freebsd")]
-fn pinned_executable_path(image: &File) -> Result<PathBuf, ProcessSpawnError> {
+fn pinned_process_file_path(image: &File) -> Result<PathBuf, ProcessSpawnError> {
     Ok(PathBuf::from(format!("/dev/fd/{}", image.as_raw_fd())))
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
-fn pinned_executable_path(_image: &File) -> Result<PathBuf, ProcessSpawnError> {
+fn pinned_process_file_path(_image: &File) -> Result<PathBuf, ProcessSpawnError> {
     Err(ProcessSpawnError::NotImplemented {
-        what: "descriptor-pinned executable launch is unavailable on this platform".to_string(),
+        what: "descriptor-pinned process launch is unavailable on this platform".to_string(),
     })
 }
 
@@ -3985,6 +4090,7 @@ mod tests {
             argv: vec![argument_secret.to_string()],
             env: BTreeMap::from([(env_key_secret.to_string(), env_value_secret.to_string())]),
             cwd: PathBuf::from(cwd_secret),
+            cwd_file: None,
             stdio: ProcessStdio::default(),
         };
         let transcript = InMemoryProcessSpawnTranscript::replaying(vec![(
@@ -4200,6 +4306,242 @@ mod tests {
         assert!(exit.success);
         assert_eq!(stdout, b"verified");
         assert!(stderr.is_empty());
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[test]
+    fn verified_working_directory_survives_path_replacement() {
+        let cat = executable(&["/bin/cat", "/usr/bin/cat"]);
+        // Exercise both the final component and an ancestor. Each swap takes
+        // place after all validation, before the real child is launched.
+        for replace_ancestor in [false, true] {
+            let temporary = tempfile::tempdir()
+                .expect("working-directory replacement fixture")
+                .keep();
+            let jail = temporary.join("jail");
+            let cwd = jail.join("parent/work");
+            let outside = temporary.join("outside");
+            let outside_cwd = if replace_ancestor {
+                outside.join("work")
+            } else {
+                outside.clone()
+            };
+            std::fs::create_dir_all(&cwd).expect("create authorized cwd");
+            std::fs::create_dir_all(&outside_cwd).expect("create outside cwd");
+            std::fs::write(cwd.join("marker"), b"verified-cwd").expect("authorized marker");
+            std::fs::write(outside_cwd.join("marker"), b"outside-cwd").expect("outside marker");
+            let mut policy = ProcessSpawnPolicy::jailed(&jail).expect("jailed policy");
+            let canonical = policy.authorize_executable(&cat).expect("authorize cat");
+            let provider = NativeProcessSpawn::new(policy).expect("native provider");
+            let ProcessSpawnRequest::Run { mut launch, .. } =
+                run_request(canonical, vec!["marker"])
+            else {
+                unreachable!()
+            };
+            launch.cwd = Some("parent/work".to_string());
+            let validated = provider.validate_launch(&launch).expect("validated cwd");
+            let replaced = if replace_ancestor {
+                jail.join("parent")
+            } else {
+                cwd
+            };
+            std::fs::rename(&replaced, jail.join("retained"))
+                .expect("retain the authorized directory identity");
+            std::os::unix::fs::symlink(&outside, &replaced)
+                .expect("replace the validated pathname with an outside symlink");
+
+            let permit = provider.reserve_child().expect("reserve child");
+            let running = provider
+                .spawn_validated(validated, permit)
+                .expect("spawn in the verified working directory");
+            let (exit, stdout, stderr) =
+                wait_and_collect(running, Duration::from_secs(1)).expect("collect real cwd probe");
+            assert!(exit.success);
+            assert_eq!(stdout, b"verified-cwd", "ancestor swap: {replace_ancestor}");
+            assert!(stderr.is_empty());
+            assert_process_workers_released(&provider);
+
+            // A fresh launch does not inherit the earlier validation. Refuse
+            // the swapped path, then prove the same provider still works on
+            // the retained in-jail directory without changing its policy.
+            let mut fresh_request = ProcessSpawnRequest::Run {
+                launch,
+                stdin: Vec::new(),
+                timeout_millis: None,
+            };
+            assert!(matches!(
+                provider.perform(&fresh_request, &[ProcessSpawnCapability::Spawn]),
+                Err(ProcessSpawnError::PolicyViolation { code, .. }) if code == "cwd_escape"
+            ));
+            let ProcessSpawnRequest::Run { launch, .. } = &mut fresh_request else {
+                unreachable!()
+            };
+            launch.cwd = Some(
+                if replace_ancestor {
+                    "retained/work"
+                } else {
+                    "retained"
+                }
+                .to_string(),
+            );
+            assert!(matches!(
+                provider.perform(&fresh_request, &[ProcessSpawnCapability::Spawn]),
+                Ok(ProcessSpawnResponse::Run {
+                    exit: ProcessExit { success: true, .. },
+                    stdout,
+                    stderr,
+                }) if stdout == b"verified-cwd" && stderr.is_empty()
+            ));
+            assert_process_workers_released(&provider);
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[test]
+    fn installed_working_directory_jail_survives_root_replacement() {
+        let cat = executable(&["/bin/cat", "/usr/bin/cat"]);
+        let temporary = tempfile::tempdir()
+            .expect("jail-root replacement fixture")
+            .keep();
+        let jail = temporary.join("jail");
+        std::fs::create_dir_all(jail.join("work")).expect("create authorized jail");
+        std::fs::write(jail.join("marker"), b"installed-jail").expect("authorized marker");
+        std::fs::write(jail.join("work/marker"), b"installed-work")
+            .expect("authorized child marker");
+        let mut policy = ProcessSpawnPolicy::jailed(&jail).expect("jailed policy");
+        let canonical = policy.authorize_executable(&cat).expect("authorize cat");
+        let provider = NativeProcessSpawn::new(policy).expect("native provider");
+
+        std::fs::rename(&jail, temporary.join("retained-jail")).expect("retain installed jail");
+        std::fs::create_dir_all(jail.join("work"))
+            .expect("replace the root pathname with another directory");
+        std::fs::write(jail.join("marker"), b"replacement-jail").expect("replacement marker");
+        std::fs::write(jail.join("work/marker"), b"replacement-work")
+            .expect("replacement child marker");
+
+        let mut request = run_request(canonical, vec!["marker"]);
+        let response = provider
+            .perform(&request, &[ProcessSpawnCapability::Spawn])
+            .expect("run in the installed jail identity");
+        let ProcessSpawnResponse::Run {
+            exit,
+            stdout,
+            stderr,
+        } = response
+        else {
+            panic!("run response");
+        };
+        assert!(exit.success);
+        assert_eq!(stdout, b"installed-jail");
+        assert!(stderr.is_empty());
+        let ProcessSpawnRequest::Run { launch, .. } = &mut request else {
+            unreachable!()
+        };
+        launch.cwd = Some("work".to_string());
+        assert!(matches!(
+            provider.perform(&request, &[ProcessSpawnCapability::Spawn]),
+            Ok(ProcessSpawnResponse::Run {
+                exit: ProcessExit { success: true, .. },
+                stdout,
+                stderr,
+            }) if stdout == b"installed-work" && stderr.is_empty()
+        ));
+        assert_process_workers_released(&provider);
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[test]
+    fn working_directory_pin_rejects_symlink_swaps_during_resolution() {
+        // Canonicalization is normalization only. These real filesystem swaps
+        // cover the separate window before the descriptor walk obtains authority.
+        for replace_ancestor in [false, true] {
+            let temporary = tempfile::tempdir()
+                .expect("working-directory resolution fixture")
+                .keep();
+            let jail = temporary.join("jail");
+            let cwd = jail.join("parent/work");
+            let outside = temporary.join("outside");
+            std::fs::create_dir_all(&cwd).expect("authorized cwd");
+            std::fs::create_dir_all(outside.join("work")).expect("outside cwd");
+            let provider =
+                NativeProcessSpawn::new(ProcessSpawnPolicy::jailed(&jail).expect("jailed policy"))
+                    .expect("native provider");
+            let canonical = canonical_directory(&cwd, "test normalization")
+                .expect("normalize the original directory");
+            let replaced = if replace_ancestor {
+                jail.join("parent")
+            } else {
+                cwd
+            };
+            std::fs::rename(&replaced, jail.join("retained"))
+                .expect("retain the original directory");
+            std::os::unix::fs::symlink(&outside, &replaced).expect("outside symlink swap");
+            assert!(matches!(
+                provider.pin_working_directory(&canonical, &UnrestrictedProcessSpawnControl),
+                Err(ProcessSpawnError::Io { operation, .. })
+                    if operation == "open working-directory identity"
+            ));
+            assert_process_workers_released(&provider);
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[test]
+    fn working_directory_root_pin_rejects_replaced_ancestors() {
+        let temporary = tempfile::tempdir()
+            .expect("root authority resolution fixture")
+            .keep();
+        let parent = temporary.join("parent");
+        let jail = parent.join("jail");
+        let outside = temporary.join("outside");
+        std::fs::create_dir_all(&jail).expect("authorized root");
+        std::fs::create_dir_all(outside.join("jail")).expect("outside root");
+        let policy = ProcessSpawnPolicy::jailed(&jail).expect("jailed policy");
+        validate_policy(&policy).expect("validate original root");
+        std::fs::rename(&parent, temporary.join("retained-parent")).expect("retain root parent");
+        std::os::unix::fs::symlink(&outside, &parent).expect("replace root ancestor");
+        assert!(matches!(
+            open_working_directory_root(Path::new(&policy.jailed_cwd_root)),
+            Err(ProcessSpawnError::Io { operation, .. })
+                if operation == "open working-directory identity"
+        ));
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[test]
+    fn working_directory_preserves_permitted_in_jail_symlinks() {
+        let cat = executable(&["/bin/cat", "/usr/bin/cat"]);
+        let temporary = tempfile::tempdir()
+            .expect("in-jail working-directory alias fixture")
+            .keep();
+        let cwd = temporary.join("parent/work");
+        std::fs::create_dir_all(&cwd).expect("authorized cwd");
+        std::fs::write(cwd.join("marker"), b"in-jail").expect("authorized marker");
+        std::os::unix::fs::symlink("parent/work", temporary.join("alias"))
+            .expect("relative in-jail symlink");
+        let mut policy = ProcessSpawnPolicy::jailed(&temporary).expect("jailed policy");
+        let canonical = policy.authorize_executable(&cat).expect("authorize cat");
+        let provider = NativeProcessSpawn::new(policy).expect("native provider");
+        let mut request = run_request(canonical, vec!["marker"]);
+        for cwd in [
+            "alias".to_string(),
+            "alias/../work".to_string(),
+            path_string(&cwd).unwrap(),
+        ] {
+            let ProcessSpawnRequest::Run { launch, .. } = &mut request else {
+                unreachable!()
+            };
+            launch.cwd = Some(cwd);
+            assert!(matches!(
+                provider.perform(&request, &[ProcessSpawnCapability::Spawn]),
+                Ok(ProcessSpawnResponse::Run {
+                    exit: ProcessExit { success: true, .. },
+                    stdout,
+                    stderr,
+                }) if stdout == b"in-jail" && stderr.is_empty()
+            ));
+            assert_process_workers_released(&provider);
+        }
     }
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]

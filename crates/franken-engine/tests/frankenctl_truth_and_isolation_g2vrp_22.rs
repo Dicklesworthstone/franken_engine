@@ -930,6 +930,7 @@ fn frankenctl_executes_all_42_leaf_commands_with_zero_fabricated_stubs() {
         trust_level: Some("provisional".to_string()),
         host_io_root: None,
         host_io_max_bytes: None,
+        network_allowlist: None,
         acknowledge_unfiltered_network: false,
         purpose: None,
         metadata: BTreeMap::new(),

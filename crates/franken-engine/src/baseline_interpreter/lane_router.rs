@@ -1787,6 +1787,7 @@ pub struct QuickJsLane {
     entry_flow_label_ceiling: Option<Label>,
     clock_epoch_ms: Option<i64>,
     module_resolver: Option<InstalledModuleResolver>,
+    profiling_collector: Option<crate::profiling::ProfileCollector>,
 }
 
 impl Default for QuickJsLane {
@@ -1803,6 +1804,7 @@ impl Default for QuickJsLane {
             entry_flow_label_ceiling: None,
             clock_epoch_ms: None,
             module_resolver: None,
+            profiling_collector: None,
         }
     }
 }
@@ -1825,6 +1827,7 @@ impl QuickJsLane {
             entry_flow_label_ceiling: None,
             clock_epoch_ms: None,
             module_resolver: None,
+            profiling_collector: None,
         }
     }
 
@@ -1921,6 +1924,7 @@ impl QuickJsLane {
             self.entry_flow_label_ceiling.clone(),
             self.clock_epoch_ms,
             self.module_resolver.clone(),
+            self.profiling_collector.clone(),
             module,
             trace_id,
             hook,
@@ -1963,6 +1967,7 @@ pub struct V8Lane {
     entry_flow_label_ceiling: Option<Label>,
     clock_epoch_ms: Option<i64>,
     module_resolver: Option<InstalledModuleResolver>,
+    profiling_collector: Option<crate::profiling::ProfileCollector>,
 }
 
 impl Default for V8Lane {
@@ -1979,6 +1984,7 @@ impl Default for V8Lane {
             entry_flow_label_ceiling: None,
             clock_epoch_ms: None,
             module_resolver: None,
+            profiling_collector: None,
         }
     }
 }
@@ -2085,6 +2091,7 @@ pub(super) fn execute_lane_with_provisioned_stack(
     entry_flow_label_ceiling: Option<Label>,
     clock_epoch_ms: Option<i64>,
     module_resolver: Option<InstalledModuleResolver>,
+    profiling_collector: Option<crate::profiling::ProfileCollector>,
     module: &Ir3Module,
     trace_id: &str,
     hook: Option<Arc<dyn InterpreterHook>>,
@@ -2118,10 +2125,20 @@ pub(super) fn execute_lane_with_provisioned_stack(
         if let Some(epoch_ms) = clock_epoch_ms {
             core.set_clock_epoch_ms(epoch_ms);
         }
+        if let Some(collector) = &profiling_collector {
+            core.profiling_data = Some(collector.start_execution());
+        }
         let execution = match compact_tier1.as_ref() {
             Some(program) => core.execute_ephemeral_with_compact_tier1(&module, program),
             None => core.execute_ephemeral(&module),
         };
+        // Publish before any success/error handoff drops this ephemeral core.
+        // Recording stays local during execution; only this merge takes a lock.
+        if let (Some(collector), Some(profiler)) =
+            (&profiling_collector, core.profiling_data.take())
+        {
+            collector.finish_execution(profiler);
+        }
         let outcome = match execution {
             Ok(result) => Ok(result),
             Err(InterpreterError::ContainmentActionRequested { action, reason }) => {
@@ -2206,6 +2223,7 @@ impl V8Lane {
             entry_flow_label_ceiling: None,
             clock_epoch_ms: None,
             module_resolver: None,
+            profiling_collector: None,
         }
     }
 
@@ -2292,6 +2310,7 @@ impl V8Lane {
             self.entry_flow_label_ceiling.clone(),
             self.clock_epoch_ms,
             self.module_resolver.clone(),
+            self.profiling_collector.clone(),
             module,
             trace_id,
             hook,
@@ -2730,6 +2749,7 @@ pub struct RoutedResult {
 pub struct LaneRouter {
     quickjs: QuickJsLane,
     v8: V8Lane,
+    profiling_data: Option<crate::profiling::Profiler>,
 }
 
 impl Default for LaneRouter {
@@ -2737,6 +2757,7 @@ impl Default for LaneRouter {
         Self {
             quickjs: QuickJsLane::new(),
             v8: V8Lane::new(),
+            profiling_data: None,
         }
     }
 }
@@ -2750,6 +2771,7 @@ impl LaneRouter {
         Self {
             quickjs: QuickJsLane::with_config(quickjs_config),
             v8: V8Lane::with_config(v8_config),
+            profiling_data: None,
         }
     }
 
@@ -2915,20 +2937,31 @@ impl LaneRouter {
         (LaneChoice::QuickJs, LaneReason::DefaultFallback)
     }
 
-    /// Enable profiling with the specified configuration.
-    pub fn enable_profiling(&mut self, _config: crate::profiling::ProfilingConfig) {
-        // Lane routing creates a fresh interpreter core per execution; profiling
-        // is owned by the core rather than persisted on the router.
+    /// Start a fresh profiling session across both execution lanes. Each run
+    /// still creates an isolated core; completed runs merge their real opcode,
+    /// allocation and sampling observations into bounded session storage.
+    /// Profiling selects the canonical Tier-R dispatch so compact runs cannot
+    /// bypass the opcode recorder. Enabling again discards the previous session.
+    pub fn enable_profiling(&mut self, config: crate::profiling::ProfilingConfig) {
+        let (profiler, collector) = crate::profiling::Profiler::router_session(config);
+        self.quickjs.profiling_collector = Some(collector.clone());
+        self.v8.profiling_collector = Some(collector);
+        self.profiling_data = Some(profiler);
     }
 
-    /// Disable profiling and return collected data.
+    /// Stop collecting and return the completed session. Later executions
+    /// cannot change this report, and a second disable returns `None`.
     pub fn disable_profiling(&mut self) -> Option<crate::profiling::Profiler> {
-        None
+        self.quickjs.profiling_collector = None;
+        self.v8.profiling_collector = None;
+        self.profiling_data.take()
     }
 
-    /// Get reference to current profiling data.
+    /// Read accumulated observations from completed executions, including the
+    /// dispatched prefix of failed runs. Report elapsed time sums the measured
+    /// executions rather than time the router spent idle between calls.
     pub fn profiling_data(&self) -> Option<&crate::profiling::Profiler> {
-        None
+        self.profiling_data.as_ref()
     }
 }
 

@@ -14385,6 +14385,7 @@ enum CompactTier1Opcode {
     Baseline,
     LoadInt,
     LoadFloat,
+    LoadStr,
     LoadBool,
     LoadNull,
     LoadUndefined,
@@ -14401,6 +14402,8 @@ enum CompactTier1Opcode {
     Dec,
     LogicalNot,
     BitNot,
+    TypeOf,
+    Void,
     Lt,
     Lte,
     Gt,
@@ -15199,6 +15202,9 @@ impl CompactTier1Program {
             Ir3Instruction::LoadFloat { dst, bits } => {
                 CompactTier1Instruction::with_dst(Op::LoadFloat, *dst, *bits)
             }
+            Ir3Instruction::LoadStr { dst, pool_index } => {
+                CompactTier1Instruction::with_dst(Op::LoadStr, *dst, u64::from(*pool_index))
+            }
             Ir3Instruction::LoadBool { dst, value } => {
                 CompactTier1Instruction::with_dst(Op::LoadBool, *dst, u64::from(*value))
             }
@@ -15246,6 +15252,12 @@ impl CompactTier1Program {
             }
             Ir3Instruction::BitNot { dst, src } => {
                 CompactTier1Instruction::with_unary(Op::BitNot, *dst, *src)
+            }
+            Ir3Instruction::TypeOf { dst, src } => {
+                CompactTier1Instruction::with_unary(Op::TypeOf, *dst, *src)
+            }
+            Ir3Instruction::Void { dst, src } => {
+                CompactTier1Instruction::with_unary(Op::Void, *dst, *src)
             }
             Ir3Instruction::Lt { dst, lhs, rhs } => {
                 CompactTier1Instruction::with_binary(Op::Lt, *dst, *lhs, *rhs)

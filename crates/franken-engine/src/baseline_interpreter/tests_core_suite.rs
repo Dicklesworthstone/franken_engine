@@ -4,6 +4,9 @@ use crate::ir_contract::{
 };
 use std::sync::{Arc, Mutex};
 
+#[path = "tests_core_suite/compact_constants.rs"]
+mod compact_constants;
+
 // -- helpers --------------------------------------------------------
 
 fn test_module(instructions: Vec<Ir3Instruction>) -> Ir3Module {
@@ -150,7 +153,7 @@ fn compact_tier1_scalar_loop_is_artifact_exact_bd_performance_bridge_5_2() {
 }
 
 #[test]
-fn compact_tier1_mixed_dispatch_preserves_unsupported_string_path_bd_performance_bridge_5_2() {
+fn compact_tier1_string_concatenation_preserves_accounted_path_bd_performance_bridge_5_2() {
     let module = test_module_with_pool(
         vec![
             Ir3Instruction::LoadStr {
@@ -170,7 +173,7 @@ fn compact_tier1_mixed_dispatch_preserves_unsupported_string_path_bd_performance
     let (compact, baseline) = execute_compact_and_baseline(&module, test_quickjs_config());
     assert_execution_semantics_equal(&compact, &baseline);
     assert_eq!(compact.value, Value::str("answer: 42"));
-    assert_eq!(compact.tier_i_instructions_executed, 3);
+    assert_eq!(compact.tier_i_instructions_executed, 4);
     assert_eq!(compact.tier_i_specialized_instructions_executed, 0);
     assert_eq!(baseline.tier_i_instructions_executed, 0);
 }
@@ -9893,6 +9896,191 @@ fn router_respects_forced_lane() {
         .expect("operation should succeed for valid inputs");
     assert_eq!(result.lane, LaneChoice::V8);
     assert_eq!(result.reason, LaneReason::PolicyDirective);
+}
+
+#[test]
+fn router_profiling_counts_real_loop_dispatch_across_both_lanes() {
+    let module = test_module(vec![
+        Ir3Instruction::LoadInt { dst: 0, value: 0 },
+        Ir3Instruction::LoadInt { dst: 1, value: 1 },
+        Ir3Instruction::LoadInt { dst: 2, value: 4 },
+        Ir3Instruction::Add {
+            dst: 0,
+            lhs: 0,
+            rhs: 1,
+        },
+        Ir3Instruction::Lt {
+            dst: 3,
+            lhs: 0,
+            rhs: 2,
+        },
+        Ir3Instruction::JumpIf { cond: 3, target: 3 },
+        Ir3Instruction::Halt,
+    ]);
+    let plan = CompactTier1Program::compile(&module).expect("real compact loop");
+    let config = test_quickjs_config();
+    let mut router = LaneRouter::with_configs(config.clone(), config);
+    assert!(router.profiling_data().is_none());
+    router.enable_profiling(crate::profiling::ProfilingConfig {
+        hotspot_sampling_interval: 4,
+        ..Default::default()
+    });
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let result = router
+            .execute_with_compact_tier1(&module, &plan, "profile-loop", Some(lane))
+            .expect("profiled loop executes");
+        assert_eq!(result.lane, lane);
+        assert_eq!(result.result.value, Value::Int(4));
+        assert_eq!(result.result.instructions_executed, 16);
+        assert_eq!(result.result.tier_i_instructions_executed, 0);
+    }
+    let profiler = router
+        .profiling_data()
+        .expect("session survives fresh cores");
+    let report = profiler.generate_report("both-lanes".to_string());
+    for (opcode, count) in [
+        ("LoadInt", 6),
+        ("Add", 8),
+        ("Lt", 8),
+        ("JumpIf", 8),
+        ("Halt", 2),
+    ] {
+        assert_eq!(report.instruction_stats[opcode].count, count, "{opcode}");
+    }
+    assert_eq!(report.instruction_stats.len(), 5);
+    assert_eq!(profiler.sample_count(), 8);
+    assert!(report.total_execution_time_ns > 0);
+}
+
+#[test]
+fn router_profiling_keeps_error_prefix_and_freezes_disabled_session() {
+    let mut router = LaneRouter::new();
+    router.enable_profiling(crate::profiling::ProfilingConfig::default());
+    let failing = test_module(vec![
+        Ir3Instruction::LoadInt { dst: 0, value: 9 },
+        Ir3Instruction::LoadStr {
+            dst: 1,
+            pool_index: 0,
+        },
+        Ir3Instruction::Halt,
+    ]);
+    assert!(matches!(
+        router.execute(&failing, "profile-failure", Some(LaneChoice::V8)),
+        Err(InterpreterError::StringPoolOutOfBounds {
+            index: 0,
+            pool_size: 0
+        })
+    ));
+    let report = router
+        .profiling_data()
+        .expect("failed execution retains its profile")
+        .generate_report("failed".to_string());
+    assert_eq!(report.instruction_stats["LoadInt"].count, 1);
+    assert_eq!(report.instruction_stats["LoadStr"].count, 1);
+    assert!(!report.instruction_stats.contains_key("Halt"));
+
+    let returning = test_module(vec![
+        Ir3Instruction::LoadInt { dst: 0, value: 7 },
+        Ir3Instruction::Return { value: 0 },
+    ]);
+    assert_eq!(
+        router
+            .execute(&returning, "profile-return", None)
+            .unwrap()
+            .result
+            .value,
+        Value::Int(7)
+    );
+    let finished = router.disable_profiling().expect("completed session");
+    assert!(router.profiling_data().is_none());
+    assert!(router.disable_profiling().is_none());
+    let before = finished.generate_report("finished".to_string());
+    assert_eq!(before.instruction_stats["LoadInt"].count, 2);
+    assert_eq!(before.instruction_stats["Return"].count, 1);
+    router
+        .execute(&returning, "unprofiled-return", None)
+        .unwrap();
+    let after = finished.generate_report("finished".to_string());
+    assert_eq!(after.instruction_stats["LoadInt"].count, 2);
+    assert_eq!(
+        after.total_execution_time_ns,
+        before.total_execution_time_ns
+    );
+
+    router.enable_profiling(crate::profiling::ProfilingConfig::default());
+    assert!(
+        router
+            .profiling_data()
+            .unwrap()
+            .generate_report("reset".to_string())
+            .instruction_stats
+            .is_empty()
+    );
+    router.execute(&returning, "new-profile", None).unwrap();
+    let reset = router
+        .profiling_data()
+        .unwrap()
+        .generate_report("reset".to_string());
+    assert_eq!(reset.instruction_stats["LoadInt"].count, 1);
+    assert_eq!(reset.instruction_stats["Return"].count, 1);
+    assert!(!reset.instruction_stats.contains_key("LoadStr"));
+}
+
+#[test]
+fn router_profiling_configuration_replaces_the_previous_session() {
+    let module = test_module(vec![
+        Ir3Instruction::NewObject { dst: 0 },
+        Ir3Instruction::Halt,
+    ]);
+    let mut router = LaneRouter::new();
+    router.enable_profiling(crate::profiling::ProfilingConfig::default());
+    router.execute(&module, "first-profile", None).unwrap();
+    assert!(
+        !router
+            .profiling_data()
+            .unwrap()
+            .generate_report("first".to_string())
+            .instruction_stats
+            .is_empty()
+    );
+    router.enable_profiling(crate::profiling::ProfilingConfig {
+        enable_instruction_profiling: false,
+        enable_hotspot_profiling: false,
+        enable_memory_profiling: true,
+        ..Default::default()
+    });
+    router
+        .execute(&module, "memory-profile", Some(LaneChoice::V8))
+        .unwrap();
+    let profile = router.profiling_data().unwrap();
+    let report = profile.generate_report("memory".to_string());
+    assert!(report.instruction_stats.is_empty());
+    assert!(report.hotspots.is_empty());
+    assert_eq!(profile.sample_count(), 0);
+    assert!(report.memory_stats.objects_allocated > 0);
+    assert!(report.memory_stats.total_bytes_allocated > 0);
+}
+
+#[test]
+fn router_profiling_records_source_calls_without_changing_execution_artifacts() {
+    let module = lower_symbol_source_bd_n8eta_4_2(
+        "const absolute = Math.abs; function magnitude(x) { return absolute(x); } console.log(magnitude(-7));",
+    );
+    let config = test_quickjs_config();
+    let mut router = LaneRouter::with_configs(config.clone(), config);
+    let unprofiled = router.execute(&module, "profile-source", None).unwrap();
+    router.enable_profiling(crate::profiling::ProfilingConfig::default());
+    let profiled = router.execute(&module, "profile-source", None).unwrap();
+    assert_eq!(profiled.result.console_output, vec!["7".to_string()]);
+    assert_execution_semantics_equal(&profiled.result, &unprofiled.result);
+    let report = router
+        .profiling_data()
+        .unwrap()
+        .generate_report("source".to_string());
+    assert!(report.instruction_stats["Call"].count >= 2);
+    assert!(report.instruction_stats["Return"].count >= 1);
+    assert!(report.instruction_stats["HostCall"].count >= 1);
+    assert_eq!(report.instruction_stats["Halt"].count, 1);
 }
 
 // -----------------------------------------------------------------------

@@ -37,6 +37,17 @@ impl InterpreterCore {
                 )?;
                 self.ip += 1;
             }
+            Op::LoadStr => {
+                let pool_index = instruction.payload as u32;
+                let value = module.constant_pool.get(pool_index as usize).ok_or(
+                    InterpreterError::StringPoolOutOfBounds {
+                        index: pool_index,
+                        pool_size: module.constant_pool.len() as u32,
+                    },
+                )?;
+                self.write_reg(dst, Value::Str(value.clone()))?;
+                self.ip += 1;
+            }
             Op::LoadBool => {
                 self.write_reg(dst, Value::Bool(instruction.payload != 0))?;
                 self.ip += 1;
@@ -170,6 +181,18 @@ impl InterpreterCore {
                 let result_label = self.unary_operation_label(lhs)?;
                 let result = self.eval_bit_not(lhs)?;
                 self.write_reg_with_label(dst, result, result_label)?;
+                self.ip += 1;
+            }
+            Op::TypeOf => {
+                let result_label = self.unary_operation_label(lhs)?;
+                let value = self.read_reg(lhs)?;
+                self.write_reg_with_label(dst, Value::str(value.typeof_name()), result_label)?;
+                self.ip += 1;
+            }
+            Op::Void => {
+                let result_label = self.unary_operation_label(lhs)?;
+                let _ = self.read_reg(lhs)?;
+                self.write_reg_with_label(dst, Value::Undefined, result_label)?;
                 self.ip += 1;
             }
             Op::Lt => {

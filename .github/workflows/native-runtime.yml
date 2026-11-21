@@ -717,6 +717,16 @@ jobs:
         run: |
           cargo test --locked -j1 -p frankenengine-engine --no-default-features --lib \
             react_compilation_pipeline -- --nocapture --test-threads=1
+      - name: Execute compact runtime and profiling regressions
+        if: always()
+        run: |
+          set -euo pipefail
+          for test_filter in compact_ router_profiling_ profiling::; do
+            cargo test --locked -j1 -p frankenengine-engine --no-default-features --lib \
+              "$test_filter" -- --nocapture --test-threads=1
+          done
+          cargo test --locked -j1 -p frankenengine-engine --no-default-features \
+            --test baseline_interpreter_refactor_coverage -- --nocapture --test-threads=1
       - name: Execute JSX and TSX parser tests
         if: always()
         run: |

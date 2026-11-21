@@ -568,7 +568,7 @@ fn console_output_captured_instead_of_printed() {
 #[test]
 fn instruction_profiling_records_instructions_when_enabled() {
     let source = baseline_interpreter_source();
-    assert!(source.contains("profiler.record_instruction(instruction);"));
+    assert!(source.contains("profiler.record_instruction(instr_ref);"));
     assert!(source.contains("profiler.record_instruction_time("));
     assert!(source.contains("profile_start.elapsed()"));
 }
@@ -576,7 +576,9 @@ fn instruction_profiling_records_instructions_when_enabled() {
 #[test]
 fn instruction_profiling_records_timing_data() {
     let source = baseline_interpreter_source();
-    assert!(source.contains("let profile_start = if self.profiling_data.is_some()"));
+    assert!(
+        source.contains("let profile_start = if let Some(profiler) = &mut self.profiling_data")
+    );
     assert!(
         source.contains("profiler.record_instruction_time(instr_ref, profile_start.elapsed())")
     );

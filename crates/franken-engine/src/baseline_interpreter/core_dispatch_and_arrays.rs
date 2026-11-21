@@ -11988,7 +11988,6 @@ impl InterpreterCore {
             _ => unreachable!("non-reentrant opcode crossed the iterator/hostcall boundary"),
         }
         if let (Some(profiler), Some(profile_start)) = (&mut self.profiling_data, profile_start) {
-            profiler.record_instruction(instruction);
             profiler.record_instruction_time(instruction, profile_start.elapsed());
         }
         Ok(())
@@ -12324,16 +12323,13 @@ impl InterpreterCore {
             }
 
             let instr_ref = Self::instruction_with_trampoline(module, trampoline, self.ip)?;
-            // Profiling retains the canonical Tier-R handler so its existing
-            // per-opcode recorder observes the original IR3 instruction. The
-            // production lanes do not install this profiler today.
+            // Profiling retains the canonical Tier-R handler so its recorder
+            // observes the original IR3 instruction on either execution lane.
             let compact_instruction = if self.profiling_data.is_none() {
                 compact_tier1
                     .and_then(|program| program.instruction_at(self.ip))
-                    // bd-9vouw.37: an object operand of `+` needs the
-                    // observable ToPrimitive, which only the Tier-R handler
-                    // (reentrant path) performs.
-                    // bd-9vouw.37: likewise every numeric operator.
+                    // Observable coercions retain the canonical,
+                    // reentrant Tier-R handler.
                     .filter(|compact| !self.compact_operator_needs_to_primitive(compact))
             } else {
                 None
@@ -12378,8 +12374,11 @@ impl InterpreterCore {
                 }
             }
 
-            // Start profiling timing for this instruction
-            let profile_start = if self.profiling_data.is_some() {
+            // Count dispatch once, before any terminal, throwing or reentrant
+            // handoff. Tail-only recording missed Halt, terminal Return and
+            // builtin calls, and erased the faulting opcode on failed runs.
+            let profile_start = if let Some(profiler) = &mut self.profiling_data {
+                profiler.record_instruction(instr_ref);
                 Some(std::time::Instant::now())
             } else {
                 None
@@ -18043,7 +18042,6 @@ impl InterpreterCore {
             // Record profiling data for this instruction
             if let (Some(profiler), Some(profile_start)) = (&mut self.profiling_data, profile_start)
             {
-                profiler.record_instruction(instr_ref);
                 profiler.record_instruction_time(instr_ref, profile_start.elapsed());
             }
         }

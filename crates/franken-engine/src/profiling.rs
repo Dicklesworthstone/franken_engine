@@ -4,6 +4,7 @@
 //! memory allocation profiling to inform optimization targeting.
 
 use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -42,11 +43,14 @@ impl Default for ProfilingConfig {
 /// Statistics for a single instruction type.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstructionStats {
-    /// Number of times this instruction was executed.
+    /// Number of times this instruction was dispatched, including attempts
+    /// that threw or ended execution.
     pub count: u64,
-    /// Total time spent executing this instruction (in nanoseconds).
+    /// Sum of recorded handler timing samples, in nanoseconds. Terminal or
+    /// faulting dispatches without a handler-end sample still contribute to
+    /// `count`, but not to this timing total.
     pub total_time_ns: u64,
-    /// Average time per execution (in nanoseconds).
+    /// Recorded timing total divided by the dispatched instruction count.
     pub average_time_ns: u64,
 }
 
@@ -123,6 +127,39 @@ pub struct Profiler {
     sample_count: u64,
     /// Zero disables sampling; otherwise count down to the next sample.
     instructions_until_sample: u64,
+    /// Router reports retain a stable public handle while fresh interpreter
+    /// cores collect locally. No shared lock is taken on the opcode hot path.
+    completed_profiles: Option<Arc<Mutex<CompletedProfiles>>>,
+}
+
+#[derive(Debug)]
+struct CompletedProfiles {
+    profiler: Profiler,
+    execution_time: Duration,
+}
+
+/// A router session's completion sink. Each core owns an ordinary dense
+/// profiler and publishes it exactly once, including on a typed failure.
+#[derive(Debug, Clone)]
+pub(crate) struct ProfileCollector {
+    config: ProfilingConfig,
+    completed: Arc<Mutex<CompletedProfiles>>,
+}
+
+impl ProfileCollector {
+    pub(crate) fn start_execution(&self) -> Profiler {
+        Profiler::new(self.config.clone())
+    }
+
+    pub(crate) fn finish_execution(&self, profiler: Profiler) {
+        let execution_time = profiler.start_time.elapsed();
+        let mut completed = self
+            .completed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        completed.execution_time = completed.execution_time.saturating_add(execution_time);
+        completed.profiler.merge_execution(&profiler);
+    }
 }
 
 impl Profiler {
@@ -151,13 +188,66 @@ impl Profiler {
             last_sample_time: now,
             sample_count: 0,
             instructions_until_sample,
+            completed_profiles: None,
         }
     }
 
-    /// Record execution of an instruction.
+    /// Keep the public borrowed-report API without sharing mutable opcode
+    /// counters with worker threads. The collector's storage is bounded by
+    /// the opcode set, regardless of the number of completed executions.
+    pub(crate) fn router_session(config: ProfilingConfig) -> (Self, ProfileCollector) {
+        let completed = Arc::new(Mutex::new(CompletedProfiles {
+            profiler: Self::new(config.clone()),
+            execution_time: Duration::ZERO,
+        }));
+        let collector = ProfileCollector {
+            config: config.clone(),
+            completed: Arc::clone(&completed),
+        };
+        let mut handle = Self::new(config);
+        handle.completed_profiles = Some(completed);
+        (handle, collector)
+    }
+
+    fn merge_execution(&mut self, execution: &Self) {
+        for (total, count) in self.opcodes.counts.iter_mut().zip(execution.opcodes.counts) {
+            *total = total.saturating_add(count);
+        }
+        for (total, time) in self.opcodes.times.iter_mut().zip(execution.opcodes.times) {
+            if let Some(time) = time {
+                let total = total.get_or_insert(Duration::ZERO);
+                *total = total.saturating_add(time);
+            }
+        }
+        let total = &mut self.memory_stats;
+        let run = &execution.memory_stats;
+        total.objects_allocated = total
+            .objects_allocated
+            .saturating_add(run.objects_allocated);
+        total.arrays_allocated = total.arrays_allocated.saturating_add(run.arrays_allocated);
+        total.total_bytes_allocated = total
+            .total_bytes_allocated
+            .saturating_add(run.total_bytes_allocated);
+        total.gc_cycles = total.gc_cycles.saturating_add(run.gc_cycles);
+        total.gc_time_ns = total.gc_time_ns.saturating_add(run.gc_time_ns);
+        self.sample_count = self.sample_count.saturating_add(execution.sample_count);
+        if execution.sample_count != 0 {
+            self.last_sample_time = self.last_sample_time.max(execution.last_sample_time);
+        }
+    }
+
+    /// Record one instruction dispatch, even if it later throws or terminates.
     #[inline]
     pub fn record_instruction(&mut self, instruction: &Ir3Instruction) {
         if !self.config.enable_instruction_profiling {
+            return;
+        }
+        if let Some(completed) = &self.completed_profiles {
+            completed
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .profiler
+                .record_instruction(instruction);
             return;
         }
 
@@ -179,6 +269,13 @@ impl Profiler {
     /// Wall-clock instant of the most recent hotspot sample tick. Returns the
     /// profiler's start time when no sample has been taken yet.
     pub fn last_sample_time(&self) -> Instant {
+        if let Some(completed) = &self.completed_profiles {
+            return completed
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .profiler
+                .last_sample_time;
+        }
         self.last_sample_time
     }
 
@@ -186,17 +283,32 @@ impl Profiler {
     /// hotspot profiling is disabled, the configured interval is zero, or
     /// fewer than `hotspot_sampling_interval` instructions have been recorded.
     pub fn sample_count(&self) -> u64 {
+        if let Some(completed) = &self.completed_profiles {
+            return completed
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .profiler
+                .sample_count;
+        }
         self.sample_count
     }
 
     /// Elapsed wall-clock duration since the most recent hotspot sample tick.
     pub fn time_since_last_sample(&self) -> Duration {
-        self.last_sample_time.elapsed()
+        self.last_sample_time().elapsed()
     }
 
     /// Record timing for an instruction execution.
     pub fn record_instruction_time(&mut self, instruction: &Ir3Instruction, duration: Duration) {
         if !self.config.enable_hotspot_profiling {
+            return;
+        }
+        if let Some(completed) = &self.completed_profiles {
+            completed
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .profiler
+                .record_instruction_time(instruction, duration);
             return;
         }
 
@@ -206,6 +318,14 @@ impl Profiler {
     /// Record object allocation.
     pub fn record_object_allocation(&mut self, size_bytes: u64) {
         if !self.config.enable_memory_profiling {
+            return;
+        }
+        if let Some(completed) = &self.completed_profiles {
+            completed
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .profiler
+                .record_object_allocation(size_bytes);
             return;
         }
 
@@ -218,6 +338,14 @@ impl Profiler {
         if !self.config.enable_memory_profiling {
             return;
         }
+        if let Some(completed) = &self.completed_profiles {
+            completed
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .profiler
+                .record_array_allocation(size_bytes);
+            return;
+        }
 
         self.memory_stats.arrays_allocated += 1;
         self.memory_stats.total_bytes_allocated += size_bytes;
@@ -228,6 +356,14 @@ impl Profiler {
         if !self.config.enable_memory_profiling {
             return;
         }
+        if let Some(completed) = &self.completed_profiles {
+            completed
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .profiler
+                .record_gc_cycle(duration);
+            return;
+        }
 
         self.memory_stats.gc_cycles += 1;
         self.memory_stats.gc_time_ns += duration.as_nanos() as u64;
@@ -235,7 +371,22 @@ impl Profiler {
 
     /// Generate a profiling report.
     pub fn generate_report(&self, benchmark_name: String) -> ProfilingReport {
-        let total_execution_time = self.start_time.elapsed();
+        if let Some(completed) = &self.completed_profiles {
+            let completed = completed
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            return completed
+                .profiler
+                .report_with_elapsed(benchmark_name, completed.execution_time);
+        }
+        self.report_with_elapsed(benchmark_name, self.start_time.elapsed())
+    }
+
+    fn report_with_elapsed(
+        &self,
+        benchmark_name: String,
+        total_execution_time: Duration,
+    ) -> ProfilingReport {
         let total_execution_time_ns = total_execution_time.as_nanos() as u64;
 
         // Allocate names and ordered maps only at the reporting boundary.
@@ -472,6 +623,107 @@ mod tests {
             after > before,
             "last_sample_time must advance when a sample is taken"
         );
+    }
+
+    #[test]
+    fn router_session_publishes_completed_runs_and_preserves_zero_timing() {
+        let (session, collector) = Profiler::router_session(ProfilingConfig {
+            hotspot_sampling_interval: 2,
+            ..Default::default()
+        });
+        let operation = Ir3Instruction::LoadInt { dst: 0, value: 3 };
+        let mut first = collector.start_execution();
+        first.record_instruction(&operation);
+        first.record_instruction_time(&operation, Duration::ZERO);
+        first.record_object_allocation(17);
+        assert!(
+            session
+                .generate_report("running".into())
+                .instruction_stats
+                .is_empty()
+        );
+        collector.finish_execution(first);
+        let first_report = session.generate_report("first".into());
+        assert_eq!(first_report.instruction_stats["LoadInt"].count, 1);
+        assert_eq!(first_report.hotspots.len(), 1);
+        assert_eq!(first_report.hotspots[0].name, "LoadInt");
+        assert_eq!(session.sample_count(), 0);
+
+        let mut second = collector.start_execution();
+        second.record_instruction(&operation);
+        second.record_instruction(&operation);
+        second.record_instruction_time(&operation, Duration::from_nanos(10));
+        second.record_array_allocation(23);
+        second.record_gc_cycle(Duration::from_nanos(7));
+        let last_sample = second.last_sample_time();
+        collector.finish_execution(second);
+        let report = session.generate_report("completed".into());
+        assert_eq!(report.instruction_stats["LoadInt"].count, 3);
+        assert_eq!(report.instruction_stats["LoadInt"].total_time_ns, 10);
+        assert_eq!(report.memory_stats.objects_allocated, 1);
+        assert_eq!(report.memory_stats.arrays_allocated, 1);
+        assert_eq!(report.memory_stats.total_bytes_allocated, 40);
+        assert_eq!(report.memory_stats.gc_cycles, 1);
+        assert_eq!(report.memory_stats.gc_time_ns, 7);
+        assert_eq!(session.sample_count(), 1);
+        assert_eq!(session.last_sample_time(), last_sample);
+        assert_eq!(
+            session
+                .generate_report("idle".into())
+                .total_execution_time_ns,
+            report.total_execution_time_ns,
+            "time between executions is not runtime cost"
+        );
+    }
+
+    #[test]
+    fn router_session_merges_parallel_workers_without_losing_counts() {
+        let (session, collector) = Profiler::router_session(ProfilingConfig {
+            hotspot_sampling_interval: 4,
+            ..Default::default()
+        });
+        let workers: Vec<_> = (0..8)
+            .map(|value| {
+                let collector = collector.clone();
+                std::thread::spawn(move || {
+                    let mut profiler = collector.start_execution();
+                    for _ in 0..10 {
+                        profiler.record_instruction(&Ir3Instruction::LoadInt { dst: 0, value });
+                    }
+                    collector.finish_execution(profiler);
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().expect("profiling worker finishes");
+        }
+        let report = session.generate_report("parallel".into());
+        assert_eq!(report.instruction_stats["LoadInt"].count, 80);
+        assert_eq!(session.sample_count(), 16);
+    }
+
+    #[test]
+    fn returned_session_profiler_accepts_explicit_recording() {
+        let (mut session, collector) = Profiler::router_session(ProfilingConfig::default());
+        let operation = Ir3Instruction::LoadInt { dst: 0, value: 1 };
+        let mut execution = collector.start_execution();
+        execution.record_instruction(&operation);
+        collector.finish_execution(execution);
+        drop(collector);
+
+        session.record_instruction(&operation);
+        session.record_instruction_time(&operation, Duration::from_nanos(6));
+        session.record_object_allocation(10);
+        session.record_array_allocation(20);
+        session.record_gc_cycle(Duration::from_nanos(4));
+        let report = session.generate_report("continued-recording".into());
+        assert_eq!(report.instruction_stats["LoadInt"].count, 2);
+        assert_eq!(report.instruction_stats["LoadInt"].total_time_ns, 6);
+        assert_eq!(report.memory_stats.objects_allocated, 1);
+        assert_eq!(report.memory_stats.arrays_allocated, 1);
+        assert_eq!(report.memory_stats.total_bytes_allocated, 30);
+        assert_eq!(report.memory_stats.gc_cycles, 1);
+        assert_eq!(report.memory_stats.gc_time_ns, 4);
     }
 }
 

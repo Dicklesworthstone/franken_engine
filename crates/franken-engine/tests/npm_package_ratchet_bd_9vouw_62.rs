@@ -142,33 +142,68 @@ fn parse_error_positions_point_at_offending_token_inside_multiline_wrappers() {
     use frankenengine_engine::ast::ParseGoal;
     use frankenengine_engine::parser::{CanonicalEs2020Parser, Es2020Parser};
 
-    // Reproduce the exact bd-9vouw.62 multi-line CommonJS function + nested
-    // conditional shape where an invalid assignment target on line 148
-    // previously reported the enclosing function/if start line (line 1 or 23).
-    let mut lines = Vec::with_capacity(152);
-    lines.push("module.exports = function (args) {".to_string()); // line 1
+    // Reproduce the exact bd-9vouw.62 minimist-1.2.8 layout:
+    // line 23 opens `module.exports = function (args) {`, line 143 opens a
+    // `for` loop, and line 148 contains an invalid assignment target inside an
+    // `if (...)` condition (`if (1 + 2 = 3)`). Previously this reported the
+    // enclosing function start (line 23 col 1); Node v22 reports line 148 col 9.
+    let mut minimist_lines = Vec::with_capacity(152);
+    for n in 1..23 {
+        minimist_lines.push(format!("// prelude line {n}"));
+    }
+    minimist_lines.push("module.exports = function (args) {".to_string()); // line 23
+    for n in 24..143 {
+        minimist_lines.push(format!("  var v{n} = {n};"));
+    }
+    minimist_lines.push("  for (var i = 0; i < args.length; i++) {".to_string()); // line 143
+    for n in 144..148 {
+        minimist_lines.push(format!("    var k{n} = args[{n}];"));
+    }
+    minimist_lines.push("    if (1 + 2 = 3) { return args; }".to_string()); // line 148, col 9 (`1 + 2`)
+    minimist_lines.push("  }".to_string()); // line 149
+    minimist_lines.push("};".to_string()); // line 150
+    let minimist_source = minimist_lines.join("\n");
+
+    let minimist_err = CanonicalEs2020Parser
+        .parse(minimist_source.as_str(), ParseGoal::Script)
+        .expect_err("`if (1 + 2 = 3)` on line 148 must fail to parse");
+    let minimist_span = minimist_err
+        .span
+        .expect("parse error must carry a SourceSpan");
+    assert_eq!(
+        (minimist_span.start_line, minimist_span.start_column),
+        (148, 9),
+        "expected offending target span at line 148 col 9, got {minimist_err}"
+    );
+
+    // Also check a multi-line `&&` LHS inside an `if (...)` condition starting
+    // on line 24 (`args.length !== 24 && ... && 1 + 2 = 3`): per ECMAScript
+    // precedence the invalid LHS starts on line 24 col 5 (matching Node v22),
+    // NOT the enclosing function (line 1) or `if` header (line 23).
+    let mut chain_lines = Vec::with_capacity(152);
+    chain_lines.push("module.exports = function (args) {".to_string()); // line 1
     for n in 2..23 {
-        lines.push(format!("  var v{n} = {n};"));
+        chain_lines.push(format!("  var v{n} = {n};"));
     }
-    lines.push("  if (".to_string()); // line 23
+    chain_lines.push("  if (".to_string()); // line 23
     for n in 24..148 {
-        lines.push(format!("    args.length !== {n} &&"));
+        chain_lines.push(format!("    args.length !== {n} &&"));
     }
-    lines.push("    1 + 2 = 3".to_string()); // line 148, col 5 (`1 + 2`)
-    lines.push("  ) {".to_string()); // line 149
-    lines.push("    return args;".to_string()); // line 150
-    lines.push("  }".to_string()); // line 151
-    lines.push("};".to_string()); // line 152
-    let source = lines.join("\n");
+    chain_lines.push("    1 + 2 = 3".to_string()); // line 148
+    chain_lines.push("  ) {".to_string()); // line 149
+    chain_lines.push("    return args;".to_string()); // line 150
+    chain_lines.push("  }".to_string()); // line 151
+    chain_lines.push("};".to_string()); // line 152
+    let chain_source = chain_lines.join("\n");
 
     let err = CanonicalEs2020Parser
-        .parse(source.as_str(), ParseGoal::Script)
-        .expect_err("`1 + 2 = 3` on line 148 must fail to parse");
+        .parse(chain_source.as_str(), ParseGoal::Script)
+        .expect_err("`args.length !== 24 && ... && 1 + 2 = 3` must fail to parse");
     let span = err.span.expect("parse error must carry a SourceSpan");
     assert_eq!(
         (span.start_line, span.start_column),
-        (148, 5),
-        "expected offending target span at line 148 col 5, got {err}"
+        (24, 5),
+        "expected offending LHS span at line 24 col 5 (matching Node v22), got {err}"
     );
 
     // Also verify statement-level errors inside multi-line function bodies

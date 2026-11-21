@@ -9495,6 +9495,123 @@ pub struct HeapObject {
     /// operations. The deterministic collector retains the target while
     /// the WeakRef is reachable, as it did before the slot became private.
     weak_ref_target: Option<Box<WeakRefTarget>>,
+    /// Engine-private state of built-in and host objects whose internal slots
+    /// are inaccessible to guest property operations, reflection, and
+    /// integrity levels (bd-9vouw.150): legacy `ClientRequest`, `TextDecoder`,
+    /// `Intl.*` resolved options, `FsStats`/`FsDirent` predicates, timer
+    /// handles, and `timers/promises` interval iterators.
+    host_slots: Option<Box<HostObjectSlots>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) enum HostObjectSlots {
+    LegacyClientRequest(LegacyClientRequestSlots),
+    TextDecoder(TextDecoderSlots),
+    IntlResolved(ObjectId),
+    FsEntryKind(FsEntryKindSlots),
+    TimerHandle(u32),
+    TimersPromisesInterval(TimersPromisesIntervalSlots),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct LegacyClientRequestSlots {
+    pub(super) url: JsString,
+    pub(super) method: JsString,
+    pub(super) headers: ObjectId,
+    pub(super) body: JsString,
+    pub(super) ended: bool,
+    pub(super) response_cb: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct TextDecoderSlots {
+    pub(super) encoding: JsString,
+    pub(super) fatal: bool,
+    pub(super) ignore_bom: bool,
+    pub(super) state: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct FsEntryKindSlots {
+    pub(super) is_file: bool,
+    pub(super) is_directory: bool,
+    pub(super) is_symbolic_link: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct TimersPromisesIntervalSlots {
+    pub(super) delay_ms: u64,
+    pub(super) value: Value,
+    pub(super) done: bool,
+}
+
+impl HeapObject {
+    pub(super) fn legacy_client_request_slots(&self) -> Option<&LegacyClientRequestSlots> {
+        match self.host_slots.as_deref() {
+            Some(HostObjectSlots::LegacyClientRequest(slots)) => Some(slots),
+            _ => None,
+        }
+    }
+
+    pub(super) fn legacy_client_request_slots_mut(
+        &mut self,
+    ) -> Option<&mut LegacyClientRequestSlots> {
+        match self.host_slots.as_deref_mut() {
+            Some(HostObjectSlots::LegacyClientRequest(slots)) => Some(slots),
+            _ => None,
+        }
+    }
+
+    pub(super) fn text_decoder_slots(&self) -> Option<&TextDecoderSlots> {
+        match self.host_slots.as_deref() {
+            Some(HostObjectSlots::TextDecoder(slots)) => Some(slots),
+            _ => None,
+        }
+    }
+
+    pub(super) fn text_decoder_slots_mut(&mut self) -> Option<&mut TextDecoderSlots> {
+        match self.host_slots.as_deref_mut() {
+            Some(HostObjectSlots::TextDecoder(slots)) => Some(slots),
+            _ => None,
+        }
+    }
+
+    pub(super) fn intl_resolved_id(&self) -> Option<ObjectId> {
+        match self.host_slots.as_deref() {
+            Some(HostObjectSlots::IntlResolved(resolved_id)) => Some(*resolved_id),
+            _ => None,
+        }
+    }
+
+    pub(super) fn fs_entry_kind_slots(&self) -> Option<FsEntryKindSlots> {
+        match self.host_slots.as_deref() {
+            Some(HostObjectSlots::FsEntryKind(slots)) => Some(*slots),
+            _ => None,
+        }
+    }
+
+    pub(super) fn timer_handle_id(&self) -> Option<u32> {
+        match self.host_slots.as_deref() {
+            Some(HostObjectSlots::TimerHandle(timer_id)) => Some(*timer_id),
+            _ => None,
+        }
+    }
+
+    pub(super) fn timers_promises_interval_slots(&self) -> Option<&TimersPromisesIntervalSlots> {
+        match self.host_slots.as_deref() {
+            Some(HostObjectSlots::TimersPromisesInterval(slots)) => Some(slots),
+            _ => None,
+        }
+    }
+
+    pub(super) fn timers_promises_interval_slots_mut(
+        &mut self,
+    ) -> Option<&mut TimersPromisesIntervalSlots> {
+        match self.host_slots.as_deref_mut() {
+            Some(HostObjectSlots::TimersPromisesInterval(slots)) => Some(slots),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -9773,6 +9890,7 @@ impl Serialize for HeapObject {
                 + usize::from(self.date_value.is_some())
                 + usize::from(self.collection_storage.is_some())
                 + usize::from(self.weak_ref_target.is_some())
+                + usize::from(self.host_slots.is_some())
                 + if has_constructor_metadata { 4 } else { 0 },
         )?;
         object.serialize_field("properties", &self.properties)?;
@@ -9829,6 +9947,9 @@ impl Serialize for HeapObject {
         }
         if let Some(target) = &self.weak_ref_target {
             object.serialize_field("weak_ref_target", target)?;
+        }
+        if let Some(host_slots) = &self.host_slots {
+            object.serialize_field("host_slots", host_slots)?;
         }
         if !self.private_elements.is_empty() {
             let elements = self
@@ -9943,6 +10064,8 @@ impl<'de> Deserialize<'de> for HeapObject {
             collection_storage: Option<Box<ObjectId>>,
             #[serde(default)]
             weak_ref_target: Option<Box<WeakRefTarget>>,
+            #[serde(default)]
+            host_slots: Option<Box<HostObjectSlots>>,
         }
 
         #[derive(Deserialize)]
@@ -10068,6 +10191,7 @@ impl<'de> Deserialize<'de> for HeapObject {
             date_value: wire.date_value,
             collection_storage: wire.collection_storage,
             weak_ref_target: wire.weak_ref_target,
+            host_slots: wire.host_slots,
         };
         for record in wire.symbol_properties {
             let symbol = SymbolId(record.symbol_id);
@@ -10231,6 +10355,20 @@ fn validate_heap_symbol_references(
     }
     if let Some(target) = &object.weak_ref_target {
         validate_symbol_value(state, &target.value)?;
+    }
+    if let Some(slots) = object.host_slots.as_deref() {
+        match slots {
+            HostObjectSlots::LegacyClientRequest(req) => {
+                validate_symbol_value(state, &req.response_cb)?;
+            }
+            HostObjectSlots::TimersPromisesInterval(interval) => {
+                validate_symbol_value(state, &interval.value)?;
+            }
+            HostObjectSlots::TextDecoder(_)
+            | HostObjectSlots::IntlResolved(_)
+            | HostObjectSlots::FsEntryKind(_)
+            | HostObjectSlots::TimerHandle(_) => {}
+        }
     }
     for value in object.properties.all_data_values() {
         validate_symbol_value(state, value)?;
@@ -17251,6 +17389,10 @@ pub struct InterpreterCore {
     event_promise_waiters:
         BTreeMap<ObjectId, BTreeMap<RuntimePropertyKey, Vec<EventPromiseWaiterRecord>>>,
     next_event_promise_waiter_id: u64,
+    /// Per-emitter `maxListeners` overrides stored privately outside guest
+    /// properties (bd-9vouw.150). Absent entries default to 10; weak table
+    /// entries are swept when their owner object is reclaimed.
+    event_max_listeners: BTreeMap<ObjectId, Value>,
     /// Authenticated child-process facades whose native lifecycle has settled
     /// under provider limits. Pending facades move here on their deterministic
     /// I/O `Wait` turn; listener registration then exposes only engine-owned

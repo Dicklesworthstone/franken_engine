@@ -19,7 +19,7 @@ use super::*;
 /// are real own properties of the prototype, installed when it is created.
 /// The [`SPECIES_GETTER_KEY`] rows are the constructors' own
 /// `get [Symbol.species]` (bd-9vouw.278), installed on the constructor.
-pub(super) const PROTOTYPE_GETTERS: [(&str, &str, &str); 55] = [
+pub(super) const PROTOTYPE_GETTERS: [(&str, &str, &str); 59] = [
     // Annex B.2.2.1 (bd-9vouw.284): the one accessor here with a setter
     // ([`InterpreterCore::prototype_accessor_setter`]). Ordinary `o.__proto__`
     // reads and writes keep their direct path while they reach it.
@@ -80,6 +80,11 @@ pub(super) const PROTOTYPE_GETTERS: [(&str, &str, &str); 55] = [
     // WHATWG File API (bd-9vouw.226).
     ("Blob", "size", "get size"),
     ("Blob", "type", "get type"),
+    // WHATWG Encoding (bd-3l74k, bd-9vouw.150).
+    ("TextEncoder", "encoding", "get encoding"),
+    ("TextDecoder", "encoding", "get encoding"),
+    ("TextDecoder", "fatal", "get fatal"),
+    ("TextDecoder", "ignoreBOM", "get ignoreBOM"),
     // `get [Symbol.species]() { return this }` (ES2020 22.1.2.5, 22.2.2.4,
     // 23.1.2.2, 23.2.2.2, 24.1.3.3, 24.2.3.2, 25.6.4.6, 21.2.4.2), owned by
     // the constructor, not its prototype. The concrete typed array
@@ -205,7 +210,10 @@ impl InterpreterCore {
         let descriptor = self.alloc_object_with_properties(&[
             ("get", getter),
             ("set", setter),
-            ("enumerable", Value::Bool(false)),
+            (
+                "enumerable",
+                Value::Bool(matches!(owner, "TextEncoder" | "TextDecoder")),
+            ),
             ("configurable", Value::Bool(true)),
         ])?;
         Ok(Some(Value::Object(descriptor)))
@@ -357,6 +365,22 @@ impl InterpreterCore {
         {
             return Ok(value);
         }
+        if owner == "TextEncoder" && key == "encoding" {
+            return Ok(Value::str("utf-8"));
+        }
+        if owner == "TextDecoder" {
+            let slots = self
+                .heap
+                .get(id.0 as usize)
+                .and_then(HeapObject::text_decoder_slots)
+                .ok_or_else(incompatible)?;
+            return Ok(match key {
+                "encoding" => Value::Str(slots.encoding.clone()),
+                "fatal" => Value::Bool(slots.fatal),
+                "ignoreBOM" => Value::Bool(slots.ignore_bom),
+                _ => return Err(incompatible()),
+            });
+        }
         // ES2024 25.1.6.2-4, 25.2.5.2-5 (bd-9vouw.256). A detached buffer's
         // byteLength slot reads 0, which maxByteLength then answers too.
         if matches!(owner, "ArrayBuffer" | "SharedArrayBuffer") {
@@ -471,6 +495,11 @@ impl InterpreterCore {
                 self.has_event_family_brand(id, owner)
             }
             "Blob" => object.blob.is_some(),
+            "TextEncoder" => object.brand() == Some(text_codec::TEXT_ENCODER_TYPE),
+            "TextDecoder" => {
+                object.brand() == Some(text_codec::TEXT_DECODER_TYPE)
+                    && object.text_decoder_slots().is_some()
+            }
             _ => false,
         }
     }

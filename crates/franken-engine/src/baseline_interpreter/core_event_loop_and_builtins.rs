@@ -2242,9 +2242,7 @@ impl InterpreterCore {
             );
         let mut object = HeapObject::new();
         object.brand = Some(Box::new(JsString::from(marker)));
-        object
-            .properties
-            .insert("__timerId".to_string(), Value::Int(timer_id as i64));
+        object.host_slots = Some(Box::new(HostObjectSlots::TimerHandle(timer_id)));
         for (name, kind) in [
             ("hasRef", BuiltinFunctionKind::TimerHasRef),
             ("ref", BuiltinFunctionKind::TimerRef),
@@ -2415,14 +2413,10 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let timer_id = match handle {
             Value::Int(id) => Some(*id as u32),
-            Value::Object(object_id) => match self
+            Value::Object(object_id) => self
                 .heap
                 .get(object_id.0 as usize)
-                .and_then(|object| object.properties.get("__timerId"))
-            {
-                Some(Value::Int(id)) => Some(*id as u32),
-                _ => None,
-            },
+                .and_then(HeapObject::timer_handle_id),
             _ => None,
         };
         let Some(timer_id) = timer_id else {
@@ -2610,17 +2604,14 @@ impl InterpreterCore {
             }
         };
         let (delay_ms, value, done) = {
-            let properties = &self.heap[interval.0 as usize].properties;
-            let delay_ms = match properties.get("__delayMs") {
-                Some(Value::Int(ms)) => (*ms).max(1) as u64,
-                _ => 1,
+            let Some(slots) = self.heap[interval.0 as usize].timers_promises_interval_slots()
+            else {
+                return Err(InterpreterError::TypeError {
+                    expected: "timers/promises setInterval iterator receiver".to_string(),
+                    got: "object without interval state".to_string(),
+                });
             };
-            let value = properties
-                .get("__value")
-                .cloned()
-                .unwrap_or(Value::Undefined);
-            let done = matches!(properties.get("__done"), Some(Value::Bool(true)));
-            (delay_ms, value, done)
+            (slots.delay_ms.max(1), slots.value.clone(), slots.done)
         };
         let mut label = self.join_arg_range_label(args)?;
         if let Some(register) = receiver_register {
@@ -2631,7 +2622,13 @@ impl InterpreterCore {
         }
         let next_value = if finish || done {
             if !done {
-                self.set_object_property(interval, "__done".to_string(), Value::Bool(true))?;
+                self.mutate_heap(|heap| {
+                    if let Some(slots) =
+                        heap[interval.0 as usize].timers_promises_interval_slots_mut()
+                    {
+                        slots.done = true;
+                    }
+                });
             }
             None
         } else {
@@ -11902,6 +11899,35 @@ impl InterpreterCore {
         Ok(())
     }
 
+    /// Install engine-private built-in/host internal slots after checking the
+    /// exact memory delta (bd-9vouw.150). Ordinary properties, reflection, and
+    /// object integrity levels never see or alter these slots.
+    pub(super) fn set_host_slots(
+        &mut self,
+        object_id: ObjectId,
+        slots: HostObjectSlots,
+    ) -> Result<(), InterpreterError> {
+        let object = self
+            .heap
+            .get(object_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        let previous_bytes = object
+            .host_slots
+            .as_deref()
+            .map_or(0, Self::estimate_host_object_slots_bytes);
+        let next_bytes = Self::estimate_host_object_slots_bytes(&slots);
+        self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+        self.mutate_heap(|heap| {
+            let slot = &mut heap[object_id.0 as usize].host_slots;
+            match slot.as_deref_mut() {
+                Some(current) => *current = slots,
+                None => *slot = Some(Box::new(slots)),
+            }
+        });
+        self.gc_write_barrier(object_id);
+        Ok(())
+    }
+
     /// `WeakRef.prototype.deref()` (ES2021 26.1.3.2).
     pub(super) fn weak_ref_deref(&mut self, receiver: &Value) -> Result<Value, InterpreterError> {
         let target = match receiver {
@@ -13097,6 +13123,35 @@ impl InterpreterCore {
                         && visited.insert(*child_id)
                     {
                         pending.extend(next.replace(*child_id));
+                    }
+                }
+                if let Some(slots) = object.host_slots.as_deref() {
+                    match slots {
+                        HostObjectSlots::LegacyClientRequest(req) => {
+                            if visited.insert(req.headers) {
+                                pending.extend(next.replace(req.headers));
+                            }
+                            if let Value::Object(cb_id) = req.response_cb
+                                && visited.insert(cb_id)
+                            {
+                                pending.extend(next.replace(cb_id));
+                            }
+                        }
+                        HostObjectSlots::IntlResolved(resolved_id) => {
+                            if visited.insert(*resolved_id) {
+                                pending.extend(next.replace(*resolved_id));
+                            }
+                        }
+                        HostObjectSlots::TimersPromisesInterval(interval) => {
+                            if let Value::Object(value_id) = interval.value
+                                && visited.insert(value_id)
+                            {
+                                pending.extend(next.replace(value_id));
+                            }
+                        }
+                        HostObjectSlots::TextDecoder(_)
+                        | HostObjectSlots::FsEntryKind(_)
+                        | HostObjectSlots::TimerHandle(_) => {}
                     }
                 }
             }

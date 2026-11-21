@@ -109,17 +109,21 @@ fn unshadowed_global_value(
     }
 }
 
-fn immutable_global_write_error() -> LoweringPipelineError {
-    // Global-value PutValue remains separate from the property mutation path.
-    // A sloppy write must be ignored and a strict write must throw after its
-    // RHS runs. Do not turn either into a mutable forward-reference binding.
-    unsupported_frontier_expression_error(
-        "immutable_global_write",
-        "FE-LOWER-GLOBAL-VALUE-WRITE-0001",
-        "lower_ir0_to_ir1.immutable_global_write",
-        "assignment to an unshadowed immutable global is not yet implemented",
-        None,
-    )
+fn emit_immutable_global_write_strict_check(
+    ops: &mut Vec<Ir1Op>,
+    binding_lookup: &BTreeMap<String, BindingId>,
+    name: &str,
+) {
+    // ES2020 PutValue on a non-writable global data property (`undefined`,
+    // `NaN`, `Infinity`): after RHS evaluation, sloppy mode ignores the write
+    // and keeps the assigned/computed value; strict mode throws TypeError.
+    if is_strict_context(binding_lookup) {
+        ops.push(Ir1Op::Pop);
+        emit_type_error_throw_message(
+            ops,
+            format!("Cannot assign to read only property '{name}' of object '#<Object>'"),
+        );
+    }
 }
 
 fn lexical_capture_cell_name(name: &str, binding_id: BindingId) -> String {
@@ -11173,8 +11177,21 @@ fn lower_expression_to_ir1(
 
             match argument.as_ref() {
                 Expression::Identifier(name) => {
-                    if unshadowed_global_value(binding_lookup, name).is_some() {
-                        return Err(immutable_global_write_error());
+                    if let Some(value) = unshadowed_global_value(binding_lookup, name) {
+                        ops.push(Ir1Op::LoadLiteral { value });
+                        ops.push(Ir1Op::UnaryOp {
+                            operator: UnaryOperator::UnaryPlus,
+                        });
+                        if *prefix {
+                            ops.push(Ir1Op::LoadLiteral {
+                                value: Ir1Literal::Integer(1),
+                            });
+                            ops.push(Ir1Op::BinaryOp {
+                                operator: step_operator,
+                            });
+                        }
+                        emit_immutable_global_write_strict_check(ops, binding_lookup, name);
+                        return Ok(());
                     }
                     let binding_id = if let Some(existing) = binding_lookup.get(name.as_str()) {
                         *existing
@@ -11390,8 +11407,62 @@ fn lower_expression_to_ir1(
             right,
         } => {
             if let Expression::Identifier(name) = left.as_ref() {
-                if unshadowed_global_value(binding_lookup, name).is_some() {
-                    return Err(immutable_global_write_error());
+                if let Some(value) = unshadowed_global_value(binding_lookup, name) {
+                    match operator {
+                        AssignmentOperator::LogicalAndAssign
+                        | AssignmentOperator::LogicalOrAssign
+                        | AssignmentOperator::NullishCoalescingAssign => {
+                            let should_eval_rhs = match operator {
+                                AssignmentOperator::LogicalAndAssign => name == "Infinity",
+                                AssignmentOperator::LogicalOrAssign => name != "Infinity",
+                                AssignmentOperator::NullishCoalescingAssign => name == "undefined",
+                                _ => false,
+                            };
+                            if !should_eval_rhs {
+                                ops.push(Ir1Op::LoadLiteral { value });
+                                return Ok(());
+                            }
+                            lower_expression_to_ir1(
+                                right,
+                                ops,
+                                bindings,
+                                binding_lookup,
+                                binding_index,
+                                root_scope_id,
+                                label_counter,
+                            )?;
+                            emit_immutable_global_write_strict_check(ops, binding_lookup, name);
+                            return Ok(());
+                        }
+                        _ => {}
+                    }
+                    if let Some(binary_operator) = compound_assignment_binary_operator(*operator) {
+                        ops.push(Ir1Op::LoadLiteral { value });
+                        lower_expression_to_ir1(
+                            right,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            label_counter,
+                        )?;
+                        ops.push(Ir1Op::BinaryOp {
+                            operator: binary_operator,
+                        });
+                    } else {
+                        lower_expression_to_ir1(
+                            right,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            label_counter,
+                        )?;
+                    }
+                    emit_immutable_global_write_strict_check(ops, binding_lookup, name);
+                    return Ok(());
                 }
                 let binding_id = if let Some(existing) = binding_lookup.get(name.as_str()) {
                     *existing

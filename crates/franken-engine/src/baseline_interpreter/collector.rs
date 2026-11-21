@@ -1727,6 +1727,8 @@ impl InterpreterCore {
                 collection_storage,
                 // Deterministic WeakRef retention is unchanged by slot privacy.
                 weak_ref_target,
+                // Private host/builtin slots can retain child objects and values.
+                host_slots,
             } = object;
             for value in private_elements.values().flat_map(PrivateElement::values) {
                 marker.value(value);
@@ -1767,6 +1769,23 @@ impl InterpreterCore {
             }
             if let Some(target) = weak_ref_target {
                 marker.value(&target.value);
+            }
+            if let Some(slots) = host_slots.as_deref() {
+                match slots {
+                    HostObjectSlots::LegacyClientRequest(req) => {
+                        marker.object(req.headers);
+                        marker.value(&req.response_cb);
+                    }
+                    HostObjectSlots::IntlResolved(resolved) => {
+                        marker.object(*resolved);
+                    }
+                    HostObjectSlots::TimersPromisesInterval(interval) => {
+                        marker.value(&interval.value);
+                    }
+                    HostObjectSlots::TextDecoder(_)
+                    | HostObjectSlots::FsEntryKind(_)
+                    | HostObjectSlots::TimerHandle(_) => {}
+                }
             }
             if let Some(view) = typed_array {
                 marker.object(view.buffer);
@@ -2037,6 +2056,8 @@ impl InterpreterCore {
             event_once_wrappers,
             event_promise_waiters,
             next_event_promise_waiter_id: _,
+            // Weak: holds only numeric values (Int/Float), swept with dead owners.
+            event_max_listeners: _,
             // Weak owner tables: hidden values are traced from a reachable
             // child or pipe facade, then dead entries are swept with it.
             completed_child_processes: _,

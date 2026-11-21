@@ -534,43 +534,6 @@ impl InterpreterCore {
         Ok(*id)
     }
 
-    #[allow(dead_code)]
-    pub(super) fn weakmap_entries_id(&self, receiver: Value) -> Result<ObjectId, InterpreterError> {
-        let weakmap_id = match receiver {
-            Value::Object(object_id) => object_id,
-            other => {
-                return Err(InterpreterError::TypeError {
-                    expected: "WeakMap".to_string(),
-                    got: other.type_name().to_string(),
-                });
-            }
-        };
-
-        let weakmap_obj = self
-            .heap
-            .get(weakmap_id.0 as usize)
-            .ok_or(InterpreterError::ObjectNotFound { id: weakmap_id.0 })?;
-
-        if weakmap_obj.brand() != Some("WeakMap") {
-            return Err(InterpreterError::TypeError {
-                expected: "WeakMap".to_string(),
-                got: "object".to_string(),
-            });
-        }
-
-        match weakmap_obj.properties.get("__entries") {
-            Some(Value::Object(entries_id)) => Ok(*entries_id),
-            Some(other) => Err(InterpreterError::TypeError {
-                expected: "WeakMap entries".to_string(),
-                got: other.type_name().to_string(),
-            }),
-            None => Err(InterpreterError::TypeError {
-                expected: "WeakMap entries".to_string(),
-                got: "missing".to_string(),
-            }),
-        }
-    }
-
     /// Unified Number.prototype.toString implementation with bounded radix handling.
     pub(super) fn number_to_string_impl(
         &self,
@@ -2701,6 +2664,12 @@ impl InterpreterCore {
             )
             .saturating_add(
                 object
+                    .host_slots
+                    .as_deref()
+                    .map_or(0, Self::estimate_host_object_slots_bytes),
+            )
+            .saturating_add(
+                object
                     .array_buffer
                     .as_ref()
                     .map(|backing| {
@@ -4371,6 +4340,28 @@ impl InterpreterCore {
             .saturating_add(Self::estimate_label_bytes(&target.label))
     }
 
+    pub(super) fn estimate_host_object_slots_bytes(slots: &HostObjectSlots) -> u64 {
+        match slots {
+            HostObjectSlots::LegacyClientRequest(req) => {
+                (std::mem::size_of::<LegacyClientRequestSlots>() as u64)
+                    .saturating_add(Self::estimate_js_string_bytes(&req.url))
+                    .saturating_add(Self::estimate_js_string_bytes(&req.method))
+                    .saturating_add(Self::estimate_js_string_bytes(&req.body))
+                    .saturating_add(Self::estimate_execution_seed_value_bytes(&req.response_cb))
+            }
+            HostObjectSlots::TextDecoder(decoder) => (std::mem::size_of::<TextDecoderSlots>()
+                as u64)
+                .saturating_add(Self::estimate_js_string_bytes(&decoder.encoding)),
+            HostObjectSlots::IntlResolved(_) => std::mem::size_of::<ObjectId>() as u64,
+            HostObjectSlots::FsEntryKind(_) => std::mem::size_of::<FsEntryKindSlots>() as u64,
+            HostObjectSlots::TimerHandle(_) => std::mem::size_of::<u32>() as u64,
+            HostObjectSlots::TimersPromisesInterval(interval) => {
+                (std::mem::size_of::<TimersPromisesIntervalSlots>() as u64)
+                    .saturating_add(Self::estimate_execution_seed_value_bytes(&interval.value))
+            }
+        }
+    }
+
     pub(super) fn estimate_heap_object_bytes(object: &HeapObject) -> u64 {
         let properties = Self::estimate_ordered_property_map_bytes(&object.properties);
         let property_labels =
@@ -4433,6 +4424,12 @@ impl InterpreterCore {
                     .weak_ref_target
                     .as_deref()
                     .map_or(0, Self::estimate_weak_ref_target_bytes),
+            )
+            .saturating_add(
+                object
+                    .host_slots
+                    .as_deref()
+                    .map_or(0, Self::estimate_host_object_slots_bytes),
             )
             .saturating_add(array_buffer_bytes)
             .saturating_add(typed_array_bytes)
@@ -5236,6 +5233,18 @@ impl InterpreterCore {
         )
     }
 
+    pub(super) fn estimate_event_max_listeners_entry_bytes(value: &Value) -> u64 {
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(Self::estimate_value_bytes(value))
+    }
+
+    pub(super) fn event_max_listeners_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(
+            self.event_max_listeners
+                .values()
+                .map(Self::estimate_event_max_listeners_entry_bytes),
+        )
+    }
+
     pub(super) fn event_promise_waiters_memory_bytes(&self) -> u64 {
         Self::saturating_sum(
             self.event_promise_waiters
@@ -5669,6 +5678,7 @@ impl InterpreterCore {
             .saturating_add(self.event_listeners_memory_bytes())
             .saturating_add(self.event_once_wrappers_memory_bytes())
             .saturating_add(self.event_promise_waiters_memory_bytes())
+            .saturating_add(self.event_max_listeners_memory_bytes())
             .saturating_add(self.object_mutation_labels_memory_bytes())
             .saturating_add(self.url_objects_memory_bytes())
             .saturating_add(self.url_search_params_memory_bytes())

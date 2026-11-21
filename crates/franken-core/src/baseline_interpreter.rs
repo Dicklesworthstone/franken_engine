@@ -13870,8 +13870,12 @@ impl InterpreterCore {
         label: &mut crate::ifc_artifacts::Label,
     ) -> Result<bool, InterpreterError> {
         // Legacy hooks cannot observe an exact key they cannot represent.
-        // Refuse before a lazy function backing or prototype is allocated.
-        self.preflight_legacy_property_key_for_hook(&key)?;
+        // Refuse before a lazy function backing or prototype is allocated;
+        // existing objects route through `run_pre_runtime_property_access_hook`
+        // below so typed hooks continue to observe Symbols and exact UTF-16 keys.
+        if !matches!(base, Value::Object(_)) {
+            self.preflight_legacy_property_key_for_hook(&key)?;
+        }
         let Some(lookup_object) = self.property_mutation_target(base)? else {
             return Ok(false);
         };
@@ -14168,9 +14172,7 @@ impl InterpreterCore {
             return Ok(u32::try_from((*length).max(0)).unwrap_or(u32::MAX));
         }
         Ok(object.properties.keys().fold(0u32, |current, key| {
-            key.parse::<u32>()
-                .ok()
-                .map_or(current, |index| current.max(index.saturating_add(1)))
+            canonical_array_index(key).map_or(current, |index| current.max(index.saturating_add(1)))
         }))
     }
 

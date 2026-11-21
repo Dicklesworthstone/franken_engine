@@ -3291,21 +3291,17 @@ impl InterpreterCore {
                 let Value::Object(object_id) = receiver else {
                     return Ok(Value::Bool(false));
                 };
-                let property = match builtin.kind {
-                    BuiltinFunctionKind::FsStatsIsFile
-                    | BuiltinFunctionKind::FsDirentIsFile => "__isFile",
-                    BuiltinFunctionKind::FsStatsIsDirectory
-                    | BuiltinFunctionKind::FsDirentIsDirectory => "__isDirectory",
-                    BuiltinFunctionKind::FsEntryIsSymbolicLink => "__isSymbolicLink",
-                    _ => unreachable!("filesystem predicate arm only contains fs predicates"),
-                };
                 let value = self
                     .heap
                     .get(object_id.0 as usize)
-                    .and_then(|object| object.properties.get(property))
-                    .and_then(|value| match value {
-                        Value::Bool(value) => Some(*value),
-                        _ => None,
+                    .and_then(HeapObject::fs_entry_kind_slots)
+                    .map(|slots| match builtin.kind {
+                        BuiltinFunctionKind::FsStatsIsFile
+                        | BuiltinFunctionKind::FsDirentIsFile => slots.is_file,
+                        BuiltinFunctionKind::FsStatsIsDirectory
+                        | BuiltinFunctionKind::FsDirentIsDirectory => slots.is_directory,
+                        BuiltinFunctionKind::FsEntryIsSymbolicLink => slots.is_symbolic_link,
+                        _ => unreachable!("filesystem predicate arm only contains fs predicates"),
                     })
                     .unwrap_or(false);
                 Ok(Value::Bool(value))
@@ -3389,10 +3385,20 @@ impl InterpreterCore {
                         got: receiver.type_name().to_string(),
                     });
                 };
-                if self.heap.get(req_id.0 as usize).is_none_or(|request| {
-                    matches!(request.properties.get("__ended"), Some(Value::Bool(true)))
-                }) {
-                    return Ok(Value::Undefined);
+                match self
+                    .heap
+                    .get(req_id.0 as usize)
+                    .and_then(HeapObject::legacy_client_request_slots)
+                {
+                    None => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "ClientRequest receiver for ClientRequest.prototype.end"
+                                .to_string(),
+                            got: "object".to_string(),
+                        });
+                    }
+                    Some(slots) if slots.ended => return Ok(Value::Undefined),
+                    Some(_) => {}
                 }
                 // Construction authorized a request object, not a future
                 // effect. Recheck the live membrane before appending the final
@@ -3405,7 +3411,7 @@ impl InterpreterCore {
                 // the `end(cb)` FINISH callback (fired once the request is sent), NOT a
                 // body chunk; a leading non-closure arg is the final body chunk
                 // (`end(data)`). Detect the finish callback from the last arg and
-                // append any leading data chunk to the writable `__body`.
+                // append any leading data chunk to the writable internal body buffer.
                 let arg0 = self.builtin_arg(args, 0)?;
                 let arg1 = self.builtin_arg(args, 1)?;
                 // The finish callback is the last closure argument (`end(cb)` or
@@ -3435,60 +3441,50 @@ impl InterpreterCore {
                 // egress. `None` => already ended (idempotent no-op).
                 let req_index = req_id.0 as usize;
                 let captured = {
-                    let Some(req) = self.heap.get(req_index) else {
+                    let Some(slots) = self
+                        .heap
+                        .get(req_index)
+                        .and_then(HeapObject::legacy_client_request_slots)
+                    else {
                         return Ok(Value::Undefined);
                     };
-                    if matches!(req.properties.get("__ended"), Some(Value::Bool(true))) {
+                    if slots.ended {
                         None
                     } else {
-                        let url = match req.properties.get("__url") {
-                            Some(Value::Str(s)) => s.to_string(),
-                            _ => String::new(),
-                        };
-                        let method = match req.properties.get("__method") {
-                            Some(Value::Str(s)) => s.to_string(),
-                            _ => "GET".to_string(),
-                        };
-                        let headers: Vec<(String, String)> = match req.properties.get("__headers") {
-                            Some(Value::Object(hid)) => self
-                                .heap
-                                .get(hid.0 as usize)
-                                .map(|h| {
-                                    h.properties
-                                        .iter()
-                                        .filter_map(|(name, value)| {
-                                            Self::net_header_value(value).map(|v| (name.clone(), v))
-                                        })
-                                        .collect()
-                                })
-                                .unwrap_or_default(),
-                            _ => Vec::new(),
-                        };
-                        let body_str = match req.properties.get("__body") {
-                            Some(Value::Str(s)) => {
-                                if s.len() > MAX_HTTP_BODY_BYTES {
-                                    return Err(InterpreterError::RangeError {
-                                        message: format!(
-                                            "HTTP request body exceeds {MAX_HTTP_BODY_BYTES} bytes"
-                                        ),
-                                    });
-                                }
-                                self.check_temporary_memory_budget(
-                                    u64::try_from(s.len())
-                                        .unwrap_or(u64::MAX)
-                                        .saturating_mul(3)
-                                        .saturating_add(64 * 1024),
-                                )?;
-                                s.to_string()
-                            }
-                            _ => String::new(),
-                        };
+                        let url = slots.url.to_string();
+                        let method = slots.method.to_string();
+                        let headers: Vec<(String, String)> = self
+                            .heap
+                            .get(slots.headers.0 as usize)
+                            .map(|h| {
+                                h.properties
+                                    .iter()
+                                    .filter_map(|(name, value)| {
+                                        Self::net_header_value(value).map(|v| (name.clone(), v))
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        if slots.body.len() > MAX_HTTP_BODY_BYTES {
+                            return Err(InterpreterError::RangeError {
+                                message: format!(
+                                    "HTTP request body exceeds {MAX_HTTP_BODY_BYTES} bytes"
+                                ),
+                            });
+                        }
+                        self.check_temporary_memory_budget(
+                            u64::try_from(slots.body.len())
+                                .unwrap_or(u64::MAX)
+                                .saturating_mul(3)
+                                .saturating_add(64 * 1024),
+                        )?;
+                        let body_str = slots.body.to_string();
                         // bd-3894s slice (2c): the response callback captured by
                         // `http.request(url[, opts], cb)` at construction. Delivered
                         // `cb(res)` below, after the deferred egress produces the
                         // response (on the first `.end()` only).
-                        let response_cb = match req.properties.get("__response_cb") {
-                            Some(Value::Closure(cid)) => Some(*cid),
+                        let response_cb = match slots.response_cb {
+                            Value::Closure(cid) => Some(cid),
                             _ => None,
                         };
                         Some((url, method, headers, body_str, response_cb))
@@ -3513,7 +3509,11 @@ impl InterpreterCore {
                     // not a consumed request. Only commit the one-shot state after
                     // the typed denial has been accepted by the configured
                     // journal or transcript.
-                    self.set_object_property(req_id, "__ended".to_string(), Value::Bool(true))?;
+                    self.mutate_heap(|heap| {
+                        if let Some(slots) = heap[req_index].legacy_client_request_slots_mut() {
+                            slots.ended = true;
+                        }
+                    });
                     let err = self.build_request_error_value()?;
                     self.schedule_http_task(PendingHttpTask::EmitLegacyEvent {
                         target: req_id,
@@ -3525,7 +3525,11 @@ impl InterpreterCore {
                     return Ok(Value::Undefined);
                 }
                 // Mark ended BEFORE live egress so a re-entrant `.end()` is a no-op.
-                self.set_object_property(req_id, "__ended".to_string(), Value::Bool(true))?;
+                self.mutate_heap(|heap| {
+                    if let Some(slots) = heap[req_index].legacy_client_request_slots_mut() {
+                        slots.ended = true;
+                    }
+                });
                 let response = self.perform_net_request_effect(url, method, headers, body)?;
                 match response {
                     Value::Object(rid) => {
@@ -4001,9 +4005,8 @@ impl InterpreterCore {
                     });
                 };
                 Ok(self
-                    .heap
-                    .get(target_id.0 as usize)
-                    .and_then(|object| object.properties.get("__maxListeners"))
+                    .event_max_listeners
+                    .get(&target_id)
                     .cloned()
                     .unwrap_or(Value::Int(10)))
             }
@@ -4029,7 +4032,13 @@ impl InterpreterCore {
                         message: "max listeners must be a non-negative number".to_string(),
                     });
                 }
-                self.set_object_property(target_id, "__maxListeners".to_string(), value)?;
+                let previous_bytes = self
+                    .event_max_listeners
+                    .get(&target_id)
+                    .map_or(0, Self::estimate_event_max_listeners_entry_bytes);
+                let next_bytes = Self::estimate_event_max_listeners_entry_bytes(&value);
+                self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+                self.event_max_listeners.insert(target_id, value);
                 Ok(Value::Object(target_id))
             }
             BuiltinFunctionKind::EmitterListeners => {
@@ -4904,19 +4913,14 @@ impl InterpreterCore {
                         got: "missing timer handle".to_string(),
                     }
                 })?;
-                let timer_id = match self
+                let timer_id = self
                     .heap
                     .get(handle_id.0 as usize)
-                    .and_then(|object| object.properties.get("__timerId"))
-                {
-                    Some(Value::Int(id)) => *id as u32,
-                    _ => {
-                        return Err(InterpreterError::TypeError {
-                            expected: "timer handle with __timerId".to_string(),
-                            got: "malformed timer handle".to_string(),
-                        });
-                    }
-                };
+                    .and_then(HeapObject::timer_handle_id)
+                    .ok_or_else(|| InterpreterError::TypeError {
+                        expected: "timer handle with internal timer id".to_string(),
+                        got: "malformed timer handle".to_string(),
+                    })?;
                 match builtin.kind {
                     BuiltinFunctionKind::TimerHasRef => Ok(Value::Bool(
                         self.active_timers.contains_key(&timer_id)

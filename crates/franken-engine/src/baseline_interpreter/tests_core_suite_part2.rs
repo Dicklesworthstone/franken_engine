@@ -4536,20 +4536,24 @@ fn class_extends_sets_prototype_chain() {
 // Timer substrate tests
 // -----------------------------------------------------------------------
 
-/// bd-suwvw: setTimeout/setInterval return an object handle (like
-/// Node/bun's Timeout); resolve the deterministic timer id from its
-/// `__timerId` property.
+/// bd-suwvw + bd-9vouw.150: setTimeout/setInterval return an object handle
+/// (like Node/bun's Timeout); resolve the deterministic timer id from its
+/// private host slot and verify `__timerId` is not leaked as an own property.
 fn timer_handle_id(core: &InterpreterCore, handle: &Value) -> u32 {
     let Value::Object(object_id) = handle else {
         panic!("timer builtins should return an object handle, got {handle:?}");
     };
-    match core
+    let object = core
         .heap
         .get(object_id.0 as usize)
-        .and_then(|object| object.properties.get("__timerId"))
-    {
-        Some(Value::Int(id)) => *id as u32,
-        other => panic!("timer handle should carry __timerId, got {other:?}"),
+        .expect("timer handle object should exist on the heap");
+    assert!(
+        !object.properties.contains_key("__timerId"),
+        "timer handle must not expose __timerId as an own property"
+    );
+    match object.timer_handle_id() {
+        Some(id) => id,
+        None => panic!("timer handle should carry a private TimerHandle slot"),
     }
 }
 

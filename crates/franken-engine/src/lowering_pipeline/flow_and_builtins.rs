@@ -480,7 +480,20 @@ pub(super) fn expr_contains_matching_member<F: Fn(&Expression) -> bool>(
                     .iter()
                     .any(|a| expr_contains_matching_member(a, is_target))
         }
-        Expression::Binary { left, right, .. } | Expression::Assignment { left, right, .. } => {
+        Expression::Binary { left, right, .. } => {
+            let mut right_nodes: Vec<&Expression> = vec![right.as_ref()];
+            let mut current = left.as_ref();
+            while let Expression::Binary { left, right, .. } = current {
+                right_nodes.push(right.as_ref());
+                current = left.as_ref();
+            }
+            expr_contains_matching_member(current, is_target)
+                || right_nodes
+                    .into_iter()
+                    .rev()
+                    .any(|node| expr_contains_matching_member(node, is_target))
+        }
+        Expression::Assignment { left, right, .. } => {
             expr_contains_matching_member(left, is_target)
                 || expr_contains_matching_member(right, is_target)
         }
@@ -2671,7 +2684,20 @@ pub(super) fn timers_scan_expr_deep<F: Fn(&Expression) -> bool>(
         | Expression::OptionalMember {
             object, property, ..
         } => timers_scan_expr_deep(object, base) || timers_scan_expr_deep(property, base),
-        Expression::Binary { left, right, .. } | Expression::Assignment { left, right, .. } => {
+        Expression::Binary { left, right, .. } => {
+            let mut right_nodes: Vec<&Expression> = vec![right.as_ref()];
+            let mut current = left.as_ref();
+            while let Expression::Binary { left, right, .. } = current {
+                right_nodes.push(right.as_ref());
+                current = left.as_ref();
+            }
+            timers_scan_expr_deep(current, base)
+                || right_nodes
+                    .into_iter()
+                    .rev()
+                    .any(|node| timers_scan_expr_deep(node, base))
+        }
+        Expression::Assignment { left, right, .. } => {
             timers_scan_expr_deep(left, base) || timers_scan_expr_deep(right, base)
         }
         Expression::Unary { argument, .. }
@@ -3468,7 +3494,20 @@ pub(super) fn module_alias_expr_contains_unshadowed_usage(
             module_alias_expr_contains_unshadowed_usage(object, alias, surface)
                 || module_alias_expr_contains_unshadowed_usage(property, alias, surface)
         }
-        Expression::Binary { left, right, .. } | Expression::Assignment { left, right, .. } => {
+        Expression::Binary { left, right, .. } => {
+            let mut right_nodes: Vec<&Expression> = vec![right.as_ref()];
+            let mut current = left.as_ref();
+            while let Expression::Binary { left, right, .. } = current {
+                right_nodes.push(right.as_ref());
+                current = left.as_ref();
+            }
+            module_alias_expr_contains_unshadowed_usage(current, alias, surface)
+                || right_nodes
+                    .into_iter()
+                    .rev()
+                    .any(|node| module_alias_expr_contains_unshadowed_usage(node, alias, surface))
+        }
+        Expression::Assignment { left, right, .. } => {
             module_alias_expr_contains_unshadowed_usage(left, alias, surface)
                 || module_alias_expr_contains_unshadowed_usage(right, alias, surface)
         }
@@ -3966,8 +4005,17 @@ pub(super) fn module_alias_expr_has_rejected_use(
                 || (*computed && module_alias_expr_has_rejected_use(property, alias, surface))
         }
         Expression::Binary { left, right, .. } => {
-            module_alias_expr_has_rejected_use(left, alias, surface)
-                || module_alias_expr_has_rejected_use(right, alias, surface)
+            let mut right_nodes: Vec<&Expression> = vec![right.as_ref()];
+            let mut current = left.as_ref();
+            while let Expression::Binary { left, right, .. } = current {
+                right_nodes.push(right.as_ref());
+                current = left.as_ref();
+            }
+            module_alias_expr_has_rejected_use(current, alias, surface)
+                || right_nodes
+                    .into_iter()
+                    .rev()
+                    .any(|node| module_alias_expr_has_rejected_use(node, alias, surface))
         }
         Expression::Assignment { left, right, .. } => {
             module_alias_write_target_has_rejected_use(left, alias, surface)

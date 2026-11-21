@@ -8788,7 +8788,6 @@ impl InterpreterCore {
             };
             self.set_object_brand(facade, "Cluster")?;
             for (key, value) in [
-                ("__maxListeners", Value::Int(10)),
                 ("isPrimary", Value::Bool(true)),
                 ("isMaster", Value::Bool(true)),
                 ("isWorker", Value::Bool(false)),
@@ -9568,11 +9567,6 @@ impl InterpreterCore {
                 let result = (|| {
                     let object_id = self.alloc_object_with_prototype(Some(prototype))?;
                     self.set_object_brand(object_id, "EventEmitter")?;
-                    self.set_object_property(
-                        object_id,
-                        "__maxListeners".to_string(),
-                        Value::Int(10),
-                    )?;
                     Ok(Value::Object(object_id))
                 })();
                 if result.is_err() {
@@ -16517,8 +16511,6 @@ impl InterpreterCore {
                 let object_id = self.alloc_branded_object(
                     TIMERS_PROMISES_INTERVAL_TYPE,
                     &[
-                        ("__delayMs", Value::Int(delay_ms as i64)),
-                        ("__value", value),
                         (
                             "next",
                             Value::BuiltinFunction(BuiltinFunction::new_kind(
@@ -16532,6 +16524,14 @@ impl InterpreterCore {
                             )),
                         ),
                     ],
+                )?;
+                self.set_host_slots(
+                    object_id,
+                    HostObjectSlots::TimersPromisesInterval(TimersPromisesIntervalSlots {
+                        delay_ms,
+                        value,
+                        done: false,
+                    }),
                 )?;
                 // `for await` (desugared to the async iteration protocol)
                 // finds the iterator through @@asyncIterator.

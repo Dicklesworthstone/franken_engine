@@ -1927,17 +1927,12 @@ impl InterpreterCore {
         if let Value::Object(object_id) = iterable
             && let Some(object) = self.heap.get(object_id.0 as usize)
             && object.brand() == Some(TIMERS_PROMISES_INTERVAL_TYPE)
+            && let Some(slots) = object.timers_promises_interval_slots()
         {
-            let delay_ms = match object.properties.get("__delayMs") {
-                Some(Value::Int(ms)) => (*ms).max(1) as u64,
-                _ => 1,
-            };
-            let value = object
-                .properties
-                .get("__value")
-                .cloned()
-                .unwrap_or(Value::Undefined);
-            return Ok(RuntimeForOfInit::from_timers_interval(delay_ms, value));
+            return Ok(RuntimeForOfInit::from_timers_interval(
+                slots.delay_ms.max(1),
+                slots.value.clone(),
+            ));
         }
 
         // A Map's or Set's live entry list (bd-9vouw.131): entries added

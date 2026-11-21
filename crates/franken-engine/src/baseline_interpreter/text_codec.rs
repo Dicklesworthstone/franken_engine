@@ -25,12 +25,6 @@ mod prefix_tests;
 pub(super) const TEXT_ENCODER_TYPE: &str = "TextEncoder";
 pub(super) const TEXT_DECODER_TYPE: &str = "TextDecoder";
 
-// Fixed-size heap-accounted state, not a side table or a retained input view.
-// Guest writes/deletion/redefinition are disabled; native writes use the same
-// internal property setter as the other codec slots. This representation does
-// not introduce a new object edge for the collector to trace.
-const DECODER_STATE_SLOT: &str = "__textDecoderState";
-
 /// The canonical encoding name of a TextDecoder label (WHATWG Encoding 4.2,
 /// for the encodings supported here), or `None` when it is unsupported.
 fn canonical_decoder_encoding(label: &str) -> Option<&'static str> {
@@ -68,8 +62,6 @@ impl InterpreterCore {
         let prototype = self.ensure_builtin_prototype(TEXT_ENCODER_TYPE)?;
         let encoder = self.alloc_object_with_prototype(Some(prototype))?;
         self.set_object_brand(encoder, TEXT_ENCODER_TYPE)?;
-        self.set_object_property(encoder, "encoding".to_string(), Value::str("utf-8"))?;
-        self.hide_internal_slots(encoder, &["encoding"])?;
         Ok(Value::Object(encoder))
     }
 
@@ -111,22 +103,14 @@ impl InterpreterCore {
         let prototype = self.ensure_builtin_prototype(TEXT_DECODER_TYPE)?;
         let decoder = self.alloc_object_with_prototype(Some(prototype))?;
         self.set_object_brand(decoder, TEXT_DECODER_TYPE)?;
-        self.set_object_property(decoder, "encoding".to_string(), Value::str(encoding))?;
-        self.set_object_property(decoder, "fatal".to_string(), Value::Bool(fatal))?;
-        self.set_object_property(decoder, "ignoreBOM".to_string(), Value::Bool(ignore_bom))?;
-        self.set_object_property(decoder, DECODER_STATE_SLOT.to_string(), Value::Int(0))?;
-        self.hide_internal_slots(
+        self.set_host_slots(
             decoder,
-            &["encoding", "fatal", "ignoreBOM", DECODER_STATE_SLOT],
-        )?;
-        self.set_own_property_attributes(
-            decoder,
-            &RuntimePropertyKey::String(JsString::from(DECODER_STATE_SLOT)),
-            PropertyAttributes {
-                writable: false,
-                enumerable: false,
-                configurable: false,
-            },
+            HostObjectSlots::TextDecoder(TextDecoderSlots {
+                encoding: JsString::from(encoding),
+                fatal,
+                ignore_bom,
+                state: 0,
+            }),
         )?;
         Ok(Value::Object(decoder))
     }
@@ -251,22 +235,23 @@ impl InterpreterCore {
                 // the backing's existing read guard through native decoding;
                 // no guest code runs between validation and that access.
                 self.with_text_codec_input_bytes(&input, |_| ())?;
-                let slot = |core: &Self, key: &str| {
-                    core.heap
+                let (encoding, fatal, ignore_bom, mut state) = {
+                    let Some(slots) = self
+                        .heap
                         .get(decoder.0 as usize)
-                        .and_then(|object| object.properties.get(key).cloned())
-                        .unwrap_or(Value::Undefined)
-                };
-                let encoding = match slot(self, "encoding") {
-                    Value::Str(encoding) => encoding.to_string(),
-                    _ => "utf-8".to_string(),
-                };
-                let fatal = slot(self, "fatal").is_truthy();
-                let ignore_bom = slot(self, "ignoreBOM").is_truthy();
-                let mut state = match slot(self, DECODER_STATE_SLOT) {
-                    Value::Int(packed) => DecodeState::unpack(packed),
-                    // Decoders from older heap snapshots have no pending bytes.
-                    _ => DecodeState::default(),
+                        .and_then(HeapObject::text_decoder_slots)
+                    else {
+                        return Err(InterpreterError::TypeError {
+                            expected: "TextDecoder receiver for decode".to_string(),
+                            got: "object without TextDecoder slots".to_string(),
+                        });
+                    };
+                    (
+                        slots.encoding.to_string(),
+                        slots.fatal,
+                        slots.ignore_bom,
+                        DecodeState::unpack(slots.state),
+                    )
                 };
                 // Whether this call finishes what an earlier streaming call
                 // left buffered (incomplete bytes, the BOM decision).
@@ -281,11 +266,12 @@ impl InterpreterCore {
                 let decoded = self.with_text_codec_input_bytes(&input, |bytes| {
                     state.decode_slice(&encoding, bytes, fatal, ignore_bom, stream)
                 })?;
-                self.set_object_property(
-                    decoder,
-                    DECODER_STATE_SLOT.to_string(),
-                    Value::Int(state.pack()),
-                )?;
+                let packed_state = state.pack();
+                self.mutate_heap(|heap| {
+                    if let Some(slots) = heap[decoder.0 as usize].text_decoder_slots_mut() {
+                        slots.state = packed_state;
+                    }
+                });
                 let text = decoded.ok_or_else(|| InterpreterError::TypeError {
                     expected: format!("valid {encoding} data"),
                     got: format!("The encoded data was not valid for encoding {encoding}"),

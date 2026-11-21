@@ -5207,29 +5207,35 @@ fn client_request_create_builds_writable_request_object_bd_3894s() {
         Some("ClientRequest"),
         "the object is branded ClientRequest so `.write`/`.end` resolve by member access"
     );
+    for forbidden in [
+        "__url",
+        "__method",
+        "__headers",
+        "__body",
+        "__ended",
+        "__response_cb",
+    ] {
+        assert!(
+            !obj.properties.contains_key(forbidden),
+            "ClientRequest must not leak {forbidden} as a guest-visible property"
+        );
+    }
+    let slots = obj
+        .legacy_client_request_slots()
+        .expect("ClientRequest must carry private LegacyClientRequestSlots");
+    assert_eq!(slots.url, JsString::from(url), "captures the request URL");
     assert_eq!(
-        obj.properties.get("__url"),
-        Some(&Value::str(url)),
-        "captures the request URL"
-    );
-    assert_eq!(
-        obj.properties.get("__method"),
-        Some(&Value::str("PUT")),
+        slots.method,
+        JsString::from("PUT"),
         "the method is upper-cased per Node parity"
     );
     assert_eq!(
-        obj.properties.get("__body"),
-        Some(&Value::str("seed")),
+        slots.body,
+        JsString::from("seed"),
         "the writable body buffer is seeded from opts.body"
     );
-    assert_eq!(
-        obj.properties.get("__ended"),
-        Some(&Value::Bool(false)),
-        "a fresh ClientRequest is not yet ended"
-    );
-    let Some(Value::Object(headers_id)) = obj.properties.get("__headers") else {
-        panic!("headers must be captured as a child object");
-    };
+    assert!(!slots.ended, "a fresh ClientRequest is not yet ended");
+    let headers_id = slots.headers;
     let headers = core
         .heap
         .get(headers_id.0 as usize)
@@ -5664,14 +5670,20 @@ fn client_request_with_response_callback_delivers_after_end_bd_3894s() {
     let Value::Object(req_id) = req else {
         panic!("http.request must return a ClientRequest object, got {req:?}");
     };
-    // The response callback is captured on the ClientRequest, NOT egressed yet.
+    // The response callback is captured on the ClientRequest's private slot, NOT egressed yet.
+    assert!(
+        !core.heap[req_id.0 as usize]
+            .properties
+            .contains_key("__response_cb"),
+        "response callback must not be exposed as a guest property"
+    );
     assert_eq!(
         core.heap
             .get(req_id.0 as usize)
-            .and_then(|o| o.properties.get("__response_cb"))
-            .cloned(),
+            .and_then(HeapObject::legacy_client_request_slots)
+            .map(|slots| slots.response_cb.clone()),
         Some(Value::Closure(0)),
-        "the response callback is captured as __response_cb at construction"
+        "the response callback is captured in private slots at construction"
     );
     assert!(
         recorder.recorded_entries().is_empty(),
@@ -5883,12 +5895,8 @@ fn legacy_client_request_body_is_bounded_and_failure_atomic_bd_z1peg_2() {
     );
     assert_eq!(
         core.heap[request.0 as usize]
-            .properties
-            .get("__body")
-            .and_then(|value| match value {
-                Value::Str(body) => Some(body.len()),
-                _ => None,
-            }),
+            .legacy_client_request_slots()
+            .map(|slots| slots.body.len()),
         Some(first_chunk_len)
     );
     core.write_reg(
@@ -5908,12 +5916,8 @@ fn legacy_client_request_body_is_bounded_and_failure_atomic_bd_z1peg_2() {
     );
     assert_eq!(
         core.heap[request.0 as usize]
-            .properties
-            .get("__body")
-            .and_then(|value| match value {
-                Value::Str(body) => Some(body.len()),
-                _ => None,
-            }),
+            .legacy_client_request_slots()
+            .map(|slots| slots.body.len()),
         Some(MAX_HTTP_BODY_BYTES)
     );
     assert_eq!(
@@ -5923,9 +5927,8 @@ fn legacy_client_request_body_is_bounded_and_failure_atomic_bd_z1peg_2() {
 
     core.write_reg(1, Value::str("y")).expect("overflow byte");
     let before_body = core.heap[request.0 as usize]
-        .properties
-        .get("__body")
-        .cloned()
+        .legacy_client_request_slots()
+        .map(|slots| slots.body.clone())
         .expect("request body state");
     let before_label = core.object_mutation_labels.get(&request).cloned();
     let before_memory = core.estimated_memory_bytes();
@@ -5940,7 +5943,9 @@ fn legacy_client_request_body_is_bounded_and_failure_atomic_bd_z1peg_2() {
         .expect_err("one byte beyond the body ceiling must fail");
     assert!(matches!(write_error, InterpreterError::RangeError { .. }));
     assert_eq!(
-        core.heap[request.0 as usize].properties.get("__body"),
+        core.heap[request.0 as usize]
+            .legacy_client_request_slots()
+            .map(|slots| &slots.body),
         Some(&before_body)
     );
     assert_eq!(
@@ -5960,23 +5965,41 @@ fn legacy_client_request_body_is_bounded_and_failure_atomic_bd_z1peg_2() {
         .expect_err("an oversized final chunk must fail before ending");
     assert!(matches!(end_error, InterpreterError::RangeError { .. }));
     assert_eq!(
-        core.heap[request.0 as usize].properties.get("__ended"),
-        Some(&Value::Bool(false))
+        core.heap[request.0 as usize]
+            .legacy_client_request_slots()
+            .map(|slots| slots.ended),
+        Some(false)
     );
     assert!(core.pending_http_tasks.is_empty());
     assert_eq!(core.estimated_memory_bytes(), before_memory);
     assert_eq!(before_memory, core.recompute_estimated_memory_bytes());
 
-    core.set_object_property(
-        request,
-        "__body".to_string(),
-        Value::str("z".repeat(MAX_HTTP_BODY_BYTES + 1)),
-    )
-    .expect("direct body mutation remains within the interpreter memory budget");
-    let directly_mutated_body = core.heap[request.0 as usize]
-        .properties
-        .get("__body")
+    // A guest property write named `__body` creates an ordinary property and
+    // must NOT alter the private ClientRequest body slot.
+    core.set_object_property(request, "__body".to_string(), Value::str("guest-tamper"))
+        .expect("guest property named __body is ordinary data");
+    assert_eq!(
+        core.heap[request.0 as usize]
+            .legacy_client_request_slots()
+            .map(|slots| &slots.body),
+        Some(&before_body)
+    );
+
+    // Even if private slot state were deserialized with an oversized body,
+    // ClientRequestEnd must still refuse it before egress.
+    let mut oversized_slots = core.heap[request.0 as usize]
+        .legacy_client_request_slots()
         .cloned()
+        .expect("private client request slots");
+    oversized_slots.body = JsString::from("z".repeat(MAX_HTTP_BODY_BYTES + 1));
+    core.set_host_slots(
+        request,
+        HostObjectSlots::LegacyClientRequest(oversized_slots),
+    )
+    .expect("direct slot mutation remains within the interpreter memory budget");
+    let directly_mutated_body = core.heap[request.0 as usize]
+        .legacy_client_request_slots()
+        .map(|slots| slots.body.clone())
         .expect("directly mutated request body state");
     let direct_mutation_memory = core.estimated_memory_bytes();
     let direct_mutation_error = core
@@ -5993,12 +6016,16 @@ fn legacy_client_request_body_is_bounded_and_failure_atomic_bd_z1peg_2() {
         InterpreterError::RangeError { .. }
     ));
     assert_eq!(
-        core.heap[request.0 as usize].properties.get("__body"),
+        core.heap[request.0 as usize]
+            .legacy_client_request_slots()
+            .map(|slots| &slots.body),
         Some(&directly_mutated_body)
     );
     assert_eq!(
-        core.heap[request.0 as usize].properties.get("__ended"),
-        Some(&Value::Bool(false))
+        core.heap[request.0 as usize]
+            .legacy_client_request_slots()
+            .map(|slots| slots.ended),
+        Some(false)
     );
     assert_eq!(core.estimated_memory_bytes(), direct_mutation_memory);
     assert_eq!(
@@ -6042,9 +6069,9 @@ fn legacy_client_request_body_is_bounded_and_failure_atomic_bd_z1peg_2() {
     ));
     assert_eq!(
         memory_limited.heap[limited_request.0 as usize]
-            .properties
-            .get("__body"),
-        Some(&Value::str(""))
+            .legacy_client_request_slots()
+            .map(|slots| slots.body.clone()),
+        Some(JsString::from(""))
     );
     assert!(
         !memory_limited
@@ -6071,9 +6098,9 @@ fn legacy_client_request_body_is_bounded_and_failure_atomic_bd_z1peg_2() {
     );
     assert_eq!(
         memory_limited.heap[limited_request.0 as usize]
-            .properties
-            .get("__body"),
-        Some(&Value::str("z"))
+            .legacy_client_request_slots()
+            .map(|slots| slots.body.clone()),
+        Some(JsString::from("z"))
     );
     assert_eq!(
         memory_limited.object_mutation_labels.get(&limited_request),
@@ -6292,13 +6319,10 @@ fn legacy_client_request_ifc_denial_is_recorded_before_provider_bd_z1peg_2() {
     else {
         panic!("expected ClientRequest")
     };
-    let captured_headers = match core.heap[header_request.0 as usize]
-        .properties
-        .get("__headers")
-    {
-        Some(Value::Object(headers)) => *headers,
-        other => panic!("expected captured headers object, got {other:?}"),
-    };
+    let captured_headers = core.heap[header_request.0 as usize]
+        .legacy_client_request_slots()
+        .map(|slots| slots.headers)
+        .expect("expected captured headers object in private slot");
     core.join_object_mutation_label(captured_headers, &Label::Secret)
         .expect("classified captured header state");
     assert_eq!(
@@ -6389,9 +6413,9 @@ fn legacy_client_request_ifc_denial_is_recorded_before_provider_bd_z1peg_2() {
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     assert_eq!(
         missing_evidence.heap[missing_evidence_request.0 as usize]
-            .properties
-            .get("__ended"),
-        Some(&Value::Bool(false)),
+            .legacy_client_request_slots()
+            .map(|slots| slots.ended),
+        Some(false),
         "a refusal that could not be evidenced must not consume the request"
     );
     assert!(missing_evidence.pending_http_tasks.is_empty());
@@ -7021,9 +7045,9 @@ fn event_emitter_constructor_exposes_shared_runtime_surface_bd_2dmnn() {
     };
     let object = core.heap.get(target_id.0 as usize).expect("emitter object");
     assert_eq!(object.brand(), Some("EventEmitter"));
-    assert_eq!(
-        object.properties.get("__maxListeners"),
-        Some(&Value::Int(10))
+    assert!(
+        !object.properties.contains_key("__maxListeners"),
+        "EventEmitter must not leak __maxListeners as an own property"
     );
     for method in [
         "on",
@@ -7057,7 +7081,7 @@ fn event_emitter_listener_records_and_unhandled_error_bd_2dmnn() {
     let mut core = test_interpreter();
     let module = test_module_with_functions(vec![], vec![]);
     let target_id = core
-        .alloc_branded_object("EventEmitter", &[("__maxListeners", Value::Int(10))])
+        .alloc_branded_object("EventEmitter", &[])
         .expect("emitter object");
 
     let dispatch_listener =

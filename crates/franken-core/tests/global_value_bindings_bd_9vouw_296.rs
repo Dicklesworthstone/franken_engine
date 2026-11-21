@@ -162,17 +162,57 @@ fn assignments_and_updates_parse_as_identifier_references() {
             other => panic!("expected assignment or update, got {other:?}"),
         };
         assert!(matches!(reference.as_ref(), Expression::Identifier(_)));
-
-        // The core AST has no strictness provenance yet. Preserve an explicit
-        // refusal until writes can distinguish strict throws from sloppy no-ops,
-        // instead of fabricating a mutable global with a forward binding.
-        let ir0 = Ir0Module::from_syntax_tree(tree, "global-write");
-        let context = LoweringContext::new("write-trace", "write-decision", "write-policy");
-        let error = lower_ir0_to_ir3(&ir0, &context)
-            .expect_err("unshadowed globals must not become mutable bindings");
-        assert!(
-            error.to_string().contains("strictness provenance"),
-            "{source}: {error}"
-        );
     }
+
+    // Sloppy writes ignore the mutation, evaluate to the assigned/computed
+    // value, and leave all three immutable globals intact.
+    assert_value(
+        "let r1 = (undefined = 7); \
+         let r2 = (NaN += 1); \
+         let r3 = (undefined += 'x'); \
+         let r4 = Infinity++; \
+         let r5 = --undefined; \
+         r1 === 7 && r2 !== r2 && r3 === 'undefinedx' && r4 === 1 / 0 && r5 !== r5 \
+         && undefined === void 0 && NaN !== NaN && Infinity === 1 / 0;",
+        Value::Bool(true),
+    );
+
+    // Logical assignments respect short-circuiting and side effects.
+    assert_value(
+        "let side = 0; \
+         let a = (undefined &&= (side += 1, 7)); \
+         let b = (NaN &&= (side += 10, 7)); \
+         let c = (Infinity ||= (side += 100, 7)); \
+         let d = (NaN ??= (side += 1000, 7)); \
+         let e = (Infinity ??= (side += 10000, 7)); \
+         let f = (undefined ||= (side += 2, 7)); \
+         let g = (undefined ??= (side += 4, 8)); \
+         let h = (Infinity &&= (side += 8, 9)); \
+         side === 14 && a === void 0 && b !== b && c === 1 / 0 && d !== d && e === 1 / 0 \
+         && f === 7 && g === 8 && h === 9 \
+         && undefined === void 0 && NaN !== NaN && Infinity === 1 / 0;",
+        Value::Bool(true),
+    );
+
+    // Strict writes evaluate the RHS first and then throw a catchable
+    // TypeError, while short-circuiting logical assignments neither run RHS
+    // nor throw.
+    assert_value(
+        "(function () { \
+            'use strict'; \
+            let ran = 0; \
+            let ok = true; \
+            try { undefined = (ran += 1, 7); ok = false; } catch (e) { ok = ok && e.name === 'TypeError' && ran === 1; } \
+            try { NaN += (ran += 2, 1); ok = false; } catch (e) { ok = ok && e.name === 'TypeError' && ran === 3; } \
+            try { Infinity++; ok = false; } catch (e) { ok = ok && e.name === 'TypeError'; } \
+            try { --undefined; ok = false; } catch (e) { ok = ok && e.name === 'TypeError'; } \
+            try { Infinity &&= (ran += 4, 9); ok = false; } catch (e) { ok = ok && e.name === 'TypeError' && ran === 7; } \
+            let s1 = (undefined &&= (ran += 100, 1)); \
+            let s2 = (NaN ??= (ran += 100, 2)); \
+            let s3 = (Infinity ||= (ran += 100, 3)); \
+            return ok && ran === 7 && s1 === void 0 && s2 !== s2 && s3 === 1 / 0 \
+                && undefined === void 0 && NaN !== NaN && Infinity === 1 / 0; \
+        })();",
+        Value::Bool(true),
+    );
 }

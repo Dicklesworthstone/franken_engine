@@ -257,7 +257,10 @@ impl SyntaxTree {
     }
 
     pub fn canonical_bytes(&self) -> Vec<u8> {
-        deterministic_serde::encode_value(&self.canonical_value())
+        let value = self.canonical_value();
+        let bytes = deterministic_serde::encode_value(&value);
+        deterministic_serde::drop_canonical_value_iteratively(value);
+        bytes
     }
 
     pub fn canonical_hash(&self) -> String {
@@ -414,7 +417,20 @@ fn expression_has_top_level_await(expression: &Expression) -> bool {
         Expression::Yield { argument, .. } => argument
             .as_deref()
             .is_some_and(expression_has_top_level_await),
-        Expression::Binary { left, right, .. } | Expression::Assignment { left, right, .. } => {
+        Expression::Binary { .. } => {
+            let mut right_nodes: Vec<&Expression> = Vec::new();
+            let mut current = expression;
+            while let Expression::Binary { left, right, .. } = current {
+                right_nodes.push(right.as_ref());
+                current = left.as_ref();
+            }
+            expression_has_top_level_await(current)
+                || right_nodes
+                    .into_iter()
+                    .rev()
+                    .any(expression_has_top_level_await)
+        }
+        Expression::Assignment { left, right, .. } => {
             expression_has_top_level_await(left) || expression_has_top_level_await(right)
         }
         Expression::Unary { argument, .. } | Expression::SpreadElement(argument) => {
@@ -2291,16 +2307,29 @@ impl Expression {
                 ),
                 ("delegate", CanonicalValue::Bool(*delegate)),
             ]),
-            Self::Binary {
-                operator,
-                left,
-                right,
-            } => CanonicalValue::map_from_entries([
-                ("kind", CanonicalValue::str("binary")),
-                ("operator", CanonicalValue::str(operator.as_str())),
-                ("left", left.canonical_value()),
-                ("right", right.canonical_value()),
-            ]),
+            Self::Binary { .. } => {
+                let mut steps: Vec<(BinaryOperator, &Expression)> = Vec::new();
+                let mut current = self;
+                while let Self::Binary {
+                    operator,
+                    left,
+                    right,
+                } = current
+                {
+                    steps.push((*operator, right.as_ref()));
+                    current = left.as_ref();
+                }
+                let mut value = current.canonical_value();
+                for (operator, right) in steps.into_iter().rev() {
+                    value = CanonicalValue::map_from_entries([
+                        ("kind", CanonicalValue::str("binary")),
+                        ("operator", CanonicalValue::str(operator.as_str())),
+                        ("left", value),
+                        ("right", right.canonical_value()),
+                    ]);
+                }
+                value
+            }
             Self::Unary { operator, argument } => CanonicalValue::map_from_entries([
                 ("kind", CanonicalValue::str("unary")),
                 ("operator", CanonicalValue::str(operator.as_str())),

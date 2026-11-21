@@ -611,3 +611,264 @@ WeakSet.prototype.add = nativeAdd;
         "add,add,close,TypeError|true|1|0",
     );
 }
+
+/// TextEncoder and TextDecoder keep `encoding`, `fatal`, `ignoreBOM`, and
+/// streaming state in engine-private slots accessed through prototype getters
+/// rather than own properties. Expected baseline output captured from Node v26.3.0.
+#[test]
+fn text_codec_slots_are_private_and_prototype_getters_match_node() {
+    assert_profile_value(
+        r#"function attempt(f) { try { return String(f()); } catch (e) { return e.name; } }
+var te = new TextEncoder();
+var td = new TextDecoder('latin1', { fatal: true, ignoreBOM: true });
+var out = [
+  Object.getOwnPropertyNames(te).length,
+  Object.getOwnPropertyNames(td).length,
+  te.hasOwnProperty('encoding'),
+  td.hasOwnProperty('encoding'),
+  td.hasOwnProperty('fatal'),
+  td.hasOwnProperty('ignoreBOM'),
+  '__textDecoderState' in td,
+  String(td.__textDecoderState),
+  te.encoding, td.encoding, td.fatal, td.ignoreBOM,
+  attempt(() => Object.getOwnPropertyDescriptor(TextEncoder.prototype, 'encoding').get.call({})),
+  attempt(() => Object.getOwnPropertyDescriptor(TextDecoder.prototype, 'encoding').get.call({})),
+  attempt(() => Object.getOwnPropertyDescriptor(TextDecoder.prototype, 'fatal').get.call(te)),
+  attempt(() => Object.getOwnPropertyDescriptor(TextDecoder.prototype, 'ignoreBOM').get.call({})),
+];
+td.encoding = 'utf-8'; td.fatal = false; td.ignoreBOM = false; td.__textDecoderState = 99;
+out.push(td.encoding, td.fatal, td.ignoreBOM, td.decode(new Uint8Array([0xE9])));
+var streamTd = new TextDecoder('utf-8');
+streamTd.__textDecoderState = 12345;
+out.push(
+  streamTd.decode(new Uint8Array([0xE2, 0x82]), { stream: true }),
+  streamTd.decode(new Uint8Array([0xAC])),
+);
+out.join('|');"#,
+        "0|0|false|false|false|false|false|undefined|utf-8|windows-1252|true|true|TypeError|TypeError|TypeError|TypeError|windows-1252|true|true|é||€",
+    );
+
+    // Private streaming state also survives Object.freeze on the decoder.
+    assert_profile_value(
+        r#"var frozen = Object.freeze(new TextDecoder('utf-8'));
+[frozen.decode(new Uint8Array([0xE2, 0x82]), { stream: true }),
+ frozen.decode(new Uint8Array([0xAC])),
+ Object.getOwnPropertyNames(frozen).length].join('|');"#,
+        "|€|0",
+    );
+}
+
+/// Intl.* resolved options live in a private heap slot traced by GC and
+/// immune to guest `__resolved` writes and deletions. Expected output
+/// captured from Node v26.3.0.
+#[test]
+fn intl_resolved_options_slot_is_private_and_survives_gc_stress() {
+    use frankenengine_engine::ast::ParseGoal;
+    use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore, Value};
+    use frankenengine_engine::capability::RuntimeCapability;
+    use frankenengine_engine::ir_contract::Ir0Module;
+    use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+    use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
+
+    let source = r#"var nf = new Intl.NumberFormat('en-US');
+var dtf = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', year: 'numeric' });
+var out = [
+  '__resolved' in nf,
+  '__resolved' in dtf,
+  String(nf.__resolved),
+  Object.getOwnPropertyNames(nf).includes('__resolved'),
+  Object.getOwnPropertyNames(dtf).includes('__resolved'),
+];
+nf.__resolved = { locale: 'evil' };
+dtf.__resolved = {};
+for (let i = 0; i < 30; i++) { const garbage = { i }; }
+out.push(nf.resolvedOptions().locale, nf.format(1234), dtf.format(new Date(Date.UTC(2024, 0, 1))));
+delete nf.__resolved;
+out.push(nf.resolvedOptions().locale, nf.format(42));
+out.join('|');"#;
+
+    assert_profile_value(
+        source,
+        "false|false|undefined|false|false|en-US|1,234|2024|en-US|42",
+    );
+
+    let tree = CanonicalEs2020Parser
+        .parse_with_options(
+            ParserSource {
+                label: "intl-private-gc.js".into(),
+                text: source.into(),
+            },
+            ParseGoal::Script,
+            &ParserOptions::default(),
+        )
+        .expect("intl program parses");
+    let module = lower_ir0_to_ir3(
+        &Ir0Module::from_syntax_tree(tree, "intl-private-gc.js"),
+        &LoweringContext::new("intl-gc", "intl-decision", "intl-policy"),
+    )
+    .expect("intl program lowers")
+    .ir3;
+    for mut config in [
+        InterpreterConfig::quickjs_defaults(),
+        InterpreterConfig::v8_defaults(),
+    ] {
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]
+        .into_iter()
+        .collect();
+        let mut core = InterpreterCore::new(config, "intl-gc");
+        core.set_gc_stress_interval(Some(1));
+        let result = core
+            .execute(&module)
+            .expect("Intl private slot survives GC");
+        assert_eq!(
+            result.value,
+            Value::str("false|false|undefined|false|false|en-US|1,234|2024|en-US|42")
+        );
+        assert!(core.gc_stats().collections > 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "HostObjectSlots::IntlResolved must keep exact memory accounting"
+        );
+    }
+}
+
+/// Timer handles store their timer id in a private host slot: `__timerId` is
+/// absent from reflection, forged `{ __timerId: 1 }` objects cannot cancel a
+/// real timer, and guest writes to `handle.__timerId` do not corrupt
+/// `clearTimeout` / `ref` / `unref` / `hasRef`.
+#[test]
+fn timer_handle_id_slot_is_private_and_cannot_be_forged_or_corrupted() {
+    use frankenengine_engine::ast::ParseGoal;
+    use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore, Value};
+    use frankenengine_engine::capability::RuntimeCapability;
+    use frankenengine_engine::ir_contract::Ir0Module;
+    use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+    use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
+
+    let source = r#"var fired = [];
+var h1 = setTimeout(() => { fired.push('t1'); }, 5);
+var h2 = setTimeout(() => { fired.push('t2'); }, 10);
+var leaked = ['__timerId' in h1, Object.getOwnPropertyNames(h1).includes('__timerId'), String(h1.__timerId)];
+clearTimeout({ __timerId: 1 });
+clearTimeout({ __timerId: 2 });
+h2.__timerId = 99999;
+var refCheck = [h2.hasRef(), h2.unref() === h2, h2.hasRef(), h2.ref() === h2, h2.hasRef()];
+clearTimeout(h2);
+[leaked.join(','), refCheck.join(','), h2.hasRef(), h1.hasRef()].join('|');"#;
+
+    let tree = CanonicalEs2020Parser
+        .parse_with_options(
+            ParserSource {
+                label: "timer-private.js".into(),
+                text: source.into(),
+            },
+            ParseGoal::Script,
+            &ParserOptions::default(),
+        )
+        .expect("timer program parses");
+    let module = lower_ir0_to_ir3(
+        &Ir0Module::from_syntax_tree(tree, "timer-private.js"),
+        &LoweringContext::new("timer-slot", "timer-decision", "timer-policy"),
+    )
+    .expect("timer program lowers")
+    .ir3;
+    for mut config in [
+        InterpreterConfig::quickjs_defaults(),
+        InterpreterConfig::v8_defaults(),
+    ] {
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+            RuntimeCapability::Timer,
+        ]
+        .into_iter()
+        .collect();
+        let mut core = InterpreterCore::new(config, "timer-slot");
+        let result = core.execute(&module).expect("timer slot checks execute");
+        assert_eq!(
+            result.value,
+            Value::str("false,false,undefined|true,true,false,true,true|false|true")
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "HostObjectSlots::TimerHandle must keep exact memory accounting"
+        );
+    }
+}
+
+/// EventEmitter maxListeners lives in an engine-private weak side table:
+/// `__maxListeners` is absent from reflection, guest writes do not corrupt
+/// `getMaxListeners()`, `setMaxListeners()` works on frozen emitters, and
+/// GC reclaims entries of collected emitters with exact memory accounting.
+#[test]
+fn event_emitter_max_listeners_is_private_and_survives_freeze() {
+    use frankenengine_engine::ast::ParseGoal;
+    use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore, Value};
+    use frankenengine_engine::capability::RuntimeCapability;
+    use frankenengine_engine::ir_contract::Ir0Module;
+    use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+    use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
+
+    let source = r#"const { EventEmitter } = require('events');
+const ee = new EventEmitter();
+const leaked = ['__maxListeners' in ee, Object.getOwnPropertyNames(ee).includes('__maxListeners'), String(ee.__maxListeners), ee.getMaxListeners()];
+ee.__maxListeners = 999;
+const afterGuestWrite = [ee.getMaxListeners(), ee.__maxListeners];
+delete ee.__maxListeners;
+Object.freeze(ee);
+ee.setMaxListeners(25);
+for (let i = 0; i < 20; i++) {
+  const tmp = new EventEmitter();
+  tmp.setMaxListeners(i + 1);
+}
+[leaked.join(','), afterGuestWrite.join(','), ee.getMaxListeners(), Object.getOwnPropertyNames(ee).includes('__maxListeners')].join('|');"#;
+
+    let tree = CanonicalEs2020Parser
+        .parse_with_options(
+            ParserSource {
+                label: "emitter-private-max-listeners.js".into(),
+                text: source.into(),
+            },
+            ParseGoal::Script,
+            &ParserOptions::default(),
+        )
+        .expect("emitter program parses");
+    let module = lower_ir0_to_ir3(
+        &Ir0Module::from_syntax_tree(tree, "emitter-private-max-listeners.js"),
+        &LoweringContext::new("emitter-slot", "emitter-decision", "emitter-policy"),
+    )
+    .expect("emitter program lowers")
+    .ir3;
+    for mut config in [
+        InterpreterConfig::quickjs_defaults(),
+        InterpreterConfig::v8_defaults(),
+    ] {
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]
+        .into_iter()
+        .collect();
+        let mut core = InterpreterCore::new(config, "emitter-slot");
+        core.set_gc_stress_interval(Some(1));
+        let result = core.execute(&module).expect("emitter slot checks execute");
+        assert_eq!(
+            result.value,
+            Value::str("false,false,undefined,10|10,999|25|false")
+        );
+        assert!(core.gc_stats().collections > 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "event_max_listeners must keep exact memory accounting across GC"
+        );
+    }
+}

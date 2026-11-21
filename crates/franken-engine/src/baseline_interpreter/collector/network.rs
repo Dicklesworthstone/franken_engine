@@ -354,6 +354,14 @@ impl InterpreterCore {
             }
             live
         });
+        self.event_max_listeners.retain(|id, value| {
+            let live = !heap.is_reclaimed(id.0 as usize);
+            if !live {
+                released =
+                    released.saturating_add(Self::estimate_event_max_listeners_entry_bytes(value));
+            }
+            live
+        });
         self.event_promise_waiters.retain(|id, events| {
             let live = !heap.is_reclaimed(id.0 as usize);
             if !live {

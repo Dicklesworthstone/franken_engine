@@ -786,7 +786,7 @@ impl ParseEventIr {
         parser_mode: ParserMode,
     ) -> Self {
         let source_label = source_label.into();
-        let source_fingerprint = canonical_value_hash(&tree.canonical_value());
+        let source_fingerprint = canonical_value_hash_owned(tree.canonical_value());
         let (trace_id, decision_id) =
             parse_event_provenance_ids(&source_label, parser_mode, tree.goal, &source_fingerprint);
         Self::from_syntax_tree_with_provenance(
@@ -915,7 +915,7 @@ impl ParseEventIr {
                 statement_index: Some(statement_index),
                 span: Some(statement.span().clone()),
                 payload_kind: Some(statement_kind_label(statement).to_string()),
-                payload_hash: Some(canonical_value_hash(&statement.canonical_value())),
+                payload_hash: Some(canonical_value_hash_owned(statement.canonical_value())),
             });
         }
 
@@ -934,7 +934,7 @@ impl ParseEventIr {
             statement_index: None,
             span: Some(tree.span),
             payload_kind: Some("syntax_tree".to_string()),
-            payload_hash: Some(canonical_value_hash(&tree.canonical_value())),
+            payload_hash: Some(canonical_value_hash_owned(tree.canonical_value())),
         });
 
         Self {
@@ -1551,6 +1551,12 @@ impl MaterializedSyntaxTree {
 
 fn canonical_value_hash(value: &CanonicalValue) -> String {
     let digest = Sha256::digest(deterministic_serde::encode_value(value));
+    format!("{PARSE_EVENT_IR_HASH_PREFIX}{}", hex::encode(digest))
+}
+
+fn canonical_value_hash_owned(value: CanonicalValue) -> String {
+    let digest = Sha256::digest(deterministic_serde::encode_value(&value));
+    deterministic_serde::drop_canonical_value_iteratively(value);
     format!("{PARSE_EVENT_IR_HASH_PREFIX}{}", hex::encode(digest))
 }
 
@@ -4250,14 +4256,6 @@ fn merge_logical_lines_with(text: &str, initial_hashbang: bool) -> Vec<LogicalLi
 /// parser lane (bd-rucba).
 const PARSE_STACK_BYTES_PER_RECURSION_LEVEL: usize = 64 * 1024;
 const PARSE_STACK_BASE_BYTES: usize = 4 * 1024 * 1024;
-
-/// Terms of a folded left-associative operator chain charged as one level of
-/// the recursion budget (bd-9vouw.85). Measured on a debug frankenctl: a
-/// top-level chain of `+`, string, call or product terms overflowed the parse
-/// stack above (4 MiB + 256 levels of 64 KiB) at 1,790-1,800 terms, about
-/// 5.5 terms per level; 4 keeps the longest admitted chain (~1,000 terms at
-/// top level) about 40% below that.
-const FOLDED_CHAIN_TERMS_PER_RECURSION_LEVEL: u64 = 4;
 
 /// Run `run` on a scoped thread whose stack is provisioned from the recursion
 /// budget, falling back to the caller stack if the thread cannot be spawned
@@ -9337,19 +9335,12 @@ fn try_parse_binary(
             .filter(|(_, _, candidate)| candidate.precedence() == op.precedence())
             .collect();
         if chain.len() > 1 {
-            // The folded tree is still one Binary node per operator, and the
-            // parse-event, materialization and lowering walkers recurse down
-            // its left spine: a debug build overflowed the provisioned parse
-            // stack at ~1,790 terms and aborted. So the chain is charged one
-            // budget level per FOLDED_CHAIN_TERMS_PER_RECURSION_LEVEL terms,
-            // and a chain too long for the budget fails closed with the
-            // budget error, as every chain past 255 terms did before.
-            let terms = u64::try_from(chain.len())
-                .unwrap_or(u64::MAX)
-                .saturating_add(1);
-            let operand_depth = recursion_depth
-                .saturating_add(1)
-                .saturating_add(terms.div_ceil(FOLDED_CHAIN_TERMS_PER_RECURSION_LEVEL));
+            // Flat left-associative chains charge one nesting level rather than
+            // one level per term (bd-9vouw.85); downstream AST, canonical-value,
+            // static-semantics, and lowering walkers traverse left spines
+            // iteratively so 10,000-term chains evaluate without stack overflow,
+            // while genuinely nested operands still enforce max_recursion_depth.
+            let operand_depth = recursion_depth.saturating_add(1);
             if op == BinaryOperator::NullishCoalescing {
                 let mut operand_start = 0;
                 for &(position, length, _) in
@@ -17666,7 +17657,17 @@ fn field_initializer_forbidden(expression: &Expression) -> Option<&'static str> 
                 .or_else(|| computed.then(|| in_expression(property)).flatten()),
             Expression::Await(inner) | Expression::SpreadElement(inner) => in_expression(inner),
             Expression::Yield { argument, .. } => argument.as_deref().and_then(in_expression),
-            Expression::Binary { left, right, .. } | Expression::Assignment { left, right, .. } => {
+            Expression::Binary { .. } => {
+                let mut right_nodes: Vec<&Expression> = Vec::new();
+                let mut current = expr;
+                while let Expression::Binary { left, right, .. } = current {
+                    right_nodes.push(right.as_ref());
+                    current = left.as_ref();
+                }
+                in_expression(current)
+                    .or_else(|| right_nodes.into_iter().rev().find_map(in_expression))
+            }
+            Expression::Assignment { left, right, .. } => {
                 in_expression(left).or_else(|| in_expression(right))
             }
             Expression::Unary { argument, .. } => in_expression(argument),

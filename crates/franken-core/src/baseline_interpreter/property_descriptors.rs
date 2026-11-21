@@ -122,6 +122,15 @@ impl HeapObject {
                         .get_exact(key)
                         .cloned()
                         .map(RuntimeProperty::Data)
+                })
+                .or_else(|| {
+                    (self.is_array && key.as_str() == Some("length")).then(|| {
+                        let derived_len = self.properties.keys().fold(0u32, |current, prop_key| {
+                            canonical_array_index(prop_key)
+                                .map_or(current, |index| current.max(index.saturating_add(1)))
+                        });
+                        RuntimeProperty::Data(Value::Int(i64::from(derived_len)))
+                    })
                 }),
             RuntimePropertyKey::Symbol(symbol) => self
                 .properties

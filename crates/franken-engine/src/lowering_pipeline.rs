@@ -431,8 +431,19 @@ fn collect_lexical_typed_hostcalls(
                         self.visit_expression(arg);
                     }
                 }
-                Expression::Binary { left, right, .. }
-                | Expression::Assignment { left, right, .. } => {
+                Expression::Binary { left, right, .. } => {
+                    let mut right_nodes: Vec<&Expression> = vec![right.as_ref()];
+                    let mut current = left.as_ref();
+                    while let Expression::Binary { left, right, .. } = current {
+                        right_nodes.push(right.as_ref());
+                        current = left.as_ref();
+                    }
+                    self.visit_expression(current);
+                    for node in right_nodes.into_iter().rev() {
+                        self.visit_expression(node);
+                    }
+                }
+                Expression::Assignment { left, right, .. } => {
                     self.visit_expression(left);
                     self.visit_expression(right);
                 }
@@ -4223,7 +4234,19 @@ impl<'a> MentionedNames<'a> {
                     self.expression(argument);
                 }
             }
-            Expression::Binary { left, right, .. } | Expression::Assignment { left, right, .. } => {
+            Expression::Binary { left, right, .. } => {
+                let mut right_nodes: Vec<&Expression> = vec![right.as_ref()];
+                let mut current = left.as_ref();
+                while let Expression::Binary { left, right, .. } = current {
+                    right_nodes.push(right.as_ref());
+                    current = left.as_ref();
+                }
+                self.expression(current);
+                for node in right_nodes.into_iter().rev() {
+                    self.expression(node);
+                }
+            }
+            Expression::Assignment { left, right, .. } => {
                 self.expression(left);
                 self.expression(right);
             }
@@ -16710,10 +16733,22 @@ fn try_fold_static_string_expr(expr: &Expression) -> Option<String> {
             left,
             right,
         } => {
-            let mut lhs = try_fold_static_string_expr(left)?;
-            let rhs = try_fold_static_string_expr(right)?;
-            lhs.push_str(&rhs);
-            Some(lhs)
+            let mut right_nodes: Vec<&Expression> = vec![right.as_ref()];
+            let mut current = left.as_ref();
+            while let Expression::Binary {
+                operator: BinaryOperator::Add,
+                left,
+                right,
+            } = current
+            {
+                right_nodes.push(right.as_ref());
+                current = left.as_ref();
+            }
+            let mut out = try_fold_static_string_expr(current)?;
+            for node in right_nodes.into_iter().rev() {
+                out.push_str(&try_fold_static_string_expr(node)?);
+            }
+            Some(out)
         }
         _ => None,
     }
@@ -17645,6 +17680,16 @@ fn lower_expression_to_ir1(
     let op_start = ops.len();
     let lowered_by_stack_bounded_helper =
         try_lower_environment_read_to_ir1(expression, ops, binding_lookup)
+            || try_lower_sequence_iife_to_ir1(
+                expression,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                label_counter,
+                span_table,
+            )?
             || try_lower_net_expression_to_ir1(
                 expression,
                 ops,
@@ -18062,6 +18107,112 @@ fn try_lower_arrow_expression_to_ir1(
 /// `instanceof` remains in the generic lowerer because that arm owns the
 /// authenticated Array/net/cluster special cases. All other binary operators
 /// have the uniform left/right/BinaryOp lowering below.
+/// Match the synthetic comma/sequence IIFE emitted by the parser's
+/// `build_sequence_expression` (`((__seq_0, ..., __seq_K) => __seq_K)(e0, ..., eK)`).
+fn sequence_iife_operands(expression: &Expression) -> Option<&[Expression]> {
+    let Expression::Call {
+        callee, arguments, ..
+    } = expression
+    else {
+        return None;
+    };
+    if arguments.len() < 2
+        || arguments
+            .iter()
+            .any(|arg| matches!(arg, Expression::SpreadElement(_)))
+    {
+        return None;
+    }
+    let Expression::ArrowFunction {
+        params,
+        body: ArrowBody::Expression(body_expr),
+        is_async: false,
+        source_text: None,
+    } = callee.as_ref()
+    else {
+        return None;
+    };
+    if params.len() != arguments.len() {
+        return None;
+    }
+    for (idx, param) in params.iter().enumerate() {
+        let BindingPattern::Identifier(name) = &param.pattern else {
+            return None;
+        };
+        if !name
+            .strip_prefix("__seq_")
+            .and_then(|rest| rest.parse::<usize>().ok())
+            .is_some_and(|parsed| parsed == idx)
+        {
+            return None;
+        }
+    }
+    let Expression::Identifier(ret_name) = body_expr.as_ref() else {
+        return None;
+    };
+    if !ret_name
+        .strip_prefix("__seq_")
+        .and_then(|rest| rest.parse::<usize>().ok())
+        .is_some_and(|parsed| parsed + 1 == params.len())
+    {
+        return None;
+    }
+    Some(arguments.as_slice())
+}
+
+/// Lower parser-synthesized comma sequences iteratively with `Ir1Op::Discard`
+/// between operands instead of materializing nested 64-argument arrow calls
+/// (bd-9vouw.85). Keeps stack depth and register usage O(1) for 10,000-term
+/// comma sequences on both top-level and fixed 256-register lanes.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn try_lower_sequence_iife_to_ir1(
+    expression: &Expression,
+    ops: &mut Vec<Ir1Op>,
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    root_scope_id: ScopeId,
+    label_counter: &mut u32,
+    span_table: &mut Vec<Ir1OpSpanEntry>,
+) -> Result<bool, LoweringPipelineError> {
+    if sequence_iife_operands(expression).is_none() {
+        return Ok(false);
+    }
+    let mut chunks: Vec<&[Expression]> = Vec::new();
+    let mut current = expression;
+    while let Some(args) = sequence_iife_operands(current) {
+        if sequence_iife_operands(&args[0]).is_some() {
+            chunks.push(&args[1..]);
+            current = &args[0];
+        } else {
+            chunks.push(args);
+            break;
+        }
+    }
+    let total_operands: usize = chunks.iter().map(|chunk| chunk.len()).sum();
+    let mut lowered = 0usize;
+    for chunk in chunks.into_iter().rev() {
+        for operand in chunk {
+            lower_expression_to_ir1(
+                operand,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                label_counter,
+                span_table,
+            )?;
+            lowered += 1;
+            if lowered < total_operands {
+                ops.push(Ir1Op::Discard);
+            }
+        }
+    }
+    Ok(true)
+}
+
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
 fn try_lower_simple_binary_expression_to_ir1(
@@ -18074,12 +18225,7 @@ fn try_lower_simple_binary_expression_to_ir1(
     label_counter: &mut u32,
     span_table: &mut Vec<Ir1OpSpanEntry>,
 ) -> Result<bool, LoweringPipelineError> {
-    let Expression::Binary {
-        operator,
-        left,
-        right,
-    } = expression
-    else {
+    let Expression::Binary { operator, .. } = expression else {
         return Ok(false);
     };
     if matches!(
@@ -18096,18 +18242,28 @@ fn try_lower_simple_binary_expression_to_ir1(
         // short-circuit lowered before IR3" (bd-jux2l).
         return Ok(false);
     }
-    lower_expression_to_ir1(
+    let mut steps: Vec<(BinaryOperator, &Expression)> = Vec::new();
+    let mut current = expression;
+    while let Expression::Binary {
+        operator,
         left,
-        ops,
-        bindings,
-        binding_lookup,
-        binding_index,
-        root_scope_id,
-        label_counter,
-        span_table,
-    )?;
-    lower_expression_to_ir1(
         right,
+    } = current
+    {
+        if matches!(
+            *operator,
+            BinaryOperator::Instanceof
+                | BinaryOperator::LogicalAnd
+                | BinaryOperator::LogicalOr
+                | BinaryOperator::NullishCoalescing
+        ) {
+            break;
+        }
+        steps.push((*operator, right.as_ref()));
+        current = left.as_ref();
+    }
+    lower_expression_to_ir1(
+        current,
         ops,
         bindings,
         binding_lookup,
@@ -18116,9 +18272,19 @@ fn try_lower_simple_binary_expression_to_ir1(
         label_counter,
         span_table,
     )?;
-    ops.push(Ir1Op::BinaryOp {
-        operator: *operator,
-    });
+    for (operator, right) in steps.into_iter().rev() {
+        lower_expression_to_ir1(
+            right,
+            ops,
+            bindings,
+            binding_lookup,
+            binding_index,
+            root_scope_id,
+            label_counter,
+            span_table,
+        )?;
+        ops.push(Ir1Op::BinaryOp { operator });
+    }
     Ok(true)
 }
 
@@ -18222,20 +18388,37 @@ fn try_lower_logical_expression_to_ir1(
     label_counter: &mut u32,
     span_table: &mut Vec<Ir1OpSpanEntry>,
 ) -> Result<bool, LoweringPipelineError> {
-    let Expression::Binary {
-        operator,
-        left,
-        right,
-    } = expression
-    else {
+    let Expression::Binary { operator, .. } = expression else {
         return Ok(false);
     };
+    let chain_op = *operator;
     if !matches!(
-        operator,
+        chain_op,
         BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr | BinaryOperator::NullishCoalescing
     ) {
         return Ok(false);
     }
+
+    // Flatten a left-associative chain of the same short-circuit operator
+    // (`a && b && ... && z`, `a || b || ... || z`, `a ?? b ?? ... ?? z`) so
+    // the entire chain shares one short-lived internal binding, one end label,
+    // and O(1) Rust stack depth + O(1) registers (bd-9vouw.85).
+    let mut operands: Vec<&Expression> = Vec::new();
+    let mut current = expression;
+    while let Expression::Binary {
+        operator,
+        left,
+        right,
+    } = current
+    {
+        if *operator != chain_op {
+            break;
+        }
+        operands.push(right.as_ref());
+        current = left.as_ref();
+    }
+    operands.push(current);
+    operands.reverse();
 
     let temp_binding = alloc_internal_binding(
         bindings,
@@ -18244,11 +18427,10 @@ fn try_lower_logical_expression_to_ir1(
         root_scope_id,
         "short_circuit",
     )?;
-    let eval_rhs_label = alloc_label(label_counter);
     let end_label = alloc_label(label_counter);
 
     lower_expression_to_ir1(
-        left,
+        operands[0],
         ops,
         bindings,
         binding_lookup,
@@ -18260,46 +18442,51 @@ fn try_lower_logical_expression_to_ir1(
     ops.push(Ir1Op::StoreBinding {
         binding_id: temp_binding,
     });
-    ops.push(Ir1Op::Pop);
-    ops.push(Ir1Op::LoadBinding {
-        binding_id: temp_binding,
-    });
+    ops.push(Ir1Op::Discard);
 
-    match operator {
-        BinaryOperator::LogicalAnd => ops.push(Ir1Op::JumpIfTruthy {
-            label_id: eval_rhs_label,
-        }),
-        BinaryOperator::LogicalOr => ops.push(Ir1Op::JumpIfFalsyConsume {
-            label_id: eval_rhs_label,
-        }),
-        BinaryOperator::NullishCoalescing => ops.push(Ir1Op::JumpIfNullish {
-            label_id: eval_rhs_label,
-        }),
-        _ => {
-            return Err(LoweringPipelineError::InvariantViolation {
-                detail: "unexpected operator in logical expression helper",
-            });
+    for rhs in &operands[1..] {
+        let eval_rhs_label = alloc_label(label_counter);
+        ops.push(Ir1Op::LoadBinding {
+            binding_id: temp_binding,
+        });
+
+        match chain_op {
+            BinaryOperator::LogicalAnd => ops.push(Ir1Op::JumpIfTruthy {
+                label_id: eval_rhs_label,
+            }),
+            BinaryOperator::LogicalOr => ops.push(Ir1Op::JumpIfFalsyConsume {
+                label_id: eval_rhs_label,
+            }),
+            BinaryOperator::NullishCoalescing => ops.push(Ir1Op::JumpIfNullish {
+                label_id: eval_rhs_label,
+            }),
+            _ => {
+                return Err(LoweringPipelineError::InvariantViolation {
+                    detail: "unexpected operator in logical expression helper",
+                });
+            }
         }
+
+        ops.push(Ir1Op::Jump {
+            label_id: end_label,
+        });
+        ops.push(Ir1Op::Label { id: eval_rhs_label });
+        lower_expression_to_ir1(
+            rhs,
+            ops,
+            bindings,
+            binding_lookup,
+            binding_index,
+            root_scope_id,
+            label_counter,
+            span_table,
+        )?;
+        ops.push(Ir1Op::StoreBinding {
+            binding_id: temp_binding,
+        });
+        ops.push(Ir1Op::Discard);
     }
 
-    ops.push(Ir1Op::Jump {
-        label_id: end_label,
-    });
-    ops.push(Ir1Op::Label { id: eval_rhs_label });
-    lower_expression_to_ir1(
-        right,
-        ops,
-        bindings,
-        binding_lookup,
-        binding_index,
-        root_scope_id,
-        label_counter,
-        span_table,
-    )?;
-    ops.push(Ir1Op::StoreBinding {
-        binding_id: temp_binding,
-    });
-    ops.push(Ir1Op::Pop);
     ops.push(Ir1Op::Label { id: end_label });
     ops.push(Ir1Op::LoadBinding {
         binding_id: temp_binding,
@@ -24562,7 +24749,20 @@ fn expr_contains_matching_call<F: Fn(&Expression) -> bool>(
             expr_contains_matching_call(object, is_target)
                 || expr_contains_matching_call(property, is_target)
         }
-        Expression::Binary { left, right, .. } | Expression::Assignment { left, right, .. } => {
+        Expression::Binary { left, right, .. } => {
+            let mut right_nodes: Vec<&Expression> = vec![right.as_ref()];
+            let mut current = left.as_ref();
+            while let Expression::Binary { left, right, .. } = current {
+                right_nodes.push(right.as_ref());
+                current = left.as_ref();
+            }
+            expr_contains_matching_call(current, is_target)
+                || right_nodes
+                    .into_iter()
+                    .rev()
+                    .any(|node| expr_contains_matching_call(node, is_target))
+        }
+        Expression::Assignment { left, right, .. } => {
             expr_contains_matching_call(left, is_target)
                 || expr_contains_matching_call(right, is_target)
         }

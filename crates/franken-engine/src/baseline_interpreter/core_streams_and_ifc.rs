@@ -57,9 +57,8 @@ impl InterpreterCore {
     pub(super) fn readable_object_properties(
         object_mode: bool,
         high_water_mark: i64,
-    ) -> [(&'static str, Value); 9] {
+    ) -> [(&'static str, Value); 8] {
         [
-            ("__maxListeners", Value::Int(10)),
             ("readable", Value::Bool(true)),
             ("readableEnded", Value::Bool(false)),
             ("readableFlowing", Value::Null),
@@ -6349,28 +6348,26 @@ impl InterpreterCore {
         chunk: &Value,
         chunk_label: &Label,
     ) -> Result<bool, InterpreterError> {
+        let request_index = request_id.0 as usize;
+        let previous_body = match self
+            .heap
+            .get(request_index)
+            .and_then(HeapObject::legacy_client_request_slots)
+        {
+            Some(slots) => slots.body.clone(),
+            None => {
+                return Err(InterpreterError::TypeError {
+                    expected: "ClientRequest receiver with internal body state".to_string(),
+                    got: "object".to_string(),
+                });
+            }
+        };
         let Some(chunk_len) = Self::client_request_chunk_len(chunk) else {
             return Ok(false);
         };
         if chunk_len == 0 {
             return Ok(false);
         }
-
-        let request_index = request_id.0 as usize;
-        let previous_body = match self
-            .heap
-            .get(request_index)
-            .and_then(|request| request.properties.get("__body"))
-        {
-            Some(Value::Str(body)) => body.clone(),
-            Some(value) => {
-                return Err(InterpreterError::TypeError {
-                    expected: "string ClientRequest body state".to_string(),
-                    got: value.type_name().to_string(),
-                });
-            }
-            None => return Err(InterpreterError::ObjectNotFound { id: request_id.0 }),
-        };
         let next_len = previous_body.len().checked_add(chunk_len).ok_or_else(|| {
             InterpreterError::RangeError {
                 message: format!("HTTP request body exceeds {MAX_HTTP_BODY_BYTES} bytes"),
@@ -6406,11 +6403,9 @@ impl InterpreterCore {
             // from turning a guest value into a production panic.
             _ => return Ok(false),
         }
-        let next_body = Value::str(next_body);
-        let previous_body_value = Value::Str(previous_body);
-        let previous_property_bytes =
-            Self::estimate_property_entry_bytes("__body", &previous_body_value);
-        let next_property_bytes = Self::estimate_property_entry_bytes("__body", &next_body);
+        let next_body = JsString::from(next_body);
+        let previous_body_bytes = Self::estimate_js_string_bytes(&previous_body);
+        let next_body_bytes = Self::estimate_js_string_bytes(&next_body);
         let previous_label_bytes = if previous_label == Label::Public {
             0
         } else {
@@ -6423,18 +6418,18 @@ impl InterpreterCore {
         };
         let requested_bytes = self
             .estimated_memory_bytes
-            .saturating_sub(previous_property_bytes)
+            .saturating_sub(previous_body_bytes)
             .saturating_sub(previous_label_bytes)
-            .saturating_add(next_property_bytes)
+            .saturating_add(next_body_bytes)
             .saturating_add(next_label_bytes);
         if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
         }
 
         self.mutate_heap(|heap| {
-            heap[request_index]
-                .properties
-                .insert("__body".to_string(), next_body);
+            if let Some(slots) = heap[request_index].legacy_client_request_slots_mut() {
+                slots.body = next_body;
+            }
         });
         if next_label == Label::Public {
             self.object_mutation_labels.remove(&request_id);
@@ -9148,6 +9143,39 @@ impl InterpreterCore {
                 }
                 if let Some(target) = object.weak_ref_target.as_deref() {
                     Self::queue_object_id_from_value(&target.value, &mut frontier, &mut queued);
+                }
+                if let Some(slots) = object.host_slots.as_deref() {
+                    match slots {
+                        HostObjectSlots::LegacyClientRequest(req) => {
+                            Self::queue_object_id_from_value(
+                                &Value::Object(req.headers),
+                                &mut frontier,
+                                &mut queued,
+                            );
+                            Self::queue_object_id_from_value(
+                                &req.response_cb,
+                                &mut frontier,
+                                &mut queued,
+                            );
+                        }
+                        HostObjectSlots::IntlResolved(resolved_id) => {
+                            Self::queue_object_id_from_value(
+                                &Value::Object(*resolved_id),
+                                &mut frontier,
+                                &mut queued,
+                            );
+                        }
+                        HostObjectSlots::TimersPromisesInterval(interval) => {
+                            Self::queue_object_id_from_value(
+                                &interval.value,
+                                &mut frontier,
+                                &mut queued,
+                            );
+                        }
+                        HostObjectSlots::TextDecoder(_)
+                        | HostObjectSlots::FsEntryKind(_)
+                        | HostObjectSlots::TimerHandle(_) => {}
+                    }
                 }
                 if let Some(prototype) = object.prototype {
                     Self::queue_object_id_from_value(

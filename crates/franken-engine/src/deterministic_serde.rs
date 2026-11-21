@@ -582,77 +582,112 @@ fn encode_into(buf: &mut Vec<u8>, value: &CanonicalValue) {
 }
 
 fn encode_into_impl(buf: &mut Vec<u8>, value: &CanonicalValue) {
-    match value {
-        CanonicalValue::U64(v) => {
-            buf.push(TAG_U64);
-            buf.extend_from_slice(&v.to_be_bytes());
-        }
-        CanonicalValue::I64(v) => {
-            buf.push(TAG_I64);
-            buf.extend_from_slice(&v.to_be_bytes());
-        }
-        CanonicalValue::Bool(v) => {
-            buf.push(TAG_BOOL);
-            buf.push(if *v { 0x01 } else { 0x00 });
-        }
-        CanonicalValue::Bytes(v) => {
-            buf.push(TAG_BYTES);
-            #[cfg(feature = "_h4_profile")]
-            _h4_phase_write_field_bytes(buf, v);
-            #[cfg(not(feature = "_h4_profile"))]
-            {
-                // Clamp length to u32::MAX and only write that many bytes so
-                // the encoded length prefix matches the data that follows,
-                // preventing decode-cursor misalignment on roundtrip.
-                let clamped = v.len().min(u32::MAX as usize);
-                buf.extend_from_slice(&(clamped as u32).to_be_bytes());
-                buf.extend_from_slice(&v[..clamped]);
+    enum EncodeWork<'a> {
+        Value(&'a CanonicalValue),
+        MapKey(&'a str),
+    }
+
+    let mut stack = vec![EncodeWork::Value(value)];
+    while let Some(work) = stack.pop() {
+        match work {
+            EncodeWork::MapKey(key) => {
+                let key_bytes = key.as_bytes();
+                let key_clamped = key_bytes.len().min(u32::MAX as usize);
+                buf.extend_from_slice(&(key_clamped as u32).to_be_bytes());
+                buf.extend_from_slice(&key_bytes[..key_clamped]);
             }
-        }
-        CanonicalValue::String(v) => {
-            buf.push(TAG_STRING);
-            #[cfg(feature = "_h4_profile")]
-            _h4_phase_write_field_bytes(buf, v.as_bytes());
-            #[cfg(not(feature = "_h4_profile"))]
-            {
-                let bytes = v.as_bytes();
-                let clamped = bytes.len().min(u32::MAX as usize);
-                buf.extend_from_slice(&(clamped as u32).to_be_bytes());
-                buf.extend_from_slice(&bytes[..clamped]);
-            }
-        }
-        CanonicalValue::Array(items) => {
-            buf.push(TAG_ARRAY);
-            let clamped = items.len().min(u32::MAX as usize);
-            buf.extend_from_slice(&(clamped as u32).to_be_bytes());
-            for item in items.iter().take(clamped) {
-                encode_into(buf, item);
-            }
-        }
-        CanonicalValue::Map(entries) => {
-            #[cfg(feature = "_h4_profile")]
-            _h4_phase_encode_map_entries(buf, entries);
-            #[cfg(not(feature = "_h4_profile"))]
-            {
-                buf.push(TAG_MAP);
-                // BTreeMap guarantees lexicographic ordering.
-                let clamped = entries.len().min(u32::MAX as usize);
-                buf.extend_from_slice(&(clamped as u32).to_be_bytes());
-                for (key, val) in entries.iter().take(clamped) {
-                    let key_bytes = key.as_bytes();
-                    let key_clamped = key_bytes.len().min(u32::MAX as usize);
-                    buf.extend_from_slice(&(key_clamped as u32).to_be_bytes());
-                    buf.extend_from_slice(&key_bytes[..key_clamped]);
-                    encode_into(buf, val);
+            EncodeWork::Value(current) => match current {
+                CanonicalValue::U64(v) => {
+                    buf.push(TAG_U64);
+                    buf.extend_from_slice(&v.to_be_bytes());
                 }
-            }
+                CanonicalValue::I64(v) => {
+                    buf.push(TAG_I64);
+                    buf.extend_from_slice(&v.to_be_bytes());
+                }
+                CanonicalValue::Bool(v) => {
+                    buf.push(TAG_BOOL);
+                    buf.push(if *v { 0x01 } else { 0x00 });
+                }
+                CanonicalValue::Bytes(v) => {
+                    buf.push(TAG_BYTES);
+                    #[cfg(feature = "_h4_profile")]
+                    _h4_phase_write_field_bytes(buf, v);
+                    #[cfg(not(feature = "_h4_profile"))]
+                    {
+                        // Clamp length to u32::MAX and only write that many bytes so
+                        // the encoded length prefix matches the data that follows,
+                        // preventing decode-cursor misalignment on roundtrip.
+                        let clamped = v.len().min(u32::MAX as usize);
+                        buf.extend_from_slice(&(clamped as u32).to_be_bytes());
+                        buf.extend_from_slice(&v[..clamped]);
+                    }
+                }
+                CanonicalValue::String(v) => {
+                    buf.push(TAG_STRING);
+                    #[cfg(feature = "_h4_profile")]
+                    _h4_phase_write_field_bytes(buf, v.as_bytes());
+                    #[cfg(not(feature = "_h4_profile"))]
+                    {
+                        let bytes = v.as_bytes();
+                        let clamped = bytes.len().min(u32::MAX as usize);
+                        buf.extend_from_slice(&(clamped as u32).to_be_bytes());
+                        buf.extend_from_slice(&bytes[..clamped]);
+                    }
+                }
+                CanonicalValue::Array(items) => {
+                    buf.push(TAG_ARRAY);
+                    let clamped = items.len().min(u32::MAX as usize);
+                    buf.extend_from_slice(&(clamped as u32).to_be_bytes());
+                    for item in items[..clamped].iter().rev() {
+                        stack.push(EncodeWork::Value(item));
+                    }
+                }
+                CanonicalValue::Map(entries) => {
+                    #[cfg(feature = "_h4_profile")]
+                    _h4_phase_encode_map_entries(buf, entries);
+                    #[cfg(not(feature = "_h4_profile"))]
+                    {
+                        buf.push(TAG_MAP);
+                        // BTreeMap guarantees lexicographic ordering.
+                        let clamped = entries.len().min(u32::MAX as usize);
+                        buf.extend_from_slice(&(clamped as u32).to_be_bytes());
+                        let pairs: Vec<(&String, &CanonicalValue)> =
+                            entries.iter().take(clamped).collect();
+                        for (key, val) in pairs.into_iter().rev() {
+                            stack.push(EncodeWork::Value(val));
+                            stack.push(EncodeWork::MapKey(key.as_str()));
+                        }
+                    }
+                }
+                CanonicalValue::Null => {
+                    buf.push(TAG_NULL);
+                }
+                CanonicalValue::Float(v) => {
+                    buf.push(TAG_F64);
+                    buf.extend_from_slice(&v.to_bits().to_be_bytes());
+                }
+            },
         }
-        CanonicalValue::Null => {
-            buf.push(TAG_NULL);
-        }
-        CanonicalValue::Float(v) => {
-            buf.push(TAG_F64);
-            buf.extend_from_slice(&v.to_bits().to_be_bytes());
+    }
+}
+
+/// Drop an arbitrarily deep `CanonicalValue` iteratively so deeply nested
+/// left-associative AST canonical representations do not overflow the Rust
+/// call stack on drop (bd-9vouw.85).
+pub(crate) fn drop_canonical_value_iteratively(value: CanonicalValue) {
+    let mut stack = vec![value];
+    while let Some(current) = stack.pop() {
+        match current {
+            CanonicalValue::Array(items) => stack.extend(items),
+            CanonicalValue::Map(entries) => stack.extend(entries.into_values()),
+            CanonicalValue::U64(_)
+            | CanonicalValue::I64(_)
+            | CanonicalValue::Bool(_)
+            | CanonicalValue::Bytes(_)
+            | CanonicalValue::String(_)
+            | CanonicalValue::Null
+            | CanonicalValue::Float(_) => {}
         }
     }
 }

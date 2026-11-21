@@ -1700,8 +1700,16 @@ fn walk_expression(state: &mut AnalyzerState, expr: &Expression, span: &SourceSp
             walk_expression(state, inner, span);
         }
         Expression::Binary { left, right, .. } => {
-            walk_expression(state, left, span);
-            walk_expression(state, right, span);
+            let mut right_nodes: Vec<&Expression> = vec![right.as_ref()];
+            let mut current = left.as_ref();
+            while let Expression::Binary { left, right, .. } = current {
+                right_nodes.push(right.as_ref());
+                current = left.as_ref();
+            }
+            walk_expression(state, current, span);
+            for node in right_nodes.into_iter().rev() {
+                walk_expression(state, node, span);
+            }
         }
         Expression::Unary {
             operator, argument, ..
@@ -1972,10 +1980,22 @@ fn initializer_self_reference(expr: &Expression, targets: &BTreeSet<&str>) -> Op
         Expression::Yield { argument, .. } => argument
             .as_deref()
             .and_then(|a| initializer_self_reference(a, targets)),
-        Expression::Binary { left, right, .. } | Expression::Assignment { left, right, .. } => {
-            initializer_self_reference(left, targets)
-                .or_else(|| initializer_self_reference(right, targets))
+        Expression::Binary { left, right, .. } => {
+            let mut right_nodes: Vec<&Expression> = vec![right.as_ref()];
+            let mut current = left.as_ref();
+            while let Expression::Binary { left, right, .. } = current {
+                right_nodes.push(right.as_ref());
+                current = left.as_ref();
+            }
+            initializer_self_reference(current, targets).or_else(|| {
+                right_nodes
+                    .into_iter()
+                    .rev()
+                    .find_map(|node| initializer_self_reference(node, targets))
+            })
         }
+        Expression::Assignment { left, right, .. } => initializer_self_reference(left, targets)
+            .or_else(|| initializer_self_reference(right, targets)),
         Expression::Conditional {
             test,
             consequent,
@@ -2046,8 +2066,16 @@ fn collect_identifier_refs(expr: &Expression, out: &mut Vec<String>) {
     match expr {
         Expression::Identifier(name) => out.push(name.clone()),
         Expression::Binary { left, right, .. } => {
-            collect_identifier_refs(left, out);
-            collect_identifier_refs(right, out);
+            let mut right_nodes: Vec<&Expression> = vec![right.as_ref()];
+            let mut current = left.as_ref();
+            while let Expression::Binary { left, right, .. } = current {
+                right_nodes.push(right.as_ref());
+                current = left.as_ref();
+            }
+            collect_identifier_refs(current, out);
+            for node in right_nodes.into_iter().rev() {
+                collect_identifier_refs(node, out);
+            }
         }
         Expression::Unary { argument, .. } => {
             collect_identifier_refs(argument, out);

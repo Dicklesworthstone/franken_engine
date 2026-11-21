@@ -447,7 +447,20 @@ pub(super) fn walk_expression<W: Walk + ?Sized>(
             Some(argument) => walker.expression(argument),
             None => Ok(()),
         },
-        Expression::Binary { left, right, .. } | Expression::Assignment { left, right, .. } => {
+        Expression::Binary { left, right, .. } => {
+            let mut right_nodes: Vec<&mut Expression> = vec![right.as_mut()];
+            let mut current = left.as_mut();
+            while let Expression::Binary { left, right, .. } = current {
+                right_nodes.push(right.as_mut());
+                current = left.as_mut();
+            }
+            walker.expression(current)?;
+            for node in right_nodes.into_iter().rev() {
+                walker.expression(node)?;
+            }
+            Ok(())
+        }
+        Expression::Assignment { left, right, .. } => {
             walker.expression(left)?;
             walker.expression(right)
         }
@@ -745,7 +758,20 @@ impl Search {
             Expression::Yield { argument, .. } => argument
                 .as_deref()
                 .is_some_and(|node| self.in_expression(node)),
-            Expression::Binary { left, right, .. } | Expression::Assignment { left, right, .. } => {
+            Expression::Binary { left, right, .. } => {
+                let mut right_nodes: Vec<&Expression> = vec![right.as_ref()];
+                let mut current = left.as_ref();
+                while let Expression::Binary { left, right, .. } = current {
+                    right_nodes.push(right.as_ref());
+                    current = left.as_ref();
+                }
+                self.in_expression(current)
+                    || right_nodes
+                        .into_iter()
+                        .rev()
+                        .any(|node| self.in_expression(node))
+            }
+            Expression::Assignment { left, right, .. } => {
                 self.in_expression(left) || self.in_expression(right)
             }
             Expression::Unary { argument, .. } => self.in_expression(argument),

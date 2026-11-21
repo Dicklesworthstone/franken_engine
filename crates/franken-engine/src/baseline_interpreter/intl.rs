@@ -167,7 +167,7 @@ impl InterpreterCore {
         let resolved_id = self.alloc_object_with_properties(&resolved)?;
         let object = self.alloc_object_with_prototype(None)?;
         self.set_object_brand(object, &format!("Intl.{service}"))?;
-        self.set_object_property(object, "__resolved".to_string(), Value::Object(resolved_id))?;
+        self.set_host_slots(object, HostObjectSlots::IntlResolved(resolved_id))?;
         let methods: &[&str] = match service {
             "NumberFormat" => &["format", "resolvedOptions"],
             "DateTimeFormat" => &["format", "formatToParts", "resolvedOptions"],
@@ -187,9 +187,7 @@ impl InterpreterCore {
             });
             self.set_object_property(object, (*method).to_string(), bound)?;
         }
-        let mut hidden = vec!["__resolved"];
-        hidden.extend_from_slice(methods);
-        self.hide_internal_slots(object, &hidden)?;
+        self.hide_internal_slots(object, methods)?;
         self.intl_to_string_tag(object, &format!("Intl.{service}"))?;
         Ok(Value::Object(object))
     }
@@ -216,8 +214,8 @@ impl InterpreterCore {
             .bound_object
             .map(ObjectId)
             .and_then(|object| self.heap.get(object.0 as usize))
-            .and_then(|object| object.properties.get("__resolved").cloned());
-        let Some(Value::Object(resolved)) = resolved else {
+            .and_then(HeapObject::intl_resolved_id);
+        let Some(resolved) = resolved else {
             return Err(InterpreterError::TypeError {
                 expected: format!("an Intl.{service} object"),
                 got: "an object without Intl state".to_string(),

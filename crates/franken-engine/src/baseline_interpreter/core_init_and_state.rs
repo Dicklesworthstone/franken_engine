@@ -1010,6 +1010,7 @@ impl InterpreterCore {
             event_once_wrappers: BTreeMap::new(),
             event_promise_waiters: BTreeMap::new(),
             next_event_promise_waiter_id: 0,
+            event_max_listeners: BTreeMap::new(),
             completed_child_processes: BTreeMap::new(),
             child_process_streams: BTreeMap::new(),
             child_process_handles: BTreeMap::new(),
@@ -3125,20 +3126,13 @@ impl InterpreterCore {
             },
         )?;
         self.set_object_property(object_id, "mtime".to_string(), modified)?;
-        self.set_object_property(
+        self.set_host_slots(
             object_id,
-            "__isFile".to_string(),
-            Value::Bool(metadata.is_file),
-        )?;
-        self.set_object_property(
-            object_id,
-            "__isDirectory".to_string(),
-            Value::Bool(metadata.is_directory),
-        )?;
-        self.set_object_property(
-            object_id,
-            "__isSymbolicLink".to_string(),
-            Value::Bool(metadata.is_symbolic_link),
+            HostObjectSlots::FsEntryKind(FsEntryKindSlots {
+                is_file: metadata.is_file,
+                is_directory: metadata.is_directory,
+                is_symbolic_link: metadata.is_symbolic_link,
+            }),
         )?;
         Ok(Value::Object(object_id))
     }
@@ -3150,20 +3144,13 @@ impl InterpreterCore {
         let object_id = self.alloc_object_with_prototype(None)?;
         self.set_object_brand(object_id, "FsDirent")?;
         self.set_object_property(object_id, "name".to_string(), Value::str(entry.name))?;
-        self.set_object_property(
+        self.set_host_slots(
             object_id,
-            "__isFile".to_string(),
-            Value::Bool(entry.is_file),
-        )?;
-        self.set_object_property(
-            object_id,
-            "__isDirectory".to_string(),
-            Value::Bool(entry.is_directory),
-        )?;
-        self.set_object_property(
-            object_id,
-            "__isSymbolicLink".to_string(),
-            Value::Bool(entry.is_symbolic_link),
+            HostObjectSlots::FsEntryKind(FsEntryKindSlots {
+                is_file: entry.is_file,
+                is_directory: entry.is_directory,
+                is_symbolic_link: entry.is_symbolic_link,
+            }),
         )?;
         Ok(Value::Object(object_id))
     }
@@ -3885,16 +3872,17 @@ impl InterpreterCore {
         let initial_body = body
             .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
             .unwrap_or_default();
-        let request_id = self.alloc_branded_object(
-            "ClientRequest",
-            &[
-                ("__url", Value::str(url.as_str())),
-                ("__method", Value::str(method.as_str())),
-                ("__headers", Value::Object(headers_id)),
-                ("__body", Value::str(initial_body.as_str())),
-                ("__ended", Value::Bool(false)),
-                ("__response_cb", response_callback),
-            ],
+        let request_id = self.alloc_branded_object("ClientRequest", &[])?;
+        self.set_host_slots(
+            request_id,
+            HostObjectSlots::LegacyClientRequest(LegacyClientRequestSlots {
+                url: JsString::from(url.as_str()),
+                method: JsString::from(method.as_str()),
+                headers: headers_id,
+                body: JsString::from(initial_body.as_str()),
+                ended: false,
+                response_cb: response_callback,
+            }),
         )?;
         self.join_object_mutation_label(request_id, &lifecycle_label)?;
         Ok(Value::Object(request_id))
@@ -4661,10 +4649,7 @@ impl InterpreterCore {
         let is_tls = tls.is_some();
         let object_id = self.alloc_branded_object(
             if is_tls { "TlsServer" } else { "NetServer" },
-            &[
-                ("__maxListeners", Value::Int(10)),
-                ("listening", Value::Bool(false)),
-            ],
+            &[("listening", Value::Bool(false))],
         )?;
         let state = LoopbackServerState {
             address: "127.0.0.1".to_string(),
@@ -4704,7 +4689,6 @@ impl InterpreterCore {
         let object_id = self.alloc_branded_object(
             "NetSocket",
             &[
-                ("__maxListeners", Value::Int(10)),
                 ("readable", Value::Bool(true)),
                 ("writable", Value::Bool(true)),
                 ("connecting", Value::Bool(!connected)),
@@ -7753,7 +7737,6 @@ impl InterpreterCore {
             let request = self.alloc_branded_object(
                 "HttpClientRequest",
                 &[
-                    ("__maxListeners", Value::Int(10)),
                     ("writable", Value::Bool(true)),
                     ("writableEnded", Value::Bool(false)),
                 ],
@@ -7899,7 +7882,6 @@ impl InterpreterCore {
             let message = self.alloc_branded_object(
                 "HttpIncomingMessage",
                 &[
-                    ("__maxListeners", Value::Int(10)),
                     ("httpVersion", Value::str("1.1")),
                     ("socket", Value::Object(socket)),
                     ("readable", Value::Bool(true)),
@@ -9234,7 +9216,6 @@ impl InterpreterCore {
                 let response = self.alloc_branded_object(
                     "HttpServerResponse",
                     &[
-                        ("__maxListeners", Value::Int(10)),
                         ("statusCode", Value::Int(200)),
                         ("statusMessage", Value::str("OK")),
                         ("writable", Value::Bool(true)),
@@ -10610,6 +10591,7 @@ impl InterpreterCore {
         let released_bytes = self
             .event_listeners_memory_bytes()
             .saturating_add(self.event_promise_waiters_memory_bytes())
+            .saturating_add(self.event_max_listeners_memory_bytes())
             .saturating_add(self.pending_io_callbacks_memory_bytes())
             .saturating_add(self.pending_fs_promise_reads_memory_bytes())
             .saturating_add(self.pending_dynamic_imports_memory_bytes())
@@ -10645,6 +10627,7 @@ impl InterpreterCore {
         self.event_listeners.clear();
         self.event_promise_waiters.clear();
         self.next_event_promise_waiter_id = 0;
+        self.event_max_listeners.clear();
         self.completed_child_processes.clear();
         self.child_process_streams.clear();
         self.child_process_handles.clear();
@@ -11301,7 +11284,6 @@ impl InterpreterCore {
             }
         };
         let properties = [
-            ("__maxListeners", Value::Int(10)),
             ("writable", Value::Bool(true)),
             ("writableEnded", Value::Bool(false)),
             ("writableFinished", Value::Bool(false)),
@@ -11451,7 +11433,6 @@ impl InterpreterCore {
         };
         let brand = "PassThrough";
         let properties = [
-            ("__maxListeners", Value::Int(10)),
             ("readable", Value::Bool(true)),
             ("readableEnded", Value::Bool(false)),
             ("readableFlowing", Value::Null),
@@ -11624,7 +11605,6 @@ impl InterpreterCore {
         };
         let brand = "Transform";
         let properties = [
-            ("__maxListeners", Value::Int(10)),
             ("readable", Value::Bool(true)),
             ("readableEnded", Value::Bool(false)),
             ("readableFlowing", Value::Null),

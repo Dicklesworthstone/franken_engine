@@ -7658,13 +7658,26 @@ fn parse_primary_expression(
         return Err(invalid_syntax_error(message, span, context));
     }
 
-    Ok(Expression::Raw(canonicalize_whitespace(expression)))
+    // Parsing is the admission boundary for the whole source, including
+    // uncalled functions and untaken branches. An opaque AST node cannot
+    // defer a missing grammar production to execution: earlier effects would
+    // already have happened, and a surrounding catch could hide the refusal.
+    // Keep UnsupportedSyntax distinct from the InvalidSyntax diagnostics
+    // above: not recognizing a production does not prove it invalid.
+    Err(unsupported_expression_syntax_error(
+        &format!(
+            "unrecognized expression syntax: {}",
+            canonicalize_whitespace(expression)
+        ),
+        span,
+        context,
+    ))
 }
 
 /// Why an expression the parser did not recognise cannot be an expression at
-/// all, for shapes no ECMAScript expression has. Such source is a SyntaxError
-/// before anything runs, not an `Expression::Raw` that throws only when it is
-/// evaluated, after the statements before it ran (bd-9vouw.444):
+/// all, for shapes no ECMAScript expression has. These proven grammar errors
+/// report InvalidSyntax, while other unrecognized productions report
+/// UnsupportedSyntax; both are refused before execution (bd-9vouw.444):
 /// - a `/` opening no complete regular expression literal, whose body met a
 ///   line terminator (`/` newline `/`, ES2020 11.8.5);
 /// - a `.` that is no decimal point and has no object before it (`.source`

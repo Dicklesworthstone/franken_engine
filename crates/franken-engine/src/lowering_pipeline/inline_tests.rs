@@ -9969,36 +9969,23 @@ fn raw_expression_throws_instead_of_yielding_its_source_text() {
     assert_raw_lowers_to_syntax_error_throw("console");
 }
 
-fn raw_fail_closed_eval(source: &str) -> String {
-    let mut engine = crate::HybridRouter::default();
-    match engine.eval(source) {
-        Ok(outcome) => outcome.value,
-        Err(err) => format!("ERR:{err}"),
-    }
-}
-
 #[test]
-fn unrecognised_expression_throws_a_catchable_syntax_error() {
-    // `a::b` (the bind-operator proposal) is not JavaScript, and the
-    // parser leaves it as `Expression::Raw`. Such text used to evaluate
-    // to the string "a::b"; it must throw when it runs. Node rejects the
-    // program before running it, so this pins the refusal, not parity.
-    // (The example was `this.#p` until private names were implemented.)
-    assert_eq!(
-        raw_fail_closed_eval(
+fn unrecognised_expression_cannot_be_hidden_by_a_catch() {
+    let error = crate::HybridRouter::default()
+        .eval(
             "class A { get p() { return a::b; } } \
-             let r; try { r = new A().p; } catch (e) { r = e.name + ':' + e.message; } r"
-        ),
-        "SyntaxError:unsupported expression syntax: a::b"
-    );
+             let r; try { r = new A().p; } catch (e) { r = 'swallowed'; } r",
+        )
+        .expect_err("the source must fail admission before its catch can run");
+    assert_eq!(error.code, crate::EvalErrorCode::ParseFailure, "{error:?}");
 }
 
 #[test]
-fn unevaluated_unsupported_expression_does_not_fail_the_program() {
-    assert_eq!(
-        raw_fail_closed_eval("function never() { return a::b; } 'ok'"),
-        "ok"
-    );
+fn unevaluated_unrecognised_expression_is_still_rejected() {
+    let error = crate::HybridRouter::default()
+        .eval("function never() { return a::b; } 'ok'")
+        .expect_err("an uncalled function cannot hide unrecognized syntax");
+    assert_eq!(error.code, crate::EvalErrorCode::ParseFailure, "{error:?}");
 }
 
 // -- Full pipeline with imports/exports --

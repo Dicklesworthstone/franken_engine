@@ -472,6 +472,166 @@ fn raw_expression_for_complex_syntax() {
     }
 }
 
+#[test]
+fn unrecognised_expressions_are_rejected_in_every_source_position() {
+    for source in [
+        "const value = a::b;",
+        "const value = false ? a::b : 1;",
+        "false && (a::b);",
+        "if (false) { const value = a::b; }",
+        "function never() { return a::b; }",
+        "function never(value = a::b) { return value; }",
+        "const never = () => a::b;",
+        "const object = { get value() { return a::b; } };",
+        "class Never { method() { return a::b; } }",
+        "class Never { value = a::b; }",
+        "try { const value = a::b; } catch (error) { 1; }",
+        "try { 1; } catch (error) { const value = a::b; }",
+        "try { throw {}; } catch ({ value = a::b }) { 1; }",
+        "try { 1; } finally { const value = a::b; }",
+    ] {
+        for goal in [ParseGoal::Script, ParseGoal::Module] {
+            let error = parser().parse(source, goal).expect_err(source);
+            assert_eq!(
+                error.code,
+                ParseErrorCode::UnsupportedSyntax,
+                "{source}: {error}"
+            );
+            assert!(
+                error
+                    .message
+                    .starts_with("unrecognized expression syntax: "),
+                "{source}: {error}"
+            );
+            assert!(error.span.is_some(), "{source}: missing source position");
+        }
+    }
+}
+
+#[test]
+fn unrecognised_source_fails_before_runtime_effects_or_catches() {
+    use frankenengine_engine::{EvalErrorCode, HybridRouter};
+
+    for source in [
+        "console.log('must not run'); const value = a::b;",
+        "throw new Error('must not run'); function never() { return a::b; }",
+        "for (;;) {} function never() { return a::b; }",
+        "try { const value = a::b; } catch (error) { 'swallowed'; }",
+        "if (false) { const value = a::b; } 'accepted';",
+    ] {
+        let error = HybridRouter::default()
+            .eval_with_instruction_budget(source, 1)
+            .expect_err(source);
+        // A runtime throw, catch or loop budget would have a different code.
+        assert_eq!(error.code, EvalErrorCode::ParseFailure, "{source}: {error}");
+        assert!(error.message.contains("a::b"), "{source}: {error}");
+    }
+}
+
+#[test]
+fn supported_expression_families_still_execute_after_raw_refusal() {
+    use frankenengine_engine::HybridRouter;
+
+    for (source, expected) in [
+        (
+            "const obj = { n: 6, method(x) { return this.n + x; } }; obj.method?.(1);",
+            "7",
+        ),
+        (
+            "const obj = { x: 3 }; const { x, ...rest } = obj; [...[x], 4].join(',');",
+            "3,4",
+        ),
+        (
+            "class C { #n = 5; value() { return this.#n; } } new C().value();",
+            "5",
+        ),
+        (
+            "function* items() { yield* [2, 3]; } [...items()].join(',');",
+            "2,3",
+        ),
+        ("`value:${({ x: 7 }).x}`;", "value:7"),
+        ("(/a::b/.test('a::b') ? 2n ** 5n : 0n).toString();", "32"),
+        (
+            "try { throw new Error('ordinary'); } catch (error) { error.message; }",
+            "ordinary",
+        ),
+    ] {
+        let outcome = HybridRouter::default().eval(source).expect(source);
+        assert_eq!(outcome.value, expected, "{source}");
+    }
+}
+
+#[test]
+fn engine_owned_javascript_modules_require_no_raw_fallback() {
+    // These are the real sources parsed to implement the runtime modules.
+    // Admission must retain their supported grammar instead of relying on an
+    // opaque expression hidden in a deferred function body.
+    let sources = [
+        (
+            "assert",
+            include_str!("../src/lowering_pipeline/assert_module.js"),
+        ),
+        (
+            "buffer",
+            include_str!("../src/lowering_pipeline/buffer_module.js"),
+        ),
+        (
+            "buffer_file",
+            include_str!("../src/lowering_pipeline/buffer_file_module.js"),
+        ),
+        (
+            "events",
+            include_str!("../src/lowering_pipeline/events_module.js"),
+        ),
+        ("fs", include_str!("../src/lowering_pipeline/fs_module.js")),
+        (
+            "path",
+            include_str!("../src/lowering_pipeline/path_module.js"),
+        ),
+        (
+            "readline",
+            include_str!("../src/lowering_pipeline/readline_module.js"),
+        ),
+        (
+            "stream",
+            include_str!("../src/lowering_pipeline/stream_module.js"),
+        ),
+        (
+            "stream_operators",
+            include_str!("../src/lowering_pipeline/stream_operators.js"),
+        ),
+        (
+            "stream_consumers",
+            include_str!("../src/lowering_pipeline/stream_consumers.js"),
+        ),
+        (
+            "web_stream",
+            include_str!("../src/lowering_pipeline/web_stream_module.js"),
+        ),
+        (
+            "string_decoder",
+            include_str!("../src/lowering_pipeline/string_decoder_module.js"),
+        ),
+        (
+            "timers",
+            include_str!("../src/lowering_pipeline/timers_module.js"),
+        ),
+        (
+            "util",
+            include_str!("../src/lowering_pipeline/util_module.js"),
+        ),
+        (
+            "zlib",
+            include_str!("../src/lowering_pipeline/zlib_module.js"),
+        ),
+    ];
+    for (name, source) in sources {
+        parser()
+            .parse(source, ParseGoal::Script)
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Statement splitting with semicolons
 // ---------------------------------------------------------------------------

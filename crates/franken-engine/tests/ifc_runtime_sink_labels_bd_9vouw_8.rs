@@ -911,3 +911,173 @@ fn console_denies_secret_promise_settlements_before_capturing_output() {
         }
     }
 }
+
+#[test]
+#[cfg(unix)]
+fn network_host_budget_refusals_abort_before_guest_catch_or_continuation() {
+    use frankenengine_extension_host::host_io::SandboxedHostIo;
+    use frankenengine_extension_host::host_io::budget::{
+        HostIoBudgetError, HostIoBudgetLimits, HostIoWorkBudget,
+    };
+    use std::net::TcpListener;
+
+    let root = tempfile::Builder::new()
+        .prefix("franken-network-host-budget-")
+        .tempdir()
+        .expect("sandbox root")
+        .keep();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("loopback listener");
+    listener
+        .set_nonblocking(true)
+        .expect("nonblocking listener");
+    let url = format!("http://{}/quota", listener.local_addr().unwrap());
+    for expected in [
+        HostIoBudgetError::RequestsExhausted,
+        HostIoBudgetError::RequestBytesExhausted,
+        HostIoBudgetError::TooManyInFlight,
+        HostIoBudgetError::Revoked,
+    ] {
+        for operation in [
+            format!("fetch('{url}');"),
+            format!(
+                "const http = require('http'); const req = http.request('{url}'); \
+                 req.on('error', () => console.log('error-event')); \
+                 req.write('body'); req.end();"
+            ),
+        ] {
+            let budget = HostIoWorkBudget::new(HostIoBudgetLimits {
+                requests: u64::from(expected != HostIoBudgetError::RequestsExhausted),
+                request_bytes: if expected == HostIoBudgetError::RequestBytesExhausted {
+                    0
+                } else {
+                    4096
+                },
+                max_in_flight: usize::from(expected != HostIoBudgetError::TooManyInFlight),
+            });
+            if expected == HostIoBudgetError::Revoked {
+                budget.revoke();
+            }
+            let provider = SandboxedHostIo::with_root(&root)
+                .expect("native provider")
+                .with_work_budget(budget);
+            let transcript = Arc::new(InMemoryHostIoTranscript::recording());
+            let mut config = InterpreterConfig::quickjs_defaults();
+            config.granted_capabilities = [
+                RuntimeCapability::VmDispatch,
+                RuntimeCapability::HeapAllocate,
+                RuntimeCapability::Builtin,
+                RuntimeCapability::Console,
+                RuntimeCapability::NetworkEgress,
+            ]
+            .into_iter()
+            .collect();
+            let mut core = InterpreterCore::new(config, "network-host-budget");
+            core.set_host_io(Arc::new(provider), Some(transcript.clone()));
+            let outcome = core.execute(&lower(&format!(
+                "try {{ {operation} }} catch (error) {{ console.log('caught'); }} \
+                 console.log('continued');"
+            )));
+            assert!(
+                matches!(&outcome, Err(InterpreterError::InternalError { details })
+                    if details.contains(expected.code())),
+                "{expected}, {operation}: {outcome:?}"
+            );
+            assert!(
+                core.console_output().is_empty(),
+                "quota refusal must bypass guest catch, callbacks and following console effects"
+            );
+            let entries = transcript.recorded_entries();
+            assert_eq!(entries.len(), 1, "quota refusal remains recorded");
+            assert!(
+                matches!(&entries[0], (HostIoRequest::NetworkRequest { .. },
+                    Err(HostIoError::Denied { reason })) if reason == expected.code()),
+                "{expected}: {entries:?}"
+            );
+            assert_eq!(
+                listener
+                    .accept()
+                    .expect_err("no connection before admission")
+                    .kind(),
+                std::io::ErrorKind::WouldBlock
+            );
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn ordinary_network_policy_and_transport_failures_preserve_guest_continuation() {
+    use frankenengine_extension_host::host_io::SandboxedHostIo;
+    use std::net::TcpListener;
+    use std::time::Duration;
+
+    let root = tempfile::Builder::new()
+        .prefix("franken-network-ordinary-failure-")
+        .tempdir()
+        .expect("sandbox root")
+        .keep();
+    for policy_denial in [true, false] {
+        // An open listener that never replies provides a real, bounded
+        // transport timeout without relying on a free port staying unbound.
+        let listener = TcpListener::bind("127.0.0.1:0").expect("loopback listener");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking listener");
+        let url = format!("http://{}/ordinary", listener.local_addr().unwrap());
+        let provider = SandboxedHostIo::with_root(&root)
+            .expect("native provider")
+            .with_network_timeout(Duration::from_millis(100))
+            .expect("bounded timeout");
+        let provider = if policy_denial {
+            provider.with_public_egress_only()
+        } else {
+            provider
+        };
+        let transcript = Arc::new(InMemoryHostIoTranscript::recording());
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Console,
+            RuntimeCapability::NetworkEgress,
+        ]
+        .into_iter()
+        .collect();
+        let mut core = InterpreterCore::new(config, "ordinary-network-failure");
+        core.set_host_io(Arc::new(provider), Some(transcript.clone()));
+        let outcome = core.execute(&lower(&format!(
+            "const response = fetch('{url}'); console.log(typeof response); \
+             console.log('continued');"
+        )));
+        outcome.expect("ordinary network refusal must not abort guest execution");
+        let messages: Vec<_> = core
+            .console_output()
+            .iter()
+            .map(|entry| entry.message.as_str())
+            .collect();
+        assert_eq!(messages, ["undefined", "continued"]);
+        let entries = transcript.recorded_entries();
+        assert_eq!(
+            entries.len(),
+            1,
+            "ordinary network failure remains recorded"
+        );
+        assert!(matches!(
+            &entries[0].0,
+            HostIoRequest::NetworkRequest { .. }
+        ));
+        if policy_denial {
+            assert!(matches!(&entries[0].1, Err(HostIoError::Denied { .. })));
+            assert_eq!(
+                listener
+                    .accept()
+                    .expect_err("policy denies loopback")
+                    .kind(),
+                std::io::ErrorKind::WouldBlock
+            );
+        } else {
+            assert!(matches!(&entries[0].1, Err(HostIoError::Io { .. })));
+            listener.accept().expect("transport reached native socket");
+        }
+    }
+}

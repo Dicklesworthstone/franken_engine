@@ -424,6 +424,7 @@ fn manifest(grants: Vec<AgentToolGrant>) -> AgentSandboxManifest {
         trust_level: None,
         host_io_root: None,
         host_io_max_bytes: None,
+        host_io_budget: None,
         network_allowlist: None,
         acknowledge_unfiltered_network: false,
         purpose: None,

@@ -27,6 +27,53 @@ fn assert_denied(outcome: HostIoOutcome, code: &str) {
     assert!(matches!(outcome, Err(HostIoError::Denied { reason }) if reason == code));
 }
 
+#[test]
+fn host_io_budget_codes_decode_only_exact_public_diagnostics() {
+    for (error, code) in [
+        (HostIoBudgetError::Revoked, "HOST_IO_BUDGET_REVOKED"),
+        (HostIoBudgetError::Poisoned, "HOST_IO_BUDGET_POISONED"),
+        (
+            HostIoBudgetError::RequestsExhausted,
+            "HOST_IO_REQUEST_BUDGET_EXHAUSTED",
+        ),
+        (
+            HostIoBudgetError::RequestBytesExhausted,
+            "HOST_IO_REQUEST_BYTES_EXHAUSTED",
+        ),
+        (
+            HostIoBudgetError::TooManyInFlight,
+            "HOST_IO_CONCURRENCY_EXHAUSTED",
+        ),
+        (
+            HostIoBudgetError::RequestSizeOverflow,
+            "HOST_IO_REQUEST_SIZE_OVERFLOW",
+        ),
+        (
+            HostIoBudgetError::HierarchyDepthExceeded,
+            "HOST_IO_BUDGET_DEPTH_EXCEEDED",
+        ),
+        (
+            HostIoBudgetError::ConcurrencyLimitBroadened,
+            "HOST_IO_CONCURRENCY_LIMIT_BROADENED",
+        ),
+    ] {
+        assert_eq!(error.code(), code);
+        assert_eq!(HostIoBudgetError::from_code(code), Some(error));
+        assert_eq!(
+            HostIoBudgetError::from_code(&format!("{code}: private")),
+            None
+        );
+        assert_eq!(HostIoBudgetError::from_code(&format!(" {code}")), None);
+        assert_eq!(HostIoBudgetError::from_code(&format!("{code}\n")), None);
+        assert_eq!(HostIoBudgetError::from_code(&code.to_lowercase()), None);
+    }
+    assert_eq!(HostIoBudgetError::from_code(""), None);
+    assert_eq!(
+        HostIoBudgetError::from_code("private provider denial"),
+        None
+    );
+}
+
 #[derive(Debug, Default)]
 struct RecordingProvider {
     calls: AtomicUsize,

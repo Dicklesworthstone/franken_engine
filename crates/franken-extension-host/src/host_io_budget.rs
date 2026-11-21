@@ -71,6 +71,25 @@ impl HostIoBudgetError {
         }
     }
 
+    /// Decode only a complete, public budget diagnostic. Provider-owned denial
+    /// text must never acquire the authority of a budget error by sharing a
+    /// prefix or appending private diagnostic details to a recognized code.
+    #[must_use]
+    pub fn from_code(code: &str) -> Option<Self> {
+        [
+            Self::Revoked,
+            Self::Poisoned,
+            Self::RequestsExhausted,
+            Self::RequestBytesExhausted,
+            Self::TooManyInFlight,
+            Self::RequestSizeOverflow,
+            Self::HierarchyDepthExceeded,
+            Self::ConcurrencyLimitBroadened,
+        ]
+        .into_iter()
+        .find(|error| error.code() == code)
+    }
+
     fn host_error(self) -> HostIoError {
         HostIoError::Denied {
             reason: self.code().to_string(),

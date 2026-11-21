@@ -40,8 +40,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::net::SocketAddr;
+use std::sync::Arc;
 
-use frankenengine_extension_host::host_io::{NetworkDestinationAllowlist, NetworkEgressPolicy};
+use frankenengine_extension_host::host_io::budget::{HostIoBudgetLimits, HostIoWorkBudget};
+use frankenengine_extension_host::host_io::{
+    HostIoProvider, NetworkDestinationAllowlist, NetworkEgressPolicy, SandboxedHostIo,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::capability::RuntimeCapability;
@@ -89,6 +93,9 @@ pub enum AgentSandboxError {
     InvalidNetworkAllowlist {
         detail: String,
     },
+    InvalidHostIoConfiguration {
+        detail: String,
+    },
     DeniedCapabilityAlsoGranted {
         capability_tag: String,
     },
@@ -134,6 +141,9 @@ impl fmt::Display for AgentSandboxError {
             Self::InvalidNetworkAllowlist { detail } => {
                 write!(f, "invalid agent-sandbox network allowlist: {detail}")
             }
+            Self::InvalidHostIoConfiguration { detail } => {
+                write!(f, "invalid agent-sandbox host I/O configuration: {detail}")
+            }
             Self::DeniedCapabilityAlsoGranted { capability_tag } => write!(
                 f,
                 "capability tag `{capability_tag}` appears in both the effective \
@@ -167,6 +177,32 @@ pub struct AgentToolGrant {
     pub description: Option<String>,
 }
 
+/// Non-renewable host work credits for one sandbox execution. All limits must
+/// be explicit; a misspelled field cannot silently disable an intended limit.
+/// These count admitted requests and their owned strings/payloads, not response
+/// bytes, disk usage or syscalls. The provider's per-operation cap still applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentHostIoBudget {
+    pub requests: u64,
+    pub request_bytes: u64,
+    pub max_in_flight: u64,
+}
+
+impl AgentHostIoBudget {
+    fn limits(self) -> Result<HostIoBudgetLimits, AgentSandboxError> {
+        Ok(HostIoBudgetLimits {
+            requests: self.requests,
+            request_bytes: self.request_bytes,
+            max_in_flight: usize::try_from(self.max_in_flight).map_err(|_| {
+                AgentSandboxError::InvalidHostIoConfiguration {
+                    detail: "host_io_budget.max_in_flight exceeds the host address space".into(),
+                }
+            })?,
+        })
+    }
+}
+
 /// The agent-sandbox manifest an agent framework hands the engine.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentSandboxManifest {
@@ -192,6 +228,13 @@ pub struct AgentSandboxManifest {
     /// Byte ceiling for sandboxed host I/O.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_io_max_bytes: Option<u64>,
+    /// Cumulative work limits shared by every clone of this run's provider.
+    /// Zero requests or concurrency denies all host dispatch; zero byte credits
+    /// still permits requests with no owned strings/payloads. Omission preserves
+    /// the existing per-operation-only behavior. A budget grants no capability
+    /// and never enables host I/O without a sandbox root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_io_budget: Option<AgentHostIoBudget>,
     /// Exact numeric IP:port destinations the host authorizes. When present,
     /// only these destinations are allowed, including explicitly listed local
     /// services; an empty list denies every connection. DNS names must resolve
@@ -239,6 +282,9 @@ impl AgentSandboxManifest {
             return Err(AgentSandboxError::EmptyField { field: "agent_id" });
         }
         self.network_egress_policy()?;
+        if let Some(budget) = self.host_io_budget {
+            budget.limits()?;
+        }
 
         let mut seen_tools = BTreeSet::new();
         for grant in &self.tool_grants {
@@ -303,6 +349,34 @@ impl AgentSandboxManifest {
                 }),
             None => Ok(NetworkEgressPolicy::PublicInternetOnly),
         }
+    }
+
+    /// Construct the live provider once at the trusted run boundary. Every
+    /// lane receives a clone of this same Arc, so lane changes cannot replenish
+    /// cumulative credits. Replay consumes recorded outcomes instead of calling
+    /// this constructor or reopening host paths.
+    pub fn build_host_io_provider(
+        &self,
+    ) -> Result<Option<Arc<dyn HostIoProvider>>, AgentSandboxError> {
+        self.validate()?;
+        let Some(root) = self.host_io_root.as_ref() else {
+            return Ok(None);
+        };
+        let provider = match self.host_io_max_bytes {
+            Some(limit) => SandboxedHostIo::with_root_and_limit(root, limit),
+            None => SandboxedHostIo::with_root(root),
+        }
+        .map_err(|error| AgentSandboxError::InvalidHostIoConfiguration {
+            detail: error.to_string(),
+        })?
+        .with_egress_policy(self.network_egress_policy()?);
+        let provider: Arc<dyn HostIoProvider> = match self.host_io_budget {
+            Some(budget) => {
+                Arc::new(provider.with_work_budget(HostIoWorkBudget::new(budget.limits()?)))
+            }
+            None => Arc::new(provider),
+        };
+        Ok(Some(provider))
     }
 
     /// The typed capability set the tool grants denote (before the forced VM
@@ -601,6 +675,7 @@ mod tests {
             trust_level: None,
             host_io_root: Some("/tmp/agent-root".to_string()),
             host_io_max_bytes: Some(1 << 20),
+            host_io_budget: None,
             network_allowlist: None,
             acknowledge_unfiltered_network: false,
             purpose: Some("agent_sandbox".to_string()),
@@ -611,6 +686,65 @@ mod tests {
     #[test]
     fn valid_manifest_passes_validation() {
         manifest().validate().expect("manifest validates");
+    }
+
+    #[test]
+    fn host_io_budget_round_trips_and_preserves_absent_field_encoding() {
+        let original = serde_json::to_string(&manifest()).unwrap();
+        assert!(!original.contains("host_io_budget"));
+        let mut restored: AgentSandboxManifest = serde_json::from_str(&original).unwrap();
+        assert_eq!(serde_json::to_string(&restored).unwrap(), original);
+        let capabilities = restored.effective_runtime_capabilities(false).unwrap();
+        restored.host_io_budget = Some(AgentHostIoBudget {
+            requests: 23,
+            request_bytes: 4_096,
+            max_in_flight: 2,
+        });
+        restored.validate().unwrap();
+        assert_eq!(
+            restored.effective_runtime_capabilities(false).unwrap(),
+            capabilities,
+            "work credits must never grant a capability"
+        );
+        let json = serde_json::to_value(&restored).unwrap();
+        assert_eq!(
+            json["host_io_budget"],
+            serde_json::json!({"requests": 23, "request_bytes": 4096, "max_in_flight": 2})
+        );
+        assert_eq!(
+            serde_json::from_value::<AgentSandboxManifest>(json).unwrap(),
+            restored
+        );
+    }
+
+    #[test]
+    fn host_io_budget_requires_all_limits_and_rejects_unknown_fields() {
+        for budget in [
+            serde_json::json!({"requests": 1, "request_bytes": 32}),
+            serde_json::json!({"request_bytes": 32, "max_in_flight": 1}),
+            serde_json::json!({"requests": 1, "max_in_flight": 1}),
+            serde_json::json!({
+                "requests": 1, "request_bytes": 32, "max_in_flight": 1, "response_bytes": 32
+            }),
+            serde_json::json!({"requests": -1, "request_bytes": 32, "max_in_flight": 1}),
+        ] {
+            let mut json = serde_json::to_value(manifest()).unwrap();
+            json["host_io_budget"] = budget;
+            assert!(serde_json::from_value::<AgentSandboxManifest>(json).is_err());
+        }
+    }
+
+    #[test]
+    fn zero_host_io_budget_is_valid_but_never_opens_an_absent_root() {
+        let mut limited = manifest();
+        limited.host_io_root = None;
+        limited.host_io_budget = Some(AgentHostIoBudget {
+            requests: 0,
+            request_bytes: 0,
+            max_in_flight: 0,
+        });
+        limited.validate().unwrap();
+        assert!(limited.build_host_io_provider().unwrap().is_none());
     }
 
     #[test]

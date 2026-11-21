@@ -148,17 +148,16 @@ fn small_cohort_refused_even_with_budget_available() {
     assert!(budget.try_admit_round(1_000_000, 10_000, 7, 2).is_ok());
 }
 
-/// Advanced composition admits strictly more rounds than basic for the same
-/// budget and per-round request, because each round after the first is charged
-/// sub-linearly.
+/// Generic pure-DP round guarantees must add under every requested policy.
+/// No policy may admit extra releases using an unsupported epsilon discount.
 #[test]
-fn advanced_composition_admits_more_rounds_than_basic() {
+fn every_composition_policy_refuses_at_the_original_additive_budget() {
     let count_rounds = |method| {
         let mut budget =
             FleetPrivacyBudget::new(config_with(method, 10_000_000, 1_000_000_000, 1, 0)).unwrap();
         let mut n = 0u64;
         for round in 0..1000u64 {
-            if budget.try_admit_round(1_000_000, 1_000, 3, round).is_ok() {
+            if budget.try_admit_round(1_000_000, 0, 3, round).is_ok() {
                 n += 1;
             } else {
                 break;
@@ -167,13 +166,18 @@ fn advanced_composition_admits_more_rounds_than_basic() {
         n
     };
 
-    let basic = count_rounds(CompositionMethod::Basic);
-    let advanced = count_rounds(CompositionMethod::Advanced);
-    assert_eq!(basic, 10);
-    assert!(
-        advanced > basic,
-        "advanced composition should admit more rounds (basic={basic}, advanced={advanced})"
-    );
+    for method in [
+        CompositionMethod::Basic,
+        CompositionMethod::Advanced,
+        CompositionMethod::Renyi,
+        CompositionMethod::ZeroCdp,
+    ] {
+        assert_eq!(
+            count_rounds(method),
+            10,
+            "a pure-DP round must pay its full epsilon cost under {method}"
+        );
+    }
 }
 
 /// The round cap refuses further aggregation even when budget remains, and the
@@ -224,7 +228,7 @@ fn ledger_integrity_over_long_lifetime() {
         }
     }
 
-    assert!(budget.rounds_admitted() > 0);
+    assert_eq!(budget.rounds_admitted(), 200);
     assert!(budget.verify_ledger_integrity().is_ok());
 
     // Independent recomputation of cumulative epsilon from charged amounts.
@@ -300,4 +304,160 @@ fn budget_state_round_trips_through_json() {
     assert_eq!(budget, restored);
     assert_eq!(restored.rounds_admitted(), 5);
     assert!(restored.verify_ledger_integrity().is_ok());
+}
+
+fn assert_only_latch_and_refusal_changed(before: &FleetPrivacyBudget, after: &FleetPrivacyBudget) {
+    assert_eq!(after.events().len(), before.events().len() + 1);
+    let refusal = after.events().last().unwrap();
+    assert!(matches!(refusal, FleetBudgetEvent::RoundRefused { .. }));
+    let mut expected = serde_json::to_value(before).unwrap();
+    expected["exhausted"] = serde_json::json!(true);
+    expected["events"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::to_value(refusal).unwrap());
+    assert_eq!(serde_json::to_value(after).unwrap(), expected);
+}
+
+#[test]
+fn maximum_allocations_reject_overflow_without_charging_or_losing_the_refusal_event() {
+    for method in [
+        CompositionMethod::Basic,
+        CompositionMethod::Advanced,
+        CompositionMethod::Renyi,
+        CompositionMethod::ZeroCdp,
+    ] {
+        for (epsilon, delta, dimension) in [(i64::MAX, 0, "epsilon"), (0, i64::MAX, "delta")] {
+            let mut budget =
+                FleetPrivacyBudget::new(config_with(method, i64::MAX, i64::MAX, 3, 0)).unwrap();
+            budget.try_admit_round(1, 1, 3, 1).unwrap();
+            let mut restored: FleetPrivacyBudget =
+                serde_json::from_str(&serde_json::to_string(&budget).unwrap()).unwrap();
+            assert!(restored.would_refuse(epsilon, delta));
+            let before = restored.clone();
+            assert!(
+                matches!(restored.try_admit_round(epsilon, delta, 3, 2), Err(FleetBudgetError::Refused { dimension: actual, .. }) if actual == dimension)
+            );
+            assert_only_latch_and_refusal_changed(&before, &restored);
+            assert!(restored.verify_ledger_integrity().is_ok());
+            assert!(restored.try_admit_round(0, 0, 3, 3).is_err());
+        }
+    }
+}
+
+#[test]
+fn every_policy_preserves_exact_maximum_totals_and_latches_after_the_final_unit() {
+    for method in [
+        CompositionMethod::Basic,
+        CompositionMethod::Advanced,
+        CompositionMethod::Renyi,
+        CompositionMethod::ZeroCdp,
+    ] {
+        let mut budget =
+            FleetPrivacyBudget::new(config_with(method, i64::MAX, i64::MAX, 3, 0)).unwrap();
+        let first = budget
+            .try_admit_round(i64::MAX - 1, i64::MAX - 1, 3, 1)
+            .unwrap();
+        assert_eq!(first.entry.epsilon_charged_millionths, i64::MAX - 1);
+        assert!(!budget.would_refuse(1, 1));
+        let last = budget.try_admit_round(1, 1, 3, 2).unwrap();
+        assert_eq!(last.entry.cumulative_epsilon_millionths, i64::MAX);
+        assert_eq!(last.entry.cumulative_delta_millionths, i64::MAX);
+        assert!(last.budget_now_exhausted);
+        assert!(budget.would_refuse(0, 0));
+        assert!(budget.verify_ledger_integrity().is_ok());
+    }
+}
+
+#[test]
+fn legacy_discounted_or_unknown_policy_snapshots_cannot_resume_spending() {
+    for method in [
+        CompositionMethod::Advanced,
+        CompositionMethod::Renyi,
+        CompositionMethod::ZeroCdp,
+    ] {
+        let mut budget =
+            FleetPrivacyBudget::new(config_with(method, 1_000_000, 100_000, 3, 0)).unwrap();
+        budget.try_admit_round(100_000, 1_000, 3, 1).unwrap();
+        let mut persisted = serde_json::to_value(&budget).unwrap();
+        persisted
+            .as_object_mut()
+            .unwrap()
+            .remove("accounting_version");
+        let mut restored: FleetPrivacyBudget = serde_json::from_value(persisted).unwrap();
+        assert!(restored.would_refuse(0, 0));
+        let before = restored.clone();
+        assert!(matches!(
+            restored.try_admit_round(0, 0, 3, 2),
+            Err(FleetBudgetError::InvalidConfiguration { .. })
+        ));
+        assert_only_latch_and_refusal_changed(&before, &restored);
+    }
+    let budget = FleetPrivacyBudget::new(config_with(
+        CompositionMethod::Basic,
+        1_000_000,
+        100_000,
+        3,
+        0,
+    ))
+    .unwrap();
+    let mut persisted = serde_json::to_value(&budget).unwrap();
+    persisted["accounting_version"] = serde_json::json!(99);
+    let mut restored: FleetPrivacyBudget = serde_json::from_value(persisted).unwrap();
+    assert!(restored.would_refuse(0, 0));
+    let before = restored.clone();
+    assert!(matches!(
+        restored.try_admit_round(0, 0, 3, 1),
+        Err(FleetBudgetError::InvalidConfiguration { .. })
+    ));
+    assert_only_latch_and_refusal_changed(&before, &restored);
+}
+
+#[test]
+fn valid_legacy_basic_history_and_empty_native_snapshots_upgrade_safely() {
+    for method in [
+        CompositionMethod::Basic,
+        CompositionMethod::Advanced,
+        CompositionMethod::Renyi,
+        CompositionMethod::ZeroCdp,
+    ] {
+        let mut budget =
+            FleetPrivacyBudget::new(config_with(method, 1_000_000, 100_000, 3, 0)).unwrap();
+        if method == CompositionMethod::Basic {
+            budget.try_admit_round(100_000, 1_000, 3, 1).unwrap();
+        }
+        let mut persisted = serde_json::to_value(&budget).unwrap();
+        persisted
+            .as_object_mut()
+            .unwrap()
+            .remove("accounting_version");
+        let mut restored: FleetPrivacyBudget = serde_json::from_value(persisted).unwrap();
+        let receipt = restored.try_admit_round(100_000, 1_000, 3, 2).unwrap();
+        assert_eq!(receipt.entry.epsilon_charged_millionths, 100_000);
+        assert_eq!(receipt.entry.delta_charged_millionths, 1_000);
+        assert_eq!(
+            serde_json::to_value(&restored).unwrap()["accounting_version"],
+            1
+        );
+        assert!(restored.verify_ledger_integrity().is_ok());
+    }
+}
+
+#[test]
+fn zero_cost_rounds_do_not_invent_a_privacy_charge_under_any_policy() {
+    for method in [
+        CompositionMethod::Basic,
+        CompositionMethod::Advanced,
+        CompositionMethod::Renyi,
+        CompositionMethod::ZeroCdp,
+    ] {
+        let mut budget =
+            FleetPrivacyBudget::new(config_with(method, 1_000_000, 100_000, 3, 0)).unwrap();
+        let receipt = budget.try_admit_round(0, 0, 3, 1).unwrap();
+        assert_eq!(receipt.entry.epsilon_charged_millionths, 0);
+        assert_eq!(receipt.entry.delta_charged_millionths, 0);
+        assert_eq!(receipt.epsilon_remaining_millionths, 1_000_000);
+        assert_eq!(receipt.delta_remaining_millionths, 100_000);
+        assert!(budget.verify_ledger_integrity().is_ok());
+    }
 }

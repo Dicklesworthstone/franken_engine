@@ -22,8 +22,10 @@
 //! Fixed-point millionths (`1_000_000 = 1.0`) for all fractional values, matching
 //! the rest of the privacy-learning layer.  No floating point; deterministic.
 //!
-//! Composition matches [`crate::dp_budget_accountant`] so a fleet ledger and a
-//! per-node ledger agree on what a round costs.
+//! Each round supplies a generic `(epsilon, delta)` guarantee, so this ledger
+//! uses the additive upper bound for every configured composition method.
+//! Native composition needs additional state and conversion delta; callers
+//! needing that bound can use [`crate::dp_budget_accountant`].
 //!
 //! Plan references: Section 10.15, subsection 9I.2 (Privacy-Preserving Fleet
 //! Learning Layer); Track QQ sharpens Track T.
@@ -31,6 +33,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::privacy_learning_contract::CompositionMethod;
+
+const FLEET_ACCOUNTING_VERSION: u8 = 1;
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -45,7 +49,8 @@ pub struct FleetBudgetConfig {
     pub lifetime_epsilon_budget_millionths: i64,
     /// Total lifetime delta budget for the whole fleet (millionths).
     pub lifetime_delta_budget_millionths: i64,
-    /// Composition method used to charge each round against the budget.
+    /// Requested composition method, retained as policy metadata. This generic
+    /// round ledger conservatively adds costs for every method.
     pub composition_method: CompositionMethod,
     /// Minimum participant cohort required for a round to be admitted.
     ///
@@ -168,6 +173,8 @@ pub enum FleetBudgetEvent {
     /// A round was refused; nothing was charged and no aggregate is published.
     RoundRefused {
         fleet_id: String,
+        /// Saturates at `u64::MAX` only when no next identifier is representable;
+        /// that terminal refusal never admits a round with a duplicate ID.
         attempted_round_id: u64,
         participant_count: usize,
         reason: String,
@@ -259,6 +266,9 @@ pub struct FleetPrivacyBudget {
     exhausted: bool,
     ledger: Vec<FleetRoundLedgerEntry>,
     events: Vec<FleetBudgetEvent>,
+    /// Missing in snapshots produced by the old discounted composition rules.
+    #[serde(default)]
+    accounting_version: u8,
 }
 
 impl FleetPrivacyBudget {
@@ -273,18 +283,24 @@ impl FleetPrivacyBudget {
             exhausted: false,
             ledger: Vec::new(),
             events: Vec::new(),
+            accounting_version: FLEET_ACCOUNTING_VERSION,
         })
     }
 
     /// Remaining lifetime epsilon (millionths).  Never reported below zero.
     pub fn epsilon_remaining_millionths(&self) -> i64 {
-        (self.config.lifetime_epsilon_budget_millionths - self.lifetime_epsilon_spent_millionths)
+        self.config
+            .lifetime_epsilon_budget_millionths
+            .saturating_sub(self.lifetime_epsilon_spent_millionths)
             .max(0)
     }
 
     /// Remaining lifetime delta (millionths).  Never reported below zero.
     pub fn delta_remaining_millionths(&self) -> i64 {
-        (self.config.lifetime_delta_budget_millionths - self.lifetime_delta_spent_millionths).max(0)
+        self.config
+            .lifetime_delta_budget_millionths
+            .saturating_sub(self.lifetime_delta_spent_millionths)
+            .max(0)
     }
 
     /// Whether the budget latch has tripped (fail-closed).
@@ -312,33 +328,35 @@ impl FleetPrivacyBudget {
         &self.config.fleet_id
     }
 
-    /// Charge the raw `(ε, δ)` cost of one round through the composition method.
-    ///
-    /// Mirrors [`crate::dp_budget_accountant`] so the fleet ledger and a node
-    /// ledger agree on per-round cost.  `k` is the number of rounds already
-    /// admitted.
-    fn compose(&self, epsilon: i64, delta: i64) -> (i64, i64) {
-        let k = self.rounds_admitted;
-        match self.config.composition_method {
-            CompositionMethod::Basic => (epsilon, delta),
-            CompositionMethod::Advanced => {
-                let kp1 = (k + 1) as i64;
-                let scale = if kp1 <= 1 {
-                    1_000_000i64
-                } else {
-                    isqrt_millionths(1_000_000_000_000i64 / kp1)
-                };
-                let composed_eps = epsilon.saturating_mul(scale) / 1_000_000;
-                (composed_eps.max(1), delta)
+    fn validate_accounting_policy(&self) -> Result<(), FleetBudgetError> {
+        self.config.validate()?;
+        if self.lifetime_epsilon_spent_millionths < 0
+            || self.lifetime_delta_spent_millionths < 0
+            || self.lifetime_epsilon_spent_millionths
+                > self.config.lifetime_epsilon_budget_millionths
+            || self.lifetime_delta_spent_millionths > self.config.lifetime_delta_budget_millionths
+        {
+            return Err(FleetBudgetError::InvalidConfiguration {
+                reason: "restored lifetime spend is outside the configured budget".into(),
+            });
+        }
+        match self.accounting_version {
+            FLEET_ACCOUNTING_VERSION => Ok(()),
+            0 if self.config.composition_method == CompositionMethod::Basic => {
+                // Validate a legacy additive snapshot once, before stamping its
+                // first successful new admission with the current version.
+                self.verify_ledger_integrity()
             }
-            CompositionMethod::Renyi => {
-                let composed_eps = epsilon.saturating_mul(800_000) / 1_000_000;
-                (composed_eps.max(1), delta)
-            }
-            CompositionMethod::ZeroCdp => {
-                let composed_eps = epsilon.saturating_mul(700_000) / 1_000_000;
-                (composed_eps.max(1), delta)
-            }
+            0 if self.rounds_admitted == 0
+                && self.lifetime_epsilon_spent_millionths == 0
+                && self.lifetime_delta_spent_millionths == 0
+                && self.ledger.is_empty() => Ok(()),
+            0 => Err(FleetBudgetError::InvalidConfiguration {
+                reason: "legacy non-basic fleet history requires an audited migration; discounted charges cannot be reused".into(),
+            }),
+            _ => Err(FleetBudgetError::InvalidConfiguration {
+                reason: "unsupported fleet accounting version".into(),
+            }),
         }
     }
 
@@ -349,14 +367,25 @@ impl FleetPrivacyBudget {
         if self.exhausted {
             return true;
         }
-        if epsilon_millionths < 0 || delta_millionths < 0 {
+        if epsilon_millionths < 0
+            || delta_millionths < 0
+            || self.validate_accounting_policy().is_err()
+            || self.rounds_admitted == u64::MAX
+        {
             return true;
         }
-        let (eps, delta) = self.compose(epsilon_millionths, delta_millionths);
-        self.lifetime_epsilon_spent_millionths.saturating_add(eps)
-            > self.config.lifetime_epsilon_budget_millionths
-            || self.lifetime_delta_spent_millionths.saturating_add(delta)
-                > self.config.lifetime_delta_budget_millionths
+        checked_fleet_spend(
+            self.lifetime_epsilon_spent_millionths,
+            epsilon_millionths,
+            self.config.lifetime_epsilon_budget_millionths,
+        )
+        .is_none()
+            || checked_fleet_spend(
+                self.lifetime_delta_spent_millionths,
+                delta_millionths,
+                self.config.lifetime_delta_budget_millionths,
+            )
+            .is_none()
     }
 
     /// Attempt to admit a new aggregation round.
@@ -366,8 +395,8 @@ impl FleetPrivacyBudget {
     /// On `Err`, **nothing is charged** and the aggregator must not publish.
     /// A refusal also records a `RoundRefused` audit event.
     ///
-    /// Refusal order is fixed and fail-closed: invalid cost, then latch, then
-    /// cohort floor, then round cap, then budget ceiling.
+    /// Refusal order is fixed and fail-closed: invalid cost, latch, persisted
+    /// policy and counter validity, cohort floor, round cap, then budget ceiling.
     pub fn try_admit_round(
         &mut self,
         epsilon_millionths: i64,
@@ -382,7 +411,9 @@ impl FleetPrivacyBudget {
             });
         }
 
-        let attempted_round_id = self.rounds_admitted + 1;
+        let next_round_id = self.rounds_admitted.checked_add(1);
+        // Audit-only terminal marker. Admission below requires a checked ID.
+        let attempted_round_id = next_round_id.unwrap_or(u64::MAX);
 
         // 2. Fail-closed latch: once tripped, stays tripped.
         if self.exhausted {
@@ -395,7 +426,21 @@ impl FleetPrivacyBudget {
             return Err(err);
         }
 
-        // 3. Cohort floor: refuse rounds with too few contributing peers.
+        if let Err(err) = self.validate_accounting_policy() {
+            self.exhausted = true;
+            self.record_refusal(attempted_round_id, participant_count, &err, now_ns);
+            return Err(err);
+        }
+        let Some(attempted_round_id) = next_round_id else {
+            self.exhausted = true;
+            let err = FleetBudgetError::RoundCapReached {
+                max_rounds: u64::MAX,
+            };
+            self.record_refusal(u64::MAX, participant_count, &err, now_ns);
+            return Err(err);
+        };
+
+        // Cohort floor: refuse rounds with too few contributing peers.
         if participant_count < self.config.min_participants_per_round {
             let err = FleetBudgetError::InsufficientCohort {
                 participant_count,
@@ -405,7 +450,7 @@ impl FleetPrivacyBudget {
             return Err(err);
         }
 
-        // 4. Round cap.
+        // Configured round cap.
         if self.config.max_rounds != 0 && self.rounds_admitted >= self.config.max_rounds {
             let err = FleetBudgetError::RoundCapReached {
                 max_rounds: self.config.max_rounds,
@@ -414,33 +459,41 @@ impl FleetPrivacyBudget {
             return Err(err);
         }
 
-        // 5. Budget ceiling (after composition).
-        let (composed_eps, composed_delta) = self.compose(epsilon_millionths, delta_millionths);
-        let next_eps = self
-            .lifetime_epsilon_spent_millionths
-            .saturating_add(composed_eps);
-        let next_delta = self
-            .lifetime_delta_spent_millionths
-            .saturating_add(composed_delta);
-
-        let eps_over = next_eps > self.config.lifetime_epsilon_budget_millionths;
-        let delta_over = next_delta > self.config.lifetime_delta_budget_millionths;
-        if eps_over || delta_over {
+        // Generic (epsilon, delta) guarantees compose additively. Neither a
+        // constant discount nor epsilon/sqrt(k) is a valid replacement.
+        let (composed_eps, composed_delta) = (epsilon_millionths, delta_millionths);
+        let next_eps = checked_fleet_spend(
+            self.lifetime_epsilon_spent_millionths,
+            composed_eps,
+            self.config.lifetime_epsilon_budget_millionths,
+        );
+        let next_delta = checked_fleet_spend(
+            self.lifetime_delta_spent_millionths,
+            composed_delta,
+            self.config.lifetime_delta_budget_millionths,
+        );
+        let (Some(next_eps), Some(next_delta)) = (next_eps, next_delta) else {
             // Trip the latch: refusing on budget grounds is terminal.
             self.exhausted = true;
             let err = FleetBudgetError::Refused {
-                dimension: if eps_over { "epsilon" } else { "delta" }.into(),
+                dimension: if next_eps.is_none() {
+                    "epsilon"
+                } else {
+                    "delta"
+                }
+                .into(),
                 epsilon_remaining_millionths: self.epsilon_remaining_millionths(),
                 delta_remaining_millionths: self.delta_remaining_millionths(),
             };
             self.record_refusal(attempted_round_id, participant_count, &err, now_ns);
             return Err(err);
-        }
+        };
 
         // Commit the round.
         self.lifetime_epsilon_spent_millionths = next_eps;
         self.lifetime_delta_spent_millionths = next_delta;
         self.rounds_admitted = attempted_round_id;
+        self.accounting_version = FLEET_ACCOUNTING_VERSION;
 
         let entry = FleetRoundLedgerEntry {
             round_id: attempted_round_id,
@@ -457,8 +510,9 @@ impl FleetPrivacyBudget {
 
         // If this round consumed the budget exactly, latch so the *next* call
         // refuses deterministically rather than re-deriving the boundary.
-        let budget_now_exhausted =
-            self.epsilon_remaining_millionths() == 0 || self.delta_remaining_millionths() == 0;
+        let budget_now_exhausted = self.epsilon_remaining_millionths() == 0
+            || self.delta_remaining_millionths() == 0
+            || self.rounds_admitted == u64::MAX;
         if budget_now_exhausted {
             self.exhausted = true;
         }
@@ -507,9 +561,10 @@ impl FleetPrivacyBudget {
     pub fn forecast(&self) -> FleetBudgetForecast {
         let eps_remaining = self.epsilon_remaining_millionths();
         let estimated_rounds_remaining = if self.rounds_admitted > 0 {
-            let avg_eps = self.lifetime_epsilon_spent_millionths / self.rounds_admitted as i64;
+            let avg_eps = i128::from(self.lifetime_epsilon_spent_millionths)
+                / i128::from(self.rounds_admitted);
             if avg_eps > 0 {
-                (eps_remaining / avg_eps).max(0) as u64
+                (i128::from(eps_remaining) / avg_eps).max(0) as u64
             } else {
                 u64::MAX
             }
@@ -526,12 +581,19 @@ impl FleetPrivacyBudget {
     }
 
     /// Recompute cumulative sums from the ledger and confirm they match the
-    /// recorded running totals.  Detects ledger tampering / replay divergence.
+    /// recorded running totals and additive raw charges. This is an explicit
+    /// consistency audit, not authentication of an externally supplied ledger.
     pub fn verify_ledger_integrity(&self) -> Result<(), FleetBudgetError> {
+        self.config.validate()?;
         let mut eps = 0i64;
         let mut delta = 0i64;
+        let mut expected_round = 0u64;
         for (i, entry) in self.ledger.iter().enumerate() {
-            let expected_round = (i as u64) + 1;
+            expected_round = expected_round.checked_add(1).ok_or_else(|| {
+                FleetBudgetError::InvalidConfiguration {
+                    reason: "ledger round count overflow".into(),
+                }
+            })?;
             if entry.round_id != expected_round {
                 return Err(FleetBudgetError::InvalidConfiguration {
                     reason: format!(
@@ -540,8 +602,34 @@ impl FleetPrivacyBudget {
                     ),
                 });
             }
-            eps = eps.saturating_add(entry.epsilon_charged_millionths);
-            delta = delta.saturating_add(entry.delta_charged_millionths);
+            if entry.epsilon_requested_millionths < 0
+                || entry.delta_requested_millionths < 0
+                || entry.epsilon_charged_millionths != entry.epsilon_requested_millionths
+                || entry.delta_charged_millionths != entry.delta_requested_millionths
+            {
+                return Err(FleetBudgetError::InvalidConfiguration {
+                    reason: format!(
+                        "ledger has a non-additive or negative charge at round {}",
+                        entry.round_id
+                    ),
+                });
+            }
+            eps = checked_fleet_spend(
+                eps,
+                entry.epsilon_charged_millionths,
+                self.config.lifetime_epsilon_budget_millionths,
+            )
+            .ok_or_else(|| FleetBudgetError::InvalidConfiguration {
+                reason: "ledger epsilon sum exceeds the budget or integer range".into(),
+            })?;
+            delta = checked_fleet_spend(
+                delta,
+                entry.delta_charged_millionths,
+                self.config.lifetime_delta_budget_millionths,
+            )
+            .ok_or_else(|| FleetBudgetError::InvalidConfiguration {
+                reason: "ledger delta sum exceeds the budget or integer range".into(),
+            })?;
             if entry.cumulative_epsilon_millionths != eps
                 || entry.cumulative_delta_millionths != delta
             {
@@ -550,24 +638,23 @@ impl FleetPrivacyBudget {
                 });
             }
         }
-        if eps != self.lifetime_epsilon_spent_millionths
+        if expected_round != self.rounds_admitted
+            || eps != self.lifetime_epsilon_spent_millionths
             || delta != self.lifetime_delta_spent_millionths
         {
             return Err(FleetBudgetError::InvalidConfiguration {
-                reason: "ledger total does not match recorded lifetime spend".into(),
+                reason: "ledger totals do not match recorded lifetime spend and round count".into(),
             });
         }
         Ok(())
     }
 }
 
-/// Integer square root scaled to millionths (deterministic, no floating point).
-fn isqrt_millionths(n: i64) -> i64 {
-    if n <= 0 {
-        1
-    } else {
-        (n.unsigned_abs().isqrt() as i64).max(1)
+fn checked_fleet_spend(spent: i64, charge: i64, allocation: i64) -> Option<i64> {
+    if spent < 0 || charge < 0 || allocation < 0 {
+        return None;
     }
+    spent.checked_add(charge).filter(|next| *next <= allocation)
 }
 
 // ---------------------------------------------------------------------------
@@ -854,32 +941,33 @@ mod tests {
     // -- composition methods --
 
     #[test]
-    fn advanced_composition_charges_less_after_first_round() {
+    fn advanced_policy_uses_the_additive_bound_for_each_round() {
         let mut cfg = basic_config();
         cfg.composition_method = CompositionMethod::Advanced;
         let mut b = FleetPrivacyBudget::new(cfg).unwrap();
         let r1 = b.try_admit_round(1_000_000, 10_000, 4, 1).unwrap();
-        assert_eq!(r1.entry.epsilon_charged_millionths, 1_000_000); // k=0 -> scale 1.0
+        assert_eq!(r1.entry.epsilon_charged_millionths, 1_000_000);
         let r2 = b.try_admit_round(1_000_000, 10_000, 4, 2).unwrap();
-        assert!(r2.entry.epsilon_charged_millionths < 1_000_000); // k=1 -> scale < 1.0
+        assert_eq!(r2.entry.epsilon_charged_millionths, 1_000_000);
+        assert_eq!(r2.entry.cumulative_epsilon_millionths, 2_000_000);
     }
 
     #[test]
-    fn renyi_composition_charges_80_percent() {
+    fn renyi_policy_requires_native_statistics_before_any_discount() {
         let mut cfg = basic_config();
         cfg.composition_method = CompositionMethod::Renyi;
         let mut b = FleetPrivacyBudget::new(cfg).unwrap();
         let r = b.try_admit_round(1_000_000, 10_000, 4, 1).unwrap();
-        assert_eq!(r.entry.epsilon_charged_millionths, 800_000);
+        assert_eq!(r.entry.epsilon_charged_millionths, 1_000_000);
     }
 
     #[test]
-    fn zcdp_composition_charges_70_percent() {
+    fn zcdp_policy_requires_native_statistics_before_any_discount() {
         let mut cfg = basic_config();
         cfg.composition_method = CompositionMethod::ZeroCdp;
         let mut b = FleetPrivacyBudget::new(cfg).unwrap();
         let r = b.try_admit_round(1_000_000, 10_000, 4, 1).unwrap();
-        assert_eq!(r.entry.epsilon_charged_millionths, 700_000);
+        assert_eq!(r.entry.epsilon_charged_millionths, 1_000_000);
     }
 
     // -- forecast --
@@ -920,6 +1008,108 @@ mod tests {
         // Corrupt a cumulative figure.
         b.ledger[1].cumulative_epsilon_millionths += 1;
         assert!(b.verify_ledger_integrity().is_err());
+    }
+
+    fn assert_only_latch_and_refusal_changed(
+        mut before: FleetPrivacyBudget,
+        after: &FleetPrivacyBudget,
+    ) {
+        assert_eq!(after.events.len(), before.events.len() + 1);
+        let event = after.events.last().unwrap().clone();
+        assert!(matches!(event, FleetBudgetEvent::RoundRefused { .. }));
+        before.exhausted = true;
+        before.events.push(event);
+        assert_eq!(
+            &before, after,
+            "refused rounds must not commit ledger entries or spend"
+        );
+    }
+
+    #[test]
+    fn round_identifier_exhaustion_is_atomic_and_never_wraps_the_audit_marker() {
+        let mut b = budget();
+        b.rounds_admitted = u64::MAX;
+        let before = b.clone();
+        assert!(b.would_refuse(0, 0));
+        assert!(matches!(
+            b.try_admit_round(1, 1, 3, 1),
+            Err(FleetBudgetError::RoundCapReached {
+                max_rounds: u64::MAX
+            })
+        ));
+        assert_only_latch_and_refusal_changed(before, &b);
+        assert!(matches!(
+            b.events.last(),
+            Some(FleetBudgetEvent::RoundRefused {
+                attempted_round_id: u64::MAX,
+                ..
+            })
+        ));
+        assert!(b.try_admit_round(0, 0, 3, 2).is_err());
+        assert_eq!(b.rounds_admitted, u64::MAX);
+        assert!(b.ledger.is_empty());
+    }
+
+    #[test]
+    fn ledger_audit_rejects_saturated_sums_and_undercharged_entries() {
+        let mut b = FleetPrivacyBudget::new(FleetBudgetConfig {
+            lifetime_epsilon_budget_millionths: i64::MAX,
+            lifetime_delta_budget_millionths: i64::MAX,
+            ..basic_config()
+        })
+        .unwrap();
+        b.try_admit_round(i64::MAX - 1, 0, 3, 1).unwrap();
+        let mut second = b.ledger[0].clone();
+        second.round_id = 2;
+        second.epsilon_requested_millionths = 2;
+        second.epsilon_charged_millionths = 2;
+        second.cumulative_epsilon_millionths = i64::MAX;
+        b.ledger.push(second);
+        b.rounds_admitted = 2;
+        b.lifetime_epsilon_spent_millionths = i64::MAX;
+        assert!(b.verify_ledger_integrity().is_err());
+
+        let mut b = budget();
+        b.try_admit_round(100_000, 0, 3, 1).unwrap();
+        b.ledger[0].epsilon_requested_millionths = 200_000;
+        assert!(b.verify_ledger_integrity().is_err());
+        b.ledger[0].epsilon_requested_millionths = -1;
+        assert!(b.verify_ledger_integrity().is_err());
+    }
+
+    #[test]
+    fn legacy_basic_state_must_pass_the_full_additive_ledger_audit() {
+        let mut b = budget();
+        b.try_admit_round(100_000, 0, 3, 1).unwrap();
+        b.accounting_version = 0;
+        b.rounds_admitted += 1;
+        let before = b.clone();
+        assert!(b.would_refuse(0, 0));
+        assert!(matches!(
+            b.try_admit_round(0, 0, 3, 2),
+            Err(FleetBudgetError::InvalidConfiguration { .. })
+        ));
+        assert_only_latch_and_refusal_changed(before, &b);
+    }
+
+    #[test]
+    fn malformed_restored_spend_has_total_diagnostics_but_cannot_admit() {
+        let mut b = budget();
+        b.config.lifetime_epsilon_budget_millionths = i64::MAX;
+        b.config.lifetime_delta_budget_millionths = i64::MAX;
+        b.lifetime_epsilon_spent_millionths = i64::MIN;
+        b.lifetime_delta_spent_millionths = i64::MIN;
+        b.rounds_admitted = u64::MAX;
+        let forecast = b.forecast();
+        assert_eq!(forecast.epsilon_remaining_millionths, i64::MAX);
+        assert_eq!(forecast.delta_remaining_millionths, i64::MAX);
+        let before = b.clone();
+        assert!(b.would_refuse(0, 0));
+        assert!(matches!(
+            b.try_admit_round(0, 0, 3, 1),
+            Err(FleetBudgetError::InvalidConfiguration { .. })
+        ));
+        assert_only_latch_and_refusal_changed(before, &b);
     }
 
     // -- serde round trip --

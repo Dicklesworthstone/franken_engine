@@ -13822,7 +13822,7 @@ impl InterpreterCore {
             // (bd-vpxgj).
             "builtin:DatePrototypeToLocaleString" => {
                 let this_val = self.read_reg(args.start)?;
-                let locale_arg = if args.count > 0 {
+                let locale_arg = if args.count > 1 {
                     self.read_reg(args.start + 1)?
                 } else {
                     Value::str("en-US")
@@ -13838,7 +13838,7 @@ impl InterpreterCore {
 
             "builtin:DatePrototypeToLocaleDateString" => {
                 let this_val = self.read_reg(args.start)?;
-                let locale_arg = if args.count > 0 {
+                let locale_arg = if args.count > 1 {
                     self.read_reg(args.start + 1)?
                 } else {
                     Value::str("en-US")
@@ -13854,7 +13854,7 @@ impl InterpreterCore {
 
             "builtin:DatePrototypeToLocaleTimeString" => {
                 let this_val = self.read_reg(args.start)?;
-                let locale_arg = if args.count > 0 {
+                let locale_arg = if args.count > 1 {
                     self.read_reg(args.start + 1)?
                 } else {
                     Value::str("en-US")

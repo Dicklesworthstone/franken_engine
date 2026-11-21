@@ -163,3 +163,138 @@ fn unsupported_locale_fallback() {
             .expect_err("an unknown locale is refused");
     assert!(error.contains("zz-ZZ"), "{error}");
 }
+
+/// Direct `builtin:DatePrototypeToLocale{,Date,Time}String` hostcalls route
+/// through `date_locale` with exact proleptic-Gregorian UTC arithmetic and
+/// match Node v22/v26 output (including leap years, pre-epoch timestamps, and
+/// omitted locale arguments) (bd-9vouw.106).
+#[test]
+fn direct_locale_date_hostcalls_match_node_outputs() {
+    use frankenengine_engine::baseline_interpreter::Value;
+    use frankenengine_engine::ir_contract::{
+        CapabilityTag, Ir3Instruction, IrHeader, IrLevel, IrSchemaVersion, RegRange,
+    };
+
+    let run_hostcall = |timestamp_ms: i64, tag: &str, locale: Option<&str>| -> Value {
+        let mut instructions = vec![
+            Ir3Instruction::LoadInt {
+                dst: 0,
+                value: timestamp_ms,
+            },
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("builtin:Date".to_string()),
+                args: RegRange { start: 0, count: 1 },
+                dst: 1,
+            },
+        ];
+        let mut constant_pool = Vec::new();
+        let arg_count = if let Some(locale_str) = locale {
+            constant_pool.push(locale_str.to_string());
+            instructions.push(Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 0,
+            });
+            2
+        } else {
+            // Seed r2 with a non-default locale to verify count == 1 does not
+            // read past the argument range.
+            constant_pool.push("ja-JP".to_string());
+            instructions.push(Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 0,
+            });
+            1
+        };
+        instructions.push(Ir3Instruction::HostCall {
+            capability: CapabilityTag(tag.to_string()),
+            args: RegRange {
+                start: 1,
+                count: arg_count,
+            },
+            dst: 0,
+        });
+        instructions.push(Ir3Instruction::Halt);
+
+        let module = Ir3Module {
+            header: IrHeader {
+                schema_version: IrSchemaVersion::CURRENT,
+                level: IrLevel::Ir3,
+                source_hash: None,
+                source_label: "locale-hostcall.js".to_string(),
+            },
+            instructions,
+            constant_pool,
+            function_table: Vec::new(),
+            specialization: None,
+            required_capabilities: Vec::new(),
+            function_lengths: Default::default(),
+            function_sources: Default::default(),
+            sloppy_functions: Default::default(),
+        };
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]
+        .into_iter()
+        .collect();
+        let mut core = InterpreterCore::new(config, "locale-hostcall");
+        core.execute(&module)
+            .expect("locale hostcall should execute")
+            .value
+    };
+
+    // Date.UTC(2024, 2, 15, 13, 5, 9) = 1710507909000 ms (post-leap-day 2024).
+    let march_2024 = 1_710_507_909_000_i64;
+    assert_eq!(
+        run_hostcall(march_2024, "builtin:DatePrototypeToLocaleString", None),
+        Value::str("3/15/2024, 1:05:09 PM")
+    );
+    assert_eq!(
+        run_hostcall(
+            march_2024,
+            "builtin:DatePrototypeToLocaleString",
+            Some("en-US")
+        ),
+        Value::str("3/15/2024, 1:05:09 PM")
+    );
+    assert_eq!(
+        run_hostcall(
+            march_2024,
+            "builtin:DatePrototypeToLocaleDateString",
+            Some("en-GB")
+        ),
+        Value::str("15/03/2024")
+    );
+    assert_eq!(
+        run_hostcall(
+            march_2024,
+            "builtin:DatePrototypeToLocaleTimeString",
+            Some("en-GB")
+        ),
+        Value::str("13:05:09")
+    );
+    assert_eq!(
+        run_hostcall(
+            march_2024,
+            "builtin:DatePrototypeToLocaleString",
+            Some("ja-JP")
+        ),
+        Value::str("2024/3/15 13:05:09")
+    );
+
+    // Pre-epoch: Date.UTC(1969, 11, 31, 23, 59, 59) = -1000 ms.
+    assert_eq!(
+        run_hostcall(-1_000, "builtin:DatePrototypeToLocaleString", Some("en-US")),
+        Value::str("12/31/1969, 11:59:59 PM")
+    );
+    assert_eq!(
+        run_hostcall(
+            -1_000,
+            "builtin:DatePrototypeToLocaleDateString",
+            Some("ja-JP")
+        ),
+        Value::str("1969/12/31")
+    );
+}

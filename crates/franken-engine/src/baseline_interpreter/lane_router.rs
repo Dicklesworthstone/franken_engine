@@ -3436,107 +3436,16 @@ pub(super) enum DateFormatType {
 
 /// Locale data for date formatting - supports en-US, en-GB, ja-JP
 pub(super) struct LocaleData {
-    month_names: &'static [&'static str; 12],
-    month_names_short: &'static [&'static str; 12],
-    day_names: &'static [&'static str; 7],
-    day_names_short: &'static [&'static str; 7],
-    date_order: DateOrder,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum DateOrder {
-    Mdy, // MM/DD/YYYY (en-US)
-    Dmy, // DD/MM/YYYY (en-GB)
-    Ymd, // YYYY-MM-DD (ja-JP)
+    tag: &'static str,
 }
 
 impl InterpreterCore {
     /// Get locale data for supported locales (en-US, en-GB, ja-JP)
     pub(super) fn get_locale_data(locale: &str) -> LocaleData {
         match locale {
-            "en-US" => LocaleData {
-                month_names: &[
-                    "January",
-                    "February",
-                    "March",
-                    "April",
-                    "May",
-                    "June",
-                    "July",
-                    "August",
-                    "September",
-                    "October",
-                    "November",
-                    "December",
-                ],
-                month_names_short: &[
-                    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov",
-                    "Dec",
-                ],
-                day_names: &[
-                    "Sunday",
-                    "Monday",
-                    "Tuesday",
-                    "Wednesday",
-                    "Thursday",
-                    "Friday",
-                    "Saturday",
-                ],
-                day_names_short: &["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
-                date_order: DateOrder::Mdy,
-            },
-            "en-GB" => LocaleData {
-                month_names: &[
-                    "January",
-                    "February",
-                    "March",
-                    "April",
-                    "May",
-                    "June",
-                    "July",
-                    "August",
-                    "September",
-                    "October",
-                    "November",
-                    "December",
-                ],
-                month_names_short: &[
-                    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov",
-                    "Dec",
-                ],
-                day_names: &[
-                    "Sunday",
-                    "Monday",
-                    "Tuesday",
-                    "Wednesday",
-                    "Thursday",
-                    "Friday",
-                    "Saturday",
-                ],
-                day_names_short: &["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
-                date_order: DateOrder::Dmy,
-            },
-            "ja-JP" => LocaleData {
-                month_names: &[
-                    "1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月",
-                    "12月",
-                ],
-                month_names_short: &[
-                    "1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月",
-                    "12月",
-                ],
-                day_names: &[
-                    "日曜日",
-                    "月曜日",
-                    "火曜日",
-                    "水曜日",
-                    "木曜日",
-                    "金曜日",
-                    "土曜日",
-                ],
-                day_names_short: &["日", "月", "火", "水", "木", "金", "土"],
-                date_order: DateOrder::Ymd,
-            },
+            "en-US" => LocaleData { tag: "en-US" },
+            "en-GB" => LocaleData { tag: "en-GB" },
+            "ja-JP" => LocaleData { tag: "ja-JP" },
             _ => {
                 // Fallback to en-US for unsupported locales
                 Self::get_locale_data("en-US")
@@ -3565,7 +3474,7 @@ impl InterpreterCore {
             if !time.is_finite() {
                 return Ok(Value::str("Invalid Date"));
             }
-            let timestamp = time as i64;
+            let timestamp = time.trunc() as i64;
 
             let locale_data = Self::get_locale_data(locale);
             let formatted = self.format_timestamp_with_locale(timestamp, locale_data, format_type);
@@ -3575,91 +3484,30 @@ impl InterpreterCore {
         Ok(Value::str("Invalid Date"))
     }
 
-    /// Format a Unix timestamp (milliseconds) according to locale rules
+    /// Format a Unix timestamp (milliseconds) according to locale rules via the
+    /// exact proleptic-Gregorian UTC breakdown and `date_locale` layouts
+    /// (bd-9vouw.106).
     pub(super) fn format_timestamp_with_locale(
         &self,
         timestamp_ms: i64,
         locale_data: LocaleData,
         format_type: DateFormatType,
     ) -> String {
-        // Convert timestamp to date components
-        // Simplified date calculation for demonstration (real implementation would use proper date arithmetic)
-        let days_since_epoch = timestamp_ms / (1000 * 60 * 60 * 24);
-        let seconds_in_day = (timestamp_ms / 1000) % (60 * 60 * 24);
-        let hours = (seconds_in_day / 3600) % 24;
-        let minutes = (seconds_in_day / 60) % 60;
-        let seconds = seconds_in_day % 60;
-
-        // Simplified date calculation (January 1, 1970 was a Thursday)
-        // For more accurate implementation, use proper calendar algorithms
-        let epoch_year = 1970;
-        let mut year = epoch_year;
-        let mut remaining_days = days_since_epoch;
-
-        // Approximate year calculation (not accounting for leap years properly for simplicity)
-        if remaining_days >= 365 {
-            year += remaining_days / 365;
-            remaining_days %= 365;
-        }
-
-        // Simplified month/day calculation
-        let month = if remaining_days >= 31 {
-            (remaining_days / 30).min(11)
-        } else {
-            0
+        let time = timestamp_ms as f64;
+        let fields = date_locale::DateFields {
+            year: date_math::year_from_time(time) as i64,
+            month: date_math::month_from_time(time) as u32,
+            day: date_math::date_from_time(time) as u32,
+            hour: date_math::hour(time) as u32,
+            minute: date_math::minute(time) as u32,
+            second: date_math::second(time) as u32,
         };
-        let day = (remaining_days % 30) + 1;
-
-        let day_of_week = (days_since_epoch + 4) % 7; // January 1, 1970 was Thursday (4)
-
-        match format_type {
-            DateFormatType::DateOnly => {
-                self.format_date_part(year, month as usize, day, day_of_week as usize, locale_data)
-            }
-            DateFormatType::TimeOnly => {
-                format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
-            }
-            DateFormatType::DateTime => {
-                let date_part = self.format_date_part(
-                    year,
-                    month as usize,
-                    day,
-                    day_of_week as usize,
-                    locale_data,
-                );
-                let time_part = format!("{:02}:{:02}:{:02}", hours, minutes, seconds);
-                format!("{} {}", date_part, time_part)
-            }
-        }
-    }
-
-    /// Format the date part according to locale ordering and month names
-    pub(super) fn format_date_part(
-        &self,
-        year: i64,
-        month: usize,
-        day: i64,
-        day_of_week: usize,
-        locale_data: LocaleData,
-    ) -> String {
-        let _long_month_name = locale_data.month_names[month.min(11)];
-        let _month_name = locale_data.month_names_short[month.min(11)];
-        let _long_day_name = locale_data.day_names[day_of_week % 7];
-        let day_name = locale_data.day_names_short[day_of_week % 7];
-
-        match locale_data.date_order {
-            DateOrder::Mdy => {
-                // MM/DD/YYYY format (en-US)
-                format!("{} {:02}/{:02}/{}", day_name, month + 1, day, year)
-            }
-            DateOrder::Dmy => {
-                // DD/MM/YYYY format (en-GB)
-                format!("{} {:02}/{:02}/{}", day_name, day, month + 1, year)
-            }
-            DateOrder::Ymd => {
-                // YYYY-MM-DD format (ja-JP)
-                format!("{} {:04}-{:02}-{:02}", day_name, year, month + 1, day)
-            }
-        }
+        let kind = match format_type {
+            DateFormatType::DateTime => date_locale::DateLocaleKind::DateTime,
+            DateFormatType::DateOnly => date_locale::DateLocaleKind::Date,
+            DateFormatType::TimeOnly => date_locale::DateLocaleKind::Time,
+        };
+        date_locale::format_date_locale(fields, Some(locale_data.tag), kind)
+            .unwrap_or_else(|_| "Invalid Date".to_string())
     }
 }

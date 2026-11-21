@@ -31,7 +31,9 @@ use crate::baseline_interpreter::{
 };
 use crate::bayesian_posterior::{Evidence, Posterior, RiskState, UpdateResult, UpdaterStore};
 use crate::capability::RuntimeCapability;
-use crate::capability_witness::{CapabilityWitness, WitnessSchemaVersion};
+use crate::capability_witness::{
+    CapabilityWitness, CapabilityWitnessTrustRoot, WitnessSchemaVersion,
+};
 use crate::checkpoint::CancellationToken;
 use crate::containment_executor::{
     ContainmentContext, ContainmentError, ContainmentExecutor, ContainmentReceipt,
@@ -2167,6 +2169,9 @@ pub struct ExecutionOrchestrator {
     /// Optional signed PLAS capability witness enforcing least-authority
     /// execution and persisted as a typed `PlasWitnessEntry` (`g2vrp.13`).
     capability_witness: Option<CapabilityWitness>,
+    /// Host-pinned authority for witness synthesis and promotion. Witness
+    /// metadata and replay input never establish their own trust roots.
+    capability_witness_trust_root: Option<CapabilityWitnessTrustRoot>,
     /// Pluggable control-plane storage adapter (`g2vrp.13`); defaults to
     /// deterministic in-memory storage and upgrades to FrankenSQLite via
     /// [`Self::open_state_db`].
@@ -2505,6 +2510,7 @@ impl ExecutionOrchestrator {
             data_contract_ingress: None,
             data_contract_flow_events: Vec::new(),
             capability_witness: None,
+            capability_witness_trust_root: None,
             storage_adapter: Box::new(InMemoryStorageAdapter::new()),
             #[cfg(test)]
             evidence_compression_status_override: None,
@@ -2547,12 +2553,19 @@ impl ExecutionOrchestrator {
 
     /// Install a signed PLAS [`CapabilityWitness`] (`frankenctl run --witness`).
     ///
-    /// Every subsequent `execute` verifies content integrity, proof coverage,
-    /// schema compatibility, and lifecycle non-terminality, enforces that
-    /// package and lowered IR3 capability requirements stay strictly within
-    /// `witness.required_capabilities` (and disjoint from
-    /// `witness.denied_capabilities`), and persists a typed
-    /// [`PlasWitnessEntry`] in the active storage adapter.
+    /// Every subsequent `execute` requires an active witness at the current
+    /// policy epoch, authenticated against the separately installed
+    /// [`CapabilityWitnessTrustRoot`]. Synthesis, promotion and proof checks
+    /// run before native execution and witness persistence. Signed source and
+    /// parse-goal bindings are enforced when present. Package and lowered IR3
+    /// requirements must remain within `witness.required_capabilities` and
+    /// disjoint from `witness.denied_capabilities`; a witness never grants a
+    /// capability missing from the host's existing execution authority.
+    ///
+    /// Installing the artifact alone does not trust it. Without
+    /// [`Self::set_capability_witness_trust_root`], execution with a witness
+    /// fails closed. Executions that install no witness retain their existing
+    /// capability and IFC checks.
     pub fn set_capability_witness(&mut self, witness: CapabilityWitness) {
         self.capability_witness = Some(witness);
     }
@@ -2560,6 +2573,18 @@ impl ExecutionOrchestrator {
     /// Inspect the currently installed PLAS [`CapabilityWitness`], if any.
     pub fn capability_witness(&self) -> Option<&CapabilityWitness> {
         self.capability_witness.as_ref()
+    }
+
+    /// Pin witness synthesis and promotion authorities supplied by the trusted
+    /// host. This must not be reconstructed from the witness's own metadata or
+    /// from a replay artifact. Replacing the root takes effect on the next
+    /// execution, including when reusing an already installed witness.
+    pub fn set_capability_witness_trust_root(&mut self, trust_root: CapabilityWitnessTrustRoot) {
+        self.capability_witness_trust_root = Some(trust_root);
+    }
+
+    pub fn capability_witness_trust_root(&self) -> Option<&CapabilityWitnessTrustRoot> {
+        self.capability_witness_trust_root.as_ref()
     }
 
     /// Install a custom [`StorageAdapter`] backing IFC provenance, replay-index
@@ -4900,6 +4925,11 @@ impl ExecutionOrchestrator {
         let Some(witness) = self.capability_witness.clone() else {
             return Ok(());
         };
+        let trust_root = self.capability_witness_trust_root.as_ref().ok_or_else(|| {
+            OrchestratorError::CapabilityWitnessRejected {
+                detail: "capability witness requires an externally pinned trust root".to_string(),
+            }
+        })?;
         if !WitnessSchemaVersion::CURRENT.is_compatible_with(&witness.schema_version) {
             return Err(OrchestratorError::CapabilityWitnessRejected {
                 detail: format!(
@@ -4909,10 +4939,10 @@ impl ExecutionOrchestrator {
                 ),
             });
         }
-        if witness.lifecycle_state.is_terminal() {
+        if !witness.lifecycle_state.is_active() {
             return Err(OrchestratorError::CapabilityWitnessRejected {
                 detail: format!(
-                    "witness lifecycle state `{}` is terminal and cannot authorize execution",
+                    "witness lifecycle state `{}` is not active and cannot authorize execution",
                     witness.lifecycle_state
                 ),
             });
@@ -4922,25 +4952,39 @@ impl ExecutionOrchestrator {
                 detail: "witness required capability set is empty".to_string(),
             });
         }
-        if witness.epoch.as_u64() > self.config.epoch.as_u64() {
+        if witness.epoch != self.config.epoch {
             return Err(OrchestratorError::CapabilityWitnessRejected {
                 detail: format!(
-                    "witness epoch {} exceeds orchestrator epoch {}",
+                    "witness epoch {} does not match orchestrator epoch {}",
                     witness.epoch.as_u64(),
                     self.config.epoch.as_u64()
                 ),
             });
         }
         witness
-            .verify_integrity()
+            .verify_active_acceptance_with_trust_root(trust_root)
             .map_err(|err| OrchestratorError::CapabilityWitnessRejected {
-                detail: format!("witness integrity check failed: {err}"),
+                detail: format!("witness authentication or promotion check failed: {err}"),
             })?;
-        witness.verify_proof_coverage().map_err(|err| {
-            OrchestratorError::CapabilityWitnessRejected {
-                detail: format!("witness proof coverage check failed: {err}"),
-            }
-        })?;
+
+        // Static witnesses emitted by `frankenctl check` bind the exact source
+        // bytes and parse goal they analyzed. Authenticate those fields above
+        // before using them; a valid witness for another program is not proof
+        // for this one even when its declared capability set happens to match.
+        if let Some(source_sha256) = witness.metadata.get("source_sha256")
+            && *source_sha256 != ContentHash::compute(package.source.as_bytes()).to_hex()
+        {
+            return Err(OrchestratorError::CapabilityWitnessRejected {
+                detail: "witness source binding does not match the execution source".to_string(),
+            });
+        }
+        if let Some(parse_goal) = witness.metadata.get("parse_goal")
+            && parse_goal != self.config.parse_goal.as_str()
+        {
+            return Err(OrchestratorError::CapabilityWitnessRejected {
+                detail: "witness parse goal does not match the execution parse goal".to_string(),
+            });
+        }
 
         let allowed: BTreeSet<&str> = witness
             .required_capabilities

@@ -4082,47 +4082,16 @@ fn shadowed_error_constructor_stays_fail_high_bd_8y64t() {
 
 #[test]
 fn plas_capability_witness_enforces_least_authority_and_persists_typed_entry_rc_d2() {
-    use frankenengine_engine::capability_witness::{
-        ConfidenceInterval, ProofKind, ProofObligation, WitnessBuilder,
-    };
-    use frankenengine_engine::engine_object_id::{ObjectDomain, SchemaId, derive_id};
-    use frankenengine_engine::hash_tiers::ContentHash;
-    use frankenengine_engine::policy_theorem_compiler::Capability;
-    use frankenengine_engine::security_epoch::SecurityEpoch;
-    use frankenengine_engine::signature_preimage::SigningKey;
     use frankenengine_engine::storage_adapter::EventContext;
     use frankenengine_engine::typed_persistence_models::{
         PlasWitnessEntry, TypedStorageAdapterExt,
     };
 
-    let schema_id = SchemaId::from_definition(b"rc-d2-test");
-    let ext_id = derive_id(ObjectDomain::Attestation, "rc-d2", &schema_id, b"ext").unwrap();
-    let policy_id = derive_id(ObjectDomain::Attestation, "rc-d2", &schema_id, b"policy").unwrap();
-    let proof_id = derive_id(ObjectDomain::EvidenceRecord, "rc-d2", &schema_id, b"proof").unwrap();
     let signing_key = SigningKey::from_bytes([0x42; 32]).unwrap();
-
-    let vm_cap = Capability::new("vm_dispatch");
-    let witness = WitnessBuilder::new(
-        ext_id,
-        policy_id,
-        SecurityEpoch::from_raw(1),
-        1_700_000_000_000_000,
-        signing_key,
-    )
-    .require(vm_cap.clone())
-    .deny(Capability::new("env_read"), "env access forbidden")
-    .proof(ProofObligation {
-        capability: vm_cap,
-        kind: ProofKind::StaticAnalysis,
-        proof_artifact_id: proof_id,
-        justification: "minimal pure arithmetic footprint".to_string(),
-        artifact_hash: ContentHash::compute(b"static-footprint"),
-    })
-    .confidence(ConfidenceInterval::from_trials(100, 100))
-    .build()
-    .expect("valid witness");
+    let (witness, trust_root) = active_plas_runtime_witness(&signing_key, 1, None);
 
     let mut orch = ExecutionOrchestrator::with_defaults();
+    orch.set_capability_witness_trust_root(trust_root.clone());
     orch.set_capability_witness(witness.clone());
 
     let mut authorized_pkg = simple_package("ext-rc-d2-ok", "1 + 2;");
@@ -4158,6 +4127,7 @@ fn plas_capability_witness_enforces_least_authority_and_persists_typed_entry_rc_
     let mut tampered = witness;
     tampered.replay_seed = 999;
     let mut tampered_orch = ExecutionOrchestrator::with_defaults();
+    tampered_orch.set_capability_witness_trust_root(trust_root);
     tampered_orch.set_capability_witness(tampered);
     let tampered_err = tampered_orch
         .execute(&authorized_pkg)
@@ -4169,4 +4139,302 @@ fn plas_capability_witness_enforces_least_authority_and_persists_typed_entry_rc_
         ),
         "expected CapabilityWitnessRejected, got {tampered_err}"
     );
+}
+
+/// Build a genuinely signed active fixture through the existing theorem and
+/// approval APIs. The small arithmetic capability model here is test input,
+/// not a claim about source-analysis completeness or a production trust root.
+fn active_plas_runtime_witness(
+    signing_key: &SigningKey,
+    epoch: u64,
+    source: Option<&str>,
+) -> (
+    frankenengine_engine::capability_witness::CapabilityWitness,
+    frankenengine_engine::capability_witness::CapabilityWitnessTrustRoot,
+) {
+    use frankenengine_engine::capability_witness::{
+        CapabilityWitnessTrustRoot, LifecycleState, PromotionTheoremInput, ProofKind,
+        ProofObligation, SourceCapabilitySet, WitnessBuilder,
+    };
+    use frankenengine_engine::engine_object_id::{ObjectDomain, SchemaId, derive_id};
+    use frankenengine_engine::hash_tiers::ContentHash;
+    use frankenengine_engine::policy_theorem_compiler::Capability;
+
+    let schema_id = SchemaId::from_definition(b"rc-d2-test");
+    let ext_id = derive_id(ObjectDomain::Attestation, "rc-d2", &schema_id, b"ext").unwrap();
+    let policy_id = derive_id(ObjectDomain::Attestation, "rc-d2", &schema_id, b"policy").unwrap();
+    let proof_id = derive_id(ObjectDomain::EvidenceRecord, "rc-d2", &schema_id, b"proof").unwrap();
+    let vm_cap = Capability::new("vm_dispatch");
+    let mut builder = WitnessBuilder::new(
+        ext_id,
+        policy_id,
+        SecurityEpoch::from_raw(epoch),
+        1_700_000_000_000_000,
+        signing_key.clone(),
+    )
+    .require(vm_cap.clone())
+    .deny(Capability::new("env_read"), "env access forbidden")
+    .proof(ProofObligation {
+        capability: vm_cap,
+        kind: ProofKind::StaticAnalysis,
+        proof_artifact_id: proof_id,
+        justification: "test arithmetic footprint".to_string(),
+        artifact_hash: ContentHash::compute(b"static-footprint"),
+    })
+    .meta(
+        "trusted_synthesizer_verification_key",
+        signing_key.verification_key().to_hex(),
+    );
+    if let Some(source) = source {
+        builder = builder
+            .meta(
+                "source_sha256",
+                ContentHash::compute(source.as_bytes()).to_hex(),
+            )
+            .meta("parse_goal", "script");
+    }
+    let mut witness = builder.build().expect("signed draft witness");
+    let input = PromotionTheoremInput {
+        source_capability_sets: vec![SourceCapabilitySet {
+            source_id: "arithmetic-fixture".to_string(),
+            capabilities: witness.required_capabilities.clone(),
+        }],
+        manifest_capabilities: witness.required_capabilities.clone(),
+        capability_lattice: BTreeMap::new(),
+        non_interference_dependencies: BTreeMap::new(),
+        custom_extensions: Vec::new(),
+    };
+    let report = witness
+        .evaluate_promotion_theorems_signed_by(&input, signing_key)
+        .expect("evaluate signed theorem report");
+    assert!(report.all_passed);
+    witness
+        .apply_promotion_theorem_report(&report)
+        .expect("apply authenticated theorem report");
+    witness
+        .transition_to(LifecycleState::Validated)
+        .expect("validate fixture witness");
+    witness
+        .add_promotion_signature(signing_key)
+        .expect("approve the exact promoted artifact");
+    let trust_root = CapabilityWitnessTrustRoot::single_authority(signing_key.verification_key());
+    witness
+        .transition_to_with_trust_root(LifecycleState::Promoted, &trust_root)
+        .expect("promote with pinned authority");
+    witness
+        .transition_to_with_trust_root(LifecycleState::Active, &trust_root)
+        .expect("activate authenticated witness");
+    (witness, trust_root)
+}
+
+fn assert_plas_runtime_refusal(
+    orch: &mut ExecutionOrchestrator,
+    package: &ExtensionPackage,
+    expected_detail: &str,
+) {
+    use frankenengine_engine::storage_adapter::{EventContext, StoreKind, StoreQuery};
+
+    let error = orch.execute(package).expect_err("witness must fail closed");
+    let OrchestratorError::CapabilityWitnessRejected { detail } = error.primary_error() else {
+        panic!("expected witness refusal, got {error}");
+    };
+    assert!(
+        detail.contains(expected_detail),
+        "expected {expected_detail:?}, got {detail:?}"
+    );
+    assert_eq!(orch.execution_count(), 0, "refused witness never executes");
+    assert!(orch.last_failed_console_output().is_empty());
+    assert!(orch.last_failed_host_effect_journal().is_empty());
+    let context = EventContext::new("witness-read", "witness-read", "witness-read").unwrap();
+    assert!(
+        orch.storage_adapter_mut()
+            .query(StoreKind::PlasWitness, &StoreQuery::default(), &context)
+            .expect("inspect witness persistence")
+            .is_empty(),
+        "refused witness must not enter the typed witness store"
+    );
+}
+
+#[test]
+fn plas_runtime_witness_requires_external_trust_and_rejects_unknown_signers() {
+    use frankenengine_engine::capability_witness::CapabilityWitnessTrustRoot;
+
+    let signer = SigningKey::from_bytes([0x42; 32]).unwrap();
+    let (witness, trust_root) = active_plas_runtime_witness(&signer, 1, None);
+    let package = simple_package("plas-auth", "1 + 2;");
+
+    let mut untrusted = ExecutionOrchestrator::with_defaults();
+    untrusted.set_capability_witness(witness.clone());
+    assert_plas_runtime_refusal(&mut untrusted, &package, "externally pinned trust root");
+
+    let stranger = SigningKey::from_bytes([0x43; 32]).unwrap();
+    let mut unknown = ExecutionOrchestrator::with_defaults();
+    unknown.set_capability_witness_trust_root(CapabilityWitnessTrustRoot::single_authority(
+        stranger.verification_key(),
+    ));
+    unknown.set_capability_witness(witness.clone());
+    assert_plas_runtime_refusal(&mut unknown, &package, "not authorized by the trust root");
+
+    let mut invalid_root = trust_root;
+    invalid_root.required_promotion_signatures = 0;
+    let mut malformed = ExecutionOrchestrator::with_defaults();
+    malformed.set_capability_witness_trust_root(invalid_root);
+    malformed.set_capability_witness(witness);
+    assert_plas_runtime_refusal(&mut malformed, &package, "at least one signature");
+}
+
+#[test]
+fn plas_runtime_witness_rejects_hash_only_forgery_and_corrupted_signatures() {
+    use frankenengine_engine::hash_tiers::ContentHash;
+
+    let signer = SigningKey::from_bytes([0x42; 32]).unwrap();
+    let (witness, trust_root) = active_plas_runtime_witness(&signer, 1, None);
+    let package = simple_package("plas-forgery", "1 + 2;");
+
+    let mut rehashed = witness.clone();
+    rehashed.replay_seed = 999;
+    rehashed.content_hash = ContentHash::compute(&rehashed.synthesis_unsigned_bytes());
+    rehashed
+        .verify_integrity()
+        .expect("attack recomputes a valid checksum");
+
+    let mut bad_synthesis = witness.clone();
+    bad_synthesis.synthesizer_signature = vec![0; 64];
+    let mut bad_promotion = witness.clone();
+    bad_promotion.promotion_signatures = vec![vec![0; 64]];
+    let mut synthesis_as_promotion = witness;
+    synthesis_as_promotion.promotion_signatures =
+        vec![synthesis_as_promotion.synthesizer_signature.clone()];
+
+    for forged in [
+        rehashed,
+        bad_synthesis,
+        bad_promotion,
+        synthesis_as_promotion,
+    ] {
+        forged
+            .verify_integrity()
+            .expect("a valid content hash alone cannot authorize execution");
+        let mut orch = ExecutionOrchestrator::with_defaults();
+        orch.set_capability_witness_trust_root(trust_root.clone());
+        orch.set_capability_witness(forged);
+        assert_plas_runtime_refusal(
+            &mut orch,
+            &package,
+            "authentication or promotion check failed",
+        );
+    }
+}
+
+#[test]
+fn plas_runtime_witness_requires_active_lifecycle_and_current_epoch() {
+    use frankenengine_engine::capability_witness::LifecycleState;
+
+    let signer = SigningKey::from_bytes([0x42; 32]).unwrap();
+    let (witness, trust_root) = active_plas_runtime_witness(&signer, 1, None);
+    let package = simple_package("plas-freshness", "1 + 2;");
+    for state in [
+        LifecycleState::Draft,
+        LifecycleState::Validated,
+        LifecycleState::Promoted,
+        LifecycleState::Superseded,
+        LifecycleState::Revoked,
+    ] {
+        let mut inactive = witness.clone();
+        inactive.lifecycle_state = state;
+        let mut orch = ExecutionOrchestrator::with_defaults();
+        orch.set_capability_witness_trust_root(trust_root.clone());
+        orch.set_capability_witness(inactive);
+        assert_plas_runtime_refusal(&mut orch, &package, "is not active");
+    }
+
+    for (witness_epoch, runtime_epoch) in [(1, 2), (2, 1)] {
+        let (wrong_epoch, root) = active_plas_runtime_witness(&signer, witness_epoch, None);
+        let mut orch = ExecutionOrchestrator::new(OrchestratorConfig {
+            epoch: SecurityEpoch::from_raw(runtime_epoch),
+            ..OrchestratorConfig::default()
+        });
+        orch.set_capability_witness_trust_root(root);
+        orch.set_capability_witness(wrong_epoch);
+        assert_plas_runtime_refusal(&mut orch, &package, "does not match orchestrator epoch");
+    }
+}
+
+#[test]
+fn plas_runtime_witness_checks_signed_source_and_parse_goal_bindings() {
+    use frankenengine_engine::ast::ParseGoal;
+
+    let signer = SigningKey::from_bytes([0x42; 32]).unwrap();
+    let source = "1 + 2;";
+    let (witness, trust_root) = active_plas_runtime_witness(&signer, 1, Some(source));
+    let package = simple_package("plas-bound-source", source);
+
+    let other_package = simple_package(
+        "plas-other-source",
+        "console.log('must-not-execute'); 1 + 3;",
+    );
+    let mut control = ExecutionOrchestrator::with_defaults();
+    let control_result = control
+        .execute(&other_package)
+        .expect("the mismatched source would otherwise emit its console effect");
+    assert_eq!(control_result.execution_value, "4");
+    assert_eq!(
+        control_result
+            .console_output
+            .iter()
+            .map(|entry| entry.message.as_str())
+            .collect::<Vec<_>>(),
+        ["must-not-execute"]
+    );
+
+    let mut changed_source = ExecutionOrchestrator::with_defaults();
+    changed_source.set_capability_witness_trust_root(trust_root.clone());
+    changed_source.set_capability_witness(witness.clone());
+    assert_plas_runtime_refusal(
+        &mut changed_source,
+        &other_package,
+        "source binding does not match",
+    );
+
+    let mut changed_goal = ExecutionOrchestrator::new(OrchestratorConfig {
+        parse_goal: ParseGoal::Module,
+        ..OrchestratorConfig::default()
+    });
+    changed_goal.set_capability_witness_trust_root(trust_root.clone());
+    changed_goal.set_capability_witness(witness.clone());
+    assert_plas_runtime_refusal(&mut changed_goal, &package, "parse goal does not match");
+
+    let mut authorized = ExecutionOrchestrator::with_defaults();
+    authorized.set_capability_witness_trust_root(trust_root);
+    authorized.set_capability_witness(witness);
+    assert_eq!(authorized.execute(&package).unwrap().execution_value, "3");
+}
+
+#[test]
+fn plas_runtime_witness_rechecks_replaced_trust_root_without_changing_optional_execution() {
+    use frankenengine_engine::capability_witness::CapabilityWitnessTrustRoot;
+
+    let signer = SigningKey::from_bytes([0x42; 32]).unwrap();
+    let (witness, trust_root) = active_plas_runtime_witness(&signer, 1, None);
+    let package = simple_package("plas-root-rotation", "1 + 2;");
+    let mut orch = ExecutionOrchestrator::with_defaults();
+    orch.set_capability_witness_trust_root(trust_root.clone());
+    assert_eq!(orch.capability_witness_trust_root(), Some(&trust_root));
+    // A root alone neither requires a witness nor changes capability grants.
+    assert_eq!(orch.execute(&package).unwrap().execution_value, "3");
+    orch.set_capability_witness(witness);
+    assert_eq!(orch.execute(&package).unwrap().execution_value, "3");
+
+    let replacement = SigningKey::from_bytes([0x44; 32]).unwrap();
+    orch.set_capability_witness_trust_root(CapabilityWitnessTrustRoot::single_authority(
+        replacement.verification_key(),
+    ));
+    let error = orch
+        .execute(&package)
+        .expect_err("old signer is no longer trusted");
+    assert!(matches!(
+        error.primary_error(),
+        OrchestratorError::CapabilityWitnessRejected { .. }
+    ));
+    assert_eq!(orch.execution_count(), 2);
 }

@@ -37,7 +37,8 @@ use frankenengine_engine::agent_sandbox::{
 };
 use frankenengine_engine::capability::{CapabilityProfile, RuntimeCapability};
 use frankenengine_engine::capability_witness::{
-    CapabilityWitness, ConfidenceInterval, ProofKind, ProofObligation, WitnessBuilder,
+    CapabilityWitness, CapabilityWitnessTrustRoot, ConfidenceInterval, ProofKind, ProofObligation,
+    WitnessBuilder,
 };
 use frankenengine_engine::data_contract::{
     DEFAULT_DATA_CONTRACT_PURPOSE, DataContract, DataContractIfcIngress, DataContractRunBinding,
@@ -350,8 +351,10 @@ struct CheckArgs {
     format: CheckOutputFormat,
     /// Optional bundle directory for `run_manifest.json` + `events.jsonl`.
     out: Option<PathBuf>,
-    /// Optional signed PLAS `CapabilityWitness` JSON output path (`g2vrp.13`).
+    /// Optional signed Draft PLAS witness for subsequent independent promotion.
     emit_witness: Option<PathBuf>,
+    witness_signing_key: Option<PathBuf>,
+    witness_epoch: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -429,6 +432,8 @@ struct RunArgs {
     state_db: Option<PathBuf>,
     /// Optional signed PLAS `CapabilityWitness` JSON input path (`g2vrp.13`).
     witness: Option<PathBuf>,
+    /// Operator-pinned promotion authorities and epoch, never read from a witness.
+    witness_trust: Option<WitnessTrustArgs>,
     /// Override the execution-cell close budget for policy testing.
     cell_close_budget_ms: Option<u64>,
     /// Override the interpreter instruction budget (bd-9vouw.6). The
@@ -680,6 +685,14 @@ struct ReplayArgs {
     out: Option<PathBuf>,
     fleet_trace: Option<PathBuf>,
     evidence_trust: Option<ReplayEvidenceTrustArgs>,
+    witness_trust: Option<WitnessTrustArgs>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WitnessTrustArgs {
+    root: PathBuf,
+    expected_digest: String,
+    epoch: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2433,6 +2446,8 @@ fn parse_check_command(args: &[String]) -> Result<CommandSpec, String> {
     let mut format = CheckOutputFormat::Human;
     let mut out: Option<PathBuf> = None;
     let mut emit_witness: Option<PathBuf> = None;
+    let mut witness_signing_key: Option<PathBuf> = None;
+    let mut witness_epoch: Option<u64> = None;
 
     let mut index = 0usize;
     while index < args.len() {
@@ -2446,6 +2461,17 @@ fn parse_check_command(args: &[String]) -> Result<CommandSpec, String> {
             "--emit-witness" => {
                 emit_witness = Some(PathBuf::from(next_arg(args, &mut index, "--emit-witness")?))
             }
+            "--witness-signing-key" => {
+                witness_signing_key = Some(PathBuf::from(next_arg(
+                    args, &mut index, "--witness-signing-key",
+                )?));
+            }
+            "--witness-epoch" => {
+                witness_epoch = Some(parse_positive_u64(
+                    &next_arg(args, &mut index, "--witness-epoch")?,
+                    "--witness-epoch",
+                )?);
+            }
             value if !value.starts_with("--") && input.is_none() => {
                 input = Some(PathBuf::from(value));
             }
@@ -2455,6 +2481,11 @@ fn parse_check_command(args: &[String]) -> Result<CommandSpec, String> {
     }
 
     let input = input.ok_or_else(|| "check requires <file> or --input <path>".to_string())?;
+    if emit_witness.is_some() != witness_signing_key.is_some()
+        || emit_witness.is_some() != witness_epoch.is_some()
+    {
+        return Err("witness synthesis requires --emit-witness, --witness-signing-key, and --witness-epoch together; the result is a Draft requiring independent promotion".to_string());
+    }
 
     Ok(CommandSpec::Check(CheckArgs {
         input,
@@ -2462,6 +2493,8 @@ fn parse_check_command(args: &[String]) -> Result<CommandSpec, String> {
         format,
         out,
         emit_witness,
+        witness_signing_key,
+        witness_epoch,
     }))
 }
 
@@ -2760,6 +2793,9 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
     let mut certificate_out: Option<PathBuf> = None;
     let mut state_db: Option<PathBuf> = None;
     let mut witness: Option<PathBuf> = None;
+    let mut witness_trust_root: Option<PathBuf> = None;
+    let mut expected_witness_trust_digest: Option<String> = None;
+    let mut witness_epoch: Option<u64> = None;
     let mut cell_close_budget_ms: Option<u64> = None;
     let mut instruction_budget: Option<u64> = None;
     let mut parser_max_token_count: Option<u64> = None;
@@ -2821,6 +2857,22 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
             }
             "--witness" => {
                 witness = Some(PathBuf::from(next_arg(args, &mut index, "--witness")?));
+            }
+            "--witness-trust-root" => {
+                witness_trust_root = Some(PathBuf::from(next_arg(
+                    args, &mut index, "--witness-trust-root",
+                )?));
+            }
+            "--expected-witness-trust-digest" => {
+                expected_witness_trust_digest = Some(parse_expected_trust_digest(&next_arg(
+                    args, &mut index, "--expected-witness-trust-digest",
+                )?)?);
+            }
+            "--witness-epoch" => {
+                witness_epoch = Some(parse_positive_u64(
+                    &next_arg(args, &mut index, "--witness-epoch")?,
+                    "--witness-epoch",
+                )?);
             }
             "--cell-close-budget-ms" => {
                 cell_close_budget_ms = Some(parse_positive_u64(
@@ -2905,6 +2957,14 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
     let input = input.ok_or_else(|| "run requires --input <path>".to_string())?;
     let extension_id =
         extension_id.ok_or_else(|| "run requires --extension-id <id>".to_string())?;
+    let witness_trust = parse_witness_trust_args(
+        witness_trust_root,
+        expected_witness_trust_digest,
+        witness_epoch,
+    )?;
+    if witness.is_some() != witness_trust.is_some() {
+        return Err("--witness requires --witness-trust-root, --expected-witness-trust-digest, and --witness-epoch together".to_string());
+    }
     let evidence_authority = match (evidence_key_file, evidence_producer_id, trust_snapshot, expected_trust_digest) {
         (None, None, None, None) => None,
         (Some(key_file), Some(producer_id), Some(snapshot), Some(expected_digest)) => {
@@ -2953,6 +3013,7 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
         certificate_out,
         state_db,
         witness,
+        witness_trust,
         cell_close_budget_ms,
         instruction_budget,
         parser_max_token_count,
@@ -3588,6 +3649,9 @@ fn parse_replay_run_command(args: &[String]) -> Result<CommandSpec, String> {
     let mut fleet_trace: Option<PathBuf> = None;
     let mut trust_snapshot: Option<PathBuf> = None;
     let mut expected_trust_digest: Option<String> = None;
+    let mut witness_trust_root: Option<PathBuf> = None;
+    let mut expected_witness_trust_digest: Option<String> = None;
+    let mut witness_epoch: Option<u64> = None;
 
     let mut index = 0usize;
     while index < args.len() {
@@ -3616,6 +3680,22 @@ fn parse_replay_run_command(args: &[String]) -> Result<CommandSpec, String> {
                 let digest = next_arg(args, &mut index, "--expected-trust-digest")?;
                 expected_trust_digest = Some(parse_expected_trust_digest(&digest)?);
             }
+            "--witness-trust-root" => {
+                witness_trust_root = Some(PathBuf::from(next_arg(
+                    args, &mut index, "--witness-trust-root",
+                )?));
+            }
+            "--expected-witness-trust-digest" => {
+                expected_witness_trust_digest = Some(parse_expected_trust_digest(&next_arg(
+                    args, &mut index, "--expected-witness-trust-digest",
+                )?)?);
+            }
+            "--witness-epoch" => {
+                witness_epoch = Some(parse_positive_u64(
+                    &next_arg(args, &mut index, "--witness-epoch")?,
+                    "--witness-epoch",
+                )?);
+            }
             flag => return Err(format!("unknown replay run flag `{flag}`")),
         }
         index += 1;
@@ -3643,6 +3723,15 @@ fn parse_replay_run_command(args: &[String]) -> Result<CommandSpec, String> {
         }
     };
 
+    let witness_trust = parse_witness_trust_args(
+        witness_trust_root,
+        expected_witness_trust_digest,
+        witness_epoch,
+    )?;
+    if witness_trust.is_some() && (compare_trace.is_some() || fleet_trace.is_some()) {
+        return Err("witness authentication applies only to run-report re-execution".to_string());
+    }
+
     Ok(CommandSpec::Replay(ReplayArgs {
         trace: trace.ok_or_else(|| "replay run requires --trace <path>".to_string())?,
         compare_trace,
@@ -3650,7 +3739,24 @@ fn parse_replay_run_command(args: &[String]) -> Result<CommandSpec, String> {
         out,
         fleet_trace,
         evidence_trust,
+        witness_trust,
     }))
+}
+
+fn parse_witness_trust_args(
+    root: Option<PathBuf>,
+    expected_digest: Option<String>,
+    epoch: Option<u64>,
+) -> Result<Option<WitnessTrustArgs>, String> {
+    match (root, expected_digest, epoch) {
+        (None, None, None) => Ok(None),
+        (Some(root), Some(expected_digest), Some(epoch)) => Ok(Some(WitnessTrustArgs {
+            root,
+            expected_digest,
+            epoch,
+        })),
+        _ => Err("witness authentication requires --witness-trust-root, --expected-witness-trust-digest, and --witness-epoch together".to_string()),
+    }
 }
 
 fn parse_replay_debug_command(args: &[String]) -> Result<CommandSpec, String> {
@@ -4811,6 +4917,13 @@ fn execute_compile(args: CompileArgs) -> Result<i32, String> {
 }
 
 fn execute_check(args: CheckArgs) -> Result<i32, String> {
+    if args.emit_witness.is_some() != args.witness_signing_key.is_some()
+        || args.emit_witness.is_some() != args.witness_epoch.is_some()
+    {
+        return Err(
+            "witness synthesis requires an explicit private signing key and epoch".to_string(),
+        );
+    }
     let source = fs::read_to_string(&args.input)
         .map_err(|error| format!("failed to read source `{}`: {error}", args.input.display()))?;
     let source_label = args.input.display().to_string();
@@ -4824,7 +4937,20 @@ fn execute_check(args: CheckArgs) -> Result<i32, String> {
                 report.outcome()
             ));
         }
-        let witness = synthesize_check_capability_witness(&report, args.parse_goal)?;
+        let signing_key = read_private_evidence_signing_key(
+            args.witness_signing_key.as_deref().ok_or_else(|| {
+                "--emit-witness requires --witness-signing-key <private.seed>".to_string()
+            })?,
+        )?;
+        let epoch = args.witness_epoch.ok_or_else(|| {
+            "--emit-witness requires --witness-epoch <positive integer>".to_string()
+        })?;
+        let witness = synthesize_check_capability_witness(
+            &report,
+            args.parse_goal,
+            signing_key,
+            SecurityEpoch::from_raw(epoch),
+        )?;
         write_json_file(witness_path, &witness)?;
     }
 
@@ -4849,6 +4975,8 @@ fn execute_check(args: CheckArgs) -> Result<i32, String> {
 fn synthesize_check_capability_witness(
     report: &AuthorityFootprintReport,
     parse_goal: ParseGoal,
+    signing_key: SigningKey,
+    epoch: SecurityEpoch,
 ) -> Result<CapabilityWitness, String> {
     let schema_id = SchemaId::from_definition(b"frankenctl.check.plas-witness.v1");
     let extension_id = derive_id(
@@ -4866,14 +4994,6 @@ fn synthesize_check_capability_witness(
     )
     .map_err(|error| format!("failed to derive witness policy id: {error}"))?;
 
-    let mut key_bytes = [0u8; SIGNING_KEY_LEN];
-    let key_digest = Sha256::digest(
-        format!("frankenctl.check.witness.seed.v1:{}", report.report_sha256).as_bytes(),
-    );
-    key_bytes.copy_from_slice(&key_digest[..SIGNING_KEY_LEN]);
-    let signing_key = SigningKey::from_bytes(key_bytes)
-        .map_err(|error| format!("failed to construct witness signing key: {error}"))?;
-
     let mut required_tags: BTreeSet<String> = run_cli_capability_set(parse_goal, false)
         .into_iter()
         .map(|cap| cap.to_string())
@@ -4883,15 +5003,19 @@ fn synthesize_check_capability_witness(
     }
 
     let report_hash = ContentHash::compute(report.report_sha256.as_bytes());
+    let synthesizer_verification_key = signing_key.verification_key().to_hex();
     let mut builder = WitnessBuilder::new(
         extension_id,
         policy_id,
-        SecurityEpoch::from_raw(1),
+        epoch,
         0,
         signing_key,
     )
     .transcript_hash(report_hash)
-    .confidence(ConfidenceInterval::from_trials(100, 100))
+    // Static analysis does not execute ablation trials or approve promotion.
+    .confidence(ConfidenceInterval::from_trials(0, 0))
+    .meta("witness_purpose", "static_authority_draft")
+    .meta("trusted_synthesizer_verification_key", synthesizer_verification_key)
     .meta("source_path", report.source_path.clone())
     .meta("source_sha256", report.source_sha256.clone())
     .meta("report_sha256", report.report_sha256.clone())
@@ -4936,6 +5060,38 @@ fn synthesize_check_capability_witness(
     builder
         .build()
         .map_err(|error| format!("failed to synthesize PLAS capability witness: {error}"))
+}
+
+/// The root and epoch come from operator configuration, separately from the
+/// untrusted witness or replay report. A digest found inside either artifact
+/// is never accepted as its own trust pin.
+fn load_pinned_capability_witness_trust(
+    witness: Option<&CapabilityWitness>,
+    trust: Option<&WitnessTrustArgs>,
+    execution_epoch: u64,
+) -> Result<Option<CapabilityWitnessTrustRoot>, String> {
+    match (witness, trust) {
+        (None, None) => Ok(None),
+        (None, Some(_)) => Err("witness trust was supplied for an execution without a capability witness".to_string()),
+        (Some(_), None) => Err("capability witness requires an independently pinned --witness-trust-root, --expected-witness-trust-digest, and --witness-epoch before execution".to_string()),
+        (Some(_), Some(trust)) => {
+            if trust.epoch != execution_epoch {
+                return Err(format!(
+                    "witness trust epoch {} differs from execution epoch {execution_epoch}",
+                    trust.epoch,
+                ));
+            }
+            let root: CapabilityWitnessTrustRoot = load_json_file(&trust.root)?;
+            let digest = root
+                .canonical_digest()
+                .map_err(|error| format!("invalid capability witness trust root: {error}"))?
+                .to_hex();
+            if digest != trust.expected_digest {
+                return Err("capability witness trust root differs from its independent pin".to_string());
+            }
+            Ok(Some(root))
+        }
+    }
 }
 
 /// One JSON object per finding, newline-delimited (`events.jsonl`). Deterministic
@@ -5761,6 +5917,19 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
     if let Some(configured) = configured_evidence.as_ref() {
         orchestrator_config.epoch = configured.snapshot.current_epoch;
     }
+    if let Some(trust) = args.witness_trust.as_ref() {
+        if configured_evidence.is_some() && orchestrator_config.epoch.as_u64() != trust.epoch {
+            return Err(
+                "witness epoch differs from the configured runtime evidence epoch".to_string(),
+            );
+        }
+        orchestrator_config.epoch = SecurityEpoch::from_raw(trust.epoch);
+    }
+    let witness_trust = load_pinned_capability_witness_trust(
+        loaded_witness.as_ref(),
+        args.witness_trust.as_ref(),
+        orchestrator_config.epoch.as_u64(),
+    )?;
     let replay_cell_close_budget_ms = orchestrator_config.cell_close_budget_ms;
     let run_epoch = orchestrator_config.epoch;
     let evidence_authority = if let Some(configured) = configured_evidence.as_ref() {
@@ -5795,6 +5964,9 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
     }
     if let Some(witness) = loaded_witness.as_ref() {
         orchestrator.set_capability_witness(witness.clone());
+    }
+    if let Some(trust_root) = witness_trust {
+        orchestrator.set_capability_witness_trust_root(trust_root);
     }
     let resolved_clock_epoch_ms = resolve_clock_epoch_selection(args.clock_epoch)?;
     orchestrator.set_clock_epoch_ms(resolved_clock_epoch_ms);
@@ -10797,6 +10969,10 @@ fn execute_replay(args: ReplayArgs) -> Result<i32, String> {
     {
         return Err("evidence authentication applies only to run-report re-execution".to_string());
     }
+    if args.witness_trust.is_some() && (args.compare_trace.is_some() || args.fleet_trace.is_some())
+    {
+        return Err("witness authentication applies only to run-report re-execution".to_string());
+    }
     if args.compare_trace.is_none() {
         if args.fleet_trace.is_some() {
             return Err(
@@ -11140,6 +11316,11 @@ fn execute_run_report_replay(args: ReplayArgs) -> Result<i32, String> {
         .transpose()?;
 
     let input = &report.replay_input;
+    let witness_trust = load_pinned_capability_witness_trust(
+        input.capability_witness.as_ref(),
+        args.witness_trust.as_ref(),
+        input.policy_epoch,
+    )?;
     let expected_unsigned = UnsignedExecutionContent {
         ir4_witness_hash: report.ir4_witness_hash.clone(),
         ir4_witness: report.ir4_witness.clone(),
@@ -11246,6 +11427,9 @@ fn execute_run_report_replay(args: ReplayArgs) -> Result<i32, String> {
     .map_err(|error| format!("failed to initialize replay execution orchestrator: {error}"))?;
     if let Some(witness) = input.capability_witness.as_ref() {
         orchestrator.set_capability_witness(witness.clone());
+    }
+    if let Some(trust_root) = witness_trust {
+        orchestrator.set_capability_witness_trust_root(trust_root);
     }
     orchestrator.set_clock_epoch_ms(input.clock_epoch_ms);
     if let Some(ingress) = input.data_contract_ingress.as_ref() {
@@ -11534,6 +11718,11 @@ fn execute_failed_run_report_replay(
         .replay_input
         .as_ref()
         .ok_or_else(|| "failed-run replay requires a replay_input payload".to_string())?;
+    let witness_trust = load_pinned_capability_witness_trust(
+        input.capability_witness.as_ref(),
+        args.witness_trust.as_ref(),
+        input.policy_epoch,
+    )?;
     if report.command != input.command() {
         return Err("failed-run command differs from the signed replay authority".to_string());
     }
@@ -11643,6 +11832,9 @@ fn execute_failed_run_report_replay(
     .map_err(|error| format!("failed to initialize replay execution orchestrator: {error}"))?;
     if let Some(witness) = input.capability_witness.as_ref() {
         orchestrator.set_capability_witness(witness.clone());
+    }
+    if let Some(trust_root) = witness_trust {
+        orchestrator.set_capability_witness_trust_root(trust_root);
     }
     orchestrator.set_clock_epoch_ms(input.clock_epoch_ms);
     if let Some(ingress) = input.data_contract_ingress.as_ref() {
@@ -16465,8 +16657,8 @@ fn check_usage() -> String {
     [
         "check usage:",
         "  frankenctl check <file> [--goal script|module] [--format human|json] [--out <bundle-dir>]",
-        "      [--emit-witness <witness.json>]",
-        "  frankenctl check --input <file> [--format json] [--out <bundle-dir>] [--emit-witness <witness.json>]",
+        "      [--emit-witness <draft.json> --witness-signing-key <private.seed> --witness-epoch <n>]",
+        "  frankenctl check --input <file> [--format json] [--out <bundle-dir>]",
         "",
         "  Parses + lowers <file> to IR2 and reports, projected onto source spans:",
         "    - the minimal capability footprint required by its SUPPORTED syntax,",
@@ -16480,6 +16672,11 @@ fn check_usage() -> String {
         "",
         "  exit codes: 0 = clean, 1 = findings present, 2 = unanalyzable (fail-closed)",
         "  --out <dir> writes a content-addressed run_manifest.json + events.jsonl bundle.",
+        "  Witness emission requires all three witness flags. The private key is an exact",
+        "  32-byte seed in an owner-only regular file on supported Unix platforms.",
+        "  The signed result is Draft, records zero empirical trials, and does not",
+        "  authorize execution. A policy authority must independently evaluate and sign",
+        "  promotion evidence before a pinned trust root can admit it as Active.",
     ]
     .join("\n")
 }
@@ -16519,6 +16716,7 @@ fn run_usage() -> String {
         "run usage:",
         "  frankenctl run --input <source.js> --extension-id <id> [--goal script|module|commonjs]",
         "      [--module-root <dir>] [--out <report.json>] [--state-db <state.db>] [--witness <witness.json>]",
+        "      [--witness-trust-root <root.json> --expected-witness-trust-digest <64-hex-digest> --witness-epoch <n>]",
         "      [--data-contract <contract.json>] [--purpose <purpose>] [--certificate-out <bundle-dir>]",
         "      [--explain [bundle.json]] [--explain-out <bundle.json>]",
         "      [--emit-trace <trace.json>] [--emit-guardplane-latency <latency.json>]",
@@ -16568,6 +16766,14 @@ fn run_usage() -> String {
         "  Use `frankenctl evidence init --help` to provision a new initial identity.",
         "  Configured key-file loading requires supported Unix systems. Without these",
         "  flags each run continues to create a fresh runtime identity.",
+        "",
+        "  --witness requires all three witness-trust flags. Only Active witnesses",
+        "  signed by the independently pinned synthesis/promotion authorities are",
+        "  accepted at the explicit current epoch. This epoch must agree with any",
+        "  configured evidence authority. Declared source and parse-goal bindings are enforced.",
+        "  Pin CapabilityWitnessTrustRoot::canonical_digest(), not the JSON file hash",
+        "  or any digest supplied by a witness/report. Drafts from check need separate",
+        "  promotion; old synthesis-only promotion signatures must be reapproved.",
         "",
         "  --certificate-out <bundle-dir> (requires --data-contract) writes the",
         "  signed E8 certificate bundle assembled from the run's recorded",
@@ -16905,6 +17111,7 @@ fn replay_run_usage() -> String {
         "      [--mode strict|best-effort|validate] [--out <report.json>]",
         "      [--fleet-trace <dir|trace.json>]",
         "      [--trust-snapshot <public-trust.json> --expected-trust-digest <sha256>]",
+        "      [--witness-trust-root <root.json> --expected-witness-trust-digest <sha256> --witness-epoch <n>]",
         "",
         "notes:",
         "  Without --compare-trace, --trace must be a frankenctl run or agent-sandbox report;",
@@ -16921,6 +17128,11 @@ fn replay_run_usage() -> String {
         "  copied from an untrusted report is not a trust anchor. Runtime-only",
         "  key provenance and rotation windows are checked by the trust registry.",
         "  Older reports without signed inputs cannot use authenticated replay.",
+        "  A report carrying a capability witness additionally requires all three",
+        "  witness-trust flags, even in best-effort mode. Supply the root pin and",
+        "  accepted epoch independently; trust is never inherited from a report.",
+        "  The accepted epoch must match the recorded execution epoch. Witness",
+        "  signatures, lifecycle, source binding and capability limits are rechecked.",
         "  New reports sign the exact imported sources and package-manifest hashes;",
         "  retain those files separately. Replay checks their bytes at each load.",
         "  Sandbox replay restores the recorded tool authority and guardplane policy,",
@@ -18868,6 +19080,7 @@ mod tests {
                 out: None,
                 fleet_trace: None,
                 evidence_trust: None,
+                witness_trust: None,
             })
         );
     }
@@ -19856,23 +20069,195 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "sibling-persistence")]
+    fn witness_cli_flags_require_explicit_signing_and_pinned_trust() {
+        let strings = |values: &[&str]| {
+            values
+                .iter()
+                .map(|value| value.to_string())
+                .collect::<Vec<_>>()
+        };
+        for flags in [
+            vec!["input.js", "--emit-witness", "draft.json"],
+            vec!["input.js", "--witness-signing-key", "private.seed"],
+            vec![
+                "input.js",
+                "--emit-witness",
+                "draft.json",
+                "--witness-signing-key",
+                "private.seed",
+            ],
+        ] {
+            assert!(parse_check_command(&strings(&flags)).is_err());
+        }
+        assert!(
+            parse_check_command(&strings(&[
+                "input.js",
+                "--emit-witness",
+                "draft.json",
+                "--witness-signing-key",
+                "private.seed",
+                "--witness-epoch",
+                "3",
+            ]))
+            .is_ok()
+        );
+        assert!(
+            parse_run_command(&strings(&[
+                "--input",
+                "input.js",
+                "--extension-id",
+                "test",
+                "--witness",
+                "witness.json",
+            ]))
+            .is_err()
+        );
+        let digest = "ab".repeat(32);
+        let trust_flags = [
+            "--witness-trust-root",
+            "root.json",
+            "--expected-witness-trust-digest",
+            digest.as_str(),
+            "--witness-epoch",
+            "3",
+        ];
+        let mut replay = strings(&["--trace", "report.json"]);
+        for count in [2, 4] {
+            let mut incomplete = replay.clone();
+            incomplete.extend(strings(&trust_flags[..count]));
+            assert!(parse_replay_run_command(&incomplete).is_err());
+        }
+        replay.extend(strings(&trust_flags));
+        assert!(parse_replay_run_command(&replay).is_ok());
+        replay.extend(strings(&["--compare-trace", "other.json"]));
+        assert!(parse_replay_run_command(&replay).is_err());
+    }
+
+    #[test]
+    fn witness_synthesis_uses_private_key_and_reports_no_unperformed_trials() {
+        use frankenengine_engine::capability_witness::LifecycleState;
+        let report = analyze_authority_footprint("1 + 2;", "pure.js", ParseGoal::Script);
+        assert_eq!(report.outcome(), CheckOutcome::Clean);
+        let first_key = SigningKey::from_bytes([0x43; 32]).unwrap();
+        let second_key = SigningKey::from_bytes([0x44; 32]).unwrap();
+        let build = |key| {
+            synthesize_check_capability_witness(
+                &report,
+                ParseGoal::Script,
+                key,
+                SecurityEpoch::from_raw(3),
+            )
+            .expect("signed static draft")
+        };
+        let first = build(first_key.clone());
+        let second = build(second_key.clone());
+        assert_eq!(
+            first,
+            build(first_key.clone()),
+            "same inputs remain deterministic"
+        );
+        first
+            .verify_synthesizer_signature(&first_key.verification_key())
+            .unwrap();
+        second
+            .verify_synthesizer_signature(&second_key.verification_key())
+            .unwrap();
+        assert!(
+            first
+                .verify_synthesizer_signature(&second_key.verification_key())
+                .is_err()
+        );
+        let public_seed: [u8; 32] = Sha256::digest(
+            format!("frankenctl.check.witness.seed.v1:{}", report.report_sha256).as_bytes(),
+        )
+        .into();
+        let old_public_key = SigningKey::from_bytes(public_seed)
+            .unwrap()
+            .verification_key();
+        assert!(first.verify_synthesizer_signature(&old_public_key).is_err());
+        assert_eq!(first.lifecycle_state, LifecycleState::Draft);
+        assert!(first.promotion_signatures.is_empty());
+        assert_eq!(
+            (first.confidence.n_trials, first.confidence.n_successes),
+            (0, 0)
+        );
+        assert_eq!(first.epoch, SecurityEpoch::from_raw(3));
+    }
+
+    #[test]
+    fn witness_trust_loader_rejects_report_supplied_authority_and_wrong_pin() {
+        let report = analyze_authority_footprint("1 + 2;", "pure.js", ParseGoal::Script);
+        let key = SigningKey::from_bytes([0x45; 32]).unwrap();
+        let witness = synthesize_check_capability_witness(
+            &report,
+            ParseGoal::Script,
+            key.clone(),
+            SecurityEpoch::from_raw(3),
+        )
+        .unwrap();
+        let root = CapabilityWitnessTrustRoot::single_authority(key.verification_key());
+        let directory =
+            std::env::temp_dir().join(format!("frankenctl-witness-pin-{}", current_unix_ns()));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("root.json");
+        write_json_file(&path, &root).unwrap();
+        let mut trust = WitnessTrustArgs {
+            root: path,
+            expected_digest: root.canonical_digest().unwrap().to_hex(),
+            epoch: 3,
+        };
+        assert_eq!(
+            load_pinned_capability_witness_trust(Some(&witness), Some(&trust), 3).unwrap(),
+            Some(root)
+        );
+        assert!(load_pinned_capability_witness_trust(Some(&witness), None, 3).is_err());
+        assert!(load_pinned_capability_witness_trust(None, Some(&trust), 3).is_err());
+        assert!(load_pinned_capability_witness_trust(Some(&witness), Some(&trust), 4).is_err());
+        trust.expected_digest = "00".repeat(32);
+        let error =
+            load_pinned_capability_witness_trust(Some(&witness), Some(&trust), 3).unwrap_err();
+        assert!(error.contains("independent pin"), "{error}");
+    }
+
+    #[test]
+    #[cfg(all(
+        feature = "sibling-persistence",
+        unix,
+        not(any(target_os = "redox", target_os = "espidf"))
+    ))]
     fn check_emit_witness_and_run_witness_enforce_plas_envelope_rc_d2() {
+        use frankenengine_engine::capability_witness::{
+            LifecycleState, PromotionTheoremInput, SourceCapabilitySet,
+        };
         use frankenengine_engine::storage_adapter::{
             DurableFrankensqliteStorageAdapter, EventContext, StoreQuery,
         };
         use frankenengine_engine::typed_persistence_models::{
             PlasWitnessEntry, TypedStorageAdapterExt,
         };
+        use std::os::unix::fs::OpenOptionsExt;
 
         let temp_dir =
             std::env::temp_dir().join(format!("frankenctl-plas-witness-{}", current_unix_ns()));
         fs::create_dir_all(&temp_dir).expect("temp dir should be created");
         let src_path = temp_dir.join("pure.js");
         let witness_path = temp_dir.join("pure.witness.json");
+        let key_path = temp_dir.join("private.seed");
+        let root_path = temp_dir.join("witness-root.json");
         let state_db = temp_dir.join("state.db");
         let report_out = temp_dir.join("run_report.json");
         fs::write(&src_path, "const answer = 20 + 22;\nanswer;\n").expect("source should write");
+        let mut key_file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&key_path)
+            .expect("private test key");
+        std::io::Write::write_all(&mut key_file, &[0x42; 32]).expect("private test seed");
+        let signer = SigningKey::from_bytes([0x42; 32]).expect("test signer");
+        let trust_root = CapabilityWitnessTrustRoot::single_authority(signer.verification_key());
+        write_json_file(&root_path, &trust_root).expect("public trust root");
+        let root_digest = trust_root.canonical_digest().expect("root digest").to_hex();
 
         let check_spec = parse_command(&[
             "check".to_string(),
@@ -19881,6 +20266,10 @@ mod tests {
             "json".to_string(),
             "--emit-witness".to_string(),
             witness_path.display().to_string(),
+            "--witness-signing-key".to_string(),
+            key_path.display().to_string(),
+            "--witness-epoch".to_string(),
+            "1".to_string(),
         ])
         .expect("check --emit-witness should parse");
         let CommandSpec::Check(check_args) = check_spec else {
@@ -19888,11 +20277,18 @@ mod tests {
         };
         let check_exit = execute_check(check_args).expect("clean check --emit-witness succeeds");
         assert_eq!(check_exit, 0);
-        let emitted: CapabilityWitness =
+        let mut emitted: CapabilityWitness =
             load_json_file(&witness_path).expect("witness json must deserialize");
         emitted
             .verify_integrity()
             .expect("emitted witness integrity");
+        emitted
+            .verify_synthesizer_signature(&signer.verification_key())
+            .expect("actual private key signed the draft");
+        assert_eq!(emitted.lifecycle_state, LifecycleState::Draft);
+        assert_eq!(emitted.confidence.n_trials, 0);
+        assert_eq!(emitted.confidence.n_successes, 0);
+        assert!(emitted.promotion_signatures.is_empty());
 
         let run_spec = parse_command(&[
             "run".to_string(),
@@ -19902,6 +20298,12 @@ mod tests {
             "ext-plas-cli".to_string(),
             "--witness".to_string(),
             witness_path.display().to_string(),
+            "--witness-trust-root".to_string(),
+            root_path.display().to_string(),
+            "--expected-witness-trust-digest".to_string(),
+            root_digest.clone(),
+            "--witness-epoch".to_string(),
+            "1".to_string(),
             "--state-db".to_string(),
             state_db.display().to_string(),
             "--out".to_string(),
@@ -19911,6 +20313,47 @@ mod tests {
         let CommandSpec::Run(run_args) = run_spec else {
             panic!("expected Run command");
         };
+        let draft_error = execute_run(*run_args.clone()).expect_err("draft is not authorization");
+        assert!(
+            draft_error.contains("capability_witness_rejected"),
+            "{draft_error}"
+        );
+        assert!(!report_out.exists());
+
+        // An explicit policy-authority test fixture approves this exact small
+        // capability model. The check command itself never performs promotion.
+        let theorem_input = PromotionTheoremInput {
+            source_capability_sets: vec![SourceCapabilitySet {
+                source_id: "pure-arithmetic-cli-fixture".to_string(),
+                capabilities: emitted.required_capabilities.clone(),
+            }],
+            manifest_capabilities: emitted.required_capabilities.clone(),
+            capability_lattice: BTreeMap::new(),
+            non_interference_dependencies: BTreeMap::new(),
+            custom_extensions: Vec::new(),
+        };
+        let theorem_report = emitted
+            .evaluate_promotion_theorems_signed_by(&theorem_input, &signer)
+            .expect("evaluate fixture policy");
+        assert!(theorem_report.all_passed);
+        emitted
+            .apply_promotion_theorem_report(&theorem_report)
+            .expect("signed theorem report");
+        emitted
+            .transition_to(LifecycleState::Validated)
+            .expect("validated fixture");
+        emitted
+            .add_promotion_signature(&signer)
+            .expect("explicit authority approval");
+        emitted
+            .transition_to_with_trust_root(LifecycleState::Promoted, &trust_root)
+            .expect("trusted promotion");
+        emitted
+            .transition_to_with_trust_root(LifecycleState::Active, &trust_root)
+            .expect("trusted activation");
+        write_json_file(&witness_path, &emitted).expect("approved witness");
+        let mut budget_args = (*run_args).clone();
+        let mut changed_source_args = (*run_args).clone();
         let run_exit = execute_run(*run_args).expect("authorized run --witness succeeds");
         assert_eq!(run_exit, 0);
 
@@ -19931,6 +20374,98 @@ mod tests {
         );
         assert_eq!(rows[0].content_hash, emitted.content_hash.to_hex());
 
+        let failure_path = temp_dir.join("budget_failure.json");
+        budget_args.out = Some(failure_path.clone());
+        budget_args.state_db = None;
+        budget_args.instruction_budget = Some(1);
+        assert_eq!(
+            execute_run(budget_args).expect("authenticated budget failure"),
+            2
+        );
+        let failed: ReplayableFailedRunReport = load_json_file(&failure_path).unwrap();
+        assert!(
+            failed
+                .replay_input
+                .as_ref()
+                .unwrap()
+                .capability_witness
+                .is_some()
+        );
+        assert!(failed.replay_input_signature.is_some());
+        let mut failed_replay = ReplayArgs {
+            trace: failure_path,
+            compare_trace: None,
+            mode: ReplayMode::Strict,
+            out: None,
+            fleet_trace: None,
+            evidence_trust: None,
+            witness_trust: None,
+        };
+        let missing_root =
+            execute_replay(failed_replay.clone()).expect_err("failed report cannot self-authorize");
+        assert!(
+            missing_root.contains("independently pinned"),
+            "{missing_root}"
+        );
+        failed_replay.witness_trust = Some(WitnessTrustArgs {
+            root: root_path.clone(),
+            expected_digest: root_digest.clone(),
+            epoch: 1,
+        });
+        assert_eq!(
+            execute_replay(failed_replay.clone()).expect("authenticated failure replay"),
+            0
+        );
+        failed_replay
+            .witness_trust
+            .as_mut()
+            .unwrap()
+            .expected_digest = "00".repeat(32);
+        let wrong_pin = execute_replay(failed_replay).expect_err("wrong pin before failed replay");
+        assert!(wrong_pin.contains("independent pin"), "{wrong_pin}");
+
+        let replay_args = ReplayArgs {
+            trace: report_out.clone(),
+            compare_trace: None,
+            mode: ReplayMode::Strict,
+            out: None,
+            fleet_trace: None,
+            evidence_trust: None,
+            witness_trust: None,
+        };
+        let missing_root =
+            execute_replay(replay_args.clone()).expect_err("report cannot self-authorize");
+        assert!(
+            missing_root.contains("independently pinned"),
+            "{missing_root}"
+        );
+        let mut replay_args = replay_args;
+        replay_args.witness_trust = Some(WitnessTrustArgs {
+            root: root_path.clone(),
+            expected_digest: root_digest.clone(),
+            epoch: 1,
+        });
+        assert_eq!(
+            execute_replay(replay_args.clone()).expect("authenticated witness replay"),
+            0
+        );
+        replay_args.witness_trust.as_mut().unwrap().epoch = 2;
+        let stale =
+            execute_replay(replay_args).expect_err("recorded epoch cannot override current trust");
+        assert!(stale.contains("differs from execution epoch"), "{stale}");
+
+        let original_source = fs::read(&src_path).unwrap();
+        fs::write(&src_path, "const answer = 1 + 2; answer;").unwrap();
+        changed_source_args.out = Some(temp_dir.join("changed-source.json"));
+        changed_source_args.state_db = None;
+        let changed_source =
+            execute_run(changed_source_args).expect_err("source binding is authenticated");
+        assert!(
+            changed_source.contains("capability_witness_rejected"),
+            "{changed_source}"
+        );
+        fs::write(&src_path, original_source).unwrap();
+
         // Tampered witness must fail closed with capability_witness_rejected.
         let tampered_path = temp_dir.join("tampered.witness.json");
         let mut tampered = emitted;
@@ -19945,6 +20480,12 @@ mod tests {
             "ext-plas-tampered".to_string(),
             "--witness".to_string(),
             tampered_path.display().to_string(),
+            "--witness-trust-root".to_string(),
+            root_path.display().to_string(),
+            "--expected-witness-trust-digest".to_string(),
+            root_digest,
+            "--witness-epoch".to_string(),
+            "1".to_string(),
             "--out".to_string(),
             tampered_report.display().to_string(),
         ])

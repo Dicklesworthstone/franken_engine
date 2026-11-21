@@ -9,16 +9,24 @@
 //! The default [`DenyAllProcessSpawn`] provider performs no effects. The native
 //! provider is suitable only when the product layer has installed an explicit
 //! policy: it clears the ambient environment, confines working directories,
-//! opens and verifies the canonical executable once, launches that same open
-//! file identity instead of resolving the pathname twice, pins working
+//! opens the canonical executable once and launches a verified immutable image
+//! of its bytes instead of reopening a mutable pathname, pins working
 //! directories beneath an owned jail descriptor through launch, bounds
 //! input/output/runtime, and exposes only provider-scoped opaque handles (never
 //! native process identifiers).
 //!
-//! FreeBSD requires a trusted `/dev/fd` fdescfs mount with `nodup` semantics
-//! whose configuration remains stable through spawning. A no-follow metadata
-//! check requires each descriptor path to identify its held file; default
-//! pseudo-files and `rdlnk` pathname-following semantics are refused.
+//! Linux executes a sealed anonymous snapshot whose immutable bytes match the
+//! policy digest, after checking execution permission on the held source file.
+//! The main executable is pinned; its dynamic loader, libraries and other files
+//! remain host dependencies. `/proc/self/exe` names the anonymous image, so
+//! executable-relative resource and `$ORIGIN` lookup need compatible packaging.
+//!
+//! FreeBSD native launch fails closed until an immutable executable-image
+//! backend exists. Its anonymous shared-memory descriptors cannot replace the
+//! vnode required by the current `/dev/fd` launch mechanism. Inode pinning alone
+//! cannot prevent an authorized file from being rewritten after digest checking.
+//! The retained descriptor-path guard requires a trusted, stable fdescfs `nodup`
+//! mount; default pseudo-files and `rdlnk` pathname-following semantics are refused.
 
 #![forbid(unsafe_code)]
 
@@ -1669,8 +1677,12 @@ impl NativeProcessSpawn {
         launch: &ProcessLaunch,
         control: &dyn ProcessSpawnControl,
     ) -> Result<RunningChild, ProcessSpawnError> {
-        let launch = self.validate_launch_controlled(launch, control)?;
+        // Admission bounds both running children and executable snapshots in
+        // preparation. Failed or cancelled validation drops this permit, so
+        // callers cannot multiply the image-size allowance before child quota
+        // is checked, or permanently consume capacity through failed launches.
         let permit = self.reserve_child()?;
+        let launch = self.validate_launch_controlled(launch, control)?;
         control.checkpoint()?;
         let mut running = self.spawn_validated(launch, permit)?;
         if let Err(error) = control.checkpoint() {
@@ -2505,7 +2517,7 @@ fn digest_file(path: &Path, maximum_bytes: u64) -> Result<[u8; 32], ProcessSpawn
     Ok(digest.finalize().into())
 }
 
-#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+#[cfg(target_os = "linux")]
 fn open_verified_executable(
     executable: &Path,
     expected_digest: &[u8; 32],
@@ -2513,6 +2525,9 @@ fn open_verified_executable(
     maximum_bytes: u64,
     control: &dyn ProcessSpawnControl,
 ) -> Result<File, ProcessSpawnError> {
+    use rustix::fs::{Access, AtFlags, MemfdFlags, Mode, SealFlags};
+    use std::io::Seek;
+
     control.checkpoint()?;
     let mut executable_file = open_executable_file(executable, "open executable identity")?;
     let metadata = executable_file
@@ -2529,7 +2544,39 @@ fn open_verified_executable(
     }
     enforce_limit("executable_bytes", metadata.len(), maximum_bytes)?;
 
-    let mut digest = Sha256::new();
+    // Creating an executable memfd must not bypass source execute bits, ACLs
+    // or a noexec mount. Resolve the held source's procfd magic link, not the
+    // caller's mutable pathname. rustix's accessat rejects EMPTY_PATH, so use
+    // the same trusted procfd namespace that native launch already requires.
+    rustix::fs::accessat(
+        rustix::fs::CWD,
+        pinned_process_file_path(&executable_file)?,
+        Access::EXEC_OK,
+        AtFlags::EACCESS,
+    )
+    .map_err(|error| ProcessSpawnError::Io {
+        operation: "check executable execution permission".to_string(),
+        detail: error.to_string(),
+    })?;
+    control.checkpoint()?;
+
+    let flags = MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING;
+    let (snapshot, seal_execution_mode) =
+        match rustix::fs::memfd_create("frankenengine-process-image", flags | MemfdFlags::EXEC) {
+            Ok(image) => (Ok(image), true),
+            // MFD_EXEC was added in Linux 6.3. Only an unknown-flag refusal may
+            // retry the older interface; permission/security-policy denials never
+            // fall back. A non-executable memfd still fails the chmod below.
+            Err(rustix::io::Errno::INVAL) => (
+                rustix::fs::memfd_create("frankenengine-process-image", flags),
+                false,
+            ),
+            Err(error) => (Err(error), true),
+        };
+    let mut snapshot = File::from(snapshot.map_err(|error| ProcessSpawnError::Io {
+        operation: "create immutable executable snapshot".to_string(),
+        detail: error.to_string(),
+    })?);
     let mut buffer = [0_u8; 16 * 1024];
     let mut total_bytes = 0_u64;
     loop {
@@ -2538,6 +2585,54 @@ fn open_verified_executable(
             .read(&mut buffer)
             .map_err(|error| ProcessSpawnError::Io {
                 operation: "read executable identity".to_string(),
+                detail: error.to_string(),
+            })?;
+        if read == 0 {
+            break;
+        }
+        total_bytes = total_bytes.saturating_add(u64::try_from(read).unwrap_or(u64::MAX));
+        enforce_limit("executable_bytes", total_bytes, maximum_bytes)?;
+        snapshot
+            .write_all(&buffer[..read])
+            .map_err(|error| ProcessSpawnError::Io {
+                operation: "copy executable snapshot".to_string(),
+                detail: error.to_string(),
+            })?;
+    }
+    control.checkpoint()?;
+    // Never transfer source ownership, setuid/setgid bits or ambient write
+    // permissions to the anonymous executable.
+    rustix::fs::fchmod(&snapshot, Mode::RUSR | Mode::XUSR).map_err(|error| {
+        ProcessSpawnError::Io {
+            operation: "set executable snapshot permissions".to_string(),
+            detail: error.to_string(),
+        }
+    })?;
+    let mut seals = SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK | SealFlags::SEAL;
+    if seal_execution_mode {
+        seals |= SealFlags::EXEC;
+    }
+    rustix::fs::fcntl_add_seals(&snapshot, seals).map_err(|error| ProcessSpawnError::Io {
+        operation: "seal executable snapshot".to_string(),
+        detail: error.to_string(),
+    })?;
+
+    // Hash after sealing: concurrent writes to the source (or to a discovered
+    // snapshot descriptor before sealing) can never change the bytes between
+    // digest acceptance and exec. A mixed or expanded copy must fail the same
+    // digest and size checks as any other unauthorized executable.
+    snapshot.rewind().map_err(|error| ProcessSpawnError::Io {
+        operation: "rewind sealed executable snapshot".to_string(),
+        detail: error.to_string(),
+    })?;
+    let mut digest = Sha256::new();
+    total_bytes = 0;
+    loop {
+        control.checkpoint()?;
+        let read = snapshot
+            .read(&mut buffer)
+            .map_err(|error| ProcessSpawnError::Io {
+                operation: "hash sealed executable snapshot".to_string(),
                 detail: error.to_string(),
             })?;
         if read == 0 {
@@ -2554,7 +2649,23 @@ fn open_verified_executable(
             format!("digest changed for {executable_string}"),
         ));
     }
-    Ok(executable_file)
+    control.checkpoint()?;
+    Ok(snapshot)
+}
+
+#[cfg(target_os = "freebsd")]
+fn open_verified_executable(
+    _executable: &Path,
+    _expected_digest: &[u8; 32],
+    _executable_string: &str,
+    _maximum_bytes: u64,
+    control: &dyn ProcessSpawnControl,
+) -> Result<File, ProcessSpawnError> {
+    control.checkpoint()?;
+    Err(ProcessSpawnError::NotImplemented {
+        what: "FreeBSD native process launch requires an immutable executable-image backend; mutable inode pinning is insufficient"
+            .to_string(),
+    })
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
@@ -3649,11 +3760,13 @@ mod tests {
         )
     }
 
+    #[cfg(target_os = "linux")]
     #[derive(Debug)]
     struct TestStopControl {
         stopped: Arc<AtomicUsize>,
     }
 
+    #[cfg(target_os = "linux")]
     impl ProcessSpawnControl for TestStopControl {
         fn checkpoint(&self) -> Result<(), ProcessSpawnError> {
             if self.stopped.load(Ordering::Acquire) == 0 {
@@ -3666,7 +3779,7 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     fn spawn_signal_resistant_child(
         runtime_millis: u64,
         acknowledge_signal: bool,
@@ -3735,7 +3848,7 @@ mod tests {
         (provider, handle, markers, group)
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     fn rescue_signal_test_after_deadline(
         group: rustix::process::Pid,
     ) -> (SyncSender<()>, JoinHandle<bool>) {
@@ -3870,7 +3983,7 @@ mod tests {
         assert!(policy.allowed_executables.is_empty());
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn detached_spawn_watchdog_reaps_when_live_control_stops() {
         let sleep = executable(&["/bin/sleep", "/usr/bin/sleep"]);
@@ -4284,7 +4397,7 @@ mod tests {
         ));
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn bounded_real_direct_command_runs_without_a_shell() {
         let echo = executable(&["/bin/echo", "/usr/bin/echo"]);
@@ -4386,7 +4499,7 @@ mod tests {
         }
     }
 
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[cfg(target_os = "linux")]
     #[test]
     fn verified_executable_file_survives_path_replacement() {
         let shell = executable(&["/bin/sh", "/usr/bin/sh"]);
@@ -4423,7 +4536,219 @@ mod tests {
         assert!(stderr.is_empty());
     }
 
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn verified_executable_snapshot_survives_in_place_rewrites_and_truncation() {
+        use std::os::unix::fs::MetadataExt;
+
+        let echo = executable(&["/bin/echo", "/usr/bin/echo"]);
+        let replacement = std::fs::read(executable(&["/bin/false", "/usr/bin/false"]))
+            .expect("replacement executable bytes");
+        for truncate in [false, true] {
+            let root = tempfile::tempdir()
+                .expect("in-place executable fixture")
+                .keep();
+            let authorized = root.join("authorized-image");
+            std::fs::copy(&echo, &authorized).expect("copy authorized image");
+            let mut policy = ProcessSpawnPolicy::jailed(&root).expect("jailed policy");
+            let canonical = policy
+                .authorize_executable(&authorized)
+                .expect("authorize original bytes");
+            let provider = NativeProcessSpawn::new(policy).expect("native provider");
+            let request = run_request(canonical, vec!["authorized-image"]);
+            let ProcessSpawnRequest::Run { launch, .. } = request else {
+                unreachable!()
+            };
+            let validated = provider.validate_launch(&launch).expect("digest accepted");
+            let before = std::fs::metadata(&authorized).expect("source identity");
+
+            // Preserve the exact inode that old descriptor pinning executes.
+            // Closing the writer before spawn also avoids ETXTBSY masking the
+            // content-substitution defect with an unrelated kernel refusal.
+            let changed = if truncate {
+                &[][..]
+            } else {
+                replacement.as_slice()
+            };
+            std::fs::write(&authorized, changed).expect("change authorized inode in place");
+            let after = std::fs::metadata(&authorized).expect("unchanged inode");
+            assert_eq!((before.dev(), before.ino()), (after.dev(), after.ino()));
+
+            let running = provider
+                .spawn_validated(validated, provider.reserve_child().unwrap())
+                .expect("launch the immutable authorized image");
+            let (exit, stdout, stderr) =
+                wait_and_collect(running, Duration::from_secs(1)).expect("collect real child");
+            assert!(exit.success);
+            assert_eq!(stdout, b"authorized-image\n");
+            assert!(stderr.is_empty());
+            assert!(matches!(
+                provider.validate_launch(&launch),
+                Err(ProcessSpawnError::PolicyViolation { code, .. })
+                    if code == "executable_digest_mismatch"
+            ));
+            assert_process_workers_released(&provider);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn verified_executable_snapshot_seals_reject_writes_shrink_and_growth() {
+        use rustix::fs::SealFlags;
+        use std::os::unix::fs::FileExt;
+
+        let echo = executable(&["/bin/echo", "/usr/bin/echo"]);
+        let (provider, canonical) = provider_for(&echo);
+        let ProcessSpawnRequest::Run { launch, .. } = run_request(canonical, vec!["sealed"]) else {
+            unreachable!()
+        };
+        let validated = provider.validate_launch(&launch).expect("sealed image");
+        let image = validated.executable_file.as_ref().expect("retained image");
+        let seals = rustix::fs::fcntl_get_seals(image).expect("kernel seals");
+        assert!(
+            seals
+                .contains(SealFlags::WRITE | SealFlags::SHRINK | SealFlags::GROW | SealFlags::SEAL)
+        );
+        let alias = image
+            .try_clone()
+            .expect("same image through another descriptor");
+        assert_eq!(
+            alias.write_at(b"unauthorized", 0).unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied,
+        );
+        let length = alias.metadata().unwrap().len();
+        for changed_length in [0, length + 1] {
+            assert_eq!(
+                alias.set_len(changed_length).unwrap_err().kind(),
+                std::io::ErrorKind::PermissionDenied,
+            );
+        }
+        assert_eq!(alias.metadata().unwrap().len(), length);
+        let running = provider
+            .spawn_validated(validated, provider.reserve_child().unwrap())
+            .expect("sealed image remains executable");
+        let (exit, stdout, stderr) =
+            wait_and_collect(running, Duration::from_secs(1)).expect("collect sealed image");
+        assert!(exit.success);
+        assert_eq!(stdout, b"sealed\n");
+        assert!(stderr.is_empty());
+        assert_process_workers_released(&provider);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn verified_executable_snapshot_preserves_source_execute_permission_checks() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir()
+            .expect("executable permission fixture")
+            .keep();
+        let authorized = root.join("authorized-image");
+        std::fs::copy(executable(&["/bin/echo", "/usr/bin/echo"]), &authorized)
+            .expect("copy image");
+        std::fs::set_permissions(&authorized, std::fs::Permissions::from_mode(0o644))
+            .expect("remove source execute permission");
+        let mut policy = ProcessSpawnPolicy::jailed(&root).expect("jailed policy");
+        let canonical = policy
+            .authorize_executable(&authorized)
+            .expect("authorize digest");
+        let provider = NativeProcessSpawn::new(policy).expect("native provider");
+        let request = run_request(canonical, vec!["permitted"]);
+        assert!(matches!(
+            provider.perform(&request, &[ProcessSpawnCapability::Spawn]),
+            Err(ProcessSpawnError::Io { operation, .. })
+                if operation == "check executable execution permission"
+        ));
+        assert_process_workers_released(&provider);
+
+        std::fs::set_permissions(&authorized, std::fs::Permissions::from_mode(0o755))
+            .expect("grant source execute permission");
+        assert!(matches!(
+            provider.perform(&request, &[ProcessSpawnCapability::Spawn]),
+            Ok(ProcessSpawnResponse::Run { exit, stdout, stderr })
+                if exit.success && stdout == b"permitted\n" && stderr.is_empty()
+        ));
+        assert_process_workers_released(&provider);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn verified_executable_snapshot_admission_bounds_preparation_and_releases_failures() {
+        let original = std::fs::read(executable(&["/bin/echo", "/usr/bin/echo"]))
+            .expect("authorized executable bytes");
+        let root = tempfile::tempdir()
+            .expect("snapshot admission fixture")
+            .keep();
+        let authorized = root.join("authorized-image");
+        std::fs::copy(executable(&["/bin/echo", "/usr/bin/echo"]), &authorized)
+            .expect("copy image with execute permissions");
+        let mut policy = ProcessSpawnPolicy::jailed(&root).expect("jailed policy");
+        policy.limits.max_children = 1;
+        let canonical = policy
+            .authorize_executable(&authorized)
+            .expect("authorize digest");
+        let provider = NativeProcessSpawn::new(policy).expect("native provider");
+        let request = run_request(canonical, vec!["capacity-restored"]);
+
+        let occupied = provider
+            .reserve_child()
+            .expect("occupy snapshot/child capacity");
+        std::fs::write(&authorized, b"unauthorized image").expect("replace source bytes");
+        assert!(
+            matches!(
+                provider.perform(&request, &[ProcessSpawnCapability::Spawn]),
+                Err(ProcessSpawnError::LimitExceeded { limit, actual: 2, maximum: 1 })
+                    if limit == "children"
+            ),
+            "capacity must be refused before preparing or hashing the changed source"
+        );
+        drop(occupied);
+
+        assert!(matches!(
+            provider.perform(&request, &[ProcessSpawnCapability::Spawn]),
+            Err(ProcessSpawnError::PolicyViolation { code, .. })
+                if code == "executable_digest_mismatch"
+        ));
+        assert_process_workers_released(&provider);
+
+        std::fs::write(&authorized, &original).expect("restore authorized bytes");
+        let ProcessSpawnRequest::Run { launch, .. } = &request else {
+            unreachable!()
+        };
+        let cancelled = TestStopControl {
+            stopped: Arc::new(AtomicUsize::new(1)),
+        };
+        assert!(matches!(
+            provider.launch_controlled(launch, &cancelled),
+            Err(ProcessSpawnError::Denied { reason }) if reason == "TEST_PROCESS_CONTROL_STOPPED"
+        ));
+        assert_process_workers_released(&provider);
+        assert!(matches!(
+            provider.perform(&request, &[ProcessSpawnCapability::Spawn]),
+            Ok(ProcessSpawnResponse::Run { exit, stdout, stderr })
+                if exit.success && stdout == b"capacity-restored\n" && stderr.is_empty()
+        ));
+        assert_process_workers_released(&provider);
+    }
+
+    #[cfg(target_os = "freebsd")]
+    #[test]
+    fn native_launch_requires_immutable_executable_backend_on_freebsd() {
+        let echo = executable(&["/bin/echo", "/usr/bin/echo"]);
+        let (provider, canonical) = provider_for(&echo);
+        let request = run_request(canonical, vec!["must-not-run"]);
+        provider
+            .preflight_process_request(&request)
+            .expect("portable request admission remains supported");
+        assert!(matches!(
+            provider.perform(&request, &[ProcessSpawnCapability::Spawn]),
+            Err(ProcessSpawnError::NotImplemented { what })
+                if what.contains("FreeBSD") && what.contains("immutable executable-image backend")
+        ));
+        assert_process_workers_released(&provider);
+    }
+
+    #[cfg(target_os = "linux")]
     #[test]
     fn verified_working_directory_survives_path_replacement() {
         let cat = executable(&["/bin/cat", "/usr/bin/cat"]);
@@ -4511,7 +4836,7 @@ mod tests {
         }
     }
 
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[cfg(target_os = "linux")]
     #[test]
     fn installed_working_directory_jail_survives_root_replacement() {
         let cat = executable(&["/bin/cat", "/usr/bin/cat"]);
@@ -4622,7 +4947,7 @@ mod tests {
         ));
     }
 
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[cfg(target_os = "linux")]
     #[test]
     fn working_directory_preserves_permitted_in_jail_symlinks() {
         let cat = executable(&["/bin/cat", "/usr/bin/cat"]);
@@ -4659,7 +4984,7 @@ mod tests {
         }
     }
 
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[cfg(target_os = "linux")]
     #[test]
     fn authorized_executable_replaced_by_fifo_is_rejected_without_a_peer() {
         let echo = executable(&["/bin/echo", "/usr/bin/echo"]);
@@ -4831,7 +5156,7 @@ mod tests {
         ));
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn output_overflow_is_drained_then_rejected() {
         let echo = executable(&["/bin/echo", "/usr/bin/echo"]);
@@ -4885,7 +5210,7 @@ mod tests {
         ));
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn shell_opt_in_uses_only_the_signed_shell_alias_and_canonical_protocol() {
         let shell = executable(&["/bin/sh", "/usr/bin/sh"]);
@@ -4944,7 +5269,7 @@ mod tests {
         ));
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn piped_stdin_and_fixed_environment_are_real_and_bounded() {
         let env = executable(&["/usr/bin/env", "/bin/env"]);
@@ -4978,7 +5303,7 @@ mod tests {
         ));
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn timeout_kills_and_reaps_run() {
         let sleep = executable(&["/bin/sleep", "/usr/bin/sleep"]);
@@ -4996,7 +5321,7 @@ mod tests {
         assert_eq!(provider.active_children.load(Ordering::Acquire), 0);
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn run_timeout_retains_partial_streams_and_terminating_signal() {
         let shell = executable(&["/bin/sh", "/usr/bin/sh"]);
@@ -5030,7 +5355,7 @@ mod tests {
         assert_eq!(provider.active_children.load(Ordering::Acquire), 0);
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn capture_cap_retains_prefix_bytes_on_limit_failure() {
         let shell = executable(&["/bin/sh", "/usr/bin/sh"]);
@@ -5110,7 +5435,7 @@ mod tests {
         assert!(debug.contains("partial_stderr_len"));
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn lifecycle_stdin_write_end_round_trips_through_cat_bd_m42c2() {
         let cat = executable(&["/bin/cat", "/usr/bin/cat"]);
@@ -5184,7 +5509,7 @@ mod tests {
         ));
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn bounded_stdin_enforces_the_cumulative_limit_bd_m42c2() {
         let cat = executable(&["/bin/cat", "/usr/bin/cat"]);
@@ -5237,7 +5562,7 @@ mod tests {
         ));
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn kill_with_terminate_signals_the_group_and_reports_sigterm_bd_m42c2() {
         let sleep = executable(&["/bin/sleep", "/usr/bin/sleep"]);
@@ -5305,7 +5630,7 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn ignored_terminate_and_interrupt_obey_the_lifecycle_deadline() {
         for signal in [ProcessSignal::Terminate, ProcessSignal::Interrupt] {
@@ -5363,7 +5688,7 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn expired_absolute_deadline_cannot_gain_a_new_reaping_budget() {
         let (provider, handle, _markers, group) = spawn_signal_resistant_child(10_000, false);
@@ -5403,7 +5728,7 @@ mod tests {
         assert_process_workers_released(&provider);
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn cancellation_after_native_signal_delivery_interrupts_reaping() {
         let (provider, handle, markers, group) = spawn_signal_resistant_child(10_000, true);
@@ -5599,7 +5924,7 @@ mod tests {
         ));
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn zero_timeout_uses_the_policy_deadline_instead_of_immediate_expiry() {
         let sleep = executable(&["/bin/sleep", "/usr/bin/sleep"]);
@@ -5623,7 +5948,7 @@ mod tests {
         ));
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn no_reader_cannot_block_run_stdin_past_timeout() {
         let sleep = executable(&["/bin/sleep", "/usr/bin/sleep"]);
@@ -5824,7 +6149,7 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn watchdog_timeout_remains_observable_until_wait_consumes_it() {
         let sleep = executable(&["/bin/sleep", "/usr/bin/sleep"]);
@@ -5866,7 +6191,7 @@ mod tests {
         ));
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn lifecycle_kill_reaps_and_invalidates_opaque_handle() {
         let sleep = executable(&["/bin/sleep", "/usr/bin/sleep"]);
@@ -5938,7 +6263,7 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn teardown_cleanup_reaps_without_guest_kill_authority() {
         let sleep = executable(&["/bin/sleep", "/usr/bin/sleep"]);

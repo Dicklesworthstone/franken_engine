@@ -1,24 +1,24 @@
 //! bd-x85a7: authenticated lowering contract for Node `child_process` effects.
 
 use std::collections::BTreeMap;
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::sync::{Arc, Barrier, Mutex};
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 use std::time::Instant;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use frankenengine_engine::HybridRouter;
 use frankenengine_engine::ast::ParseGoal;
 use frankenengine_engine::baseline_interpreter::LaneChoice;
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore};
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::checkpoint::CancellationToken;
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 use frankenengine_engine::execution_cell::CellInterpreterOutcome;
 use frankenengine_engine::execution_cell::{
     CellError, CellExecutionError, CellExecutionEvent, CellExecutionEventKind,
@@ -34,7 +34,7 @@ use frankenengine_engine::lowering_pipeline::{
     LoweringContext, LoweringPipelineError, lower_ir0_to_ir3,
 };
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions};
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 use frankenengine_engine::runtime_config::RuntimeConfig;
 use frankenengine_extension_host::host_effect_journal::{
     HostEffectJournalAttemptRecord, HostEffectJournalEntry, InMemoryHostEffectJournal,
@@ -42,7 +42,7 @@ use frankenengine_extension_host::host_effect_journal::{
 use frankenengine_extension_host::host_io::{
     HostIoCapability, HostIoError, HostIoOutcome, HostIoProvider, HostIoRequest, HostIoResponse,
 };
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 use frankenengine_extension_host::process_spawn::{NativeProcessSpawn, ProcessSpawnPolicy};
 use frankenengine_extension_host::process_spawn::{
     ProcessExit, ProcessLaunch, ProcessSpawnCapability, ProcessSpawnError, ProcessSpawnOutcome,
@@ -508,7 +508,7 @@ fn first_class_process_selection_and_arguments_retain_runtime_ifc_denials() {
     }
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn first_class_process_values_execute_real_native_processes_and_async_callbacks() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
@@ -650,7 +650,7 @@ fn test_process_authority() -> ProcessSpawnAttemptAuthority {
     ProcessSpawnAttemptAuthority::expiring_at_unix_ms(expires_at_ms)
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn unix_executable(candidates: &[&str]) -> PathBuf {
     candidates
         .iter()
@@ -660,7 +660,7 @@ fn unix_executable(candidates: &[&str]) -> PathBuf {
         .expect("a required Unix test executable must exist")
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn native_process_provider(
     alias: &str,
     candidates: &[&str],
@@ -1327,7 +1327,7 @@ fn orchestrator_threads_typed_provider_and_exact_journal_into_sync_execution() {
     );
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn no_mock_native_os_process_executes_under_exact_cell_authority() {
     let (provider, canonical) =
@@ -1483,7 +1483,7 @@ fn no_mock_native_os_process_executes_under_exact_cell_authority() {
     );
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn no_mock_native_hang_times_out_finalizes_and_provider_recovers() {
     let (provider, _) =
@@ -1546,7 +1546,7 @@ fn no_mock_native_hang_times_out_finalizes_and_provider_recovers() {
         .expect("recovery run must replay-verify");
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn no_mock_native_child_signal_is_audited_and_parent_recovers() {
     let (provider, _) = native_process_provider("native-sh", &["/bin/sh", "/usr/bin/sh"], 2_000);
@@ -1743,7 +1743,7 @@ fn cancellation_during_provider_dispatch_commits_prefix_then_finalizes_once() {
     );
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn cancellation_reaps_a_real_blocking_child_before_the_policy_timeout() {
     let (provider, _) = native_process_provider("native-sh", &["/bin/sh", "/usr/bin/sh"], 30_000);
@@ -2165,7 +2165,7 @@ fn non_public_mutation_of_a_public_options_alias_is_blocked_by_static_flow_proof
     );
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn child_kill_flips_killed_flag_and_reports_exit_bd_m42c2() {
     // Mirror of franken_node compat fixture 0012.
@@ -2203,7 +2203,7 @@ fn child_kill_flips_killed_flag_and_reports_exit_bd_m42c2() {
     );
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn child_kill_reports_sigterm_in_exit_event_bd_m42c2() {
     // Mirror of franken_node compat fixture 0022.
@@ -2234,7 +2234,7 @@ fn child_kill_reports_sigterm_in_exit_event_bd_m42c2() {
     );
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn child_stdin_write_and_end_round_trip_bd_m42c2() {
     // Mirror of franken_node compat fixture 0029.
@@ -2269,7 +2269,7 @@ fn child_stdin_write_and_end_round_trip_bd_m42c2() {
 /// Real native process effects with a heap much smaller than the program's
 /// allocation count. The same parser/lowering/interpreter path runs in both
 /// profiles, and the incremental memory charge is checked against a full walk.
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn run_native_process_collection(source: &str, expected: &[&str]) {
     let module = lower(source);
     for throughput in [false, true] {
@@ -2321,7 +2321,7 @@ fn run_native_process_collection(source: &str, expected: &[&str]) {
     }
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn native_process_collection_keeps_a_pending_exec_callback_and_its_capture() {
     run_native_process_collection(
@@ -2340,7 +2340,7 @@ fn native_process_collection_keeps_a_pending_exec_callback_and_its_capture() {
     );
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn native_process_collection_runs_inside_exec_callbacks() {
     run_native_process_collection(
@@ -2356,7 +2356,7 @@ fn native_process_collection_runs_inside_exec_callbacks() {
     );
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn native_process_collection_preserves_buffers_and_removed_listener_snapshots() {
     run_native_process_collection(
@@ -2382,7 +2382,7 @@ fn native_process_collection_preserves_buffers_and_removed_listener_snapshots() 
     );
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn orchestrator_native_process_collection_respects_the_configured_heap_in_both_profiles() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {

@@ -1,6 +1,6 @@
 //! Live interpreter -> attempt authority -> journal -> shared work pool -> OS.
 //! These tests launch real, policy-pinned executables, not simulated processes.
-#![cfg(any(target_os = "linux", target_os = "freebsd"))]
+#![cfg(target_os = "linux")]
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;

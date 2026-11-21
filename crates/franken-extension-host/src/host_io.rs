@@ -5,6 +5,7 @@
 //! default provider denies every request, preserving fail-closed behavior until
 //! a real sandboxed provider is deliberately installed.
 
+use control::OperationControl;
 use serde::{Deserialize, Serialize};
 #[cfg(unix)]
 use std::ffi::{OsStr, OsString};
@@ -843,6 +844,11 @@ impl SandboxFdTable {
 /// * **Bounded** — reads and writes above `max_bytes` fail closed, defending
 ///   against parser-bomb / OOM inputs (including a file that grows between
 ///   `stat` and `read`).
+/// * **Cooperatively cancellable** — `perform_controlled` polls filesystem
+///   authority between path components, directory entries and 8 KiB I/O chunks,
+///   and after descriptor-lock waits. A refusal stops subsequent work and
+///   result publication; it cannot undo a committed prefix or interrupt a
+///   filesystem syscall already running in the kernel.
 ///
 /// Network effects (`NetworkSend` / `NetworkRecv`) are also **performed for
 /// real** here: a `NetworkSend` opens a TCP connection to the endpoint and
@@ -1186,7 +1192,13 @@ impl SandboxedHostIo {
     /// `follow_final=false` stops at the final component without following it
     /// so `lstat`/`readlink` can inspect a symlink itself.
     #[cfg(unix)]
-    fn read_target(&self, raw: &str, follow_final: bool) -> Result<ReadTarget, HostIoError> {
+    fn read_target(
+        &self,
+        raw: &str,
+        follow_final: bool,
+        control: &OperationControl,
+    ) -> Result<ReadTarget, HostIoError> {
+        control.check_host()?;
         self.confine(raw)?;
         let work: std::collections::VecDeque<OsString> = Path::new(raw)
             .components()
@@ -1209,6 +1221,7 @@ impl SandboxedHostIo {
             | rustix::fs::OFlags::CLOEXEC;
 
         while let Some(part) = walk.work.pop_front() {
+            control.check_host()?;
             if part == OsStr::new(".") {
                 continue;
             }
@@ -1418,7 +1431,9 @@ impl SandboxedHostIo {
         &self,
         raw: &str,
         create_parents: bool,
+        control: &OperationControl,
     ) -> Result<MutationTarget, HostIoError> {
+        control.check_host()?;
         self.confine(raw)?;
         let normal: Vec<&OsStr> = Path::new(raw)
             .components()
@@ -1439,6 +1454,7 @@ impl SandboxedHostIo {
             | rustix::fs::OFlags::NOFOLLOW
             | rustix::fs::OFlags::CLOEXEC;
         for part in parents {
+            control.check_host()?;
             let opened = match rustix::fs::openat(
                 &current,
                 *part,
@@ -1447,6 +1463,7 @@ impl SandboxedHostIo {
             ) {
                 Ok(opened) => opened,
                 Err(err) if create_parents && err == rustix::io::Errno::NOENT => {
+                    control.check_host()?;
                     match rustix::fs::mkdirat(
                         &current,
                         *part,
@@ -1506,7 +1523,9 @@ impl SandboxedHostIo {
         flags: rustix::fs::OFlags,
         raw: &str,
         action: &str,
+        control: &OperationControl,
     ) -> Result<std::fs::File, HostIoError> {
+        control.check_host()?;
         let descriptor = rustix::fs::openat(
             &target.parent,
             &target.name,
@@ -1531,9 +1550,15 @@ impl SandboxedHostIo {
         flags: rustix::fs::OFlags,
         raw: &str,
         action: &str,
+        control: &OperationControl,
     ) -> Result<std::fs::File, HostIoError> {
-        let file =
-            Self::open_mutation_file(target, flags & !rustix::fs::OFlags::TRUNC, raw, action)?;
+        let file = Self::open_mutation_file(
+            target,
+            flags & !rustix::fs::OFlags::TRUNC,
+            raw,
+            action,
+            control,
+        )?;
         let metadata = file
             .metadata()
             .map_err(|err| Self::fs_error("stat", raw, err))?;
@@ -1549,6 +1574,7 @@ impl SandboxedHostIo {
             });
         }
         if flags.contains(rustix::fs::OFlags::TRUNC) {
+            control.check_host()?;
             file.set_len(0)
                 .map_err(|err| Self::fs_error("truncate", raw, err))?;
         }
@@ -1560,7 +1586,9 @@ impl SandboxedHostIo {
         target: &MutationTarget,
         raw: &str,
         recursive: bool,
+        control: &OperationControl,
     ) -> Result<(), HostIoError> {
+        control.check_host()?;
         match rustix::fs::mkdirat(
             &target.parent,
             &target.name,
@@ -1583,20 +1611,49 @@ impl SandboxedHostIo {
     }
 
     #[cfg(unix)]
-    fn remove_directory_contents(directory: &OwnedFd, raw: &str) -> Result<(), HostIoError> {
-        let mut entries = rustix::fs::Dir::read_from(directory)
+    fn remove_directory_contents(
+        directory: &OwnedFd,
+        raw: &str,
+        control: &OperationControl,
+    ) -> Result<(), HostIoError> {
+        control.check_host()?;
+        let entries = rustix::fs::Dir::read_from(directory)
             .map_err(|err| Self::rustix_fs_error("open directory for remove", raw, err))?;
-        while let Some(entry) = entries.read() {
+        // Retain descriptor-relative authority in an explicit stack. Guest
+        // directory depth must not consume native call frames. Each child Dir
+        // owns exactly its opened descriptor and closes on every error path.
+        let mut pending = vec![(entries, None::<std::ffi::CString>)];
+        while let Some((entries, _)) = pending.last_mut() {
+            control.check_host()?;
+            let Some(entry) = entries.read() else {
+                let (_, name) = pending.pop().expect("current directory exists");
+                if let Some(name) = name {
+                    let parent = pending
+                        .last()
+                        .expect("child retains its parent")
+                        .0
+                        .fd()
+                        .map_err(|err| Self::rustix_fs_error("open parent for remove", raw, err))?;
+                    control.check_host()?;
+                    rustix::fs::unlinkat(parent, &name, rustix::fs::AtFlags::REMOVEDIR)
+                        .map_err(|err| Self::rustix_fs_error("remove directory", raw, err))?;
+                }
+                continue;
+            };
             let entry = entry
                 .map_err(|err| Self::rustix_fs_error("read directory for remove", raw, err))?;
             let name = entry.file_name();
             if matches!(name.to_bytes(), b"." | b"..") {
                 continue;
             }
+            let directory = entries
+                .fd()
+                .map_err(|err| Self::rustix_fs_error("open directory for remove", raw, err))?;
             let stat = rustix::fs::statat(directory, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
                 .map_err(|err| {
                 Self::rustix_fs_error("stat before recursive remove", raw, err)
             })?;
+            control.check_host()?;
             if rustix::fs::FileType::from_raw_mode(stat.st_mode).is_dir() {
                 let child = rustix::fs::openat(
                     directory,
@@ -1608,9 +1665,12 @@ impl SandboxedHostIo {
                     rustix::fs::Mode::empty(),
                 )
                 .map_err(|err| Self::rustix_fs_error("open directory for remove", raw, err))?;
-                Self::remove_directory_contents(&child, raw)?;
-                rustix::fs::unlinkat(directory, name, rustix::fs::AtFlags::REMOVEDIR)
-                    .map_err(|err| Self::rustix_fs_error("remove directory", raw, err))?;
+                let child = rustix::fs::Dir::new(child)
+                    .map_err(|err| Self::rustix_fs_error("open directory for remove", raw, err))?;
+                pending.try_reserve(1).map_err(|_| HostIoError::Io {
+                    detail: "recursive remove traversal allocation failed".to_string(),
+                })?;
+                pending.push((child, Some(name.to_owned())));
             } else {
                 rustix::fs::unlinkat(directory, name, rustix::fs::AtFlags::empty())
                     .map_err(|err| Self::rustix_fs_error("remove file", raw, err))?;
@@ -1625,7 +1685,9 @@ impl SandboxedHostIo {
         raw: &str,
         recursive: bool,
         force: bool,
+        control: &OperationControl,
     ) -> Result<(), HostIoError> {
+        control.check_host()?;
         let stat = match rustix::fs::statat(
             &target.parent,
             &target.name,
@@ -1647,10 +1709,12 @@ impl SandboxedHostIo {
                     rustix::fs::Mode::empty(),
                 )
                 .map_err(|err| Self::rustix_fs_error("open directory for remove", raw, err))?;
-                Self::remove_directory_contents(&directory, raw)?;
+                Self::remove_directory_contents(&directory, raw, control)?;
             }
+            control.check_host()?;
             rustix::fs::unlinkat(&target.parent, &target.name, rustix::fs::AtFlags::REMOVEDIR)
         } else {
+            control.check_host()?;
             rustix::fs::unlinkat(&target.parent, &target.name, rustix::fs::AtFlags::empty())
         };
         match outcome {
@@ -1660,15 +1724,16 @@ impl SandboxedHostIo {
         }
     }
 
-    fn fs_read(&self, raw: &str) -> HostIoOutcome {
+    fn fs_read(&self, raw: &str, control: &OperationControl) -> HostIoOutcome {
         #[cfg(not(unix))]
         {
-            let _ = raw;
+            let _ = (raw, control);
             Err(Self::fs_not_implemented("read"))
         }
         #[cfg(unix)]
         {
-            let ReadTarget::Entry { parent, name, .. } = self.read_target(raw, true)? else {
+            let ReadTarget::Entry { parent, name, .. } = self.read_target(raw, true, control)?
+            else {
                 return Err(HostIoError::Fs {
                     code: "EISDIR".to_string(),
                     detail: format!("not a regular file: {raw}"),
@@ -1676,6 +1741,7 @@ impl SandboxedHostIo {
             };
             // NONBLOCK so an entry swapped for a FIFO after resolution errors
             // on the type check below instead of blocking the host.
+            control.check_host()?;
             let descriptor = rustix::fs::openat(
                 &parent,
                 &name,
@@ -1708,8 +1774,8 @@ impl SandboxedHostIo {
             // Bounded read: cap+1 so a file that grew between stat and read
             // still fails closed rather than being silently truncated.
             let mut bytes = Vec::new();
-            file.take(self.max_bytes.saturating_add(1))
-                .read_to_end(&mut bytes)
+            control
+                .read_to_end(&mut file.take(self.max_bytes.saturating_add(1)), &mut bytes)
                 .map_err(|err| Self::fs_error("read", raw, err))?;
             if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > self.max_bytes {
                 return Err(HostIoError::Io {
@@ -1720,7 +1786,7 @@ impl SandboxedHostIo {
         }
     }
 
-    fn fs_write(&self, raw: &str, data: &[u8]) -> HostIoOutcome {
+    fn fs_write(&self, raw: &str, data: &[u8], control: &OperationControl) -> HostIoOutcome {
         if u64::try_from(data.len()).unwrap_or(u64::MAX) > self.max_bytes {
             return Err(HostIoError::Io {
                 detail: format!(
@@ -1732,19 +1798,21 @@ impl SandboxedHostIo {
         }
         #[cfg(not(unix))]
         {
-            let _ = (raw, data);
+            let _ = (raw, data, control);
             Err(Self::fs_not_implemented("write"))
         }
         #[cfg(unix)]
         {
-            let target = self.mutation_target(raw, false)?;
+            let target = self.mutation_target(raw, false, control)?;
             let mut file = Self::open_regular_mutation_file(
                 &target,
                 rustix::fs::OFlags::WRONLY | rustix::fs::OFlags::CREATE | rustix::fs::OFlags::TRUNC,
                 raw,
                 "open for write",
+                control,
             )?;
-            file.write_all(data)
+            control
+                .write_all(&mut file, data)
                 .map_err(|err| Self::fs_error("write", raw, err))?;
             Ok(HostIoResponse::FsWrite {
                 bytes_written: u64::try_from(data.len()).unwrap_or(u64::MAX),
@@ -1757,11 +1825,15 @@ impl SandboxedHostIo {
     fn with_fd_entry<T>(
         &self,
         fd: u64,
+        control: &OperationControl,
         action: impl FnOnce(&mut SandboxFdEntry) -> Result<T, HostIoError>,
     ) -> Result<T, HostIoError> {
         let mut table = self.fd_table.lock().map_err(|_| HostIoError::Io {
             detail: "sandbox fd table lock poisoned".to_string(),
         })?;
+        // Waiting behind another descriptor operation is not authorization to
+        // execute after the supervisor revoked this operation in the meantime.
+        control.check_host()?;
         let Some(entry) = table.entries.get_mut(&fd) else {
             return Err(HostIoError::Fs {
                 code: "EBADF".to_string(),
@@ -1786,6 +1858,16 @@ impl SandboxedHostIo {
     /// # Errors
     /// `EMFILE`, invalid flags and containment failures surface as [`HostIoError`].
     pub fn open_fd(&self, raw: &str, flags: &str) -> Result<u64, HostIoError> {
+        self.open_fd_controlled(raw, flags, &OperationControl::unrestricted())
+    }
+
+    fn open_fd_controlled(
+        &self,
+        raw: &str,
+        flags: &str,
+        control: &OperationControl,
+    ) -> Result<u64, HostIoError> {
+        control.check_host()?;
         #[cfg(not(unix))]
         {
             let _ = (raw, flags);
@@ -1851,6 +1933,7 @@ impl SandboxedHostIo {
             let mut table = self.fd_table.lock().map_err(|_| HostIoError::Io {
                 detail: "sandbox fd table lock poisoned".to_string(),
             })?;
+            control.check_host()?;
             if table.entries.len() >= table.max_open_files {
                 return Err(HostIoError::Fs {
                     code: "EMFILE".to_string(),
@@ -1864,15 +1947,18 @@ impl SandboxedHostIo {
             })?;
             let base_flags = base_flags | rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::NOCTTY;
             let file = if writable {
-                let target = self.mutation_target(raw, false)?;
-                Self::open_regular_mutation_file(&target, base_flags, raw, "open")?
+                let target = self.mutation_target(raw, false, control)?;
+                Self::open_regular_mutation_file(&target, base_flags, raw, "open", control)?
             } else {
-                let ReadTarget::Entry { parent, name, .. } = self.read_target(raw, true)? else {
+                let ReadTarget::Entry { parent, name, .. } =
+                    self.read_target(raw, true, control)?
+                else {
                     return Err(HostIoError::Fs {
                         code: "EISDIR".to_string(),
                         detail: format!("not a regular file: {raw}"),
                     });
                 };
+                control.check_host()?;
                 let descriptor = rustix::fs::openat(
                     &parent,
                     &name,
@@ -1891,6 +1977,7 @@ impl SandboxedHostIo {
                     detail: format!("not a regular file: {raw}"),
                 });
             }
+            control.check_host()?;
             table.next_fd = next_fd;
             table.entries.insert(
                 fd,
@@ -1926,6 +2013,17 @@ impl SandboxedHostIo {
         length: u64,
         position: Option<u64>,
     ) -> Result<Vec<u8>, HostIoError> {
+        self.read_fd_controlled(fd, length, position, &OperationControl::unrestricted())
+    }
+
+    fn read_fd_controlled(
+        &self,
+        fd: u64,
+        length: u64,
+        position: Option<u64>,
+        control: &OperationControl,
+    ) -> Result<Vec<u8>, HostIoError> {
+        control.check_host()?;
         if length > self.max_bytes {
             return Err(HostIoError::Io {
                 detail: format!(
@@ -1934,7 +2032,7 @@ impl SandboxedHostIo {
                 ),
             });
         }
-        self.with_fd_entry(fd, |entry| {
+        self.with_fd_entry(fd, control, |entry| {
             if !entry.readable {
                 return Err(HostIoError::Fs {
                     code: "EBADF".to_string(),
@@ -1945,6 +2043,8 @@ impl SandboxedHostIo {
             let mut buffer = vec![0u8; capacity];
             let mut filled = 0usize;
             while filled < buffer.len() {
+                control.check_host()?;
+                let end = filled + (buffer.len() - filled).min(control::FILE_IO_CHUNK_BYTES);
                 let read = if let Some(base) = position {
                     // Positional reads are pread-shaped: the fd cursor stays
                     // where sequential reads left it, matching Node.
@@ -1953,7 +2053,7 @@ impl SandboxedHostIo {
                         let offset = base.saturating_add(filled as u64);
                         std::os::unix::fs::FileExt::read_at(
                             &entry.file,
-                            &mut buffer[filled..],
+                            &mut buffer[filled..end],
                             offset,
                         )
                     }
@@ -1963,7 +2063,7 @@ impl SandboxedHostIo {
                         return Err(Self::fs_not_implemented("pread"));
                     }
                 } else {
-                    std::io::Read::read(&mut entry.file, &mut buffer[filled..])
+                    std::io::Read::read(&mut entry.file, &mut buffer[filled..end])
                 }
                 .map_err(|err| Self::fs_error("read", &entry.guest_path.clone(), err))?;
                 if read == 0 {
@@ -1982,7 +2082,11 @@ impl SandboxedHostIo {
     /// # Errors
     /// `EBADF` for an unknown fd; I/O failures surface as filesystem errors.
     pub fn fsync_fd(&self, fd: u64) -> Result<(), HostIoError> {
-        self.with_fd_entry(fd, |entry| {
+        self.fsync_fd_controlled(fd, &OperationControl::unrestricted())
+    }
+
+    fn fsync_fd_controlled(&self, fd: u64, control: &OperationControl) -> Result<(), HostIoError> {
+        self.with_fd_entry(fd, control, |entry| {
             entry
                 .file
                 .sync_all()
@@ -1997,7 +2101,16 @@ impl SandboxedHostIo {
     /// Unknown descriptors, non-writable files, excessive lengths and filesystem
     /// failures are returned without reopening the original pathname.
     pub fn truncate_fd(&self, fd: u64, length: u64) -> Result<(), HostIoError> {
-        self.with_fd_entry(fd, |entry| {
+        self.truncate_fd_controlled(fd, length, &OperationControl::unrestricted())
+    }
+
+    fn truncate_fd_controlled(
+        &self,
+        fd: u64,
+        length: u64,
+        control: &OperationControl,
+    ) -> Result<(), HostIoError> {
+        self.with_fd_entry(fd, control, |entry| {
             if length > self.max_bytes {
                 return Err(HostIoError::Io {
                     detail: format!(
@@ -2018,7 +2131,15 @@ impl SandboxedHostIo {
     /// # Errors
     /// Unknown descriptors and filesystem failures retain their typed error.
     pub fn datasync_fd(&self, fd: u64) -> Result<(), HostIoError> {
-        self.with_fd_entry(fd, |entry| {
+        self.datasync_fd_controlled(fd, &OperationControl::unrestricted())
+    }
+
+    fn datasync_fd_controlled(
+        &self,
+        fd: u64,
+        control: &OperationControl,
+    ) -> Result<(), HostIoError> {
+        self.with_fd_entry(fd, control, |entry| {
             entry
                 .file
                 .sync_data()
@@ -2032,6 +2153,16 @@ impl SandboxedHostIo {
     /// # Errors
     /// Unknown descriptors, invalid modes and filesystem failures are returned.
     pub fn chmod_fd(&self, fd: u64, mode: u32) -> Result<(), HostIoError> {
+        self.chmod_fd_controlled(fd, mode, &OperationControl::unrestricted())
+    }
+
+    fn chmod_fd_controlled(
+        &self,
+        fd: u64,
+        mode: u32,
+        control: &OperationControl,
+    ) -> Result<(), HostIoError> {
+        control.check_host()?;
         #[cfg(not(unix))]
         {
             let _ = (fd, mode);
@@ -2039,7 +2170,7 @@ impl SandboxedHostIo {
         }
         #[cfg(unix)]
         {
-            self.with_fd_entry(fd, |entry| {
+            self.with_fd_entry(fd, control, |entry| {
                 // RawMode is u16 on Apple platforms and u32 elsewhere. Only
                 // permission bits are meaningful, as with Node's fchmod.
                 #[allow(clippy::useless_conversion, clippy::unnecessary_fallible_conversions)]
@@ -2085,9 +2216,19 @@ impl SandboxedHostIo {
     /// Invalid timestamps, unknown descriptors and filesystem failures retain
     /// their typed error. Both timestamps are validated before either changes.
     pub fn utimes_fd(&self, fd: u64, atime: f64, mtime: f64) -> Result<(), HostIoError> {
+        self.utimes_fd_controlled(fd, atime, mtime, &OperationControl::unrestricted())
+    }
+
+    fn utimes_fd_controlled(
+        &self,
+        fd: u64,
+        atime: f64,
+        mtime: f64,
+        control: &OperationControl,
+    ) -> Result<(), HostIoError> {
         let accessed = Self::fs_timestamp(atime)?;
         let modified = Self::fs_timestamp(mtime)?;
-        self.with_fd_entry(fd, |entry| {
+        self.with_fd_entry(fd, control, |entry| {
             entry
                 .file
                 .set_times(
@@ -2108,6 +2249,15 @@ impl SandboxedHostIo {
     /// `EBADF` for an unknown or closed guest descriptor; host stat failures
     /// retain their typed filesystem error.
     pub fn stat_fd(&self, fd: u64) -> Result<FsMetadata, HostIoError> {
+        self.stat_fd_controlled(fd, &OperationControl::unrestricted())
+    }
+
+    fn stat_fd_controlled(
+        &self,
+        fd: u64,
+        control: &OperationControl,
+    ) -> Result<FsMetadata, HostIoError> {
+        control.check_host()?;
         #[cfg(not(unix))]
         {
             let _ = fd;
@@ -2115,7 +2265,7 @@ impl SandboxedHostIo {
         }
         #[cfg(unix)]
         {
-            self.with_fd_entry(fd, |entry| {
+            self.with_fd_entry(fd, control, |entry| {
                 let stat = rustix::fs::fstat(&entry.file)
                     .map_err(|err| Self::rustix_fs_error("fstat", &entry.guest_path, err))?;
                 Ok(Self::stat_metadata_result(&stat))
@@ -2131,9 +2281,14 @@ impl SandboxedHostIo {
     /// # Errors
     /// `EBADF` for an unknown or already-closed fd.
     pub fn close_fd(&self, fd: u64) -> Result<(), HostIoError> {
+        self.close_fd_controlled(fd, &OperationControl::unrestricted())
+    }
+
+    fn close_fd_controlled(&self, fd: u64, control: &OperationControl) -> Result<(), HostIoError> {
         let mut table = self.fd_table.lock().map_err(|_| HostIoError::Io {
             detail: "sandbox fd table lock poisoned".to_string(),
         })?;
+        control.check_host()?;
         if table.entries.remove(&fd).is_none() {
             return Err(HostIoError::Fs {
                 code: "EBADF".to_string(),
@@ -2200,7 +2355,9 @@ impl SandboxedHostIo {
         raw: &str,
         arguments: &[String],
         data: &[u8],
+        control: &OperationControl,
     ) -> HostIoOutcome {
+        control.check_host()?;
         let result = match operation {
             FsOperation::Read | FsOperation::Write => {
                 return Err(HostIoError::NotImplemented {
@@ -2213,12 +2370,12 @@ impl SandboxedHostIo {
             // `fd=` argument and ignore the path field.
             FsOperation::Open => {
                 let flags = Self::fs_argument(arguments, "flags").unwrap_or("r");
-                FsMetaResult::Unsigned(self.open_fd(raw, flags)?)
+                FsMetaResult::Unsigned(self.open_fd_controlled(raw, flags, control)?)
             }
             FsOperation::WriteFd => {
                 let fd = Self::fs_fd_argument(arguments)?;
                 let position = fd_write::position_argument(arguments)?;
-                FsMetaResult::Unsigned(self.write_fd_at(fd, data, position)?)
+                FsMetaResult::Unsigned(self.write_fd_at_controlled(fd, data, position, control)?)
             }
             FsOperation::ReadFd => {
                 let fd = Self::fs_fd_argument(arguments)?;
@@ -2227,15 +2384,15 @@ impl SandboxedHostIo {
                     .unwrap_or(0);
                 let position = Self::fs_argument(arguments, "position")
                     .and_then(|value| value.parse::<u64>().ok());
-                FsMetaResult::Bytes(self.read_fd(fd, length, position)?)
+                FsMetaResult::Bytes(self.read_fd_controlled(fd, length, position, control)?)
             }
             FsOperation::Fsync => {
-                self.fsync_fd(Self::fs_fd_argument(arguments)?)?;
+                self.fsync_fd_controlled(Self::fs_fd_argument(arguments)?, control)?;
                 FsMetaResult::Unit
             }
-            FsOperation::Fstat => {
-                FsMetaResult::Metadata(self.stat_fd(Self::fs_fd_argument(arguments)?)?)
-            }
+            FsOperation::Fstat => FsMetaResult::Metadata(
+                self.stat_fd_controlled(Self::fs_fd_argument(arguments)?, control)?,
+            ),
             FsOperation::Ftruncate => {
                 let length = Self::fs_argument(arguments, "length")
                     .and_then(|value| value.parse::<u64>().ok())
@@ -2243,11 +2400,11 @@ impl SandboxedHostIo {
                         code: "EINVAL".to_string(),
                         detail: "ftruncate requires a nonnegative integer length".to_string(),
                     })?;
-                self.truncate_fd(Self::fs_fd_argument(arguments)?, length)?;
+                self.truncate_fd_controlled(Self::fs_fd_argument(arguments)?, length, control)?;
                 FsMetaResult::Unit
             }
             FsOperation::Fdatasync => {
-                self.datasync_fd(Self::fs_fd_argument(arguments)?)?;
+                self.datasync_fd_controlled(Self::fs_fd_argument(arguments)?, control)?;
                 FsMetaResult::Unit
             }
             FsOperation::Fchmod => {
@@ -2257,19 +2414,20 @@ impl SandboxedHostIo {
                         code: "EINVAL".to_string(),
                         detail: "fchmod requires an unsigned integer mode".to_string(),
                     })?;
-                self.chmod_fd(Self::fs_fd_argument(arguments)?, mode)?;
+                self.chmod_fd_controlled(Self::fs_fd_argument(arguments)?, mode, control)?;
                 FsMetaResult::Unit
             }
             FsOperation::Futimes => {
-                self.utimes_fd(
+                self.utimes_fd_controlled(
                     Self::fs_fd_argument(arguments)?,
                     Self::fs_timestamp_argument(arguments, "atime")?,
                     Self::fs_timestamp_argument(arguments, "mtime")?,
+                    control,
                 )?;
                 FsMetaResult::Unit
             }
             FsOperation::CloseFd => {
-                self.close_fd(Self::fs_fd_argument(arguments)?)?;
+                self.close_fd_controlled(Self::fs_fd_argument(arguments)?, control)?;
                 FsMetaResult::Unit
             }
             FsOperation::Append => {
@@ -2288,7 +2446,7 @@ impl SandboxedHostIo {
                 }
                 #[cfg(unix)]
                 {
-                    let target = self.mutation_target(raw, false)?;
+                    let target = self.mutation_target(raw, false, control)?;
                     let mut file = Self::open_regular_mutation_file(
                         &target,
                         rustix::fs::OFlags::WRONLY
@@ -2296,8 +2454,10 @@ impl SandboxedHostIo {
                             | rustix::fs::OFlags::APPEND,
                         raw,
                         "open for append",
+                        control,
                     )?;
-                    file.write_all(data)
+                    control
+                        .write_all(&mut file, data)
                         .map_err(|err| Self::fs_error("append", raw, err))?;
                     FsMetaResult::Unsigned(u64::try_from(data.len()).unwrap_or(u64::MAX))
                 }
@@ -2309,7 +2469,7 @@ impl SandboxedHostIo {
                 }
                 #[cfg(unix)]
                 {
-                    match self.read_target(raw, true) {
+                    match self.read_target(raw, true, control) {
                         Ok(_) => FsMetaResult::Bool(true),
                         Err(HostIoError::Fs { code, .. })
                             if code == "ENOENT" || code == "ENOTDIR" =>
@@ -2329,8 +2489,8 @@ impl SandboxedHostIo {
                 }
                 #[cfg(unix)]
                 {
-                    let target = self.mutation_target(raw, recursive)?;
-                    Self::mkdir_target(&target, raw, recursive)?;
+                    let target = self.mutation_target(raw, recursive, control)?;
+                    Self::mkdir_target(&target, raw, recursive, control)?;
                     FsMetaResult::Unit
                 }
             }
@@ -2342,7 +2502,7 @@ impl SandboxedHostIo {
                 #[cfg(unix)]
                 {
                     let with_file_types = Self::fs_flag(arguments, "with_file_types");
-                    let directory = match self.read_target(raw, true)? {
+                    let directory = match self.read_target(raw, true, control)? {
                         ReadTarget::Directory { fd, .. } => fd,
                         ReadTarget::Entry { parent, name, .. } => rustix::fs::openat(
                             &parent,
@@ -2367,7 +2527,11 @@ impl SandboxedHostIo {
                     };
                     let mut directory_entries = rustix::fs::Dir::read_from(&directory)
                         .map_err(|err| Self::fs_error("readdir", raw, std::io::Error::from(err)))?;
-                    while let Some(entry) = directory_entries.read() {
+                    loop {
+                        control.check_host()?;
+                        let Some(entry) = directory_entries.read() else {
+                            break;
+                        };
                         let entry = entry.map_err(|err| {
                             Self::fs_error("readdir entry", raw, std::io::Error::from(err))
                         })?;
@@ -2427,7 +2591,7 @@ impl SandboxedHostIo {
                 #[cfg(unix)]
                 {
                     let follow_final = operation == FsOperation::Stat;
-                    let stat = match self.read_target(raw, follow_final)? {
+                    let stat = match self.read_target(raw, follow_final, control)? {
                         ReadTarget::Directory { fd, .. } => {
                             rustix::fs::fstat(&fd).map_err(|err| {
                                 Self::fs_error(operation.as_str(), raw, std::io::Error::from(err))
@@ -2464,7 +2628,8 @@ impl SandboxedHostIo {
                 self.confine(raw)?;
                 #[cfg(unix)]
                 {
-                    let link = self.mutation_target(link_raw, false)?;
+                    let link = self.mutation_target(link_raw, false, control)?;
+                    control.check_host()?;
                     rustix::fs::symlinkat(raw, &link.parent, &link.name)
                         .map_err(|err| Self::rustix_fs_error("symlink", link_raw, err))?;
                 }
@@ -2481,7 +2646,8 @@ impl SandboxedHostIo {
                 }
                 #[cfg(unix)]
                 {
-                    let ReadTarget::Entry { parent, name, .. } = self.read_target(raw, false)?
+                    let ReadTarget::Entry { parent, name, .. } =
+                        self.read_target(raw, false, control)?
                     else {
                         return Err(HostIoError::SandboxViolation {
                             detail: format!("path resolves to no final component: {raw}"),
@@ -2520,9 +2686,10 @@ impl SandboxedHostIo {
                 }
                 #[cfg(unix)]
                 {
-                    let source = self.mutation_target(raw, false)?;
-                    let destination = self.mutation_target(destination_raw, false)?;
+                    let source = self.mutation_target(raw, false, control)?;
+                    let destination = self.mutation_target(destination_raw, false, control)?;
                     if operation == FsOperation::Rename {
+                        control.check_host()?;
                         rustix::fs::renameat(
                             &source.parent,
                             &source.name,
@@ -2538,6 +2705,7 @@ impl SandboxedHostIo {
                             rustix::fs::OFlags::RDONLY,
                             raw,
                             "open copy source",
+                            control,
                         )?;
                         let source_metadata = source_file
                             .metadata()
@@ -2556,9 +2724,11 @@ impl SandboxedHostIo {
                         // existing destination. This is a bounded byte capture,
                         // not an atomic snapshot of concurrent source writes.
                         let mut bytes = Vec::new();
-                        (&mut source_file)
-                            .take(self.max_bytes.saturating_add(1))
-                            .read_to_end(&mut bytes)
+                        control
+                            .read_to_end(
+                                &mut (&mut source_file).take(self.max_bytes.saturating_add(1)),
+                                &mut bytes,
+                            )
                             .map_err(|err| Self::fs_error("read copy source", raw, err))?;
                         if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > self.max_bytes {
                             return Err(HostIoError::Io {
@@ -2582,6 +2752,7 @@ impl SandboxedHostIo {
                             destination_flags,
                             destination_raw,
                             "open copy destination",
+                            control,
                         )?;
                         let destination_metadata = destination_file.metadata().map_err(|err| {
                             Self::fs_error("stat copy destination", destination_raw, err)
@@ -2595,12 +2766,14 @@ impl SandboxedHostIo {
                                     .to_string(),
                             });
                         }
+                        control.check_host()?;
                         destination_file.set_len(0).map_err(|err| {
                             Self::fs_error("truncate copy destination", destination_raw, err)
                         })?;
-                        destination_file
-                            .write_all(&bytes)
+                        control
+                            .write_all(&mut destination_file, &bytes)
                             .map_err(|err| Self::fs_error("copy", raw, err))?;
+                        control.check_host()?;
                         destination_file
                             .set_permissions(source_metadata.permissions())
                             .map_err(|err| Self::fs_error("copy permissions", raw, err))?;
@@ -2615,7 +2788,8 @@ impl SandboxedHostIo {
                 }
                 #[cfg(unix)]
                 {
-                    let target = self.mutation_target(raw, false)?;
+                    let target = self.mutation_target(raw, false, control)?;
+                    control.check_host()?;
                     rustix::fs::unlinkat(
                         &target.parent,
                         &target.name,
@@ -2635,7 +2809,7 @@ impl SandboxedHostIo {
                 }
                 #[cfg(unix)]
                 {
-                    let target = match self.mutation_target(raw, false) {
+                    let target = match self.mutation_target(raw, false, control) {
                         Ok(target) => target,
                         Err(HostIoError::Fs { code, .. }) if force && code == "ENOENT" => {
                             return Ok(HostIoResponse::FsMeta {
@@ -2644,7 +2818,7 @@ impl SandboxedHostIo {
                         }
                         Err(err) => return Err(err),
                     };
-                    Self::remove_target(&target, raw, recursive, force)?;
+                    Self::remove_target(&target, raw, recursive, force, control)?;
                     FsMetaResult::Unit
                 }
             }
@@ -2655,7 +2829,8 @@ impl SandboxedHostIo {
                 }
                 #[cfg(unix)]
                 {
-                    let target = self.mutation_target(raw, false)?;
+                    let target = self.mutation_target(raw, false, control)?;
+                    control.check_host()?;
                     rustix::fs::unlinkat(
                         &target.parent,
                         &target.name,
@@ -2690,13 +2865,15 @@ impl SandboxedHostIo {
                 }
                 #[cfg(unix)]
                 {
-                    let target = self.mutation_target(raw, false)?;
+                    let target = self.mutation_target(raw, false, control)?;
                     let file = Self::open_regular_mutation_file(
                         &target,
                         rustix::fs::OFlags::WRONLY,
                         raw,
                         "open for truncate",
+                        control,
                     )?;
+                    control.check_host()?;
                     file.set_len(length)
                         .map_err(|err| Self::fs_error("truncate", raw, err))?;
                     FsMetaResult::Unit
@@ -2709,7 +2886,7 @@ impl SandboxedHostIo {
                 }
                 #[cfg(unix)]
                 {
-                    self.read_target(raw, true)?;
+                    self.read_target(raw, true, control)?;
                     FsMetaResult::Unit
                 }
             }
@@ -2723,12 +2900,13 @@ impl SandboxedHostIo {
                     })?;
                 #[cfg(unix)]
                 {
-                    let target = self.mutation_target(raw, false)?;
+                    let target = self.mutation_target(raw, false, control)?;
                     let file = Self::open_mutation_file(
                         &target,
                         rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NONBLOCK,
                         raw,
                         "open for chmod",
+                        control,
                     )?;
                     // `RawMode` is u16 on Apple platforms and u32 elsewhere.
                     #[allow(clippy::useless_conversion, clippy::unnecessary_fallible_conversions)]
@@ -2738,6 +2916,7 @@ impl SandboxedHostIo {
                             detail: format!("chmod mode out of range: {raw}"),
                         }
                     })?;
+                    control.check_host()?;
                     rustix::fs::fchmod(&file, rustix::fs::Mode::from_raw_mode(raw_mode))
                         .map_err(|err| Self::rustix_fs_error("chmod", raw, err))?;
                 }
@@ -2762,13 +2941,15 @@ impl SandboxedHostIo {
                 }
                 #[cfg(unix)]
                 {
-                    let target = self.mutation_target(raw, false)?;
+                    let target = self.mutation_target(raw, false, control)?;
                     let file = Self::open_mutation_file(
                         &target,
                         rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NONBLOCK,
                         raw,
                         "open for utimes",
+                        control,
                     )?;
+                    control.check_host()?;
                     file.set_times(
                         std::fs::FileTimes::new()
                             .set_accessed(accessed)
@@ -2785,7 +2966,7 @@ impl SandboxedHostIo {
                 }
                 #[cfg(unix)]
                 {
-                    let guest_components = match self.read_target(raw, true)? {
+                    let guest_components = match self.read_target(raw, true, control)? {
                         ReadTarget::Directory {
                             guest_components, ..
                         }
@@ -2807,7 +2988,8 @@ impl SandboxedHostIo {
                     let mut created = None;
                     for suffix in 0_u32..1_000_000 {
                         let candidate_raw = format!("{raw}{suffix:06}");
-                        let candidate = self.mutation_target(&candidate_raw, false)?;
+                        let candidate = self.mutation_target(&candidate_raw, false, control)?;
+                        control.check_host()?;
                         match rustix::fs::mkdirat(
                             &candidate.parent,
                             &candidate.name,
@@ -3127,22 +3309,45 @@ impl HostIoProvider for SandboxedHostIo {
                 _ => unreachable!("network request classified above"),
             });
         }
-        control::OperationControl::new(control).check_host()?;
-        match request {
-            HostIoRequest::FsRead { path } => self.fs_read(path),
-            HostIoRequest::FsWrite { path, data } => self.fs_write(path, data),
+        let control = OperationControl::new(control);
+        control.check_host()?;
+        let outcome = match request {
+            HostIoRequest::FsRead { path } => self.fs_read(path, &control),
+            HostIoRequest::FsWrite { path, data } => self.fs_write(path, data, &control),
             HostIoRequest::FsMeta {
                 operation,
                 path,
                 arguments,
                 data,
-            } => self.fs_meta(*operation, path, arguments, data),
+            } => self.fs_meta(*operation, path, arguments, data, &control),
             HostIoRequest::RandomRead { byte_len } => self.random_read(*byte_len),
             HostIoRequest::EnvRead { .. } => Err(HostIoError::Denied {
                 reason: "no explicit environment snapshot installed".to_string(),
             }),
             _ => unreachable!("network request handled above"),
+        };
+        // Filesystem operations may already have changed a prefix before a
+        // refusal; it is not rolled back. Never continue after an observed
+        // refusal or publish completed bytes/handles as an authorized success.
+        if let Err(error) = control.check_host() {
+            if matches!(
+                request,
+                HostIoRequest::FsMeta {
+                    operation: FsOperation::Open,
+                    ..
+                }
+            ) && let Ok(HostIoResponse::FsMeta {
+                result: FsMetaResult::Unsigned(fd),
+            }) = &outcome
+            {
+                // The handle was never delivered to its caller. Release its
+                // retained slot even though cancellation cannot undo CREATE
+                // or TRUNCATE that completed before the refusal was observed.
+                let _ = self.close_fd(*fd);
+            }
+            return Err(error);
         }
+        outcome
     }
 }
 

@@ -613,11 +613,11 @@ fn advanced_composition_first_op_full_cost() {
     .unwrap();
 
     let r = acc.consume(100_000, 10_000, "op1", 2_000_000_000).unwrap();
-    assert_eq!(r.composed_epsilon_millionths, 100_000); // k=0, scale=1.0
+    assert_eq!(r.composed_epsilon_millionths, 100_000);
 }
 
 #[test]
-fn advanced_composition_reduces_subsequent_cost() {
+fn advanced_fallback_preserves_subsequent_cost() {
     let mut acc = BudgetAccountant::new(AccountantConfig {
         composition_method: CompositionMethod::Advanced,
         ..test_config()
@@ -628,17 +628,13 @@ fn advanced_composition_reduces_subsequent_cost() {
     let r2 = acc.consume(100_000, 10_000, "op2", 3_000_000_000).unwrap();
 
     assert_eq!(r1.composed_epsilon_millionths, 100_000);
-    assert!(
-        r2.composed_epsilon_millionths < 100_000,
-        "advanced composition should reduce cost: got {}",
-        r2.composed_epsilon_millionths
-    );
-    // Delta is not affected by advanced composition.
+    assert_eq!(r2.composed_epsilon_millionths, 100_000);
+    assert_eq!(acc.current_budget.epsilon_spent_millionths, 200_000);
     assert_eq!(r2.composed_delta_millionths, 10_000);
 }
 
 #[test]
-fn advanced_composition_cost_decreases_with_more_ops() {
+fn advanced_fallback_preserves_full_cost_over_a_sequence() {
     let mut acc = BudgetAccountant::new(AccountantConfig {
         composition_method: CompositionMethod::Advanced,
         ..test_config()
@@ -658,21 +654,15 @@ fn advanced_composition_cost_decreases_with_more_ops() {
         composed_costs.push(r.composed_epsilon_millionths);
     }
 
-    // Composed costs should be non-increasing after the first.
-    for window in composed_costs.windows(2).skip(1) {
-        assert!(
-            window[1] <= window[0],
-            "advanced cost should not increase: {} > {}",
-            window[1],
-            window[0]
-        );
-    }
+    assert_eq!(composed_costs, vec![100_000; 10]);
+    assert_eq!(acc.current_budget.epsilon_spent_millionths, 1_000_000);
 }
 
 #[test]
 fn renyi_composition_tracks_curve_and_eventually_beats_basic() {
     let mut acc = BudgetAccountant::new(AccountantConfig {
         composition_method: CompositionMethod::Renyi,
+        delta_per_epoch_millionths: 200_000,
         now_ns: 0,
         ..test_config()
     })
@@ -693,13 +683,15 @@ fn renyi_composition_tracks_curve_and_eventually_beats_basic() {
         Some(&400_000)
     );
     assert!(acc.current_budget.epsilon_spent_millionths < 1_000_000);
-    assert_eq!(acc.current_budget.delta_spent_millionths, 100_000);
+    assert_eq!(acc.current_budget.delta_spent_millionths, 200_000);
+    assert_eq!(acc.consumption_log()[0].composed_delta_millionths, 110_000);
 }
 
 #[test]
 fn zcdp_composition_tracks_rho_and_eventually_beats_basic() {
     let mut acc = BudgetAccountant::new(AccountantConfig {
         composition_method: CompositionMethod::ZeroCdp,
+        delta_per_epoch_millionths: 200_000,
         now_ns: 0,
         ..test_config()
     })
@@ -717,7 +709,8 @@ fn zcdp_composition_tracks_rho_and_eventually_beats_basic() {
 
     assert_eq!(acc.zcdp_rho_spent_millionths(), 50_000);
     assert!(acc.current_budget.epsilon_spent_millionths < 1_000_000);
-    assert_eq!(acc.current_budget.delta_spent_millionths, 100_000);
+    assert_eq!(acc.current_budget.delta_spent_millionths, 200_000);
+    assert_eq!(acc.consumption_log()[0].composed_delta_millionths, 110_000);
 }
 
 #[test]
@@ -731,7 +724,7 @@ fn renyi_tiny_epsilon_still_charges_positive_budget() {
 
     let r = acc.consume(1, 0, "tiny", 1_000_000_000).unwrap();
     assert!(r.composed_epsilon_millionths >= 1);
-    assert_eq!(r.composed_delta_millionths, 0);
+    assert_eq!(r.composed_delta_millionths, 50_000);
 }
 
 #[test]
@@ -745,7 +738,7 @@ fn zcdp_tiny_epsilon_still_charges_positive_budget() {
 
     let r = acc.consume(1, 0, "tiny", 1_000_000_000).unwrap();
     assert!(r.composed_epsilon_millionths >= 1);
-    assert_eq!(r.composed_delta_millionths, 0);
+    assert_eq!(r.composed_delta_millionths, 50_000);
 }
 
 // ---------------------------------------------------------------------------

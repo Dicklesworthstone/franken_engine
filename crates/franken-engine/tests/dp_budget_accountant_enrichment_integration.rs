@@ -538,7 +538,7 @@ fn accountant_error_is_std_error() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn advanced_composition_consumes_less_than_basic() {
+fn advanced_fallback_matches_basic() {
     let mut basic = BudgetAccountant::new(test_config()).unwrap();
     let basic_rec = basic.consume(100_000, 10_000, "op", 2_000_000_000).unwrap();
 
@@ -551,14 +551,21 @@ fn advanced_composition_consumes_less_than_basic() {
         .consume(100_000, 10_000, "op", 2_000_000_000)
         .unwrap();
 
-    // Advanced composition should give same or less epsilon
-    assert!(adv_rec.composed_epsilon_millionths <= basic_rec.composed_epsilon_millionths);
+    assert_eq!(
+        adv_rec.composed_epsilon_millionths,
+        basic_rec.composed_epsilon_millionths
+    );
+    assert_eq!(
+        adv_rec.composed_delta_millionths,
+        basic_rec.composed_delta_millionths
+    );
 }
 
 #[test]
 fn renyi_composition_tracks_native_curve_over_sequence() {
     let mut renyi = BudgetAccountant::new(AccountantConfig {
         composition_method: CompositionMethod::Renyi,
+        delta_per_epoch_millionths: 200_000,
         ..test_config()
     })
     .unwrap();
@@ -579,13 +586,18 @@ fn renyi_composition_tracks_native_curve_over_sequence() {
         Some(&400_000)
     );
     assert!(renyi.current_budget.epsilon_spent_millionths < 1_000_000);
-    assert_eq!(renyi.current_budget.delta_spent_millionths, 100_000);
+    assert_eq!(renyi.current_budget.delta_spent_millionths, 200_000);
+    assert_eq!(
+        renyi.consumption_log()[0].composed_delta_millionths,
+        110_000
+    );
 }
 
 #[test]
 fn zcdp_composition_tracks_native_rho_over_sequence() {
     let mut zcdp = BudgetAccountant::new(AccountantConfig {
         composition_method: CompositionMethod::ZeroCdp,
+        delta_per_epoch_millionths: 200_000,
         ..test_config()
     })
     .unwrap();
@@ -602,7 +614,8 @@ fn zcdp_composition_tracks_native_rho_over_sequence() {
 
     assert_eq!(zcdp.zcdp_rho_spent_millionths(), 50_000);
     assert!(zcdp.current_budget.epsilon_spent_millionths < 1_000_000);
-    assert_eq!(zcdp.current_budget.delta_spent_millionths, 100_000);
+    assert_eq!(zcdp.current_budget.delta_spent_millionths, 200_000);
+    assert_eq!(zcdp.consumption_log()[0].composed_delta_millionths, 110_000);
 }
 
 // ---------------------------------------------------------------------------

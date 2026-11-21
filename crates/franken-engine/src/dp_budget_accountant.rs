@@ -25,6 +25,7 @@ const MILLION_I128: i128 = MILLION as i128;
 const LN_SCALE: i128 = 1_000_000_000;
 const LN2_NANOS_UP: i128 = 693_147_181;
 const RDP_ORDERS: [u32; 7] = [2, 3, 4, 8, 16, 32, 64];
+const COMPOSITION_ACCOUNTING_VERSION: u8 = 1;
 
 // ---------------------------------------------------------------------------
 // EpochBudget — per-epoch budget tracking
@@ -193,8 +194,9 @@ pub struct AccountantConfig {
 /// Differential privacy budget accountant.
 ///
 /// Tracks per-epoch and lifetime budget consumption with hard fail-closed
-/// behavior on exhaustion.  Supports basic, advanced, Renyi, and zCDP
-/// composition methods.
+/// behavior on exhaustion. Basic and Advanced use the conservative additive
+/// bound. Renyi and zCDP additionally account for their conversion failure
+/// probability; see [`Self::new_with_conversion_delta`].
 ///
 /// Epoch transitions are clean: no rollover (each epoch starts fresh).
 /// Historical epoch summaries are retained for audit.
@@ -228,15 +230,53 @@ pub struct BudgetAccountant {
     /// Current epoch RDP native epsilon curve by Renyi order (millionths).
     #[serde(default)]
     rdp_epsilon_spent_by_order_millionths: BTreeMap<u32, i64>,
+    /// Versioned conversion policy; absent in snapshots with the old,
+    /// undercharged composition rules. Never infer paid slack from native spend.
+    #[serde(default)]
+    composition_accounting: Option<CompositionAccounting>,
     /// Monotonic operation counter.
     operation_counter: u64,
     /// Consumption log for replay/audit.
     consumption_log: Vec<BudgetConsumption>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct CompositionAccounting {
+    version: u8,
+    conversion_delta_millionths: i64,
+    conversion_delta_charged: bool,
+}
+
 impl BudgetAccountant {
     /// Create a new budget accountant from configuration.
+    ///
+    /// Native modes reserve half the epoch delta allocation, capped at 0.5,
+    /// for conversion to approximate DP. The reservation is charged on the
+    /// first positive epsilon operation, not at construction. An allocation of
+    /// one millionth has no representable half and uses additive composition.
+    /// Use [`Self::new_with_conversion_delta`] to choose a different reserve.
     pub fn new(cfg: AccountantConfig) -> Result<Self, AccountantError> {
+        let conversion_delta =
+            default_conversion_delta(cfg.composition_method, cfg.delta_per_epoch_millionths);
+        Self::new_with_conversion_delta(cfg, conversion_delta)
+    }
+
+    /// Create an accountant with an explicit, immutable epoch conversion delta.
+    ///
+    /// For Renyi and zCDP, a positive reserve must be less than 1.0 and no
+    /// greater than the epoch delta allocation. The first positive epsilon
+    /// charge consumes this reserve in both epoch and lifetime delta totals;
+    /// all raw per-operation deltas are charged separately. Zero reserves use
+    /// the additive bound, without a native conversion. Basic and Advanced
+    /// require a zero reserve; Advanced currently uses the additive bound
+    /// because no explicit-slack advanced theorem implementation is supplied.
+    ///
+    /// Each input must describe a valid mechanism privacy guarantee under the
+    /// same adjacency relation. This accountant does not verify the mechanism.
+    pub fn new_with_conversion_delta(
+        cfg: AccountantConfig,
+        conversion_delta_millionths: i64,
+    ) -> Result<Self, AccountantError> {
         if cfg.epsilon_per_epoch_millionths <= 0 {
             return Err(AccountantError::InvalidConfiguration {
                 reason: "epsilon_per_epoch must be positive".into(),
@@ -257,6 +297,11 @@ impl BudgetAccountant {
                 reason: "lifetime_delta_budget must be positive".into(),
             });
         }
+        validate_conversion_delta(
+            cfg.composition_method,
+            conversion_delta_millionths,
+            cfg.delta_per_epoch_millionths,
+        )?;
 
         let current_budget = EpochBudget {
             epoch: cfg.epoch,
@@ -284,6 +329,11 @@ impl BudgetAccountant {
             composition_method: cfg.composition_method,
             zcdp_rho_spent_millionths: 0,
             rdp_epsilon_spent_by_order_millionths: BTreeMap::new(),
+            composition_accounting: Some(CompositionAccounting {
+                version: COMPOSITION_ACCOUNTING_VERSION,
+                conversion_delta_millionths,
+                conversion_delta_charged: false,
+            }),
             operation_counter: 0,
             consumption_log: Vec::new(),
         })
@@ -308,6 +358,11 @@ impl BudgetAccountant {
         if epsilon_millionths < 0 || delta_millionths < 0 {
             return Err(AccountantError::InvalidConsumption {
                 reason: "epsilon and delta must be non-negative".into(),
+            });
+        }
+        if is_native_composition(self.composition_method) && delta_millionths >= MILLION {
+            return Err(AccountantError::InvalidConsumption {
+                reason: "a native-composition operation must have delta less than 1.0".into(),
             });
         }
 
@@ -402,6 +457,7 @@ impl BudgetAccountant {
         if let Some(curve) = composition.next_rdp_epsilon_spent_by_order_millionths {
             self.rdp_epsilon_spent_by_order_millionths = curve;
         }
+        self.composition_accounting = Some(composition.next_accounting);
         self.operation_counter = next_operation_counter;
 
         let record = BudgetConsumption {
@@ -495,6 +551,17 @@ impl BudgetAccountant {
             });
         }
 
+        // Validate before clearing native state: an epoch transition must not
+        // make legacy undercharged history or an unknown policy version usable.
+        let mut accounting = match self.validated_composition_accounting() {
+            Ok(accounting) => accounting,
+            Err(error) => {
+                self.current_budget.exhausted = true;
+                return Err(error);
+            }
+        };
+        accounting.conversion_delta_charged = false;
+
         // Close current epoch and produce summary.
         let summary = EpochSummary {
             epoch: self.current_epoch,
@@ -524,6 +591,7 @@ impl BudgetAccountant {
         };
         self.zcdp_rho_spent_millionths = 0;
         self.rdp_epsilon_spent_by_order_millionths.clear();
+        self.composition_accounting = Some(accounting);
 
         // Check lifetime exhaustion for new epoch.
         if self.lifetime_epsilon_spent_millionths >= self.lifetime_epsilon_budget_millionths
@@ -563,41 +631,168 @@ impl BudgetAccountant {
 
     // -- Internal helpers --
 
+    fn validated_composition_accounting(&self) -> Result<CompositionAccounting, AccountantError> {
+        if self.epoch_epsilon_allocation_millionths <= 0
+            || self.epoch_delta_allocation_millionths <= 0
+            || self.current_budget.epsilon_budget_millionths <= 0
+            || self.current_budget.delta_budget_millionths <= 0
+            || self.lifetime_epsilon_budget_millionths <= 0
+            || self.lifetime_delta_budget_millionths <= 0
+            || self.current_budget.composition_method != self.composition_method
+            || self.current_budget.epoch != self.current_epoch
+        {
+            return Err(AccountantError::InvalidConfiguration {
+                reason: "inconsistent restored composition configuration".into(),
+            });
+        }
+
+        let accounting = match &self.composition_accounting {
+            Some(accounting) => accounting.clone(),
+            None if self.composition_method == CompositionMethod::Basic
+                || self.has_no_privacy_history() =>
+            {
+                CompositionAccounting {
+                    version: COMPOSITION_ACCOUNTING_VERSION,
+                    conversion_delta_millionths: default_conversion_delta(
+                        self.composition_method,
+                        self.epoch_delta_allocation_millionths,
+                    ),
+                    conversion_delta_charged: false,
+                }
+            }
+            None => {
+                return Err(AccountantError::InvalidConfiguration {
+                    reason: "legacy non-basic privacy history requires an audited migration; its composition charges cannot be trusted".into(),
+                });
+            }
+        };
+        if accounting.version != COMPOSITION_ACCOUNTING_VERSION {
+            return Err(AccountantError::InvalidConfiguration {
+                reason: "unsupported composition accounting version".into(),
+            });
+        }
+        validate_conversion_delta(
+            self.composition_method,
+            accounting.conversion_delta_millionths,
+            self.epoch_delta_allocation_millionths,
+        )?;
+        validate_conversion_delta(
+            self.composition_method,
+            accounting.conversion_delta_millionths,
+            self.current_budget.delta_budget_millionths,
+        )?;
+
+        let native_epsilon = match self.composition_method {
+            CompositionMethod::ZeroCdp if self.rdp_epsilon_spent_by_order_millionths.is_empty() => {
+                if self.zcdp_rho_spent_millionths == 0 {
+                    0
+                } else {
+                    zcdp_epsilon_from_rho_millionths(
+                        self.zcdp_rho_spent_millionths,
+                        accounting.conversion_delta_millionths,
+                    )?
+                }
+            }
+            CompositionMethod::Renyi if self.zcdp_rho_spent_millionths == 0 => {
+                if self.rdp_epsilon_spent_by_order_millionths.is_empty() {
+                    0
+                } else {
+                    if !self
+                        .rdp_epsilon_spent_by_order_millionths
+                        .keys()
+                        .copied()
+                        .eq(RDP_ORDERS)
+                        || self
+                            .rdp_epsilon_spent_by_order_millionths
+                            .values()
+                            .any(|cost| *cost <= 0)
+                    {
+                        return Err(AccountantError::InvalidConfiguration {
+                            reason: "invalid restored RDP curve".into(),
+                        });
+                    }
+                    rdp_epsilon_from_curve_millionths(
+                        &self.rdp_epsilon_spent_by_order_millionths,
+                        accounting.conversion_delta_millionths,
+                    )?
+                }
+            }
+            CompositionMethod::Basic | CompositionMethod::Advanced
+                if self.zcdp_rho_spent_millionths == 0
+                    && self.rdp_epsilon_spent_by_order_millionths.is_empty() =>
+            {
+                0
+            }
+            _ => {
+                return Err(AccountantError::InvalidConfiguration {
+                    reason: "native privacy state does not match the composition method".into(),
+                });
+            }
+        };
+        if accounting.conversion_delta_charged != (native_epsilon > 0)
+            || native_epsilon > self.current_budget.epsilon_spent_millionths
+            || (accounting.conversion_delta_charged
+                && (self.current_budget.delta_spent_millionths
+                    < accounting.conversion_delta_millionths
+                    || self.lifetime_delta_spent_millionths
+                        < accounting.conversion_delta_millionths))
+        {
+            return Err(AccountantError::InvalidConfiguration {
+                reason: "native privacy spend has no matching conversion reservation".into(),
+            });
+        }
+        Ok(accounting)
+    }
+
+    fn has_no_privacy_history(&self) -> bool {
+        self.current_budget.epsilon_spent_millionths == 0
+            && self.current_budget.delta_spent_millionths == 0
+            && self.current_budget.operations_count == 0
+            && self.lifetime_epsilon_spent_millionths == 0
+            && self.lifetime_delta_spent_millionths == 0
+            && self.operation_counter == 0
+            && self.consumption_log.is_empty()
+            && self.epoch_summaries.is_empty()
+            && self.zcdp_rho_spent_millionths == 0
+            && self.rdp_epsilon_spent_by_order_millionths.is_empty()
+    }
+
     /// Apply composition method to compute actual budget impact.
     ///
-    /// - Basic: straightforward addition (epsilon + delta add linearly).
-    /// - Advanced: uses sqrt(2 * k * ln(1/delta)) * eps for k queries.
-    ///   Approximated as eps * sqrt(k+1) / sqrt(k) for incremental.
-    /// - Renyi: converts each raw pure-DP epsilon charge into an RDP curve via
-    ///   rho = eps^2 / 2 and RDP(alpha) = alpha * rho, adds the curve in native
-    ///   space, then charges the incremental best-order conversion to
-    ///   (epsilon, delta)-DP.
-    /// - ZeroCdp: converts each raw pure-DP epsilon charge into rho = eps^2 / 2,
-    ///   adds rho in native space, then charges the incremental zCDP conversion
-    ///   `eps = rho + 2*sqrt(rho*ln(1/delta))`.
+    /// Basic and Advanced use additive composition. A square-root discount
+    /// without a separately paid failure probability is not an advanced bound.
+    ///
+    /// Bun--Steinke, Corollaries 8.7 and 8.9, give approximate zCDP with
+    /// rho = sum(eps_i^2 / 2). Converting with fixed slack delta' gives epsilon
+    /// rho + 2*sqrt(rho*ln(1/delta')) and delta at most sum(delta_i) + delta'.
+    /// Renyi uses the corresponding alpha*rho curve and the best finite order
+    /// (Mironov, Proposition 3). All fixed-point bounds round upward.
+    /// https://arxiv.org/abs/1605.02065 ; https://arxiv.org/abs/1702.07476
     fn apply_composition(
         &self,
         epsilon: i64,
         delta: i64,
     ) -> Result<CompositionImpact, AccountantError> {
-        let k = self.current_budget.operations_count;
+        let mut accounting = self.validated_composition_accounting()?;
+        if !is_native_composition(self.composition_method)
+            || accounting.conversion_delta_millionths == 0
+            || epsilon == 0
+        {
+            return Ok(CompositionImpact::new(epsilon, delta, accounting));
+        }
+
+        let composed_delta = if accounting.conversion_delta_charged {
+            delta
+        } else {
+            checked_accounting_value(
+                i128::from(delta) + i128::from(accounting.conversion_delta_millionths),
+                "raw delta plus conversion reservation",
+            )?
+        };
+        accounting.conversion_delta_charged = true;
         Ok(match self.composition_method {
-            CompositionMethod::Basic => CompositionImpact::new(epsilon, delta),
-            CompositionMethod::Advanced => {
-                // Advanced composition gives better bounds for many queries.
-                // Simplified: for k > 0, scale by 1/sqrt(k+1) in millionths.
-                let kp1 = i128::from(k) + 1;
-                let scale = if kp1 <= 1 {
-                    MILLION // 1.0
-                } else {
-                    // 1_000_000 / sqrt(kp1) = isqrt(1_000_000^2 / kp1)
-                    isqrt_millionths((MILLION_I128 * MILLION_I128 / kp1) as i64)
-                };
-                let composed_eps = checked_accounting_value(
-                    i128::from(epsilon) * i128::from(scale) / MILLION_I128,
-                    "advanced composed epsilon",
-                )?;
-                CompositionImpact::new(composed_eps.max(1), delta)
+            CompositionMethod::Basic | CompositionMethod::Advanced => {
+                CompositionImpact::new(epsilon, delta, accounting)
             }
             CompositionMethod::ZeroCdp => {
                 let rho_increment = zcdp_rho_from_epsilon_millionths(epsilon);
@@ -607,11 +802,11 @@ impl BudgetAccountant {
                 )?;
                 let previous_epsilon = zcdp_epsilon_from_rho_millionths(
                     self.zcdp_rho_spent_millionths,
-                    self.current_budget.delta_budget_millionths,
+                    accounting.conversion_delta_millionths,
                 )?;
                 let next_epsilon = zcdp_epsilon_from_rho_millionths(
                     next_rho,
-                    self.current_budget.delta_budget_millionths,
+                    accounting.conversion_delta_millionths,
                 )?;
                 CompositionImpact {
                     epsilon_millionths: incremental_native_epsilon(
@@ -619,9 +814,10 @@ impl BudgetAccountant {
                         previous_epsilon,
                         next_epsilon,
                     )?,
-                    delta_millionths: delta,
+                    delta_millionths: composed_delta,
                     next_zcdp_rho_spent_millionths: Some(next_rho),
                     next_rdp_epsilon_spent_by_order_millionths: None,
+                    next_accounting: accounting,
                 }
             }
             CompositionMethod::Renyi => {
@@ -637,11 +833,11 @@ impl BudgetAccountant {
                 }
                 let previous_epsilon = rdp_epsilon_from_curve_millionths(
                     &self.rdp_epsilon_spent_by_order_millionths,
-                    self.current_budget.delta_budget_millionths,
+                    accounting.conversion_delta_millionths,
                 )?;
                 let next_epsilon = rdp_epsilon_from_curve_millionths(
                     &next_curve,
-                    self.current_budget.delta_budget_millionths,
+                    accounting.conversion_delta_millionths,
                 )?;
                 CompositionImpact {
                     epsilon_millionths: incremental_native_epsilon(
@@ -649,9 +845,10 @@ impl BudgetAccountant {
                         previous_epsilon,
                         next_epsilon,
                     )?,
-                    delta_millionths: delta,
+                    delta_millionths: composed_delta,
                     next_zcdp_rho_spent_millionths: None,
                     next_rdp_epsilon_spent_by_order_millionths: Some(next_curve),
+                    next_accounting: accounting,
                 }
             }
         })
@@ -663,17 +860,54 @@ struct CompositionImpact {
     delta_millionths: i64,
     next_zcdp_rho_spent_millionths: Option<i64>,
     next_rdp_epsilon_spent_by_order_millionths: Option<BTreeMap<u32, i64>>,
+    next_accounting: CompositionAccounting,
 }
 
 impl CompositionImpact {
-    fn new(epsilon_millionths: i64, delta_millionths: i64) -> Self {
+    fn new(
+        epsilon_millionths: i64,
+        delta_millionths: i64,
+        next_accounting: CompositionAccounting,
+    ) -> Self {
         Self {
             epsilon_millionths,
             delta_millionths,
             next_zcdp_rho_spent_millionths: None,
             next_rdp_epsilon_spent_by_order_millionths: None,
+            next_accounting,
         }
     }
+}
+
+fn is_native_composition(method: CompositionMethod) -> bool {
+    matches!(
+        method,
+        CompositionMethod::Renyi | CompositionMethod::ZeroCdp
+    )
+}
+
+fn default_conversion_delta(method: CompositionMethod, epoch_delta: i64) -> i64 {
+    if is_native_composition(method) {
+        epoch_delta.min(MILLION) / 2
+    } else {
+        0
+    }
+}
+
+fn validate_conversion_delta(
+    method: CompositionMethod,
+    conversion_delta: i64,
+    epoch_delta: i64,
+) -> Result<(), AccountantError> {
+    if !(0..MILLION).contains(&conversion_delta)
+        || conversion_delta > epoch_delta
+        || (!is_native_composition(method) && conversion_delta != 0)
+    {
+        return Err(AccountantError::InvalidConfiguration {
+            reason: "conversion delta must fit the epoch allocation, be less than 1.0, and be zero for additive composition".into(),
+        });
+    }
+    Ok(())
 }
 
 // A saturated sum is not a valid admission check: at an i64::MAX allocation it
@@ -761,11 +995,10 @@ fn rdp_epsilon_from_curve_millionths(
 }
 
 fn ln_one_over_delta_millionths_up(delta_millionths: i64) -> Result<i64, AccountantError> {
-    if delta_millionths <= 0 {
-        return Ok(i64::MAX / 4);
-    }
-    if delta_millionths >= MILLION {
-        return Ok(0);
+    if !(1..MILLION).contains(&delta_millionths) {
+        return Err(AccountantError::InvalidConfiguration {
+            reason: "native conversion requires delta strictly between zero and one".into(),
+        });
     }
 
     let mut x = div_ceil_positive(MILLION_I128 * LN_SCALE, delta_millionths as i128);
@@ -775,6 +1008,10 @@ fn ln_one_over_delta_millionths_up(delta_millionths: i64) -> Result<i64, Account
         powers_of_two += 1;
     }
 
+    // Range reduction and every positive term round upward. Here y < 1/2,
+    // so the omitted tail after 24 terms of 2*atanh(y) is at most
+    // 2*(1/2)^49 / (49*(1-1/4)) < 1e-15. The extra millionth below
+    // dominates this tail; LN2_NANOS_UP is also an upper bound.
     let y = div_ceil_positive((x - LN_SCALE) * LN_SCALE, x + LN_SCALE);
     let y2 = div_ceil_positive(y * y, LN_SCALE);
     let mut term = y;
@@ -805,15 +1042,6 @@ fn isqrt_ceil_i128(n: i128) -> i128 {
     }
     let root = (n as u128).isqrt() as i128;
     if root * root == n { root } else { root + 1 }
-}
-
-/// Integer square root (deterministic, no floating point).
-fn isqrt_millionths(n: i64) -> i64 {
-    if n <= 0 {
-        1
-    } else {
-        (n.unsigned_abs().isqrt() as i64).max(1)
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1025,7 +1253,7 @@ mod tests {
     }
 
     #[test]
-    fn advanced_composition_widens_intermediate_multiplication_and_counts() {
+    fn advanced_fallback_preserves_full_charges_at_integer_limits() {
         let mut acc = maximum_budget_accountant(CompositionMethod::Advanced);
         let charge = acc.consume(i64::MAX, 0, "wide product", 1).unwrap();
         assert_eq!(charge.composed_epsilon_millionths, i64::MAX);
@@ -1033,7 +1261,7 @@ mod tests {
         let mut acc = maximum_budget_accountant(CompositionMethod::Advanced);
         acc.current_budget.operations_count = u64::MAX - 1;
         let charge = acc.consume(MILLION, 0, "wide count", 1).unwrap();
-        assert_eq!(charge.composed_epsilon_millionths, 1);
+        assert_eq!(charge.composed_epsilon_millionths, MILLION);
         assert_eq!(acc.current_budget.operations_count, u64::MAX);
         let before = acc.clone();
         assert!(matches!(
@@ -1071,8 +1299,14 @@ mod tests {
 
     #[test]
     fn native_conversion_overflow_never_becomes_an_admissible_charge() {
-        let mut acc = maximum_budget_accountant(CompositionMethod::ZeroCdp);
-        acc.current_budget.delta_budget_millionths = 1;
+        let config = AccountantConfig {
+            epsilon_per_epoch_millionths: i64::MAX,
+            delta_per_epoch_millionths: 1,
+            lifetime_epsilon_budget_millionths: i64::MAX,
+            composition_method: CompositionMethod::ZeroCdp,
+            ..test_config()
+        };
+        let mut acc = BudgetAccountant::new_with_conversion_delta(config.clone(), 1).unwrap();
         let before = acc.clone();
         assert!(matches!(
             acc.consume(4_294_967_295_000, 0, "converted epsilon overflow", 1),
@@ -1080,8 +1314,14 @@ mod tests {
         ));
         assert_only_exhaustion_latch_changed(before, &acc);
 
-        let mut acc = maximum_budget_accountant(CompositionMethod::Renyi);
-        acc.current_budget.delta_budget_millionths = 1;
+        let mut acc = BudgetAccountant::new_with_conversion_delta(
+            AccountantConfig {
+                composition_method: CompositionMethod::Renyi,
+                ..config
+            },
+            1,
+        )
+        .unwrap();
         acc.rdp_epsilon_spent_by_order_millionths = RDP_ORDERS
             .into_iter()
             .map(|order| (order, i64::MAX))
@@ -1368,26 +1608,26 @@ mod tests {
     // -- Composition method tests --
 
     #[test]
-    fn advanced_composition_reduces_cost() {
+    fn advanced_fallback_charges_each_operation_without_a_discount() {
         let mut acc = test_accountant_advanced();
-        // First operation: full cost (k=0).
         // SAFETY: Test-only unwrap with valid budget consumption parameters
         let r1 = acc
             .consume(100_000, 10_000, "op1", 2_000_000_000)
             .expect("operation should succeed for valid inputs");
-        assert_eq!(r1.composed_epsilon_millionths, 100_000); // k=0, scale=1.0
-        // Second operation: reduced cost.
+        assert_eq!(r1.composed_epsilon_millionths, 100_000);
         // SAFETY: Test-only unwrap with valid budget consumption parameters
         let r2 = acc
             .consume(100_000, 10_000, "op2", 3_000_000_000)
             .expect("operation should succeed for valid inputs");
-        assert!(r2.composed_epsilon_millionths < 100_000); // k=1, scale < 1.0
+        assert_eq!(r2.composed_epsilon_millionths, 100_000);
+        assert_eq!(acc.current_budget.epsilon_spent_millionths, 200_000);
     }
 
     #[test]
     fn renyi_composition_tracks_native_curve_and_beats_basic_over_sequence() {
         let mut acc = BudgetAccountant::new(AccountantConfig {
             composition_method: CompositionMethod::Renyi,
+            delta_per_epoch_millionths: 200_000,
             now_ns: 0,
             ..test_config()
         })
@@ -1412,13 +1652,15 @@ mod tests {
         );
         assert!(total_composed < 1_000_000);
         assert_eq!(acc.current_budget.epsilon_spent_millionths, total_composed);
-        assert_eq!(acc.current_budget.delta_spent_millionths, 100_000);
+        assert_eq!(acc.current_budget.delta_spent_millionths, 200_000);
+        assert_eq!(acc.consumption_log()[0].composed_delta_millionths, 110_000);
     }
 
     #[test]
     fn zcdp_composition_tracks_native_rho_and_beats_basic_over_sequence() {
         let mut acc = BudgetAccountant::new(AccountantConfig {
             composition_method: CompositionMethod::ZeroCdp,
+            delta_per_epoch_millionths: 200_000,
             now_ns: 0,
             ..test_config()
         })
@@ -1440,7 +1682,8 @@ mod tests {
         assert_eq!(acc.zcdp_rho_spent_millionths(), 50_000);
         assert!(total_composed < 1_000_000);
         assert_eq!(acc.current_budget.epsilon_spent_millionths, total_composed);
-        assert_eq!(acc.current_budget.delta_spent_millionths, 100_000);
+        assert_eq!(acc.current_budget.delta_spent_millionths, 200_000);
+        assert_eq!(acc.consumption_log()[0].composed_delta_millionths, 110_000);
     }
 
     fn f64_epsilon_millionths_up(value: f64) -> i64 {
@@ -1530,6 +1773,491 @@ mod tests {
             .expect("operation should succeed for valid inputs");
         assert_eq!(r.composed_epsilon_millionths, 100_000);
         assert_eq!(r.composed_delta_millionths, 10_000);
+    }
+
+    #[test]
+    fn conversion_reserve_configuration_is_explicit_and_bounded() {
+        for method in [CompositionMethod::Renyi, CompositionMethod::ZeroCdp] {
+            for reserve in [-1, 100_001, MILLION, i64::MAX] {
+                assert!(matches!(
+                    BudgetAccountant::new_with_conversion_delta(
+                        AccountantConfig {
+                            composition_method: method,
+                            ..test_config()
+                        },
+                        reserve,
+                    ),
+                    Err(AccountantError::InvalidConfiguration { .. })
+                ));
+            }
+            let mut acc = BudgetAccountant::new_with_conversion_delta(
+                AccountantConfig {
+                    composition_method: method,
+                    ..test_config()
+                },
+                7,
+            )
+            .unwrap();
+            let charge = acc.consume(1, 3, "explicit reserve", 1).unwrap();
+            assert_eq!(charge.composed_delta_millionths, 10);
+        }
+        for method in [CompositionMethod::Basic, CompositionMethod::Advanced] {
+            assert!(
+                BudgetAccountant::new_with_conversion_delta(
+                    AccountantConfig {
+                        composition_method: method,
+                        ..test_config()
+                    },
+                    1,
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn zero_epsilon_never_spends_conversion_delta_or_initializes_native_state() {
+        for method in [
+            CompositionMethod::Basic,
+            CompositionMethod::Advanced,
+            CompositionMethod::Renyi,
+            CompositionMethod::ZeroCdp,
+        ] {
+            let mut acc = BudgetAccountant::new(AccountantConfig {
+                composition_method: method,
+                ..test_config()
+            })
+            .unwrap();
+            for delta in [0, 1_000] {
+                let charge = acc.consume(0, delta, "no epsilon", 1).unwrap();
+                assert_eq!(charge.composed_epsilon_millionths, 0);
+                assert_eq!(charge.composed_delta_millionths, delta);
+            }
+            assert_eq!(acc.zcdp_rho_spent_millionths(), 0);
+            assert!(acc.rdp_epsilon_spent_by_order_millionths().is_empty());
+            assert!(
+                !acc.composition_accounting
+                    .as_ref()
+                    .unwrap()
+                    .conversion_delta_charged
+            );
+        }
+    }
+
+    #[test]
+    fn native_conversion_reserve_is_paid_once_and_survives_serialization() {
+        for method in [CompositionMethod::Renyi, CompositionMethod::ZeroCdp] {
+            let mut acc = BudgetAccountant::new(AccountantConfig {
+                composition_method: method,
+                ..test_config()
+            })
+            .unwrap();
+            let first = acc.consume(10_000, 1_000, "first", 1).unwrap();
+            assert_eq!(first.delta_consumed_millionths, 1_000);
+            assert_eq!(first.composed_delta_millionths, 51_000);
+            let persisted = serde_json::to_string(&acc).unwrap();
+            let mut acc: BudgetAccountant = serde_json::from_str(&persisted).unwrap();
+            // Public allocation changes do not change the established reserve.
+            acc.current_budget.delta_budget_millionths = 200_000;
+            let second = acc.consume(10_000, 2_000, "second", 2).unwrap();
+            assert_eq!(second.composed_delta_millionths, 2_000);
+            let rho = acc.zcdp_rho_spent_millionths();
+            let curve = acc.rdp_epsilon_spent_by_order_millionths().clone();
+            let zero = acc.consume(0, 3_000, "delta only", 3).unwrap();
+            assert_eq!(zero.composed_epsilon_millionths, 0);
+            assert_eq!(zero.composed_delta_millionths, 3_000);
+            assert_eq!(acc.zcdp_rho_spent_millionths(), rho);
+            assert_eq!(acc.rdp_epsilon_spent_by_order_millionths(), &curve);
+            assert_eq!(acc.current_budget.delta_spent_millionths, 56_000);
+            assert_eq!(acc.lifetime_delta_spent_millionths, 56_000);
+            assert_eq!(
+                acc.composition_accounting
+                    .as_ref()
+                    .unwrap()
+                    .conversion_delta_millionths,
+                50_000
+            );
+        }
+    }
+
+    #[test]
+    fn native_prefixes_charge_the_full_converted_bound_and_failure_probability() {
+        for method in [CompositionMethod::Renyi, CompositionMethod::ZeroCdp] {
+            let mut acc = BudgetAccountant::new_with_conversion_delta(
+                AccountantConfig {
+                    composition_method: method,
+                    ..test_config()
+                },
+                10_000,
+            )
+            .unwrap();
+            let mut rho = 0.0;
+            let mut raw_delta = 0;
+            for (epsilon, delta) in [
+                (100_000, 1_000),
+                (200_000, 2_000),
+                (50_000, 0),
+                (75_000, 5_000),
+            ] {
+                acc.consume(epsilon, delta, "bounded prefix", 1).unwrap();
+                let epsilon_real = epsilon as f64 / MILLION as f64;
+                rho += epsilon_real * epsilon_real / 2.0;
+                raw_delta += delta;
+                let ln_delta = -(0.01_f64).ln();
+                let reference = if method == CompositionMethod::ZeroCdp {
+                    rho + 2.0 * (rho * ln_delta).sqrt()
+                } else {
+                    RDP_ORDERS
+                        .into_iter()
+                        .map(|order| f64::from(order) * rho + ln_delta / f64::from(order - 1))
+                        .fold(f64::INFINITY, f64::min)
+                };
+                let reference = f64_epsilon_millionths_up(reference);
+                assert!(acc.current_budget.epsilon_spent_millionths >= reference);
+                assert!(acc.current_budget.epsilon_spent_millionths - reference <= 64);
+                assert_eq!(
+                    acc.current_budget.delta_spent_millionths,
+                    raw_delta + 10_000
+                );
+                assert_eq!(acc.lifetime_delta_spent_millionths, raw_delta + 10_000);
+            }
+        }
+    }
+
+    #[test]
+    fn each_epoch_conversion_reservation_counts_against_lifetime_delta() {
+        for method in [CompositionMethod::Renyi, CompositionMethod::ZeroCdp] {
+            let mut acc = BudgetAccountant::new(AccountantConfig {
+                composition_method: method,
+                lifetime_delta_budget_millionths: 100_000,
+                ..test_config()
+            })
+            .unwrap();
+            for epoch in [1, 2] {
+                let charge = acc.consume(10_000, 0, "epoch conversion", epoch).unwrap();
+                assert_eq!(charge.composed_delta_millionths, 50_000);
+                let summary = acc
+                    .advance_epoch(SecurityEpoch::from_raw(epoch + 1), epoch + 1)
+                    .unwrap();
+                assert_eq!(summary.total_delta_spent_millionths, 50_000);
+                assert_eq!(acc.lifetime_delta_spent_millionths, epoch as i64 * 50_000);
+            }
+            assert!(acc.is_exhausted());
+            let before = acc.clone();
+            assert!(acc.consume(1, 0, "no lifetime reserve remains", 3).is_err());
+            assert_only_exhaustion_latch_changed(before, &acc);
+        }
+    }
+
+    #[test]
+    fn rejected_conversion_reservation_leaves_all_native_and_audit_state_unchanged() {
+        for method in [CompositionMethod::Renyi, CompositionMethod::ZeroCdp] {
+            for (lifetime_delta, raw_delta, dimension) in
+                [(1_000_000, 60_000, "epoch"), (40_000, 0, "lifetime")]
+            {
+                let mut acc = BudgetAccountant::new(AccountantConfig {
+                    composition_method: method,
+                    lifetime_delta_budget_millionths: lifetime_delta,
+                    ..test_config()
+                })
+                .unwrap();
+                let before = acc.clone();
+                assert!(matches!(
+                    acc.consume(10_000, raw_delta, "unaffordable reserve", 1),
+                    Err(AccountantError::BudgetExhausted { dimension: actual, .. }) if actual == dimension
+                ));
+                assert_only_exhaustion_latch_changed(before, &acc);
+            }
+        }
+    }
+
+    #[test]
+    fn native_reserve_denies_the_sixth_raw_delta_charge_at_the_original_allocation() {
+        for method in [CompositionMethod::Renyi, CompositionMethod::ZeroCdp] {
+            let mut acc = BudgetAccountant::new(AccountantConfig {
+                composition_method: method,
+                ..test_config()
+            })
+            .unwrap();
+            for _ in 0..5 {
+                acc.consume(100_000, 10_000, "raw delta plus reserve", 1)
+                    .unwrap();
+            }
+            assert_eq!(acc.current_budget.delta_spent_millionths, 100_000);
+            assert!(acc.current_budget.epsilon_spent_millionths < 900_000);
+            let before = acc.clone();
+            assert!(matches!(
+                acc.consume(100_000, 10_000, "sixth operation", 2),
+                Err(AccountantError::BudgetExhausted { dimension, .. }) if dimension == "epoch"
+            ));
+            assert_only_exhaustion_latch_changed(before, &acc);
+        }
+    }
+
+    #[test]
+    fn unrepresentable_default_slack_uses_additive_composition() {
+        for method in [CompositionMethod::Renyi, CompositionMethod::ZeroCdp] {
+            let config = AccountantConfig {
+                composition_method: method,
+                delta_per_epoch_millionths: 1,
+                ..test_config()
+            };
+            let mut acc = BudgetAccountant::new(config.clone()).unwrap();
+            for epsilon in [10_000, 20_000] {
+                let charge = acc.consume(epsilon, 0, "additive fallback", 1).unwrap();
+                assert_eq!(charge.composed_epsilon_millionths, epsilon);
+                assert_eq!(charge.composed_delta_millionths, 0);
+            }
+            assert_eq!(acc.zcdp_rho_spent_millionths(), 0);
+            assert!(acc.rdp_epsilon_spent_by_order_millionths().is_empty());
+            let mut explicit = BudgetAccountant::new_with_conversion_delta(config, 1).unwrap();
+            assert_eq!(
+                explicit
+                    .consume(1, 0, "explicit one-millionth reserve", 1)
+                    .unwrap()
+                    .composed_delta_millionths,
+                1
+            );
+        }
+    }
+
+    fn restore_without_composition_policy(acc: &BudgetAccountant) -> BudgetAccountant {
+        let mut persisted = serde_json::to_value(acc).unwrap();
+        persisted
+            .as_object_mut()
+            .unwrap()
+            .remove("composition_accounting");
+        serde_json::from_value(persisted).unwrap()
+    }
+
+    #[test]
+    fn legacy_non_basic_history_cannot_be_reused_or_laundered_through_an_epoch() {
+        for method in [
+            CompositionMethod::Advanced,
+            CompositionMethod::Renyi,
+            CompositionMethod::ZeroCdp,
+        ] {
+            for rolled in [false, true] {
+                let mut acc = BudgetAccountant::new(AccountantConfig {
+                    composition_method: method,
+                    ..test_config()
+                })
+                .unwrap();
+                acc.consume(10_000, 1_000, "historical operation", 1)
+                    .unwrap();
+                if rolled {
+                    acc.advance_epoch(SecurityEpoch::from_raw(2), 2).unwrap();
+                }
+                let restored = restore_without_composition_policy(&acc);
+                let mut consume = restored.clone();
+                assert!(matches!(
+                    consume.consume(0, 0, "legacy continuation", 3),
+                    Err(AccountantError::InvalidConfiguration { .. })
+                ));
+                assert_only_exhaustion_latch_changed(restored.clone(), &consume);
+                let mut advance = restored.clone();
+                assert!(matches!(
+                    advance.advance_epoch(SecurityEpoch::from_raw(3), 3),
+                    Err(AccountantError::InvalidConfiguration { .. })
+                ));
+                assert_only_exhaustion_latch_changed(restored, &advance);
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_basic_and_provably_empty_native_state_upgrade_atomically() {
+        for method in [
+            CompositionMethod::Basic,
+            CompositionMethod::Advanced,
+            CompositionMethod::Renyi,
+            CompositionMethod::ZeroCdp,
+        ] {
+            let mut acc = BudgetAccountant::new(AccountantConfig {
+                composition_method: method,
+                ..test_config()
+            })
+            .unwrap();
+            if method == CompositionMethod::Basic {
+                acc.consume(10_000, 1_000, "valid additive history", 1)
+                    .unwrap();
+            }
+            let mut restored = restore_without_composition_policy(&acc);
+            let charge = restored.consume(10_000, 0, "safe upgrade", 2).unwrap();
+            assert_eq!(
+                charge.composed_delta_millionths,
+                if is_native_composition(method) {
+                    50_000
+                } else {
+                    0
+                }
+            );
+            assert_eq!(
+                restored.composition_accounting.as_ref().unwrap().version,
+                COMPOSITION_ACCOUNTING_VERSION
+            );
+        }
+        let acc = BudgetAccountant::new(AccountantConfig {
+            composition_method: CompositionMethod::Renyi,
+            ..test_config()
+        })
+        .unwrap();
+        let mut restored = restore_without_composition_policy(&acc);
+        let before = restored.clone();
+        assert!(
+            restored
+                .consume(10_000, 60_000, "failed upgrade", 1)
+                .is_err()
+        );
+        assert_only_exhaustion_latch_changed(before, &restored);
+    }
+
+    #[test]
+    fn unknown_or_malformed_composition_policy_cannot_be_reset_by_an_epoch() {
+        for method in [
+            CompositionMethod::Basic,
+            CompositionMethod::Advanced,
+            CompositionMethod::Renyi,
+            CompositionMethod::ZeroCdp,
+        ] {
+            let acc = BudgetAccountant::new(AccountantConfig {
+                composition_method: method,
+                ..test_config()
+            })
+            .unwrap();
+            for (field, value) in [
+                ("version", serde_json::json!(99)),
+                ("conversion_delta_millionths", serde_json::json!(-1)),
+                ("conversion_delta_millionths", serde_json::json!(MILLION)),
+                ("conversion_delta_charged", serde_json::json!(true)),
+            ] {
+                let mut persisted = serde_json::to_value(&acc).unwrap();
+                persisted["composition_accounting"][field] = value;
+                let restored: BudgetAccountant = serde_json::from_value(persisted).unwrap();
+                let mut consume = restored.clone();
+                assert!(consume.consume(0, 0, "invalid policy", 1).is_err());
+                assert_only_exhaustion_latch_changed(restored.clone(), &consume);
+                let mut advance = restored.clone();
+                assert!(
+                    advance
+                        .advance_epoch(SecurityEpoch::from_raw(2), 2)
+                        .is_err()
+                );
+                assert_only_exhaustion_latch_changed(restored, &advance);
+            }
+        }
+    }
+
+    #[test]
+    fn restored_invalid_allocations_and_legacy_summary_only_history_fail_closed() {
+        let acc = BudgetAccountant::new(AccountantConfig {
+            composition_method: CompositionMethod::Renyi,
+            ..test_config()
+        })
+        .unwrap();
+        for field in [
+            "epoch_epsilon_allocation_millionths",
+            "epoch_delta_allocation_millionths",
+            "lifetime_epsilon_budget_millionths",
+            "lifetime_delta_budget_millionths",
+        ] {
+            let mut persisted = serde_json::to_value(&acc).unwrap();
+            persisted[field] = serde_json::json!(0);
+            let restored: BudgetAccountant = serde_json::from_value(persisted).unwrap();
+            let mut consume = restored.clone();
+            assert!(
+                consume
+                    .consume(0, 0, "invalid restored allocation", 1)
+                    .is_err()
+            );
+            assert_only_exhaustion_latch_changed(restored.clone(), &consume);
+            let mut advance = restored.clone();
+            assert!(
+                advance
+                    .advance_epoch(SecurityEpoch::from_raw(2), 2)
+                    .is_err()
+            );
+            assert_only_exhaustion_latch_changed(restored, &advance);
+        }
+        let mut acc = acc;
+        acc.advance_epoch(SecurityEpoch::from_raw(2), 2).unwrap();
+        let mut legacy = restore_without_composition_policy(&acc);
+        let before = legacy.clone();
+        assert!(
+            legacy
+                .consume(0, 0, "old summaries are still history", 3)
+                .is_err()
+        );
+        assert_only_exhaustion_latch_changed(before, &legacy);
+    }
+
+    #[test]
+    fn native_raw_delta_and_conversion_delta_have_distinct_valid_domains() {
+        for method in [CompositionMethod::Renyi, CompositionMethod::ZeroCdp] {
+            let mut acc = BudgetAccountant::new(AccountantConfig {
+                composition_method: method,
+                ..test_config()
+            })
+            .unwrap();
+            let before = acc.clone();
+            assert!(matches!(
+                acc.consume(1, MILLION, "invalid raw probability", 1),
+                Err(AccountantError::InvalidConsumption { .. })
+            ));
+            assert_eq!(acc, before);
+            assert!(
+                acc.consume(1, 0, "pure DP input with paid conversion", 2)
+                    .is_ok()
+            );
+        }
+        for delta in [i64::MIN, -1, 0, MILLION, i64::MAX] {
+            assert!(ln_one_over_delta_millionths_up(delta).is_err());
+        }
+    }
+
+    #[test]
+    fn native_rho_and_square_root_round_outward_at_small_and_large_limits() {
+        for epsilon in [1_i64, 999, 1_000, 1_001, 100_000, i64::MAX] {
+            let rho = zcdp_rho_from_epsilon_millionths(epsilon);
+            let square = i128::from(epsilon) * i128::from(epsilon);
+            assert!(rho * (2 * MILLION_I128) >= square);
+            assert!((rho - 1) * (2 * MILLION_I128) < square);
+        }
+        let square = i128::from(i64::MAX) * i128::from(i64::MAX);
+        for value in [1, 2, 3, 4, 5, square - 1, square, square + 1, i128::MAX] {
+            let root = isqrt_ceil_i128(value) as u128;
+            assert!(root * root >= value as u128);
+            assert!((root - 1) * (root - 1) < value as u128);
+        }
+        let mut acc = BudgetAccountant::new(AccountantConfig {
+            composition_method: CompositionMethod::Renyi,
+            ..test_config()
+        })
+        .unwrap();
+        acc.consume(1, 0, "smallest positive epsilon", 1).unwrap();
+        for order in RDP_ORDERS {
+            assert_eq!(
+                acc.rdp_epsilon_spent_by_order_millionths().get(&order),
+                Some(&i64::from(order))
+            );
+        }
+    }
+
+    #[test]
+    fn advanced_fallback_covers_the_pure_dp_worst_case() {
+        // Repeated randomized response can attain the product likelihood ratio;
+        // without paying any extra delta, epsilon must add for this sequence.
+        let mut acc = test_accountant_advanced();
+        for epsilon in [100_000, 200_000, 300_000] {
+            assert_eq!(
+                acc.consume(epsilon, 0, "pure DP", 1)
+                    .unwrap()
+                    .composed_epsilon_millionths,
+                epsilon
+            );
+        }
+        assert_eq!(acc.current_budget.epsilon_spent_millionths, 600_000);
+        assert_eq!(acc.current_budget.delta_spent_millionths, 0);
     }
 
     // -- Forecast tests --
@@ -1664,16 +2392,16 @@ mod tests {
 
     #[test]
     fn isqrt_basic_values() {
-        assert_eq!(isqrt_millionths(1), 1);
-        assert_eq!(isqrt_millionths(4), 2);
-        assert_eq!(isqrt_millionths(9), 3);
-        assert_eq!(isqrt_millionths(100), 10);
+        assert_eq!(isqrt_ceil_i128(1), 1);
+        assert_eq!(isqrt_ceil_i128(4), 2);
+        assert_eq!(isqrt_ceil_i128(9), 3);
+        assert_eq!(isqrt_ceil_i128(100), 10);
     }
 
     #[test]
     fn isqrt_zero_and_negative() {
-        assert_eq!(isqrt_millionths(0), 1); // clamped to 1
-        assert_eq!(isqrt_millionths(-5), 1); // clamped to 1
+        assert_eq!(isqrt_ceil_i128(0), 0);
+        assert_eq!(isqrt_ceil_i128(-5), 0);
     }
 
     // -- EpochBudget tests --
@@ -1890,12 +2618,12 @@ mod tests {
 
     #[test]
     fn isqrt_large_perfect_square() {
-        assert_eq!(isqrt_millionths(1_000_000), 1000);
-        assert_eq!(isqrt_millionths(10_000), 100);
+        assert_eq!(isqrt_ceil_i128(1_000_000), 1000);
+        assert_eq!(isqrt_ceil_i128(10_000), 100);
     }
 
     #[test]
-    fn advanced_composition_multiple_operations_decreasing_cost() {
+    fn advanced_fallback_preserves_each_cost_over_a_sequence() {
         let mut acc = test_accountant_advanced();
         let mut composed_costs = Vec::new();
         for i in 0..5 {
@@ -1909,15 +2637,8 @@ mod tests {
                 .expect("operation should succeed for valid inputs");
             composed_costs.push(r.composed_epsilon_millionths);
         }
-        // After the first operation, each subsequent should cost less or equal
-        for i in 1..composed_costs.len() {
-            assert!(
-                composed_costs[i] <= composed_costs[i - 1],
-                "advanced composition cost should decrease: {} > {}",
-                composed_costs[i],
-                composed_costs[i - 1]
-            );
-        }
+        assert_eq!(composed_costs, vec![100_000; 5]);
+        assert_eq!(acc.current_budget.epsilon_spent_millionths, 500_000);
     }
 
     // -- Enrichment batch 3: edge cases, operation IDs, epoch summaries --
@@ -2028,12 +2749,9 @@ mod tests {
 
     #[test]
     fn isqrt_non_perfect_square() {
-        // sqrt(5) = 2.236..., floor = 2
-        assert_eq!(isqrt_millionths(5), 2);
-        // sqrt(8) = 2.828..., floor = 2
-        assert_eq!(isqrt_millionths(8), 2);
-        // sqrt(99) = 9.949..., floor = 9
-        assert_eq!(isqrt_millionths(99), 9);
+        assert_eq!(isqrt_ceil_i128(5), 3);
+        assert_eq!(isqrt_ceil_i128(8), 3);
+        assert_eq!(isqrt_ceil_i128(99), 10);
     }
 
     #[test]
@@ -2371,21 +3089,21 @@ mod tests {
     }
 
     #[test]
-    fn isqrt_millionths_zero_returns_one() {
-        assert_eq!(isqrt_millionths(0), 1);
+    fn isqrt_ceiling_zero_returns_zero() {
+        assert_eq!(isqrt_ceil_i128(0), 0);
     }
 
     #[test]
-    fn isqrt_millionths_negative_returns_one() {
-        assert_eq!(isqrt_millionths(-10), 1);
+    fn isqrt_ceiling_negative_returns_zero() {
+        assert_eq!(isqrt_ceil_i128(-10), 0);
     }
 
     #[test]
-    fn isqrt_millionths_perfect_squares() {
-        assert_eq!(isqrt_millionths(1), 1);
-        assert_eq!(isqrt_millionths(4), 2);
-        assert_eq!(isqrt_millionths(9), 3);
-        assert_eq!(isqrt_millionths(100), 10);
-        assert_eq!(isqrt_millionths(10000), 100);
+    fn isqrt_ceiling_perfect_squares() {
+        assert_eq!(isqrt_ceil_i128(1), 1);
+        assert_eq!(isqrt_ceil_i128(4), 2);
+        assert_eq!(isqrt_ceil_i128(9), 3);
+        assert_eq!(isqrt_ceil_i128(100), 10);
+        assert_eq!(isqrt_ceil_i128(10000), 100);
     }
 }

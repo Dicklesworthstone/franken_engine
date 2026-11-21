@@ -9504,7 +9504,7 @@ pub struct HeapObject {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(super) enum HostObjectSlots {
+enum HostObjectSlots {
     LegacyClientRequest(LegacyClientRequestSlots),
     TextDecoder(TextDecoderSlots),
     IntlResolved(ObjectId),
@@ -9514,99 +9514,95 @@ pub(super) enum HostObjectSlots {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(super) struct LegacyClientRequestSlots {
-    pub(super) url: JsString,
-    pub(super) method: JsString,
-    pub(super) headers: ObjectId,
-    pub(super) body: JsString,
-    pub(super) ended: bool,
-    pub(super) response_cb: Value,
+struct LegacyClientRequestSlots {
+    url: JsString,
+    method: JsString,
+    headers: ObjectId,
+    body: JsString,
+    ended: bool,
+    response_cb: Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(super) struct TextDecoderSlots {
-    pub(super) encoding: JsString,
-    pub(super) fatal: bool,
-    pub(super) ignore_bom: bool,
-    pub(super) state: i64,
+struct TextDecoderSlots {
+    encoding: JsString,
+    fatal: bool,
+    ignore_bom: bool,
+    state: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub(super) struct FsEntryKindSlots {
-    pub(super) is_file: bool,
-    pub(super) is_directory: bool,
-    pub(super) is_symbolic_link: bool,
+struct FsEntryKindSlots {
+    is_file: bool,
+    is_directory: bool,
+    is_symbolic_link: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(super) struct TimersPromisesIntervalSlots {
-    pub(super) delay_ms: u64,
-    pub(super) value: Value,
-    pub(super) done: bool,
+struct TimersPromisesIntervalSlots {
+    delay_ms: u64,
+    value: Value,
+    done: bool,
 }
 
 impl HeapObject {
-    pub(super) fn legacy_client_request_slots(&self) -> Option<&LegacyClientRequestSlots> {
+    fn legacy_client_request_slots(&self) -> Option<&LegacyClientRequestSlots> {
         match self.host_slots.as_deref() {
             Some(HostObjectSlots::LegacyClientRequest(slots)) => Some(slots),
             _ => None,
         }
     }
 
-    pub(super) fn legacy_client_request_slots_mut(
-        &mut self,
-    ) -> Option<&mut LegacyClientRequestSlots> {
+    fn legacy_client_request_slots_mut(&mut self) -> Option<&mut LegacyClientRequestSlots> {
         match self.host_slots.as_deref_mut() {
             Some(HostObjectSlots::LegacyClientRequest(slots)) => Some(slots),
             _ => None,
         }
     }
 
-    pub(super) fn text_decoder_slots(&self) -> Option<&TextDecoderSlots> {
+    fn text_decoder_slots(&self) -> Option<&TextDecoderSlots> {
         match self.host_slots.as_deref() {
             Some(HostObjectSlots::TextDecoder(slots)) => Some(slots),
             _ => None,
         }
     }
 
-    pub(super) fn text_decoder_slots_mut(&mut self) -> Option<&mut TextDecoderSlots> {
+    fn text_decoder_slots_mut(&mut self) -> Option<&mut TextDecoderSlots> {
         match self.host_slots.as_deref_mut() {
             Some(HostObjectSlots::TextDecoder(slots)) => Some(slots),
             _ => None,
         }
     }
 
-    pub(super) fn intl_resolved_id(&self) -> Option<ObjectId> {
+    fn intl_resolved_id(&self) -> Option<ObjectId> {
         match self.host_slots.as_deref() {
             Some(HostObjectSlots::IntlResolved(resolved_id)) => Some(*resolved_id),
             _ => None,
         }
     }
 
-    pub(super) fn fs_entry_kind_slots(&self) -> Option<FsEntryKindSlots> {
+    fn fs_entry_kind_slots(&self) -> Option<FsEntryKindSlots> {
         match self.host_slots.as_deref() {
             Some(HostObjectSlots::FsEntryKind(slots)) => Some(*slots),
             _ => None,
         }
     }
 
-    pub(super) fn timer_handle_id(&self) -> Option<u32> {
+    fn timer_handle_id(&self) -> Option<u32> {
         match self.host_slots.as_deref() {
             Some(HostObjectSlots::TimerHandle(timer_id)) => Some(*timer_id),
             _ => None,
         }
     }
 
-    pub(super) fn timers_promises_interval_slots(&self) -> Option<&TimersPromisesIntervalSlots> {
+    fn timers_promises_interval_slots(&self) -> Option<&TimersPromisesIntervalSlots> {
         match self.host_slots.as_deref() {
             Some(HostObjectSlots::TimersPromisesInterval(slots)) => Some(slots),
             _ => None,
         }
     }
 
-    pub(super) fn timers_promises_interval_slots_mut(
-        &mut self,
-    ) -> Option<&mut TimersPromisesIntervalSlots> {
+    fn timers_promises_interval_slots_mut(&mut self) -> Option<&mut TimersPromisesIntervalSlots> {
         match self.host_slots.as_deref_mut() {
             Some(HostObjectSlots::TimersPromisesInterval(slots)) => Some(slots),
             _ => None,

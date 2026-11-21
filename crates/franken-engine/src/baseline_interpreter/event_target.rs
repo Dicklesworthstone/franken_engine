@@ -81,59 +81,16 @@ pub(super) const EVENT_TARGET_METHODS: [(&str, &str, &str); 13] = [
     ("AbortSignal.timeoutFire", "AbortSignal", ""),
 ];
 
-const LISTENERS_SLOT: &str = "__eventTargetListeners";
-const EVENT_TYPE_SLOT: &str = "__eventType";
-const EVENT_BUBBLES_SLOT: &str = "__eventBubbles";
-const EVENT_CANCELABLE_SLOT: &str = "__eventCancelable";
-const EVENT_COMPOSED_SLOT: &str = "__eventComposed";
-const EVENT_DEFAULT_PREVENTED_SLOT: &str = "__eventDefaultPrevented";
-const EVENT_PHASE_SLOT: &str = "__eventPhase";
-const EVENT_TARGET_SLOT: &str = "__eventTarget";
-const EVENT_CURRENT_TARGET_SLOT: &str = "__eventCurrentTarget";
-const EVENT_TIME_STAMP_SLOT: &str = "__eventTimeStamp";
-const EVENT_STOP_SLOT: &str = "__eventStop";
-const EVENT_STOP_IMMEDIATE_SLOT: &str = "__eventStopImmediate";
-const EVENT_IN_PASSIVE_SLOT: &str = "__eventInPassiveListener";
-const EVENT_DISPATCHING_SLOT: &str = "__eventDispatching";
-const EVENT_DETAIL_SLOT: &str = "__eventDetail";
-const CONTROLLER_SIGNAL_SLOT: &str = "__controllerSignal";
-const SIGNAL_ABORTED_SLOT: &str = "__signalAborted";
-const SIGNAL_REASON_SLOT: &str = "__signalReason";
-const SIGNAL_ALGORITHMS_SLOT: &str = "__signalAbortAlgorithms";
-const SIGNAL_DEPENDENTS_SLOT: &str = "__signalDependents";
-// Present only on composed signals (including any([])); absence denotes a
-// root signal. Flattened source order is retained, not a chain of composites.
-// Store source IDs as integers so a live composite does not root an abandoned
-// source and, transitively, all the other composites registered on that source.
-const SIGNAL_SOURCES_SLOT: &str = "__signalSources";
 // An engine-private HeapObject brand, never an option or a guest property.
 // The ordinary object memory meter and collector own its storage and lifetime.
 const PROTECTED_ABORT_LISTENER_BRAND: &str = "ProtectedAbortListener";
 
-/// The internal slots above: never own keys guest code lists.
-pub(super) const EVENT_FAMILY_SLOT_KEYS: [&str; 21] = [
-    LISTENERS_SLOT,
-    EVENT_TYPE_SLOT,
-    EVENT_BUBBLES_SLOT,
-    EVENT_CANCELABLE_SLOT,
-    EVENT_COMPOSED_SLOT,
-    EVENT_DEFAULT_PREVENTED_SLOT,
-    EVENT_PHASE_SLOT,
-    EVENT_TARGET_SLOT,
-    EVENT_CURRENT_TARGET_SLOT,
-    EVENT_TIME_STAMP_SLOT,
-    EVENT_STOP_SLOT,
-    EVENT_STOP_IMMEDIATE_SLOT,
-    EVENT_IN_PASSIVE_SLOT,
-    EVENT_DISPATCHING_SLOT,
-    EVENT_DETAIL_SLOT,
-    CONTROLLER_SIGNAL_SLOT,
-    SIGNAL_ABORTED_SLOT,
-    SIGNAL_REASON_SLOT,
-    SIGNAL_ALGORITHMS_SLOT,
-    SIGNAL_DEPENDENTS_SLOT,
-    SIGNAL_SOURCES_SLOT,
-];
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EventArraySlot {
+    Listeners,
+    SignalAlgorithms,
+    SignalDependents,
+}
 
 /// Legacy DOMException codes (WebIDL 3.14.1); any other name has code 0.
 const DOM_EXCEPTION_CODES: [(&str, i64); 21] = [
@@ -212,12 +169,7 @@ impl InterpreterCore {
                 let signal = self.alloc_abort_signal()?;
                 let prototype = self.ensure_builtin_prototype("AbortController")?;
                 let controller = self.alloc_object_with_prototype(Some(prototype))?;
-                self.set_object_property(
-                    controller,
-                    CONTROLLER_SIGNAL_SLOT.to_string(),
-                    Value::Object(signal),
-                )?;
-                self.hide_internal_slots(controller, &[CONTROLLER_SIGNAL_SLOT])?;
+                self.set_host_slots(controller, HostObjectSlots::AbortController(signal))?;
                 Ok(Value::Object(controller))
             }
             "AbortSignal" => Err(InterpreterError::TypeError {
@@ -288,36 +240,51 @@ impl InterpreterCore {
             }
             "Event.preventDefault" => {
                 let event = self.event_receiver(&receiver, "preventDefault")?;
-                if self.event_slot(event, EVENT_CANCELABLE_SLOT).is_truthy()
-                    && !self.event_slot(event, EVENT_IN_PASSIVE_SLOT).is_truthy()
-                {
-                    self.set_event_slot(event, EVENT_DEFAULT_PREVENTED_SLOT, Value::Bool(true))?;
-                }
+                self.mutate_event_slots(event, |slots| {
+                    if slots.cancelable && !slots.in_passive {
+                        slots.default_prevented = true;
+                    }
+                })?;
                 Ok(Value::Undefined)
             }
             "Event.stopPropagation" => {
                 let event = self.event_receiver(&receiver, "stopPropagation")?;
-                self.set_event_slot(event, EVENT_STOP_SLOT, Value::Bool(true))?;
+                self.mutate_event_slots(event, |slots| {
+                    slots.stop = true;
+                })?;
                 Ok(Value::Undefined)
             }
             "Event.stopImmediatePropagation" => {
                 let event = self.event_receiver(&receiver, "stopImmediatePropagation")?;
-                self.set_event_slot(event, EVENT_STOP_SLOT, Value::Bool(true))?;
-                self.set_event_slot(event, EVENT_STOP_IMMEDIATE_SLOT, Value::Bool(true))?;
+                self.mutate_event_slots(event, |slots| {
+                    slots.stop = true;
+                    slots.stop_immediate = true;
+                })?;
                 Ok(Value::Undefined)
             }
             "Event.composedPath" => {
                 let event = self.event_receiver(&receiver, "composedPath")?;
-                let path = if self.event_slot(event, EVENT_DISPATCHING_SLOT).is_truthy() {
-                    vec![self.event_slot(event, EVENT_CURRENT_TARGET_SLOT)]
-                } else {
-                    Vec::new()
+                let path = match self.event_slots_cloned(event)? {
+                    slots if slots.dispatching => vec![slots.current_target],
+                    _ => Vec::new(),
                 };
                 Ok(Value::Object(self.alloc_array_from_values(&path)?))
             }
             "AbortController.abort" => {
-                let controller = match &receiver {
-                    Value::Object(id) if self.has_event_slot(*id, CONTROLLER_SIGNAL_SLOT) => *id,
+                let signal = match &receiver {
+                    Value::Object(id) => match self
+                        .heap
+                        .get(id.0 as usize)
+                        .and_then(HeapObject::abort_controller_signal)
+                    {
+                        Some(signal) => signal,
+                        None => {
+                            return Err(InterpreterError::TypeError {
+                                expected: "AbortController receiver for abort".to_string(),
+                                got: receiver.type_name().to_string(),
+                            });
+                        }
+                    },
                     other => {
                         return Err(InterpreterError::TypeError {
                             expected: "AbortController receiver for abort".to_string(),
@@ -325,22 +292,16 @@ impl InterpreterCore {
                         });
                     }
                 };
-                let Value::Object(signal) = self.event_slot(controller, CONTROLLER_SIGNAL_SLOT)
-                else {
-                    return Err(InterpreterError::InternalError {
-                        details: "AbortController lost its signal".to_string(),
-                    });
-                };
                 let reason = arg(self, 0)?;
                 self.abort_signal(module, signal, reason)?;
                 Ok(Value::Undefined)
             }
             "AbortSignal.throwIfAborted" => {
                 let signal = self.abort_signal_receiver(&receiver, "throwIfAborted")?;
-                if self.event_slot(signal, SIGNAL_ABORTED_SLOT).is_truthy() {
-                    let reason = self.event_slot(signal, SIGNAL_REASON_SLOT);
+                let slots = self.abort_signal_slots_cloned(signal)?;
+                if slots.aborted {
                     let label = self.clone_active_execution_context_label()?;
-                    return Err(self.throw_guest_value(reason, label)?);
+                    return Err(self.throw_guest_value(slots.reason, label)?);
                 }
                 Ok(Value::Undefined)
             }
@@ -387,7 +348,7 @@ impl InterpreterCore {
                 let Some(signal) = builtin.bound_object.map(ObjectId) else {
                     return Ok(Value::Undefined);
                 };
-                if !self.event_slot(signal, SIGNAL_ABORTED_SLOT).is_truthy() {
+                if !self.abort_signal_is_aborted(signal) {
                     let reason = self.alloc_dom_exception(
                         "The operation was aborted due to timeout",
                         "TimeoutError",
@@ -438,11 +399,16 @@ impl InterpreterCore {
 
     /// Whether `id` has the internal slots a family accessor needs.
     pub(super) fn has_event_family_brand(&self, id: ObjectId, owner: &str) -> bool {
+        let Some(object) = self.heap.get(id.0 as usize) else {
+            return false;
+        };
         match owner {
-            "Event" => self.has_event_slot(id, EVENT_TYPE_SLOT),
-            "CustomEvent" => self.has_event_slot(id, EVENT_DETAIL_SLOT),
-            "AbortController" => self.has_event_slot(id, CONTROLLER_SIGNAL_SLOT),
-            "AbortSignal" => self.has_event_slot(id, SIGNAL_ABORTED_SLOT),
+            "Event" => object.event_slots().is_some(),
+            "CustomEvent" => object
+                .event_slots()
+                .is_some_and(|slots| slots.detail.is_some()),
+            "AbortController" => object.abort_controller_signal().is_some(),
+            "AbortSignal" => object.abort_signal_slots().is_some(),
             _ => false,
         }
     }
@@ -455,31 +421,39 @@ impl InterpreterCore {
         key: &str,
         id: ObjectId,
     ) -> Option<Value> {
-        let slot = match (owner, key) {
-            ("Event", "type") => EVENT_TYPE_SLOT,
-            ("Event", "bubbles") => EVENT_BUBBLES_SLOT,
-            ("Event", "cancelable") => EVENT_CANCELABLE_SLOT,
-            ("Event", "composed") => EVENT_COMPOSED_SLOT,
-            ("Event", "defaultPrevented") => EVENT_DEFAULT_PREVENTED_SLOT,
-            ("Event", "eventPhase") => EVENT_PHASE_SLOT,
-            ("Event", "target" | "srcElement") => EVENT_TARGET_SLOT,
-            ("Event", "currentTarget") => EVENT_CURRENT_TARGET_SLOT,
-            ("Event", "timeStamp") => EVENT_TIME_STAMP_SLOT,
-            ("Event", "cancelBubble") => EVENT_STOP_SLOT,
-            ("Event", "returnValue") => {
-                return Some(Value::Bool(
-                    !self
-                        .event_slot(id, EVENT_DEFAULT_PREVENTED_SLOT)
-                        .is_truthy(),
-                ));
+        let object = self.heap.get(id.0 as usize)?;
+        match owner {
+            "Event" => {
+                let slots = object.event_slots()?;
+                Some(match key {
+                    "type" => Value::Str(slots.event_type.clone()),
+                    "bubbles" => Value::Bool(slots.bubbles),
+                    "cancelable" => Value::Bool(slots.cancelable),
+                    "composed" => Value::Bool(slots.composed),
+                    "defaultPrevented" => Value::Bool(slots.default_prevented),
+                    "eventPhase" => Value::Int(slots.phase),
+                    "target" | "srcElement" => slots.target.clone(),
+                    "currentTarget" => slots.current_target.clone(),
+                    "timeStamp" => slots.time_stamp.clone(),
+                    "cancelBubble" => Value::Bool(slots.stop),
+                    "returnValue" => Value::Bool(!slots.default_prevented),
+                    _ => return None,
+                })
             }
-            ("CustomEvent", "detail") => EVENT_DETAIL_SLOT,
-            ("AbortController", "signal") => CONTROLLER_SIGNAL_SLOT,
-            ("AbortSignal", "aborted") => SIGNAL_ABORTED_SLOT,
-            ("AbortSignal", "reason") => SIGNAL_REASON_SLOT,
-            _ => return None,
-        };
-        Some(self.event_slot(id, slot))
+            "CustomEvent" if key == "detail" => object.event_slots()?.detail.clone(),
+            "AbortController" if key == "signal" => {
+                object.abort_controller_signal().map(Value::Object)
+            }
+            "AbortSignal" => {
+                let slots = object.abort_signal_slots()?;
+                Some(match key {
+                    "aborted" => Value::Bool(slots.aborted),
+                    "reason" => slots.reason.clone(),
+                    _ => return None,
+                })
+            }
+            _ => None,
+        }
     }
 
     /// An object with the given canonical prototype and an empty listener list.
@@ -487,34 +461,35 @@ impl InterpreterCore {
         let prototype = self.ensure_builtin_prototype(prototype)?;
         let target = self.alloc_object_with_prototype(Some(prototype))?;
         let listeners = self.alloc_array_from_values(&[])?;
-        self.set_object_property(target, LISTENERS_SLOT.to_string(), Value::Object(listeners))?;
-        self.hide_internal_slots(target, &[LISTENERS_SLOT])?;
+        self.set_host_slots(
+            target,
+            HostObjectSlots::EventTarget(EventTargetSlots {
+                listeners: Some(listeners),
+            }),
+        )?;
         Ok(target)
     }
 
     fn alloc_abort_signal(&mut self) -> Result<ObjectId, InterpreterError> {
-        let signal = self.alloc_event_target("AbortSignal")?;
+        let prototype = self.ensure_builtin_prototype("AbortSignal")?;
+        let signal = self.alloc_object_with_prototype(Some(prototype))?;
+        let listeners = self.alloc_array_from_values(&[])?;
         let algorithms = self.alloc_array_from_values(&[])?;
         let dependents = self.alloc_array_from_values(&[])?;
-        for (slot, value) in [
-            (SIGNAL_ABORTED_SLOT, Value::Bool(false)),
-            (SIGNAL_REASON_SLOT, Value::Undefined),
-            (SIGNAL_ALGORITHMS_SLOT, Value::Object(algorithms)),
-            (SIGNAL_DEPENDENTS_SLOT, Value::Object(dependents)),
-            ("onabort", Value::Null),
-        ] {
-            self.set_object_property(signal, slot.to_string(), value)?;
-        }
-        self.hide_internal_slots(
+        self.set_host_slots(
             signal,
-            &[
-                SIGNAL_ABORTED_SLOT,
-                SIGNAL_REASON_SLOT,
-                SIGNAL_ALGORITHMS_SLOT,
-                SIGNAL_DEPENDENTS_SLOT,
-                "onabort",
-            ],
+            HostObjectSlots::AbortSignal(AbortSignalSlots {
+                listeners: Some(listeners),
+                aborted: false,
+                reason: Value::Undefined,
+                algorithms: Some(algorithms),
+                dependents: Some(dependents),
+                is_composite: false,
+                sources: None,
+            }),
         )?;
+        self.set_object_property(signal, "onabort".to_string(), Value::Null)?;
+        self.hide_internal_slots(signal, &["onabort"])?;
         Ok(signal)
     }
 
@@ -530,29 +505,25 @@ impl InterpreterCore {
         let prototype_id = self.ensure_builtin_prototype(prototype)?;
         let event = self.alloc_object_with_prototype(Some(prototype_id))?;
         let time_stamp = self.deterministic_performance_now();
-        let mut slots = vec![
-            (EVENT_TYPE_SLOT, Value::str(event_type)),
-            (EVENT_BUBBLES_SLOT, Value::Bool(flags[0])),
-            (EVENT_CANCELABLE_SLOT, Value::Bool(flags[1])),
-            (EVENT_COMPOSED_SLOT, Value::Bool(flags[2])),
-            (EVENT_DEFAULT_PREVENTED_SLOT, Value::Bool(false)),
-            (EVENT_PHASE_SLOT, Value::Int(0)),
-            (EVENT_TARGET_SLOT, Value::Null),
-            (EVENT_CURRENT_TARGET_SLOT, Value::Null),
-            (EVENT_TIME_STAMP_SLOT, time_stamp),
-            (EVENT_STOP_SLOT, Value::Bool(false)),
-            (EVENT_STOP_IMMEDIATE_SLOT, Value::Bool(false)),
-            (EVENT_IN_PASSIVE_SLOT, Value::Bool(false)),
-            (EVENT_DISPATCHING_SLOT, Value::Bool(false)),
-        ];
-        if prototype == "CustomEvent" {
-            slots.push((EVENT_DETAIL_SLOT, detail));
-        }
-        let keys: Vec<&str> = slots.iter().map(|(slot, _)| *slot).collect();
-        for (slot, value) in slots {
-            self.set_object_property(event, slot.to_string(), value)?;
-        }
-        self.hide_internal_slots(event, &keys)?;
+        self.set_host_slots(
+            event,
+            HostObjectSlots::Event(EventSlots {
+                event_type: JsString::from(event_type),
+                bubbles: flags[0],
+                cancelable: flags[1],
+                composed: flags[2],
+                default_prevented: false,
+                phase: 0,
+                target: Value::Null,
+                current_target: Value::Null,
+                time_stamp,
+                stop: false,
+                stop_immediate: false,
+                in_passive: false,
+                dispatching: false,
+                detail: (prototype == "CustomEvent").then_some(detail),
+            }),
+        )?;
         // Node: `isTrusted` is an own property of every event.
         self.set_object_property(event, "isTrusted".to_string(), Value::Bool(false))?;
         Ok(event)
@@ -595,7 +566,7 @@ impl InterpreterCore {
         signal: ObjectId,
         reason: Value,
     ) -> Result<(), InterpreterError> {
-        if self.event_slot(signal, SIGNAL_ABORTED_SLOT).is_truthy() {
+        if self.abort_signal_is_aborted(signal) {
             return Ok(());
         }
         let reason = self.abort_reason_or_default(reason)?;
@@ -613,8 +584,8 @@ impl InterpreterCore {
     ) -> Result<(), InterpreterError> {
         self.signal_mark_aborted(signal, reason.clone())?;
         let mut to_abort = Vec::new();
-        for dependent in self.event_array_objects(signal, SIGNAL_DEPENDENTS_SLOT)? {
-            if !self.event_slot(dependent, SIGNAL_ABORTED_SLOT).is_truthy() {
+        for dependent in self.event_array_objects(signal, EventArraySlot::SignalDependents)? {
+            if !self.abort_signal_is_aborted(dependent) {
                 self.signal_mark_aborted(dependent, reason.clone())?;
                 to_abort.push(dependent);
             }
@@ -638,9 +609,9 @@ impl InterpreterCore {
                 break;
             }
         }
-        // The internal array helpers treat an undefined list as empty. Clear
+        // The internal array helpers treat a `None` list as empty. Clear
         // without allocating after callbacks, including on a host refusal.
-        let cleanup = self.set_event_slot(signal, SIGNAL_DEPENDENTS_SLOT, Value::Undefined);
+        let cleanup = self.set_event_array_slot(signal, EventArraySlot::SignalDependents, None);
         outcome?;
         cleanup?;
         self.signal_unlink_aborted_sources(&to_abort)?;
@@ -667,24 +638,27 @@ impl InterpreterCore {
             }
         }
         for original in sources {
-            let mut remaining = self.event_array_objects(original, SIGNAL_DEPENDENTS_SLOT)?;
+            let mut remaining =
+                self.event_array_objects(original, EventArraySlot::SignalDependents)?;
             let previous_len = remaining.len();
-            remaining
-                .retain(|dependent| !self.event_slot(*dependent, SIGNAL_ABORTED_SLOT).is_truthy());
+            remaining.retain(|dependent| !self.abort_signal_is_aborted(*dependent));
             if remaining.len() == previous_len {
                 continue;
             }
             let list = if remaining.is_empty() {
-                Value::Undefined
+                None
             } else {
                 let values: Vec<Value> = remaining.into_iter().map(Value::Object).collect();
-                Value::Object(self.alloc_array_from_values(&values)?)
+                Some(self.alloc_array_from_values(&values)?)
             };
-            self.set_event_slot(original, SIGNAL_DEPENDENTS_SLOT, list)?;
+            self.set_event_array_slot(original, EventArraySlot::SignalDependents, list)?;
         }
         for dependent in dependents {
-            // Keep the slot present: an empty dependent is not a new root.
-            self.set_event_slot(*dependent, SIGNAL_SOURCES_SLOT, Value::Undefined)?;
+            // Keep `is_composite` true: an empty dependent is not a new root.
+            self.mutate_abort_signal_slots(*dependent, |slots| {
+                slots.is_composite = true;
+                slots.sources = None;
+            })?;
         }
         Ok(())
     }
@@ -697,7 +671,12 @@ impl InterpreterCore {
         &mut self,
         signal: ObjectId,
     ) -> Result<Vec<ObjectId>, InterpreterError> {
-        let Value::Object(list) = self.event_slot(signal, SIGNAL_SOURCES_SLOT) else {
+        let Some(list) = self
+            .heap
+            .get(signal.0 as usize)
+            .and_then(HeapObject::abort_signal_slots)
+            .and_then(|slots| slots.sources)
+        else {
             return Ok(Vec::new());
         };
         Ok(self
@@ -707,7 +686,7 @@ impl InterpreterCore {
                 Value::Int(id) => u32::try_from(id).ok().map(ObjectId),
                 _ => None,
             })
-            .filter(|source| self.has_event_slot(*source, SIGNAL_ABORTED_SLOT))
+            .filter(|source| self.is_abort_signal(*source))
             .collect())
     }
 
@@ -717,8 +696,10 @@ impl InterpreterCore {
         reason: Value,
     ) -> Result<(), InterpreterError> {
         // Admit the potentially allocating reason before publishing aborted.
-        self.set_event_slot(signal, SIGNAL_REASON_SLOT, reason)?;
-        self.set_event_slot(signal, SIGNAL_ABORTED_SLOT, Value::Bool(true))
+        self.mutate_abort_signal_slots(signal, |slots| {
+            slots.reason = reason;
+            slots.aborted = true;
+        })
     }
 
     /// Remove the listeners added with this signal, then fire `abort`.
@@ -731,10 +712,10 @@ impl InterpreterCore {
         // snapshot first so removing N listeners does not repeatedly rebuild
         // this signal's abort list. The target lists retain live records until
         // removal; dispatch/collection only resume after the drain completes.
-        let records = self.event_array_objects(signal, SIGNAL_ALGORITHMS_SLOT)?;
-        self.set_event_slot(signal, SIGNAL_ALGORITHMS_SLOT, Value::Undefined)?;
+        let records = self.event_array_objects(signal, EventArraySlot::SignalAlgorithms)?;
+        self.set_event_array_slot(signal, EventArraySlot::SignalAlgorithms, None)?;
         for record in records {
-            if let Value::Object(target) = self.event_slot(record, "target") {
+            if let Value::Object(target) = self.record_slot(record, "target") {
                 self.event_target_remove_record(target, record)?;
             }
         }
@@ -769,9 +750,7 @@ impl InterpreterCore {
         let mut sources = Vec::new();
         for value in self.array_like_values(list)? {
             match value {
-                Value::Object(id) if self.has_event_slot(id, SIGNAL_ABORTED_SLOT) => {
-                    sources.push(id)
-                }
+                Value::Object(id) if self.is_abort_signal(id) => sources.push(id),
                 other => {
                     return Err(InterpreterError::TypeError {
                         expected: "AbortSignal elements for AbortSignal.any".to_string(),
@@ -782,8 +761,8 @@ impl InterpreterCore {
         }
         let result = self.alloc_abort_signal()?;
         for source in &sources {
-            if self.event_slot(*source, SIGNAL_ABORTED_SLOT).is_truthy() {
-                let reason = self.event_slot(*source, SIGNAL_REASON_SLOT);
+            if self.abort_signal_is_aborted(*source) {
+                let reason = self.abort_signal_reason(*source);
                 self.signal_mark_aborted(result, reason)?;
                 return Ok(Value::Object(result));
             }
@@ -791,7 +770,7 @@ impl InterpreterCore {
         let mut roots = Vec::new();
         let mut seen = std::collections::BTreeSet::new();
         for source in sources {
-            let candidates = if self.has_event_slot(source, SIGNAL_SOURCES_SLOT) {
+            let candidates = if self.abort_signal_is_composite(source) {
                 self.signal_source_objects(source)?
             } else {
                 vec![source]
@@ -807,10 +786,12 @@ impl InterpreterCore {
             .map(|root| Value::Int(i64::from(root.0)))
             .collect();
         let root_list = self.alloc_array_from_values(&root_values)?;
-        self.set_event_slot(result, SIGNAL_SOURCES_SLOT, Value::Object(root_list))?;
-        self.hide_internal_slots(result, &[SIGNAL_SOURCES_SLOT])?;
+        self.mutate_abort_signal_slots(result, |slots| {
+            slots.is_composite = true;
+            slots.sources = Some(root_list);
+        })?;
         for root in roots {
-            self.event_array_push(root, SIGNAL_DEPENDENTS_SLOT, Value::Object(result))?;
+            self.event_array_push(root, EventArraySlot::SignalDependents, Value::Object(result))?;
         }
         Ok(Value::Object(result))
     }
@@ -850,7 +831,7 @@ impl InterpreterCore {
         };
         let signal = match signal {
             Value::Undefined => None,
-            Value::Object(id) if self.has_event_slot(id, SIGNAL_ABORTED_SLOT) => Some(id),
+            Value::Object(id) if self.is_abort_signal(id) => Some(id),
             other => {
                 return Err(InterpreterError::TypeError {
                     expected: "an AbortSignal as the signal option".to_string(),
@@ -858,7 +839,7 @@ impl InterpreterCore {
                 });
             }
         };
-        if signal.is_some_and(|signal| self.event_slot(signal, SIGNAL_ABORTED_SLOT).is_truthy()) {
+        if signal.is_some_and(|signal| self.abort_signal_is_aborted(signal)) {
             return Ok(());
         }
         if self
@@ -879,19 +860,19 @@ impl InterpreterCore {
         if let Some(signal) = signal {
             // Object IDs are never reused. A weak backlink permits cleanup
             // without retaining an otherwise unreachable cancellation source.
-            self.set_event_slot(record, "signal", Value::Int(i64::from(signal.0)))?;
+            self.set_record_slot(record, "signal", Value::Int(i64::from(signal.0)))?;
         }
-        let previous_list = self.event_slot(target, LISTENERS_SLOT);
-        self.event_array_push(target, LISTENERS_SLOT, Value::Object(record))?;
+        let previous_list = self.event_array_slot_id(target, EventArraySlot::Listeners);
+        self.event_array_push(target, EventArraySlot::Listeners, Value::Object(record))?;
         if let Some(signal) = signal
             && let Err(error) =
-                self.event_array_push(signal, SIGNAL_ALGORITHMS_SLOT, Value::Object(record))
+                self.event_array_push(signal, EventArraySlot::SignalAlgorithms, Value::Object(record))
         {
             // A refusal while adding cancellation must not leave an active,
             // uncancellable listener on the target. Restoring the old list
             // needs no replacement array or guest callback.
-            self.set_event_slot(record, "removed", Value::Bool(true))?;
-            self.set_event_slot(target, LISTENERS_SLOT, previous_list)?;
+            self.set_record_slot(record, "removed", Value::Bool(true))?;
+            self.set_event_array_slot(target, EventArraySlot::Listeners, previous_list)?;
             return Err(error);
         }
         Ok(())
@@ -941,7 +922,7 @@ impl InterpreterCore {
                 ("target", Value::Object(signal)),
             ],
         )?;
-        self.event_array_push(signal, LISTENERS_SLOT, Value::Object(record))?;
+        self.event_array_push(signal, EventArraySlot::Listeners, Value::Object(record))?;
         Ok(Value::Undefined)
     }
 
@@ -964,15 +945,15 @@ impl InterpreterCore {
         callback: &Value,
         capture: bool,
     ) -> Result<Option<ObjectId>, InterpreterError> {
-        for record in self.event_array_objects(target, LISTENERS_SLOT)? {
+        for record in self.event_array_objects(target, EventArraySlot::Listeners)? {
             let same_type = matches!(
-                self.event_slot(record, "type"),
+                self.record_slot(record, "type"),
                 Value::Str(text) if text.as_str() == Some(event_type)
             );
             if same_type
-                && Self::same_value(&self.event_slot(record, "callback"), callback)
-                && self.event_slot(record, "capture").is_truthy() == capture
-                && !self.event_slot(record, "removed").is_truthy()
+                && Self::same_value(&self.record_slot(record, "callback"), callback)
+                && self.record_slot(record, "capture").is_truthy() == capture
+                && !self.record_slot(record, "removed").is_truthy()
             {
                 return Ok(Some(record));
             }
@@ -989,18 +970,18 @@ impl InterpreterCore {
         target: ObjectId,
         record: ObjectId,
     ) -> Result<(), InterpreterError> {
-        self.set_event_slot(record, "removed", Value::Bool(true))?;
-        self.event_array_remove(target, LISTENERS_SLOT, record)?;
-        if let Value::Int(signal) = self.event_slot(record, "signal")
+        self.set_record_slot(record, "removed", Value::Bool(true))?;
+        self.event_array_remove(target, EventArraySlot::Listeners, record)?;
+        if let Value::Int(signal) = self.record_slot(record, "signal")
             && let Ok(signal) = u32::try_from(signal)
         {
             let signal = ObjectId(signal);
-            if self.has_event_slot(signal, SIGNAL_ABORTED_SLOT) {
-                self.event_array_remove(signal, SIGNAL_ALGORITHMS_SLOT, record)?;
+            if self.is_abort_signal(signal) {
+                self.event_array_remove(signal, EventArraySlot::SignalAlgorithms, record)?;
             }
         }
-        if self.has_event_slot(record, "signal") {
-            self.set_event_slot(record, "signal", Value::Undefined)?;
+        if self.has_record_slot(record, "signal") {
+            self.set_record_slot(record, "signal", Value::Undefined)?;
         }
         Ok(())
     }
@@ -1021,7 +1002,7 @@ impl InterpreterCore {
         };
         let target = *target;
         let event = match event_value {
-            Value::Object(id) if self.has_event_slot(*id, EVENT_TYPE_SLOT) => *id,
+            Value::Object(id) if self.is_event(*id) => *id,
             other => {
                 return Err(InterpreterError::TypeError {
                     expected: "an Event as the argument of dispatchEvent".to_string(),
@@ -1029,7 +1010,8 @@ impl InterpreterCore {
                 });
             }
         };
-        if self.event_slot(event, EVENT_DISPATCHING_SLOT).is_truthy() {
+        let initial_slots = self.event_slots_cloned(event)?;
+        if initial_slots.dispatching {
             let error = self.alloc_dom_exception(
                 "The event is already being dispatched",
                 "InvalidStateError",
@@ -1037,17 +1019,16 @@ impl InterpreterCore {
             let label = self.clone_active_execution_context_label()?;
             return Err(self.throw_guest_value(Value::Object(error), label)?);
         }
-        self.set_event_slot(event, EVENT_TARGET_SLOT, target_value.clone())?;
-        self.set_event_slot(event, EVENT_CURRENT_TARGET_SLOT, target_value.clone())?;
-        self.set_event_slot(event, EVENT_PHASE_SLOT, Value::Int(2))?;
-        self.set_event_slot(event, EVENT_DISPATCHING_SLOT, Value::Bool(true))?;
-        let event_type = match self.event_slot(event, EVENT_TYPE_SLOT) {
-            Value::Str(text) => text.to_string(),
-            _ => String::new(),
-        };
+        let event_type = initial_slots.event_type.to_string();
+        self.mutate_event_slots(event, |slots| {
+            slots.target = target_value.clone();
+            slots.current_target = target_value.clone();
+            slots.phase = 2;
+            slots.dispatching = true;
+        })?;
         let mut first_error: Option<(Value, Label)> = None;
-        if event_type == "abort" && self.has_event_slot(target, SIGNAL_ABORTED_SLOT) {
-            let handler = self.event_slot(target, "onabort");
+        if event_type == "abort" && self.is_abort_signal(target) {
+            let handler = self.record_slot(target, "onabort");
             if handler.is_callable() {
                 let outcome = self.invoke_inline_method_call_with_argument_label(
                     Some(module),
@@ -1060,17 +1041,17 @@ impl InterpreterCore {
             }
         }
         let records: Vec<ObjectId> = self
-            .event_array_objects(target, LISTENERS_SLOT)?
+            .event_array_objects(target, EventArraySlot::Listeners)?
             .into_iter()
             .filter(|record| {
                 matches!(
-                    self.event_slot(*record, "type"),
+                    self.record_slot(*record, "type"),
                     Value::Str(text) if text.as_str() == Some(event_type.as_str())
                 )
             })
             .collect();
         for record in records {
-            if self.event_slot(record, "removed").is_truthy() {
+            if self.record_slot(record, "removed").is_truthy() {
                 continue;
             }
             let protected_abort_listener = event_type == "abort"
@@ -1079,8 +1060,10 @@ impl InterpreterCore {
                     .get(record.0 as usize)
                     .is_some_and(|object| object.brand() == Some(PROTECTED_ABORT_LISTENER_BRAND));
             if self
-                .event_slot(event, EVENT_STOP_IMMEDIATE_SLOT)
-                .is_truthy()
+                .heap
+                .get(event.0 as usize)
+                .and_then(HeapObject::event_slots)
+                .is_some_and(|slots| slots.stop_immediate)
                 && !protected_abort_listener
             {
                 // Ordinary listeners stay suppressed. Protected abort
@@ -1088,12 +1071,14 @@ impl InterpreterCore {
                 // original positions with this exact signal and Event.
                 continue;
             }
-            if self.event_slot(record, "once").is_truthy() {
+            if self.record_slot(record, "once").is_truthy() {
                 self.event_target_remove_record(target, record)?;
             }
-            let passive = self.event_slot(record, "passive");
-            self.set_event_slot(event, EVENT_IN_PASSIVE_SLOT, passive)?;
-            let callback = self.event_slot(record, "callback");
+            let passive = self.record_slot(record, "passive").is_truthy();
+            self.mutate_event_slots(event, |slots| {
+                slots.in_passive = passive;
+            })?;
+            let callback = self.record_slot(record, "callback");
             let outcome = if callback.is_callable() {
                 self.invoke_inline_method_call_with_argument_label(
                     Some(module),
@@ -1121,19 +1106,24 @@ impl InterpreterCore {
                     Err(error) => Err(error),
                 }
             };
-            self.set_event_slot(event, EVENT_IN_PASSIVE_SLOT, Value::Bool(false))?;
+            self.mutate_event_slots(event, |slots| {
+                slots.in_passive = false;
+            })?;
             self.event_listener_outcome(outcome, &mut first_error)?;
         }
         // Node leaves target and currentTarget set after the dispatch.
-        self.set_event_slot(event, EVENT_PHASE_SLOT, Value::Int(0))?;
-        self.set_event_slot(event, EVENT_DISPATCHING_SLOT, Value::Bool(false))?;
+        self.mutate_event_slots(event, |slots| {
+            slots.phase = 0;
+            slots.dispatching = false;
+        })?;
         if let Some((thrown, label)) = first_error {
             return Err(self.throw_guest_value(thrown, label)?);
         }
-        let canceled = self.event_slot(event, EVENT_CANCELABLE_SLOT).is_truthy()
-            && self
-                .event_slot(event, EVENT_DEFAULT_PREVENTED_SLOT)
-                .is_truthy();
+        let canceled = self
+            .heap
+            .get(event.0 as usize)
+            .and_then(HeapObject::event_slots)
+            .is_some_and(|slots| slots.cancelable && slots.default_prevented);
         Ok(Value::Bool(!canceled))
     }
 
@@ -1155,13 +1145,99 @@ impl InterpreterCore {
         Ok(())
     }
 
+    fn is_event_target(&self, id: ObjectId) -> bool {
+        self.heap
+            .get(id.0 as usize)
+            .is_some_and(HeapObject::is_event_target)
+    }
+
+    fn is_event(&self, id: ObjectId) -> bool {
+        self.heap
+            .get(id.0 as usize)
+            .is_some_and(|object| object.event_slots().is_some())
+    }
+
+    fn is_abort_signal(&self, id: ObjectId) -> bool {
+        self.heap
+            .get(id.0 as usize)
+            .is_some_and(|object| object.abort_signal_slots().is_some())
+    }
+
+    fn abort_signal_is_aborted(&self, id: ObjectId) -> bool {
+        self.heap
+            .get(id.0 as usize)
+            .and_then(HeapObject::abort_signal_slots)
+            .is_some_and(|slots| slots.aborted)
+    }
+
+    fn abort_signal_is_composite(&self, id: ObjectId) -> bool {
+        self.heap
+            .get(id.0 as usize)
+            .and_then(HeapObject::abort_signal_slots)
+            .is_some_and(|slots| slots.is_composite)
+    }
+
+    fn abort_signal_reason(&self, id: ObjectId) -> Value {
+        self.heap
+            .get(id.0 as usize)
+            .and_then(HeapObject::abort_signal_slots)
+            .map(|slots| slots.reason.clone())
+            .unwrap_or(Value::Undefined)
+    }
+
+    fn event_slots_cloned(&self, id: ObjectId) -> Result<EventSlots, InterpreterError> {
+        self.heap
+            .get(id.0 as usize)
+            .and_then(HeapObject::event_slots)
+            .cloned()
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: "Event lost its internal slots".to_string(),
+            })
+    }
+
+    fn abort_signal_slots_cloned(&self, id: ObjectId) -> Result<AbortSignalSlots, InterpreterError> {
+        self.heap
+            .get(id.0 as usize)
+            .and_then(HeapObject::abort_signal_slots)
+            .cloned()
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: "AbortSignal lost its internal slots".to_string(),
+            })
+    }
+
+    fn mutate_event_slots<R>(
+        &mut self,
+        id: ObjectId,
+        mutate: impl FnOnce(&mut EventSlots) -> R,
+    ) -> Result<R, InterpreterError> {
+        self.mutate_host_slots(id, |slots| match slots {
+            HostObjectSlots::Event(event) => Ok(mutate(event)),
+            _ => Err(InterpreterError::InternalError {
+                details: "Event lost its internal slots".to_string(),
+            }),
+        })?
+    }
+
+    fn mutate_abort_signal_slots<R>(
+        &mut self,
+        id: ObjectId,
+        mutate: impl FnOnce(&mut AbortSignalSlots) -> R,
+    ) -> Result<R, InterpreterError> {
+        self.mutate_host_slots(id, |slots| match slots {
+            HostObjectSlots::AbortSignal(signal) => Ok(mutate(signal)),
+            _ => Err(InterpreterError::InternalError {
+                details: "AbortSignal lost its internal slots".to_string(),
+            }),
+        })?
+    }
+
     fn event_target_receiver(
         &self,
         receiver: &Value,
         method: &str,
     ) -> Result<ObjectId, InterpreterError> {
         match receiver {
-            Value::Object(id) if self.has_event_slot(*id, LISTENERS_SLOT) => Ok(*id),
+            Value::Object(id) if self.is_event_target(*id) => Ok(*id),
             other => Err(InterpreterError::TypeError {
                 expected: format!("EventTarget receiver for {method}"),
                 got: other.type_name().to_string(),
@@ -1171,7 +1247,7 @@ impl InterpreterCore {
 
     fn event_receiver(&self, receiver: &Value, method: &str) -> Result<ObjectId, InterpreterError> {
         match receiver {
-            Value::Object(id) if self.has_event_slot(*id, EVENT_TYPE_SLOT) => Ok(*id),
+            Value::Object(id) if self.is_event(*id) => Ok(*id),
             other => Err(InterpreterError::TypeError {
                 expected: format!("Event receiver for {method}"),
                 got: other.type_name().to_string(),
@@ -1185,7 +1261,7 @@ impl InterpreterCore {
         method: &str,
     ) -> Result<ObjectId, InterpreterError> {
         match receiver {
-            Value::Object(id) if self.has_event_slot(*id, SIGNAL_ABORTED_SLOT) => Ok(*id),
+            Value::Object(id) if self.is_abort_signal(*id) => Ok(*id),
             other => Err(InterpreterError::TypeError {
                 expected: format!("AbortSignal receiver for {method}"),
                 got: other.type_name().to_string(),
@@ -1228,20 +1304,20 @@ impl InterpreterCore {
         Ok(self.value_to_string(&primitive))
     }
 
-    fn has_event_slot(&self, id: ObjectId, slot: &str) -> bool {
+    fn has_record_slot(&self, id: ObjectId, slot: &str) -> bool {
         self.heap
             .get(id.0 as usize)
             .is_some_and(|object| object.properties.get(slot).is_some())
     }
 
-    fn event_slot(&self, id: ObjectId, slot: &str) -> Value {
+    fn record_slot(&self, id: ObjectId, slot: &str) -> Value {
         self.heap
             .get(id.0 as usize)
             .and_then(|object| object.properties.get(slot).cloned())
             .unwrap_or(Value::Undefined)
     }
 
-    fn set_event_slot(
+    fn set_record_slot(
         &mut self,
         id: ObjectId,
         slot: &str,
@@ -1250,13 +1326,51 @@ impl InterpreterCore {
         self.set_object_property(id, slot.to_string(), value)
     }
 
-    /// The objects of the array in slot `slot` of `id`.
+    fn event_array_slot_id(&self, id: ObjectId, slot: EventArraySlot) -> Option<ObjectId> {
+        let object = self.heap.get(id.0 as usize)?;
+        match slot {
+            EventArraySlot::Listeners => object.event_target_listeners(),
+            EventArraySlot::SignalAlgorithms => object.abort_signal_slots()?.algorithms,
+            EventArraySlot::SignalDependents => object.abort_signal_slots()?.dependents,
+        }
+    }
+
+    fn set_event_array_slot(
+        &mut self,
+        id: ObjectId,
+        slot: EventArraySlot,
+        list: Option<ObjectId>,
+    ) -> Result<(), InterpreterError> {
+        self.mutate_host_slots(id, |host_slots| match (slot, host_slots) {
+            (EventArraySlot::Listeners, HostObjectSlots::EventTarget(target)) => {
+                target.listeners = list;
+                Ok(())
+            }
+            (EventArraySlot::Listeners, HostObjectSlots::AbortSignal(signal)) => {
+                signal.listeners = list;
+                Ok(())
+            }
+            (EventArraySlot::SignalAlgorithms, HostObjectSlots::AbortSignal(signal)) => {
+                signal.algorithms = list;
+                Ok(())
+            }
+            (EventArraySlot::SignalDependents, HostObjectSlots::AbortSignal(signal)) => {
+                signal.dependents = list;
+                Ok(())
+            }
+            _ => Err(InterpreterError::InternalError {
+                details: "EventTarget/AbortSignal lost its internal array slot".to_string(),
+            }),
+        })?
+    }
+
+    /// The objects of the array in `slot` of `id`.
     fn event_array_objects(
         &mut self,
         id: ObjectId,
-        slot: &str,
+        slot: EventArraySlot,
     ) -> Result<Vec<ObjectId>, InterpreterError> {
-        let Value::Object(list) = self.event_slot(id, slot) else {
+        let Some(list) = self.event_array_slot_id(id, slot) else {
             return Ok(Vec::new());
         };
         Ok(self
@@ -1269,12 +1383,12 @@ impl InterpreterCore {
             .collect())
     }
 
-    /// Append to the array in slot `slot` of `id` (a fresh array, so a
+    /// Append to the array in `slot` of `id` (a fresh array, so a
     /// dispatch iterating the old one is unaffected).
     fn event_array_push(
         &mut self,
         id: ObjectId,
-        slot: &str,
+        slot: EventArraySlot,
         value: Value,
     ) -> Result<(), InterpreterError> {
         let mut values: Vec<Value> = self
@@ -1284,7 +1398,7 @@ impl InterpreterCore {
             .collect();
         values.push(value);
         let list = self.alloc_array_from_values(&values)?;
-        self.set_event_slot(id, slot, Value::Object(list))
+        self.set_event_array_slot(id, slot, Some(list))
     }
 
     /// Remove an internal record without touching any other registration.
@@ -1293,7 +1407,7 @@ impl InterpreterCore {
     fn event_array_remove(
         &mut self,
         id: ObjectId,
-        slot: &str,
+        slot: EventArraySlot,
         record: ObjectId,
     ) -> Result<(), InterpreterError> {
         let mut entries = self.event_array_objects(id, slot)?;
@@ -1303,12 +1417,12 @@ impl InterpreterCore {
             return Ok(());
         }
         let replacement = if entries.is_empty() {
-            Value::Undefined
+            None
         } else {
             let values: Vec<Value> = entries.into_iter().map(Value::Object).collect();
-            Value::Object(self.alloc_array_from_values(&values)?)
+            Some(self.alloc_array_from_values(&values)?)
         };
-        self.set_event_slot(id, slot, replacement)
+        self.set_event_array_slot(id, slot, replacement)
     }
 }
 
@@ -1363,7 +1477,7 @@ mod abort_graph_tests {
         let first = any(&mut core, &module, &[b, a, b]);
         let second = any(&mut core, &module, &[first, a, first]);
         assert_eq!(core.signal_source_objects(second).unwrap(), vec![b, a]);
-        let Value::Object(source_list) = core.event_slot(second, SIGNAL_SOURCES_SLOT) else {
+        let Some(source_list) = core.abort_signal_slots_cloned(second).unwrap().sources else {
             panic!("a dependent keeps its ordered source set");
         };
         assert_eq!(
@@ -1373,13 +1487,13 @@ mod abort_graph_tests {
         );
         for source in [a, b] {
             assert_eq!(
-                core.event_array_objects(source, SIGNAL_DEPENDENTS_SLOT)
+                core.event_array_objects(source, EventArraySlot::SignalDependents)
                     .unwrap(),
                 vec![first, second]
             );
         }
         assert!(
-            core.event_array_objects(first, SIGNAL_DEPENDENTS_SLOT)
+            core.event_array_objects(first, EventArraySlot::SignalDependents)
                 .unwrap()
                 .is_empty()
         );
@@ -1400,34 +1514,26 @@ mod abort_graph_tests {
         core.signal_abort_with(&module, a, Value::str("cancel"))
             .expect("abort a");
         assert!(
-            core.event_array_objects(a, SIGNAL_DEPENDENTS_SLOT)
+            core.event_array_objects(a, EventArraySlot::SignalDependents)
                 .unwrap()
                 .is_empty()
         );
         assert_eq!(
-            core.event_array_objects(b, SIGNAL_DEPENDENTS_SLOT).unwrap(),
+            core.event_array_objects(b, EventArraySlot::SignalDependents)
+                .unwrap(),
             vec![live]
         );
         for signal in [first, second] {
-            assert!(core.has_event_slot(signal, SIGNAL_SOURCES_SLOT));
+            assert!(core.abort_signal_is_composite(signal));
             assert!(core.signal_source_objects(signal).unwrap().is_empty());
-            assert_eq!(
-                core.event_slot(signal, SIGNAL_REASON_SLOT),
-                Value::str("cancel")
-            );
+            assert_eq!(core.abort_signal_reason(signal), Value::str("cancel"));
         }
         core.signal_abort_with(&module, b, Value::str("later"))
             .expect("abort b");
-        assert_eq!(
-            core.event_slot(live, SIGNAL_REASON_SLOT),
-            Value::str("later")
-        );
-        assert_eq!(
-            core.event_slot(second, SIGNAL_REASON_SLOT),
-            Value::str("cancel")
-        );
+        assert_eq!(core.abort_signal_reason(live), Value::str("later"));
+        assert_eq!(core.abort_signal_reason(second), Value::str("cancel"));
         assert!(
-            core.event_array_objects(b, SIGNAL_DEPENDENTS_SLOT)
+            core.event_array_objects(b, EventArraySlot::SignalDependents)
                 .unwrap()
                 .is_empty()
         );
@@ -1443,12 +1549,12 @@ mod abort_graph_tests {
         let empty = any(&mut core, &module, &[]);
         let nested = any(&mut core, &module, &[empty, empty]);
         assert!(
-            core.event_array_objects(empty, SIGNAL_DEPENDENTS_SLOT)
+            core.event_array_objects(empty, EventArraySlot::SignalDependents)
                 .unwrap()
                 .is_empty()
         );
         assert!(core.signal_source_objects(nested).unwrap().is_empty());
-        assert!(!core.event_slot(nested, SIGNAL_ABORTED_SLOT).is_truthy());
+        assert!(!core.abort_signal_is_aborted(nested));
     }
 
     #[test]
@@ -1462,23 +1568,17 @@ mod abort_graph_tests {
             core.signal_abort_with(&module, request, Value::Int(request_id))
                 .expect("finish request");
             assert!(
-                core.event_array_objects(shared, SIGNAL_DEPENDENTS_SLOT)
+                core.event_array_objects(shared, EventArraySlot::SignalDependents)
                     .unwrap()
                     .is_empty(),
                 "the shared source must release request {request_id}"
             );
-            assert_eq!(
-                core.event_slot(nested, SIGNAL_REASON_SLOT),
-                Value::Int(request_id)
-            );
+            assert_eq!(core.abort_signal_reason(nested), Value::Int(request_id));
         }
         let last = any(&mut core, &module, &[shared]);
         core.signal_abort_with(&module, shared, Value::str("shutdown"))
             .expect("new subscriptions still work after pruning");
-        assert_eq!(
-            core.event_slot(last, SIGNAL_REASON_SLOT),
-            Value::str("shutdown")
-        );
+        assert_eq!(core.abort_signal_reason(last), Value::str("shutdown"));
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
@@ -1501,8 +1601,11 @@ mod abort_graph_tests {
                 Value::Int(i64::from(original.0)),
             ])
             .expect("weak handles");
-        core.set_event_slot(dependent, SIGNAL_SOURCES_SLOT, Value::Object(list))
-            .expect("source list");
+        core.mutate_abort_signal_slots(dependent, |slots| {
+            slots.is_composite = true;
+            slots.sources = Some(list);
+        })
+        .expect("source list");
         assert_eq!(
             core.signal_source_objects(dependent).unwrap(),
             vec![original]
@@ -1565,32 +1668,33 @@ mod abort_graph_tests {
             [false, false],
         );
         assert_eq!(
-            core.event_slot(record, "signal"),
+            core.record_slot(record, "signal"),
             Value::Int(i64::from(signal.0))
         );
         core.event_target_remove_record(target, record).unwrap();
         assert_eq!(
-            core.event_array_objects(signal, SIGNAL_ALGORITHMS_SLOT)
+            core.event_array_objects(signal, EventArraySlot::SignalAlgorithms)
                 .unwrap(),
             vec![peer]
         );
         assert_eq!(
-            core.event_array_objects(target, LISTENERS_SLOT).unwrap(),
+            core.event_array_objects(target, EventArraySlot::Listeners)
+                .unwrap(),
             vec![peer]
         );
-        assert_eq!(core.event_slot(record, "signal"), Value::Undefined);
-        let list = core.event_slot(signal, SIGNAL_ALGORITHMS_SLOT);
+        assert_eq!(core.record_slot(record, "signal"), Value::Undefined);
+        let list = core.event_array_slot_id(signal, EventArraySlot::SignalAlgorithms);
         core.event_target_remove_record(target, record).unwrap();
         assert_eq!(
-            core.event_slot(signal, SIGNAL_ALGORITHMS_SLOT),
+            core.event_array_slot_id(signal, EventArraySlot::SignalAlgorithms),
             list,
             "idempotent unlink"
         );
         core.abort_signal(&module, signal, Value::Undefined)
             .unwrap();
-        assert!(core.event_slot(peer, "removed").is_truthy());
+        assert!(core.record_slot(peer, "removed").is_truthy());
         assert!(
-            core.event_array_objects(target, LISTENERS_SLOT)
+            core.event_array_objects(target, EventArraySlot::Listeners)
                 .unwrap()
                 .is_empty()
         );
@@ -1620,17 +1724,17 @@ mod abort_graph_tests {
         core.event_target_dispatch(&module, &Value::Object(target), &Value::Object(event))
             .unwrap();
         assert!(
-            core.event_array_objects(signal, SIGNAL_ALGORITHMS_SLOT)
+            core.event_array_objects(signal, EventArraySlot::SignalAlgorithms)
                 .unwrap()
                 .is_empty()
         );
         assert!(
-            core.event_array_objects(target, LISTENERS_SLOT)
+            core.event_array_objects(target, EventArraySlot::Listeners)
                 .unwrap()
                 .is_empty()
         );
         assert_eq!(
-            core.event_slot(record, "callback"),
+            core.record_slot(record, "callback"),
             callback,
             "snapshot must retain its callback"
         );
@@ -1657,13 +1761,13 @@ mod abort_graph_tests {
             );
             core.event_target_remove_record(target, record).unwrap();
             assert!(
-                core.event_array_objects(signal, SIGNAL_ALGORITHMS_SLOT)
+                core.event_array_objects(signal, EventArraySlot::SignalAlgorithms)
                     .unwrap()
                     .is_empty(),
                 "completed registration {attempt} was retained"
             );
         }
-        assert!(!core.event_slot(signal, SIGNAL_ABORTED_SLOT).is_truthy());
+        assert!(!core.abort_signal_is_aborted(signal));
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
@@ -1689,18 +1793,19 @@ mod abort_graph_tests {
         let new = listen(&mut core, &module, target, second, callback, [false, false]);
         core.abort_signal(&module, first, Value::Undefined).unwrap();
         assert_eq!(
-            core.event_array_objects(target, LISTENERS_SLOT).unwrap(),
+            core.event_array_objects(target, EventArraySlot::Listeners)
+                .unwrap(),
             vec![new]
         );
         assert_eq!(
-            core.event_array_objects(second, SIGNAL_ALGORITHMS_SLOT)
+            core.event_array_objects(second, EventArraySlot::SignalAlgorithms)
                 .unwrap(),
             vec![new]
         );
         core.abort_signal(&module, second, Value::Undefined)
             .unwrap();
         assert!(
-            core.event_array_objects(target, LISTENERS_SLOT)
+            core.event_array_objects(target, EventArraySlot::Listeners)
                 .unwrap()
                 .is_empty()
         );
@@ -1733,20 +1838,20 @@ mod abort_graph_tests {
             bubbling
         );
         assert_eq!(
-            core.event_array_objects(signal, SIGNAL_ALGORITHMS_SLOT)
+            core.event_array_objects(signal, EventArraySlot::SignalAlgorithms)
                 .unwrap(),
             vec![bubbling, capture]
         );
         core.event_target_remove_record(target, bubbling).unwrap();
         assert_eq!(
-            core.event_array_objects(signal, SIGNAL_ALGORITHMS_SLOT)
+            core.event_array_objects(signal, EventArraySlot::SignalAlgorithms)
                 .unwrap(),
             vec![capture]
         );
         core.abort_signal(&module, signal, Value::Undefined)
             .unwrap();
         assert!(
-            core.event_array_objects(target, LISTENERS_SLOT)
+            core.event_array_objects(target, EventArraySlot::Listeners)
                 .unwrap()
                 .is_empty()
         );
@@ -1766,12 +1871,12 @@ mod abort_graph_tests {
         core.abort_signal(&module, signal, Value::Undefined)
             .unwrap();
         assert_eq!(
-            core.event_slot(signal, SIGNAL_ALGORITHMS_SLOT),
-            Value::Undefined
+            core.event_array_slot_id(signal, EventArraySlot::SignalAlgorithms),
+            None
         );
         for target in targets {
             assert!(
-                core.event_array_objects(target, LISTENERS_SLOT)
+                core.event_array_objects(target, EventArraySlot::Listeners)
                     .unwrap()
                     .is_empty()
             );
@@ -1793,8 +1898,8 @@ mod abort_graph_tests {
         let options = core
             .alloc_object_with_properties(&[("signal", Value::Object(signal))])
             .unwrap();
-        let target_list = core.event_slot(target, LISTENERS_SLOT);
-        let signal_list = core.event_slot(signal, SIGNAL_ALGORITHMS_SLOT);
+        let target_list = core.event_array_slot_id(target, EventArraySlot::Listeners);
+        let signal_list = core.event_array_slot_id(signal, EventArraySlot::SignalAlgorithms);
         // Permit the listener record and replacement target list, but refuse
         // the third allocation: its cancellation registration's new array.
         let before = core.heap.live_len();
@@ -1812,13 +1917,20 @@ mod abort_graph_tests {
             before + 2,
             "reach the cancellation allocation"
         );
-        assert_eq!(core.event_slot(target, LISTENERS_SLOT), target_list);
-        assert_eq!(core.event_slot(signal, SIGNAL_ALGORITHMS_SLOT), signal_list);
         assert_eq!(
-            core.event_array_objects(target, LISTENERS_SLOT).unwrap(),
+            core.event_array_slot_id(target, EventArraySlot::Listeners),
+            target_list
+        );
+        assert_eq!(
+            core.event_array_slot_id(signal, EventArraySlot::SignalAlgorithms),
+            signal_list
+        );
+        assert_eq!(
+            core.event_array_objects(target, EventArraySlot::Listeners)
+                .unwrap(),
             vec![peer]
         );
-        assert!(!core.event_slot(peer, "removed").is_truthy());
+        assert!(!core.record_slot(peer, "removed").is_truthy());
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
@@ -1845,9 +1957,11 @@ mod abort_graph_tests {
             Value::Object(options),
         )
         .unwrap();
-        let ordinary = core.event_array_objects(signal, LISTENERS_SLOT).unwrap()[0];
+        let ordinary = core
+            .event_array_objects(signal, EventArraySlot::Listeners)
+            .unwrap()[0];
         // Even a property on the internal record does not confer the brand.
-        core.set_event_slot(
+        core.set_record_slot(
             ordinary,
             "__type",
             Value::str(PROTECTED_ABORT_LISTENER_BRAND),
@@ -1861,7 +1975,9 @@ mod abort_graph_tests {
         .unwrap();
         core.register_protected_abort_listener(RegRange { start: 0, count: 2 })
             .unwrap();
-        let protected = core.event_array_objects(signal, LISTENERS_SLOT).unwrap()[1];
+        let protected = core
+            .event_array_objects(signal, EventArraySlot::Listeners)
+            .unwrap()[1];
         assert_eq!(
             core.heap[protected.0 as usize].brand(),
             Some(PROTECTED_ABORT_LISTENER_BRAND)
@@ -1869,14 +1985,17 @@ mod abort_graph_tests {
         let event = core
             .alloc_event("Event", "abort", [false; 3], Value::Null)
             .unwrap();
-        core.set_event_slot(event, EVENT_STOP_IMMEDIATE_SLOT, Value::Bool(true))
-            .unwrap();
+        core.mutate_event_slots(event, |slots| {
+            slots.stop_immediate = true;
+        })
+        .unwrap();
         core.event_target_dispatch(&module, &Value::Object(signal), &Value::Object(event))
             .unwrap();
-        assert!(!core.event_slot(ordinary, "removed").is_truthy());
-        assert!(core.event_slot(protected, "removed").is_truthy());
+        assert!(!core.record_slot(ordinary, "removed").is_truthy());
+        assert!(core.record_slot(protected, "removed").is_truthy());
         assert_eq!(
-            core.event_array_objects(signal, LISTENERS_SLOT).unwrap(),
+            core.event_array_objects(signal, EventArraySlot::Listeners)
+                .unwrap(),
             vec![ordinary]
         );
         assert_eq!(
@@ -1899,19 +2018,22 @@ mod abort_graph_tests {
             Value::Undefined,
         )
         .unwrap();
-        let original = core.event_array_objects(signal, LISTENERS_SLOT).unwrap();
+        let original = core
+            .event_array_objects(signal, EventArraySlot::Listeners)
+            .unwrap();
         core.seed_register(0, Value::Object(signal)).unwrap();
         core.seed_register(1, callback).unwrap();
         let before = core.estimated_memory_bytes();
         core.register_protected_abort_listener(RegRange { start: 0, count: 2 })
             .unwrap();
         assert_eq!(
-            core.event_array_objects(signal, LISTENERS_SLOT).unwrap(),
+            core.event_array_objects(signal, EventArraySlot::Listeners)
+                .unwrap(),
             original
         );
         assert_eq!(core.estimated_memory_bytes(), before);
         assert_eq!(core.heap[original[0].0 as usize].brand(), None);
-        assert!(!core.event_slot(original[0], "once").is_truthy());
+        assert!(!core.record_slot(original[0], "once").is_truthy());
     }
 
     #[test]
@@ -1924,14 +2046,17 @@ mod abort_graph_tests {
             Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::ArrayIsArray)),
         )
         .unwrap();
-        let original = core.event_slot(signal, LISTENERS_SLOT);
+        let original = core.event_array_slot_id(signal, EventArraySlot::Listeners);
         let before = core.heap.live_len();
         // Admit the fully branded record, refuse the replacement listener list.
         core.config.max_heap_objects = u32::try_from(before + 1).unwrap();
         core.register_protected_abort_listener(RegRange { start: 0, count: 2 })
             .expect_err("listener-list allocation is refused");
         assert_eq!(core.heap.live_len(), before + 1);
-        assert_eq!(core.event_slot(signal, LISTENERS_SLOT), original);
+        assert_eq!(
+            core.event_array_slot_id(signal, EventArraySlot::Listeners),
+            original
+        );
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
@@ -1957,7 +2082,7 @@ mod abort_graph_tests {
             Err(InterpreterError::CapabilityDenied { .. })
         ));
         assert!(
-            core.event_array_objects(signal, LISTENERS_SLOT)
+            core.event_array_objects(signal, EventArraySlot::Listeners)
                 .unwrap()
                 .is_empty()
         );
@@ -1968,7 +2093,7 @@ mod abort_graph_tests {
         core.dispatch_builtin_hostcall(tag, RegRange { start: 0, count: 2 }, Some(&module))
             .unwrap();
         assert_eq!(
-            core.event_array_objects(signal, LISTENERS_SLOT)
+            core.event_array_objects(signal, EventArraySlot::Listeners)
                 .unwrap()
                 .len(),
             1

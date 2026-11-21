@@ -7650,9 +7650,8 @@ enum CollectionSeedSource {
 }
 
 /// A typed array's heap entries that are not own properties in ES2020
-/// (prototype accessors and engine slots); see own_property_visible.
-const TYPED_ARRAY_SLOT_KEYS: [&str; 6] = [
-    "__typedArrayKind",
+/// (prototype accessors); see own_property_visible.
+const TYPED_ARRAY_SLOT_KEYS: [&str; 5] = [
     "length",
     "byteLength",
     "byteOffset",
@@ -9511,6 +9510,12 @@ enum HostObjectSlots {
     FsEntryKind(FsEntryKindSlots),
     TimerHandle(u32),
     TimersPromisesInterval(TimersPromisesIntervalSlots),
+    IteratorHelper(IteratorHelperSlots),
+    RegExpStringIterator(RegExpStringIteratorSlots),
+    EventTarget(EventTargetSlots),
+    Event(EventSlots),
+    AbortController(ObjectId),
+    AbortSignal(AbortSignalSlots),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -9543,6 +9548,74 @@ struct TimersPromisesIntervalSlots {
     delay_ms: u64,
     value: Value,
     done: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+enum IteratorHelperKind {
+    Map,
+    Filter,
+    FlatMap,
+    Take,
+    Drop,
+    Wrap,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct IteratorHelperSlots {
+    kind: IteratorHelperKind,
+    iterated: Value,
+    next: Value,
+    callback: Value,
+    counter: i64,
+    remaining: Value,
+    inner: Value,
+    inner_next: Value,
+    done: bool,
+    running: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct RegExpStringIteratorSlots {
+    regexp: Value,
+    subject: JsString,
+    subject_label: Label,
+    global: bool,
+    full_unicode: bool,
+    done: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+struct EventTargetSlots {
+    listeners: Option<ObjectId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct EventSlots {
+    event_type: JsString,
+    bubbles: bool,
+    cancelable: bool,
+    composed: bool,
+    default_prevented: bool,
+    phase: i64,
+    target: Value,
+    current_target: Value,
+    time_stamp: Value,
+    stop: bool,
+    stop_immediate: bool,
+    in_passive: bool,
+    dispatching: bool,
+    detail: Option<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct AbortSignalSlots {
+    listeners: Option<ObjectId>,
+    aborted: bool,
+    reason: Value,
+    algorithms: Option<ObjectId>,
+    dependents: Option<ObjectId>,
+    is_composite: bool,
+    sources: Option<ObjectId>,
 }
 
 impl HeapObject {
@@ -9605,6 +9678,56 @@ impl HeapObject {
     fn timers_promises_interval_slots_mut(&mut self) -> Option<&mut TimersPromisesIntervalSlots> {
         match self.host_slots.as_deref_mut() {
             Some(HostObjectSlots::TimersPromisesInterval(slots)) => Some(slots),
+            _ => None,
+        }
+    }
+
+    fn iterator_helper_slots(&self) -> Option<&IteratorHelperSlots> {
+        match self.host_slots.as_deref() {
+            Some(HostObjectSlots::IteratorHelper(slots)) => Some(slots),
+            _ => None,
+        }
+    }
+
+    fn regexp_string_iterator_slots(&self) -> Option<&RegExpStringIteratorSlots> {
+        match self.host_slots.as_deref() {
+            Some(HostObjectSlots::RegExpStringIterator(slots)) => Some(slots),
+            _ => None,
+        }
+    }
+
+    fn is_event_target(&self) -> bool {
+        matches!(
+            self.host_slots.as_deref(),
+            Some(HostObjectSlots::EventTarget(_) | HostObjectSlots::AbortSignal(_))
+        )
+    }
+
+    fn event_target_listeners(&self) -> Option<ObjectId> {
+        match self.host_slots.as_deref() {
+            Some(HostObjectSlots::EventTarget(target)) => target.listeners,
+            Some(HostObjectSlots::AbortSignal(signal)) => signal.listeners,
+            _ => None,
+        }
+    }
+
+    fn event_slots(&self) -> Option<&EventSlots> {
+        match self.host_slots.as_deref() {
+            Some(HostObjectSlots::Event(slots)) => Some(slots),
+            _ => None,
+        }
+    }
+
+    fn abort_controller_signal(&self) -> Option<ObjectId> {
+        match self.host_slots.as_deref() {
+            Some(HostObjectSlots::AbortController(signal)) => Some(*signal),
+            _ => None,
+        }
+    }
+
+    fn abort_signal_slots(&self) -> Option<&AbortSignalSlots> {
+        match self.host_slots.as_deref() {
+            Some(HostObjectSlots::AbortSignal(slots)) => Some(slots),
             _ => None,
         }
     }
@@ -10360,10 +10483,34 @@ fn validate_heap_symbol_references(
             HostObjectSlots::TimersPromisesInterval(interval) => {
                 validate_symbol_value(state, &interval.value)?;
             }
+            HostObjectSlots::IteratorHelper(helper) => {
+                validate_symbol_value(state, &helper.iterated)?;
+                validate_symbol_value(state, &helper.next)?;
+                validate_symbol_value(state, &helper.callback)?;
+                validate_symbol_value(state, &helper.remaining)?;
+                validate_symbol_value(state, &helper.inner)?;
+                validate_symbol_value(state, &helper.inner_next)?;
+            }
+            HostObjectSlots::RegExpStringIterator(rsi) => {
+                validate_symbol_value(state, &rsi.regexp)?;
+            }
+            HostObjectSlots::Event(event) => {
+                validate_symbol_value(state, &event.target)?;
+                validate_symbol_value(state, &event.current_target)?;
+                validate_symbol_value(state, &event.time_stamp)?;
+                if let Some(detail) = &event.detail {
+                    validate_symbol_value(state, detail)?;
+                }
+            }
+            HostObjectSlots::AbortSignal(signal) => {
+                validate_symbol_value(state, &signal.reason)?;
+            }
             HostObjectSlots::TextDecoder(_)
             | HostObjectSlots::IntlResolved(_)
             | HostObjectSlots::FsEntryKind(_)
-            | HostObjectSlots::TimerHandle(_) => {}
+            | HostObjectSlots::TimerHandle(_)
+            | HostObjectSlots::EventTarget(_)
+            | HostObjectSlots::AbortController(_) => {}
         }
     }
     for value in object.properties.all_data_values() {

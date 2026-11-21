@@ -11736,8 +11736,7 @@ impl InterpreterCore {
     /// %TypedArray%.prototype accessors (ES2020 22.2.3), as are an
     /// ArrayBuffer's `byteLength` (24.1.4.1) and a DataView's `buffer`,
     /// `byteLength` and `byteOffset` (24.3.4); the engine keeps those as heap
-    /// entries (plus the `__type`/`__typedArrayKind` slots), which [[Get]]
-    /// and `in` still read, but they are not own keys.
+    /// entries, which [[Get]] and `in` still read, but they are not own keys.
     pub(super) fn own_property_visible(&self, object_id: ObjectId, key: &str) -> bool {
         let writable_view = (self.writable_streams.contains_key(&object_id)
             || self.writable_terminal_states.contains_key(&object_id))
@@ -11746,13 +11745,7 @@ impl InterpreterCore {
             .heap
             .get(object_id.0 as usize)
             .is_some_and(|object| Self::binary_slot_key(object, key));
-        // The internal slots of events, targets and signals (bd-9vouw.170).
-        let event_slot = event_target::EVENT_FAMILY_SLOT_KEYS.contains(&key);
-        // Iterator helpers' and matchAll iterators' slots: Reflect.ownKeys of
-        // `[].values().map(f)` listed ten of them (bd-9vouw.476).
-        let iterator_slot = iterator_helpers::ITERATOR_HELPER_SLOT_KEYS.contains(&key)
-            || iterator_helpers::REGEXP_STRING_ITERATOR_SLOT_KEYS.contains(&key);
-        !(writable_view || binary_slot || event_slot || iterator_slot)
+        !(writable_view || binary_slot)
     }
 
     /// Whether `key` is one of the heap entries through which `object`, a

@@ -9172,6 +9172,81 @@ impl InterpreterCore {
                                 &mut queued,
                             );
                         }
+                        HostObjectSlots::IteratorHelper(helper) => {
+                            for value in [
+                                &helper.iterated,
+                                &helper.next,
+                                &helper.callback,
+                                &helper.inner,
+                                &helper.inner_next,
+                            ] {
+                                Self::queue_object_id_from_value(value, &mut frontier, &mut queued);
+                            }
+                        }
+                        HostObjectSlots::RegExpStringIterator(rsi) => {
+                            Self::queue_object_id_from_value(
+                                &rsi.regexp,
+                                &mut frontier,
+                                &mut queued,
+                            );
+                        }
+                        HostObjectSlots::EventTarget(target) => {
+                            if let Some(listeners) = target.listeners {
+                                Self::queue_object_id_from_value(
+                                    &Value::Object(listeners),
+                                    &mut frontier,
+                                    &mut queued,
+                                );
+                            }
+                        }
+                        HostObjectSlots::Event(event) => {
+                            Self::queue_object_id_from_value(
+                                &event.target,
+                                &mut frontier,
+                                &mut queued,
+                            );
+                            Self::queue_object_id_from_value(
+                                &event.current_target,
+                                &mut frontier,
+                                &mut queued,
+                            );
+                            if let Some(detail) = &event.detail {
+                                Self::queue_object_id_from_value(
+                                    detail,
+                                    &mut frontier,
+                                    &mut queued,
+                                );
+                            }
+                        }
+                        HostObjectSlots::AbortController(signal) => {
+                            Self::queue_object_id_from_value(
+                                &Value::Object(*signal),
+                                &mut frontier,
+                                &mut queued,
+                            );
+                        }
+                        HostObjectSlots::AbortSignal(signal) => {
+                            for id in [
+                                signal.listeners,
+                                signal.algorithms,
+                                signal.dependents,
+                                signal.sources,
+                            ]
+                            .into_iter()
+                            .flatten()
+                            {
+                                Self::queue_object_id_from_value(
+                                    &Value::Object(id),
+                                    &mut frontier,
+                                    &mut queued,
+                                );
+                            }
+                            Self::queue_object_id_from_value(
+                                &signal.reason,
+                                &mut frontier,
+                                &mut queued,
+                            );
+                        }
                         HostObjectSlots::TextDecoder(_)
                         | HostObjectSlots::FsEntryKind(_)
                         | HostObjectSlots::TimerHandle(_) => {}

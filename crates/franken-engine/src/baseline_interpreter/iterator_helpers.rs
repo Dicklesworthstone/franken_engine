@@ -78,52 +78,16 @@ pub(super) const ITERATOR_HELPER_METHODS: [(&str, &str, &str); 17] = [
     ),
 ];
 
-const KIND_SLOT: &str = "__iteratorHelperKind";
-const ITERATED_SLOT: &str = "__iteratorHelperIterated";
-const NEXT_SLOT: &str = "__iteratorHelperNext";
-const CALLBACK_SLOT: &str = "__iteratorHelperCallback";
-const COUNTER_SLOT: &str = "__iteratorHelperCounter";
-const REMAINING_SLOT: &str = "__iteratorHelperRemaining";
-const INNER_SLOT: &str = "__iteratorHelperInner";
-const INNER_NEXT_SLOT: &str = "__iteratorHelperInnerNext";
-const DONE_SLOT: &str = "__iteratorHelperDone";
-const RUNNING_SLOT: &str = "__iteratorHelperRunning";
-
-/// Hidden from own-key enumeration and reflection (`own_property_visible`).
-pub(super) const ITERATOR_HELPER_SLOT_KEYS: [&str; 10] = [
-    KIND_SLOT,
-    ITERATED_SLOT,
-    NEXT_SLOT,
-    CALLBACK_SLOT,
-    COUNTER_SLOT,
-    REMAINING_SLOT,
-    INNER_SLOT,
-    INNER_NEXT_SLOT,
-    DONE_SLOT,
-    RUNNING_SLOT,
-];
-
-/// A matchAll iterator's slots: the RegExp it runs (the matcher @@matchAll
-/// constructed), the subject (labelled with the matchAll arguments' label,
-/// which a guest `exec` it calls receives), whether the RegExp is global and
-/// full-Unicode, and whether it is done.
-const RSI_REGEXP_SLOT: &str = "__regexpStringIteratorRegExp";
-const RSI_STRING_SLOT: &str = "__regexpStringIteratorString";
-const RSI_GLOBAL_SLOT: &str = "__regexpStringIteratorGlobal";
-const RSI_UNICODE_SLOT: &str = "__regexpStringIteratorUnicode";
-const RSI_DONE_SLOT: &str = "__regexpStringIteratorDone";
-
-/// Hidden from own-key enumeration and reflection (`own_property_visible`).
-pub(super) const REGEXP_STRING_ITERATOR_SLOT_KEYS: [&str; 5] = [
-    RSI_REGEXP_SLOT,
-    RSI_STRING_SLOT,
-    RSI_GLOBAL_SLOT,
-    RSI_UNICODE_SLOT,
-    RSI_DONE_SLOT,
-];
-
-/// A wrapper made by `Iterator.from` carries this kind.
-const WRAPPER_KIND: &str = "wrap";
+fn helper_kind_from_name(name: &str) -> Option<IteratorHelperKind> {
+    match name {
+        "map" => Some(IteratorHelperKind::Map),
+        "filter" => Some(IteratorHelperKind::Filter),
+        "flatMap" => Some(IteratorHelperKind::FlatMap),
+        "take" => Some(IteratorHelperKind::Take),
+        "drop" => Some(IteratorHelperKind::Drop),
+        _ => None,
+    }
+}
 
 pub(super) fn helper_method(specifier: &'static str) -> Value {
     Value::BuiltinFunction(BuiltinFunction {
@@ -175,13 +139,12 @@ impl InterpreterCore {
             "IteratorHelper.return" => self.iterator_helper_return(module, &receiver),
             "WrapForValidIterator.next" => {
                 let wrapper = self.iterator_helper_receiver(&receiver, true, "next")?;
-                let iterated = self.iterator_helper_slot(wrapper, ITERATED_SLOT)?;
-                let next = self.iterator_helper_slot(wrapper, NEXT_SLOT)?;
-                self.invoke_inline_method_call(Some(module), next, iterated, Vec::new())
+                let slots = self.iterator_helper_slots_cloned(wrapper)?;
+                self.invoke_inline_method_call(Some(module), slots.next, slots.iterated, Vec::new())
             }
             "WrapForValidIterator.return" => {
                 let wrapper = self.iterator_helper_receiver(&receiver, true, "return")?;
-                let iterated = self.iterator_helper_slot(wrapper, ITERATED_SLOT)?;
+                let iterated = self.iterator_helper_slots_cloned(wrapper)?.iterated;
                 let return_method = self.get_v(module, &iterated, &string_key("return"))?;
                 if matches!(return_method, Value::Undefined | Value::Null) {
                     return self.alloc_iterator_result_object(None);
@@ -217,7 +180,7 @@ impl InterpreterCore {
     }
 
     /// The helper behind `receiver` (or the `Iterator.from` wrapper when
-    /// `wrapper` is set): an object with the kind slot.
+    /// `wrapper` is set): an object with engine-private `IteratorHelperSlots`.
     fn iterator_helper_receiver(
         &self,
         receiver: &Value,
@@ -225,11 +188,11 @@ impl InterpreterCore {
         method: &str,
     ) -> Result<ObjectId, InterpreterError> {
         if let Value::Object(id) = receiver
-            && let Some(Value::Str(kind)) = self
+            && let Some(slots) = self
                 .heap
                 .get(id.0 as usize)
-                .and_then(|object| object.properties.get(KIND_SLOT))
-            && (kind.as_str() == Some(WRAPPER_KIND)) == wrapper
+                .and_then(HeapObject::iterator_helper_slots)
+            && (slots.kind == IteratorHelperKind::Wrap) == wrapper
         {
             return Ok(*id);
         }
@@ -244,6 +207,32 @@ impl InterpreterCore {
             ),
             got: receiver.type_name().to_string(),
         })
+    }
+
+    fn iterator_helper_slots_cloned(
+        &self,
+        id: ObjectId,
+    ) -> Result<IteratorHelperSlots, InterpreterError> {
+        self.heap
+            .get(id.0 as usize)
+            .and_then(HeapObject::iterator_helper_slots)
+            .cloned()
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: "iterator helper lost its internal slots".to_string(),
+            })
+    }
+
+    fn mutate_iterator_helper_slots<R>(
+        &mut self,
+        id: ObjectId,
+        mutate: impl FnOnce(&mut IteratorHelperSlots) -> R,
+    ) -> Result<R, InterpreterError> {
+        self.mutate_host_slots(id, |slots| match slots {
+            HostObjectSlots::IteratorHelper(helper) => Ok(mutate(helper)),
+            _ => Err(InterpreterError::InternalError {
+                details: "iterator helper lost its internal slots".to_string(),
+            }),
+        })?
     }
 
     /// CreateRegExpStringIterator(R, S, global, fullUnicode) (ES2024
@@ -261,19 +250,17 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let prototype = self.ensure_builtin_prototype(REGEXP_STRING_ITERATOR_PROTOTYPE)?;
         let iterator = self.alloc_object_with_prototype(Some(prototype))?;
-        self.iterator_helper_set(iterator, RSI_REGEXP_SLOT, regexp)?;
-        self.iterator_helper_set(iterator, RSI_STRING_SLOT, Value::Str(subject))?;
-        if *label != Label::Public {
-            self.set_own_runtime_property_label(
-                iterator,
-                &RuntimePropertyKey::String(JsString::from(RSI_STRING_SLOT)),
-                label,
-            )?;
-        }
-        self.iterator_helper_set(iterator, RSI_GLOBAL_SLOT, Value::Bool(global))?;
-        self.iterator_helper_set(iterator, RSI_UNICODE_SLOT, Value::Bool(full_unicode))?;
-        self.iterator_helper_set(iterator, RSI_DONE_SLOT, Value::Bool(false))?;
-        self.hide_internal_slots(iterator, &REGEXP_STRING_ITERATOR_SLOT_KEYS)?;
+        self.set_host_slots(
+            iterator,
+            HostObjectSlots::RegExpStringIterator(RegExpStringIteratorSlots {
+                regexp,
+                subject,
+                subject_label: label.clone(),
+                global,
+                full_unicode,
+                done: false,
+            }),
+        )?;
         Ok(Value::Object(iterator))
     }
 
@@ -290,15 +277,21 @@ impl InterpreterCore {
         module: &Ir3Module,
         receiver: &Value,
     ) -> Result<Value, InterpreterError> {
-        let iterator = match receiver {
-            Value::Object(id)
-                if self
-                    .heap
-                    .get(id.0 as usize)
-                    .is_some_and(|object| object.properties.contains_key(RSI_REGEXP_SLOT)) =>
+        let (iterator, rsi) = match receiver {
+            Value::Object(id) => match self
+                .heap
+                .get(id.0 as usize)
+                .and_then(HeapObject::regexp_string_iterator_slots)
+                .cloned()
             {
-                *id
-            }
+                Some(slots) => (*id, slots),
+                None => {
+                    return Err(InterpreterError::TypeError {
+                        expected: "a RegExp String Iterator for next".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                }
+            },
             other => {
                 return Err(InterpreterError::TypeError {
                     expected: "a RegExp String Iterator for next".to_string(),
@@ -306,55 +299,39 @@ impl InterpreterCore {
                 });
             }
         };
-        if matches!(
-            self.iterator_helper_slot(iterator, RSI_DONE_SLOT)?,
-            Value::Bool(true)
-        ) {
+        if rsi.done {
             return self.alloc_iterator_result_object(None);
         }
-        let regexp = self.iterator_helper_slot(iterator, RSI_REGEXP_SLOT)?;
-        let subject = self.iterator_helper_slot(iterator, RSI_STRING_SLOT)?;
-        let global = matches!(
-            self.iterator_helper_slot(iterator, RSI_GLOBAL_SLOT)?,
-            Value::Bool(true)
-        );
+        let regexp = rsi.regexp;
+        let text = rsi.subject;
+        let global = rsi.global;
+        let full_unicode = rsi.full_unicode;
+        let label = rsi.subject_label;
         // Each exec costs what the guest `re.exec(s)` it stands for would:
         // one instruction of the run's budget.
         self.charge_property_copy_work()?;
         if !self.regexp_is_pristine(&regexp) {
-            let Value::Str(text) = &subject else {
-                return Err(InterpreterError::InternalError {
-                    details: "RegExp String Iterator lost its string".to_string(),
-                });
-            };
-            let full_unicode = matches!(
-                self.iterator_helper_slot(iterator, RSI_UNICODE_SLOT)?,
-                Value::Bool(true)
-            );
-            let label = self.runtime_property_label(
-                iterator,
-                &RuntimePropertyKey::String(JsString::from(RSI_STRING_SLOT)),
-            );
             let found = self.regexp_string_iterator_step_generic(
                 module,
                 &regexp,
-                text,
+                &text,
                 global,
                 full_unicode,
                 &label,
             )?;
             if found.is_none() || !global {
-                self.iterator_helper_set(iterator, RSI_DONE_SLOT, Value::Bool(true))?;
+                self.set_regexp_string_iterator_done(iterator)?;
             }
             return self.alloc_iterator_result_object(found);
         }
-        let result = self.regexp_prototype_exec(regexp.clone(), &subject)?;
+        let subject_value = Value::Str(text.clone());
+        let result = self.regexp_prototype_exec(regexp.clone(), &subject_value)?;
         let Value::Object(result_id) = result else {
-            self.iterator_helper_set(iterator, RSI_DONE_SLOT, Value::Bool(true))?;
+            self.set_regexp_string_iterator_done(iterator)?;
             return self.alloc_iterator_result_object(None);
         };
         if !global {
-            self.iterator_helper_set(iterator, RSI_DONE_SLOT, Value::Bool(true))?;
+            self.set_regexp_string_iterator_done(iterator)?;
             return self.alloc_iterator_result_object(Some(result));
         }
         let empty_match = matches!(
@@ -363,7 +340,7 @@ impl InterpreterCore {
                 .and_then(|object| object.properties.get("0")),
             Some(Value::Str(matched)) if matched.is_empty()
         );
-        if empty_match && let (Value::Object(regexp_id), Value::Str(text)) = (&regexp, &subject) {
+        if empty_match && let Value::Object(regexp_id) = &regexp {
             let this_index = match self
                 .heap
                 .get(regexp_id.0 as usize)
@@ -372,10 +349,6 @@ impl InterpreterCore {
                 Some(Value::Int(index)) => usize::try_from(*index).unwrap_or(0),
                 _ => 0,
             };
-            let full_unicode = matches!(
-                self.iterator_helper_slot(iterator, RSI_UNICODE_SLOT)?,
-                Value::Bool(true)
-            );
             let surrogate_pair = full_unicode
                 && text
                     .code_unit_at(this_index)
@@ -393,22 +366,16 @@ impl InterpreterCore {
         self.alloc_iterator_result_object(Some(result))
     }
 
-    fn iterator_helper_slot(&self, id: ObjectId, slot: &str) -> Result<Value, InterpreterError> {
-        self.heap
-            .get(id.0 as usize)
-            .and_then(|object| object.properties.get(slot).cloned())
-            .ok_or_else(|| InterpreterError::InternalError {
-                details: format!("iterator helper lost its {slot} slot"),
-            })
-    }
-
-    fn iterator_helper_set(
-        &mut self,
-        id: ObjectId,
-        slot: &str,
-        value: Value,
-    ) -> Result<(), InterpreterError> {
-        self.set_object_property(id, slot.to_string(), value)
+    fn set_regexp_string_iterator_done(&mut self, id: ObjectId) -> Result<(), InterpreterError> {
+        self.mutate_host_slots(id, |slots| match slots {
+            HostObjectSlots::RegExpStringIterator(rsi) => {
+                rsi.done = true;
+                Ok(())
+            }
+            _ => Err(InterpreterError::InternalError {
+                details: "RegExp String Iterator lost its internal slots".to_string(),
+            }),
+        })?
     }
 
     /// GetIteratorDirect(obj): the iterator record of an iterator object, its
@@ -582,33 +549,28 @@ impl InterpreterCore {
             }
         };
         let next = self.iterator_direct_next(module, &receiver)?;
+        let helper_kind =
+            helper_kind_from_name(kind).ok_or_else(|| InterpreterError::InternalError {
+                details: format!("unknown iterator helper kind {kind}"),
+            })?;
         let prototype = self.ensure_builtin_prototype(ITERATOR_HELPER_PROTOTYPE)?;
         let helper = self.alloc_object_with_prototype(Some(prototype))?;
-        for (slot, value) in [
-            (KIND_SLOT, Value::str(kind)),
-            (ITERATED_SLOT, receiver),
-            (NEXT_SLOT, next),
-            (CALLBACK_SLOT, callback),
-            (COUNTER_SLOT, Value::Int(0)),
-            (REMAINING_SLOT, remaining),
-            (INNER_SLOT, Value::Undefined),
-            (INNER_NEXT_SLOT, Value::Undefined),
-            (DONE_SLOT, Value::Bool(false)),
-            (RUNNING_SLOT, Value::Bool(false)),
-        ] {
-            self.iterator_helper_set(helper, slot, value)?;
-        }
-        self.hide_internal_slots(helper, &ITERATOR_HELPER_SLOT_KEYS)?;
+        self.set_host_slots(
+            helper,
+            HostObjectSlots::IteratorHelper(IteratorHelperSlots {
+                kind: helper_kind,
+                iterated: receiver,
+                next,
+                callback,
+                counter: 0,
+                remaining,
+                inner: Value::Undefined,
+                inner_next: Value::Undefined,
+                done: false,
+                running: false,
+            }),
+        )?;
         Ok(Value::Object(helper))
-    }
-
-    fn iterator_helper_flag(&self, id: ObjectId, slot: &str) -> bool {
-        matches!(
-            self.heap
-                .get(id.0 as usize)
-                .and_then(|object| object.properties.get(slot)),
-            Some(Value::Bool(true))
-        )
     }
 
     fn iterator_helper_next(
@@ -617,35 +579,29 @@ impl InterpreterCore {
         receiver: &Value,
     ) -> Result<Value, InterpreterError> {
         let helper = self.iterator_helper_receiver(receiver, false, "next")?;
-        if self.iterator_helper_flag(helper, RUNNING_SLOT) {
+        let slots = self.iterator_helper_slots_cloned(helper)?;
+        if slots.running {
             return Err(InterpreterError::TypeError {
                 expected: "an iterator helper that is not running".to_string(),
                 got: "a reentrant next()".to_string(),
             });
         }
-        if self.iterator_helper_flag(helper, DONE_SLOT) {
+        if slots.done {
             return self.alloc_iterator_result_object(None);
         }
-        self.iterator_helper_set(helper, RUNNING_SLOT, Value::Bool(true))?;
+        self.mutate_iterator_helper_slots(helper, |state| state.running = true)?;
         let step = self.iterator_helper_step(module, helper);
-        self.iterator_helper_set(helper, RUNNING_SLOT, Value::Bool(false))?;
+        self.mutate_iterator_helper_slots(helper, |state| state.running = false)?;
         match step {
             Ok(Some(value)) => self.alloc_iterator_result_object(Some(value)),
             Ok(None) => {
-                self.iterator_helper_set(helper, DONE_SLOT, Value::Bool(true))?;
+                self.mutate_iterator_helper_slots(helper, |state| state.done = true)?;
                 self.alloc_iterator_result_object(None)
             }
             Err(error) => {
-                self.iterator_helper_set(helper, DONE_SLOT, Value::Bool(true))?;
+                self.mutate_iterator_helper_slots(helper, |state| state.done = true)?;
                 Err(error)
             }
-        }
-    }
-
-    fn iterator_helper_counter(&self, helper: ObjectId) -> Result<i64, InterpreterError> {
-        match self.iterator_helper_slot(helper, COUNTER_SLOT)? {
-            Value::Int(counter) => Ok(counter),
-            _ => Ok(0),
         }
     }
 
@@ -654,7 +610,9 @@ impl InterpreterCore {
         helper: ObjectId,
         counter: i64,
     ) -> Result<(), InterpreterError> {
-        self.iterator_helper_set(helper, COUNTER_SLOT, Value::Int(counter.saturating_add(1)))
+        self.mutate_iterator_helper_slots(helper, |state| {
+            state.counter = counter.saturating_add(1);
+        })
     }
 
     /// One step of a lazy helper: the value it yields, or `None` when done.
@@ -663,19 +621,17 @@ impl InterpreterCore {
         module: &Ir3Module,
         helper: ObjectId,
     ) -> Result<Option<Value>, InterpreterError> {
-        let kind = match self.iterator_helper_slot(helper, KIND_SLOT)? {
-            Value::Str(kind) => kind.to_string(),
-            _ => String::new(),
-        };
-        let iterated = self.iterator_helper_slot(helper, ITERATED_SLOT)?;
-        let next = self.iterator_helper_slot(helper, NEXT_SLOT)?;
-        let callback = self.iterator_helper_slot(helper, CALLBACK_SLOT)?;
-        match kind.as_str() {
-            "map" => {
+        let slots = self.iterator_helper_slots_cloned(helper)?;
+        let kind = slots.kind;
+        let iterated = slots.iterated;
+        let next = slots.next;
+        let callback = slots.callback;
+        match kind {
+            IteratorHelperKind::Map => {
                 let Some(value) = self.iterator_helper_step_value(module, &iterated, &next)? else {
                     return Ok(None);
                 };
-                let counter = self.iterator_helper_counter(helper)?;
+                let counter = self.iterator_helper_slots_cloned(helper)?.counter;
                 let mapped = match self.invoke_inline_method_call(
                     Some(module),
                     callback,
@@ -692,11 +648,11 @@ impl InterpreterCore {
                 self.iterator_helper_bump(helper, counter)?;
                 Ok(Some(mapped))
             }
-            "filter" => loop {
+            IteratorHelperKind::Filter => loop {
                 let Some(value) = self.iterator_helper_step_value(module, &iterated, &next)? else {
                     return Ok(None);
                 };
-                let counter = self.iterator_helper_counter(helper)?;
+                let counter = self.iterator_helper_slots_cloned(helper)?.counter;
                 let selected = match self.invoke_inline_method_call(
                     Some(module),
                     callback.clone(),
@@ -715,31 +671,27 @@ impl InterpreterCore {
                     return Ok(Some(value));
                 }
             },
-            "take" => {
+            IteratorHelperKind::Take => {
                 let remaining = self.iterator_helper_remaining(helper)?;
                 if remaining == 0.0 {
                     self.iterator_helper_close(module, &iterated)?;
                     return Ok(None);
                 }
                 if remaining.is_finite() {
-                    self.iterator_helper_set(
-                        helper,
-                        REMAINING_SLOT,
-                        Value::Float(Float64::new(remaining - 1.0)),
-                    )?;
+                    self.mutate_iterator_helper_slots(helper, |state| {
+                        state.remaining = Value::Float(Float64::new(remaining - 1.0));
+                    })?;
                 }
                 self.iterator_helper_step_value(module, &iterated, &next)
             }
-            "drop" => {
+            IteratorHelperKind::Drop => {
                 let mut remaining = self.iterator_helper_remaining(helper)?;
                 while remaining > 0.0 {
                     if remaining.is_finite() {
                         remaining -= 1.0;
-                        self.iterator_helper_set(
-                            helper,
-                            REMAINING_SLOT,
-                            Value::Float(Float64::new(remaining)),
-                        )?;
+                        self.mutate_iterator_helper_slots(helper, |state| {
+                            state.remaining = Value::Float(Float64::new(remaining));
+                        })?;
                     }
                     if self
                         .iterator_helper_step_value(module, &iterated, &next)?
@@ -750,15 +702,20 @@ impl InterpreterCore {
                 }
                 self.iterator_helper_step_value(module, &iterated, &next)
             }
-            "flatMap" => loop {
-                let inner = self.iterator_helper_slot(helper, INNER_SLOT)?;
-                if !matches!(inner, Value::Undefined) {
-                    let inner_next = self.iterator_helper_slot(helper, INNER_NEXT_SLOT)?;
-                    match self.iterator_helper_step_value(module, &inner, &inner_next) {
+            IteratorHelperKind::FlatMap => loop {
+                let current = self.iterator_helper_slots_cloned(helper)?;
+                if !matches!(current.inner, Value::Undefined) {
+                    match self.iterator_helper_step_value(
+                        module,
+                        &current.inner,
+                        &current.inner_next,
+                    ) {
                         Ok(Some(value)) => return Ok(Some(value)),
                         Ok(None) => {
-                            self.iterator_helper_set(helper, INNER_SLOT, Value::Undefined)?;
-                            self.iterator_helper_set(helper, INNER_NEXT_SLOT, Value::Undefined)?;
+                            self.mutate_iterator_helper_slots(helper, |state| {
+                                state.inner = Value::Undefined;
+                                state.inner_next = Value::Undefined;
+                            })?;
                         }
                         Err(error) => {
                             return Err(
@@ -770,7 +727,7 @@ impl InterpreterCore {
                 let Some(value) = self.iterator_helper_step_value(module, &iterated, &next)? else {
                     return Ok(None);
                 };
-                let counter = self.iterator_helper_counter(helper)?;
+                let counter = self.iterator_helper_slots_cloned(helper)?.counter;
                 let flattened = self
                     .invoke_inline_method_call(
                         Some(module),
@@ -787,18 +744,20 @@ impl InterpreterCore {
                         );
                     }
                 };
-                self.iterator_helper_set(helper, INNER_SLOT, inner)?;
-                self.iterator_helper_set(helper, INNER_NEXT_SLOT, inner_next)?;
+                self.mutate_iterator_helper_slots(helper, |state| {
+                    state.inner = inner;
+                    state.inner_next = inner_next;
+                })?;
                 self.iterator_helper_bump(helper, counter)?;
             },
-            other => Err(InterpreterError::InternalError {
-                details: format!("unknown iterator helper kind {other}"),
+            IteratorHelperKind::Wrap => Err(InterpreterError::InternalError {
+                details: "unexpected wrap helper in iterator_helper_step".to_string(),
             }),
         }
     }
 
     fn iterator_helper_remaining(&self, helper: ObjectId) -> Result<f64, InterpreterError> {
-        Ok(match self.iterator_helper_slot(helper, REMAINING_SLOT)? {
+        Ok(match self.iterator_helper_slots_cloned(helper)?.remaining {
             Value::Float(remaining) => remaining.inner(),
             Value::Int(remaining) => remaining as f64,
             _ => 0.0,
@@ -813,20 +772,21 @@ impl InterpreterCore {
         receiver: &Value,
     ) -> Result<Value, InterpreterError> {
         let helper = self.iterator_helper_receiver(receiver, false, "return")?;
-        if self.iterator_helper_flag(helper, RUNNING_SLOT) {
+        let slots = self.iterator_helper_slots_cloned(helper)?;
+        if slots.running {
             return Err(InterpreterError::TypeError {
                 expected: "an iterator helper that is not running".to_string(),
                 got: "a reentrant return()".to_string(),
             });
         }
-        if self.iterator_helper_flag(helper, DONE_SLOT) {
+        if slots.done {
             return self.alloc_iterator_result_object(None);
         }
-        self.iterator_helper_set(helper, DONE_SLOT, Value::Bool(true))?;
-        let iterated = self.iterator_helper_slot(helper, ITERATED_SLOT)?;
-        let inner = self.iterator_helper_slot(helper, INNER_SLOT)?;
+        self.mutate_iterator_helper_slots(helper, |state| state.done = true)?;
+        let iterated = slots.iterated;
+        let inner = slots.inner;
         if !matches!(inner, Value::Undefined) {
-            self.iterator_helper_set(helper, INNER_SLOT, Value::Undefined)?;
+            self.mutate_iterator_helper_slots(helper, |state| state.inner = Value::Undefined)?;
             if let Err(error) = self.iterator_helper_close(module, &inner) {
                 return Err(self.iterator_helper_close_after_throw(module, &iterated, error));
             }
@@ -899,14 +859,21 @@ impl InterpreterCore {
         }
         let prototype = self.ensure_builtin_prototype(WRAP_FOR_VALID_ITERATOR_PROTOTYPE)?;
         let wrapper = self.alloc_object_with_prototype(Some(prototype))?;
-        for (slot, value) in [
-            (KIND_SLOT, Value::str(WRAPPER_KIND)),
-            (ITERATED_SLOT, iterator),
-            (NEXT_SLOT, next),
-        ] {
-            self.iterator_helper_set(wrapper, slot, value)?;
-        }
-        self.hide_internal_slots(wrapper, &[KIND_SLOT, ITERATED_SLOT, NEXT_SLOT])?;
+        self.set_host_slots(
+            wrapper,
+            HostObjectSlots::IteratorHelper(IteratorHelperSlots {
+                kind: IteratorHelperKind::Wrap,
+                iterated: iterator,
+                next,
+                callback: Value::Undefined,
+                counter: 0,
+                remaining: Value::Undefined,
+                inner: Value::Undefined,
+                inner_next: Value::Undefined,
+                done: false,
+                running: false,
+            }),
+        )?;
         Ok(Value::Object(wrapper))
     }
 

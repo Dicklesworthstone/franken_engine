@@ -134,6 +134,8 @@ fn install_async_label_test_closure(core: &mut InterpreterCore) {
     core.mutate_registers(|registers| {
         registers[3] = Value::AsyncFunction(0);
     });
+    core.sync_estimated_memory_bytes()
+        .expect("async label test closure should synchronize memory accounting");
 }
 
 fn async_label_test_result_handle(core: &InterpreterCore) -> crate::promise_model::PromiseHandle {
@@ -1884,11 +1886,18 @@ fn pending_await_saves_the_live_register_prefix_bd_9vouw_167() {
     );
     let mut core = test_interpreter();
     install_async_label_test_closure(&mut core);
-    let awaited = core.promise_store.create();
+    let awaited = core
+        .create_promise()
+        .expect("awaited Promise should allocate");
     core.write_reg_with_label(10, Value::Promise(awaited.0), Label::Public)
         .expect("awaited handle should be writable");
     core.write_reg_with_label(11, Value::str("kept-local"), Label::Internal)
         .expect("local should be writable");
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes(),
+        "pre-execution setup must match full memory walk"
+    );
 
     core.execute(&module).expect("pending await should suspend");
     let async_result = async_label_test_result_handle(&core);
@@ -1899,15 +1908,21 @@ fn pending_await_saves_the_live_register_prefix_bd_9vouw_167() {
     assert!(41 < core.config.max_registers as usize);
     assert_eq!(suspended.saved_registers[40], Value::str("kept-local"));
     assert_eq!(suspended.saved_register_labels[40], Label::Internal);
-    // No estimate check here: this hand-built program's estimate is 208
-    // bytes below the walk after it parks, on main's code before this
-    // change too (bd-9vouw.173). The accounting of this change is checked
-    // on lowered programs by a_pending_async_call_holds_its_live_registers.
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes(),
+        "suspended hand-built async call must match full memory walk (bd-9vouw.173)"
+    );
 
     core.fulfill_promise(awaited, crate::object_model::JsValue::Int(7), Label::Public)
         .expect("awaited Promise should be fulfillable");
     core.drain_microtasks(Some(&module))
         .expect("pending fulfillment should resume");
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes(),
+        "resumed hand-built async call must match full memory walk (bd-9vouw.173)"
+    );
     let record = core
         .promise_store
         .get(async_result)

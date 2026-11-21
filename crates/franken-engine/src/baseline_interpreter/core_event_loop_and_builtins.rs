@@ -11928,6 +11928,36 @@ impl InterpreterCore {
         Ok(())
     }
 
+    /// Atomically mutate engine-private `HostObjectSlots` after checking the
+    /// exact memory delta and maintaining the GC write barrier (bd-9vouw.150).
+    pub(super) fn mutate_host_slots<R>(
+        &mut self,
+        object_id: ObjectId,
+        mutate: impl FnOnce(&mut HostObjectSlots) -> R,
+    ) -> Result<R, InterpreterError> {
+        let mut updated = self
+            .heap
+            .get(object_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
+            .host_slots
+            .as_deref()
+            .cloned()
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: format!("object#{} has no host slots", object_id.0),
+            })?;
+        let previous_bytes = Self::estimate_host_object_slots_bytes(&updated);
+        let result = mutate(&mut updated);
+        let next_bytes = Self::estimate_host_object_slots_bytes(&updated);
+        self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+        self.mutate_heap(|heap| {
+            if let Some(slot) = heap[object_id.0 as usize].host_slots.as_deref_mut() {
+                *slot = updated;
+            }
+        });
+        self.gc_write_barrier(object_id);
+        Ok(result)
+    }
+
     /// `WeakRef.prototype.deref()` (ES2021 26.1.3.2).
     pub(super) fn weak_ref_deref(&mut self, receiver: &Value) -> Result<Value, InterpreterError> {
         let target = match receiver {
@@ -13126,27 +13156,80 @@ impl InterpreterCore {
                     }
                 }
                 if let Some(slots) = object.host_slots.as_deref() {
+                    let mut visit_child = |child_id: ObjectId| {
+                        if visited.insert(child_id) {
+                            pending.extend(next.replace(child_id));
+                        }
+                    };
                     match slots {
                         HostObjectSlots::LegacyClientRequest(req) => {
-                            if visited.insert(req.headers) {
-                                pending.extend(next.replace(req.headers));
-                            }
-                            if let Value::Object(cb_id) = req.response_cb
-                                && visited.insert(cb_id)
-                            {
-                                pending.extend(next.replace(cb_id));
+                            visit_child(req.headers);
+                            if let Value::Object(cb_id) = req.response_cb {
+                                visit_child(cb_id);
                             }
                         }
                         HostObjectSlots::IntlResolved(resolved_id) => {
-                            if visited.insert(*resolved_id) {
-                                pending.extend(next.replace(*resolved_id));
-                            }
+                            visit_child(*resolved_id);
                         }
                         HostObjectSlots::TimersPromisesInterval(interval) => {
-                            if let Value::Object(value_id) = interval.value
-                                && visited.insert(value_id)
-                            {
-                                pending.extend(next.replace(value_id));
+                            if let Value::Object(value_id) = interval.value {
+                                visit_child(value_id);
+                            }
+                        }
+                        HostObjectSlots::IteratorHelper(helper) => {
+                            for child in [
+                                &helper.iterated,
+                                &helper.next,
+                                &helper.callback,
+                                &helper.inner,
+                                &helper.inner_next,
+                            ] {
+                                if let Value::Object(child_id) = *child {
+                                    visit_child(child_id);
+                                }
+                            }
+                        }
+                        HostObjectSlots::RegExpStringIterator(rsi) => {
+                            if winner.is_none_or(|current| &rsi.subject_label > current) {
+                                winner = Some(&rsi.subject_label);
+                            }
+                            if let Value::Object(re_id) = rsi.regexp {
+                                visit_child(re_id);
+                            }
+                        }
+                        HostObjectSlots::EventTarget(target) => {
+                            if let Some(listeners) = target.listeners {
+                                visit_child(listeners);
+                            }
+                        }
+                        HostObjectSlots::Event(event) => {
+                            for child in [&event.target, &event.current_target] {
+                                if let Value::Object(child_id) = *child {
+                                    visit_child(child_id);
+                                }
+                            }
+                            if let Some(Value::Object(detail_id)) = event.detail {
+                                visit_child(detail_id);
+                            }
+                        }
+                        HostObjectSlots::AbortController(signal) => {
+                            visit_child(*signal);
+                        }
+                        HostObjectSlots::AbortSignal(signal) => {
+                            if let Some(listeners) = signal.listeners {
+                                visit_child(listeners);
+                            }
+                            if let Value::Object(reason_id) = signal.reason {
+                                visit_child(reason_id);
+                            }
+                            if let Some(algorithms) = signal.algorithms {
+                                visit_child(algorithms);
+                            }
+                            if let Some(dependents) = signal.dependents {
+                                visit_child(dependents);
+                            }
+                            if let Some(sources) = signal.sources {
+                                visit_child(sources);
                             }
                         }
                         HostObjectSlots::TextDecoder(_)

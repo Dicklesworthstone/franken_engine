@@ -4359,6 +4359,39 @@ impl InterpreterCore {
                 (std::mem::size_of::<TimersPromisesIntervalSlots>() as u64)
                     .saturating_add(Self::estimate_execution_seed_value_bytes(&interval.value))
             }
+            HostObjectSlots::IteratorHelper(helper) => {
+                (std::mem::size_of::<IteratorHelperSlots>() as u64)
+                    .saturating_add(Self::estimate_execution_seed_value_bytes(&helper.iterated))
+                    .saturating_add(Self::estimate_execution_seed_value_bytes(&helper.next))
+                    .saturating_add(Self::estimate_execution_seed_value_bytes(&helper.callback))
+                    .saturating_add(Self::estimate_execution_seed_value_bytes(&helper.remaining))
+                    .saturating_add(Self::estimate_execution_seed_value_bytes(&helper.inner))
+                    .saturating_add(Self::estimate_execution_seed_value_bytes(&helper.inner_next))
+            }
+            HostObjectSlots::RegExpStringIterator(rsi) => {
+                (std::mem::size_of::<RegExpStringIteratorSlots>() as u64)
+                    .saturating_add(Self::estimate_execution_seed_value_bytes(&rsi.regexp))
+                    .saturating_add(Self::estimate_js_string_bytes(&rsi.subject))
+                    .saturating_add(Self::estimate_label_bytes(&rsi.subject_label))
+            }
+            HostObjectSlots::EventTarget(_) => std::mem::size_of::<EventTargetSlots>() as u64,
+            HostObjectSlots::Event(event) => (std::mem::size_of::<EventSlots>() as u64)
+                .saturating_add(Self::estimate_js_string_bytes(&event.event_type))
+                .saturating_add(Self::estimate_execution_seed_value_bytes(&event.target))
+                .saturating_add(Self::estimate_execution_seed_value_bytes(
+                    &event.current_target,
+                ))
+                .saturating_add(Self::estimate_execution_seed_value_bytes(&event.time_stamp))
+                .saturating_add(
+                    event
+                        .detail
+                        .as_ref()
+                        .map_or(0, Self::estimate_execution_seed_value_bytes),
+                ),
+            HostObjectSlots::AbortController(_) => std::mem::size_of::<ObjectId>() as u64,
+            HostObjectSlots::AbortSignal(signal) => (std::mem::size_of::<AbortSignalSlots>()
+                as u64)
+                .saturating_add(Self::estimate_execution_seed_value_bytes(&signal.reason)),
         }
     }
 
@@ -6300,9 +6333,6 @@ impl InterpreterCore {
         object.brand = Some(Box::new(JsString::from(kind.type_name())));
         object
             .properties
-            .insert("__typedArrayKind".to_string(), Value::str(kind.type_name()));
-        object
-            .properties
             .insert("length".to_string(), Value::Int(length_i64));
         object
             .properties
@@ -6435,9 +6465,6 @@ impl InterpreterCore {
         let mut view_object = HeapObject::new();
         view_object.brand = Some(Box::new(JsString::from("Uint8Array")));
         view_object.prototype = Some(view_prototype);
-        view_object
-            .properties
-            .insert("__typedArrayKind".to_string(), Value::str("Uint8Array"));
         view_object
             .properties
             .insert("length".to_string(), Value::Int(byte_length_i64));

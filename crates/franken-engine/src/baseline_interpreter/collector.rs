@@ -1782,6 +1782,48 @@ impl InterpreterCore {
                     HostObjectSlots::TimersPromisesInterval(interval) => {
                         marker.value(&interval.value);
                     }
+                    HostObjectSlots::IteratorHelper(helper) => {
+                        marker.value(&helper.iterated);
+                        marker.value(&helper.next);
+                        marker.value(&helper.callback);
+                        marker.value(&helper.remaining);
+                        marker.value(&helper.inner);
+                        marker.value(&helper.inner_next);
+                    }
+                    HostObjectSlots::RegExpStringIterator(rsi) => {
+                        marker.value(&rsi.regexp);
+                    }
+                    HostObjectSlots::EventTarget(target) => {
+                        if let Some(listeners) = target.listeners {
+                            marker.object(listeners);
+                        }
+                    }
+                    HostObjectSlots::Event(event) => {
+                        marker.value(&event.target);
+                        marker.value(&event.current_target);
+                        marker.value(&event.time_stamp);
+                        if let Some(detail) = &event.detail {
+                            marker.value(detail);
+                        }
+                    }
+                    HostObjectSlots::AbortController(signal) => {
+                        marker.object(*signal);
+                    }
+                    HostObjectSlots::AbortSignal(signal) => {
+                        if let Some(listeners) = signal.listeners {
+                            marker.object(listeners);
+                        }
+                        marker.value(&signal.reason);
+                        if let Some(algorithms) = signal.algorithms {
+                            marker.object(algorithms);
+                        }
+                        if let Some(dependents) = signal.dependents {
+                            marker.object(dependents);
+                        }
+                        if let Some(sources) = signal.sources {
+                            marker.object(sources);
+                        }
+                    }
                     HostObjectSlots::TextDecoder(_)
                     | HostObjectSlots::FsEntryKind(_)
                     | HostObjectSlots::TimerHandle(_) => {}

@@ -872,3 +872,242 @@ for (let i = 0; i < 20; i++) {
         );
     }
 }
+
+/// IteratorHelper, WrapForValidIterator, and RegExpStringIterator store their
+/// state in engine-private `HostObjectSlots`: no `__*` own keys leak, forged
+/// objects with legacy slot names throw TypeError, guest writes/deletes do not
+/// corrupt iteration, frozen iterators still advance, and GC preserves held
+/// callbacks/iterators with exact memory accounting (bd-9vouw.150).
+#[test]
+fn iterator_helpers_and_regexp_string_iterators_use_private_host_slots() {
+    use frankenengine_engine::ast::ParseGoal;
+    use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore, Value};
+    use frankenengine_engine::capability::RuntimeCapability;
+    use frankenengine_engine::ir_contract::Ir0Module;
+    use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+    use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
+
+    let source = r#"function attempt(f) { try { return String(f()); } catch (e) { return e.name; } }
+const helper = [1, 2, 3].values().map(x => x * 10);
+const wrapper = Iterator.from({
+  i: 0,
+  next() { return this.i < 2 ? { value: ++this.i, done: false } : { value: undefined, done: true }; }
+});
+const rsi = 'a1b2'.matchAll(/[a-z](\d)/g);
+
+const helperProto = Object.getPrototypeOf(helper);
+const wrapperProto = Object.getPrototypeOf(wrapper);
+const rsiProto = Object.getPrototypeOf(rsi);
+
+const leak = [
+  Reflect.ownKeys(helper).length,
+  Reflect.ownKeys(wrapper).length,
+  Reflect.ownKeys(rsi).length,
+  '__iteratorHelperKind' in helper,
+  '__iteratorHelperIterated' in wrapper,
+  '__regexpStringIteratorRegExp' in rsi,
+  String(helper.__iteratorHelperKind),
+  String(rsi.__regexpStringIteratorString),
+];
+
+const forge = [
+  attempt(() => helperProto.next.call({ __iteratorHelperKind: 'map', __iteratorHelperIterated: [1].values(), __iteratorHelperNext: () => ({ value: 1, done: false }), __iteratorHelperCallback: x => x, __iteratorHelperCounter: 0, __iteratorHelperDone: false, __iteratorHelperRunning: false })),
+  attempt(() => wrapperProto.next.call({ __iteratorHelperKind: 'wrap', __iteratorHelperIterated: {}, __iteratorHelperNext: () => ({ value: 1, done: false }) })),
+  attempt(() => rsiProto.next.call({ __regexpStringIteratorRegExp: /a/g, __regexpStringIteratorString: 'a', __regexpStringIteratorGlobal: true, __regexpStringIteratorUnicode: false, __regexpStringIteratorDone: false })),
+];
+
+helper.__iteratorHelperKind = 'drop';
+helper.__iteratorHelperDone = true;
+delete helper.__iteratorHelperKind;
+rsi.__regexpStringIteratorDone = true;
+rsi.__regexpStringIteratorString = 'corrupted';
+delete rsi.__regexpStringIteratorDone;
+
+Object.freeze(helper);
+Object.freeze(wrapper);
+Object.freeze(rsi);
+
+for (let i = 0; i < 30; i++) { const garbage = { i }; }
+
+const results = [
+  helper.next().value,
+  helper.next().value,
+  wrapper.next().value,
+  wrapper.next().value,
+  rsi.next().value[0],
+  rsi.next().value[0],
+  rsi.next().done,
+];
+
+[leak.join(','), forge.join(','), results.join(',')].join('|');"#;
+
+    let tree = CanonicalEs2020Parser
+        .parse_with_options(
+            ParserSource {
+                label: "iterator-private-slots.js".into(),
+                text: source.into(),
+            },
+            ParseGoal::Script,
+            &ParserOptions::default(),
+        )
+        .expect("iterator slot program parses");
+    let module = lower_ir0_to_ir3(
+        &Ir0Module::from_syntax_tree(tree, "iterator-private-slots.js"),
+        &LoweringContext::new("iter-slot", "iter-decision", "iter-policy"),
+    )
+    .expect("iterator slot program lowers")
+    .ir3;
+    for mut config in [
+        InterpreterConfig::quickjs_defaults(),
+        InterpreterConfig::v8_defaults(),
+    ] {
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]
+        .into_iter()
+        .collect();
+        let mut core = InterpreterCore::new(config, "iter-slot");
+        core.set_gc_stress_interval(Some(1));
+        let result = core.execute(&module).expect("iterator slot checks execute");
+        assert_eq!(
+            result.value,
+            Value::str(
+                "0,0,0,false,false,false,undefined,undefined|TypeError,TypeError,TypeError|10,20,1,2,a1,b2,true"
+            )
+        );
+        assert!(core.gc_stats().collections > 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "IteratorHelper/RegExpStringIterator slots must keep exact memory accounting"
+        );
+    }
+}
+
+/// EventTarget, Event, CustomEvent, AbortController, AbortSignal, and
+/// TypedArray (`__typedArrayKind`) keep their internal state outside guest
+/// properties: zero `__*` leakage, forged receivers throw TypeError, guest
+/// writes/deletes do not corrupt state, frozen instances continue working, and
+/// GC preserves internal references with exact memory accounting (bd-9vouw.150).
+#[test]
+fn event_target_family_and_typed_array_slots_are_private_and_unforgeable() {
+    use frankenengine_engine::ast::ParseGoal;
+    use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore, Value};
+    use frankenengine_engine::capability::RuntimeCapability;
+    use frankenengine_engine::ir_contract::Ir0Module;
+    use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+    use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
+
+    let source = r#"function attempt(f) { try { return String(f()); } catch (e) { return e.name; } }
+const et = new EventTarget();
+const ev = new CustomEvent('ping', { cancelable: true, detail: { n: 7 } });
+const ac = new AbortController();
+const sig = ac.signal;
+const ta = new Uint8Array([4, 5]);
+
+const leak = [
+  '__eventTargetListeners' in et,
+  '__eventType' in ev,
+  '__eventDetail' in ev,
+  '__controllerSignal' in ac,
+  '__signalAborted' in sig,
+  '__typedArrayKind' in ta,
+  String(ta.__typedArrayKind),
+  Object.getOwnPropertyNames(et).length,
+  Object.getOwnPropertyNames(ac).length,
+  Object.getOwnPropertyNames(ta).join(','),
+];
+
+const forge = [
+  attempt(() => EventTarget.prototype.dispatchEvent.call({ __eventTargetListeners: [] }, ev)),
+  attempt(() => Event.prototype.preventDefault.call({ __eventType: 'x', __eventCancelable: true, __eventDefaultPrevented: false })),
+  attempt(() => AbortController.prototype.abort.call({ __controllerSignal: sig })),
+  attempt(() => AbortSignal.prototype.throwIfAborted.call({ __signalAborted: true, __signalReason: 'forged' })),
+  attempt(() => AbortSignal.any([{ __signalAborted: false }])),
+];
+
+et.__eventTargetListeners = 'corrupted';
+ev.__eventType = 'forged';
+ev.__eventCancelable = false;
+ac.__controllerSignal = null;
+sig.__signalAborted = true;
+ta.__typedArrayKind = 'Float64Array';
+delete et.__eventTargetListeners;
+delete ev.__eventType;
+delete ac.__controllerSignal;
+delete sig.__signalAborted;
+delete ta.__typedArrayKind;
+
+Object.freeze(et);
+Object.freeze(ev);
+Object.freeze(ac);
+
+let seen = [];
+et.addEventListener('ping', (e) => {
+  seen.push(e.type + ':' + e.detail.n);
+  e.preventDefault();
+});
+const notCanceled = et.dispatchEvent(ev);
+const combined = AbortSignal.any([sig]);
+for (let i = 0; i < 30; i++) { const garbage = { i }; }
+ac.abort('stop');
+
+const behavior = [
+  seen.join(','),
+  notCanceled,
+  ev.defaultPrevented,
+  sig.aborted,
+  combined.aborted,
+  combined.reason,
+  Object.prototype.toString.call(ta),
+  ta[0] + ta[1],
+];
+
+[leak.join(','), forge.join(','), behavior.join(',')].join('|');"#;
+
+    let tree = CanonicalEs2020Parser
+        .parse_with_options(
+            ParserSource {
+                label: "event-target-private-slots.js".into(),
+                text: source.into(),
+            },
+            ParseGoal::Script,
+            &ParserOptions::default(),
+        )
+        .expect("event target slot program parses");
+    let module = lower_ir0_to_ir3(
+        &Ir0Module::from_syntax_tree(tree, "event-target-private-slots.js"),
+        &LoweringContext::new("et-slot", "et-decision", "et-policy"),
+    )
+    .expect("event target slot program lowers")
+    .ir3;
+    for mut config in [
+        InterpreterConfig::quickjs_defaults(),
+        InterpreterConfig::v8_defaults(),
+    ] {
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]
+        .into_iter()
+        .collect();
+        let mut core = InterpreterCore::new(config, "et-slot");
+        core.set_gc_stress_interval(Some(1));
+        let result = core.execute(&module).expect("event target slot checks execute");
+        assert_eq!(
+            result.value,
+            Value::str(
+                "false,false,false,false,false,false,undefined,0,0,0,1|TypeError,TypeError,TypeError,TypeError,TypeError|ping:7,false,true,true,true,stop,[object Uint8Array],9"
+            )
+        );
+        assert!(core.gc_stats().collections > 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "EventTarget/Event/AbortController/AbortSignal slots must keep exact memory accounting"
+        );
+    }
+}

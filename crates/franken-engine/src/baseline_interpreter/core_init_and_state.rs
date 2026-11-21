@@ -1,4 +1,5 @@
 use super::*;
+use frankenengine_extension_host::host_io::budget::HostIoBudgetError;
 
 impl InterpreterCore {
     pub(super) fn scoped_constant_name(module: &Ir3Module, name_pool_index: u32) -> Cow<'_, str> {
@@ -3641,16 +3642,16 @@ impl InterpreterCore {
     /// the raw HTTP/1.1 response bytes are parsed into the JS response object
     /// `{ status, statusText, ok, headers, body }` ([`Self::build_net_response_value`]).
     ///
-    /// A product-layer network-policy denial (the SSRF gate) surfaces as a handler
-    /// `CapabilityDenied`. The denial was ALREADY recorded in the host-effect
-    /// transcript by the recorder inside the handler stack (`route_host_io` records
-    /// every request/outcome, including the Err) — that recorded entry IS the
-    /// fail-closed DENIED receipt the run --json effect ledger renders. So it must
-    /// NOT abort the run as a fatal interpreter error (which would discard the whole
-    /// transcript before harvest): it is a fail-closed no-op — the egress did not
-    /// reach the network, the call evaluates to `undefined`, and the run completes
-    /// so the signed denied receipt is surfaced. When no sandboxed provider is
-    /// installed the call also evaluates to `undefined` (no effect performed).
+    /// Ordinary product-layer network-policy denials (the SSRF gate) and
+    /// transport failures are recorded by `route_host_io`, then evaluate to
+    /// `undefined` so the run can complete and surface its denied receipt. When
+    /// no sandboxed provider is installed the call also evaluates to `undefined`
+    /// without performing an effect.
+    ///
+    /// Explicit host-resource budget refusals are different: like filesystem
+    /// quota refusals, they terminate execution before any response callback or
+    /// following guest instruction. Their recorded denial remains in the
+    /// recorder even though execution does not reach successful-run harvesting.
     pub(super) fn perform_net_request_effect(
         &mut self,
         url: String,
@@ -3706,17 +3707,25 @@ impl InterpreterCore {
             Err(EffectError::CapabilityDenied { .. }) => {
                 return Ok(Value::Undefined);
             }
+            Err(EffectError::HandlerError {
+                message,
+                code: None,
+                ..
+            }) if HostIoBudgetError::from_code(&message).is_some() => {
+                return Err(InterpreterError::InternalError {
+                    details: format!("host effect dispatch failed for net:request: {message}"),
+                });
+            }
             // bd-3894s slice (5): an I/O failure inside the network mechanism
             // (TLS handshake/certificate rejection, connect refused, timeout)
             // surfaces as the provider's `HostIoError::Io` -> `HandlerError`.
-            // Exactly like the policy-deny arm above, the failed outcome was
-            // ALREADY recorded in the host-effect transcript by `route_host_io`,
-            // so aborting the run here would discard the signed fail-closed
-            // evidence. Node parity is an 'error' event, not a process abort:
+            // Like an ordinary policy denial, this failed outcome is already
+            // recorded by `route_host_io`. Resource refusals have been handled
+            // above; ordinary failures retain their existing 'error' event /
+            // undefined behavior so the run can surface the recorded failure:
             // the call evaluates to `undefined`, no response value is fabricated,
-            // and the run completes so the recorded failure is surfaced. This arm
-            // is net-only (this fn dispatches only net effects); fs keeps its
-            // fatal-on-error semantics.
+            // and the run completes. This arm is net-only (this fn dispatches
+            // only net effects); fs keeps its fatal-on-error semantics.
             Err(EffectError::HandlerError { .. }) => {
                 return Ok(Value::Undefined);
             }

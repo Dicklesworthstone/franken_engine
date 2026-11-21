@@ -1774,6 +1774,33 @@ over that legacy flag, so approving a local service does not approve other
 private destinations or the public Internet. The manifest, including its
 allowlist, remains part of the signed replay input; replay uses recorded I/O.
 
+Sandbox manifests can also bound cumulative host work for one execution:
+
+```json
+{
+  "host_io_budget": {
+    "requests": 100,
+    "request_bytes": 1048576,
+    "max_in_flight": 4
+  }
+}
+```
+
+The live provider shares these non-renewable credits across all execution lanes
+and provider clones. Each admitted request consumes one credit plus its owned
+path, argument, endpoint and payload bytes before dispatch. An admitted I/O
+failure still consumes credits; an exhausted budget refuses the next operation
+before it can change a file or open a socket. Budget refusals terminate guest
+execution with a fixed diagnostic and remain in the host-effect transcript.
+Zero requests or concurrency denies all dispatch. All three fields are required
+when the budget is present, and unknown budget fields are rejected. Omit the
+field to retain the existing per-operation limits. These are admission limits,
+not response-byte or disk
+quotas: `host_io_max_bytes`, capability checks, the sandbox root and network
+destination policy still apply independently. Successful run reports sign the
+manifest, including this budget, and replay consumes the recorded outcomes
+without spending live credits or reopening the filesystem.
+
 **Status & threat-model boundary:** certificates cover **explicit data flows only**
 (`explicit_flow_ifc_v1`) within the v1 analyzed subset—never covert, timing,
 control-flow-implicit, or hardware side channels, and never a noninterference

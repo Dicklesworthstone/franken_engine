@@ -23,6 +23,7 @@ use crate::ifc_artifacts::Label;
 use frankenengine_extension_host::host_effect_journal::{
     HostEffectJournalError, HostEffectJournalMode, InMemoryHostEffectJournal,
 };
+use frankenengine_extension_host::host_io::budget::HostIoBudgetError;
 use frankenengine_extension_host::host_io::{
     ENVIRONMENT_VALUE_MAX_BYTES, FsOperation, HostIoCapability, HostIoError, HostIoProvider,
     HostIoRecorder, HostIoRequest, HostIoResponse, SANDBOXED_HOST_IO_MAX_BYTES,
@@ -650,6 +651,20 @@ impl FullCapsHandler {
                 message: detail,
                 code: Some(code),
             }),
+            Err(HostIoError::Denied { reason }) => {
+                match HostIoBudgetError::from_code(&reason) {
+                    Some(error) => Err(EffectError::HandlerError {
+                        handler: "full_caps_handler".to_string(),
+                        message: error.code().to_string(),
+                        // A guest filesystem code would make this host quota
+                        // refusal catchable. Preserve the fatal host boundary.
+                        code: None,
+                    }),
+                    None => Err(EffectError::CapabilityDenied {
+                        required: effect.required_capabilities(),
+                    }),
+                }
+            }
             Err(_) => Err(EffectError::CapabilityDenied {
                 required: effect.required_capabilities(),
             }),
@@ -3505,6 +3520,149 @@ mod tests {
         for (request, granted) in seen.iter() {
             assert_eq!(granted.as_slice(), &[request.required_capability()]);
         }
+    }
+
+    fn replay_host_io_denial(reason: &str) -> EffectError {
+        use frankenengine_extension_host::host_io::InMemoryHostIoTranscript;
+
+        let effect = FsHostcallEffect {
+            operation: FsOperation::Write,
+            path: "output".to_string(),
+            arguments: Vec::new(),
+            content: Some(b"value".to_vec()),
+        };
+        let recorded = vec![(
+            HostIoRequest::FsWrite {
+                path: "output".to_string(),
+                data: b"value".to_vec(),
+            },
+            Err(HostIoError::Denied {
+                reason: reason.to_string(),
+            }),
+        )];
+        let recorder = Arc::new(InMemoryHostIoTranscript::replaying(recorded.clone()));
+        recorder.begin_execution().expect("begin denied replay");
+        let handler =
+            FullCapsHandler::with_host_io_recorded(Arc::new(NeverCalledHostIo), recorder.clone());
+        let error = handler.handle(&effect).expect_err("replay must deny");
+        assert_eq!(recorder.finish_execution().unwrap(), recorded);
+        error
+    }
+
+    #[test]
+    fn full_caps_host_budget_denials_preserve_public_codes_without_guest_error_codes() {
+        for budget_error in [
+            HostIoBudgetError::Revoked,
+            HostIoBudgetError::Poisoned,
+            HostIoBudgetError::RequestsExhausted,
+            HostIoBudgetError::RequestBytesExhausted,
+            HostIoBudgetError::TooManyInFlight,
+            HostIoBudgetError::RequestSizeOverflow,
+            HostIoBudgetError::HierarchyDepthExceeded,
+            HostIoBudgetError::ConcurrencyLimitBroadened,
+        ] {
+            let error = replay_host_io_denial(budget_error.code());
+            assert!(
+                matches!(
+                    &error,
+                    EffectError::HandlerError { handler, message, code: None }
+                        if handler == "full_caps_handler" && message == budget_error.code()
+                ),
+                "a host budget refusal must retain its safe diagnostic without becoming a guest filesystem error: {error:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn full_caps_host_budget_diagnostics_do_not_expose_private_denial_text() {
+        for reason in [
+            "private provider diagnostic",
+            "HOST_IO_REQUEST_BUDGET_EXHAUSTED: private provider diagnostic",
+            "HOST_IO_REQUEST_BUDGET_EXHAUSTED\nprivate provider diagnostic",
+            " HOST_IO_REQUEST_BUDGET_EXHAUSTED",
+        ] {
+            let error = replay_host_io_denial(reason);
+            assert!(matches!(error, EffectError::CapabilityDenied { .. }));
+            assert!(!error.to_string().contains(reason));
+            assert!(!error.to_string().contains("private provider diagnostic"));
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn full_caps_host_budget_records_native_denial_before_mutation_and_replays_it() {
+        use frankenengine_extension_host::host_io::budget::{HostIoBudgetLimits, HostIoWorkBudget};
+        use frankenengine_extension_host::host_io::{InMemoryHostIoTranscript, SandboxedHostIo};
+
+        let root = tempfile::Builder::new()
+            .prefix("franken-effect-host-budget-")
+            .tempdir()
+            .expect("exclusive sandbox root")
+            .keep();
+        let provider = SandboxedHostIo::with_root(&root)
+            .expect("native provider")
+            .with_work_budget(HostIoWorkBudget::new(HostIoBudgetLimits {
+                requests: 1,
+                request_bytes: 64,
+                max_in_flight: 1,
+            }));
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+        recorder.begin_execution().expect("begin recording");
+        let handler = FullCapsHandler::with_host_io_recorded(Arc::new(provider), recorder.clone());
+        let first = FsHostcallEffect {
+            operation: FsOperation::Write,
+            path: "output".to_string(),
+            arguments: Vec::new(),
+            content: Some(b"first value".to_vec()),
+        };
+        let second = FsHostcallEffect {
+            content: Some(b"must not overwrite".to_vec()),
+            ..first.clone()
+        };
+        assert!(handler.handle(&first).unwrap().is_some());
+        let denied = handler
+            .handle(&second)
+            .expect_err("request quota exhausted");
+        assert!(matches!(
+            &denied,
+            EffectError::HandlerError { message, code: None, .. }
+                if message == HostIoBudgetError::RequestsExhausted.code()
+        ));
+        assert_eq!(std::fs::read(root.join("output")).unwrap(), b"first value");
+        let recorded = recorder.finish_execution().expect("finish recording");
+        assert_eq!(
+            recorded,
+            vec![
+                (
+                    HostIoRequest::FsWrite {
+                        path: "output".to_string(),
+                        data: b"first value".to_vec(),
+                    },
+                    Ok(HostIoResponse::FsWrite { bytes_written: 11 }),
+                ),
+                (
+                    HostIoRequest::FsWrite {
+                        path: "output".to_string(),
+                        data: b"must not overwrite".to_vec(),
+                    },
+                    Err(HostIoError::Denied {
+                        reason: HostIoBudgetError::RequestsExhausted.code().to_string(),
+                    }),
+                ),
+            ],
+        );
+
+        let replay = Arc::new(InMemoryHostIoTranscript::replaying(recorded.clone()));
+        replay.begin_execution().expect("begin replay");
+        let replay_handler =
+            FullCapsHandler::with_host_io_recorded(Arc::new(NeverCalledHostIo), replay.clone());
+        assert!(replay_handler.handle(&first).unwrap().is_some());
+        let replay_denied = replay_handler
+            .handle(&second)
+            .expect_err("recorded request denial");
+        assert_eq!(replay_denied.to_string(), denied.to_string());
+        assert_eq!(replay.finish_execution().unwrap(), recorded);
+        assert_eq!(std::fs::read(root.join("output")).unwrap(), b"first value");
     }
 
     #[test]

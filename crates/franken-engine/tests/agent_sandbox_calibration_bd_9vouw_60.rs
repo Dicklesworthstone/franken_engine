@@ -514,3 +514,108 @@ fn sandbox_replay_records_caught_denials_without_a_live_provider_rc_c2() {
         String::from_utf8_lossy(&replay.stderr)
     );
 }
+
+#[cfg(unix)]
+fn write_budgeted_manifest(dir: &Path) -> PathBuf {
+    let manifest_path = write_manifest(dir);
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(&manifest_path).expect("manifest")).expect("json");
+    manifest["tool_grants"]
+        .as_array_mut()
+        .expect("grants")
+        .push(serde_json::json!({"tool_name": "write_file", "capability_tag": "fs_write"}));
+    manifest["host_io_budget"] = serde_json::json!({
+        "requests": 1,
+        "request_bytes": 1024,
+        "max_in_flight": 1,
+    });
+    fs::write(&manifest_path, serde_json::to_vec(&manifest).expect("json")).expect("manifest");
+    manifest_path
+}
+
+#[test]
+#[cfg(unix)]
+fn sandbox_host_budget_stops_repeated_writes_before_the_next_host_effect() {
+    let dir = scratch_dir("host_budget_denial");
+    let manifest_path = write_budgeted_manifest(&dir);
+    let (output, report) = sandbox(
+        &dir,
+        &manifest_path,
+        "budget_denied",
+        "const fs = require('fs'); fs.writeFileSync('output.txt', 'first write'); \
+         try { fs.writeFileSync('output.txt', 'must not overwrite'); } \
+         catch (error) { console.log('must not catch a host budget denial'); } \
+         console.log('must not continue after denial');",
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "quota exhaustion must stop the sandbox, stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(
+        fs::read_to_string(dir.join("root/output.txt")).expect("admitted real write"),
+        "first write",
+    );
+    let report = report.expect("failure evidence report");
+    assert_eq!(report["command"], "agent-sandbox");
+    assert!(
+        report["error"]
+            .as_str()
+            .expect("typed host denial diagnostic")
+            .contains("HOST_IO_REQUEST_BUDGET_EXHAUSTED"),
+        "{report}",
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn sandbox_host_budget_replay_consumes_recorded_effects_without_reopening_the_root() {
+    let dir = scratch_dir("host_budget_replay");
+    let manifest_path = write_budgeted_manifest(&dir);
+    let (output, report) = sandbox(
+        &dir,
+        &manifest_path,
+        "budget_recorded",
+        "const fs = require('fs'); fs.writeFileSync('output.txt', 'recorded write'); console.log('complete');",
+    );
+    assert!(
+        output.status.success(),
+        "last admitted request must complete: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let report = report.expect("budgeted sandbox report");
+    assert_eq!(report["report"]["host_effects"], 1);
+    assert_eq!(
+        report["replay"]["replay_input"]["agent_sandbox_manifest"]["host_io_budget"],
+        serde_json::json!({"requests": 1, "request_bytes": 1024, "max_in_flight": 1}),
+    );
+    assert!(report["replay"]["replay_input_signature"].is_object());
+    fs::rename(dir.join("root"), dir.join("retained-root")).expect("retain the live root");
+    fs::write(
+        dir.join("retained-root/output.txt"),
+        "must remain untouched",
+    )
+    .expect("canary");
+
+    let replay = replay_sandbox_report(&dir, "budget_offline", &report);
+    assert!(
+        replay.status.success(),
+        "quota-configured replay must not need a live provider: stdout={} stderr={}",
+        String::from_utf8_lossy(&replay.stdout),
+        String::from_utf8_lossy(&replay.stderr),
+    );
+    let replay_report: serde_json::Value =
+        serde_json::from_slice(&replay.stdout).expect("replay json");
+    assert_eq!(replay_report["complete"], true);
+    assert_eq!(replay_report["decisions_match"], true);
+    assert_eq!(replay_report["unsigned_execution_content_match"], true);
+    assert_eq!(replay_report["divergence_count"], 0);
+    assert!(!dir.join("root").exists());
+    assert_eq!(
+        fs::read_to_string(dir.join("retained-root/output.txt")).expect("canary"),
+        "must remain untouched",
+    );
+}

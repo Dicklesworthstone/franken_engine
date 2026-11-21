@@ -14,6 +14,11 @@
 //! directories beneath an owned jail descriptor through launch, bounds
 //! input/output/runtime, and exposes only provider-scoped opaque handles (never
 //! native process identifiers).
+//!
+//! FreeBSD requires a trusted `/dev/fd` fdescfs mount with `nodup` semantics
+//! whose configuration remains stable through spawning. A no-follow metadata
+//! check requires each descriptor path to identify its held file; default
+//! pseudo-files and `rdlnk` pathname-following semantics are refused.
 
 #![forbid(unsafe_code)]
 
@@ -2575,7 +2580,36 @@ fn pinned_process_file_path(image: &File) -> Result<PathBuf, ProcessSpawnError> 
 
 #[cfg(target_os = "freebsd")]
 fn pinned_process_file_path(image: &File) -> Result<PathBuf, ProcessSpawnError> {
-    Ok(PathBuf::from(format!("/dev/fd/{}", image.as_raw_fd())))
+    let path = PathBuf::from(format!("/dev/fd/{}", image.as_raw_fd()));
+    verify_descriptor_path_identity(image, &path)?;
+    Ok(path)
+}
+
+#[cfg(any(target_os = "freebsd", all(test, unix)))]
+fn verify_descriptor_path_identity(image: &File, path: &Path) -> Result<(), ProcessSpawnError> {
+    use std::os::unix::fs::MetadataExt;
+
+    let held = image.metadata().map_err(|error| ProcessSpawnError::Io {
+        operation: "inspect held process file identity".to_string(),
+        detail: error.to_string(),
+    })?;
+    // FreeBSD's nodup lookup returns the actual vnode. Following a symlink
+    // instead would accept rdlnk mounts and reintroduce pathname races.
+    let exposed = std::fs::symlink_metadata(path).map_err(|error| ProcessSpawnError::Io {
+        operation: "inspect process descriptor path identity".to_string(),
+        detail: error.to_string(),
+    })?;
+    if exposed.file_type().is_symlink()
+        || exposed.dev() != held.dev()
+        || exposed.ino() != held.ino()
+        || exposed.file_type() != held.file_type()
+    {
+        return Err(ProcessSpawnError::NotImplemented {
+            what: "descriptor-pinned process launch requires fdescfs mounted with nodup at /dev/fd"
+                .to_string(),
+        });
+    }
+    Ok(())
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
@@ -4269,6 +4303,87 @@ mod tests {
                 ref stderr,
             } if stdout == b"hello\n" && stderr.is_empty()
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn descriptor_path_guard_accepts_held_file_and_directory_identities() {
+        let root = tempfile::tempdir()
+            .expect("descriptor identity fixture")
+            .keep();
+        let file_path = root.join("image");
+        std::fs::write(&file_path, b"held image").expect("write image");
+        let file = File::open(&file_path).expect("hold image");
+        verify_descriptor_path_identity(&file, &file_path).expect("same file identity");
+        let alias = root.join("same-image");
+        std::fs::hard_link(&file_path, &alias).expect("create inode alias");
+        verify_descriptor_path_identity(&file, &alias).expect("identity does not depend on name");
+
+        let directory = File::open(&root).expect("hold directory");
+        verify_descriptor_path_identity(&directory, &root).expect("same directory identity");
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        {
+            let path_only_directory = open_working_directory_root(&root).expect("pin O_PATH root");
+            verify_descriptor_path_identity(&path_only_directory, &root)
+                .expect("O_PATH descriptor retains directory metadata");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn descriptor_path_guard_refuses_symlinks_distinct_objects_and_replacements() {
+        use std::os::unix::fs::{MetadataExt, symlink};
+
+        for directory in [false, true] {
+            let root = tempfile::tempdir()
+                .expect("descriptor identity refusal fixture")
+                .keep();
+            let original_path = root.join("original");
+            let other_path = root.join("other");
+            let other_kind = root.join("other-kind");
+            if directory {
+                std::fs::create_dir(&original_path).expect("create original directory");
+                std::fs::create_dir(&other_path).expect("create distinct directory");
+                std::fs::write(&other_kind, b"file").expect("create distinct file");
+            } else {
+                std::fs::write(&original_path, b"original").expect("create original file");
+                std::fs::write(&other_path, b"other").expect("create distinct file");
+                std::fs::create_dir(&other_kind).expect("create distinct directory");
+            }
+            let held = File::open(&original_path).expect("hold original identity");
+            let link = root.join("link");
+            symlink(&original_path, &link).expect("link to held identity");
+            let followed = std::fs::metadata(&link).expect("follow link");
+            let original = held.metadata().expect("held metadata");
+            assert_eq!(followed.dev(), original.dev());
+            assert_eq!(followed.ino(), original.ino());
+            for candidate in [&link, &other_path, &other_kind] {
+                assert!(
+                    matches!(verify_descriptor_path_identity(&held, candidate),
+                        Err(ProcessSpawnError::NotImplemented { what }) if what.contains("nodup")),
+                    "untrusted descriptor path accepted: {candidate:?}"
+                );
+            }
+
+            let retained = root.join("retained");
+            std::fs::rename(&original_path, &retained).expect("move held identity");
+            if directory {
+                std::fs::create_dir(&original_path).expect("replace directory pathname");
+            } else {
+                std::fs::write(&original_path, b"replacement").expect("replace file pathname");
+            }
+            assert!(matches!(
+                verify_descriptor_path_identity(&held, &original_path),
+                Err(ProcessSpawnError::NotImplemented { .. })
+            ));
+            verify_descriptor_path_identity(&held, &retained)
+                .expect("renaming preserves the held identity");
+            assert!(matches!(
+                verify_descriptor_path_identity(&held, &root.join("missing")),
+                Err(ProcessSpawnError::Io { operation, .. })
+                    if operation == "inspect process descriptor path identity"
+            ));
+        }
     }
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]

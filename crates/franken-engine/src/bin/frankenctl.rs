@@ -151,7 +151,7 @@ use frankenengine_engine::ts_normalization::{
 };
 use frankenengine_extension_host::host_io::{
     DenyAllHostIo, HostIoCapability, HostIoError, HostIoExceptionProvenance, HostIoOutcome,
-    HostIoProvider, HostIoRecorder, HostIoRequest, InMemoryHostIoTranscript, SandboxedHostIo,
+    HostIoProvider, HostIoRecorder, HostIoRequest, InMemoryHostIoTranscript,
 };
 use rand::RngCore;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -6191,19 +6191,12 @@ fn execute_agent_sandbox(args: AgentSandboxArgs) -> Result<i32, String> {
     // Host I/O stays deny-all unless the manifest declares a sandbox root
     // (fail-closed default); the transcript recorder feeds the certificate's
     // capability trace.
-    if let Some(root) = manifest.host_io_root.as_ref() {
-        let provider = match manifest.host_io_max_bytes {
-            Some(limit) => SandboxedHostIo::with_root_and_limit(PathBuf::from(root), limit),
-            None => SandboxedHostIo::with_root(PathBuf::from(root)),
-        }
-        .map_err(|error| format!("failed to open agent-sandbox host I/O root `{root}`: {error}"))?
-        .with_egress_policy(
-            manifest
-                .network_egress_policy()
-                .map_err(|error| format!("agent-sandbox network policy rejected: {error}"))?,
-        );
+    if let Some(provider) = manifest
+        .build_host_io_provider()
+        .map_err(|error| format!("failed to configure agent-sandbox host I/O: {error}"))?
+    {
         orchestrator.set_host_io(
-            Arc::new(provider),
+            provider,
             Some(Arc::new(InMemoryHostIoTranscript::recording())),
         );
     } else {

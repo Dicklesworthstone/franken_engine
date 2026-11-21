@@ -7,6 +7,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+#[cfg(unix)]
+use frankenengine_engine::agent_sandbox::AgentHostIoBudget;
 use frankenengine_engine::agent_sandbox::{
     AGENT_SANDBOX_MANIFEST_SCHEMA_VERSION, AgentSandboxError, AgentSandboxManifest,
     AgentSandboxReport, AgentToolGrant, DEFAULT_AGENT_TRUST_LEVEL,
@@ -27,6 +29,10 @@ use frankenengine_engine::non_use_certificate::{
     CertificateStatus, CertifierInputs, E8_CERTIFIER_PRODUCER_ID, NON_USE_CERTIFICATE_FILE,
     NonUseCertificate, emit_certificate_bundle_lab,
 };
+#[cfg(unix)]
+use frankenengine_extension_host::host_io::{
+    FsOperation, HostIoCapability, HostIoError, HostIoRequest, HostIoResponse,
+};
 
 const GENERATED_SOURCE: &str = "const parts = ['4', '2']; const result = parts.join('');";
 const AGENT_ID: &str = "agent-e8t5-framework";
@@ -45,6 +51,7 @@ fn manifest() -> AgentSandboxManifest {
         trust_level: None,
         host_io_root: None,
         host_io_max_bytes: None,
+        host_io_budget: None,
         network_allowlist: None,
         acknowledge_unfiltered_network: false,
         purpose: Some(DEFAULT_DATA_CONTRACT_PURPOSE.to_string()),
@@ -315,4 +322,228 @@ fn package_capabilities_match_tool_grants_exactly() {
             .get("capability_witness.denied_capabilities"),
         Some(&"network,process_spawn".to_string())
     );
+}
+
+#[cfg(unix)]
+fn host_budget_manifest(budget: AgentHostIoBudget) -> (AgentSandboxManifest, std::path::PathBuf) {
+    let root = tempfile::Builder::new()
+        .prefix("agent-sandbox-host-budget-")
+        .tempdir()
+        .expect("native sandbox root")
+        .keep();
+    let mut manifest = manifest();
+    manifest.host_io_root = Some(root.to_str().expect("UTF-8 test path").to_string());
+    manifest.host_io_budget = Some(budget);
+    manifest
+        .tool_grants
+        .extend(
+            [RuntimeCapability::FsRead, RuntimeCapability::FsWrite].map(|capability| {
+                AgentToolGrant {
+                    tool_name: capability.as_str().to_string(),
+                    capability_tag: capability.as_str().to_string(),
+                    description: None,
+                }
+            }),
+        );
+    (manifest, root)
+}
+
+#[test]
+#[cfg(unix)]
+fn manifest_host_budget_is_shared_across_provider_clones_before_disk_mutation() {
+    let (manifest, root) = host_budget_manifest(AgentHostIoBudget {
+        requests: 1,
+        request_bytes: 1024,
+        max_in_flight: 1,
+    });
+    let provider = manifest.build_host_io_provider().unwrap().unwrap();
+    let first = HostIoRequest::FsWrite {
+        path: "output".to_string(),
+        data: b"first value".to_vec(),
+    };
+    assert_eq!(
+        provider.perform(&first, &[HostIoCapability::FsWrite]),
+        Ok(HostIoResponse::FsWrite { bytes_written: 11 })
+    );
+    let alias = provider.clone();
+    assert_eq!(
+        alias.perform(
+            &HostIoRequest::FsWrite {
+                path: "output".to_string(),
+                data: b"replacement".to_vec(),
+            },
+            &[HostIoCapability::FsWrite],
+        ),
+        Err(HostIoError::Denied {
+            reason: "HOST_IO_REQUEST_BUDGET_EXHAUSTED".to_string(),
+        })
+    );
+    assert_eq!(std::fs::read(root.join("output")).unwrap(), b"first value");
+}
+
+#[test]
+#[cfg(unix)]
+fn manifest_host_budget_counts_utf8_paths_and_payloads_without_spending_refused_work() {
+    let (manifest, root) = host_budget_manifest(AgentHostIoBudget {
+        requests: 3,
+        request_bytes: 7,
+        max_in_flight: 1,
+    });
+    let provider = manifest.build_host_io_provider().unwrap().unwrap();
+    // The two-byte path plus six-byte value cannot fit; refusal must happen
+    // before creating the file or spending the request's admission credit.
+    assert_eq!(
+        provider.perform(
+            &HostIoRequest::FsWrite {
+                path: "é".to_string(),
+                data: b"123456".to_vec(),
+            },
+            &[HostIoCapability::FsWrite],
+        ),
+        Err(HostIoError::Denied {
+            reason: "HOST_IO_REQUEST_BYTES_EXHAUSTED".to_string(),
+        })
+    );
+    assert!(!root.join("é").exists());
+    provider
+        .perform(
+            &HostIoRequest::FsWrite {
+                path: "é".to_string(),
+                data: b"123".to_vec(),
+            },
+            &[HostIoCapability::FsWrite],
+        )
+        .unwrap();
+    // Five write-request bytes plus two read-request bytes use the allowance
+    // exactly. The returned three bytes are response bytes, not a new debit.
+    assert_eq!(
+        provider.perform(
+            &HostIoRequest::FsRead {
+                path: "é".to_string(),
+            },
+            &[HostIoCapability::FsRead],
+        ),
+        Ok(HostIoResponse::FsRead {
+            bytes: b"123".to_vec(),
+        })
+    );
+    assert_eq!(
+        provider.perform(
+            &HostIoRequest::FsRead {
+                path: "é".to_string(),
+            },
+            &[HostIoCapability::FsRead],
+        ),
+        Err(HostIoError::Denied {
+            reason: "HOST_IO_REQUEST_BYTES_EXHAUSTED".to_string(),
+        })
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn manifest_host_budget_counts_metadata_arguments_before_creating_directories() {
+    for (request_bytes, admitted) in [(19, false), (20, true)] {
+        let (manifest, root) = host_budget_manifest(AgentHostIoBudget {
+            requests: 1,
+            request_bytes,
+            max_in_flight: 1,
+        });
+        let provider = manifest.build_host_io_provider().unwrap().unwrap();
+        let result = provider.perform(
+            &HostIoRequest::FsMeta {
+                operation: FsOperation::Mkdir,
+                path: "newdir".to_string(),
+                arguments: vec!["recursive=true".to_string()],
+                data: vec![],
+            },
+            &[HostIoCapability::FsWrite],
+        );
+        assert_eq!(root.join("newdir").is_dir(), admitted);
+        if admitted {
+            assert!(result.is_ok(), "exact request-byte boundary: {result:?}");
+        } else {
+            assert_eq!(
+                result,
+                Err(HostIoError::Denied {
+                    reason: "HOST_IO_REQUEST_BYTES_EXHAUSTED".to_string(),
+                })
+            );
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn manifest_host_budget_does_not_grant_authority_or_refund_native_failures() {
+    let (manifest, root) = host_budget_manifest(AgentHostIoBudget {
+        requests: 1,
+        request_bytes: 1024,
+        max_in_flight: 1,
+    });
+    let provider = manifest.build_host_io_provider().unwrap().unwrap();
+    let missing = HostIoRequest::FsRead {
+        path: "missing".to_string(),
+    };
+    assert_eq!(
+        provider.perform(&missing, &[]),
+        Err(HostIoError::CapabilityMissing {
+            capability: HostIoCapability::FsRead,
+        }),
+        "an admission budget never grants the missing read capability"
+    );
+    assert!(matches!(
+        provider.perform(&missing, &[HostIoCapability::FsRead]),
+        Err(HostIoError::Fs { code, .. }) if code == "ENOENT"
+    ));
+    assert_eq!(
+        provider.perform(
+            &HostIoRequest::FsWrite {
+                path: "output".to_string(),
+                data: b"must not be written".to_vec(),
+            },
+            &[HostIoCapability::FsWrite],
+        ),
+        Err(HostIoError::Denied {
+            reason: "HOST_IO_REQUEST_BUDGET_EXHAUSTED".to_string(),
+        }),
+        "native failures consume their admitted work without a refund"
+    );
+    assert!(!root.join("output").exists());
+}
+
+#[test]
+#[cfg(unix)]
+fn manifest_host_budget_zero_limits_and_missing_root_deny_host_dispatch() {
+    for (requests, max_in_flight, reason) in [
+        (0, 1, "HOST_IO_REQUEST_BUDGET_EXHAUSTED"),
+        (1, 0, "HOST_IO_CONCURRENCY_EXHAUSTED"),
+    ] {
+        let (manifest, root) = host_budget_manifest(AgentHostIoBudget {
+            requests,
+            request_bytes: 1024,
+            max_in_flight,
+        });
+        let provider = manifest.build_host_io_provider().unwrap().unwrap();
+        assert_eq!(
+            provider.perform(
+                &HostIoRequest::FsWrite {
+                    path: "output".to_string(),
+                    data: b"must not be written".to_vec(),
+                },
+                &[HostIoCapability::FsWrite],
+            ),
+            Err(HostIoError::Denied {
+                reason: reason.to_string(),
+            })
+        );
+        assert!(!root.join("output").exists());
+    }
+    let mut unrooted = manifest();
+    unrooted.host_io_budget = Some(AgentHostIoBudget {
+        requests: 1,
+        request_bytes: 1024,
+        max_in_flight: 1,
+    });
+    assert!(unrooted.build_host_io_provider().unwrap().is_none());
 }

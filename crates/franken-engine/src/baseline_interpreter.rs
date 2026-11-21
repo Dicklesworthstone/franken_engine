@@ -14204,6 +14204,20 @@ pub struct ConsoleEntry {
 /// program printed before throwing would be lost.
 pub type FailedConsoleSink = Arc<std::sync::Mutex<Vec<ConsoleEntry>>>;
 
+/// State observed at an interpreter failure, before its ephemeral core is
+/// dropped. Finalizing this prefix records where execution stopped; it does
+/// not emit a completion witness or turn the failure into a successful run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FailedExecutionCapture {
+    pub error: InterpreterError,
+    pub instructions_executed: u64,
+    pub console_output: Vec<ConsoleEntry>,
+    pub dropped_console_entries: u64,
+    pub randomness_transcript: NondeterminismTrace,
+}
+
+pub(crate) type FailedExecutionCaptureSink = Arc<std::sync::Mutex<Option<FailedExecutionCapture>>>;
+
 const MAX_IFC_RUNTIME_FLOW_AUDIT_ENTRIES: usize = 1024;
 
 /// Implicit-flow program-counter taint frame pushed at a conditional branch

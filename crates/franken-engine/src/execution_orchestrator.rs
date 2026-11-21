@@ -25,9 +25,9 @@ pub use frankenengine_core::execution_work_budget::{ExecutionWorkPool, WorkBudge
 
 use crate::ast::ParseGoal;
 use crate::baseline_interpreter::{
-    CompactTier1Program, ConsoleEntry, ExecutionResult, FailedConsoleSink, HookAction,
-    InterpreterConfig, InterpreterError, InterpreterHook, LaneChoice, LaneReason, LaneRouter,
-    ModuleSourceIntegrity, RoutedResult,
+    CompactTier1Program, ConsoleEntry, ExecutionResult, FailedConsoleSink,
+    FailedExecutionCaptureSink, HookAction, InterpreterConfig, InterpreterError, InterpreterHook,
+    LaneChoice, LaneReason, LaneRouter, ModuleSourceIntegrity, RoutedResult,
 };
 use crate::bayesian_posterior::{Evidence, Posterior, RiskState, UpdateResult, UpdaterStore};
 use crate::capability::RuntimeCapability;
@@ -39,6 +39,7 @@ use crate::containment_executor::{
 };
 use crate::control_plane::{Budget, Cx, KernelContext, NoCaps, TraceId};
 use crate::data_contract::DataContractIfcIngress;
+use crate::deterministic_replay::NondeterminismTrace;
 use crate::entropy_evidence_compressor::{
     ArithmeticCoder, CompressionCertificate, EntropyError, EntropyEstimator,
 };
@@ -1548,6 +1549,43 @@ impl UncommittedEvidenceChainEvidence {
     }
 }
 
+/// Exact observed prefix of an interpreter run that ended in an error.
+///
+/// This is separate from a successful execution result and never carries an
+/// IR4 completion witness. It is published only after host-effect and module
+/// input boundaries, cell cleanup, and the signed terminal evidence commit all
+/// succeed. Replay must reproduce the entire context, including consumption of
+/// every recorded host outcome, rather than merely reaching the same error.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FailedExecutionReplayContext {
+    pub error: InterpreterError,
+    pub ir3_hash: ContentHash,
+    pub instructions_executed: u64,
+    pub console_output: Vec<ConsoleEntry>,
+    pub dropped_console_entries: u64,
+    pub randomness_transcript: NondeterminismTrace,
+    pub host_effect_transcript: Vec<(HostIoRequest, HostIoOutcome)>,
+    pub imported_module_hashes: BTreeMap<String, String>,
+}
+
+impl FailedExecutionReplayContext {
+    #[must_use]
+    pub fn outcome(&self) -> &'static str {
+        if matches!(self.error, InterpreterError::CapabilityDenied { .. }) {
+            "capability_denied"
+        } else {
+            "execution_failed"
+        }
+    }
+
+    /// Commitment used by the signed terminal evidence entry. Serialization
+    /// failures propagate to callers rather than producing a placeholder hash.
+    pub fn content_hash(&self) -> Result<ContentHash, serde_json::Error> {
+        serde_json::to_vec(&("franken-engine.failed-execution-replay-context.v1", self))
+            .map(|bytes| ContentHash::compute(&bytes))
+    }
+}
+
 /// Ordered failure report for an orchestration attempt that reached cell
 /// creation.
 ///
@@ -1563,7 +1601,7 @@ impl UncommittedEvidenceChainEvidence {
 pub struct PostCellFailure {
     pub primary_error: Box<OrchestratorError>,
     pub additional_errors: Vec<OrchestratorError>,
-    /// Exact signed denial batch appended after successful execution cleanup.
+    /// Exact signed terminal batch appended after successful execution cleanup.
     pub committed_evidence_chain: Option<EvidenceChainArtifact>,
     pub uncommitted_evidence_chain: Option<UncommittedEvidenceChainEvidence>,
     pub containment_saga_failure: Option<ContainmentSagaFailureEvidence>,
@@ -2104,6 +2142,10 @@ pub struct ExecutionOrchestrator {
     /// failed. The lane writes it through this shared sink because a failed
     /// execution returns only its error.
     last_failed_console_output: FailedConsoleSink,
+    /// Lane-owned observation before a failing core is dropped. It is not a
+    /// replay artifact until all surrounding execution boundaries finalize.
+    failed_execution_capture: FailedExecutionCaptureSink,
+    last_failed_execution_replay_context: Option<FailedExecutionReplayContext>,
     /// `process.argv` the host launched the program with (bd-my9hk).
     process_argv: Vec<String>,
     /// Optional virtual wall-clock epoch override in milliseconds (`bd-9vouw.59`).
@@ -2453,6 +2495,8 @@ impl ExecutionOrchestrator {
             last_failed_host_effect_journal_records: Vec::new(),
             last_failed_trace_id: None,
             last_failed_console_output: Arc::default(),
+            failed_execution_capture: Arc::default(),
+            last_failed_execution_replay_context: None,
             process_argv: Vec::new(),
             clock_epoch_ms: None,
             module_resolver: None,
@@ -2727,6 +2771,15 @@ impl ExecutionOrchestrator {
             .lock()
             .map(|captured| captured.clone())
             .unwrap_or_default()
+    }
+
+    /// Replayable prefix from the last cleanly finalized interpreter failure.
+    /// Absent for incomplete recording, cleanup or evidence commits, external
+    /// cancellation, and attempts containing process effects that this host-I/O
+    /// replay format cannot represent. A new attempt always clears this state.
+    #[must_use]
+    pub fn last_failed_execution_replay_context(&self) -> Option<&FailedExecutionReplayContext> {
+        self.last_failed_execution_replay_context.as_ref()
     }
 
     /// Set `process.argv` for later executions (bd-my9hk): the runtime path,
@@ -3094,6 +3147,8 @@ impl ExecutionOrchestrator {
         self.last_failed_host_effect_journal.clear();
         self.last_failed_host_effect_journal_records.clear();
         self.last_failed_trace_id = None;
+        self.failed_execution_capture = Arc::default();
+        self.last_failed_execution_replay_context = None;
         if let Ok(mut captured) = self.last_failed_console_output.lock() {
             captured.clear();
         }
@@ -3180,6 +3235,7 @@ impl ExecutionOrchestrator {
         // Adaptive feedback is staged until evidence, containment, cell close,
         // and the signed ledger batch have all committed successfully.
         let mut pending_adaptive_router: Option<StagedAdaptiveRouterUpdate> = None;
+        let mut pending_failed_execution_replay_context = None;
         let pipeline_result = (|| -> Result<OrchestratorResult, PendingPostCellFailure> {
             // Step 3: Register extension in containment executor.
             self.containment_executor.register(&package.extension_id);
@@ -3434,16 +3490,79 @@ impl ExecutionOrchestrator {
             let (routed, guardplane_report) = match execution {
                 Ok(executed) => executed,
                 Err(primary_error) => {
-                    // bd-9vouw.61: a run the capability membrane stopped must
-                    // leave a signed, chained record of what was denied, not
-                    // only a stderr line. Evidence construction failure never
-                    // masks the denial itself.
                     let mut failure = PendingPostCellFailure::from(primary_error);
-                    match self.capability_denial_evidence(
+                    // A matching terminal error is insufficient for replay:
+                    // every expected module and host outcome must have been
+                    // consumed. Preserve the primary error if finalization
+                    // reveals an incomplete or changed input boundary.
+                    let imported_module_hashes = match self.module_source_integrity.finish() {
+                        Ok(hashes) => hashes,
+                        Err(error) => {
+                            failure
+                                .additional_errors
+                                .push(OrchestratorError::Interpreter(
+                                    InterpreterError::ModuleReadFailed {
+                                        specifier: source_label.clone(),
+                                        error,
+                                    },
+                                ));
+                            return Err(failure);
+                        }
+                    };
+                    let capture = self
+                        .failed_execution_capture
+                        .lock()
+                        .ok()
+                        .and_then(|mut captured| captured.take());
+                    let host_effects_recorded = self.host_io.is_none()
+                        || self.host_io_recorder.is_some()
+                        || host_effect_journal.is_some();
+                    let has_process_effect = host_effect_journal_entries
+                        .iter()
+                        .any(|entry| matches!(entry, HostEffectJournalEntry::ProcessSpawn { .. }));
+                    if host_effects_recorded
+                        && !has_process_effect
+                        // A delivered resolver graph is a separate input
+                        // authority absent from this filesystem replay format.
+                        && self.module_resolver.is_none()
+                        && let Some(capture) = capture
+                        && let OrchestratorError::Interpreter(error) = failure.primary_error.as_ref()
+                        && *error == capture.error
+                        && !matches!(error, InterpreterError::Cancelled)
+                    {
+                        let context = FailedExecutionReplayContext {
+                            error: capture.error,
+                            ir3_hash: adaptive_routing_context.ir3_content_hash,
+                            instructions_executed: capture.instructions_executed,
+                            console_output: capture.console_output,
+                            dropped_console_entries: capture.dropped_console_entries,
+                            randomness_transcript: capture.randomness_transcript,
+                            host_effect_transcript,
+                            imported_module_hashes,
+                        };
+                        if let Err(error) = context.randomness_transcript.validate_for_replay() {
+                            failure
+                                .additional_errors
+                                .push(OrchestratorError::Interpreter(
+                                    InterpreterError::InternalError {
+                                        details: format!(
+                                            "failed execution trace is invalid: {error}"
+                                        ),
+                                    },
+                                ));
+                            return Err(failure);
+                        }
+                        pending_failed_execution_replay_context = Some(context);
+                    }
+                    // Terminal resource refusals and uncaught errors need the
+                    // same signed record as capability denials. Evidence
+                    // construction failure never masks the interpreter error.
+                    match self.terminal_failure_evidence(
                         &trace_id,
                         &decision_id,
                         package,
                         &failure.primary_error,
+                        pending_failed_execution_replay_context.as_ref(),
                     ) {
                         Ok(Some(evidence)) => {
                             failure.uncommitted_evidence_chain = Some(Box::new(evidence));
@@ -3814,18 +3933,21 @@ impl ExecutionOrchestrator {
             }
             (Err(mut failure), close_result) => {
                 let mut committed_evidence_chain = None;
-                // A capability stop is a completed membrane decision. Commit
-                // its signed batch only after recorder/cell cleanup succeeds;
-                // containment, recorder and commit failures retain the staged
-                // evidence and the original denial instead of certifying it.
+                // A captured terminal failure is a completed runtime decision.
+                // Commit only after exact recording and cell cleanup succeed;
+                // later failures retain the staged evidence and primary error
+                // without publishing a replayable completion of that prefix.
                 if close_result.is_ok()
                     && cell_execution_transcript.is_some()
                     && failure.additional_errors.is_empty()
                     && failure.containment_saga_failure.is_none()
-                    && matches!(
-                        failure.primary_error.as_ref(),
-                        OrchestratorError::Interpreter(InterpreterError::CapabilityDenied { .. })
-                    )
+                    && (pending_failed_execution_replay_context.is_some()
+                        || matches!(
+                            failure.primary_error.as_ref(),
+                            OrchestratorError::Interpreter(
+                                InterpreterError::CapabilityDenied { .. }
+                            )
+                        ))
                     && let Some(evidence) = failure.uncommitted_evidence_chain.as_ref()
                 {
                     match self.commit_evidence_chain_batch(
@@ -3835,6 +3957,8 @@ impl ExecutionOrchestrator {
                         Ok(()) => {
                             committed_evidence_chain = Some(evidence.artifact.clone());
                             failure.uncommitted_evidence_chain = None;
+                            self.last_failed_execution_replay_context =
+                                pending_failed_execution_replay_context.take();
                         }
                         Err(error) => failure
                             .additional_errors
@@ -3986,27 +4110,41 @@ impl ExecutionOrchestrator {
         self.ledger.emit_chained_batch(entries, receipt)
     }
 
-    /// Signed evidence for a run the capability membrane terminated
-    /// (bd-9vouw.61). The entry names the denied capability and the
-    /// extension, chains onto the ledger head like any run's evidence batch,
-    /// and is validated against the ledger before it is returned, so the
-    /// failure report carries a verifiable record rather than a stderr line.
-    /// Returns `None` for failures that are not capability denials.
-    fn capability_denial_evidence(
+    /// Stage a signed terminal decision as a chained `SecurityAction` batch.
+    /// Capability denials retain their existing metadata; other interpreter
+    /// errors require a complete failure prefix. The context commitment binds
+    /// the exact error, executed IR3 and observed effects without certifying a
+    /// successful IR4 execution witness.
+    fn terminal_failure_evidence(
         &self,
         trace_id: &str,
         decision_id: &str,
         package: &ExtensionPackage,
         error: &OrchestratorError,
+        context: Option<&FailedExecutionReplayContext>,
     ) -> Result<Option<UncommittedEvidenceChainEvidence>, OrchestratorError> {
-        let OrchestratorError::Interpreter(InterpreterError::CapabilityDenied { capability }) =
-            error.primary_error()
-        else {
+        let OrchestratorError::Interpreter(error) = error.primary_error() else {
             return Ok(None);
         };
-        let entry = EvidenceEntryBuilder::new_with_authority(
+        let (outcome, suffix, rationale) = match error {
+            InterpreterError::CapabilityDenied { capability } => (
+                "capability_denied",
+                "capability-denied",
+                format!(
+                    "capability_denied capability={capability} extension_id={}",
+                    package.extension_id
+                ),
+            ),
+            _ if context.is_some() => (
+                "execution_failed",
+                "execution-failed",
+                format!("execution_failed extension_id={}", package.extension_id),
+            ),
+            _ => return Ok(None),
+        };
+        let mut builder = EvidenceEntryBuilder::new_with_authority(
             trace_id,
-            format!("{decision_id}:capability-denied"),
+            format!("{decision_id}:{suffix}"),
             &self.config.policy_id,
             self.config.epoch,
             DecisionType::SecurityAction,
@@ -4020,15 +4158,31 @@ impl ExecutionOrchestrator {
         .chosen(ChosenAction {
             action_name: format!("{}", ContainmentAction::Terminate),
             expected_loss_millionths: 0,
-            rationale: format!(
-                "capability_denied capability={capability} extension_id={}",
-                package.extension_id
-            ),
+            rationale,
         })
-        .meta("outcome", "capability_denied")
-        .meta("denied_capability", capability.clone())
-        .meta("extension_id", package.extension_id.clone())
-        .build()?;
+        .meta("outcome", outcome)
+        .meta("extension_id", package.extension_id.clone());
+        if let InterpreterError::CapabilityDenied { capability } = error {
+            builder = builder.meta("denied_capability", capability.clone());
+        }
+        if let Some(context) = context {
+            let context_hash =
+                context
+                    .content_hash()
+                    .map_err(|error| LedgerError::SchemaValidationFailed {
+                        reason: format!("failed execution context serialization failed: {error}"),
+                    })?;
+            let encoded_error = serde_json::to_string(&context.error).map_err(|error| {
+                LedgerError::SchemaValidationFailed {
+                    reason: format!("terminal interpreter error serialization failed: {error}"),
+                }
+            })?;
+            builder = builder
+                .meta("failed_execution_context_hash", context_hash.to_hex())
+                .meta("ir3_hash", context.ir3_hash.to_hex())
+                .meta("interpreter_error", encoded_error);
+        }
+        let entry = builder.build()?;
         let entries = vec![entry];
         let receipt = EvidenceChainReceipt::issue_with_authority(
             self.evidence_ledger_id().to_string(),
@@ -4573,6 +4727,7 @@ impl ExecutionOrchestrator {
         }
         lane_router.set_timer_effect_authority(timer_effect_authority);
         lane_router.set_failed_console_output_sink(Arc::clone(&self.last_failed_console_output));
+        lane_router.set_failed_execution_capture_sink(Arc::clone(&self.failed_execution_capture));
         lane_router.set_entry_flow_label_ceiling(entry_flow_label_ceiling.clone());
         if let Some(epoch_ms) = self.clock_epoch_ms {
             lane_router.set_clock_epoch_ms(epoch_ms);
@@ -7002,6 +7157,14 @@ mod tests {
         );
         let entry = &entries[0];
         assert_eq!(entry.trace_id, lifecycle.cleanup.trace_id);
+        let replay_context = orchestrator
+            .last_failed_execution_replay_context()
+            .expect("new capability denials retain their exact execution prefix");
+        assert_eq!(replay_context.outcome(), "capability_denied");
+        assert_eq!(
+            entry.metadata["failed_execution_context_hash"],
+            replay_context.content_hash().unwrap().to_hex()
+        );
         assert_eq!(
             entry.metadata.get("outcome").map(String::as_str),
             Some("capability_denied")
@@ -7132,6 +7295,388 @@ mod tests {
             OrchestratorError::Interpreter(InterpreterError::UncaughtException { value })
                 if value.contains("bd-9rhwp")
         ));
+    }
+
+    #[test]
+    fn failed_execution_replay_captures_actual_prefix_and_resets_after_next_attempt() {
+        for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+            let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig {
+                force_lane: Some(lane),
+                ..OrchestratorConfig::default()
+            });
+            let mut package = package_with_source(
+                "console.log('before failure', Math.random(), Date.now()); \
+                 throw 'terminal failure'; console.log('must not execute');",
+            );
+            package.capabilities.push("builtin".to_string());
+            let error = orchestrator.execute(&package).expect_err("uncaught throw");
+            let failure = assert_successful_post_cell_cleanup(&error);
+            let context = orchestrator
+                .last_failed_execution_replay_context()
+                .expect("cleanly finalized failed execution")
+                .clone();
+            assert!(matches!(
+                &context.error,
+                InterpreterError::UncaughtException { value } if value.contains("terminal failure")
+            ));
+            assert_eq!(context.outcome(), "execution_failed");
+            assert!(context.instructions_executed > 0);
+            assert_eq!(context.console_output.len(), 1);
+            assert!(
+                context.console_output[0]
+                    .message
+                    .starts_with("before failure ")
+            );
+            assert!(context.console_output[0].instruction_index <= context.instructions_executed);
+            assert_eq!(
+                context.console_output,
+                orchestrator.last_failed_console_output()
+            );
+            assert_eq!(context.dropped_console_entries, 0);
+            assert!(context.host_effect_transcript.is_empty());
+            assert!(context.imported_module_hashes.is_empty());
+            assert!(!context.randomness_transcript.events.is_empty());
+            assert_eq!(
+                context.randomness_transcript.capture_ended_vts,
+                Some(context.instructions_executed)
+            );
+            context.randomness_transcript.validate_for_replay().unwrap();
+            let committed = failure.committed_evidence_chain.as_ref().unwrap();
+            committed
+                .verify_genesis(
+                    &orchestrator.evidence_verification_identity(),
+                    orchestrator.evidence_ledger_id(),
+                    &failure.cleanup.trace_id,
+                )
+                .expect("terminal failure carries independently verifiable evidence");
+            assert_eq!(
+                committed.entries[0].metadata["failed_execution_context_hash"],
+                context.content_hash().unwrap().to_hex()
+            );
+            assert_eq!(
+                committed.entries[0].metadata["ir3_hash"],
+                context.ir3_hash.to_hex()
+            );
+            assert_eq!(
+                committed.entries[0].metadata["interpreter_error"],
+                serde_json::to_string(&context.error).unwrap()
+            );
+            let mut changed = context.clone();
+            changed.console_output[0].message.push_str(" tampered");
+            assert_ne!(
+                changed.content_hash().unwrap(),
+                context.content_hash().unwrap()
+            );
+            assert_eq!(orchestrator.execution_count(), 0);
+
+            let malformed = package_with_source("");
+            orchestrator
+                .execute(&malformed)
+                .expect_err("preflight failure");
+            assert!(
+                orchestrator
+                    .last_failed_execution_replay_context()
+                    .is_none()
+            );
+            assert!(orchestrator.last_failed_console_output().is_empty());
+            orchestrator
+                .execute(&simple_package())
+                .expect("next healthy attempt");
+            assert!(
+                orchestrator
+                    .last_failed_execution_replay_context()
+                    .is_none()
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_execution_replay_preserves_quota_denial_without_live_redispatch() {
+        use frankenengine_extension_host::host_io::budget::{
+            BudgetedHostIo, HostIoBudgetLimits, HostIoWorkBudget,
+        };
+        use frankenengine_extension_host::host_io::{InMemoryHostIoTranscript, SandboxedHostIo};
+
+        let root = tempfile::tempdir().expect("real sandbox root");
+        let budget = HostIoWorkBudget::new(HostIoBudgetLimits {
+            requests: 1,
+            request_bytes: 1024,
+            max_in_flight: 1,
+        });
+        let provider = Arc::new(BudgetedHostIo::new(
+            Arc::new(SandboxedHostIo::with_root(root.path()).unwrap()),
+            budget,
+        ));
+        let recording = Arc::new(InMemoryHostIoTranscript::recording());
+        let mut package = package_with_source(
+            "const fs = require('fs'); console.log('before write'); \
+             fs.writeFileSync('output.txt', 'first'); \
+             try { fs.writeFileSync('output.txt', 'must not overwrite'); } \
+             catch (error) { console.log('must not catch'); } \
+             console.log('must not continue');",
+        );
+        package.capabilities.push("fs_write".to_string());
+        let mut original = ExecutionOrchestrator::with_defaults();
+        original.set_host_io(provider, Some(recording));
+        let error = original
+            .execute(&package)
+            .expect_err("cumulative quota must stop guest");
+        assert_successful_post_cell_cleanup(&error);
+        let context = original
+            .last_failed_execution_replay_context()
+            .unwrap()
+            .clone();
+        assert!(matches!(
+            &context.error,
+            InterpreterError::InternalError { details }
+                if details.contains("HOST_IO_REQUEST_BUDGET_EXHAUSTED")
+        ));
+        assert_eq!(
+            std::fs::read(root.path().join("output.txt")).unwrap(),
+            b"first"
+        );
+        assert_eq!(context.console_output.len(), 1);
+        assert_eq!(context.console_output[0].message, "before write");
+        assert_eq!(context.host_effect_transcript.len(), 2);
+        assert!(context.host_effect_transcript[0].1.is_ok());
+        assert!(matches!(
+            &context.host_effect_transcript[1].1,
+            Err(HostIoError::Denied { reason }) if reason == "HOST_IO_REQUEST_BUDGET_EXHAUSTED"
+        ));
+
+        // The replacement provider counts any accidental dispatch. Recorded
+        // outcomes alone must reproduce both the admitted write and refusal.
+        let replacement = Arc::new(CountingHostIoProvider::default());
+        let replay = Arc::new(InMemoryHostIoTranscript::replaying(
+            context.host_effect_transcript.clone(),
+        ));
+        let mut replayed = ExecutionOrchestrator::with_defaults();
+        replayed.set_expected_imported_module_hashes(context.imported_module_hashes.clone());
+        replayed.set_host_io(replacement.clone(), Some(replay));
+        replayed
+            .execute(&package)
+            .expect_err("same recorded terminal failure");
+        assert_eq!(
+            replayed.last_failed_execution_replay_context(),
+            Some(&context)
+        );
+        assert_eq!(replacement.calls.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            std::fs::read(root.path().join("output.txt")).unwrap(),
+            b"first"
+        );
+    }
+
+    #[test]
+    fn failed_execution_replay_refuses_incomplete_host_and_module_inputs() {
+        use frankenengine_extension_host::host_io::{DenyAllHostIo, InMemoryHostIoTranscript};
+
+        let package = package_with_source("console.log('prefix'); throw 'same primary error';");
+        for missing_module in [false, true] {
+            let mut orchestrator = ExecutionOrchestrator::with_defaults();
+            if missing_module {
+                orchestrator.set_expected_imported_module_hashes(BTreeMap::from([(
+                    "not-consumed.js".to_string(),
+                    ContentHash::compute(b"module.exports = 42;").to_hex(),
+                )]));
+            } else {
+                let replay = Arc::new(InMemoryHostIoTranscript::replaying(vec![(
+                    HostIoRequest::FsRead {
+                        path: "not-consumed.txt".to_string(),
+                    },
+                    Err(HostIoError::Denied {
+                        reason: "recorded denial".to_string(),
+                    }),
+                )]));
+                orchestrator.set_host_io(Arc::new(DenyAllHostIo), Some(replay));
+            }
+            let error = orchestrator
+                .execute(&package)
+                .expect_err("terminal failure");
+            let failure = assert_successful_post_cell_cleanup(&error);
+            assert!(matches!(
+                error.primary_error(),
+                OrchestratorError::Interpreter(InterpreterError::UncaughtException { value })
+                    if value.contains("same primary error")
+            ));
+            assert_eq!(failure.additional_errors.len(), 1);
+            assert!(failure.committed_evidence_chain.is_none());
+            assert!(
+                orchestrator
+                    .last_failed_execution_replay_context()
+                    .is_none()
+            );
+            assert!(orchestrator.ledger().is_empty());
+        }
+    }
+
+    #[test]
+    fn failed_execution_replay_is_withheld_after_cleanup_or_commit_failure() {
+        for commit_failure in [false, true] {
+            let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig {
+                cell_close_budget_ms: if commit_failure { 1000 } else { 1 },
+                ..OrchestratorConfig::default()
+            });
+            orchestrator.ledger_commit_failure_override = commit_failure;
+            let error = orchestrator
+                .execute(&package_with_source(
+                    "console.log('prefix'); throw 'terminal';",
+                ))
+                .expect_err("terminal interpreter failure remains primary");
+            let failure = error.post_cell_failure().unwrap();
+            assert!(matches!(
+                error.primary_error(),
+                OrchestratorError::Interpreter(InterpreterError::UncaughtException { .. })
+            ));
+            assert!(failure.committed_evidence_chain.is_none());
+            assert!(failure.uncommitted_evidence_chain.is_some());
+            assert!(!failure.additional_errors.is_empty());
+            assert!(
+                orchestrator
+                    .last_failed_execution_replay_context()
+                    .is_none()
+            );
+            assert!(orchestrator.ledger().is_empty());
+        }
+    }
+
+    #[test]
+    fn failed_execution_replay_retains_console_limit_and_disabled_capture_counts() {
+        let mut limited = ExecutionOrchestrator::with_defaults().with_max_console_entries(Some(1));
+        limited
+            .execute(&package_with_source(
+                "console.log('retained'); console.log('refused');",
+            ))
+            .expect_err("console limit is a terminal resource refusal");
+        let context = limited.last_failed_execution_replay_context().unwrap();
+        assert!(matches!(
+            context.error,
+            InterpreterError::ConsoleBudgetExceeded {
+                entries: 2,
+                max_entries: 1,
+                ..
+            }
+        ));
+        assert_eq!(context.console_output.len(), 1);
+        assert_eq!(context.console_output[0].message, "retained");
+        assert_eq!(context.dropped_console_entries, 0);
+
+        let mut disabled = ExecutionOrchestrator::with_defaults().with_max_console_entries(Some(0));
+        disabled
+            .execute(&package_with_source(
+                "console.log('omitted'); throw 'stop';",
+            ))
+            .expect_err("uncaught throw with capture disabled");
+        let context = disabled.last_failed_execution_replay_context().unwrap();
+        assert!(context.console_output.is_empty());
+        assert_eq!(context.dropped_console_entries, 1);
+    }
+
+    #[test]
+    fn failed_execution_replay_binds_module_bytes_consumed_before_failure() {
+        let root = tempfile::tempdir().expect("module root");
+        let dependency = root.path().join("dependency.cjs");
+        let dependency_source = "module.exports = 17;";
+        std::fs::write(&dependency, dependency_source).unwrap();
+        let mut package = package_with_source(
+            "const value = require('./dependency.cjs'); console.log('dependency', value); \
+             throw 'after import';",
+        );
+        let entry = root.path().join("entry.cjs");
+        std::fs::write(&entry, &package.source).unwrap();
+        package.source_file = Some(entry.display().to_string());
+        package.module_root = Some(root.path().display().to_string());
+        package
+            .capabilities
+            .extend(["module_load".to_string(), "builtin".to_string()]);
+        let config = OrchestratorConfig {
+            commonjs_entry: true,
+            ..OrchestratorConfig::default()
+        };
+        let mut original = ExecutionOrchestrator::new(config.clone());
+        original
+            .execute(&package)
+            .expect_err("throw after actual filesystem module loading");
+        let context = original
+            .last_failed_execution_replay_context()
+            .unwrap()
+            .clone();
+        assert_eq!(context.console_output[0].message, "dependency 17");
+        assert_eq!(
+            context.imported_module_hashes["dependency.cjs"],
+            ContentHash::compute(dependency_source.as_bytes()).to_hex()
+        );
+
+        let mut replay = ExecutionOrchestrator::new(config.clone());
+        replay.set_expected_imported_module_hashes(context.imported_module_hashes.clone());
+        replay
+            .execute(&package)
+            .expect_err("same failed execution with exact dependency bytes");
+        assert_eq!(
+            replay.last_failed_execution_replay_context(),
+            Some(&context)
+        );
+
+        std::fs::write(&dependency, "module.exports = 99;").unwrap();
+        let mut changed = ExecutionOrchestrator::new(config);
+        changed.set_expected_imported_module_hashes(context.imported_module_hashes);
+        let error = changed
+            .execute(&package)
+            .expect_err("changed module bytes must be rejected");
+        let failure = assert_successful_post_cell_cleanup(&error);
+        assert!(failure.additional_errors.iter().any(|error| {
+            error
+                .to_string()
+                .contains("module integrity content mismatch")
+        }));
+        assert!(changed.last_failed_execution_replay_context().is_none());
+        assert!(changed.ledger().is_empty());
+    }
+
+    #[test]
+    fn failed_execution_replay_does_not_discard_process_effects() {
+        use frankenengine_extension_host::process_spawn::DenyAllProcessSpawn;
+
+        let mut package = package_with_source(
+            "require('child_process').execFileSync('refused-program'); throw 'after process';",
+        );
+        package.capabilities.extend([
+            "builtin".to_string(),
+            "module_load".to_string(),
+            "process_spawn".to_string(),
+        ]);
+        let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig {
+            commonjs_entry: true,
+            ..OrchestratorConfig::default()
+        });
+        orchestrator.set_process_spawn(
+            Arc::new(DenyAllProcessSpawn),
+            Arc::new(InMemoryHostEffectJournal::recording()),
+            authority_for_attempt_test(),
+        );
+        orchestrator
+            .execute(&package)
+            .expect_err("real process-policy refusal");
+        assert!(
+            orchestrator
+                .last_failed_host_effect_journal()
+                .iter()
+                .any(|entry| {
+                    matches!(
+                        entry,
+                        HostEffectJournalEntry::ProcessSpawn {
+                            outcome: Err(_),
+                            ..
+                        }
+                    )
+                })
+        );
+        assert!(
+            orchestrator
+                .last_failed_execution_replay_context()
+                .is_none()
+        );
     }
 
     #[test]
@@ -9329,6 +9874,12 @@ mod tests {
     impl HostIoProvider for CountingHostIoProvider {
         fn name(&self) -> &str {
             "counting-host-io"
+        }
+
+        fn filesystem_exception_provenance(&self) -> HostIoExceptionProvenance {
+            // This test provider exposes only the constant denial below. A
+            // replay counter must preserve the recorded lowering provenance.
+            HostIoExceptionProvenance::ProviderInternal
         }
 
         fn perform(

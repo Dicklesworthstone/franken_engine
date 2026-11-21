@@ -1801,6 +1801,25 @@ destination policy still apply independently. Successful run reports sign the
 manifest, including this budget, and replay consumes the recorded outcomes
 without spending live credits or reopening the filesystem.
 
+Terminal interpreter failures, including host I/O quota exhaustion, also emit a
+replayable report after the recorder, module-integrity checks and execution-cell
+cleanup finish successfully. The signed input binds the typed error, executed
+IR3, instruction count, partial console and randomness trace, consumed module
+hashes, recorded host effects, effective grants, IFC ingress and sandbox
+manifest. `frankenctl replay run --trace failure.json --mode strict` reproduces
+that exact failed prefix using recorded host outcomes; it never reopens the
+sandbox root or redispatches filesystem writes or network requests. Required
+module files are still read through their recorded content-hash checks. Failure
+prefixes do not claim a successful IR4 execution witness. Incomplete recorder,
+module or cleanup boundaries do not produce an exact replay claim; historical
+capability-denial reports retain their original, narrower comparison.
+
+Both `run` and `agent-sandbox` accept
+`--emit-evidence-trust ./artifacts/public-trust.json`. Retain that public snapshot
+and its emitted canonical `evidence_trust_snapshot_digest` through a trusted
+channel, then pass `--trust-snapshot` and `--expected-trust-digest` to replay for
+authentication. The failure report itself is never its own trust anchor.
+
 **Status & threat-model boundary:** certificates cover **explicit data flows only**
 (`explicit_flow_ifc_v1`) within the v1 analyzed subset—never covert, timing,
 control-flow-implicit, or hardware side channels, and never a noninterference

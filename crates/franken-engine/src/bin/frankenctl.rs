@@ -61,8 +61,8 @@ use frankenengine_engine::evidence_ledger::{
     derive_runtime_evidence_ledger_id,
 };
 use frankenengine_engine::execution_orchestrator::{
-    ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig, OrchestratorError,
-    OrchestratorResult, UncommittedEvidenceChainEvidence,
+    ExecutionOrchestrator, ExtensionPackage, FailedExecutionReplayContext, OrchestratorConfig,
+    OrchestratorError, OrchestratorResult, UncommittedEvidenceChainEvidence,
 };
 use frankenengine_engine::fleet_trace_total_order::{
     FleetNodeProvenance, FleetTraceNode, assemble_fleet_trace, node_id_from_session,
@@ -541,6 +541,8 @@ struct AgentSandboxArgs {
     input: PathBuf,
     parse_goal: ParseGoal,
     out: Option<PathBuf>,
+    /// Export the runtime's public replay trust anchor, including failed runs.
+    emit_evidence_trust: Option<PathBuf>,
     data_contract: Option<PathBuf>,
     /// Purpose override; falls back to the manifest purpose, then the
     /// data-contract default purpose.
@@ -1266,7 +1268,62 @@ struct FailedRunReplayInput {
     commonjs_entry: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     module_root: Option<String>,
-    denied_capability: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    denied_capability: Option<String>,
+    /// Exact authority and failed execution prefix. Optional fields preserve
+    /// the signed encoding of historical capability-denial reports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    capabilities: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    capability_witness: Option<CapabilityWitness>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    data_contract_ingress: Option<DataContractIfcIngress>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_sandbox_manifest: Option<AgentSandboxManifest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    host_io_exception_provenance: Option<HostIoExceptionProvenance>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    execution: Option<FailedExecutionReplayContext>,
+}
+
+impl FailedRunReplayInput {
+    fn command(&self) -> &'static str {
+        if self.agent_sandbox_manifest.is_some() {
+            "agent-sandbox"
+        } else {
+            "run"
+        }
+    }
+
+    fn trace_id_prefix(&self) -> &'static str {
+        if self.agent_sandbox_manifest.is_some() {
+            "frankenctl-agent-sandbox"
+        } else {
+            "frankenctl-run"
+        }
+    }
+
+    fn outcome(&self) -> Result<&'static str, String> {
+        match self.execution.as_ref() {
+            Some(execution) => {
+                if self.capabilities.is_none() {
+                    return Err("failed-run replay is missing its recorded authority".to_string());
+                }
+                let denied = match &execution.error {
+                    InterpreterError::CapabilityDenied { capability } => Some(capability),
+                    _ => None,
+                };
+                if self.denied_capability.as_ref() != denied {
+                    return Err("failed-run denial differs from its terminal error".to_string());
+                }
+                Ok(execution.outcome())
+            }
+            None if self.denied_capability.is_some() && self.agent_sandbox_manifest.is_none() => {
+                Ok("capability_denied")
+            }
+            None => Err("failed-run replay requires an exact execution prefix".to_string()),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1751,6 +1808,10 @@ struct ReplayCommandOutput {
     ir3_hash_match: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     unsigned_execution_content_match: Option<bool>,
+    /// Exact terminal error and observed prefix; a failed execution does not
+    /// produce or certify a successful IR4 witness.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failed_execution_content_match: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     randomness_transcript_match: Option<bool>,
     /// Re-executed decisions equal the reported ones (bd-mpu1z).
@@ -2924,6 +2985,7 @@ fn parse_agent_sandbox_command(args: &[String]) -> Result<CommandSpec, String> {
     let mut input: Option<PathBuf> = None;
     let mut goal = ParseGoal::Script;
     let mut out: Option<PathBuf> = None;
+    let mut emit_evidence_trust: Option<PathBuf> = None;
     let mut data_contract: Option<PathBuf> = None;
     let mut purpose: Option<String> = None;
     let mut certificate_out: Option<PathBuf> = None;
@@ -2940,6 +3002,13 @@ fn parse_agent_sandbox_command(args: &[String]) -> Result<CommandSpec, String> {
             "--input" => input = Some(PathBuf::from(next_arg(args, &mut index, "--input")?)),
             "--goal" => goal = parse_goal(&next_arg(args, &mut index, "--goal")?)?,
             "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+            "--emit-evidence-trust" => {
+                emit_evidence_trust = Some(PathBuf::from(next_arg(
+                    args,
+                    &mut index,
+                    "--emit-evidence-trust",
+                )?));
+            }
             "--data-contract" => {
                 data_contract = Some(PathBuf::from(next_arg(
                     args,
@@ -2985,6 +3054,7 @@ fn parse_agent_sandbox_command(args: &[String]) -> Result<CommandSpec, String> {
         input,
         parse_goal: goal,
         out,
+        emit_evidence_trust,
         data_contract,
         purpose,
         certificate_out,
@@ -5742,7 +5812,14 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         Ok(result) => result,
         Err(error) => {
             let failed_ctx = FailedRunEmitContext {
-                args: &args,
+                input: &args.input,
+                out: args.out.as_deref(),
+                parse_goal: args.parse_goal,
+                instruction_budget: args.instruction_budget,
+                parser_max_token_count: args.parser_max_token_count,
+                limits: args.limits,
+                commonjs_entry: args.commonjs_entry,
+                emit_evidence_trust: args.emit_evidence_trust.as_deref(),
                 package: &package,
                 source_label: &source_label,
                 policy_id: &policy_id,
@@ -5751,6 +5828,9 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
                 clock_epoch_ms: resolved_clock_epoch_ms,
                 evidence_authority: &evidence_authority,
                 configured_evidence: configured_evidence.as_ref(),
+                capability_witness: loaded_witness.as_ref(),
+                data_contract_ingress: data_contract_ingress.as_ref(),
+                agent_sandbox_manifest: None,
             };
             if let Some(rejection) = lowering_rejection(&error) {
                 return emit_lowering_rejection(
@@ -6077,6 +6157,8 @@ struct AgentSandboxCommandOutput {
     evidence_ledger_id: String,
     evidence_chain_head: String,
     evidence_chain_artifact: EvidenceChainArtifact,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    evidence_trust_snapshot_digest: Option<String>,
     /// Signed execution material consumed by `replay run`, without reopening
     /// the sandbox's filesystem root or performing live host effects.
     replay: ReplayableRunReport,
@@ -6166,6 +6248,7 @@ fn execute_agent_sandbox(args: AgentSandboxArgs) -> Result<i32, String> {
         orchestrator_config.cell_close_budget_ms = cell_close_budget_ms;
     }
     let replay_cell_close_budget_ms = orchestrator_config.cell_close_budget_ms;
+    let run_epoch = orchestrator_config.epoch;
     let evidence_authority = RuntimeEvidenceAuthority::generate_runtime_owned(
         fresh_runtime_evidence_producer_id("frankenctl.agent-sandbox", &source_hash.to_hex())?,
         orchestrator_config.epoch,
@@ -6209,13 +6292,44 @@ fn execute_agent_sandbox(args: AgentSandboxArgs) -> Result<i32, String> {
     let result = match orchestrator.execute(&package) {
         Ok(result) => result,
         Err(error) => {
+            let source_label = args.input.display().to_string();
+            let failed_ctx = FailedRunEmitContext {
+                input: &args.input,
+                out: args.out.as_deref(),
+                parse_goal: args.parse_goal,
+                instruction_budget: args.instruction_budget,
+                parser_max_token_count: None,
+                limits: args.limits,
+                commonjs_entry: false,
+                emit_evidence_trust: args.emit_evidence_trust.as_deref(),
+                package: &package,
+                source_label: &source_label,
+                policy_id: &policy_id,
+                epoch: run_epoch,
+                replay_cell_close_budget_ms,
+                clock_epoch_ms: None,
+                evidence_authority: &evidence_authority,
+                configured_evidence: None,
+                capability_witness: None,
+                data_contract_ingress: data_contract_ingress.as_ref(),
+                agent_sandbox_manifest: Some(&manifest),
+            };
+            if let Some(rejection) = lowering_rejection(&error) {
+                return emit_lowering_rejection(
+                    "agent-sandbox",
+                    &failed_ctx,
+                    &mut orchestrator,
+                    &error,
+                    rejection,
+                );
+            }
             return emit_orchestration_failure(
                 "agent-sandbox",
                 &args.input,
                 args.out.as_deref(),
                 &orchestrator,
                 &error,
-                None,
+                Some(&failed_ctx),
             );
         }
     };
@@ -6235,6 +6349,12 @@ fn execute_agent_sandbox(args: AgentSandboxArgs) -> Result<i32, String> {
         .map_err(|error| {
             format!("generated agent-sandbox evidence chain failed exact verification: {error}")
         })?;
+    let evidence_trust_snapshot_digest = export_run_evidence_trust_snapshot(
+        args.emit_evidence_trust.as_deref(),
+        None,
+        result.epoch,
+        trusted_runtime_identity,
+    )?;
 
     let report = AgentSandboxReport::from_run(&manifest, &result, module_goal)
         .map_err(|error| format!("failed to build agent-sandbox report: {error}"))?;
@@ -6350,6 +6470,7 @@ fn execute_agent_sandbox(args: AgentSandboxArgs) -> Result<i32, String> {
         evidence_ledger_id,
         evidence_chain_head: result.evidence_chain_receipt.head_chain_hash.clone(),
         evidence_chain_artifact,
+        evidence_trust_snapshot_digest,
         replay,
         observability_mode: default_capture_observability_mode(),
     };
@@ -8155,7 +8276,14 @@ fn derive_claim_explanation_receipt_id(output: &ClaimExplanationOutput) -> Strin
 }
 
 struct FailedRunEmitContext<'a> {
-    args: &'a RunArgs,
+    input: &'a Path,
+    out: Option<&'a Path>,
+    parse_goal: ParseGoal,
+    instruction_budget: Option<u64>,
+    parser_max_token_count: Option<u64>,
+    limits: ExecutionLimitOverrides,
+    commonjs_entry: bool,
+    emit_evidence_trust: Option<&'a Path>,
     package: &'a ExtensionPackage,
     source_label: &'a str,
     policy_id: &'a str,
@@ -8164,6 +8292,9 @@ struct FailedRunEmitContext<'a> {
     clock_epoch_ms: Option<i64>,
     evidence_authority: &'a RuntimeEvidenceAuthority,
     configured_evidence: Option<&'a LoadedRunEvidenceAuthority>,
+    capability_witness: Option<&'a CapabilityWitness>,
+    data_contract_ingress: Option<&'a DataContractIfcIngress>,
+    agent_sandbox_manifest: Option<&'a AgentSandboxManifest>,
 }
 
 fn export_run_evidence_trust_snapshot(
@@ -8206,6 +8337,38 @@ fn failed_run_replay_input_preimage(
         input,
     ))
     .map_err(|error| format!("failed to encode signed failed-run replay input: {error}"))
+}
+
+#[cfg(test)]
+mod failed_run_input_compatibility_tests {
+    use super::*;
+
+    #[test]
+    fn historical_capability_denial_preserves_signed_input_bytes() {
+        // This is the original struct field order and encoding, before exact
+        // failed-execution context and sandbox authority were introduced.
+        let historical = concat!(
+            "{\"source\":\"fetch('https://example.test')\",",
+            "\"source_label\":\"denied.js\",\"extension_id\":\"legacy\",",
+            "\"parse_goal\":\"script\",\"policy_id\":\"policy\",",
+            "\"policy_epoch\":1,\"cell_close_budget_ms\":1000,",
+            "\"denied_capability\":\"net:request\"}"
+        );
+        let input: FailedRunReplayInput = serde_json::from_str(historical).expect("old input");
+        assert_eq!(
+            serde_json::to_string(&input).expect("signed encoding"),
+            historical
+        );
+        assert_eq!(input.outcome().expect("old denial"), "capability_denied");
+        assert!(input.execution.is_none());
+        let expected = format!(
+            "[\"{FAILED_RUN_REPLAY_INPUT_SIGNATURE_DOMAIN}\",\"{ORCHESTRATION_FAILURE_SCHEMA_VERSION}\",\"trace\",\"ledger\",\"head\",{historical}]"
+        );
+        assert_eq!(
+            failed_run_replay_input_preimage("trace", "ledger", "head", &input).expect("preimage"),
+            expected.as_bytes()
+        );
+    }
 }
 
 fn emit_orchestration_failure(
@@ -8266,37 +8429,50 @@ fn emit_orchestration_failure(
         (None, Some(uncommitted.clone()))
     };
 
-    let classification = classify_run_error(error).map(str::to_string);
+    let classification = orchestrator
+        .last_failed_execution_replay_context()
+        .map(FailedExecutionReplayContext::outcome)
+        .or_else(|| classify_run_error(error))
+        .map(str::to_string);
     let outcome = classification.clone();
     let (evidence_trust_snapshot_digest, replay_input, replay_input_signature) =
         if let Some(ctx) = run_ctx {
             let epoch = ctx.epoch;
             let digest = export_run_evidence_trust_snapshot(
-                ctx.args.emit_evidence_trust.as_deref(),
+                ctx.emit_evidence_trust,
                 ctx.configured_evidence,
                 epoch,
                 trusted_identity,
             )?;
-            if let (
-                OrchestratorError::Interpreter(InterpreterError::CapabilityDenied { capability }),
-                Some(committed),
-            ) = (error.primary_error(), committed_evidence_chain.as_ref())
-            {
+            if let (Some(execution), Some(committed)) = (
+                orchestrator.last_failed_execution_replay_context(),
+                committed_evidence_chain.as_ref(),
+            ) {
+                let denied_capability = match &execution.error {
+                    InterpreterError::CapabilityDenied { capability } => Some(capability.clone()),
+                    _ => None,
+                };
                 let input_payload = FailedRunReplayInput {
                     source: ctx.package.source.clone(),
                     source_label: ctx.source_label.to_string(),
                     extension_id: ctx.package.extension_id.clone(),
-                    parse_goal: ctx.args.parse_goal.as_str().to_string(),
+                    parse_goal: ctx.parse_goal.as_str().to_string(),
                     policy_id: ctx.policy_id.to_string(),
                     policy_epoch: epoch.as_u64(),
                     cell_close_budget_ms: ctx.replay_cell_close_budget_ms,
-                    instruction_budget: ctx.args.instruction_budget,
+                    instruction_budget: ctx.instruction_budget,
                     clock_epoch_ms: ctx.clock_epoch_ms,
-                    parser_max_token_count: ctx.args.parser_max_token_count,
-                    limits: ctx.args.limits,
-                    commonjs_entry: ctx.args.commonjs_entry,
+                    parser_max_token_count: ctx.parser_max_token_count,
+                    limits: ctx.limits,
+                    commonjs_entry: ctx.commonjs_entry,
                     module_root: ctx.package.module_root.clone(),
-                    denied_capability: capability.clone(),
+                    denied_capability,
+                    capabilities: Some(ctx.package.capabilities.clone()),
+                    capability_witness: ctx.capability_witness.cloned(),
+                    data_contract_ingress: ctx.data_contract_ingress.cloned(),
+                    agent_sandbox_manifest: ctx.agent_sandbox_manifest.cloned(),
+                    host_io_exception_provenance: Some(HostIoExceptionProvenance::ProviderInternal),
+                    execution: Some(execution.clone()),
                 };
                 let sig = ctx
                     .evidence_authority
@@ -8445,8 +8621,8 @@ fn emit_lowering_rejection(
     error: &OrchestratorError,
     rejection: LoweringRejection,
 ) -> Result<i32, String> {
-    let input = run_ctx.args.input.as_path();
-    let out = run_ctx.args.out.as_deref();
+    let input = run_ctx.input;
+    let out = run_ctx.out;
     let error_message = format_orchestration_error(command, input, error);
     let (trace_id, evidence_chain_artifact) = orchestrator
         .record_lowering_rejection_evidence(&run_ctx.package.extension_id, error)
@@ -8465,7 +8641,7 @@ fn emit_lowering_rejection(
             format!("{error_message}; refusing to emit unverified lowering rejection evidence: {verify_err}")
         })?;
     let evidence_trust_snapshot_digest = export_run_evidence_trust_snapshot(
-        run_ctx.args.emit_evidence_trust.as_deref(),
+        run_ctx.emit_evidence_trust,
         run_ctx.configured_evidence,
         run_ctx.epoch,
         trusted_identity,
@@ -10744,6 +10920,7 @@ fn execute_replay(args: ReplayArgs) -> Result<i32, String> {
         evidence_trust_snapshot_digest: None,
         ir3_hash_match: None,
         unsigned_execution_content_match: None,
+        failed_execution_content_match: None,
         randomness_transcript_match: None,
         decisions_match: None,
         fleet_nodes,
@@ -11196,6 +11373,7 @@ fn execute_run_report_replay(args: ReplayArgs) -> Result<i32, String> {
         evidence_trust_snapshot_digest,
         ir3_hash_match: Some(ir3_hash_match),
         unsigned_execution_content_match: Some(unsigned_execution_content_match),
+        failed_execution_content_match: None,
         randomness_transcript_match: Some(randomness_transcript_match),
         decisions_match: Some(decisions_match),
         fleet_nodes: None,
@@ -11349,27 +11527,29 @@ fn execute_failed_run_report_replay(
     args: ReplayArgs,
     report: ReplayableFailedRunReport,
 ) -> Result<i32, String> {
-    if report.command != "run" {
-        return Err(format!(
-            "replayable orchestration failure report must originate from `run`, got `{}`",
-            report.command
-        ));
-    }
-    if report.outcome.as_deref() != Some("capability_denied")
-        && report.classification.as_deref() != Some("capability_denied")
-    {
-        return Err(format!(
-            "orchestration failure report outcome `{:?}` is not replayable (expected `capability_denied`)",
-            report.outcome.or(report.classification)
-        ));
-    }
     let artifact = report.committed_evidence_chain.as_ref().ok_or_else(|| {
-        "replayable capability-denied report requires a committed_evidence_chain artifact"
-            .to_string()
+        "failed-run replay requires a committed_evidence_chain artifact".to_string()
     })?;
-    let input = report.replay_input.as_ref().ok_or_else(|| {
-        "replayable capability-denied report requires a replay_input payload".to_string()
-    })?;
+    let input = report
+        .replay_input
+        .as_ref()
+        .ok_or_else(|| "failed-run replay requires a replay_input payload".to_string())?;
+    if report.command != input.command() {
+        return Err("failed-run command differs from the signed replay authority".to_string());
+    }
+    let expected_outcome = input.outcome()?;
+    if report
+        .outcome
+        .as_deref()
+        .or(report.classification.as_deref())
+        != Some(expected_outcome)
+        || report
+            .classification
+            .as_deref()
+            .is_some_and(|classification| classification != expected_outcome)
+    {
+        return Err("failed-run outcome differs from the recorded terminal error".to_string());
+    }
     if report.evidence_chain_head.as_deref() != Some(artifact.receipt.head_chain_hash.as_str()) {
         return Err(
             "reported evidence_chain_head differs from committed_evidence_chain receipt head"
@@ -11383,26 +11563,12 @@ fn execute_failed_run_report_replay(
         .map(|trust| authenticate_failed_run_report_evidence(&report, artifact, input, trust))
         .transpose()?;
 
-    let mut divergences = Vec::new();
-    let denial_entry = artifact.entries.iter().find(|entry| {
-        entry.metadata.get("outcome").map(String::as_str) == Some("capability_denied")
-    });
-    match denial_entry {
-        Some(entry) => {
-            if entry.metadata.get("denied_capability") != Some(&input.denied_capability) {
-                divergences.push(
-                    "denied_capability differs between evidence chain and replay_input".to_string(),
-                );
-            }
-            if entry.metadata.get("extension_id") != Some(&input.extension_id) {
-                divergences.push(
-                    "extension_id differs between evidence chain and replay_input".to_string(),
-                );
-            }
-        }
-        None => {
-            divergences.push("committed_evidence_chain lacks capability_denied entry".to_string());
-        }
+    let mut divergences = failed_run_evidence_divergences(artifact, input)?;
+    if let Some(execution) = input.execution.as_ref() {
+        execution
+            .randomness_transcript
+            .validate_for_replay()
+            .map_err(|error| format!("failed-run randomness transcript is invalid: {error}"))?;
     }
     if args.mode == ReplayMode::Strict
         && let Some(divergence) = divergences.first()
@@ -11411,22 +11577,47 @@ fn execute_failed_run_report_replay(
     }
 
     let parse_goal = parse_goal(&input.parse_goal)?;
-    let capabilities = run_cli_capabilities(parse_goal, input.commonjs_entry);
-    let package = ExtensionPackage {
-        extension_id: input.extension_id.clone(),
-        source: input.source.clone(),
-        source_file: Some(input.source_label.clone()),
-        module_root: input.module_root.clone(),
-        capabilities,
-        version: env!("CARGO_PKG_VERSION").to_string(),
-        metadata: BTreeMap::new(),
+    let package = if let Some(manifest) = input.agent_sandbox_manifest.as_ref() {
+        if input.commonjs_entry || input.module_root.is_some() || input.capability_witness.is_some()
+        {
+            return Err(
+                "sandbox replay contains unsupported execution authority overrides".to_string(),
+            );
+        }
+        let package = manifest
+            .to_extension_package(
+                input.source.clone(),
+                Some(input.source_label.clone()),
+                env!("CARGO_PKG_VERSION"),
+                parse_goal == ParseGoal::Module,
+            )
+            .map_err(|error| format!("sandbox replay manifest rejected: {error}"))?;
+        if package.extension_id != input.extension_id
+            || input.capabilities.as_ref() != Some(&package.capabilities)
+        {
+            return Err("sandbox replay authority differs from the recorded manifest".to_string());
+        }
+        package
+    } else {
+        ExtensionPackage {
+            extension_id: input.extension_id.clone(),
+            source: input.source.clone(),
+            source_file: Some(input.source_label.clone()),
+            module_root: input.module_root.clone(),
+            capabilities: input
+                .capabilities
+                .clone()
+                .unwrap_or_else(|| run_cli_capabilities(parse_goal, input.commonjs_entry)),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            metadata: BTreeMap::new(),
+        }
     };
     let source_hash = ContentHash::compute(input.source.as_bytes());
     let mut orchestrator_config = OrchestratorConfig {
         parse_goal,
         commonjs_entry: input.commonjs_entry,
-        auto_size_register_window: true,
-        trace_id_prefix: "frankenctl-run".to_string(),
+        auto_size_register_window: input.agent_sandbox_manifest.is_none(),
+        trace_id_prefix: input.trace_id_prefix().to_string(),
         policy_id: input.policy_id.clone(),
         epoch: SecurityEpoch::from_raw(input.policy_epoch),
         cell_close_budget_ms: input.cell_close_budget_ms,
@@ -11450,42 +11641,103 @@ fn execute_failed_run_report_replay(
         evidence_authority,
     )
     .map_err(|error| format!("failed to initialize replay execution orchestrator: {error}"))?;
+    if let Some(witness) = input.capability_witness.as_ref() {
+        orchestrator.set_capability_witness(witness.clone());
+    }
     orchestrator.set_clock_epoch_ms(input.clock_epoch_ms);
+    if let Some(ingress) = input.data_contract_ingress.as_ref() {
+        orchestrator.set_data_contract_ingress(ingress.clone());
+    }
+    if let Some(execution) = input.execution.as_ref() {
+        orchestrator.set_expected_imported_module_hashes(execution.imported_module_hashes.clone());
+        if input.host_io_exception_provenance != Some(HostIoExceptionProvenance::ProviderInternal) {
+            return Err("failed-run filesystem exception provenance is not replayable".to_string());
+        }
+    }
+    // Every failed replay uses an exact recording, even when it is empty.
+    // Neither the manifest's root nor its budgeted live provider is reopened.
+    let replay_io = Arc::new(ReportHostIo::replaying(
+        input
+            .execution
+            .as_ref()
+            .map(|execution| execution.host_effect_transcript.clone())
+            .unwrap_or_default(),
+        HostIoExceptionProvenance::ProviderInternal,
+    ));
+    orchestrator.set_host_io(replay_io.clone(), Some(replay_io));
+
+    let mut ir3_hash_match = input.execution.as_ref().map(|_| false);
+    let mut execution_content_match = input.execution.as_ref().map(|_| false);
+    let mut randomness_transcript_match = input.execution.as_ref().map(|_| false);
+    let mut replayed_events = 0;
 
     match orchestrator.execute(&package) {
         Ok(_) => {
             divergences.push(format!(
-                "expected capability_denied (`{}`), but re-execution completed without denial",
-                input.denied_capability
+                "expected {expected_outcome}, but re-execution completed without failure"
             ));
         }
         Err(replayed_error) => {
-            match replayed_error.primary_error() {
-                OrchestratorError::Interpreter(InterpreterError::CapabilityDenied {
-                    capability,
-                }) => {
-                    if capability != &input.denied_capability {
+            if let Some(expected) = input.execution.as_ref() {
+                match orchestrator.last_failed_execution_replay_context() {
+                    Some(actual) => {
+                        ir3_hash_match = Some(actual.ir3_hash == expected.ir3_hash);
+                        randomness_transcript_match =
+                            Some(actual.randomness_transcript == expected.randomness_transcript);
+                        execution_content_match = Some(actual == expected);
+                        replayed_events = actual.randomness_transcript.events.len() as u64;
+                        if actual != expected {
+                            divergences.push(
+                                "re-executed failure prefix differs from the recorded error, instructions, console, randomness, modules or host effects".to_string(),
+                            );
+                        }
+                    }
+                    None => divergences.push(format!(
+                        "re-execution did not produce a committed exact failure prefix: {replayed_error}"
+                    )),
+                }
+                if !matches!(replayed_error.primary_error(),
+                    OrchestratorError::Interpreter(error) if error == &expected.error)
+                {
+                    divergences.push("re-executed terminal error differs".to_string());
+                }
+            } else {
+                // Historical reports captured only a capability denial. Keep
+                // that comparison without claiming exact prefix coverage.
+                match replayed_error.primary_error() {
+                    OrchestratorError::Interpreter(InterpreterError::CapabilityDenied {
+                        capability,
+                    }) if Some(capability) == input.denied_capability.as_ref() => {}
+                    other => {
                         divergences.push(format!(
-                            "re-executed capability denial `{capability}` differs from recorded `{}`",
-                            input.denied_capability
+                            "re-executed terminal error `{other}` differs from the recorded capability denial"
                         ));
                     }
-                }
-                other => {
-                    divergences.push(format!(
-                        "re-execution failed with `{other}` instead of capability_denied `{}`",
-                        input.denied_capability
-                    ));
                 }
             }
             let replayed_committed = replayed_error
                 .post_cell_failure()
                 .and_then(|lc| lc.committed_evidence_chain.as_ref());
-            if replayed_committed.is_none() {
-                divergences.push(
-                    "re-executed capability denial did not produce a committed evidence chain"
-                        .to_string(),
-                );
+            if let Some(actual_artifact) = replayed_committed {
+                divergences.extend(failed_run_evidence_divergences(actual_artifact, input)?);
+                for (reported, actual) in artifact.entries.iter().zip(&actual_artifact.entries) {
+                    if reported.decision_type != actual.decision_type
+                        || reported.candidates != actual.candidates
+                        || reported.constraints != actual.constraints
+                        || reported.chosen_action != actual.chosen_action
+                        || reported.witnesses != actual.witnesses
+                    {
+                        divergences.push(
+                            "re-executed terminal decision differs from its evidence".to_string(),
+                        );
+                    }
+                }
+                if input.execution.is_none() {
+                    replayed_events = actual_artifact.entries.len() as u64;
+                }
+            } else {
+                divergences
+                    .push("re-executed failure did not commit its evidence chain".to_string());
             }
         }
     }
@@ -11497,7 +11749,10 @@ fn execute_failed_run_report_replay(
     }
 
     let decisions_match = divergences.is_empty();
-    let session_id = format!("{}:capability-denied", report.trace_id);
+    let session_id = input.execution.as_ref().map_or_else(
+        || format!("{}:capability-denied", report.trace_id),
+        |execution| execution.randomness_transcript.session_id.clone(),
+    );
     let (trace_id, decision_id, policy_id) = cli_replay_ids(&session_id, args.mode);
     let output = ReplayCommandOutput {
         schema_version: FRANKENCTL_SCHEMA_VERSION.to_string(),
@@ -11507,8 +11762,13 @@ fn execute_failed_run_report_replay(
         trace_path: args.trace.display().to_string(),
         mode: replay_mode_name(args.mode).to_string(),
         session_id,
-        event_count: artifact.entries.len(),
-        replayed_events: artifact.entries.len() as u64,
+        event_count: input
+            .execution
+            .as_ref()
+            .map_or(artifact.entries.len(), |execution| {
+                execution.randomness_transcript.events.len()
+            }),
+        replayed_events,
         divergence_count: divergences.len(),
         critical_divergences: if args.mode == ReplayMode::Strict {
             divergences.len()
@@ -11519,9 +11779,10 @@ fn execute_failed_run_report_replay(
         replay_kind: "reexecution".to_string(),
         evidence_authenticated: evidence_trust_snapshot_digest.is_some(),
         evidence_trust_snapshot_digest,
-        ir3_hash_match: None,
+        ir3_hash_match,
         unsigned_execution_content_match: None,
-        randomness_transcript_match: None,
+        failed_execution_content_match: execution_content_match,
+        randomness_transcript_match,
         decisions_match: Some(decisions_match),
         fleet_nodes: None,
         observability_mode: default_capture_observability_mode(),
@@ -11531,6 +11792,56 @@ fn execute_failed_run_report_replay(
     }
     print_json(&output)?;
     Ok(0)
+}
+
+fn failed_run_evidence_divergences(
+    artifact: &EvidenceChainArtifact,
+    input: &FailedRunReplayInput,
+) -> Result<Vec<String>, String> {
+    let mut divergences = Vec::new();
+    let expected_outcome = input.outcome()?;
+    if artifact.entries.len() != 1 {
+        divergences.push("failed-run evidence must contain one terminal decision".to_string());
+    }
+    let terminal_entry = artifact
+        .entries
+        .iter()
+        .find(|entry| entry.metadata.get("outcome").map(String::as_str) == Some(expected_outcome));
+    let Some(entry) = terminal_entry else {
+        divergences.push("committed evidence lacks the recorded terminal decision".to_string());
+        return Ok(divergences);
+    };
+    if entry.chosen_action.action_name != "terminate" {
+        divergences.push("failed-run evidence does not terminate the execution".to_string());
+    }
+    if entry.metadata.get("denied_capability") != input.denied_capability.as_ref() {
+        divergences.push("denied capability differs between evidence and replay input".to_string());
+    }
+    if entry.metadata.get("extension_id") != Some(&input.extension_id) {
+        divergences.push("extension differs between evidence and replay input".to_string());
+    }
+    if entry.policy_id != input.policy_id
+        || entry.epoch_id != SecurityEpoch::from_raw(input.policy_epoch)
+    {
+        divergences.push("policy or epoch differs between evidence and replay input".to_string());
+    }
+    if let Some(execution) = input.execution.as_ref() {
+        let context_hash = execution
+            .content_hash()
+            .map_err(|error| format!("failed to hash terminal execution prefix: {error}"))?
+            .to_hex();
+        let encoded_error = serde_json::to_string(&execution.error)
+            .map_err(|error| format!("failed to encode terminal interpreter error: {error}"))?;
+        if entry.metadata.get("failed_execution_context_hash") != Some(&context_hash)
+            || entry.metadata.get("ir3_hash") != Some(&execution.ir3_hash.to_hex())
+            || entry.metadata.get("interpreter_error") != Some(&encoded_error)
+            || entry.trace_id != execution.randomness_transcript.session_id
+        {
+            divergences
+                .push("failed execution prefix differs from its evidence commitment".to_string());
+        }
+    }
+    Ok(divergences)
 }
 
 fn authenticate_failed_run_report_evidence(
@@ -11606,7 +11917,7 @@ fn authenticate_failed_run_report_evidence(
         let expected_ledger = derive_runtime_evidence_ledger_id(
             &input.policy_id,
             epoch,
-            "frankenctl-run",
+            input.trace_id_prefix(),
             identity,
             &report.evidence_chain_instance_id,
         )
@@ -15456,6 +15767,10 @@ fn run_usage() -> String {
         "  A post-evidence lifecycle failure exits 2 and emits a structured",
         "  orchestration-failure report containing the verified exact batch",
         "  explicitly marked uncommitted. --out receives the same report.",
+        "  A terminal interpreter failure whose recorder, module checks and cell",
+        "  cleanup finish successfully instead commits its failure decision and",
+        "  signed execution prefix. replay run verifies the exact failure without",
+        "  repeating live host effects. This prefix is not a successful IR4 witness.",
     ]
     .join("\n")
 }
@@ -15465,6 +15780,7 @@ fn agent_sandbox_usage() -> String {
         "agent-sandbox usage:",
         "  frankenctl agent-sandbox --manifest <agent_sandbox_manifest.json> --input <generated.js>",
         "      [--goal script|module] [--out <report.json>]",
+        "      [--emit-evidence-trust <public-trust.json>]",
         "      [--data-contract <contract.json>] [--purpose <purpose>] [--certificate-out <bundle-dir>]",
         "      [--cell-close-budget-ms <n>] [--instruction-budget <n>] [--max-heap-objects <n>]",
         "      [--max-heap-bytes <n>] [--max-console-entries <n>] [--max-source-bytes <n>]",
@@ -15490,6 +15806,13 @@ fn agent_sandbox_usage() -> String {
         "",
         "  A post-evidence lifecycle failure exits 2 and emits the same",
         "  structured, explicitly uncommitted exact-chain failure report as run.",
+        "  Terminal interpreter failures, including host I/O budget exhaustion,",
+        "  commit signed failure evidence after successful recorder/module/cell",
+        "  finalization. replay run restores the manifest and recorded prefix",
+        "  without opening host_io_root or dispatching live writes or network I/O.",
+        "  --emit-evidence-trust exports the public signer snapshot and prints",
+        "  its canonical digest; retain and pin it independently for authenticated",
+        "  replay of successful or failed sandbox runs.",
         "",
         "  exit codes: 0 = the agent ran to completion (allow/challenge/sandbox),",
         "  3 = the guardplane contained it (suspend/terminate/quarantine; the",
@@ -15789,6 +16112,9 @@ fn replay_run_usage() -> String {
         "  retain those files separately. Replay checks their bytes at each load.",
         "  Sandbox replay restores the recorded tool authority and guardplane policy,",
         "  consumes host-I/O recordings, and never opens the original live host root.",
+        "  Committed terminal-failure reports replay the exact error and observed",
+        "  prefix, including quotas, console and consumed effects. They report",
+        "  failed_execution_content_match and do not claim successful IR4 content.",
         "  Trust flags cannot be combined with --compare-trace or --fleet-trace.",
         "  --compare-trace explicitly compares two nondeterminism trace files.",
         "  --fleet-trace stitches per-node traces into one globally-consistent",

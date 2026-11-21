@@ -1783,6 +1783,7 @@ pub struct QuickJsLane {
     host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
     timer_effect_authority: Option<Arc<dyn TimerEffectAuthority>>,
     failed_console_output: Option<FailedConsoleSink>,
+    failed_execution_capture: Option<FailedExecutionCaptureSink>,
     entry_flow_label_ceiling: Option<Label>,
     clock_epoch_ms: Option<i64>,
     module_resolver: Option<InstalledModuleResolver>,
@@ -1798,6 +1799,7 @@ impl Default for QuickJsLane {
             host_effect_journal: None,
             timer_effect_authority: None,
             failed_console_output: None,
+            failed_execution_capture: None,
             entry_flow_label_ceiling: None,
             clock_epoch_ms: None,
             module_resolver: None,
@@ -1819,6 +1821,7 @@ impl QuickJsLane {
             host_effect_journal: None,
             timer_effect_authority: None,
             failed_console_output: None,
+            failed_execution_capture: None,
             entry_flow_label_ceiling: None,
             clock_epoch_ms: None,
             module_resolver: None,
@@ -1855,6 +1858,10 @@ impl QuickJsLane {
     /// execution fails, so output printed before a throw is not lost.
     pub fn set_failed_console_output_sink(&mut self, sink: FailedConsoleSink) {
         self.failed_console_output = Some(sink);
+    }
+
+    pub(crate) fn set_failed_execution_capture_sink(&mut self, sink: FailedExecutionCaptureSink) {
+        self.failed_execution_capture = Some(sink);
     }
 
     /// The entry module's flow label ceiling for the cores this lane
@@ -1910,6 +1917,7 @@ impl QuickJsLane {
             self.host_effect_journal.clone(),
             self.timer_effect_authority.clone(),
             self.failed_console_output.clone(),
+            self.failed_execution_capture.clone(),
             self.entry_flow_label_ceiling.clone(),
             self.clock_epoch_ms,
             self.module_resolver.clone(),
@@ -1951,6 +1959,7 @@ pub struct V8Lane {
     host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
     timer_effect_authority: Option<Arc<dyn TimerEffectAuthority>>,
     failed_console_output: Option<FailedConsoleSink>,
+    failed_execution_capture: Option<FailedExecutionCaptureSink>,
     entry_flow_label_ceiling: Option<Label>,
     clock_epoch_ms: Option<i64>,
     module_resolver: Option<InstalledModuleResolver>,
@@ -1966,6 +1975,7 @@ impl Default for V8Lane {
             host_effect_journal: None,
             timer_effect_authority: None,
             failed_console_output: None,
+            failed_execution_capture: None,
             entry_flow_label_ceiling: None,
             clock_epoch_ms: None,
             module_resolver: None,
@@ -2071,6 +2081,7 @@ pub(super) fn execute_lane_with_provisioned_stack(
     host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
     timer_effect_authority: Option<Arc<dyn TimerEffectAuthority>>,
     failed_console_output: Option<FailedConsoleSink>,
+    failed_execution_capture: Option<FailedExecutionCaptureSink>,
     entry_flow_label_ceiling: Option<Label>,
     clock_epoch_ms: Option<i64>,
     module_resolver: Option<InstalledModuleResolver>,
@@ -2129,14 +2140,32 @@ pub(super) fn execute_lane_with_provisioned_stack(
             }
             Err(error) => Err(error),
         };
-        // A failed execution keeps its console buffer in the core
-        // (only a completed one moves it into the result); hand it
-        // to the sink before the core is dropped.
-        if outcome.is_err()
-            && let Some(sink) = &failed_console_output
-            && let Ok(mut captured) = sink.lock()
-        {
-            *captured = core.console_output().to_vec();
+        // A failed execution keeps its observed state in the core. Preserve
+        // the console compatibility surface, then move the replay prefix out
+        // before the ephemeral core is dropped. No completion witness or
+        // successful ExecutionResult is manufactured for this failure.
+        if let Err(error) = &outcome {
+            if let Some(sink) = &failed_console_output
+                && let Ok(mut captured) = sink.lock()
+            {
+                *captured = core.console_output().to_vec();
+            }
+            if let Some(sink) = &failed_execution_capture
+                && let Ok(mut captured) = sink.lock()
+            {
+                core.nondeterminism_trace
+                    .finalise(core.instructions_executed);
+                *captured = Some(FailedExecutionCapture {
+                    error: error.clone(),
+                    instructions_executed: core.instructions_executed,
+                    console_output: std::mem::take(&mut core.console_output),
+                    dropped_console_entries: core.dropped_console_entries,
+                    randomness_transcript: std::mem::replace(
+                        &mut core.nondeterminism_trace,
+                        NondeterminismTrace::new(String::new()),
+                    ),
+                });
+            }
         }
         outcome
     });
@@ -2173,6 +2202,7 @@ impl V8Lane {
             host_effect_journal: None,
             timer_effect_authority: None,
             failed_console_output: None,
+            failed_execution_capture: None,
             entry_flow_label_ceiling: None,
             clock_epoch_ms: None,
             module_resolver: None,
@@ -2209,6 +2239,10 @@ impl V8Lane {
     /// execution fails, so output printed before a throw is not lost.
     pub fn set_failed_console_output_sink(&mut self, sink: FailedConsoleSink) {
         self.failed_console_output = Some(sink);
+    }
+
+    pub(crate) fn set_failed_execution_capture_sink(&mut self, sink: FailedExecutionCaptureSink) {
+        self.failed_execution_capture = Some(sink);
     }
 
     /// The entry module's flow label ceiling for the cores this lane
@@ -2254,6 +2288,7 @@ impl V8Lane {
             self.host_effect_journal.clone(),
             self.timer_effect_authority.clone(),
             self.failed_console_output.clone(),
+            self.failed_execution_capture.clone(),
             self.entry_flow_label_ceiling.clone(),
             self.clock_epoch_ms,
             self.module_resolver.clone(),
@@ -2771,6 +2806,12 @@ impl LaneRouter {
         self.quickjs
             .set_failed_console_output_sink(Arc::clone(&sink));
         self.v8.set_failed_console_output_sink(sink);
+    }
+
+    pub(crate) fn set_failed_execution_capture_sink(&mut self, sink: FailedExecutionCaptureSink) {
+        self.quickjs
+            .set_failed_execution_capture_sink(Arc::clone(&sink));
+        self.v8.set_failed_execution_capture_sink(sink);
     }
 
     /// Give both lanes the entry module's flow label ceiling (bd-j8f7q), so

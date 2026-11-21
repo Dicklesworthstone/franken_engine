@@ -5,6 +5,9 @@
 //! positions never silently become sequential writes. Guest overloads must be
 //! normalized before this boundary, not interpreted again by the host provider.
 
+#[cfg(unix)]
+use super::control::FILE_IO_CHUNK_BYTES;
+use super::control::OperationControl;
 use super::{HostIoError, SandboxedHostIo};
 
 fn invalid_position() -> HostIoError {
@@ -55,6 +58,17 @@ impl SandboxedHostIo {
         data: &[u8],
         position: Option<u64>,
     ) -> Result<u64, HostIoError> {
+        self.write_fd_at_controlled(fd, data, position, &OperationControl::unrestricted())
+    }
+
+    pub(super) fn write_fd_at_controlled(
+        &self,
+        fd: u64,
+        data: &[u8],
+        position: Option<u64>,
+        control: &OperationControl,
+    ) -> Result<u64, HostIoError> {
+        control.check_host()?;
         let length = u64::try_from(data.len()).map_err(|_| HostIoError::Io {
             detail: "file write length is not representable".to_string(),
         })?;
@@ -74,7 +88,7 @@ impl SandboxedHostIo {
                 .filter(|end| *end <= i64::MAX as u64)
                 .ok_or_else(invalid_position)?;
         }
-        self.with_fd_entry(fd, |entry| {
+        self.with_fd_entry(fd, control, |entry| {
             if !entry.writable {
                 return Err(HostIoError::Fs {
                     code: "EBADF".to_string(),
@@ -84,8 +98,32 @@ impl SandboxedHostIo {
             if let Some(position) = position {
                 #[cfg(unix)]
                 {
-                    std::os::unix::fs::FileExt::write_all_at(&entry.file, data, position)
-                        .map_err(|error| Self::fs_error("pwrite", &entry.guest_path, error))?;
+                    let mut written = 0;
+                    while written < data.len() {
+                        control.check_host()?;
+                        let end = written + (data.len() - written).min(FILE_IO_CHUNK_BYTES);
+                        let count = match std::os::unix::fs::FileExt::write_at(
+                            &entry.file,
+                            &data[written..end],
+                            position + written as u64,
+                        ) {
+                            Ok(0) => {
+                                return Err(Self::fs_error(
+                                    "pwrite",
+                                    &entry.guest_path,
+                                    std::io::Error::from(std::io::ErrorKind::WriteZero),
+                                ));
+                            }
+                            Ok(count) => count,
+                            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+                                continue;
+                            }
+                            Err(error) => {
+                                return Err(Self::fs_error("pwrite", &entry.guest_path, error));
+                            }
+                        };
+                        written += count;
+                    }
                 }
                 #[cfg(not(unix))]
                 {
@@ -93,7 +131,8 @@ impl SandboxedHostIo {
                     return Err(Self::fs_not_implemented("pwrite"));
                 }
             } else {
-                std::io::Write::write_all(&mut entry.file, data)
+                control
+                    .write_all(&mut entry.file, data)
                     .map_err(|error| Self::fs_error("write", &entry.guest_path, error))?;
             }
             Ok(length)

@@ -60,19 +60,31 @@ pub struct EpochBudget {
 impl EpochBudget {
     /// Remaining epsilon (may be negative if over-consumed before latch).
     pub fn epsilon_remaining(&self) -> i64 {
-        self.epsilon_budget_millionths - self.epsilon_spent_millionths
+        self.epsilon_budget_millionths
+            .saturating_sub(self.epsilon_spent_millionths)
     }
 
     /// Remaining delta (may be negative if over-consumed before latch).
     pub fn delta_remaining(&self) -> i64 {
-        self.delta_budget_millionths - self.delta_spent_millionths
+        self.delta_budget_millionths
+            .saturating_sub(self.delta_spent_millionths)
     }
 
     /// Check if this epoch budget would be exhausted by the given
     /// consumption.
     pub fn would_exhaust(&self, epsilon: i64, delta: i64) -> bool {
-        self.epsilon_spent_millionths.saturating_add(epsilon) > self.epsilon_budget_millionths
-            || self.delta_spent_millionths.saturating_add(delta) > self.delta_budget_millionths
+        checked_budget_spend(
+            self.epsilon_spent_millionths,
+            epsilon,
+            self.epsilon_budget_millionths,
+        )
+        .is_none()
+            || checked_budget_spend(
+                self.delta_spent_millionths,
+                delta,
+                self.delta_budget_millionths,
+            )
+            .is_none()
     }
 }
 
@@ -284,7 +296,8 @@ impl BudgetAccountant {
     /// the actual budget impact.
     ///
     /// Returns `Err(AccountantError::BudgetExhausted)` if the budget is
-    /// already exhausted or would be exhausted by this operation.
+    /// already exhausted or would be exhausted by this operation. Arithmetic
+    /// overflow also trips the exhaustion latch without recording a charge.
     pub fn consume(
         &mut self,
         epsilon_millionths: i64,
@@ -310,52 +323,86 @@ impl BudgetAccountant {
         // Apply composition method to compute actual budget impact. Native-space
         // state is returned as a pending update so failed budget checks cannot
         // partially mutate the accountant.
-        let composition = self.apply_composition(epsilon_millionths, delta_millionths);
+        let composition = match self.apply_composition(epsilon_millionths, delta_millionths) {
+            Ok(composition) => composition,
+            Err(error) => {
+                self.current_budget.exhausted = true;
+                return Err(error);
+            }
+        };
         let composed_epsilon = composition.epsilon_millionths;
         let composed_delta = composition.delta_millionths;
 
         // Check if this would exhaust the epoch budget.
-        if self
-            .current_budget
-            .would_exhaust(composed_epsilon, composed_delta)
-        {
+        let (Some(next_epoch_epsilon), Some(next_epoch_delta)) = (
+            checked_budget_spend(
+                self.current_budget.epsilon_spent_millionths,
+                composed_epsilon,
+                self.current_budget.epsilon_budget_millionths,
+            ),
+            checked_budget_spend(
+                self.current_budget.delta_spent_millionths,
+                composed_delta,
+                self.current_budget.delta_budget_millionths,
+            ),
+        ) else {
             self.current_budget.exhausted = true;
             return Err(AccountantError::BudgetExhausted {
                 dimension: "epoch".into(),
                 epsilon_remaining: self.current_budget.epsilon_remaining(),
                 delta_remaining: self.current_budget.delta_remaining(),
             });
-        }
+        };
 
         // Check if this would exhaust the lifetime budget.
-        if self.lifetime_epsilon_spent_millionths + composed_epsilon
-            > self.lifetime_epsilon_budget_millionths
-            || self.lifetime_delta_spent_millionths + composed_delta
-                > self.lifetime_delta_budget_millionths
-        {
+        let (Some(next_lifetime_epsilon), Some(next_lifetime_delta)) = (
+            checked_budget_spend(
+                self.lifetime_epsilon_spent_millionths,
+                composed_epsilon,
+                self.lifetime_epsilon_budget_millionths,
+            ),
+            checked_budget_spend(
+                self.lifetime_delta_spent_millionths,
+                composed_delta,
+                self.lifetime_delta_budget_millionths,
+            ),
+        ) else {
             self.current_budget.exhausted = true;
             return Err(AccountantError::BudgetExhausted {
                 dimension: "lifetime".into(),
-                epsilon_remaining: self.lifetime_epsilon_budget_millionths
-                    - self.lifetime_epsilon_spent_millionths,
-                delta_remaining: self.lifetime_delta_budget_millionths
-                    - self.lifetime_delta_spent_millionths,
+                epsilon_remaining: self.lifetime_epsilon_remaining(),
+                delta_remaining: self.lifetime_delta_remaining(),
             });
-        }
+        };
 
-        // Apply the consumption.
-        self.current_budget.epsilon_spent_millionths += composed_epsilon;
-        self.current_budget.delta_spent_millionths += composed_delta;
-        self.current_budget.operations_count += 1;
-        self.lifetime_epsilon_spent_millionths += composed_epsilon;
-        self.lifetime_delta_spent_millionths += composed_delta;
+        let Some(next_epoch_operations) = self.current_budget.operations_count.checked_add(1)
+        else {
+            self.current_budget.exhausted = true;
+            return Err(AccountantError::ArithmeticOverflow {
+                field: "epoch operations count".into(),
+            });
+        };
+        let Some(next_operation_counter) = self.operation_counter.checked_add(1) else {
+            self.current_budget.exhausted = true;
+            return Err(AccountantError::ArithmeticOverflow {
+                field: "lifetime operation counter".into(),
+            });
+        };
+
+        // Commit only after every balance, native accumulator, and counter has
+        // been checked. Failure above changes only the exhaustion latch.
+        self.current_budget.epsilon_spent_millionths = next_epoch_epsilon;
+        self.current_budget.delta_spent_millionths = next_epoch_delta;
+        self.current_budget.operations_count = next_epoch_operations;
+        self.lifetime_epsilon_spent_millionths = next_lifetime_epsilon;
+        self.lifetime_delta_spent_millionths = next_lifetime_delta;
         if let Some(rho) = composition.next_zcdp_rho_spent_millionths {
             self.zcdp_rho_spent_millionths = rho;
         }
         if let Some(curve) = composition.next_rdp_epsilon_spent_by_order_millionths {
             self.rdp_epsilon_spent_by_order_millionths = curve;
         }
-        self.operation_counter += 1;
+        self.operation_counter = next_operation_counter;
 
         let record = BudgetConsumption {
             operation_id: self.operation_counter,
@@ -394,12 +441,14 @@ impl BudgetAccountant {
 
     /// Get remaining lifetime epsilon (millionths).
     pub fn lifetime_epsilon_remaining(&self) -> i64 {
-        self.lifetime_epsilon_budget_millionths - self.lifetime_epsilon_spent_millionths
+        self.lifetime_epsilon_budget_millionths
+            .saturating_sub(self.lifetime_epsilon_spent_millionths)
     }
 
     /// Get remaining lifetime delta (millionths).
     pub fn lifetime_delta_remaining(&self) -> i64 {
-        self.lifetime_delta_budget_millionths - self.lifetime_delta_spent_millionths
+        self.lifetime_delta_budget_millionths
+            .saturating_sub(self.lifetime_delta_spent_millionths)
     }
 
     /// Forecast remaining budget capacity.
@@ -409,10 +458,10 @@ impl BudgetAccountant {
 
         // Estimate remaining operations from average consumption rate.
         let estimated_ops = if self.current_budget.operations_count > 0 {
-            let avg_eps_per_op = self.current_budget.epsilon_spent_millionths
-                / self.current_budget.operations_count as i64;
+            let avg_eps_per_op = i128::from(self.current_budget.epsilon_spent_millionths)
+                / i128::from(self.current_budget.operations_count);
             if avg_eps_per_op > 0 {
-                (epoch_eps_remaining / avg_eps_per_op).max(0) as u64
+                (i128::from(epoch_eps_remaining) / avg_eps_per_op).max(0) as u64
             } else {
                 u64::MAX
             }
@@ -479,6 +528,7 @@ impl BudgetAccountant {
         // Check lifetime exhaustion for new epoch.
         if self.lifetime_epsilon_spent_millionths >= self.lifetime_epsilon_budget_millionths
             || self.lifetime_delta_spent_millionths >= self.lifetime_delta_budget_millionths
+            || self.operation_counter == u64::MAX
         {
             self.current_budget.exhausted = true;
         }
@@ -525,41 +575,50 @@ impl BudgetAccountant {
     /// - ZeroCdp: converts each raw pure-DP epsilon charge into rho = eps^2 / 2,
     ///   adds rho in native space, then charges the incremental zCDP conversion
     ///   `eps = rho + 2*sqrt(rho*ln(1/delta))`.
-    fn apply_composition(&self, epsilon: i64, delta: i64) -> CompositionImpact {
+    fn apply_composition(
+        &self,
+        epsilon: i64,
+        delta: i64,
+    ) -> Result<CompositionImpact, AccountantError> {
         let k = self.current_budget.operations_count;
-        match self.composition_method {
+        Ok(match self.composition_method {
             CompositionMethod::Basic => CompositionImpact::new(epsilon, delta),
             CompositionMethod::Advanced => {
                 // Advanced composition gives better bounds for many queries.
                 // Simplified: for k > 0, scale by 1/sqrt(k+1) in millionths.
-                let kp1 = (k + 1) as i64;
+                let kp1 = i128::from(k) + 1;
                 let scale = if kp1 <= 1 {
                     MILLION // 1.0
                 } else {
                     // 1_000_000 / sqrt(kp1) = isqrt(1_000_000^2 / kp1)
-                    isqrt_millionths((MILLION_I128 * MILLION_I128 / kp1 as i128) as i64)
+                    isqrt_millionths((MILLION_I128 * MILLION_I128 / kp1) as i64)
                 };
-                let composed_eps = epsilon * scale / MILLION;
+                let composed_eps = checked_accounting_value(
+                    i128::from(epsilon) * i128::from(scale) / MILLION_I128,
+                    "advanced composed epsilon",
+                )?;
                 CompositionImpact::new(composed_eps.max(1), delta)
             }
             CompositionMethod::ZeroCdp => {
                 let rho_increment = zcdp_rho_from_epsilon_millionths(epsilon);
-                let next_rho =
-                    saturating_i128_to_i64(self.zcdp_rho_spent_millionths as i128 + rho_increment);
+                let next_rho = checked_accounting_value(
+                    i128::from(self.zcdp_rho_spent_millionths) + rho_increment,
+                    "zCDP rho",
+                )?;
                 let previous_epsilon = zcdp_epsilon_from_rho_millionths(
                     self.zcdp_rho_spent_millionths,
                     self.current_budget.delta_budget_millionths,
-                );
+                )?;
                 let next_epsilon = zcdp_epsilon_from_rho_millionths(
                     next_rho,
                     self.current_budget.delta_budget_millionths,
-                );
+                )?;
                 CompositionImpact {
                     epsilon_millionths: incremental_native_epsilon(
                         epsilon,
                         previous_epsilon,
                         next_epsilon,
-                    ),
+                    )?,
                     delta_millionths: delta,
                     next_zcdp_rho_spent_millionths: Some(next_rho),
                     next_rdp_epsilon_spent_by_order_millionths: None,
@@ -569,33 +628,33 @@ impl BudgetAccountant {
                 let rho_increment = zcdp_rho_from_epsilon_millionths(epsilon);
                 let mut next_curve = self.rdp_epsilon_spent_by_order_millionths.clone();
                 for order in RDP_ORDERS {
-                    let increment = saturating_i128_to_i64(rho_increment * order as i128);
+                    let increment = rho_increment * i128::from(order);
                     let current = next_curve.get(&order).copied().unwrap_or(0);
                     next_curve.insert(
                         order,
-                        saturating_i128_to_i64(current as i128 + increment as i128),
+                        checked_accounting_value(i128::from(current) + increment, "RDP curve")?,
                     );
                 }
                 let previous_epsilon = rdp_epsilon_from_curve_millionths(
                     &self.rdp_epsilon_spent_by_order_millionths,
                     self.current_budget.delta_budget_millionths,
-                );
+                )?;
                 let next_epsilon = rdp_epsilon_from_curve_millionths(
                     &next_curve,
                     self.current_budget.delta_budget_millionths,
-                );
+                )?;
                 CompositionImpact {
                     epsilon_millionths: incremental_native_epsilon(
                         epsilon,
                         previous_epsilon,
                         next_epsilon,
-                    ),
+                    )?,
                     delta_millionths: delta,
                     next_zcdp_rho_spent_millionths: None,
                     next_rdp_epsilon_spent_by_order_millionths: Some(next_curve),
                 }
             }
-        }
+        })
     }
 }
 
@@ -617,12 +676,37 @@ impl CompositionImpact {
     }
 }
 
-fn incremental_native_epsilon(raw_epsilon: i64, previous_epsilon: i64, next_epsilon: i64) -> i64 {
-    let incremental = next_epsilon.saturating_sub(previous_epsilon).max(0);
+// A saturated sum is not a valid admission check: at an i64::MAX allocation it
+// cannot distinguish an exact fit from a charge that exceeds the representation.
+fn checked_budget_spend(spent: i64, charge: i64, allocation: i64) -> Option<i64> {
+    if spent < 0 || charge < 0 || allocation < 0 {
+        return None;
+    }
+    spent.checked_add(charge).filter(|next| *next <= allocation)
+}
+
+fn checked_accounting_value(value: i128, field: &str) -> Result<i64, AccountantError> {
+    i64::try_from(value)
+        .ok()
+        .filter(|value| *value >= 0)
+        .ok_or_else(|| AccountantError::ArithmeticOverflow {
+            field: field.into(),
+        })
+}
+
+fn incremental_native_epsilon(
+    raw_epsilon: i64,
+    previous_epsilon: i64,
+    next_epsilon: i64,
+) -> Result<i64, AccountantError> {
+    let incremental = checked_accounting_value(
+        i128::from(next_epsilon) - i128::from(previous_epsilon),
+        "native epsilon increment",
+    )?;
     if raw_epsilon > 0 {
-        incremental.max(1)
+        Ok(incremental.max(1))
     } else {
-        incremental
+        Ok(incremental)
     }
 }
 
@@ -634,44 +718,54 @@ fn zcdp_rho_from_epsilon_millionths(epsilon: i64) -> i128 {
     }
 }
 
-fn zcdp_epsilon_from_rho_millionths(rho_millionths: i64, delta_millionths: i64) -> i64 {
-    if rho_millionths <= 0 {
-        return 0;
+fn zcdp_epsilon_from_rho_millionths(
+    rho_millionths: i64,
+    delta_millionths: i64,
+) -> Result<i64, AccountantError> {
+    let rho = checked_accounting_value(i128::from(rho_millionths), "zCDP rho")?;
+    if rho == 0 {
+        return Ok(0);
     }
 
-    let ln_delta = ln_one_over_delta_millionths_up(delta_millionths);
-    let sqrt_term = isqrt_ceil_i128(rho_millionths as i128 * ln_delta as i128);
-    saturating_i128_to_i64(rho_millionths as i128 + 2 * sqrt_term as i128)
+    let ln_delta = ln_one_over_delta_millionths_up(delta_millionths)?;
+    let sqrt_term = isqrt_ceil_i128(i128::from(rho) * i128::from(ln_delta));
+    checked_accounting_value(i128::from(rho) + 2 * sqrt_term, "zCDP converted epsilon")
 }
 
-fn rdp_epsilon_from_curve_millionths(curve: &BTreeMap<u32, i64>, delta_millionths: i64) -> i64 {
+fn rdp_epsilon_from_curve_millionths(
+    curve: &BTreeMap<u32, i64>,
+    delta_millionths: i64,
+) -> Result<i64, AccountantError> {
     if curve.is_empty() {
-        return 0;
+        return Ok(0);
     }
 
-    let ln_delta = ln_one_over_delta_millionths_up(delta_millionths) as i128;
+    let ln_delta = i128::from(ln_one_over_delta_millionths_up(delta_millionths)?);
     let mut best = i128::MAX;
     for (&order, &rdp_epsilon) in curve {
         if order <= 1 {
             continue;
         }
+        checked_accounting_value(i128::from(rdp_epsilon), "RDP curve")?;
         let converted = rdp_epsilon as i128 + div_ceil_positive(ln_delta, (order - 1) as i128);
         best = best.min(converted);
     }
 
     if best == i128::MAX {
-        0
+        Err(AccountantError::InvalidConsumption {
+            reason: "RDP curve has no order greater than one".into(),
+        })
     } else {
-        saturating_i128_to_i64(best)
+        checked_accounting_value(best, "RDP converted epsilon")
     }
 }
 
-fn ln_one_over_delta_millionths_up(delta_millionths: i64) -> i64 {
+fn ln_one_over_delta_millionths_up(delta_millionths: i64) -> Result<i64, AccountantError> {
     if delta_millionths <= 0 {
-        return i64::MAX / 4;
+        return Ok(i64::MAX / 4);
     }
     if delta_millionths >= MILLION {
-        return 0;
+        return Ok(0);
     }
 
     let mut x = div_ceil_positive(MILLION_I128 * LN_SCALE, delta_millionths as i128);
@@ -691,34 +785,26 @@ fn ln_one_over_delta_millionths_up(delta_millionths: i64) -> i64 {
     }
 
     let ln_scaled = powers_of_two * LN2_NANOS_UP + 2 * sum;
-    saturating_i128_to_i64(div_ceil_positive(ln_scaled, LN_SCALE / MILLION_I128) + 1)
+    checked_accounting_value(
+        div_ceil_positive(ln_scaled, LN_SCALE / MILLION_I128) + 1,
+        "logarithmic conversion factor",
+    )
 }
 
 fn div_ceil_positive(numerator: i128, denominator: i128) -> i128 {
     if numerator <= 0 {
         0
     } else {
-        (numerator + denominator - 1) / denominator
+        numerator / denominator + i128::from(numerator % denominator != 0)
     }
 }
 
-fn isqrt_ceil_i128(n: i128) -> i64 {
+fn isqrt_ceil_i128(n: i128) -> i128 {
     if n <= 0 {
         return 0;
     }
     let root = (n as u128).isqrt() as i128;
-    let ceil = if root * root == n { root } else { root + 1 };
-    saturating_i128_to_i64(ceil)
-}
-
-fn saturating_i128_to_i64(value: i128) -> i64 {
-    if value > i64::MAX as i128 {
-        i64::MAX
-    } else if value < i64::MIN as i128 {
-        i64::MIN
-    } else {
-        value as i64
-    }
+    if root * root == n { root } else { root + 1 }
 }
 
 /// Integer square root (deterministic, no floating point).
@@ -753,6 +839,8 @@ pub enum AccountantError {
     InvalidConsumption { reason: String },
     /// Invalid configuration.
     InvalidConfiguration { reason: String },
+    /// A charge, native privacy accumulator, or counter is not representable.
+    ArithmeticOverflow { field: String },
 }
 
 impl fmt::Display for AccountantError {
@@ -779,6 +867,9 @@ impl fmt::Display for AccountantError {
             }
             Self::InvalidConfiguration { reason } => {
                 write!(f, "invalid configuration: {reason}")
+            }
+            Self::ArithmeticOverflow { field } => {
+                write!(f, "privacy accounting overflow: {field}")
             }
         }
     }
@@ -821,6 +912,207 @@ mod tests {
             ..test_config()
         })
         .expect("operation should succeed for valid inputs")
+    }
+
+    fn maximum_budget_accountant(composition_method: CompositionMethod) -> BudgetAccountant {
+        BudgetAccountant::new(AccountantConfig {
+            epsilon_per_epoch_millionths: i64::MAX,
+            delta_per_epoch_millionths: i64::MAX,
+            lifetime_epsilon_budget_millionths: i64::MAX,
+            lifetime_delta_budget_millionths: i64::MAX,
+            composition_method,
+            ..test_config()
+        })
+        .expect("maximum representable budgets are valid")
+    }
+
+    fn assert_only_exhaustion_latch_changed(
+        mut before: BudgetAccountant,
+        after: &BudgetAccountant,
+    ) {
+        before.current_budget.exhausted = true;
+        assert_eq!(
+            after, &before,
+            "a rejected charge must not commit any spend"
+        );
+    }
+
+    #[test]
+    fn epoch_admission_distinguishes_exact_limit_from_overflow() {
+        let mut acc = maximum_budget_accountant(CompositionMethod::Basic);
+        acc.consume(1, 1, "initial charge", 1).unwrap();
+        assert!(!acc.current_budget.would_exhaust(i64::MAX - 1, i64::MAX - 1));
+        assert!(acc.current_budget.would_exhaust(i64::MAX, 0));
+        assert!(acc.current_budget.would_exhaust(0, i64::MAX));
+        assert!(acc.current_budget.would_exhaust(-1, 0));
+        assert!(acc.current_budget.would_exhaust(0, -1));
+    }
+
+    #[test]
+    fn overflowing_epoch_spend_latches_without_mutating_the_ledger() {
+        for (epsilon, delta) in [(i64::MAX, 0), (0, i64::MAX)] {
+            let mut acc = maximum_budget_accountant(CompositionMethod::Basic);
+            acc.consume(1, 1, "initial charge", 1).unwrap();
+            let before = acc.clone();
+            let error = acc.consume(epsilon, delta, "overflow", 2).unwrap_err();
+            assert!(matches!(
+                error,
+                AccountantError::BudgetExhausted { dimension, .. } if dimension == "epoch"
+            ));
+            assert_only_exhaustion_latch_changed(before, &acc);
+            assert!(acc.consume(0, 0, "latched", 3).is_err());
+        }
+    }
+
+    #[test]
+    fn lifetime_spend_is_checked_across_epoch_boundaries() {
+        for (initial_epsilon, initial_delta, epsilon, delta) in
+            [(i64::MAX - 1, 0, 2, 0), (0, i64::MAX - 1, 0, 2)]
+        {
+            let mut acc = maximum_budget_accountant(CompositionMethod::Basic);
+            acc.consume(initial_epsilon, initial_delta, "first epoch", 1)
+                .unwrap();
+            acc.advance_epoch(SecurityEpoch::from_raw(2), 2).unwrap();
+            let before = acc.clone();
+            let error = acc.consume(epsilon, delta, "overflow", 3).unwrap_err();
+            assert!(matches!(
+                error,
+                AccountantError::BudgetExhausted { dimension, .. } if dimension == "lifetime"
+            ));
+            assert_only_exhaustion_latch_changed(before, &acc);
+        }
+    }
+
+    #[test]
+    fn exact_maximum_spend_cannot_be_replenished_by_an_epoch() {
+        let mut acc = maximum_budget_accountant(CompositionMethod::Basic);
+        acc.consume(i64::MAX - 1, i64::MAX - 1, "almost full", 1)
+            .unwrap();
+        acc.consume(1, 1, "exactly full", 2).unwrap();
+        assert_eq!(acc.lifetime_epsilon_spent_millionths, i64::MAX);
+        assert_eq!(acc.lifetime_delta_spent_millionths, i64::MAX);
+        assert_eq!(acc.lifetime_epsilon_remaining(), 0);
+        assert_eq!(acc.lifetime_delta_remaining(), 0);
+        assert_eq!(acc.total_operations(), 2);
+        acc.advance_epoch(SecurityEpoch::from_raw(2), 3).unwrap();
+        let before = acc.clone();
+        assert!(acc.consume(1, 1, "lifetime still full", 4).is_err());
+        assert_only_exhaustion_latch_changed(before, &acc);
+    }
+
+    #[test]
+    fn operation_counters_cannot_wrap_or_partially_charge() {
+        for epoch_counter in [true, false] {
+            let mut acc = maximum_budget_accountant(CompositionMethod::Basic);
+            if epoch_counter {
+                acc.current_budget.operations_count = u64::MAX;
+            } else {
+                acc.operation_counter = u64::MAX;
+            }
+            let before = acc.clone();
+            assert!(matches!(
+                acc.consume(1, 1, "counter overflow", 1),
+                Err(AccountantError::ArithmeticOverflow { .. })
+            ));
+            assert_only_exhaustion_latch_changed(before, &acc);
+            assert!(acc.consume(0, 0, "latched", 2).is_err());
+            if !epoch_counter {
+                acc.advance_epoch(SecurityEpoch::from_raw(2), 3).unwrap();
+                assert!(acc.is_exhausted(), "the lifetime counter never resets");
+                assert!(acc.consume(0, 0, "still latched", 4).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn advanced_composition_widens_intermediate_multiplication_and_counts() {
+        let mut acc = maximum_budget_accountant(CompositionMethod::Advanced);
+        let charge = acc.consume(i64::MAX, 0, "wide product", 1).unwrap();
+        assert_eq!(charge.composed_epsilon_millionths, i64::MAX);
+
+        let mut acc = maximum_budget_accountant(CompositionMethod::Advanced);
+        acc.current_budget.operations_count = u64::MAX - 1;
+        let charge = acc.consume(MILLION, 0, "wide count", 1).unwrap();
+        assert_eq!(charge.composed_epsilon_millionths, 1);
+        assert_eq!(acc.current_budget.operations_count, u64::MAX);
+        let before = acc.clone();
+        assert!(matches!(
+            acc.consume(MILLION, 0, "counter overflow", 2),
+            Err(AccountantError::ArithmeticOverflow { .. })
+        ));
+        assert_only_exhaustion_latch_changed(before, &acc);
+    }
+
+    #[test]
+    fn native_composition_refuses_unrepresentable_raw_and_accumulated_costs() {
+        for (method, first_epsilon) in [
+            (CompositionMethod::ZeroCdp, 4_000_000_000_000),
+            (CompositionMethod::Renyi, 500_000_000_000),
+        ] {
+            let mut acc = maximum_budget_accountant(method);
+            let before = acc.clone();
+            assert!(matches!(
+                acc.consume(i64::MAX, 0, "unrepresentable native charge", 1),
+                Err(AccountantError::ArithmeticOverflow { .. })
+            ));
+            assert_only_exhaustion_latch_changed(before, &acc);
+
+            let mut acc = maximum_budget_accountant(method);
+            acc.consume(first_epsilon, 0, "representable native charge", 1)
+                .unwrap();
+            let before = acc.clone();
+            assert!(matches!(
+                acc.consume(first_epsilon, 0, "native accumulation overflow", 2),
+                Err(AccountantError::ArithmeticOverflow { .. })
+            ));
+            assert_only_exhaustion_latch_changed(before, &acc);
+        }
+    }
+
+    #[test]
+    fn native_conversion_overflow_never_becomes_an_admissible_charge() {
+        let mut acc = maximum_budget_accountant(CompositionMethod::ZeroCdp);
+        acc.current_budget.delta_budget_millionths = 1;
+        let before = acc.clone();
+        assert!(matches!(
+            acc.consume(4_294_967_295_000, 0, "converted epsilon overflow", 1),
+            Err(AccountantError::ArithmeticOverflow { .. })
+        ));
+        assert_only_exhaustion_latch_changed(before, &acc);
+
+        let mut acc = maximum_budget_accountant(CompositionMethod::Renyi);
+        acc.current_budget.delta_budget_millionths = 1;
+        acc.rdp_epsilon_spent_by_order_millionths = RDP_ORDERS
+            .into_iter()
+            .map(|order| (order, i64::MAX))
+            .collect();
+        let before = acc.clone();
+        assert!(matches!(
+            acc.consume(0, 0, "restored curve conversion overflow", 1),
+            Err(AccountantError::ArithmeticOverflow { .. })
+        ));
+        assert_only_exhaustion_latch_changed(before, &acc);
+    }
+
+    #[test]
+    fn remaining_and_forecast_are_total_for_restored_integer_limits() {
+        let mut acc = maximum_budget_accountant(CompositionMethod::Basic);
+        acc.current_budget.epsilon_spent_millionths = i64::MIN;
+        acc.current_budget.delta_spent_millionths = i64::MIN;
+        acc.lifetime_epsilon_spent_millionths = i64::MIN;
+        acc.lifetime_delta_spent_millionths = i64::MIN;
+        acc.current_budget.operations_count = u64::MAX;
+        let forecast = acc.forecast();
+        assert_eq!(forecast.epoch_epsilon_remaining_millionths, i64::MAX);
+        assert_eq!(forecast.epoch_delta_remaining_millionths, i64::MAX);
+        assert_eq!(forecast.lifetime_epsilon_remaining_millionths, i64::MAX);
+        assert_eq!(forecast.lifetime_delta_remaining_millionths, i64::MAX);
+        let before = acc.clone();
+        assert!(
+            acc.consume(0, 0, "reject negative stored spend", 1)
+                .is_err()
+        );
+        assert_only_exhaustion_latch_changed(before, &acc);
     }
 
     // -- Construction tests --
@@ -1158,7 +1450,7 @@ mod tests {
     #[test]
     fn fixed_point_ln_is_conservative_against_f64_reference() {
         for delta_millionths in [1, 10, 1_000, 100_000, 500_000, 999_999] {
-            let actual = ln_one_over_delta_millionths_up(delta_millionths);
+            let actual = ln_one_over_delta_millionths_up(delta_millionths).unwrap();
             let delta = delta_millionths as f64 / MILLION as f64;
             let reference = f64_epsilon_millionths_up(-delta.ln());
             assert!(
@@ -1180,7 +1472,8 @@ mod tests {
             (125_000, 10_000),
             (500_000, 1_000),
         ] {
-            let actual = zcdp_epsilon_from_rho_millionths(rho_millionths, delta_millionths);
+            let actual =
+                zcdp_epsilon_from_rho_millionths(rho_millionths, delta_millionths).unwrap();
             let rho = rho_millionths as f64 / MILLION as f64;
             let delta = delta_millionths as f64 / MILLION as f64;
             let reference = f64_epsilon_millionths_up(rho + 2.0 * (rho * -delta.ln()).sqrt());
@@ -1208,7 +1501,7 @@ mod tests {
                 curve.insert(order, total_rho_millionths * order as i64);
             }
 
-            let actual = rdp_epsilon_from_curve_millionths(&curve, delta_millionths);
+            let actual = rdp_epsilon_from_curve_millionths(&curve, delta_millionths).unwrap();
             let total_rho = total_rho_millionths as f64 / MILLION as f64;
             let delta = delta_millionths as f64 / MILLION as f64;
             let ln_delta = -delta.ln();
@@ -1455,7 +1748,7 @@ mod tests {
 
     #[test]
     fn accountant_error_implements_std_error() {
-        let variants: [Box<dyn std::error::Error>; 4] = [
+        let variants: [Box<dyn std::error::Error>; 5] = [
             Box::new(AccountantError::BudgetExhausted {
                 dimension: "epsilon".into(),
                 epsilon_remaining: 0,
@@ -1471,6 +1764,9 @@ mod tests {
             Box::new(AccountantError::InvalidConfiguration {
                 reason: "bad".into(),
             }),
+            Box::new(AccountantError::ArithmeticOverflow {
+                field: "RDP curve".into(),
+            }),
         ];
         let mut displays = std::collections::BTreeSet::new();
         for v in &variants {
@@ -1478,7 +1774,7 @@ mod tests {
             assert!(!msg.is_empty());
             displays.insert(msg);
         }
-        assert_eq!(displays.len(), 4);
+        assert_eq!(displays.len(), 5);
     }
 
     // -----------------------------------------------------------------------
@@ -1563,7 +1859,7 @@ mod tests {
 
     #[test]
     fn error_display_all_variants_unique() {
-        let variants: [AccountantError; 4] = [
+        let variants: [AccountantError; 5] = [
             AccountantError::BudgetExhausted {
                 dimension: "epoch".into(),
                 epsilon_remaining: 0,
@@ -1579,13 +1875,16 @@ mod tests {
             AccountantError::InvalidConfiguration {
                 reason: "bad".into(),
             },
+            AccountantError::ArithmeticOverflow {
+                field: "RDP curve".into(),
+            },
         ];
         let displays: std::collections::BTreeSet<String> =
             variants.iter().map(|e| e.to_string()).collect();
         assert_eq!(
             displays.len(),
-            4,
-            "all 4 error variants must have unique Display"
+            5,
+            "all 5 error variants must have unique Display"
         );
     }
 
@@ -1967,6 +2266,9 @@ mod tests {
             AccountantError::InvalidConfiguration {
                 reason: "zero".into(),
             },
+            AccountantError::ArithmeticOverflow {
+                field: "zCDP rho".into(),
+            },
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serialize derived Serialize");
@@ -1994,13 +2296,16 @@ mod tests {
             AccountantError::InvalidConfiguration {
                 reason: "bad".into(),
             },
+            AccountantError::ArithmeticOverflow {
+                field: "epoch operations count".into(),
+            },
         ];
         let displays: std::collections::BTreeSet<String> =
             errors.iter().map(|e| e.to_string()).collect();
         assert_eq!(
             displays.len(),
-            4,
-            "all 4 error variants have unique Display"
+            5,
+            "all 5 error variants have unique Display"
         );
     }
 

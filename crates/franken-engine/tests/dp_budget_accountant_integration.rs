@@ -1004,6 +1004,90 @@ fn accountant_serde_round_trip_exhausted() {
     assert!(restored.is_exhausted());
 }
 
+#[test]
+fn restored_lifetime_boundary_survives_epoch_rolls() {
+    let mut acc = BudgetAccountant::new(AccountantConfig {
+        epsilon_per_epoch_millionths: i64::MAX,
+        delta_per_epoch_millionths: i64::MAX,
+        lifetime_epsilon_budget_millionths: i64::MAX,
+        lifetime_delta_budget_millionths: i64::MAX,
+        ..test_config()
+    })
+    .unwrap();
+    acc.consume(i64::MAX - 1, i64::MAX - 1, "first epoch", 1)
+        .unwrap();
+    acc.advance_epoch(SecurityEpoch::from_raw(2), 2).unwrap();
+
+    let json = serde_json::to_string(&acc).unwrap();
+    let mut restored: BudgetAccountant = serde_json::from_str(&json).unwrap();
+    assert_eq!(restored.lifetime_epsilon_remaining(), 1);
+    assert_eq!(restored.lifetime_delta_remaining(), 1);
+    restored.consume(1, 1, "exact lifetime limit", 3).unwrap();
+    assert_eq!(restored.lifetime_epsilon_remaining(), 0);
+    assert_eq!(restored.lifetime_delta_remaining(), 0);
+
+    let mut expected = restored.clone();
+    expected.current_budget.exhausted = true;
+    assert!(matches!(
+        restored.consume(1, 1, "past lifetime limit", 4),
+        Err(AccountantError::BudgetExhausted { dimension, .. }) if dimension == "lifetime"
+    ));
+    assert_eq!(restored, expected);
+
+    restored
+        .advance_epoch(SecurityEpoch::from_raw(3), 5)
+        .unwrap();
+    let before = restored.clone();
+    assert!(
+        restored
+            .consume(0, 0, "no reset of exhausted lifetime", 6)
+            .is_err()
+    );
+    assert_eq!(restored, before);
+}
+
+#[test]
+fn restored_counter_exhaustion_preserves_native_privacy_state() {
+    for method in [CompositionMethod::Renyi, CompositionMethod::ZeroCdp] {
+        let mut acc = BudgetAccountant::new(AccountantConfig {
+            composition_method: method,
+            ..test_config()
+        })
+        .unwrap();
+        acc.consume(10_000, 0, "existing native spend", 1).unwrap();
+
+        // Exercise the persisted counter boundary through the public restore
+        // path, with existing native accumulators and a nonempty charge log.
+        let mut persisted = serde_json::to_value(&acc).unwrap();
+        persisted["operation_counter"] = serde_json::Value::from(u64::MAX);
+        let mut restored: BudgetAccountant = serde_json::from_value(persisted).unwrap();
+        let mut expected = restored.clone();
+        expected.current_budget.exhausted = true;
+        assert!(matches!(
+            restored.consume(10_000, 0, "counter cannot advance", 2),
+            Err(AccountantError::ArithmeticOverflow { .. })
+        ));
+        assert_eq!(
+            restored, expected,
+            "rejected {method:?} charge changed state"
+        );
+
+        let json = serde_json::to_string(&restored).unwrap();
+        let mut restored: BudgetAccountant = serde_json::from_str(&json).unwrap();
+        restored
+            .advance_epoch(SecurityEpoch::from_raw(2), 3)
+            .unwrap();
+        assert!(restored.is_exhausted());
+        let before = restored.clone();
+        assert!(
+            restored
+                .consume(10_000, 0, "lifetime counter stays full", 4)
+                .is_err()
+        );
+        assert_eq!(restored, before);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Determinism
 // ---------------------------------------------------------------------------

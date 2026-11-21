@@ -694,27 +694,12 @@ fn ir0_to_ir1_raw_expression_with_call() {
         span: span(),
     };
     let ir0 = Ir0Module::from_syntax_tree(tree, "raw_call.js");
-    let result = lower_ir0_to_ir1(&ir0).expect("should succeed");
-
-    // An expression the parser did not recognise is not evaluated as its own
-    // source text (it used to be called when the text contained `(`): it
-    // throws a catchable SyntaxError when reached (bd-6vl81).
-    let ops = &result.module.ops;
-    assert!(
-        !ops.iter().any(|op| matches!(op, Ir1Op::Call { .. })),
-        "a raw expression is never called"
-    );
-    let throw_at = ops
-        .iter()
-        .position(|op| matches!(op, Ir1Op::Throw))
-        .expect("a raw expression throws");
-    assert!(
-        matches!(
-            &ops[throw_at - 1],
-            Ir1Op::HostCall { capability, arg_count: 1 } if capability == "builtin:SyntaxError"
-        ),
-        "the thrown value is a SyntaxError: {ops:?}"
-    );
+    let error = lower_ir0_to_ir1(&ir0).expect_err("unparsed source cannot produce executable IR");
+    let LoweringPipelineError::UnsupportedSyntax(diagnostic) = error else {
+        panic!("expected an unsupported-syntax diagnostic: {error:?}");
+    };
+    assert_eq!(diagnostic.diagnostic_code, "FE-LOWER-RAW-EXPRESSION-0001");
+    assert_eq!(diagnostic.span, Some(span()));
 }
 
 #[test]
@@ -728,14 +713,75 @@ fn ir0_to_ir1_raw_expression_without_call() {
         span: span(),
     };
     let ir0 = Ir0Module::from_syntax_tree(tree, "raw_no_call.js");
-    let result = lower_ir0_to_ir1(&ir0).expect("should succeed");
+    let error = lower_ir0_to_ir1(&ir0).expect_err("a raw identifier must also be parsed first");
+    assert!(matches!(error, LoweringPipelineError::UnsupportedSyntax(_)));
+}
 
-    let has_call = result
-        .module
-        .ops
-        .iter()
-        .any(|op| matches!(op, Ir1Op::Call { .. }));
-    assert!(!has_call, "raw expression without '(' should not emit Call");
+#[test]
+fn deserialized_raw_nodes_cannot_hide_in_deferred_or_discarded_syntax() {
+    use frankenengine_engine::parser::{CanonicalEs2020Parser, Es2020Parser};
+
+    fn replace_marker(
+        value: &mut serde_json::Value,
+        marker: &serde_json::Value,
+        raw: &serde_json::Value,
+    ) -> usize {
+        if value == marker {
+            *value = raw.clone();
+            return 1;
+        }
+        match value {
+            serde_json::Value::Array(values) => values
+                .iter_mut()
+                .map(|value| replace_marker(value, marker, raw))
+                .sum(),
+            serde_json::Value::Object(fields) => fields
+                .values_mut()
+                .map(|value| replace_marker(value, marker, raw))
+                .sum(),
+            _ => 0,
+        }
+    }
+
+    let marker = serde_json::to_value(Expression::StringLiteral("opaque-marker".into()))
+        .expect("serialize marker");
+    let raw = serde_json::to_value(Expression::Raw("a::b".into()))
+        .expect("the AST wire format still preserves opaque nodes");
+    for source in [
+        "if (false) { 'opaque-marker'; }",
+        "function never() { return 'opaque-marker'; }",
+        "function never(value = 'opaque-marker') { return value; }",
+        "const never = () => 'opaque-marker';",
+        "const object = { get value() { return 'opaque-marker'; } };",
+        "class Never { ['opaque-marker']() {} }",
+        "const { ['opaque-marker']: value } = {};",
+        "try { 1; } catch (error) { 'opaque-marker'; }",
+        "try { throw {}; } catch ({ value = 'opaque-marker' }) { value; }",
+        "try { 1; } finally { 'opaque-marker'; }",
+        "false && 'opaque-marker';",
+    ] {
+        let tree = CanonicalEs2020Parser
+            .parse(source, ParseGoal::Script)
+            .expect(source);
+        let mut wire = serde_json::to_value(&tree).expect("serialize source tree");
+        assert_eq!(replace_marker(&mut wire, &marker, &raw), 1, "{source}");
+        let tree = serde_json::from_value(wire).expect("deserialize opaque AST");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "opaque-input.js");
+        let direct = lower_ir0_to_ir1(&ir0).expect_err(source);
+        let LoweringPipelineError::UnsupportedSyntax(diagnostic) = &direct else {
+            panic!("{source}: expected unsupported syntax, got {direct:?}");
+        };
+        assert_eq!(diagnostic.diagnostic_code, "FE-LOWER-RAW-EXPRESSION-0001");
+        assert!(
+            diagnostic.span.is_some(),
+            "{source}: missing statement span"
+        );
+        assert_eq!(
+            lower_ir0_to_ir3(&ir0, &ctx()).expect_err(source),
+            direct,
+            "{source}: the full pipeline must preserve admission refusal"
+        );
+    }
 }
 
 #[test]

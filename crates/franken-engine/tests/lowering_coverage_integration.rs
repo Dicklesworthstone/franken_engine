@@ -266,9 +266,10 @@ fn determinism_raw_expression_no_call() {
             "some_raw_thing".to_string(),
         ))],
     );
-    let a = run_full(&ir0);
-    let b = run_full(&ir0);
-    assert_eq!(a.ir3.content_hash(), b.ir3.content_hash());
+    let a = lower_ir0_to_ir3(&ir0, &ctx()).expect_err("raw expressions must be refused");
+    let b = lower_ir0_to_ir3(&ir0, &ctx()).expect_err("refusal must be deterministic");
+    assert!(matches!(a, LoweringPipelineError::UnsupportedSyntax(_)));
+    assert_eq!(a, b);
 }
 
 #[test]
@@ -277,9 +278,10 @@ fn determinism_raw_expression_with_call() {
         ParseGoal::Script,
         vec![make_expr_stmt(Expression::Raw("fn()".to_string()))],
     );
-    let a = run_full(&ir0);
-    let b = run_full(&ir0);
-    assert_eq!(a.ir3.content_hash(), b.ir3.content_hash());
+    let a = lower_ir0_to_ir3(&ir0, &ctx()).expect_err("raw expressions must be refused");
+    let b = lower_ir0_to_ir3(&ir0, &ctx()).expect_err("refusal must be deterministic");
+    assert!(matches!(a, LoweringPipelineError::UnsupportedSyntax(_)));
+    assert_eq!(a, b);
 }
 
 // ===========================================================================
@@ -1020,7 +1022,11 @@ fn mixed_var_and_expression_statements() {
                 "b",
                 Some(Expression::StringLiteral("test".to_string().into())),
             ),
-            make_expr_stmt(Expression::Raw("fn()".to_string())),
+            make_expr_stmt(Expression::Call {
+                callee: Box::new(Expression::Identifier("String".to_string())),
+                arguments: vec![Expression::Identifier("b".to_string())],
+                span: None,
+            }),
         ],
     );
     let output = run_full(&ir0);

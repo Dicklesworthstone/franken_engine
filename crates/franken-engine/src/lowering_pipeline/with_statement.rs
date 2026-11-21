@@ -728,100 +728,110 @@ impl Search {
     }
 
     pub(super) fn in_expression(&self, expression: &Expression) -> bool {
-        if (self.expression)(expression) {
-            return true;
-        }
-        let any = |expressions: &[Expression]| {
-            expressions
-                .iter()
-                .any(|expression| self.in_expression(expression))
-        };
-        match expression {
-            Expression::Identifier(_)
-            | Expression::StringLiteral(_)
-            | Expression::NumericLiteral(_)
-            | Expression::BigIntLiteral(_)
-            | Expression::FloatLiteral(_)
-            | Expression::BooleanLiteral(_)
-            | Expression::NullLiteral
-            | Expression::UndefinedLiteral
-            | Expression::This
-            | Expression::SloppyThis
-            | Expression::NewTarget
-            | Expression::ImportMeta
-            | Expression::Raw(_)
-            | Expression::RegExpLiteral { .. }
-            | Expression::Super => false,
-            Expression::Await(inner) | Expression::SpreadElement(inner) => {
-                self.in_expression(inner)
+        // Flat operator, member, and call chains can be much deeper than the
+        // parser's syntactic nesting limit. Borrow every expression through a
+        // worklist, checking intermediate nodes as well as the chain's leaves.
+        let mut work = vec![expression];
+        while let Some(expression) = work.pop() {
+            if (self.expression)(expression) {
+                return true;
             }
-            Expression::Yield { argument, .. } => argument
-                .as_deref()
-                .is_some_and(|node| self.in_expression(node)),
-            Expression::Binary { left, right, .. } => {
-                let mut right_nodes: Vec<&Expression> = vec![right.as_ref()];
-                let mut current = left.as_ref();
-                while let Expression::Binary { left, right, .. } = current {
-                    right_nodes.push(right.as_ref());
-                    current = left.as_ref();
+            match expression {
+                Expression::Identifier(_)
+                | Expression::StringLiteral(_)
+                | Expression::NumericLiteral(_)
+                | Expression::BigIntLiteral(_)
+                | Expression::FloatLiteral(_)
+                | Expression::BooleanLiteral(_)
+                | Expression::NullLiteral
+                | Expression::UndefinedLiteral
+                | Expression::This
+                | Expression::SloppyThis
+                | Expression::NewTarget
+                | Expression::ImportMeta
+                | Expression::Raw(_)
+                | Expression::RegExpLiteral { .. }
+                | Expression::Super => {}
+                Expression::Await(inner) | Expression::SpreadElement(inner) => work.push(inner),
+                Expression::Yield { argument, .. } => {
+                    if let Some(argument) = argument {
+                        work.push(argument);
+                    }
                 }
-                self.in_expression(current)
-                    || right_nodes
-                        .into_iter()
-                        .rev()
-                        .any(|node| self.in_expression(node))
-            }
-            Expression::Assignment { left, right, .. } => {
-                self.in_expression(left) || self.in_expression(right)
-            }
-            Expression::Unary { argument, .. } => self.in_expression(argument),
-            Expression::Conditional {
-                test,
-                consequent,
-                alternate,
-            } => {
-                self.in_expression(test)
-                    || self.in_expression(consequent)
-                    || self.in_expression(alternate)
-            }
-            Expression::Call {
-                callee, arguments, ..
-            }
-            | Expression::OptionalCall {
-                callee, arguments, ..
-            }
-            | Expression::New { callee, arguments } => self.in_expression(callee) || any(arguments),
-            Expression::Member {
-                object, property, ..
-            }
-            | Expression::OptionalMember {
-                object, property, ..
-            } => self.in_expression(object) || self.in_expression(property),
-            Expression::ArrayLiteral(elements) => elements
-                .iter()
-                .flatten()
-                .any(|node| self.in_expression(node)),
-            Expression::ObjectLiteral(properties) => properties.iter().any(|property| {
-                self.in_expression(&property.key) || self.in_expression(&property.value)
-            }),
-            Expression::ArrowFunction { params, body, .. } => {
-                params.iter().any(|param| self.in_pattern(&param.pattern))
-                    || match body {
-                        ArrowBody::Expression(expression) => self.in_expression(expression),
+                Expression::Binary { left, right, .. }
+                | Expression::Assignment { left, right, .. } => {
+                    work.push(right);
+                    work.push(left);
+                }
+                Expression::Unary { argument, .. } => work.push(argument),
+                Expression::Conditional {
+                    test,
+                    consequent,
+                    alternate,
+                } => {
+                    work.push(alternate);
+                    work.push(consequent);
+                    work.push(test);
+                }
+                Expression::Call {
+                    callee, arguments, ..
+                }
+                | Expression::OptionalCall {
+                    callee, arguments, ..
+                }
+                | Expression::New { callee, arguments } => {
+                    work.extend(arguments.iter().rev());
+                    work.push(callee);
+                }
+                Expression::Member {
+                    object, property, ..
+                }
+                | Expression::OptionalMember {
+                    object, property, ..
+                } => {
+                    work.push(property);
+                    work.push(object);
+                }
+                Expression::ArrayLiteral(elements) => work.extend(elements.iter().rev().flatten()),
+                Expression::ObjectLiteral(properties) => {
+                    for property in properties.iter().rev() {
+                        work.push(&property.value);
+                        work.push(&property.key);
+                    }
+                }
+                Expression::ArrowFunction { params, body, .. } => {
+                    if params.iter().any(|param| self.in_pattern(&param.pattern)) {
+                        return true;
+                    }
+                    match body {
+                        ArrowBody::Expression(expression) => work.push(expression),
                         ArrowBody::Block(block) => {
-                            block.body.iter().any(|node| self.in_statement(node))
+                            if block.body.iter().any(|node| self.in_statement(node)) {
+                                return true;
+                            }
                         }
                     }
+                }
+                Expression::TemplateLiteral { expressions, .. } => {
+                    work.extend(expressions.iter().rev());
+                }
+                Expression::Function { params, body, .. } => {
+                    if params.iter().any(|param| self.in_pattern(&param.pattern))
+                        || body.body.iter().any(|node| self.in_statement(node))
+                    {
+                        return true;
+                    }
+                }
+                Expression::ClassExpression {
+                    super_class, body, ..
+                } => {
+                    if self.in_class(super_class.as_deref(), body) {
+                        return true;
+                    }
+                }
             }
-            Expression::TemplateLiteral { expressions, .. } => any(expressions),
-            Expression::Function { params, body, .. } => {
-                params.iter().any(|param| self.in_pattern(&param.pattern))
-                    || body.body.iter().any(|node| self.in_statement(node))
-            }
-            Expression::ClassExpression {
-                super_class, body, ..
-            } => self.in_class(super_class.as_deref(), body),
         }
+        false
     }
 
     fn in_class(&self, super_class: Option<&Expression>, body: &[MethodDefinition]) -> bool {
@@ -1681,7 +1691,7 @@ impl Walk for Rewriter<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::ParseGoal;
+    use crate::ast::{BinaryOperator, ParseGoal};
     use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 
     fn parse(source: &str) -> SyntaxTree {
@@ -1701,6 +1711,71 @@ mod tests {
         statements
             .iter()
             .any(|statement| WITH_SEARCH.in_statement(statement))
+    }
+
+    #[test]
+    fn expression_search_checks_intermediate_binary_nodes() {
+        let tree = parse("1 * 2 + 3;");
+        let multiplication = Search {
+            statement: |_| false,
+            expression: |expression| {
+                matches!(
+                    expression,
+                    Expression::Binary {
+                        operator: BinaryOperator::Multiply,
+                        ..
+                    }
+                )
+            },
+        };
+        assert!(multiplication.in_statement(&tree.body[0]));
+    }
+
+    #[test]
+    fn expression_search_traverses_long_mixed_chains_without_recursing() {
+        let mut expression = Expression::Raw("unrecognized".into());
+        for index in 0..20_000 {
+            expression = match index % 4 {
+                0 => Expression::Binary {
+                    operator: BinaryOperator::Add,
+                    left: Box::new(expression),
+                    right: Box::new(Expression::NumericLiteral(1)),
+                },
+                1 => Expression::Assignment {
+                    operator: AssignmentOperator::Assign,
+                    left: Box::new(identifier("value")),
+                    right: Box::new(expression),
+                    assignment_strictness: AssignmentStrictness::Sloppy,
+                },
+                2 => member(expression, "value"),
+                _ => Expression::Call {
+                    callee: Box::new(expression),
+                    arguments: vec![Expression::NumericLiteral(1)],
+                    span: None,
+                },
+            };
+        }
+        let raw = Search {
+            statement: |_| false,
+            expression: |expression| matches!(expression, Expression::Raw(_)),
+        };
+        let contains_raw = raw.in_expression(&expression);
+        let contains_with = WITH_SEARCH.in_expression(&expression);
+
+        // This regression exercises searching, not Rust's recursive Box drop.
+        // Release the constructed chain iteratively before asserting results.
+        loop {
+            expression = match expression {
+                Expression::Binary { left, .. } => *left,
+                Expression::Assignment { right, .. } => *right,
+                Expression::Member { object, .. } => *object,
+                Expression::Call { callee, .. } => *callee,
+                Expression::Raw(_) => break,
+                _ => unreachable!("only the chain nodes above were constructed"),
+            };
+        }
+        assert!(contains_raw);
+        assert!(!contains_with);
     }
 
     #[test]

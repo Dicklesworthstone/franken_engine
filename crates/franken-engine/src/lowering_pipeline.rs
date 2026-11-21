@@ -1229,6 +1229,16 @@ fn unsupported_frontier_expression_error(
     }))
 }
 
+fn raw_expression_lowering_error(span: Option<SourceSpan>) -> LoweringPipelineError {
+    unsupported_frontier_expression_error(
+        "raw_expression",
+        "FE-LOWER-RAW-EXPRESSION-0001",
+        "lowering.expression.raw",
+        "unrecognized expression must be parsed before lowering",
+        span,
+    )
+}
+
 pub fn lower_ir0_to_ir3(
     ir0: &Ir0Module,
     context: &LoweringContext,
@@ -1724,6 +1734,21 @@ fn lower_ir0_to_ir1_on_current_stack(
     verify_ir0_import_attributes_schema(ir0).map_err(lowering_error_from_ir_error)?;
     if ir0.tree.body.is_empty() {
         return Err(LoweringPipelineError::EmptyIr0Body);
+    }
+    // IR0 is also a public, deserializable input. Refuse opaque expressions
+    // before rewrites or control-flow lowering can discard an unreachable
+    // branch, a binding key, or an uncalled function containing one.
+    let raw_expressions = with_statement::Search {
+        statement: |_| false,
+        expression: |expression| matches!(expression, Expression::Raw(_)),
+    };
+    if let Some(statement) = ir0
+        .tree
+        .body
+        .iter()
+        .find(|statement| raw_expressions.in_statement(statement))
+    {
+        return Err(raw_expression_lowering_error(Some(*statement.span())));
     }
     if let Some(error) = module_function_redeclaration(ir0.tree.goal, &ir0.tree.body) {
         return Err(LoweringPipelineError::SemanticViolation(error));
@@ -16189,25 +16214,6 @@ fn emit_reference_error_throw(ops: &mut Vec<Ir1Op>, name: &str) {
     });
 }
 
-/// An expression the parser could not recognise (`Expression::Raw`) throws a
-/// catchable SyntaxError when it is evaluated. It used to lower to a string
-/// holding its own source text (called if the text contained `(`), so
-/// unsupported syntax such as `this.#field` silently produced wrong values.
-/// Code that never evaluates the expression is unaffected.
-fn emit_unsupported_syntax_throw(ops: &mut Vec<Ir1Op>, source: &str) {
-    ops.push(Ir1Op::LoadLiteral {
-        value: Ir1Literal::String(format!("unsupported expression syntax: {source}").into()),
-    });
-    ops.push(Ir1Op::HostCall {
-        capability: "builtin:SyntaxError".to_string(),
-        arg_count: 1,
-    });
-    ops.push(Ir1Op::Throw);
-    ops.push(Ir1Op::LoadLiteral {
-        value: Ir1Literal::Undefined,
-    });
-}
-
 /// Resolve free-floating identifier loads in a function body that have no
 /// source-level binding.
 ///
@@ -18631,7 +18637,7 @@ fn lower_expression_to_ir1_inner(
                 delegate: *delegate,
             });
         }
-        Expression::Raw(raw) => emit_unsupported_syntax_throw(ops, raw),
+        Expression::Raw(_) => return Err(raw_expression_lowering_error(None)),
         Expression::SpreadElement(inner) => {
             // Spread in expression position: lower the inner expression.
             // The actual spreading (iteration into array/object/call) is

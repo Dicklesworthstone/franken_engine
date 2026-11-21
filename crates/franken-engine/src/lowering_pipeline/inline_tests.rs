@@ -9911,13 +9911,10 @@ fn lower_const_declaration_uses_const_binding_kind() {
 
 // -- Raw (unrecognised) expressions fail closed --
 //
-// These two tests used to pin the old lowering: the source text became a
-// string literal, called with no arguments when it contained `(`. That
-// silently turned unsupported syntax into wrong values (`this.#p` was the
-// string "this.#p"). Raw now lowers to a thrown SyntaxError and never to a
-// call or a value derived from source text.
+// A raw node is not executable syntax. Neither fabricated values nor a
+// catchable runtime throw may turn a failed parse into a runnable program.
 
-fn assert_raw_lowers_to_syntax_error_throw(raw: &str) {
+fn assert_raw_is_rejected_at_lowering(raw: &str) {
     let tree = SyntaxTree {
         goal: ParseGoal::Script,
         body: vec![Statement::Expression(ExpressionStatement {
@@ -9927,46 +9924,23 @@ fn assert_raw_lowers_to_syntax_error_throw(raw: &str) {
         span: span(),
     };
     let ir0 = Ir0Module::from_syntax_tree(tree, "raw.js");
-    let result = lower_ir0_to_ir1(&ir0).expect("should succeed");
-    let ops = &result.module.ops;
-
-    assert!(
-        !ops.iter().any(|op| matches!(op, Ir1Op::Call { .. })),
-        "raw `{raw}` must not be called"
-    );
-    assert!(
-        !ops.iter().any(|op| matches!(
-            op,
-            Ir1Op::LoadLiteral { value: Ir1Literal::String(text) } if *text == raw
-        )),
-        "raw `{raw}` must not become a value"
-    );
-    let throw_at = ops
-        .iter()
-        .position(|op| matches!(op, Ir1Op::Throw))
-        .expect("raw expression must throw");
-    assert!(
-        matches!(
-            &ops[throw_at - 1],
-            Ir1Op::HostCall { capability, arg_count: 1 } if capability == "builtin:SyntaxError"
-        ),
-        "the thrown value must be a SyntaxError"
-    );
-    assert!(matches!(
-        &ops[throw_at - 2],
-        Ir1Op::LoadLiteral { value: Ir1Literal::String(text) }
-            if *text == format!("unsupported expression syntax: {raw}").as_str()
-    ));
+    let error = lower_ir0_to_ir1(&ir0).expect_err("raw syntax must not emit executable IR");
+    let LoweringPipelineError::UnsupportedSyntax(diagnostic) = error else {
+        panic!("expected a typed unsupported-syntax refusal for {raw:?}: {error:?}");
+    };
+    assert_eq!(diagnostic.diagnostic_code, "FE-LOWER-RAW-EXPRESSION-0001");
+    assert_eq!(diagnostic.feature_family, "raw_expression");
+    assert_eq!(diagnostic.span, Some(span()));
 }
 
 #[test]
-fn raw_expression_with_call_text_throws_instead_of_calling() {
-    assert_raw_lowers_to_syntax_error_throw("console.log(42)");
+fn raw_expression_with_call_text_is_rejected_before_execution() {
+    assert_raw_is_rejected_at_lowering("console.log(42)");
 }
 
 #[test]
-fn raw_expression_throws_instead_of_yielding_its_source_text() {
-    assert_raw_lowers_to_syntax_error_throw("console");
+fn raw_expression_is_rejected_instead_of_yielding_its_source_text() {
+    assert_raw_is_rejected_at_lowering("console");
 }
 
 #[test]

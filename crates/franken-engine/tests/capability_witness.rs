@@ -138,6 +138,7 @@ fn promotion_theorem_input_for(witness: &CapabilityWitness) -> PromotionTheoremI
 
 fn apply_passing_promotion_theorems(witness: &mut CapabilityWitness) {
     trust_theorem_report_signer(witness, &test_signing_key());
+    rebind_witness(witness, &test_signing_key());
     let report = witness
         .evaluate_promotion_theorems(&promotion_theorem_input_for(witness))
         .expect("theorem check report");
@@ -145,7 +146,6 @@ fn apply_passing_promotion_theorems(witness: &mut CapabilityWitness) {
     witness
         .apply_promotion_theorem_report(&report)
         .expect("promotion theorem report should be valid");
-    rebind_witness(witness, &test_signing_key());
 }
 
 fn rebind_witness(witness: &mut CapabilityWitness, signing_key: &SigningKey) {
@@ -167,6 +167,14 @@ fn rebind_witness(witness: &mut CapabilityWitness, signing_key: &SigningKey) {
     .expect("derive witness id after mutation");
     let signature = sign_preimage(signing_key, &unsigned).expect("sign witness after mutation");
     witness.synthesizer_signature = signature.to_bytes().to_vec();
+    witness.promotion_signatures.clear();
+}
+
+fn approve_promotion(witness: &mut CapabilityWitness) {
+    witness.transition_to(LifecycleState::Validated).unwrap();
+    witness
+        .add_promotion_signature(&test_signing_key())
+        .expect("authorize promotion");
 }
 
 fn build_test_witness() -> CapabilityWitness {
@@ -219,8 +227,10 @@ fn build_promoted_witness(seed: u64) -> CapabilityWitness {
     .build()
     .unwrap();
     apply_passing_promotion_theorems(&mut witness);
-    witness.transition_to(LifecycleState::Validated).unwrap();
-    witness.transition_to(LifecycleState::Promoted).unwrap();
+    approve_promotion(&mut witness);
+    witness
+        .transition_to_with_trust_root(LifecycleState::Promoted, &test_trust_root())
+        .unwrap();
     witness
 }
 
@@ -745,9 +755,13 @@ fn verify_proof_coverage_detects_missing_obligation() {
 fn full_lifecycle_draft_to_superseded() {
     let mut witness = build_test_witness();
     assert_eq!(witness.lifecycle_state, LifecycleState::Draft);
-    witness.transition_to(LifecycleState::Validated).unwrap();
-    witness.transition_to(LifecycleState::Promoted).unwrap();
-    witness.transition_to(LifecycleState::Active).unwrap();
+    approve_promotion(&mut witness);
+    witness
+        .transition_to_with_trust_root(LifecycleState::Promoted, &test_trust_root())
+        .unwrap();
+    witness
+        .transition_to_with_trust_root(LifecycleState::Active, &test_trust_root())
+        .unwrap();
     witness.transition_to(LifecycleState::Superseded).unwrap();
     assert!(witness.lifecycle_state.is_terminal());
 }
@@ -755,9 +769,13 @@ fn full_lifecycle_draft_to_superseded() {
 #[test]
 fn full_lifecycle_draft_to_revoked() {
     let mut witness = build_test_witness();
-    witness.transition_to(LifecycleState::Validated).unwrap();
-    witness.transition_to(LifecycleState::Promoted).unwrap();
-    witness.transition_to(LifecycleState::Active).unwrap();
+    approve_promotion(&mut witness);
+    witness
+        .transition_to_with_trust_root(LifecycleState::Promoted, &test_trust_root())
+        .unwrap();
+    witness
+        .transition_to_with_trust_root(LifecycleState::Active, &test_trust_root())
+        .unwrap();
     witness.transition_to(LifecycleState::Revoked).unwrap();
     assert!(witness.lifecycle_state.is_terminal());
 }
@@ -1117,12 +1135,12 @@ fn store_starts_empty_and_insert_works() {
 
 #[test]
 fn store_lifecycle_transitions_through_active() {
-    let mut store = WitnessStore::new();
-    let witness = build_test_witness();
+    let mut store = WitnessStore::with_trust_root(test_trust_root());
+    let mut witness = build_test_witness();
+    approve_promotion(&mut witness);
     let wid = witness.witness_id.clone();
     let ext_id = witness.extension_id.clone();
     store.insert(witness);
-    store.transition(&wid, LifecycleState::Validated).unwrap();
     store.transition(&wid, LifecycleState::Promoted).unwrap();
     store.transition(&wid, LifecycleState::Active).unwrap();
     assert!(store.active_for_extension(&ext_id).is_some());
@@ -1130,12 +1148,12 @@ fn store_lifecycle_transitions_through_active() {
 
 #[test]
 fn store_supersedes_old_active_on_new_activation() {
-    let mut store = WitnessStore::new();
-    let w1 = build_test_witness();
+    let mut store = WitnessStore::with_trust_root(test_trust_root());
+    let mut w1 = build_test_witness();
+    approve_promotion(&mut w1);
     let w1_id = w1.witness_id.clone();
     let ext_id = w1.extension_id.clone();
     store.insert(w1);
-    store.transition(&w1_id, LifecycleState::Validated).unwrap();
     store.transition(&w1_id, LifecycleState::Promoted).unwrap();
     store.transition(&w1_id, LifecycleState::Active).unwrap();
 
@@ -1152,9 +1170,9 @@ fn store_supersedes_old_active_on_new_activation() {
     .build()
     .unwrap();
     apply_passing_promotion_theorems(&mut w2);
+    approve_promotion(&mut w2);
     let w2_id = w2.witness_id.clone();
     store.insert(w2);
-    store.transition(&w2_id, LifecycleState::Validated).unwrap();
     store.transition(&w2_id, LifecycleState::Promoted).unwrap();
     store.transition(&w2_id, LifecycleState::Active).unwrap();
 
@@ -1170,12 +1188,12 @@ fn store_supersedes_old_active_on_new_activation() {
 
 #[test]
 fn store_revoke_removes_active() {
-    let mut store = WitnessStore::new();
-    let witness = build_test_witness();
+    let mut store = WitnessStore::with_trust_root(test_trust_root());
+    let mut witness = build_test_witness();
+    approve_promotion(&mut witness);
     let wid = witness.witness_id.clone();
     let ext_id = witness.extension_id.clone();
     store.insert(witness);
-    store.transition(&wid, LifecycleState::Validated).unwrap();
     store.transition(&wid, LifecycleState::Promoted).unwrap();
     store.transition(&wid, LifecycleState::Active).unwrap();
     store.transition(&wid, LifecycleState::Revoked).unwrap();
@@ -1192,10 +1210,16 @@ fn store_by_state_filters_correctly() {
 
 #[test]
 fn store_serde_roundtrip_preserves_active_pairs() {
-    let mut store = WitnessStore::new();
+    let mut store = WitnessStore::with_trust_root(test_trust_root());
     let mut witness = build_test_witness();
     let ext_id = witness.extension_id.clone();
-    witness.lifecycle_state = LifecycleState::Active;
+    approve_promotion(&mut witness);
+    witness
+        .transition_to_with_trust_root(LifecycleState::Promoted, &test_trust_root())
+        .unwrap();
+    witness
+        .transition_to_with_trust_root(LifecycleState::Active, &test_trust_root())
+        .unwrap();
     store.insert(witness);
     let json = serde_json::to_string(&store).unwrap();
     let back: WitnessStore = serde_json::from_str(&json).unwrap();
@@ -2124,8 +2148,10 @@ fn end_to_end_witness_lifecycle_through_publication() {
     apply_passing_promotion_theorems(&mut witness);
 
     // 4. Transition through lifecycle
-    witness.transition_to(LifecycleState::Validated).unwrap();
-    witness.transition_to(LifecycleState::Promoted).unwrap();
+    approve_promotion(&mut witness);
+    witness
+        .transition_to_with_trust_root(LifecycleState::Promoted, &test_trust_root())
+        .unwrap();
 
     // 5. Store in WitnessStore
     let mut store = WitnessStore::new();

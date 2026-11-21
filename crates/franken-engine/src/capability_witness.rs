@@ -69,6 +69,9 @@ const TRUSTED_SYNTHESIZER_VERIFICATION_KEY_METADATA: &str = "trusted_synthesizer
 const PROMOTION_QUORUM_METADATA: &str = "promotion_quorum";
 const ACTIVE_ACCEPTANCE_TRUST_ROOT_REQUIRED: &str =
     "active acceptance requires an external capability witness trust root";
+const WITNESS_PROMOTION_SIGNATURE_DOMAIN: &[u8] =
+    b"frankenengine.capability-witness-promotion.v1\0";
+const WITNESS_TRUST_ROOT_DIGEST_DOMAIN: &[u8] = b"frankenengine.capability-witness-trust-root.v1\0";
 
 // ---------------------------------------------------------------------------
 // WitnessSchemaVersion
@@ -310,7 +313,8 @@ impl CapabilityWitnessTrustRoot {
         }
     }
 
-    fn validate(&self) -> Result<(), WitnessError> {
+    /// Validate the externally supplied authority sets and promotion quorum.
+    pub fn validate(&self) -> Result<(), WitnessError> {
         if self.synthesizer_verification_keys.is_empty() {
             return Err(WitnessError::SignatureInvalid {
                 detail: "trust root has no authorized synthesizer keys".to_string(),
@@ -336,6 +340,24 @@ impl CapabilityWitnessTrustRoot {
             });
         }
         Ok(())
+    }
+
+    /// Stable digest for an operator pin, independent of any witness artifact.
+    pub fn canonical_digest(&self) -> Result<ContentHash, WitnessError> {
+        self.validate()?;
+        let mut canonical = Vec::new();
+        canonical.extend_from_slice(WITNESS_TRUST_ROOT_DIGEST_DOMAIN);
+        for keys in [
+            &self.synthesizer_verification_keys,
+            &self.promotion_verification_keys,
+        ] {
+            canonical.extend_from_slice(&(keys.len() as u64).to_be_bytes());
+            for key in keys {
+                canonical.extend_from_slice(key.as_bytes());
+            }
+        }
+        canonical.extend_from_slice(&(self.required_promotion_signatures as u64).to_be_bytes());
+        Ok(ContentHash::compute(&canonical))
     }
 }
 
@@ -754,7 +776,8 @@ pub struct CapabilityWitness {
     // -- Signatures --
     /// Synthesizer's signature over the unsigned witness bytes.
     pub synthesizer_signature: Vec<u8>,
-    /// Promotion signatures (sorted by key for determinism).
+    /// Explicit activation approvals over the full promotion preimage.
+    /// Synthesis signatures never count as promotion approvals.
     pub promotion_signatures: Vec<Vec<u8>>,
 
     // -- Temporal --
@@ -886,6 +909,60 @@ impl CapabilityWitness {
         synthesis_view.unsigned_bytes()
     }
 
+    /// Canonical activation authorization, distinct from the draft synthesis.
+    ///
+    /// The complete theorem metadata and proof obligations are retained. An
+    /// approval authorizes the transition to Active; the same approval remains
+    /// valid while the witness is Promoted and waiting for activation. Callers
+    /// must separately check the current lifecycle, epoch and external trust.
+    pub fn promotion_unsigned_bytes(&self) -> Vec<u8> {
+        let mut promotion_view = self.clone();
+        promotion_view.lifecycle_state = LifecycleState::Active;
+        let unsigned = promotion_view.unsigned_bytes();
+        let mut canonical = Vec::new();
+        canonical.extend_from_slice(WITNESS_PROMOTION_SIGNATURE_DOMAIN);
+        canonical.extend_from_slice(self.witness_id.as_bytes());
+        canonical.extend_from_slice(self.content_hash.as_bytes());
+        canonical.extend_from_slice(&(unsigned.len() as u64).to_be_bytes());
+        canonical.extend_from_slice(&unsigned);
+        canonical
+    }
+
+    /// Approve a validated theorem bundle with an explicit promotion key.
+    ///
+    /// This does not confer trust on the supplied key or activate the witness.
+    /// The externally pinned trust root and its distinct-key quorum are checked
+    /// when promoting with a trust root and again before activation or use.
+    pub fn add_promotion_signature(
+        &mut self,
+        signing_key: &SigningKey,
+    ) -> Result<(), WitnessError> {
+        if !matches!(
+            self.lifecycle_state,
+            LifecycleState::Validated | LifecycleState::Promoted
+        ) {
+            return Err(WitnessError::InvalidTransition {
+                from: self.lifecycle_state,
+                to: LifecycleState::Promoted,
+            });
+        }
+        self.verify_integrity()?;
+        self.verify_proof_coverage()?;
+        self.verify_promotion_theorem_gate()?;
+        let signature =
+            sign_preimage(signing_key, &self.promotion_unsigned_bytes()).map_err(|error| {
+                WitnessError::SignatureInvalid {
+                    detail: format!("promotion approval signing failed: {error}"),
+                }
+            })?;
+        let signature = signature.to_bytes().to_vec();
+        if !self.promotion_signatures.contains(&signature) {
+            self.promotion_signatures.push(signature);
+            self.promotion_signatures.sort();
+        }
+        Ok(())
+    }
+
     /// Transition to a new lifecycle state.
     pub fn transition_to(&mut self, target: LifecycleState) -> Result<(), WitnessError> {
         self.transition_to_checked(target, None)
@@ -913,6 +990,11 @@ impl CapabilityWitness {
         }
         if target == LifecycleState::Promoted {
             self.verify_promotion_theorem_gate()?;
+            if let Some(trust_root) = trust_root {
+                let mut promoted = self.clone();
+                promoted.lifecycle_state = LifecycleState::Promoted;
+                promoted.verify_active_acceptance_with_trust_root(trust_root)?;
+            }
         }
         if target == LifecycleState::Active {
             let Some(trust_root) = trust_root else {
@@ -1436,6 +1518,15 @@ impl CapabilityWitness {
     }
 
     fn verify_active_acceptance_gates(&self) -> Result<(), WitnessError> {
+        if !matches!(
+            self.lifecycle_state,
+            LifecycleState::Promoted | LifecycleState::Active
+        ) {
+            return Err(WitnessError::InvalidTransition {
+                from: self.lifecycle_state,
+                to: LifecycleState::Active,
+            });
+        }
         self.verify_integrity()?;
         self.verify_proof_coverage()?;
         self.verify_promotion_theorem_gate()?;
@@ -1467,7 +1558,7 @@ impl CapabilityWitness {
         &self,
         trust_root: &CapabilityWitnessTrustRoot,
     ) -> Result<(), WitnessError> {
-        let unsigned = self.synthesis_unsigned_bytes();
+        let unsigned = self.promotion_unsigned_bytes();
         let mut accepted_keys = BTreeSet::new();
         for raw_signature in &self.promotion_signatures {
             let signature = Self::signature_from_bytes(raw_signature, "promotion")?;
@@ -1743,7 +1834,6 @@ impl WitnessBuilder {
             }
         })?;
         witness.synthesizer_signature = sig.to_bytes().to_vec();
-        witness.promotion_signatures = vec![sig.to_bytes().to_vec()];
 
         Ok(witness)
     }
@@ -4192,6 +4282,7 @@ mod tests {
     fn apply_passing_promotion_theorems(witness: &mut CapabilityWitness) {
         let signing_key = test_signing_key();
         trust_theorem_report_signer(witness, &signing_key);
+        rebind_witness(witness, &signing_key);
         let input = promotion_theorem_input_for(witness);
         let report = witness
             .evaluate_promotion_theorems_signed_by(&input, &signing_key)
@@ -4200,7 +4291,6 @@ mod tests {
         witness
             .apply_promotion_theorem_report(&report)
             .expect("promotion theorem report should be valid");
-        rebind_witness(witness, &signing_key);
     }
 
     fn rebind_witness(witness: &mut CapabilityWitness, signing_key: &SigningKey) {
@@ -4223,12 +4313,8 @@ mod tests {
 
         let signature = sign_preimage(signing_key, &unsigned).expect("sign witness after mutation");
         witness.synthesizer_signature = signature.to_bytes().to_vec();
-        // Re-sign the promotion quorum over the rebound synthesis preimage. The promotion
-        // signatures are verified over `synthesis_unsigned_bytes()` during active-acceptance,
-        // so they must track the same preimage as the synthesizer signature after the
-        // metadata/proof-obligation mutations applied above; otherwise a trust root that
-        // authorizes `signing_key` would reject the (stale) promotion signatures.
-        witness.promotion_signatures = vec![signature.to_bytes().to_vec()];
+        // Rebinding synthesis does not approve the changed witness for use.
+        witness.promotion_signatures.clear();
     }
 
     fn build_test_witness() -> CapabilityWitness {
@@ -4255,6 +4341,23 @@ mod tests {
         .build()
         .expect("serde serialization should succeed");
         apply_passing_promotion_theorems(&mut witness);
+        witness
+    }
+
+    fn build_active_test_witness() -> CapabilityWitness {
+        let mut witness = build_test_witness();
+        witness
+            .transition_to(LifecycleState::Validated)
+            .expect("validate test witness");
+        witness
+            .add_promotion_signature(&test_signing_key())
+            .expect("approve test witness");
+        witness
+            .transition_to_with_trust_root(LifecycleState::Promoted, &test_trust_root())
+            .expect("promote test witness with external trust");
+        witness
+            .transition_to_with_trust_root(LifecycleState::Active, &test_trust_root())
+            .expect("activate test witness with external trust");
         witness
     }
 
@@ -4352,7 +4455,10 @@ mod tests {
             .transition_to(LifecycleState::Validated)
             .expect("serde serialization should succeed");
         witness
-            .transition_to(LifecycleState::Promoted)
+            .add_promotion_signature(&test_signing_key())
+            .expect("explicit promotion approval");
+        witness
+            .transition_to_with_trust_root(LifecycleState::Promoted, &test_trust_root())
             .expect("serde serialization should succeed");
         witness
             .transition_to_with_trust_root(LifecycleState::Active, &test_trust_root())
@@ -4369,6 +4475,246 @@ mod tests {
         let mut witness = build_test_witness();
         let err = witness.transition_to(LifecycleState::Active).unwrap_err();
         assert!(matches!(err, WitnessError::InvalidTransition { .. }));
+    }
+
+    #[test]
+    fn draft_synthesis_does_not_approve_activation() {
+        let mut witness = build_test_witness();
+        assert!(witness.promotion_signatures.is_empty());
+        witness
+            .verify_synthesizer_signature(&test_signing_key().verification_key())
+            .expect("draft is genuinely signed by the trusted synthesizer");
+        assert!(matches!(
+            witness.add_promotion_signature(&test_signing_key()),
+            Err(WitnessError::InvalidTransition {
+                from: LifecycleState::Draft,
+                ..
+            })
+        ));
+        witness.lifecycle_state = LifecycleState::Active;
+        assert!(matches!(
+            witness.verify_active_acceptance_with_trust_root(&test_trust_root()),
+            Err(WitnessError::SignatureInvalid { .. })
+        ));
+    }
+
+    #[test]
+    fn synthesis_signature_cannot_approve_fabricated_promotion_fields() {
+        let mut witness = build_test_witness();
+        witness.lifecycle_state = LifecycleState::Active;
+        witness.promotion_signatures = vec![witness.synthesizer_signature.clone()];
+        witness.metadata.insert(
+            "promotion_theorem.merge_legality.detail".to_string(),
+            "fabricated approval without a promotion key".to_string(),
+        );
+        let theorem = witness
+            .proof_obligations
+            .iter_mut()
+            .find(|proof| proof.kind == ProofKind::PolicyTheoremCheck)
+            .expect("theorem proof");
+        theorem.artifact_hash = ContentHash::compute(b"fabricated theorem artifact");
+        // The draft signature intentionally excludes later theorem material.
+        // Its validity must never authenticate the fabricated approval above.
+        witness
+            .verify_integrity()
+            .expect("unchanged synthesis bytes");
+        witness
+            .verify_synthesizer_signature(&test_signing_key().verification_key())
+            .expect("unchanged trusted synthesis signature");
+        witness
+            .verify_promotion_theorem_gate()
+            .expect("fabricated fields satisfy the structural theorem gate");
+        let error = witness
+            .verify_active_acceptance_with_trust_root(&test_trust_root())
+            .expect_err("synthesis signature is not an activation approval");
+        assert!(matches!(error, WitnessError::SignatureInvalid { detail }
+            if detail == "promotion signature is not authorized by the trust root"));
+    }
+
+    #[test]
+    fn promotion_approval_binds_all_theorem_metadata_and_proofs() {
+        let original = build_active_test_witness();
+        original
+            .verify_active_acceptance_with_trust_root(&test_trust_root())
+            .expect("genuine approval passes");
+        for change in 0..4 {
+            let mut tampered = original.clone();
+            match change {
+                0 => {
+                    tampered.metadata.insert(
+                        "promotion_theorem.merge_legality.detail".into(),
+                        "replaced theorem detail".into(),
+                    );
+                }
+                1 => {
+                    tampered.metadata.insert(
+                        "promotion_theorem.injected_claim".into(),
+                        "not approved".into(),
+                    );
+                }
+                2 => {
+                    let proof = tampered
+                        .proof_obligations
+                        .iter_mut()
+                        .find(|proof| proof.kind == ProofKind::PolicyTheoremCheck)
+                        .expect("theorem proof");
+                    proof.artifact_hash = ContentHash::compute(b"replacement proof");
+                }
+                _ => tampered.witness_id = test_proof_artifact_id(),
+            }
+            tampered.verify_integrity().expect("synthesis unchanged");
+            tampered
+                .verify_synthesizer_signature(&test_signing_key().verification_key())
+                .expect("synthesis signature unchanged");
+            assert!(
+                matches!(
+                    tampered.verify_active_acceptance_with_trust_root(&test_trust_root()),
+                    Err(WitnessError::SignatureInvalid { .. })
+                ),
+                "promotion mutation {change} must invalidate approval"
+            );
+        }
+    }
+
+    #[test]
+    fn promotion_quorum_counts_distinct_authorized_approval_keys() {
+        let first = SigningKey::from_bytes([73; 32]).expect("first approver");
+        let second = SigningKey::from_bytes([74; 32]).expect("second approver");
+        let trust_root = CapabilityWitnessTrustRoot::new(
+            [test_signing_key().verification_key()],
+            [first.verification_key(), second.verification_key()],
+            2,
+        )
+        .expect("two-approver trust root");
+        let mut witness = build_test_witness();
+        witness
+            .transition_to(LifecycleState::Validated)
+            .expect("validated");
+        witness
+            .add_promotion_signature(&first)
+            .expect("first approval");
+        witness
+            .add_promotion_signature(&first)
+            .expect("idempotent approval");
+        assert_eq!(witness.promotion_signatures.len(), 1);
+        let unchanged = witness.clone();
+        assert!(matches!(
+            witness.transition_to_with_trust_root(LifecycleState::Promoted, &trust_root),
+            Err(WitnessError::SignatureInvalid { .. })
+        ));
+        assert_eq!(witness, unchanged, "failed quorum leaves state intact");
+        witness
+            .add_promotion_signature(&second)
+            .expect("second approval");
+        witness
+            .transition_to_with_trust_root(LifecycleState::Promoted, &trust_root)
+            .expect("distinct authorized quorum");
+        witness
+            .transition_to_with_trust_root(LifecycleState::Active, &trust_root)
+            .expect("approved activation");
+        let mut duplicate = witness.clone();
+        duplicate.promotion_signatures[1] = duplicate.promotion_signatures[0].clone();
+        assert!(matches!(
+            duplicate.verify_active_acceptance_with_trust_root(&trust_root),
+            Err(WitnessError::SignatureInvalid { .. })
+        ));
+        let other_root =
+            CapabilityWitnessTrustRoot::single_authority(test_signing_key().verification_key());
+        assert!(matches!(
+            witness.verify_active_acceptance_with_trust_root(&other_root),
+            Err(WitnessError::SignatureInvalid { .. })
+        ));
+    }
+
+    #[test]
+    fn promotion_approval_rejects_invalid_input_before_signing() {
+        let mut missing_theorem = build_test_witness();
+        missing_theorem
+            .transition_to(LifecycleState::Validated)
+            .expect("validated");
+        missing_theorem
+            .metadata
+            .remove("promotion_theorem.merge_legality");
+        assert!(matches!(
+            missing_theorem.add_promotion_signature(&test_signing_key()),
+            Err(WitnessError::MissingPromotionTheoremProofs { .. })
+        ));
+        assert!(missing_theorem.promotion_signatures.is_empty());
+        let mut changed_synthesis = build_test_witness();
+        changed_synthesis
+            .transition_to(LifecycleState::Validated)
+            .expect("validated");
+        changed_synthesis.replay_seed += 1;
+        assert!(matches!(
+            changed_synthesis.add_promotion_signature(&test_signing_key()),
+            Err(WitnessError::IntegrityFailure { .. })
+        ));
+        assert!(changed_synthesis.promotion_signatures.is_empty());
+    }
+
+    #[test]
+    fn active_acceptance_checks_lifecycle_even_with_real_approval() {
+        let original = build_active_test_witness();
+        assert_ne!(
+            original.synthesizer_signature,
+            original.promotion_signatures[0]
+        );
+        for state in [
+            LifecycleState::Draft,
+            LifecycleState::Validated,
+            LifecycleState::Superseded,
+            LifecycleState::Revoked,
+        ] {
+            let mut witness = original.clone();
+            witness.lifecycle_state = state;
+            assert!(matches!(
+                witness.verify_active_acceptance_with_trust_root(&test_trust_root()),
+                Err(WitnessError::InvalidTransition { .. })
+            ));
+        }
+        let mut active = original;
+        assert!(matches!(
+            active.add_promotion_signature(&test_signing_key()),
+            Err(WitnessError::InvalidTransition { .. })
+        ));
+    }
+
+    #[test]
+    fn witness_trust_digest_binds_roles_and_quorum_independent_of_insertion_order() {
+        let first = test_signing_key().verification_key();
+        let second = SigningKey::from_bytes([75; 32]).unwrap().verification_key();
+        let root = CapabilityWitnessTrustRoot::new(
+            [first.clone(), second.clone()],
+            [first.clone(), second.clone()],
+            1,
+        )
+        .unwrap();
+        let reordered = CapabilityWitnessTrustRoot::new(
+            [second.clone(), first.clone()],
+            [second.clone(), first.clone()],
+            1,
+        )
+        .unwrap();
+        let digest = root.canonical_digest().unwrap();
+        assert_eq!(digest, reordered.canonical_digest().unwrap());
+        let mut changed = root.clone();
+        changed.required_promotion_signatures = 2;
+        assert_ne!(digest, changed.canonical_digest().unwrap());
+        changed = root.clone();
+        changed.synthesizer_verification_keys.remove(&second);
+        assert_ne!(digest, changed.canonical_digest().unwrap());
+        changed = root.clone();
+        changed.promotion_verification_keys.remove(&second);
+        assert_ne!(digest, changed.canonical_digest().unwrap());
+        let roles_a =
+            CapabilityWitnessTrustRoot::new([first.clone()], [second.clone()], 1).unwrap();
+        let roles_b = CapabilityWitnessTrustRoot::new([second], [first], 1).unwrap();
+        assert_ne!(
+            roles_a.canonical_digest().unwrap(),
+            roles_b.canonical_digest().unwrap()
+        );
+        changed.required_promotion_signatures = 0;
+        assert!(changed.canonical_digest().is_err());
     }
 
     // -----------------------------------------------------------------------
@@ -5071,6 +5417,9 @@ mod tests {
         witness
             .transition_to(LifecycleState::Promoted)
             .expect("promotion theorem metadata should permit promoted transition");
+        witness
+            .add_promotion_signature(&test_signing_key())
+            .expect("explicit promotion approval");
 
         let validator = WitnessValidator::with_trust_root(test_trust_root());
         let errors = validator.validate_for_security_decision(&witness);
@@ -5221,6 +5570,11 @@ mod tests {
             .transition(&wid, LifecycleState::Promoted)
             .expect("serde serialization should succeed");
         store
+            .get_mut(&wid)
+            .expect("stored witness")
+            .add_promotion_signature(&test_signing_key())
+            .expect("explicit promotion approval");
+        store
             .transition(&wid, LifecycleState::Active)
             .expect("serde serialization should succeed");
 
@@ -5250,6 +5604,11 @@ mod tests {
             .transition(&w1_id, LifecycleState::Promoted)
             .expect("serde serialization should succeed");
         store
+            .get_mut(&w1_id)
+            .expect("stored witness")
+            .add_promotion_signature(&test_signing_key())
+            .expect("explicit promotion approval");
+        store
             .transition(&w1_id, LifecycleState::Active)
             .expect("serde serialization should succeed");
 
@@ -5276,6 +5635,11 @@ mod tests {
         store
             .transition(&w2_id, LifecycleState::Promoted)
             .expect("serde serialization should succeed");
+        store
+            .get_mut(&w2_id)
+            .expect("stored witness")
+            .add_promotion_signature(&test_signing_key())
+            .expect("explicit promotion approval");
         store
             .transition(&w2_id, LifecycleState::Active)
             .expect("serde serialization should succeed");
@@ -5311,6 +5675,11 @@ mod tests {
         store
             .transition(&wid, LifecycleState::Promoted)
             .expect("serde serialization should succeed");
+        store
+            .get_mut(&wid)
+            .expect("stored witness")
+            .add_promotion_signature(&test_signing_key())
+            .expect("explicit promotion approval");
         store
             .transition(&wid, LifecycleState::Active)
             .expect("serde serialization should succeed");
@@ -5357,6 +5726,11 @@ mod tests {
             .expect("serde serialization should succeed");
         store
             .get_mut(&wid)
+            .expect("stored witness")
+            .add_promotion_signature(&test_signing_key())
+            .expect("explicit promotion approval");
+        store
+            .get_mut(&wid)
             .expect("serde serialization should succeed")
             .synthesizer_signature
             .fill(0x7f);
@@ -5378,6 +5752,9 @@ mod tests {
         witness
             .transition_to(LifecycleState::Promoted)
             .expect("serde serialization should succeed");
+        witness
+            .add_promotion_signature(&test_signing_key())
+            .expect("explicit promotion approval");
         witness
             .transition_to_with_trust_root(LifecycleState::Active, &test_trust_root())
             .expect("serde serialization should succeed");
@@ -5435,6 +5812,9 @@ mod tests {
         witness
             .transition_to(LifecycleState::Promoted)
             .expect("serde serialization should succeed");
+        witness
+            .add_promotion_signature(&test_signing_key())
+            .expect("explicit promotion approval");
         witness
     }
 
@@ -7820,6 +8200,9 @@ mod tests {
             .transition_to(LifecycleState::Promoted)
             .expect("serde serialization should succeed");
         witness
+            .add_promotion_signature(&test_signing_key())
+            .expect("explicit promotion approval");
+        witness
             .transition_to_with_trust_root(LifecycleState::Active, &test_trust_root())
             .expect("serde serialization should succeed");
         witness.synthesizer_signature = vec![0x55; 64];
@@ -8718,9 +9101,8 @@ mod tests {
     #[test]
     fn store_insert_active_witness_updates_active_pair() {
         let mut store = WitnessStore::with_trust_root(test_trust_root());
-        let mut witness = build_test_witness();
+        let witness = build_active_test_witness();
         let ext_id = witness.extension_id.clone();
-        witness.lifecycle_state = LifecycleState::Active;
         let wid = witness.witness_id.clone();
         store.insert(witness);
         assert_eq!(store.len(), 1);
@@ -8826,9 +9208,8 @@ mod tests {
     #[test]
     fn store_serde_roundtrip_preserves_active_pairs() {
         let mut store = WitnessStore::with_trust_root(test_trust_root());
-        let mut witness = build_test_witness();
+        let witness = build_active_test_witness();
         let ext_id = witness.extension_id.clone();
-        witness.lifecycle_state = LifecycleState::Active;
         let wid = witness.witness_id.clone();
         store.insert(witness);
         assert!(store.active_for_extension(&ext_id).is_some());
@@ -8958,6 +9339,11 @@ mod tests {
         store
             .transition(&wid, LifecycleState::Promoted)
             .expect("serde serialization should succeed");
+        store
+            .get_mut(&wid)
+            .expect("stored witness")
+            .add_promotion_signature(&test_signing_key())
+            .expect("explicit promotion approval");
         store
             .transition(&wid, LifecycleState::Active)
             .expect("serde serialization should succeed");

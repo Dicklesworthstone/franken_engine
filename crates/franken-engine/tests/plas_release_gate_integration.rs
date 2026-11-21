@@ -110,7 +110,7 @@ fn rebind_witness(witness: &mut CapabilityWitness, synthesizer_key: &SigningKey)
     .expect("derive witness id");
     let signature = sign_preimage(synthesizer_key, &unsigned).expect("sign witness");
     witness.synthesizer_signature = signature.to_bytes().to_vec();
-    witness.promotion_signatures = vec![signature.to_bytes().to_vec()];
+    witness.promotion_signatures.clear();
 }
 
 fn promote_witness_with_passing_theorems(
@@ -142,6 +142,7 @@ fn promote_witness_with_passing_theorems(
         "trusted_synthesizer_verification_key".to_string(),
         synthesizer_key.verification_key().to_hex(),
     );
+    rebind_witness(&mut witness, synthesizer_key);
     let theorem_report = witness
         .evaluate_promotion_theorems_signed_by(&passing_theorem_input(&witness), synthesizer_key)
         .expect("theorem report");
@@ -149,12 +150,17 @@ fn promote_witness_with_passing_theorems(
     witness
         .apply_promotion_theorem_report(&theorem_report)
         .expect("promotion theorem report should be valid");
-    rebind_witness(&mut witness, synthesizer_key);
     witness
         .transition_to(LifecycleState::Validated)
         .expect("validated transition");
     witness
-        .transition_to(LifecycleState::Promoted)
+        .add_promotion_signature(synthesizer_key)
+        .expect("authorize promotion");
+    witness
+        .transition_to_with_trust_root(
+            LifecycleState::Promoted,
+            &CapabilityWitnessTrustRoot::single_authority(synthesizer_key.verification_key()),
+        )
         .expect("promoted transition");
     witness
 }

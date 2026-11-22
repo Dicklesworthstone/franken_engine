@@ -8754,17 +8754,49 @@ fn write_property_resolution_found_payload(
     object_id: ObjectId,
     depth: u32,
 ) {
+    write_property_resolution_found_payload_with_key(
+        payload,
+        key.diagnostic_byte_len(),
+        |payload| key.append_diagnostic_bytes(payload),
+        object_id,
+        depth,
+    );
+}
+
+/// Write an indexed read's canonical decimal key without allocating a string.
+fn write_index_property_resolution_found_payload(
+    payload: &mut Vec<u8>,
+    index: u32,
+    object_id: ObjectId,
+    depth: u32,
+) {
+    write_property_resolution_found_payload_with_key(
+        payload,
+        decimal_u32_len(index),
+        |payload| append_decimal_u32(payload, index),
+        object_id,
+        depth,
+    );
+}
+
+fn write_property_resolution_found_payload_with_key(
+    payload: &mut Vec<u8>,
+    key_byte_len: usize,
+    append_key: impl FnOnce(&mut Vec<u8>),
+    object_id: ObjectId,
+    depth: u32,
+) {
     payload.clear();
     payload.reserve(
         b"property_found:key=".len()
-            + key.diagnostic_byte_len()
+            + key_byte_len
             + b",object_id=".len()
             + decimal_u32_len(object_id.0)
             + b",depth=".len()
             + decimal_u32_len(depth),
     );
     payload.extend_from_slice(b"property_found:key=");
-    key.append_diagnostic_bytes(payload);
+    append_key(payload);
     payload.extend_from_slice(b",object_id=");
     append_decimal_u32(payload, object_id.0);
     payload.extend_from_slice(b",depth=");

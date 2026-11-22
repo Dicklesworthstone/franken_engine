@@ -81,17 +81,35 @@ impl InterpreterCore {
                     unreachable!("compact property receiver was checked before dispatch")
                 };
                 let object_id = *object_id;
-                let Value::Str(key) = &self.registers[self.register_base + rhs as usize] else {
-                    unreachable!("compact property key was checked before dispatch")
+                let value = match &self.registers[self.register_base + rhs as usize] {
+                    Value::Str(key) => {
+                        let value = self.heap[object_id.0 as usize]
+                            .properties
+                            .get_exact(key)
+                            .expect("compact own data property was checked before dispatch")
+                            .clone();
+                        let key = RuntimePropertyKey::String(key.clone());
+                        self.capture_property_resolution_found(&key, object_id, 0);
+                        value
+                    }
+                    key => {
+                        // The guard proved an exact canonical array index;
+                        // numeric -0 and +0 both address property "0".
+                        let index = match key {
+                            Value::Int(index) => *index as u32,
+                            Value::Float(index) => index.inner() as u32,
+                            _ => unreachable!("compact numeric key was checked before dispatch"),
+                        };
+                        let value = self.heap[object_id.0 as usize]
+                            .properties
+                            .get_index(index)
+                            .expect("compact own array element was checked before dispatch")
+                            .clone();
+                        self.capture_index_property_resolution_found(index, object_id, 0);
+                        value
+                    }
                 };
-                let value = self.heap[object_id.0 as usize]
-                    .properties
-                    .get_exact(key)
-                    .expect("compact own data property was checked before dispatch")
-                    .clone();
-                let key = RuntimePropertyKey::String(key.clone());
                 let slot = StaticWriteSlot(self.register_base + dst as usize);
-                self.capture_property_resolution_found(&key, object_id, 0);
                 self.write_static_slot(slot, value);
                 self.record_tier_i_specialization();
                 self.ip += 1;
@@ -6346,6 +6364,12 @@ impl InterpreterCore {
         if key.as_str() == Some("__proto__") {
             return None;
         }
+        self.ordinary_own_property_read_storage(object_id)
+    }
+
+    /// Shared ordinary-object exclusions for exact strings and numeric
+    /// array indices. Numeric keys cannot name the __proto__ accessor.
+    fn ordinary_own_property_read_storage(&self, object_id: ObjectId) -> Option<&HeapObject> {
         #[cfg(test)]
         if FORCE_GENERIC_OWN_PROPERTY_READS.with(std::cell::Cell::get) {
             return None;
@@ -6406,6 +6430,29 @@ impl InterpreterCore {
         Some((value, Some(label)))
     }
 
+    /// A Number's canonical array index, without ToString or allocation.
+    /// All admitted values stringify as decimal digits in the canonical
+    /// handler. Fractions, non-finite numbers, negative indices and 2^32-1
+    /// are ordinary named properties and retain that handler.
+    fn compact_numeric_array_index(value: &Value) -> Option<u32> {
+        let index = match value {
+            Value::Int(index) => u32::try_from(*index).ok()?,
+            Value::Float(index) => {
+                let number = index.inner();
+                if !number.is_finite()
+                    || number < 0.0
+                    || number >= f64::from(u32::MAX)
+                    || number.fract() != 0.0
+                {
+                    return None;
+                }
+                number as u32
+            }
+            _ => return None,
+        };
+        (index != u32::MAX).then_some(index)
+    }
+
     /// Check an own data property only when its read is entirely static.
     /// Reuse the ordinary-object exclusions used by Tier R; keys requiring
     /// conversion, accessors, exotic objects, and additional IFC provenance
@@ -6437,17 +6484,37 @@ impl InterpreterCore {
         let Value::Object(object_id) = self.registers.get(actual_obj)? else {
             return None;
         };
-        let Value::Str(key) = self.registers.get(actual_key)? else {
-            return None;
+        let (value, stored_label) = match self.registers.get(actual_key)? {
+            Value::Str(key) => {
+                let runtime_key = RuntimePropertyKey::String(key.clone());
+                let object = self.ordinary_own_property_read_object(*object_id, &runtime_key)?;
+                (
+                    object.properties.get_exact(key)?,
+                    object.property_labels.get_exact(key),
+                )
+            }
+            key => {
+                let index = Self::compact_numeric_array_index(key)?;
+                let object = self.ordinary_own_property_read_storage(*object_id)?;
+                let length = object.cached_dense_length?;
+                if index >= length
+                    || !self.array_cache_matches_visible_length(*object_id, length as usize)
+                {
+                    return None;
+                }
+                // A hole must fall back even if a low-level cached length
+                // still covers it: its prototype can supply data or a getter.
+                (
+                    object.properties.get_index(index)?,
+                    object.property_labels.get_index(index),
+                )
+            }
         };
-        let runtime_key = RuntimePropertyKey::String(key.clone());
-        let object = self.ordinary_own_property_read_object(*object_id, &runtime_key)?;
-        let value = object.properties.get_exact(key)?;
         if !Self::static_register_value(value)
             // A closure's method metadata can add its definition label even
             // when the property and operand labels are all Public.
             || matches!(value, Value::Closure(_))
-            || !matches!(object.property_labels.get_exact(key), None | Some(Label::Public))
+            || !matches!(stored_label, None | Some(Label::Public))
             || !self.static_register_write_eligible(actual_dst, value, &Label::Public)
         {
             return None;
@@ -6461,11 +6528,28 @@ impl InterpreterCore {
         object_id: ObjectId,
         depth: u32,
     ) {
+        self.capture_property_resolution_payload(|payload| {
+            write_property_resolution_found_payload(payload, key, object_id, depth);
+        });
+    }
+
+    fn capture_index_property_resolution_found(
+        &mut self,
+        index: u32,
+        object_id: ObjectId,
+        depth: u32,
+    ) {
+        self.capture_property_resolution_payload(|payload| {
+            write_index_property_resolution_found_payload(payload, index, object_id, depth);
+        });
+    }
+
+    fn capture_property_resolution_payload(&mut self, write_payload: impl FnOnce(&mut Vec<u8>)) {
         // Deterministic decision: fold, don't record (bd-9vouw.18). The bytes
         // go through a reused buffer: a Vec per property read was malloc and
         // free on every found [[Get]].
         let mut payload = std::mem::take(&mut self.property_witness_scratch);
-        write_property_resolution_found_payload(&mut payload, key, object_id, depth);
+        write_payload(&mut payload);
         self.nondeterminism_trace
             .witness_deterministic(NondeterminismSource::PropertyResolution, &payload);
         if payload.capacity() <= PROPERTY_WITNESS_SCRATCH_MAX_CAPACITY {

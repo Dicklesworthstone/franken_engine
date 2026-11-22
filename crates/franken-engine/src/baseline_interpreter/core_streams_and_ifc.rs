@@ -6596,15 +6596,16 @@ impl InterpreterCore {
         let ok = (200..300).contains(&status);
         // bd-3894s slice (2d): tag the response `IncomingMessage` so `res.on('data'|
         // 'end'|'error', …)` resolves to the shared `EventEmitter.prototype.on` via
-        // the `__type` member-access path. The own data properties below
-        // (`status`/`body`/`headers`/`ok`/`statusText`) still win property resolution,
-        // so the tag only adds the readable-stream `.on` method — direct reads like
-        // `res.status` / `res.body` are unchanged.
+        // the `__type` member-access path. Populate both Node's `http.IncomingMessage`
+        // properties (`statusCode`/`statusMessage`, bd-slb7a) and the legacy
+        // `status`/`statusText`/`ok`/`body` fields alongside `headers`.
         let response_id = self.alloc_branded_object(
             "IncomingMessage",
             &[
                 ("status", Value::Int(status)),
+                ("statusCode", Value::Int(status)),
                 ("statusText", Value::str(status_text.as_str())),
+                ("statusMessage", Value::str(status_text.as_str())),
                 ("ok", Value::Bool(ok)),
                 ("headers", Value::Object(headers_id)),
                 ("body", Value::str(body_str.as_str())),

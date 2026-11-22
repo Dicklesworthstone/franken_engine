@@ -371,7 +371,12 @@ impl InterpreterCore {
                     .as_deref()
                     .unwrap_or_default()
                     .to_string();
-                self.text_codec_method(&method, receiver.unwrap_or(Value::Undefined), args)
+                self.text_codec_method(
+                    Some(module),
+                    &method,
+                    receiver.unwrap_or(Value::Undefined),
+                    args,
+                )
             }
             BuiltinFunctionKind::TimersPromisesIntervalNext
             | BuiltinFunctionKind::TimersPromisesIntervalReturn => self
@@ -11252,14 +11257,43 @@ impl InterpreterCore {
                         // launder to a Public catch binding now that
                         // the legacy mini-lane preserves the original
                         // thrown value.
+                        let callback_label = self
+                            .take_pending_hostcall_result_label()
+                            .unwrap_or(Label::Public);
                         let escaped = self
                             .join_arg_range_label(args)?
                             .join(self.get_register_label(receiver)?)
-                            .join(self.get_register_label(callee)?);
+                            .join(self.get_register_label(callee)?)
+                            .join(&callback_label);
                         self.join_pending_exception_label(&escaped)?;
                         return Ok(());
                     }
-                    Some(err) => return Err(err),
+                    Some(err) => {
+                        if matches!(err, InterpreterError::UncaughtException { .. })
+                            && self.pending_exception.is_some()
+                        {
+                            let callback_label = self
+                                .take_pending_hostcall_result_label()
+                                .unwrap_or(Label::Public);
+                            let escaped = self
+                                .join_arg_range_label(args)?
+                                .join(self.get_register_label(receiver)?)
+                                .join(self.get_register_label(callee)?)
+                                .join(&callback_label);
+                            if escaped != Label::Public {
+                                self.join_pending_exception_label(&escaped)?;
+                            }
+                        } else if Self::js_catchable_error_name(&err).is_some() {
+                            let escaped = self
+                                .join_arg_range_label(args)?
+                                .join(self.get_register_label(receiver)?)
+                                .join(self.get_register_label(callee)?);
+                            if escaped != Label::Public {
+                                self.join_into_pending_hostcall_result_label(Some(escaped))?;
+                            }
+                        }
+                        return Err(err);
+                    }
                 },
             };
             let callback_result_label = self
@@ -11331,13 +11365,40 @@ impl InterpreterCore {
                     // original thrown value (not a Public
                     // engine error), so a Secret arg cannot
                     // launder to a Public catch binding.
+                    let callback_label = self
+                        .take_pending_hostcall_result_label()
+                        .unwrap_or(Label::Public);
                     let escaped = self
                         .join_arg_range_label(args)?
-                        .join(self.get_register_label(callee)?);
+                        .join(self.get_register_label(callee)?)
+                        .join(&callback_label);
                     self.join_pending_exception_label(&escaped)?;
                     return Ok(());
                 }
-                Some(err) => return Err(err),
+                Some(err) => {
+                    if matches!(err, InterpreterError::UncaughtException { .. })
+                        && self.pending_exception.is_some()
+                    {
+                        let callback_label = self
+                            .take_pending_hostcall_result_label()
+                            .unwrap_or(Label::Public);
+                        let escaped = self
+                            .join_arg_range_label(args)?
+                            .join(self.get_register_label(callee)?)
+                            .join(&callback_label);
+                        if escaped != Label::Public {
+                            self.join_pending_exception_label(&escaped)?;
+                        }
+                    } else if Self::js_catchable_error_name(&err).is_some() {
+                        let escaped = self
+                            .join_arg_range_label(args)?
+                            .join(self.get_register_label(callee)?);
+                        if escaped != Label::Public {
+                            self.join_into_pending_hostcall_result_label(Some(escaped))?;
+                        }
+                    }
+                    return Err(err);
+                }
             },
         };
         let callback_result_label = self
@@ -11727,10 +11788,33 @@ impl InterpreterCore {
                                         // receiver/arg cannot launder to a Public catch
                                         // binding now that the mini-lane preserves the
                                         // original thrown value.
-                                        self.join_pending_exception_label(&args_label)?;
+                                        let callback_label = self
+                                            .take_pending_hostcall_result_label()
+                                            .unwrap_or(Label::Public);
+                                        let escaped = args_label.join(&callback_label);
+                                        self.join_pending_exception_label(&escaped)?;
                                         return Ok(());
                                     }
-                                    Some(err) => return Err(err),
+                                    Some(err) => {
+                                        if matches!(err, InterpreterError::UncaughtException { .. })
+                                            && self.pending_exception.is_some()
+                                        {
+                                            let callback_label = self
+                                                .take_pending_hostcall_result_label()
+                                                .unwrap_or(Label::Public);
+                                            let escaped = args_label.join(&callback_label);
+                                            if escaped != Label::Public {
+                                                self.join_pending_exception_label(&escaped)?;
+                                            }
+                                        } else if Self::js_catchable_error_name(&err).is_some()
+                                            && args_label != Label::Public
+                                        {
+                                            self.join_into_pending_hostcall_result_label(Some(
+                                                args_label,
+                                            ))?;
+                                        }
+                                        return Err(err);
+                                    }
                                 }
                             }
                         }

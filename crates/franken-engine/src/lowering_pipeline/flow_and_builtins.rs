@@ -10113,6 +10113,7 @@ pub(super) fn hostcall_exception_is_operand_derived(
             | "builtin:OsConstants"
             | "builtin:CryptoInvalidRandomInt"
             | "builtin:CryptoObjectUpdate"
+            | "builtin:CryptoObjectDigest"
             | "builtin:CryptoObjectCopy"
             | "builtin:CryptoObjectFinal"
             | "builtin:CryptoObjectGetAuthTag"
@@ -12162,15 +12163,44 @@ pub(super) fn ir2_flow_label_ceiling(
 ) -> Label {
     let bounded_imports = ops_assume_bounded_imports(ops);
     let has_try_begin = ir2_ops_contain_try_begin(ops);
+    // Top-level code sits at the bottom of the call stack: a `BeginTry` inside
+    // a nested function (such as an inlined pure module like `util`) can never
+    // catch an exception thrown by a top-level op outside any top-level catch
+    // region (bd-9vouw.128). Fail closed to `has_try_begin` if catch regions
+    // are malformed.
+    let top_level_catch_events = ir2_catch_region_events(ops).ok();
+    let mut active_top_level_catch_regions = Vec::<u32>::new();
+    let mut top_level_catch_malformed = top_level_catch_events.is_none();
     let mut ceiling = Label::Internal;
     let mut prev_op: Option<&Ir1Op> = None;
-    for op in ops {
+    for (op_index, op) in ops.iter().enumerate() {
+        if !top_level_catch_malformed
+            && let Some((starts, ends, _)) = top_level_catch_events.as_ref()
+        {
+            if let Some(ending) = ends.get(&op_index) {
+                for catch_label in ending {
+                    if active_top_level_catch_regions.pop().as_ref() != Some(catch_label) {
+                        top_level_catch_malformed = true;
+                        break;
+                    }
+                }
+            }
+            if !top_level_catch_malformed && let Some(starting) = starts.get(&op_index) {
+                active_top_level_catch_regions.extend(starting.iter().copied());
+            }
+        }
+        let op_catchable = if top_level_catch_malformed {
+            has_try_begin
+        } else {
+            !active_top_level_catch_regions.is_empty()
+        };
         accumulate_ir1_flow_label_ceiling(
             &op.inner,
             prev_op,
             host_io_exception_provenance,
             bounded_imports,
             has_try_begin,
+            op_catchable,
             &mut ceiling,
         );
         prev_op = Some(&op.inner);
@@ -12184,6 +12214,7 @@ pub(super) fn accumulate_ir1_flow_label_ceiling(
     host_io_exception_provenance: HostIoExceptionProvenance,
     bounded_imports: bool,
     has_try_begin: bool,
+    op_catchable: bool,
     ceiling: &mut Label,
 ) {
     if *ceiling == Label::TopSecret {
@@ -12193,11 +12224,14 @@ pub(super) fn accumulate_ir1_flow_label_ceiling(
         Ir1Op::DeclareFunction { body_ops, .. } | Ir1Op::CreateFunction { body_ops, .. } => {
             let mut inner_prev: Option<&Ir1Op> = None;
             for inner in body_ops {
+                // Any `try` in the unit could dynamically enclose a call into a
+                // nested function, so nested ops conservatively use `has_try_begin`.
                 accumulate_ir1_flow_label_ceiling(
                     inner,
                     inner_prev,
                     host_io_exception_provenance,
                     bounded_imports,
+                    has_try_begin,
                     has_try_begin,
                     ceiling,
                 );
@@ -12238,7 +12272,7 @@ pub(super) fn accumulate_ir1_flow_label_ceiling(
             Label::Public
         }
         Ir1Op::HostCall { capability, .. } => {
-            hostcall_flow_label_ceiling(capability, host_io_exception_provenance, has_try_begin)
+            hostcall_flow_label_ceiling(capability, host_io_exception_provenance, op_catchable)
         }
         Ir1Op::LoadBinding { .. }
         | Ir1Op::LoadName { .. }
@@ -12325,10 +12359,13 @@ pub(super) fn hostcall_flow_label_ceiling(
         return Label::TopSecret;
     };
     let result_label = row.result_contract.result_label(&Label::Public, None);
-    // Native crypto failures are rethrown with a fail-high label at runtime
-    // when catchable (`has_try_begin`), and entropy-bearing crypto hostcalls
-    // (`result_label > Label::Internal`) raise the module ceiling regardless.
-    if (has_try_begin || result_label > Label::Internal) && capability.starts_with("builtin:Crypto")
+    // Entropy/keygen crypto hostcalls (`result_label > Label::Internal`) raise
+    // the module ceiling regardless of try/catch. Among deterministic crypto
+    // hostcalls, only lifecycle `builtin:CryptoObject*` calls can rethrow a
+    // fail-high TopSecret exception at runtime (on forged/wrong-kind receivers
+    // or unclosed buffers), and only when dynamically catchable (bd-9vouw.128).
+    if (result_label > Label::Internal && capability.starts_with("builtin:Crypto"))
+        || (has_try_begin && capability.starts_with("builtin:CryptoObject"))
     {
         return Label::TopSecret;
     }

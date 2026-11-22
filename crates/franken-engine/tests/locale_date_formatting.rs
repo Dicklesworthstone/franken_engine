@@ -189,7 +189,7 @@ fn direct_locale_date_hostcalls_match_node_outputs() {
         ];
         let mut constant_pool = Vec::new();
         let arg_count = if let Some(locale_str) = locale {
-            constant_pool.push(locale_str.to_string());
+            constant_pool.push(locale_str.into());
             instructions.push(Ir3Instruction::LoadStr {
                 dst: 2,
                 pool_index: 0,
@@ -198,7 +198,7 @@ fn direct_locale_date_hostcalls_match_node_outputs() {
         } else {
             // Seed r2 with a non-default locale to verify count == 1 does not
             // read past the argument range.
-            constant_pool.push("ja-JP".to_string());
+            constant_pool.push("ja-JP".into());
             instructions.push(Ir3Instruction::LoadStr {
                 dst: 2,
                 pool_index: 0,

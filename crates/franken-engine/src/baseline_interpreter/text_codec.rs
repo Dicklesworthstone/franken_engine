@@ -140,6 +140,7 @@ impl InterpreterCore {
     /// TextDecoder.prototype.decode.
     pub(super) fn text_codec_method(
         &mut self,
+        module: Option<&Ir3Module>,
         method: &str,
         receiver: Value,
         args: RegRange,
@@ -214,7 +215,7 @@ impl InterpreterCore {
                     Value::Undefined | Value::Null => false,
                     Value::Object(options) => self
                         .proxy_aware_get_property(
-                            None,
+                            module,
                             options,
                             "stream",
                             Value::Object(options),
@@ -826,8 +827,13 @@ mod streaming_decoder_tests {
         core.seed_register(1, Value::Object(options)).unwrap();
         core.set_register_label(0, Label::Secret).unwrap();
         assert_eq!(
-            core.text_codec_method("decode", decoder.clone(), RegRange { start: 0, count: 2 })
-                .unwrap(),
+            core.text_codec_method(
+                None,
+                "decode",
+                decoder.clone(),
+                RegRange { start: 0, count: 2 }
+            )
+            .unwrap(),
             Value::str("")
         );
         assert_eq!(core.object_mutation_labels.get(&id), Some(&Label::Secret));
@@ -859,9 +865,9 @@ mod streaming_decoder_tests {
             core.heap
                 .get(id.0 as usize)
                 .unwrap()
-                .properties
-                .get(DECODER_STATE_SLOT),
-            Some(&Value::Int(0))
+                .text_decoder_slots()
+                .map(|slots| slots.state),
+            Some(0)
         );
         assert_eq!(core.object_mutation_labels.get(&id), Some(&Label::Secret));
         assert_eq!(

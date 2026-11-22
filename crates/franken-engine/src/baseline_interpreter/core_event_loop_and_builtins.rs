@@ -14612,6 +14612,21 @@ impl InterpreterCore {
                 .map(|v| (v, self.pending_exception_label.clone())),
             _ => None,
         };
+        let native_error_label = match &result {
+            Err(error) if Self::js_catchable_error_name(error).is_some() => {
+                let ctx = self
+                    .active_execution_context_label()
+                    .cloned()
+                    .unwrap_or(Label::Public);
+                let pending = self
+                    .pending_hostcall_result_label
+                    .clone()
+                    .unwrap_or(Label::Public);
+                let joined = ctx.join(&pending);
+                (joined != Label::Public).then_some(joined)
+            }
+            _ => None,
+        };
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(
             transient_execution_bytes.saturating_add(remaining_label_transport_bytes),
         );
@@ -14680,6 +14695,9 @@ impl InterpreterCore {
         }
         if let Some((value, label)) = thrown_value {
             self.replace_pending_abrupt_slots(Some((value, label)), None)?;
+        }
+        if let Some(label) = native_error_label {
+            self.join_into_pending_hostcall_result_label(Some(label))?;
         }
         let result_label = result_label?;
         result.map(|value| (value, result_label))
@@ -15138,6 +15156,21 @@ impl InterpreterCore {
                 .map(|value| (value, self.pending_exception_label.clone())),
             _ => None,
         };
+        let native_error_label = match &result {
+            Err(error) if Self::js_catchable_error_name(error).is_some() => {
+                let ctx = self
+                    .active_execution_context_label()
+                    .cloned()
+                    .unwrap_or(Label::Public);
+                let pending = self
+                    .pending_hostcall_result_label
+                    .clone()
+                    .unwrap_or(Label::Public);
+                let joined = ctx.join(&pending);
+                (joined != Label::Public).then_some(joined)
+            }
+            _ => None,
+        };
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(
             transient_execution_bytes.saturating_add(remaining_label_transport_bytes),
         );
@@ -15146,6 +15179,9 @@ impl InterpreterCore {
         self.restore_replaced_codegen_grants(previous_granted_capabilities);
         if let Some((value, label)) = thrown_value {
             self.replace_pending_abrupt_slots(Some((value, label)), None)?;
+        }
+        if let Some(label) = native_error_label {
+            self.join_into_pending_hostcall_result_label(Some(label))?;
         }
         let result_label = result_label?;
         result.map(|value| (value, result_label))

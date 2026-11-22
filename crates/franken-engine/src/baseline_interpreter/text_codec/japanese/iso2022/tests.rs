@@ -232,8 +232,13 @@ fn mode_only_secret_prefix_retains_provenance_in_public_suffix_output() {
         core.seed_register(1, Value::Object(options)).unwrap();
         core.set_register_label(0, Label::Secret).unwrap();
         assert_eq!(
-            core.text_codec_method("decode", decoder.clone(), RegRange { start: 0, count: 2 })
-                .unwrap(),
+            core.text_codec_method(
+                None,
+                "decode",
+                decoder.clone(),
+                RegRange { start: 0, count: 2 }
+            )
+            .unwrap(),
             Value::str("")
         );
         assert_eq!(core.object_mutation_labels.get(&id), Some(&Label::Secret));
@@ -260,9 +265,9 @@ fn mode_only_secret_prefix_retains_provenance_in_public_suffix_output() {
         assert!(label >= Label::Secret);
         assert_eq!(
             core.heap[id.0 as usize]
-                .properties
-                .get(super::super::super::DECODER_STATE_SLOT),
-            Some(&Value::Int(0))
+                .text_decoder_slots()
+                .map(|slots| slots.state),
+            Some(0)
         );
         assert_eq!(
             core.estimated_memory_bytes(),

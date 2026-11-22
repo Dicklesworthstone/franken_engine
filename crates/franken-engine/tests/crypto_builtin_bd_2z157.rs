@@ -1923,3 +1923,96 @@ fn hmac_authenticator_ingress_denies_secret_key_message_backing_and_generic_rece
         );
     }
 }
+
+/// bd-9vouw.128: deterministic crypto hash/HMAC/cipher chains must not be
+/// refused at lowering (`TopSecret -> Internal`) merely because another
+/// function in the program (or an inlined pure module like `require('util')`
+/// whose helpers contain `try`/`catch` and property stores) sets properties.
+/// Mutating a crypto object (`h.update = f`) still revokes its authenticated
+/// alias and fails closed.
+#[test]
+fn hash_hmac_cipher_chains_coexist_with_property_setting_functions_and_util_bd_9vouw_128() {
+    // 1. Minimal repro from bd-9vouw.128: unused function setting a property,
+    //    called before/after, and split chain.
+    for source in [
+        "const crypto = require('crypto');\n\
+         function outer() { var o = {}; o.k = 1; return o; }\n\
+         console.log(crypto.createHash('sha256').update('a').digest('hex').length);",
+        "const crypto = require('crypto');\n\
+         function outer() { var o = {}; o.k = 1; return o; }\n\
+         outer();\n\
+         console.log(crypto.createHash('sha256').update('a').digest('hex').length);\n\
+         outer();",
+        "const crypto = require('crypto');\n\
+         function outer() { var o = {}; o.k = 1; return o; }\n\
+         const h = crypto.createHash('sha256');\n\
+         h.update('a');\n\
+         console.log(h.digest('hex').length);",
+        "const crypto = require('crypto');\n\
+         function f(o) { o.k = 1; }\n\
+         f({});\n\
+         console.log(crypto.createHash('sha256').update('a').digest('hex').length);",
+    ] {
+        assert_eq!(eval_console(source), "64", "source failed: {source}");
+    }
+
+    // 2. The `require('util')` + `require('crypto')` variant (Node v26.3.0:
+    //    `64 64 7fbf ok:1`). `util_module` has internal `try` blocks and
+    //    functions that set properties (`inspect.custom`, `log.enabled`, ...).
+    let util_and_crypto = eval_console(
+        r#"
+        const util = require('util');
+        const crypto = require('crypto');
+        console.log(
+            crypto.createHash('sha256').update('a').digest('hex').length,
+            crypto.createHmac('sha256', 'k').update('a').digest('hex').length,
+            crypto.createCipheriv('aes-128-ctr', Buffer.alloc(16, 1), Buffer.alloc(16, 2)).update('hi').toString('hex'),
+            util.format('%s:%d', 'ok', 1)
+        );
+        "#,
+    );
+    assert_eq!(util_and_crypto, "64 64 7fbf ok:1");
+
+    let util_and_split_hash = eval_console(
+        r#"
+        const util = require('util');
+        const crypto = require('crypto');
+        const h = crypto.createHash('sha256');
+        h.update('a');
+        console.log(util.format('%d', h.digest('hex').length));
+        "#,
+    );
+    assert_eq!(util_and_split_hash, "64");
+
+    // 3. Negative controls: a property store that reaches the crypto object
+    //    (`h.update = f`) revokes the authenticated crypto-object alias so it
+    //    cannot dispatch private lifecycle methods and fails high under a
+    //    sensitive source.
+    let mutated_digest_error = eval_error(
+        "const crypto = require('crypto');\n\
+         const h = crypto.createHash('sha256');\n\
+         function f() { return 'hijacked'; }\n\
+         h.update = f;\n\
+         h.update('a');\n\
+         console.log(h.digest('hex'));",
+    );
+    assert!(
+        mutated_digest_error.contains("function")
+            || mutated_digest_error.contains("undefined")
+            || mutated_digest_error.contains("unauthorized flow"),
+        "mutated crypto object must not dispatch private digest: {mutated_digest_error}"
+    );
+
+    let mutated_under_secret = eval_error(
+        "const crypto = require('crypto');\n\
+         const secret = crypto.randomUUID();\n\
+         const h = crypto.createHash('sha256');\n\
+         function f(x) { return x; }\n\
+         h.update = f;\n\
+         console.log(h.update(secret));",
+    );
+    assert!(
+        mutated_under_secret.contains("unauthorized flow detected"),
+        "mutated crypto object with secret source must still fail high: {mutated_under_secret}"
+    );
+}

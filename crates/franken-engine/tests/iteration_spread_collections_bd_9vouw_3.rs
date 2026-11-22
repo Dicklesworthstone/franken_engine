@@ -220,3 +220,23 @@ fn iteration_intrinsic_prototypes() {
          true function 1 true AsyncGenerator true function Array Iterator [object Array Iterator]",
     );
 }
+
+/// bd-2b8f5: array spread (`[...g()]` and generator expressions `[...gen()]`),
+/// `Array.from(g())`, call-argument spread `f(...g())`, spread of an already
+/// exhausted generator yielding `[]`, and mid-spread throw propagation must
+/// match Node (`1,2,3|x,y|1,2,3|6|0|mid-spread` on Node v26.3.0).
+#[test]
+fn generator_expression_array_from_call_spread_throw_and_exhausted_bd_2b8f5() {
+    check(
+        "function* g() { yield 1; yield 2; yield 3; } \
+         const gen = function*() { yield 'x'; yield 'y'; }; \
+         function sum(a, b, c) { return a + b + c; } \
+         const done = g(); for (const _ of done) {} \
+         let err = ''; \
+         try { [...(function*() { yield 1; throw new Error('mid-spread'); })()]; } \
+         catch (e) { err = e.message; } \
+         [[...g()].join(','), [...gen()].join(','), Array.from(g()).join(','), \
+          sum(...g()), [...done].length, err].join('|');",
+        "1,2,3|x,y|1,2,3|6|0|mid-spread",
+    );
+}

@@ -10015,9 +10015,19 @@ fn build_net_response_value_parses_status_headers_body_bd_3894s() {
     let response = core.heap.get(id.0 as usize).expect("response object");
     assert_eq!(response.properties.get("status"), Some(&Value::Int(404)));
     assert_eq!(
+        response.properties.get("statusCode"),
+        Some(&Value::Int(404)),
+        "Node http.IncomingMessage statusCode must mirror parsed HTTP status (bd-slb7a)"
+    );
+    assert_eq!(
         response.properties.get("statusText"),
         Some(&Value::str("Not Found")),
         "a multi-word reason phrase is preserved intact"
+    );
+    assert_eq!(
+        response.properties.get("statusMessage"),
+        Some(&Value::str("Not Found")),
+        "Node http.IncomingMessage statusMessage must mirror parsed reason phrase (bd-slb7a)"
     );
     assert_eq!(
         response.properties.get("ok"),

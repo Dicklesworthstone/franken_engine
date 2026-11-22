@@ -331,7 +331,7 @@ fn native_input_reader_borrows_storage_but_snapshot_consumers_still_copy() {
 
 #[test]
 fn invalid_input_is_rejected_before_carry_or_provenance_is_changed() {
-    use super::super::{DECODER_STATE_SLOT, InterpreterError, Label, RegRange, Value};
+    use super::super::{InterpreterError, Label, RegRange, Value};
     let mut core = native_core();
     let decoder = core
         .construct_text_decoder(None, RegRange { start: 0, count: 0 })
@@ -345,24 +345,27 @@ fn invalid_input_is_rejected_before_carry_or_provenance_is_changed() {
         .unwrap();
     core.seed_register(0, Value::Object(prefix)).unwrap();
     core.seed_register(1, Value::Object(options)).unwrap();
-    core.text_codec_method("decode", decoder.clone(), RegRange { start: 0, count: 2 })
-        .unwrap();
+    core.text_codec_method(
+        None,
+        "decode",
+        decoder.clone(),
+        RegRange { start: 0, count: 2 },
+    )
+    .unwrap();
     let carry = core.heap[id.0 as usize]
-        .properties
-        .get(DECODER_STATE_SLOT)
-        .cloned();
+        .text_decoder_slots()
+        .map(|slots| slots.state);
     let label = core.object_mutation_labels.get(&id).cloned();
     core.seed_register(0, Value::Bool(true)).unwrap();
     core.set_register_label(0, Label::Secret).unwrap();
     assert!(matches!(
-        core.text_codec_method("decode", decoder, RegRange { start: 0, count: 2 }),
+        core.text_codec_method(None, "decode", decoder, RegRange { start: 0, count: 2 }),
         Err(InterpreterError::TypeError { .. })
     ));
     assert_eq!(
         core.heap[id.0 as usize]
-            .properties
-            .get(DECODER_STATE_SLOT)
-            .cloned(),
+            .text_decoder_slots()
+            .map(|slots| slots.state),
         carry
     );
     assert_eq!(core.object_mutation_labels.get(&id).cloned(), label);

@@ -152,7 +152,7 @@ mod tests {
         let expected = scalar_prefix(&text, usize::MAX).0;
         core.seed_register(0, Value::Str(text)).unwrap();
         let result = core
-            .text_codec_method("encode", encoder, RegRange { start: 0, count: 1 })
+            .text_codec_method(None, "encode", encoder, RegRange { start: 0, count: 1 })
             .unwrap();
         assert_eq!(core.text_codec_input_bytes(&result).unwrap(), expected);
         assert_eq!(
@@ -175,6 +175,7 @@ mod tests {
             core.seed_register(1, Value::Object(destination)).unwrap();
             let Value::Object(result) = core
                 .text_codec_method(
+                    None,
                     "encodeInto",
                     encoder.clone(),
                     RegRange { start: 0, count: 2 },
@@ -210,7 +211,7 @@ mod tests {
         core.seed_register(0, Value::str("a".repeat(4096))).unwrap();
         core.config.max_total_memory_bytes = core.estimated_memory_bytes();
         assert!(matches!(
-            core.text_codec_method("encode", encoder, RegRange { start: 0, count: 1 }),
+            core.text_codec_method(None, "encode", encoder, RegRange { start: 0, count: 1 }),
             Err(InterpreterError::MemoryBudgetExceeded { .. })
         ));
     }

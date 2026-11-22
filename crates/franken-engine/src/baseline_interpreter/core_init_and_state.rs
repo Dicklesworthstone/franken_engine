@@ -4656,10 +4656,18 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let lifecycle_label = self.join_arg_range_with_object_mutation_label(args)?;
         let is_tls = tls.is_some();
+        let prototype = self.native_net_function_prototype(if is_tls {
+            TLS_SERVER_OPERATION
+        } else {
+            NET_SERVER_OPERATION
+        })?;
         let object_id = self.alloc_branded_object(
             if is_tls { "TlsServer" } else { "NetServer" },
             &[("listening", Value::Bool(false))],
         )?;
+        self.mutate_heap(|heap| {
+            heap[object_id.0 as usize].prototype = Some(prototype);
+        });
         let state = LoopbackServerState {
             address: "127.0.0.1".to_string(),
             port: None,
@@ -4695,6 +4703,7 @@ impl InterpreterCore {
         remote_port: Option<u16>,
         lifecycle_label: Label,
     ) -> Result<ObjectId, InterpreterError> {
+        let prototype = self.native_net_function_prototype("builtin:NetSocket")?;
         let object_id = self.alloc_branded_object(
             "NetSocket",
             &[
@@ -4712,6 +4721,9 @@ impl InterpreterCore {
                 ),
             ],
         )?;
+        self.mutate_heap(|heap| {
+            heap[object_id.0 as usize].prototype = Some(prototype);
+        });
         let state = LoopbackSocketState {
             peer: None,
             owner_server: None,
@@ -4870,9 +4882,12 @@ impl InterpreterCore {
         socket: ObjectId,
         tls: HermeticTlsSocketState,
     ) -> Result<(), InterpreterError> {
+        // Resolve the shared prototype before the atomic state/heap commit.
+        let prototype = self.native_tls_socket_prototype()?;
         let Some(state) = self.loopback_sockets.get(&socket) else {
             return Err(InterpreterError::ObjectNotFound { id: socket.0 });
         };
+        let initial_tls_metadata = state.tls.is_none();
         let previous_tls_bytes = state
             .tls
             .as_ref()
@@ -4971,6 +4986,9 @@ impl InterpreterCore {
                 object.properties.insert(key.to_string(), value);
             }
             object.brand = Some(Box::new(tls_brand));
+            if initial_tls_metadata {
+                object.prototype = Some(prototype);
+            }
         });
         self.gc_write_barrier(socket);
         Ok(())

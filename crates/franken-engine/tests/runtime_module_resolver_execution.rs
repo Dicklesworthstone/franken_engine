@@ -162,6 +162,8 @@ impl OpaqueResolver {
             NativeBuiltinModule::Https,
             NativeBuiltinModule::ChildProcess,
             NativeBuiltinModule::Console,
+            NativeBuiltinModule::Net,
+            NativeBuiltinModule::Tls,
             NativeBuiltinModule::Module,
             NativeBuiltinModule::Events,
             NativeBuiltinModule::Fs,
@@ -3302,6 +3304,475 @@ fn delivered_child_process_dynamic_imports_preserve_classified_state_and_source_
 }
 
 #[test]
+fn delivered_net_tls_modules_share_aliases_and_real_constructor_prototypes() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![
+                ("entry.cjs", definition(ModuleSyntax::CommonJs, r#"
+const load = require;
+const net = load('net');
+const tls = load('node:tls');
+const child = load('./child.cjs');
+console.log(net === child.net, tls === child.tls, net === load('node:net'), tls === load('tls'));
+console.log(net.connect === net.createConnection, net.Server !== net.createServer);
+const Socket = net.Socket;
+const Server = net.Server;
+const socket = new Socket();
+const server = Server();
+console.log(socket instanceof Socket, server instanceof Server);
+console.log(Object.getPrototypeOf(socket) === Socket.prototype, socket.constructor === Socket);
+console.log(Object.getPrototypeOf(server) === Server.prototype, server.constructor === Server);
+console.log(typeof Socket.prototype.write, typeof Server.prototype.listen,
+    Object.getPrototypeOf(tls.Server.prototype) === Server.prototype);
+console.log(Socket.name, Socket.length, Server.name, Server.length, net.connect.length);
+const descriptor = Object.getOwnPropertyDescriptor(Socket, 'prototype');
+console.log(descriptor.writable, descriptor.enumerable, descriptor.configurable);
+const factory = net.createServer;
+const made = new factory();
+console.log(made instanceof Server, made instanceof factory);
+function Derived() {}
+Derived.prototype = Object.create(Socket.prototype);
+Derived.prototype.marker = 7;
+const derived = Reflect.construct(Socket, [], Derived);
+console.log(derived instanceof Derived, derived.marker, derived.destroyed);
+const classify = net.isIP;
+console.log(classify('127.0.0.1'), classify.call(null, '::1'), net.isIPv4('bad'));
+console.log(new classify('127.0.0.1') instanceof classify);
+console.log(Array.isArray(tls.rootCertificates), tls.rootCertificates[0].includes('BEGIN CERTIFICATE'),
+    tls.DEFAULT_MIN_VERSION);
+const ciphers = tls.getCiphers;
+console.log(Array.isArray(ciphers()), ciphers.length, Object.hasOwn(ciphers, 'prototype'));
+try { Reflect.construct(ciphers, []); } catch (error) { console.log(error instanceof TypeError); }
+console.log(tls.checkServerIdentity('localhost', { subjectaltname: 'DNS:localhost' }) === undefined);
+net.marker = 42;
+console.log(child.net.marker);
+"#).with_dependency(ModuleDependency::new("./child.cjs", ImportStyle::Require))),
+                ("child.cjs", definition(ModuleSyntax::CommonJs,
+                    "function load(name) { return require(name); } exports.net = load('node:net'); exports.tls = load('tls');")),
+            ]).with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let result = orchestrator(lane, ModuleSyntax::CommonJs)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("first-class native net/tls values preserve their implemented behavior");
+        assert_eq!(
+            lines(&result),
+            [
+                "true true true true",
+                "true true",
+                "true true",
+                "true true",
+                "true true",
+                "function function true",
+                "Socket 1 Server 2 0",
+                "true false false",
+                "true false",
+                "true 7 false",
+                "4 6 false",
+                "true",
+                "true true TLSv1.2",
+                "true 0 false",
+                "true",
+                "true",
+                "42",
+            ]
+        );
+        assert!(result.host_effect_transcript.is_empty());
+    }
+}
+
+#[test]
+fn delivered_net_socket_construction_preserves_callable_prototypes_and_class_heritage() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(OpaqueResolver::new(vec![
+            ("entry.cjs", definition(ModuleSyntax::CommonJs, r#"
+const load = require;
+const Socket = load('net').Socket;
+function Prototype() {}
+Object.setPrototypeOf(Prototype, Socket.prototype);
+function Target() {}
+Target.prototype = Prototype;
+const socket = Reflect.construct(Socket, [], Target);
+console.log(Object.getPrototypeOf(socket) === Prototype, socket instanceof Target, socket instanceof Socket);
+class Child extends Socket {}
+const child = new Child();
+console.log(Object.getPrototypeOf(Child) === Socket, child instanceof Child, child instanceof Socket);
+console.log(Object.getPrototypeOf(child) === Child.prototype, child.destroyed);
+class ExplicitChild extends Socket {
+    constructor() { super(); this.marker = 7; }
+}
+const explicit = new ExplicitChild();
+console.log(explicit instanceof Socket, explicit instanceof ExplicitChild, explicit.marker);
+"#)),
+        ]).with_native_builtins());
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let result = orchestrator(lane, ModuleSyntax::CommonJs)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect(
+                "native Socket construction retains callable prototypes and derived constructors",
+            );
+        assert_eq!(
+            lines(&result),
+            [
+                "true true true",
+                "true true true",
+                "true false",
+                "true true 7"
+            ]
+        );
+    }
+}
+
+#[test]
+fn delivered_net_constructor_retains_classified_new_target_getter_results() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![(
+                "entry.cjs",
+                definition(
+                    ModuleSyntax::CommonJs,
+                    r#"
+const load = require;
+const net = load('net');
+const crypto = load('crypto');
+const prototype = net.Socket.prototype;
+function Target() {}
+const target = new Proxy(Target, {
+    get(object, key) {
+        if (key === 'prototype') {
+            console.log('getter');
+            const secret = crypto.randomUUID();
+            if (secret) return prototype;
+            return prototype;
+        }
+        return Reflect.get(object, key);
+    }
+});
+net.retained = Reflect.construct(net.Socket, [], target);
+console.log('constructed');
+import('node:net').then(() => console.log('must not run'));
+"#,
+                ),
+            )])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let mut execution = package();
+        execution.capabilities.push("random_read".into());
+        let mut engine = orchestrator(lane, ModuleSyntax::CommonJs);
+        let error = engine
+            .execute_resolved_entry_with_resolver(&execution, &source, installed)
+            .expect_err(
+                "constructor getter observations survive native dispatch and cached import",
+            );
+        assert!(
+            error.to_string().contains("bounded-import contract"),
+            "{lane:?}: {error}"
+        );
+        assert_eq!(
+            engine
+                .last_failed_console_output()
+                .iter()
+                .map(|entry| entry.message.as_str())
+                .collect::<Vec<_>>(),
+            ["getter", "constructed"]
+        );
+    }
+}
+
+#[test]
+fn delivered_net_esm_and_commonjs_functions_drive_loopback_connections() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for (syntax, filename, imports) in [
+            (
+                ModuleSyntax::CommonJs,
+                "entry.cjs",
+                "const load = require; const { Server, Socket, connect } = load('node:net');",
+            ),
+            (
+                ModuleSyntax::EsModule,
+                "entry.mjs",
+                "import { Server, Socket, connect } from 'net';",
+            ),
+        ] {
+            for invocation in [
+                "connect(options)",
+                "connect.call(null, options)",
+                "connect.apply(null, [options])",
+                "connect.bind(null)(options)",
+                "new connect(options)",
+                "Reflect.construct(connect, [options])",
+            ] {
+                let program = format!(
+                    r#"
+{imports}
+const server = new Server(socket => {{
+    let body = '';
+    socket.setEncoding('utf8');
+    socket.on('data', chunk => body += chunk);
+    socket.on('end', () => {{
+        console.log(body, socket instanceof Socket);
+        socket.end();
+        server.close();
+    }});
+}});
+server.listen(0, '127.0.0.1', () => {{
+    const options = {{ port: server.address().port, host: '127.0.0.1' }};
+    const client = {invocation};
+    console.log(client instanceof Socket, server instanceof Server);
+    client.write('module-');
+    client.end('bytes');
+    client.on('close', () => console.log(client.bytesWritten));
+}});
+"#
+                );
+                let resolver = Arc::new(
+                    OpaqueResolver::new(vec![(filename, definition(syntax, &program))])
+                        .with_native_builtins(),
+                );
+                let source = entry(&resolver, filename, syntax);
+                let installed = ExecutionModuleResolver::new(
+                    &source.module.record.id,
+                    resolver,
+                    Arc::new(AllowAllPolicy),
+                );
+                let result = orchestrator(lane, syntax)
+                    .execute_resolved_entry_with_resolver(&package(), &source, installed)
+                    .unwrap_or_else(|error| panic!("{lane:?} {syntax:?} {invocation}: {error}"));
+                assert_eq!(lines(&result), ["true true", "module-bytes true", "12"]);
+                for tag in ["builtin:NetCreateServer", "builtin:NetConnect"] {
+                    assert!(
+                        result
+                            .ir4_witness
+                            .hostcall_decisions
+                            .iter()
+                            .any(|record| record.capability.0 == tag && record.allowed),
+                        "missing invocation gate {tag}"
+                    );
+                }
+                assert!(
+                    result.host_effect_transcript.is_empty(),
+                    "hermetic loopback uses no OS network"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn delivered_tls_extracted_functions_keep_the_hermetic_handshake_boundary() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(OpaqueResolver::new(vec![
+            ("entry.mjs", definition(ModuleSyntax::EsModule, r#"
+import { Server, connect } from 'node:tls';
+import { Socket, Server as NetServer } from 'node:net';
+// The established hermetic fixture tests event/verification state, not TLS records.
+const cert = '-----BEGIN CERTIFICATE-----\nAQIDBA==\n-----END CERTIFICATE-----';
+const server = new Server({ cert, key: 'engine-contained-private-key-marker' }, socket => {
+    console.log('server', socket.encrypted, socket instanceof Socket);
+    socket.on('data', chunk => socket.end(String(chunk).toUpperCase()));
+});
+console.log(server instanceof Server, server instanceof NetServer);
+server.listen(0, '127.0.0.1', () => {
+    const client = connect.apply(null, [{
+        port: server.address().port, host: '127.0.0.1', servername: 'localhost', rejectUnauthorized: false
+    }, () => {
+        console.log('client', client.encrypted, client.authorized, client instanceof Socket);
+        client.write('module-tls');
+    }]);
+    let body = '';
+    client.on('data', chunk => body += chunk);
+    client.on('end', () => { console.log(body); server.close(); });
+});
+"#)),
+        ]).with_native_builtins());
+        let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let result = orchestrator(lane, ModuleSyntax::EsModule)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("native TLS module calls use the existing hermetic handshake and data queues");
+        assert_eq!(
+            lines(&result),
+            [
+                "true true",
+                "server true true",
+                "client true false true",
+                "MODULE-TLS"
+            ]
+        );
+        for tag in ["builtin:TlsCreateServer", "builtin:TlsConnect"] {
+            assert!(
+                result
+                    .ir4_witness
+                    .hostcall_decisions
+                    .iter()
+                    .any(|record| record.capability.0 == tag && record.allowed)
+            );
+        }
+        assert!(result.host_effect_transcript.is_empty());
+    }
+}
+
+#[test]
+fn delivered_net_tls_namespaces_share_commonjs_and_dynamic_import_identity() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(OpaqueResolver::new(vec![
+            ("entry.mjs", definition(ModuleSyntax::EsModule, r#"
+import net, { Socket, connect, createConnection } from 'node:net';
+import * as namespace from 'net';
+import tls, { Server, rootCertificates } from 'tls';
+import child from './child.cjs';
+console.log(net === child.net, tls === child.tls, Socket === net.Socket, connect === createConnection);
+console.log(Server === tls.Server, rootCertificates === tls.rootCertificates);
+console.log(Reflect.set(namespace, 'connect', null),
+    Reflect.defineProperty(namespace, 'default', {value: null}),
+    Object.getOwnPropertyDescriptor(namespace, 'connect').writable);
+import('node:net').then(dynamic => console.log(dynamic === namespace, dynamic.default === net));
+import('node:tls').then(dynamic => console.log(dynamic.default === tls, dynamic.Server === Server));
+"#).with_dependency(ModuleDependency::new("./child.cjs", ImportStyle::Import))),
+            ("child.cjs", definition(ModuleSyntax::CommonJs,
+                "exports.net = require('net'); exports.tls = require('node:tls');")),
+        ]).with_native_builtins());
+        let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let result = orchestrator(lane, ModuleSyntax::EsModule)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("both module systems share authenticated native identities");
+        assert_eq!(
+            lines(&result),
+            [
+                "true true true true",
+                "true true",
+                "false false true",
+                "true true",
+                "true true"
+            ]
+        );
+    }
+}
+
+#[test]
+fn delivered_net_tls_recheck_missing_authority_and_cached_alias_policy() {
+    for name in ["net", "tls"] {
+        for capability in ["builtin", "module_load"] {
+            let resolver = Arc::new(
+                OpaqueResolver::new(vec![(
+                    "entry.cjs",
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        &format!(
+                            "const load = require; load('{name}'); console.log('must not run');"
+                        ),
+                    ),
+                )])
+                .with_native_builtins(),
+            );
+            let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+            let installed = ExecutionModuleResolver::new(
+                &source.module.record.id,
+                resolver,
+                Arc::new(AllowAllPolicy),
+            );
+            let mut execution = package();
+            execution.capabilities.retain(|grant| grant != capability);
+            let mut engine = orchestrator(LaneChoice::QuickJs, ModuleSyntax::CommonJs);
+            let error = engine
+                .execute_resolved_entry_with_resolver(&execution, &source, installed)
+                .expect_err("native provider descriptors never supply missing authority");
+            assert!(
+                error.to_string().contains(capability),
+                "{name} {capability}: {error}"
+            );
+            assert!(engine.last_failed_console_output().is_empty());
+        }
+        let resolver = Arc::new(OpaqueResolver::new(vec![
+            ("entry.cjs", definition(ModuleSyntax::CommonJs,
+                &format!("const load = require; load('{name}'); console.log('allowed'); load('node:{name}'); console.log('must not run');"))),
+        ]).with_native_builtins());
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let policy = Arc::new(RecordingPolicy {
+            denied: Some((format!("node:{name}"), 1)),
+            allow_native_builtins: true,
+            ..RecordingPolicy::default()
+        });
+        let installed = ExecutionModuleResolver::new(&source.module.record.id, resolver, policy);
+        let mut engine = orchestrator(LaneChoice::QuickJs, ModuleSyntax::CommonJs);
+        let error = engine
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect_err("cached native aliases must still cross module policy");
+        assert!(
+            error
+                .to_string()
+                .contains("closed-world module resolution refused"),
+            "{error}"
+        );
+        assert_eq!(
+            engine
+                .last_failed_console_output()
+                .iter()
+                .map(|entry| entry.message.as_str())
+                .collect::<Vec<_>>(),
+            ["allowed"]
+        );
+    }
+}
+
+#[test]
+fn delivered_net_tls_namespaces_reject_guest_getters_before_observation() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for name in ["net", "tls"] {
+            for target in ["api", "api.Server.prototype"] {
+                let resolver = Arc::new(OpaqueResolver::new(vec![
+                    ("entry.mjs", definition(ModuleSyntax::EsModule,
+                        &format!("import './mutator.cjs'; import * as api from 'node:{name}'; console.log(api.Server);"))
+                        .with_dependency(ModuleDependency::new("./mutator.cjs", ImportStyle::Import))),
+                    ("mutator.cjs", definition(ModuleSyntax::CommonJs, &format!(
+                        "const load = require; const api = load('{name}'); Object.defineProperty({target}, 'secret', {{ get() {{ console.log('getter ran'); return 42; }} }});"))),
+                ]).with_native_builtins());
+                let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+                let installed = ExecutionModuleResolver::new(
+                    &source.module.record.id,
+                    resolver,
+                    Arc::new(AllowAllPolicy),
+                );
+                let mut engine = orchestrator(lane, ModuleSyntax::EsModule);
+                let error = engine
+                    .execute_resolved_entry_with_resolver(&package(), &source, installed)
+                    .expect_err("native descriptors cannot authenticate guest accessors");
+                assert!(
+                    error.to_string().contains("bounded-import contract"),
+                    "{lane:?} {name} {target}: {error}"
+                );
+                assert!(engine.last_failed_console_output().is_empty());
+            }
+        }
+    }
+}
+
+#[test]
 fn delivered_http_modules_share_objects_and_preserve_mutable_exports_without_network_authority() {
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
         let resolver = Arc::new(
@@ -3972,7 +4443,10 @@ import('node:console').then(function(dynamic) {
                 ),
                 (
                     "child.cjs",
-                    definition(ModuleSyntax::CommonJs, "module.exports = require('console');"),
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        "module.exports = require('console');",
+                    ),
                 ),
             ])
             .with_native_builtins(),
@@ -4023,7 +4497,10 @@ fn delivered_console_rechecks_descriptor_authority_and_cached_alias_policy() {
         let error = engine
             .execute_resolved_entry_with_resolver(&execution, &source, installed)
             .expect_err("a console descriptor cannot supply missing module authority");
-        assert!(error.to_string().contains(capability), "{capability}: {error}");
+        assert!(
+            error.to_string().contains(capability),
+            "{capability}: {error}"
+        );
         assert!(engine.last_failed_console_output().is_empty());
     }
     let resolver = Arc::new(
@@ -4048,7 +4525,9 @@ fn delivered_console_rechecks_descriptor_authority_and_cached_alias_policy() {
         .execute_resolved_entry_with_resolver(&package(), &source, installed)
         .expect_err("a cached console cannot bypass alias authorization");
     assert!(
-        error.to_string().contains("closed-world module resolution refused"),
+        error
+            .to_string()
+            .contains("closed-world module resolution refused"),
         "{error}"
     );
     assert_eq!(
@@ -4094,7 +4573,10 @@ fn delivered_console_namespace_rejects_guest_getters_before_observation() {
         let error = engine
             .execute_resolved_entry_with_resolver(&package(), &source, installed)
             .expect_err("a native console descriptor does not authenticate guest getters");
-        assert!(error.to_string().contains("bounded-import contract"), "{error}");
+        assert!(
+            error.to_string().contains("bounded-import contract"),
+            "{error}"
+        );
         assert!(engine.last_failed_console_output().is_empty());
     }
 }

@@ -4317,6 +4317,9 @@ pub enum BuiltinFunctionKind {
     StreamReadablePipeDrain,
     /// Captured CommonJS lookup-directory inspection (append-only builtin tag).
     RequireResolvePaths,
+    /// First-class net/tls exports retain their existing native operation.
+    /// Append only: builtin ordinals participate in register hashing.
+    NativeNetFunction,
 }
 
 /// Annex B B.2.2.2-14: each String HTML method's tag and attribute name.
@@ -4356,6 +4359,7 @@ impl BuiltinFunctionKind {
                 | Self::IntlConstructor
                 | Self::NativeHttpFunction
                 | Self::NativeChildProcessFunction
+                | Self::NativeNetFunction
                 // Whether a callable proxy constructs depends on its target;
                 // `construct_callable_proxy` checks that.
                 | Self::CallableProxy
@@ -4367,7 +4371,7 @@ impl BuiltinFunctionKind {
     const fn observes_host_effect_selection(self) -> bool {
         matches!(
             self,
-            Self::NativeHttpFunction | Self::NativeChildProcessFunction
+            Self::NativeHttpFunction | Self::NativeChildProcessFunction | Self::NativeNetFunction
         )
     }
 }
@@ -4514,6 +4518,15 @@ impl BuiltinFunction {
     fn native_child_process_function(operation: &'static str) -> Self {
         Self {
             kind: BuiltinFunctionKind::NativeChildProcessFunction,
+            module_specifier: BuiltinModuleSpecifier::from_nonempty(operation),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn native_net_function(operation: &'static str) -> Self {
+        Self {
+            kind: BuiltinFunctionKind::NativeNetFunction,
             module_specifier: BuiltinModuleSpecifier::from_nonempty(operation),
             iterator_handle: None,
             bound_object: None,
@@ -6308,6 +6321,10 @@ impl BuiltinFunction {
                 native_http_function_metadata(&self.module_specifier)
                     .map_or("anonymous", |(_, name, _)| name)
             }
+            BuiltinFunctionKind::NativeNetFunction => {
+                native_net_function_metadata(&self.module_specifier)
+                    .map_or("anonymous", |(_, name, _)| name)
+            }
             BuiltinFunctionKind::NativeChildProcessFunction => {
                 native_child_process_function_metadata(&self.module_specifier)
                     .map_or("anonymous", |(_, name, _)| name)
@@ -6630,6 +6647,10 @@ impl BuiltinFunction {
         use BuiltinFunctionKind as K;
         if self.kind == K::NativeHttpFunction {
             return native_http_function_metadata(&self.module_specifier)
+                .map(|(_, _, length)| length);
+        }
+        if self.kind == K::NativeNetFunction {
+            return native_net_function_metadata(&self.module_specifier)
                 .map(|(_, _, length)| length);
         }
         if self.kind == K::NativeChildProcessFunction {
@@ -6999,6 +7020,54 @@ const ZLIB_MODULE_KEY: &str = "<module zlib>";
 const HTTP_MODULE_KEY: &str = "<module http>";
 const HTTPS_MODULE_KEY: &str = "<module https>";
 const CHILD_PROCESS_MODULE_KEY: &str = "<module child_process>";
+const NET_MODULE_KEY: &str = "<module net>";
+const TLS_MODULE_KEY: &str = "<module tls>";
+
+// The constructor identities differ from the ordinary factories, while
+// invocation still uses exactly the established Net/Tls hostcall seam.
+const NET_SERVER_OPERATION: &str = "\0native-net:Server";
+const TLS_SERVER_OPERATION: &str = "\0native-tls:Server";
+const NET_MODULE_FUNCTIONS: [(&str, &str); 8] = [
+    ("Socket", "builtin:NetSocket"),
+    ("Server", NET_SERVER_OPERATION),
+    ("createServer", "builtin:NetCreateServer"),
+    ("connect", "builtin:NetConnect"),
+    ("createConnection", "builtin:NetConnect"),
+    ("isIP", "builtin:NetIsIP"),
+    ("isIPv4", "builtin:NetIsIPv4"),
+    ("isIPv6", "builtin:NetIsIPv6"),
+];
+const TLS_MODULE_FUNCTIONS: [(&str, &str); 6] = [
+    ("Server", TLS_SERVER_OPERATION),
+    ("createServer", "builtin:TlsCreateServer"),
+    ("connect", "builtin:TlsConnect"),
+    ("createSecureContext", "builtin:TlsCreateSecureContext"),
+    ("getCiphers", "builtin:TlsGetCiphers"),
+    ("checkServerIdentity", "builtin:TlsCheckServerIdentity"),
+];
+
+fn native_net_function_metadata(operation: &str) -> Option<(&'static str, &'static str, i64)> {
+    Some(match operation {
+        NET_SERVER_OPERATION => ("builtin:NetCreateServer", "Server", 2),
+        TLS_SERVER_OPERATION => ("builtin:TlsCreateServer", "Server", 2),
+        "builtin:NetSocket" => ("builtin:NetSocket", "Socket", 1),
+        "builtin:NetCreateServer" => ("builtin:NetCreateServer", "createServer", 2),
+        "builtin:NetConnect" => ("builtin:NetConnect", "connect", 0),
+        "builtin:NetIsIP" => ("builtin:NetIsIP", "isIP", 1),
+        "builtin:NetIsIPv4" => ("builtin:NetIsIPv4", "isIPv4", 1),
+        "builtin:NetIsIPv6" => ("builtin:NetIsIPv6", "isIPv6", 1),
+        "builtin:TlsCreateServer" => ("builtin:TlsCreateServer", "createServer", 2),
+        "builtin:TlsConnect" => ("builtin:TlsConnect", "connect", 0),
+        "builtin:TlsCreateSecureContext" => {
+            ("builtin:TlsCreateSecureContext", "createSecureContext", 1)
+        }
+        "builtin:TlsGetCiphers" => ("builtin:TlsGetCiphers", "", 0),
+        "builtin:TlsCheckServerIdentity" => {
+            ("builtin:TlsCheckServerIdentity", "checkServerIdentity", 2)
+        }
+        _ => return None,
+    })
+}
 
 /// The private discriminators are the existing process_spawn wire format.
 /// Keeping them on engine-created values never grants process authority.

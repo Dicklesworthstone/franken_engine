@@ -169,6 +169,8 @@ impl InterpreterCore {
                     NativeBuiltinModule::Http
                         | NativeBuiltinModule::Https
                         | NativeBuiltinModule::ChildProcess
+                        | NativeBuiltinModule::Net
+                        | NativeBuiltinModule::Tls
                 );
                 return Ok(namespace);
             }
@@ -209,6 +211,8 @@ impl InterpreterCore {
                 NativeBuiltinModule::Http
                     | NativeBuiltinModule::Https
                     | NativeBuiltinModule::ChildProcess
+                    | NativeBuiltinModule::Net
+                    | NativeBuiltinModule::Tls
             );
             return Ok(namespace);
         }

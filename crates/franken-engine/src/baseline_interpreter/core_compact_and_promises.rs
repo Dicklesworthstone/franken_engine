@@ -1209,6 +1209,7 @@ impl InterpreterCore {
                     builtin.kind,
                     BuiltinFunctionKind::GeneratedFunction
                         | BuiltinFunctionKind::NativeHttpFunction
+                        | BuiltinFunctionKind::NativeNetFunction
                         | BuiltinFunctionKind::NativeChildProcessFunction
                 ) =>
             {
@@ -1261,6 +1262,7 @@ impl InterpreterCore {
                         builtin.kind,
                         BuiltinFunctionKind::GeneratedFunction
                             | BuiltinFunctionKind::NativeHttpFunction
+                            | BuiltinFunctionKind::NativeNetFunction
                             | BuiltinFunctionKind::NativeChildProcessFunction
                     )
             ) {
@@ -7320,6 +7322,9 @@ impl InterpreterCore {
                     if builtin.kind == BuiltinFunctionKind::GeneratedFunction {
                         return true;
                     }
+                    if builtin.kind == BuiltinFunctionKind::NativeNetFunction {
+                        return &*builtin.module_specifier != "builtin:TlsGetCiphers";
+                    }
                     if Self::materialized_global_prototype_name(builtin).is_some() {
                         return true;
                     }
@@ -8481,12 +8486,7 @@ impl InterpreterCore {
         arguments: Vec<Value>,
     ) -> Result<Value, InterpreterError> {
         self.call_proxy_trap_with_argument_label(
-            module,
-            handler_id,
-            trap_name,
-            trap,
-            arguments,
-            None,
+            module, handler_id, trap_name, trap, arguments, None,
         )
     }
 
@@ -10865,6 +10865,13 @@ impl InterpreterCore {
                     && name == "prototype" =>
             {
                 Value::Object(self.ensure_generated_function_prototype(builtin)?)
+            }
+            Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::NativeNetFunction
+                    && &*builtin.module_specifier != "builtin:TlsGetCiphers"
+                    && name == "prototype" =>
+            {
+                Value::Object(self.native_net_function_prototype(&builtin.module_specifier)?)
             }
             Value::BuiltinFunction(builtin)
                 if builtin.kind == BuiltinFunctionKind::BoundFunction =>

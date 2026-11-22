@@ -2899,10 +2899,14 @@ impl InterpreterCore {
                     self.call_static_hostcall(module, builtin, args)
                 }
             }
-            BuiltinFunctionKind::NativeHttpFunction => {
-                let (tag, _, _) = native_http_function_metadata(&builtin.module_specifier)
-                    .ok_or_else(|| InterpreterError::TypeError {
-                        expected: "known native HTTP function".to_string(),
+            BuiltinFunctionKind::NativeHttpFunction | BuiltinFunctionKind::NativeNetFunction => {
+                let metadata = if builtin.kind == BuiltinFunctionKind::NativeNetFunction {
+                    native_net_function_metadata(&builtin.module_specifier)
+                } else {
+                    native_http_function_metadata(&builtin.module_specifier)
+                };
+                let (tag, _, _) = metadata.ok_or_else(|| InterpreterError::TypeError {
+                        expected: "known native network function".to_string(),
                         got: builtin.module_specifier.to_string(),
                     })?;
                 let inputs = self.join_arg_range_with_object_mutation_label(args)?;
@@ -14566,6 +14570,15 @@ impl InterpreterCore {
                                     Value::Object(
                                         self.ensure_generated_function_prototype(&builtin)?,
                                     )
+                                } else if builtin.kind == BuiltinFunctionKind::NativeNetFunction
+                                    && &*builtin.module_specifier != "builtin:TlsGetCiphers"
+                                    && property_key.as_str() == Some("prototype")
+                                {
+                                    Value::Object(
+                                        self.native_net_function_prototype(
+                                            &builtin.module_specifier,
+                                        )?,
+                                    )
                                 } else if builtin.kind == BuiltinFunctionKind::BoundFunction
                                     && let Some(key) = property_key.as_str()
                                     && let Some(value) =
@@ -16433,7 +16446,7 @@ impl InterpreterCore {
                     }
 
                     if let Value::BuiltinFunction(builtin) = &callee_val {
-                        if !builtin.kind.is_constructible() {
+                        if !self.is_constructible_value(&callee_val) {
                             return Err(InterpreterError::TypeError {
                                 expected: "constructible function".to_string(),
                                 got: format!(
@@ -16468,8 +16481,11 @@ impl InterpreterCore {
                             self.clear_pending_hostcall_result_label();
                         }
                         let mut result = match standard_name {
-                            _ if builtin.kind
-                                == BuiltinFunctionKind::NativeChildProcessFunction =>
+                            _ if matches!(
+                                builtin.kind,
+                                BuiltinFunctionKind::NativeChildProcessFunction
+                                    | BuiltinFunctionKind::NativeNetFunction
+                            ) =>
                             {
                                 self.construct_builtin_with_new_target_and_labels(
                                     module,

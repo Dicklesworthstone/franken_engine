@@ -8226,13 +8226,23 @@ impl InterpreterCore {
         // Standard constructors fall back to their own intrinsic prototype
         // (bd-9vouw.273); ordinary process functions use %Object.prototype%.
         self.gc_nested_request = None;
-        let prototype = match self.get_v(
+        let prototype_value = self.get_v(
             module,
             new_target,
             &RuntimePropertyKey::String(JsString::from("prototype")),
-        )? {
-            Value::Object(prototype) => prototype,
-            _ if builtin.kind == BuiltinFunctionKind::NativeChildProcessFunction => {
+        )?;
+        // A getter/Proxy result can carry a stronger label than its target
+        // or stored descriptor. Keep that observation before native dispatch
+        // clears the pending-result slot and creates retained request state.
+        self.observe_scoped_callback_result()?;
+        let prototype = match self.prototype_link_for_value(Some(module), &prototype_value)? {
+            Some(Some(prototype)) => prototype,
+            _ if matches!(
+                builtin.kind,
+                BuiltinFunctionKind::NativeChildProcessFunction
+                    | BuiltinFunctionKind::NativeNetFunction
+            ) =>
+            {
                 self.ensure_builtin_prototype("Object")?
             }
             _ => self.default_constructor_prototype_for_value(
@@ -8289,7 +8299,13 @@ impl InterpreterCore {
         // Node's process functions are ordinary constructors: an explicitly
         // returned object wins, while an encoded stdout string leaves the
         // newly constructed receiver as the result.
-        if builtin.kind == BuiltinFunctionKind::NativeChildProcessFunction {
+        if builtin.kind == BuiltinFunctionKind::NativeChildProcessFunction
+            || (builtin.kind == BuiltinFunctionKind::NativeNetFunction
+                && !matches!(
+                    &*builtin.module_specifier,
+                    "builtin:NetSocket" | NET_SERVER_OPERATION | TLS_SERVER_OPERATION
+                ))
+        {
             return if result.is_object_like() {
                 Ok(result)
             } else {
@@ -8493,6 +8509,12 @@ impl InterpreterCore {
                     .ok()
                     .and_then(|proxy| self.proxy_call_target(proxy))
                     .is_some_and(|target| self.is_constructible_value(&target))
+            }
+            Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::NativeNetFunction =>
+            {
+                &*builtin.module_specifier != "builtin:TlsGetCiphers"
+                    && native_net_function_metadata(&builtin.module_specifier).is_some()
             }
             Value::BuiltinFunction(builtin) => builtin.kind.is_constructible(),
             _ => false,
@@ -8874,6 +8896,11 @@ impl InterpreterCore {
             {
                 self.native_child_process_function_prototype(&builtin.module_specifier)
             }
+            Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::NativeNetFunction =>
+            {
+                self.native_net_function_prototype(&builtin.module_specifier)
+            }
             Value::BuiltinFunction(builtin) if builtin.kind.is_constructible() => {
                 self.ensure_builtin_prototype(builtin.display_name())
             }
@@ -9059,6 +9086,19 @@ impl InterpreterCore {
                 // bd-9vouw.17: a built-in constructor's `prototype` is not
                 // writable (ES2020 19.1.2.19, 20.1.2.15, ...).
                 Value::BuiltinFunction(builtin) => {
+                    if builtin.kind == BuiltinFunctionKind::NativeNetFunction
+                        && &*builtin.module_specifier != "builtin:TlsGetCiphers"
+                    {
+                        return Ok(Some(PropertyDescriptorFields {
+                            value: Some(Value::Object(
+                                self.native_net_function_prototype(&builtin.module_specifier)?,
+                            )),
+                            writable: Some(true),
+                            enumerable: Some(false),
+                            configurable: Some(false),
+                            ..PropertyDescriptorFields::default()
+                        }));
+                    }
                     if builtin.kind == BuiltinFunctionKind::GeneratedFunction {
                         return Ok(Some(PropertyDescriptorFields {
                             value: Some(Value::Object(
@@ -11684,6 +11724,23 @@ impl InterpreterCore {
             && builtin.kind == BuiltinFunctionKind::GeneratedFunction
         {
             let prototype = self.ensure_generated_function_prototype(builtin)?;
+            let key = RuntimePropertyKey::String(JsString::from("prototype"));
+            self.set_object_runtime_property(backing, key.clone(), Value::Object(prototype))?;
+            self.set_own_property_attributes(
+                backing,
+                &key,
+                PropertyAttributes {
+                    writable: true,
+                    enumerable: false,
+                    configurable: false,
+                },
+            )?;
+        }
+        if let Value::BuiltinFunction(builtin) = function
+            && builtin.kind == BuiltinFunctionKind::NativeNetFunction
+            && &*builtin.module_specifier != "builtin:TlsGetCiphers"
+        {
+            let prototype = self.native_net_function_prototype(&builtin.module_specifier)?;
             let key = RuntimePropertyKey::String(JsString::from("prototype"));
             self.set_object_runtime_property(backing, key.clone(), Value::Object(prototype))?;
             self.set_own_property_attributes(

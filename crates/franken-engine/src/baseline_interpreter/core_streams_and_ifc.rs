@@ -13121,6 +13121,8 @@ impl InterpreterCore {
                 NativeBuiltinModule::Http
                     | NativeBuiltinModule::Https
                     | NativeBuiltinModule::ChildProcess
+                    | NativeBuiltinModule::Net
+                    | NativeBuiltinModule::Tls
             );
             return Ok(namespace);
         }
@@ -13148,6 +13150,8 @@ impl InterpreterCore {
                         NativeBuiltinModule::Http
                             | NativeBuiltinModule::Https
                             | NativeBuiltinModule::ChildProcess
+                            | NativeBuiltinModule::Net
+                            | NativeBuiltinModule::Tls
                     );
                     return Ok(namespace);
                 }
@@ -13450,6 +13454,144 @@ impl InterpreterCore {
         Ok(prototype)
     }
 
+    /// First-class net/tls objects expose the implemented hermetic kernels.
+    /// Importing them performs no connection or policy bypass: every value
+    /// call keeps the same exact hostcall tag as its lowering counterpart.
+    pub(super) fn net_core_module(
+        &mut self,
+        module: &Ir3Module,
+        use_tls: bool,
+    ) -> Result<Value, InterpreterError> {
+        let key = if use_tls {
+            TLS_MODULE_KEY
+        } else {
+            NET_MODULE_KEY
+        };
+        if let Some(object) = self.builtin_prototypes.get(key) {
+            return Ok(Value::Object(*object));
+        }
+        let functions: &[(&str, &str)] = if use_tls {
+            &TLS_MODULE_FUNCTIONS
+        } else {
+            &NET_MODULE_FUNCTIONS
+        };
+        let mut members = Vec::with_capacity(functions.len() + 2);
+        for &(name, operation) in functions {
+            let function = Value::BuiltinFunction(BuiltinFunction::native_net_function(operation));
+            // Seed ordinary function properties once, including the shared
+            // constructor prototype. Do not overwrite a prototype mutated
+            // through a previously returned instance's constructor.
+            self.ensure_function_own_property_object(module, &function)?;
+            members.push((name, function));
+        }
+        if use_tls {
+            members.push(("rootCertificates", self.tls_root_certificates()?));
+            members.push(("DEFAULT_MIN_VERSION", Value::str("TLSv1.2")));
+        }
+        let object = self.alloc_object_with_properties(&members)?;
+        self.mutate_builtin_prototypes(|prototypes| {
+            prototypes.insert(key.to_string(), object);
+        });
+        Ok(Value::Object(object))
+    }
+
+    pub(super) fn native_net_function_prototype(
+        &mut self,
+        operation: &str,
+    ) -> Result<ObjectId, InterpreterError> {
+        let operation = NET_MODULE_FUNCTIONS
+            .iter()
+            .chain(TLS_MODULE_FUNCTIONS.iter())
+            .find(|(_, candidate)| *candidate == operation)
+            .map(|(_, operation)| *operation)
+            .filter(|operation| *operation != "builtin:TlsGetCiphers")
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "constructible native net/tls function".to_string(),
+                got: operation.to_string(),
+            })?;
+        let key = format!("\0franken-engine/native-net/prototype/{operation}");
+        if let Some(object) = self.builtin_prototypes.get(&key) {
+            return Ok(*object);
+        }
+        let parent = match operation {
+            // The current socket kernel supports EventEmitter and a finite
+            // stream surface, without pretending to initialize Duplex state.
+            "builtin:NetSocket" | NET_SERVER_OPERATION => {
+                self.ensure_builtin_prototype("EventEmitter")?
+            }
+            TLS_SERVER_OPERATION => self.native_net_function_prototype(NET_SERVER_OPERATION)?,
+            _ => self.ensure_builtin_prototype("Object")?,
+        };
+        let prototype = self.alloc_object_with_prototype(Some(parent))?;
+        self.install_prototype_constructor(
+            prototype,
+            Value::BuiltinFunction(BuiltinFunction::native_net_function(operation)),
+        )?;
+        let (brand, methods): (&str, &[&str]) = match operation {
+            NET_SERVER_OPERATION => ("NetServer", &["listen", "address", "close"]),
+            "builtin:NetSocket" => (
+                "NetSocket",
+                &[
+                    "write",
+                    "end",
+                    "destroy",
+                    "setEncoding",
+                    "pause",
+                    "resume",
+                    "ref",
+                    "unref",
+                    "setNoDelay",
+                    "setKeepAlive",
+                ],
+            ),
+            _ => ("", &[]),
+        };
+        for &name in methods {
+            let function = Self::collection_prototype_method(brand, name)
+                .expect("native net prototype inventory contains implemented methods");
+            self.set_object_property(
+                prototype,
+                name.to_string(),
+                Value::BuiltinFunction(function),
+            )?;
+        }
+        self.mutate_builtin_prototypes(|prototypes| {
+            prototypes.insert(key, prototype);
+        });
+        Ok(prototype)
+    }
+
+    /// TLS sockets currently arise only from connect/accept. Keep their
+    /// additional implemented methods on a shared private prototype without
+    /// advertising an unimplemented public TLSSocket constructor.
+    pub(super) fn native_tls_socket_prototype(&mut self) -> Result<ObjectId, InterpreterError> {
+        const KEY: &str = "\0franken-engine/native-tls/socket-prototype";
+        if let Some(object) = self.builtin_prototypes.get(KEY) {
+            return Ok(*object);
+        }
+        let parent = self.native_net_function_prototype("builtin:NetSocket")?;
+        let prototype = self.alloc_object_with_prototype(Some(parent))?;
+        for name in [
+            "getPeerCertificate",
+            "getProtocol",
+            "getCipher",
+            "isSessionReused",
+            "getSession",
+        ] {
+            let function = Self::collection_prototype_method("TlsSocket", name)
+                .expect("native TLS prototype inventory contains implemented methods");
+            self.set_object_property(
+                prototype,
+                name.to_string(),
+                Value::BuiltinFunction(function),
+            )?;
+        }
+        self.mutate_builtin_prototypes(|prototypes| {
+            prototypes.insert(KEY.to_string(), prototype);
+        });
+        Ok(prototype)
+    }
+
     /// The codec functions retain their existing work, output, memory and
     /// callback-label checks when passed across a module or invoked indirectly.
     pub(super) fn zlib_core_module(&mut self) -> Result<Value, InterpreterError> {
@@ -13701,6 +13843,8 @@ impl InterpreterCore {
                 NativeBuiltinModule::Http
                     | NativeBuiltinModule::Https
                     | NativeBuiltinModule::ChildProcess
+                    | NativeBuiltinModule::Net
+                    | NativeBuiltinModule::Tls
             );
             return Ok(value);
         }
@@ -13728,6 +13872,8 @@ impl InterpreterCore {
                 NativeBuiltinModule::Http
                     | NativeBuiltinModule::Https
                     | NativeBuiltinModule::ChildProcess
+                    | NativeBuiltinModule::Net
+                    | NativeBuiltinModule::Tls
             );
             return Ok(value);
         }
@@ -13842,6 +13988,8 @@ impl InterpreterCore {
             NativeBuiltinModule::Zlib => self.zlib_core_module(),
             NativeBuiltinModule::Http => self.http_core_module(module, false),
             NativeBuiltinModule::Https => self.http_core_module(module, true),
+            NativeBuiltinModule::Net => self.net_core_module(module, false),
+            NativeBuiltinModule::Tls => self.net_core_module(module, true),
             NativeBuiltinModule::ChildProcess => self.child_process_core_module(module),
             NativeBuiltinModule::Module => self.module_core_module(),
             NativeBuiltinModule::Os => self.os_core_module(),
@@ -13899,6 +14047,14 @@ impl InterpreterCore {
                 ]
             }
             NativeBuiltinModule::Https => vec!["Agent", "get", "request"],
+            NativeBuiltinModule::Net => {
+                NET_MODULE_FUNCTIONS.iter().map(|(name, _)| *name).collect()
+            }
+            NativeBuiltinModule::Tls => TLS_MODULE_FUNCTIONS
+                .iter()
+                .map(|(name, _)| *name)
+                .chain(["rootCertificates", "DEFAULT_MIN_VERSION"])
+                .collect(),
             NativeBuiltinModule::Fs => vec![
                 "readFileSync",
                 "writeFileSync",
@@ -14762,6 +14918,8 @@ impl InterpreterCore {
             NativeBuiltinModule::Zlib => "\0franken-engine/native-zlib/esm",
             NativeBuiltinModule::Http => "\0franken-engine/native-http/esm",
             NativeBuiltinModule::Https => "\0franken-engine/native-https/esm",
+            NativeBuiltinModule::Net => "\0franken-engine/native-net/esm",
+            NativeBuiltinModule::Tls => "\0franken-engine/native-tls/esm",
             NativeBuiltinModule::ChildProcess => "\0franken-engine/native-child_process/esm",
             NativeBuiltinModule::Fs => "\0franken-engine/native-fs/esm",
             NativeBuiltinModule::FsPromises => "\0franken-engine/native-fs/promises/esm",
@@ -17231,6 +17389,9 @@ impl InterpreterCore {
         let tag = match builtin.kind {
             BuiltinFunctionKind::NativeHttpFunction => {
                 native_http_function_metadata(&builtin.module_specifier)?.0
+            }
+            BuiltinFunctionKind::NativeNetFunction => {
+                native_net_function_metadata(&builtin.module_specifier)?.0
             }
             BuiltinFunctionKind::NativeChildProcessFunction => "process_spawn",
             BuiltinFunctionKind::ConsoleLog => "console:log",

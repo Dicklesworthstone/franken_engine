@@ -1593,7 +1593,12 @@ impl InterpreterCore {
                 Ok(Value::Object(result))
             }
             BuiltinFunctionKind::ArrayToLocaleString => {
-                self.array_to_locale_string(module, receiver.unwrap_or(Value::Undefined))
+                self.array_to_locale_string(
+                    module,
+                    receiver.unwrap_or(Value::Undefined),
+                    args,
+                    Self::is_typed_array_prototype_builtin(builtin),
+                )
             }
             BuiltinFunctionKind::ArrayJoin => {
                 // ES2020 23.1.3.13(join): concatenate elements with `separator`

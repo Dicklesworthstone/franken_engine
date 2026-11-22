@@ -480,3 +480,154 @@ fn ordinary_array_sort_converts_comparator_objects_and_rejects_bigint() {
         false,
     );
 }
+
+const TYPED_ARRAY_JOIN_LARGE_SEPARATOR: &str = r#"
+const source = new Uint8Array(4096);
+const separator = { toString() { console.log('separator'); return 'x'.repeat(1024); } };
+console.log('joining');
+const joined = source.join(separator);
+console.log(joined.length);
+"#;
+
+#[test]
+fn typed_array_join_refuses_growth_before_materializing_an_oversized_result() {
+    let tree = CanonicalEs2020Parser
+        .parse_with_options(
+            ParserSource {
+                label: "typed-array-join-memory.js".into(),
+                text: TYPED_ARRAY_JOIN_LARGE_SEPARATOR.into(),
+            },
+            ParseGoal::Script,
+            &ParserOptions::default(),
+        )
+        .expect("join fixture parses");
+    let module = lower_ir0_to_ir3(
+        &Ir0Module::from_syntax_tree(tree, "typed-array-join-memory.js"),
+        &LoweringContext::new("typed-array-join-memory", "native", "builtin-only"),
+    )
+    .expect("join fixture lowers")
+    .ir3;
+    for v8_profile in [false, true] {
+        let mut config = if v8_profile {
+            InterpreterConfig::v8_defaults()
+        } else {
+            InterpreterConfig::quickjs_defaults()
+        };
+        config.instruction_budget = 10_000_000;
+        config.max_registers = 256;
+        config.max_total_memory_bytes = 524_288;
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+            RuntimeCapability::Console,
+        ]
+        .into_iter()
+        .collect();
+        let mut core = InterpreterCore::new(config, "typed-array-join-memory");
+        match core.execute(&module).expect_err("large join exceeds the budget") {
+            InterpreterError::MemoryBudgetExceeded {
+                requested_bytes,
+                max_bytes,
+                ..
+            } => {
+                assert_eq!(max_bytes, 524_288);
+                assert!(requested_bytes > max_bytes);
+                // The old implementation first materialized over 4 MiB, then
+                // refused publication. Geometric admission must fail while
+                // requesting at most one further budget-sized allocation.
+                assert!(
+                    requested_bytes <= max_bytes.saturating_mul(2),
+                    "late join refusal: requested {requested_bytes} (v8={v8_profile})"
+                );
+            }
+            error => panic!("unexpected join failure (v8={v8_profile}): {error}"),
+        }
+        assert_eq!(
+            core.console_output()
+                .iter()
+                .map(|entry| entry.message.as_str())
+                .collect::<Vec<_>>(),
+            ["joining", "separator"],
+            "separator coercion precedes the memory refusal (v8={v8_profile})"
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "join accounting after refusal (v8={v8_profile})"
+        );
+    }
+    check(
+        TYPED_ARRAY_JOIN_LARGE_SEPARATOR,
+        &["joining", "separator", "4197376"],
+        16_777_216,
+        false,
+    );
+}
+
+#[test]
+fn typed_array_join_keeps_exact_surrogates_across_separator_boundaries() {
+    check(
+        r#"
+        const values = new Uint8Array([1, 2, 3]);
+        const lone = values.join('\uD800');
+        console.log(lone.length, lone.charCodeAt(1), lone.charCodeAt(3));
+        const astral = values.join('😀');
+        console.log(astral.length, astral.charCodeAt(1), astral.charCodeAt(2), astral[3]);
+        const buffer = new ArrayBuffer(4, { maxByteLength: 8 });
+        const shrinking = new Uint8Array(buffer);
+        const healed = shrinking.join({ toString() { buffer.resize(0); return '\uDC00\uD800'; } });
+        console.log(healed.length, healed.charCodeAt(0), healed.charCodeAt(1), healed.charCodeAt(2), healed.charCodeAt(5));
+        console.log(healed.slice(1, 3) === '\uD800\uDC00');
+        "#,
+        &[
+            "5 55296 55296",
+            "7 55357 56832 2",
+            "6 56320 55296 56320 55296",
+            "true",
+        ],
+        1_048_576,
+        false,
+    );
+}
+
+#[test]
+fn typed_array_join_preserves_separator_coercion_and_live_resized_reads() {
+    check(
+        r#"
+        const buffer = new ArrayBuffer(6, { maxByteLength: 12 });
+        const view = new Uint8Array(buffer, 2);
+        view.set([1, 2, 3, 4]);
+        let conversions = 0;
+        const joined = view.join({ toString() { conversions++; view[0] = 9; buffer.resize(4); return '|'; } });
+        console.log(conversions, joined, view.length);
+        const growingBuffer = new ArrayBuffer(2, { maxByteLength: 8 });
+        const growing = new Uint8Array(growingBuffer);
+        growing.set([1, 2]);
+        console.log(growing.join({ toString() { growingBuffer.resize(4); growing[2] = 3; return '|'; } }), growing.length);
+        const empty = new Uint8Array(0);
+        console.log(empty.join({ toString() { conversions++; return ';'; } }) === '', conversions);
+        try { empty.join(Symbol('separator')); } catch (error) { console.log(error.name); }
+        console.log(new BigInt64Array([1n, -2n]).join(123n));
+        "#,
+        &["1 9|2|| 2", "1|2 4", "true 2", "TypeError", "1123-2"],
+        1_048_576,
+        false,
+    );
+}
+
+#[test]
+fn typed_array_join_releases_output_and_coerced_separator_between_calls() {
+    check(
+        r#"
+        const source = new Uint8Array(2);
+        const separator = { toString() { return 'x'.repeat(16384); } };
+        let length = 0;
+        for (let index = 0; index < 64; index++) length = source.join(separator).length;
+        console.log(length, new Uint8Array(262144).length);
+        "#,
+        &["16386 262144"],
+        524_288,
+        false,
+    );
+}

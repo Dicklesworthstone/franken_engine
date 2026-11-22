@@ -17,6 +17,9 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+/// Execution-derived, bounded native observations for fresh PLAS drafts.
+pub mod native_observation;
+
 use crate::engine_object_id::{self, EngineObjectId, ObjectDomain, SchemaId};
 use crate::evidence_ledger::{
     CandidateAction, ChosenAction, DecisionType, EvidenceEmitter, EvidenceEntry,
@@ -1355,8 +1358,7 @@ impl CapabilityWitness {
             expected_hash.as_bytes(),
         )
         .map_err(|error| WitnessError::IdDerivation(error.to_string()))?;
-        if report.report_artifact_hash != expected_hash
-            || report.report_artifact_id != expected_id
+        if report.report_artifact_hash != expected_hash || report.report_artifact_id != expected_id
         {
             return Err(WitnessError::SignatureInvalid {
                 detail: "promotion theorem report commitment does not match its contents"
@@ -5113,10 +5115,7 @@ mod tests {
         )
         .expect("two distinct promotion authorities");
         let report = witness
-            .evaluate_promotion_theorems_signed_by(
-                &promotion_theorem_input_for(&witness),
-                &first,
-            )
+            .evaluate_promotion_theorems_signed_by(&promotion_theorem_input_for(&witness), &first)
             .expect("sign authenticated report");
         witness
             .transition_to(LifecycleState::Validated)
@@ -5132,11 +5131,11 @@ mod tests {
         witness
             .apply_promotion_theorem_report(&report)
             .expect("same report may be used by the next operator");
-        assert_eq!(witness, before, "reapplication must preserve every signed byte");
         assert_eq!(
-            witness.verified_promotion_signers(&root).unwrap(),
-            signers
+            witness, before,
+            "reapplication must preserve every signed byte"
         );
+        assert_eq!(witness.verified_promotion_signers(&root).unwrap(), signers);
         witness
             .add_promotion_signature(&second)
             .expect("second independent approval");
@@ -5155,9 +5154,12 @@ mod tests {
             .add_promotion_signature(&test_signing_key())
             .expect("approve original successful report");
         let approvals = witness.promotion_signatures.clone();
-        assert!(witness.proof_obligations.iter().any(|proof| {
-            proof.kind == ProofKind::PolicyTheoremCheck
-        }));
+        assert!(
+            witness
+                .proof_obligations
+                .iter()
+                .any(|proof| { proof.kind == ProofKind::PolicyTheoremCheck })
+        );
         let mut input = promotion_theorem_input_for(&witness);
         input.manifest_capabilities.clear();
         let failed = witness
@@ -5174,9 +5176,12 @@ mod tests {
                 .map(String::as_str),
             Some("false")
         );
-        assert!(witness.proof_obligations.iter().all(|proof| {
-            proof.kind != ProofKind::PolicyTheoremCheck
-        }));
+        assert!(
+            witness
+                .proof_obligations
+                .iter()
+                .all(|proof| { proof.kind != ProofKind::PolicyTheoremCheck })
+        );
         assert_eq!(witness.promotion_signatures, approvals);
         assert!(
             witness
@@ -5298,13 +5303,12 @@ mod tests {
                 result.counterexample.clone(),
             )
             .expect("an attacker can recompute public result coordinates");
-        tampered.report_artifact_hash = ContentHash::compute(
-            &CapabilityWitness::theorem_report_canonical_bytes(
+        tampered.report_artifact_hash =
+            ContentHash::compute(&CapabilityWitness::theorem_report_canonical_bytes(
                 &witness,
                 &tampered.results,
                 tampered.all_passed,
-            ),
-        );
+            ));
         tampered.report_artifact_id = engine_object_id::derive_id(
             ObjectDomain::EvidenceRecord,
             WITNESS_THEOREM_REPORT_ZONE,

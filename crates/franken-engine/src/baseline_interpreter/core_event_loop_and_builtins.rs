@@ -3557,32 +3557,51 @@ impl InterpreterCore {
         Self::reject_out_of_bounds_typed_array(view, "join")?;
         let length = view.length;
         let separator = match self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined) {
-            Value::Undefined => vec![u16::from(b',')],
+            Value::Undefined => JsString::from(","),
             value => {
                 // Guest code runs while native locals hold values: no
                 // collection until this returns.
                 self.gc_nested_request = None;
                 match self.object_to_string_primitive(Some(module), value)? {
                     Value::Symbol(_) => return Err(Self::symbol_to_string_error()),
-                    Value::Str(text) => text.code_units_vec(),
-                    other => self.value_to_string(&other).encode_utf16().collect(),
+                    Value::Str(text) => text,
+                    Value::BigInt(digits) => {
+                        self.check_temporary_memory_budget(
+                            Self::estimate_string_bytes(&digits).saturating_mul(2),
+                        )?;
+                        JsString::from(digits.as_ref())
+                    }
+                    other => JsString::from(self.value_to_string(&other)),
                 }
             }
         };
-        let mut joined: Vec<u16> = Vec::new();
-        for index in 0..length {
-            if index > 0 {
-                joined.extend_from_slice(&separator);
+        // A coercion can return fresh storage after its callback frame has
+        // unwound. Keep that separator admitted alongside the output.
+        let separator_bytes = Self::estimate_js_string_bytes(&separator);
+        self.json_reserve_temporary(separator_bytes)?;
+        let mut joined = StringOutputBuffer::default();
+        let outcome = (|| {
+            for index in 0..length {
+                // Empty separators and missing elements must still obey the
+                // work/cancellation budget after a resize or detachment.
+                self.json_charge_work()?;
+                if index > 0 {
+                    joined.push(self, &separator)?;
+                }
+                if let Some(element) =
+                    self.typed_array_indexed_get_property(array_id, &index.to_string())?
+                    && !matches!(element, Value::Undefined)
+                {
+                    let text = self.value_to_string(&element);
+                    joined.push_text(self, &text)?;
+                }
             }
-            if let Some(element) =
-                self.typed_array_indexed_get_property(array_id, &index.to_string())?
-                && !matches!(element, Value::Undefined)
-            {
-                joined.extend(self.value_to_string(&element).encode_utf16());
-            }
-            self.check_string_limit(joined.len())?;
-        }
-        Ok(Value::Str(JsString::from_code_units(&joined)))
+            joined.finish(self).map(Value::Str)
+        })();
+        joined.release(self);
+        drop(separator);
+        self.json_release_temporary(separator_bytes);
+        outcome
     }
 
     /// TypedArraySetElement steps 1-2 (ES2024 10.4.5.16): ToBigInt for a
@@ -3606,22 +3625,6 @@ impl InterpreterCore {
             }),
             primitive => Ok(primitive),
         }
-    }
-
-    /// `typed_array_element_value` for each value, in order.
-    pub(super) fn typed_array_element_values(
-        &mut self,
-        module: Option<&Ir3Module>,
-        kind: TypedArrayKind,
-        values: Vec<Value>,
-    ) -> Result<Vec<Value>, InterpreterError> {
-        // Guest code runs while native locals hold values: no collection
-        // until this returns.
-        self.gc_nested_request = None;
-        values
-            .into_iter()
-            .map(|value| self.typed_array_element_value(module, kind, value))
-            .collect()
     }
 
     /// [[Set]] of a typed array (ES2024 10.4.5.5) for a key that is a

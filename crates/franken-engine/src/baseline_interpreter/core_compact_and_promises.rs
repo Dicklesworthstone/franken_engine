@@ -8110,7 +8110,9 @@ impl InterpreterCore {
 
     /// ES2020 19.1.2.3.1 ObjectDefineProperties, shared by
     /// `Object.defineProperties` and `Object.create`: every enumerable own
-    /// descriptor is read and validated before any property is defined.
+    /// descriptor is read and validated before any property is defined,
+    /// honoring Proxy `ownKeys`, `getOwnPropertyDescriptor`, `get`, and
+    /// `defineProperty` traps (bd-9vouw.147) for both String and Symbol keys.
     pub(super) fn object_define_properties(
         &mut self,
         module: Option<&Ir3Module>,
@@ -8118,8 +8120,7 @@ impl InterpreterCore {
         properties_arg: Value,
         caller: &str,
     ) -> Result<(), InterpreterError> {
-        let properties_id = match properties_arg {
-            Value::Object(properties_id) => properties_id,
+        let properties_id = match &properties_arg {
             Value::Undefined | Value::Null => {
                 return Err(InterpreterError::TypeError {
                     expected: format!("object-coercible {caller} properties"),
@@ -8136,34 +8137,33 @@ impl InterpreterCore {
                     got: "string".to_string(),
                 });
             }
-            _ => return Ok(()),
+            _ => match self.own_property_holder(module, &properties_arg, true)? {
+                Some(properties_id) => properties_id,
+                None => return Ok(()),
+            },
         };
-        let keys = self
-            .heap
-            .get(properties_id.0 as usize)
-            .ok_or(InterpreterError::ObjectNotFound {
-                id: properties_id.0,
-            })?
-            .properties
-            .exact_keys()
-            .into_iter()
-            .filter(|key| self.ordinary_own_string_key_is_enumerable(properties_id, key))
-            .collect::<Vec<_>>();
+        // Guest traps may run while native locals hold pending descriptors:
+        // defer nested GC until this returns.
+        self.gc_nested_request = None;
+        let keys = self.proxy_aware_own_property_keys(module, properties_id, 0)?;
         let mut definitions = Vec::with_capacity(keys.len());
-        for key in keys {
-            let key_text = key.to_string();
-            let descriptor_val = self.proxy_aware_get_property(
-                module,
-                properties_id,
-                &key_text,
-                Value::Object(properties_id),
-                0,
-            )?;
-            let descriptor = self.read_property_descriptor(module, &descriptor_val)?;
-            definitions.push((key, descriptor));
+        for key_value in keys {
+            let prop_name = self.executable_property_key_from_value(&key_value);
+            let prop_desc =
+                self.proxy_target_descriptor_fields(module, properties_id, &prop_name, 0)?;
+            if prop_desc.is_some_and(|fields| fields.enumerable == Some(true)) {
+                let descriptor_val = self.proxy_aware_get_runtime_property(
+                    module,
+                    properties_id,
+                    &prop_name,
+                    properties_arg.clone(),
+                    0,
+                )?;
+                let descriptor = self.read_property_descriptor(module, &descriptor_val)?;
+                definitions.push((prop_name, descriptor));
+            }
         }
-        for (key, mut descriptor) in definitions {
-            let prop_name = self.executable_property_key_from_value(&Value::Str(key));
+        for (prop_name, mut descriptor) in definitions {
             // ArraySetLength converts a `length` value as defineProperty
             // does (bd-9vouw.338).
             if prop_name.as_str() == Some("length")
@@ -8175,7 +8175,7 @@ impl InterpreterCore {
             {
                 descriptor.value = Some(self.array_length_definition_value(module, value)?);
             }
-            if !self.define_own_property_from_descriptor(target_id, prop_name, descriptor)? {
+            if !self.proxy_aware_define_own_property(module, target_id, prop_name, descriptor, 0)? {
                 return Err(InterpreterError::TypeError {
                     expected: format!("definable property for {caller}"),
                     got: "non-configurable, non-writable or non-extensible target".to_string(),

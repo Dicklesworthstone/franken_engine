@@ -6,8 +6,9 @@
 //! `defineProperty` trap nor reached the target. Expected strings are Node
 //! v22.2.0's output for the same programs.
 //!
-//! No-claim: Object.defineProperties, Object.create's second argument and
-//! Object.getOwnPropertyDescriptors still read and define without the traps.
+//! Covers `Object/Reflect.getOwnPropertyDescriptor`, `Object/Reflect.defineProperty`,
+//! `Object.getOwnPropertyDescriptors`, `Object.defineProperties`, and
+//! `Object.create`'s second argument through Proxy traps and forwarding.
 
 use frankenengine_engine::HybridRouter;
 
@@ -639,4 +640,68 @@ fn proxy_get_invariant_observations_label_success_and_caught_errors() {
             }
         }
     }
+}
+
+/// bd-9vouw.147: `Object.defineProperties`, `Object.create`'s second argument,
+/// and `Object.getOwnPropertyDescriptors` route through Proxy `ownKeys`,
+/// `getOwnPropertyDescriptor`, `get`, and `defineProperty` traps in ES2020
+/// 19.1.2.3.1 / 19.1.2.9 order, including Symbol keys, revoked proxies, and
+/// non-enumerable filtering. Expected strings match Node v22.
+#[test]
+fn proxy_define_properties_create_and_get_own_property_descriptors() {
+    let source = r#"
+        function attempt(f) { try { return String(f()); } catch (e) { return e.name; } }
+        const log = [];
+        const sym = Symbol('s');
+        const target = {};
+        const targetProxy = new Proxy(target, {
+            defineProperty(t, k, d) {
+                log.push('def:' + String(k) + ':' + JSON.stringify(d));
+                return Reflect.defineProperty(t, k, d);
+            }
+        });
+        const propsSource = { a: { value: 1, enumerable: true }, [sym]: { value: 2, enumerable: true } };
+        Object.defineProperty(propsSource, 'hidden', { value: { value: 3 }, enumerable: false });
+        const propsProxy = new Proxy(propsSource, {
+            ownKeys(t) { log.push('ownKeys'); return Reflect.ownKeys(t); },
+            getOwnPropertyDescriptor(t, k) { log.push('gopd:' + String(k)); return Reflect.getOwnPropertyDescriptor(t, k); },
+            get(t, k, r) { log.push('get:' + String(k)); return Reflect.get(t, k, r); }
+        });
+        const dpResult = Object.defineProperties(targetProxy, propsProxy);
+        const dpTrace = [dpResult === targetProxy, target.a, target[sym], 'hidden' in target, log.join('|')].join(' ');
+
+        log.length = 0;
+        const created = Object.create(null, propsProxy);
+        const createTrace = [String(Object.getPrototypeOf(created)), created.a, created[sym], 'hidden' in created, log.join('|')].join(' ');
+
+        log.length = 0;
+        const descs = Object.getOwnPropertyDescriptors(propsProxy);
+        const gopdsTrace = [descs.a.value.value, descs[sym].value.value, descs.hidden.enumerable, log.join('|')].join(' ');
+
+        const rev = Proxy.revocable({}, {});
+        rev.revoke();
+        const refusedProxy = new Proxy({}, { defineProperty() { return false; } });
+        const arrDefined = Object.defineProperties({}, [{ value: 42, enumerable: true }]);
+        const fnProps = function () {};
+        fnProps.x = { value: 9, enumerable: true };
+        const fnDefined = Object.defineProperties({}, fnProps);
+        const edges = [
+            Object.defineProperties(rev.proxy, {}) === rev.proxy,
+            attempt(() => Object.defineProperties(rev.proxy, { x: { value: 1 } })),
+            attempt(() => Object.defineProperties({}, rev.proxy)),
+            attempt(() => Object.defineProperties(refusedProxy, { k: { value: 1 } })),
+            arrDefined[0],
+            fnDefined.x,
+        ].join(' ');
+
+        [dpTrace, createTrace, gopdsTrace, edges].join('\n');
+    "#;
+    let expected = [
+        "true 1 2 false ownKeys|gopd:a|get:a|gopd:hidden|gopd:Symbol(s)|get:Symbol(s)|def:a:{\"value\":1,\"enumerable\":true}|def:Symbol(s):{\"value\":2,\"enumerable\":true}",
+        "null 1 2 false ownKeys|gopd:a|get:a|gopd:hidden|gopd:Symbol(s)|get:Symbol(s)",
+        "1 2 false ownKeys|gopd:a|gopd:hidden|gopd:Symbol(s)",
+        "true TypeError TypeError TypeError 42 9",
+    ]
+    .join("\n");
+    assert_eq!(eval(source), expected);
 }

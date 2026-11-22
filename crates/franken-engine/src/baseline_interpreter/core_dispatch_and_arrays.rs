@@ -11238,6 +11238,16 @@ impl InterpreterCore {
             // frame (bd-8enww.4.7).
             self.clear_pending_hostcall_result_label();
             self.mark_inline_callback_started();
+            let receiver_state_label = |core: &Self| -> Label {
+                match &receiver_val {
+                    Value::Object(object_id) => core
+                        .binary_storage_label(*object_id)
+                        .join(&core.stream_state_label(*object_id))
+                        .join(&core.url_state_label(*object_id))
+                        .join(&core.cluster_state_label(*object_id)),
+                    _ => Label::Public,
+                }
+            };
             let result = match self.dispatch_builtin_function_with_callee_register(
                 module,
                 &builtin,
@@ -11247,16 +11257,15 @@ impl InterpreterCore {
                 callee,
             ) {
                 Ok(value) => value,
-                Err(err) => match self.route_isolated_explicit_throw(module, err)? {
-                    None => {
-                        // IFC (bd-8enww.4.8): mirror the success-path
-                        // receiver+args label join (below) onto an
-                        // explicit throw escaping the builtin's
-                        // callback lane, so a Secret array's reducer
-                        // that throws one of its elements cannot
-                        // launder to a Public catch binding now that
-                        // the legacy mini-lane preserves the original
-                        // thrown value.
+                Err(err) => {
+                    if matches!(err, InterpreterError::UncaughtException { .. })
+                        && self.pending_exception.is_some()
+                    {
+                        // IFC (bd-8enww.4.8): join receiver, receiver state,
+                        // args, callee, and callback provenance onto the
+                        // pending exception BEFORE routing it, so sync catch
+                        // frames, async function rejections, and uncaught
+                        // propagation all observe the tainted label.
                         let callback_label = self
                             .take_pending_hostcall_result_label()
                             .unwrap_or(Label::Public);
@@ -11264,37 +11273,28 @@ impl InterpreterCore {
                             .join_arg_range_label(args)?
                             .join(self.get_register_label(receiver)?)
                             .join(self.get_register_label(callee)?)
+                            .join(&receiver_state_label(self))
                             .join(&callback_label);
-                        self.join_pending_exception_label(&escaped)?;
-                        return Ok(());
-                    }
-                    Some(err) => {
-                        if matches!(err, InterpreterError::UncaughtException { .. })
-                            && self.pending_exception.is_some()
-                        {
-                            let callback_label = self
-                                .take_pending_hostcall_result_label()
-                                .unwrap_or(Label::Public);
-                            let escaped = self
-                                .join_arg_range_label(args)?
-                                .join(self.get_register_label(receiver)?)
-                                .join(self.get_register_label(callee)?)
-                                .join(&callback_label);
-                            if escaped != Label::Public {
-                                self.join_pending_exception_label(&escaped)?;
-                            }
-                        } else if Self::js_catchable_error_name(&err).is_some() {
-                            let escaped = self
-                                .join_arg_range_label(args)?
-                                .join(self.get_register_label(receiver)?)
-                                .join(self.get_register_label(callee)?);
-                            if escaped != Label::Public {
-                                self.join_into_pending_hostcall_result_label(Some(escaped))?;
-                            }
+                        if escaped != Label::Public {
+                            self.join_pending_exception_label(&escaped)?;
                         }
-                        return Err(err);
+                    } else if Self::js_catchable_error_name(&err).is_some()
+                        || matches!(err, InterpreterError::UncaughtException { .. })
+                    {
+                        let escaped = self
+                            .join_arg_range_label(args)?
+                            .join(self.get_register_label(receiver)?)
+                            .join(self.get_register_label(callee)?)
+                            .join(&receiver_state_label(self));
+                        if escaped != Label::Public {
+                            self.join_into_pending_hostcall_result_label(Some(escaped))?;
+                        }
                     }
-                },
+                    match self.route_isolated_explicit_throw(module, err)? {
+                        None => return Ok(()),
+                        Some(err) => return Err(err),
+                    }
+                }
             };
             let callback_result_label = self
                 .take_pending_hostcall_result_label()
@@ -11306,30 +11306,11 @@ impl InterpreterCore {
             // lanes see only values seeded from these registers,
             // so this join is a sound upper bound for anything
             // they compute).
-            let binary_storage_label = match &receiver_val {
-                Value::Object(object_id) => self.binary_storage_label(*object_id),
-                _ => Label::Public,
-            };
-            let stream_state_label = match &receiver_val {
-                Value::Object(object_id) => self.stream_state_label(*object_id),
-                _ => Label::Public,
-            };
-            let url_state_label = match &receiver_val {
-                Value::Object(object_id) => self.url_state_label(*object_id),
-                _ => Label::Public,
-            };
-            let cluster_state_label = match &receiver_val {
-                Value::Object(object_id) => self.cluster_state_label(*object_id),
-                _ => Label::Public,
-            };
             let result_label = self
                 .join_arg_range_label(args)?
                 .join(self.get_register_label(receiver)?)
                 .join(self.get_register_label(callee)?)
-                .join(&binary_storage_label)
-                .join(&stream_state_label)
-                .join(&url_state_label)
-                .join(&cluster_state_label)
+                .join(&receiver_state_label(self))
                 .join(&callback_result_label);
             self.propagate_builtin_binary_mutation_label(
                 &builtin,
@@ -11352,19 +11333,14 @@ impl InterpreterCore {
             module, &builtin, args, None, None, callee,
         ) {
             Ok(value) => value,
-            Err(err) => match self.route_isolated_explicit_throw(module, err)? {
-                None => {
-                    // IFC (bd-8enww.4.8): an explicit throw
-                    // escaping the builtin's callback lane
-                    // carries a value seeded from the arg
-                    // registers, so join their labels onto the
-                    // re-armed exception label — the throw-path
-                    // mirror of the success-path join below.
-                    // Required now that the legacy reduce /
-                    // Array.from mini-lanes preserve the
-                    // original thrown value (not a Public
-                    // engine error), so a Secret arg cannot
-                    // launder to a Public catch binding.
+            Err(err) => {
+                if matches!(err, InterpreterError::UncaughtException { .. })
+                    && self.pending_exception.is_some()
+                {
+                    // IFC (bd-8enww.4.8): join arg, callee, and callback
+                    // provenance onto the pending exception BEFORE routing it,
+                    // so sync catch frames, async function rejections, and
+                    // uncaught propagation all observe the tainted label.
                     let callback_label = self
                         .take_pending_hostcall_result_label()
                         .unwrap_or(Label::Public);
@@ -11372,34 +11348,24 @@ impl InterpreterCore {
                         .join_arg_range_label(args)?
                         .join(self.get_register_label(callee)?)
                         .join(&callback_label);
-                    self.join_pending_exception_label(&escaped)?;
-                    return Ok(());
-                }
-                Some(err) => {
-                    if matches!(err, InterpreterError::UncaughtException { .. })
-                        && self.pending_exception.is_some()
-                    {
-                        let callback_label = self
-                            .take_pending_hostcall_result_label()
-                            .unwrap_or(Label::Public);
-                        let escaped = self
-                            .join_arg_range_label(args)?
-                            .join(self.get_register_label(callee)?)
-                            .join(&callback_label);
-                        if escaped != Label::Public {
-                            self.join_pending_exception_label(&escaped)?;
-                        }
-                    } else if Self::js_catchable_error_name(&err).is_some() {
-                        let escaped = self
-                            .join_arg_range_label(args)?
-                            .join(self.get_register_label(callee)?);
-                        if escaped != Label::Public {
-                            self.join_into_pending_hostcall_result_label(Some(escaped))?;
-                        }
+                    if escaped != Label::Public {
+                        self.join_pending_exception_label(&escaped)?;
                     }
-                    return Err(err);
+                } else if Self::js_catchable_error_name(&err).is_some()
+                    || matches!(err, InterpreterError::UncaughtException { .. })
+                {
+                    let escaped = self
+                        .join_arg_range_label(args)?
+                        .join(self.get_register_label(callee)?);
+                    if escaped != Label::Public {
+                        self.join_into_pending_hostcall_result_label(Some(escaped))?;
+                    }
                 }
-            },
+                match self.route_isolated_explicit_throw(module, err)? {
+                    None => return Ok(()),
+                    Some(err) => return Err(err),
+                }
+            }
         };
         let callback_result_label = self
             .take_pending_hostcall_result_label()

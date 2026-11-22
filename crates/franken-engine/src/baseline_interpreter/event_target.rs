@@ -1137,7 +1137,10 @@ impl InterpreterCore {
         let Err(error) = outcome else {
             return Ok(());
         };
-        let label = self.clone_active_execution_context_label()?;
+        let pending = self
+            .take_pending_hostcall_result_label()
+            .unwrap_or(Label::Public);
+        let label = self.clone_active_execution_context_label()?.join(&pending);
         let thrown = self.thrown_completion_value(error, &label)?;
         if first_error.is_none() {
             *first_error = Some(thrown);

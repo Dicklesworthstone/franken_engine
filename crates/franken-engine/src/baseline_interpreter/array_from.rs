@@ -815,7 +815,9 @@ impl InterpreterCore {
             },
             &label,
         ) {
-            let (reason, reason_label) = self.thrown_completion_value(error, &label)?;
+            let observed = label.join(&self.json_parse_context_label()?);
+            let (reason, reason_label) = self.thrown_completion_value(error, &observed)?;
+            let _ = self.take_pending_hostcall_result_label();
             let reason = self.promise_value(&reason)?;
             self.reject_promise(promise, reason, reason_label)?;
         }
@@ -1056,7 +1058,9 @@ impl InterpreterCore {
             self.array_from_async_resume_abrupt(module, holder, awaiting, settled, &label)
         };
         if let Err(error) = outcome {
-            let (reason, reason_label) = self.thrown_completion_value(error, &label)?;
+            let observed = label.join(&self.json_parse_context_label()?);
+            let (reason, reason_label) = self.thrown_completion_value(error, &observed)?;
+            let _ = self.take_pending_hostcall_result_label();
             self.array_from_async_reject(holder, reason, reason_label)?;
         }
         Ok(Value::Undefined)
@@ -1410,7 +1414,9 @@ impl InterpreterCore {
         error: InterpreterError,
         label: &Label,
     ) -> Result<(), InterpreterError> {
-        let (reason, reason_label) = self.thrown_completion_value(error, label)?;
+        let observed = label.join(&self.json_parse_context_label()?);
+        let (reason, reason_label) = self.thrown_completion_value(error, &observed)?;
+        let _ = self.take_pending_hostcall_result_label();
         let iterator = self.array_from_async_slot(holder, "__iterator")?;
         if self.array_from_async_source(holder)? == FromAsyncSource::SyncProtocol {
             self.array_from_async_keep_close_reason(holder, reason, &reason_label)?;
@@ -1497,7 +1503,10 @@ impl InterpreterCore {
                 self.take_pending_exception_slot();
                 Ok(())
             }
-            Err(error) if Self::js_catchable_error_name(&error).is_some() => Ok(()),
+            Err(error) if Self::js_catchable_error_name(&error).is_some() => {
+                let _ = self.take_pending_hostcall_result_label();
+                Ok(())
+            }
             Err(error) => Err(error),
         }
     }

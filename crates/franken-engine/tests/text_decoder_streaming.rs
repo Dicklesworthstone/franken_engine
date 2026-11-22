@@ -2,9 +2,10 @@
 //! under Node; only these tests execute the engine's parser/lowering/runtime.
 
 use frankenengine_engine::ast::ParseGoal;
-use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore};
+use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore, Value};
 use frankenengine_engine::capability::RuntimeCapability;
-use frankenengine_engine::ir_contract::Ir0Module;
+use frankenengine_engine::ifc_artifacts::Label;
+use frankenengine_engine::ir_contract::{Ir0Module, Ir3Instruction};
 use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 
@@ -272,4 +273,98 @@ console.log(d.decode().length);
 #[test]
 fn single_byte_encodings_do_not_buffer_complete_bytes() {
     check(SINGLE_BYTE_STREAM, "8364\n233\n0");
+}
+
+#[test]
+fn fatal_streaming_decode_error_and_stream_getter_keep_secret_labels() {
+    let run_seeded = |source: &str, marker: &str, seed_value: Value, label: Label| {
+        let tree = CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource {
+                    label: "text-decoder-ifc.js".into(),
+                    text: source.into(),
+                },
+                ParseGoal::Script,
+                &ParserOptions::default(),
+            )
+            .expect("decoder IFC source parses");
+        let mut module = lower_ir0_to_ir3(
+            &Ir0Module::from_syntax_tree(tree, "text-decoder-ifc.js"),
+            &LoweringContext::new("text-decoder-ifc", "bd-9vouw.150", "builtin-only"),
+        )
+        .expect("decoder IFC source lowers")
+        .ir3;
+        let mut patched = 0;
+        for instruction in &mut module.instructions {
+            if let Ir3Instruction::LoadStr { dst, pool_index } = *instruction
+                && module.constant_pool[pool_index as usize].as_str() == Some(marker)
+            {
+                *instruction = Ir3Instruction::Move { dst, src: 255 };
+                patched += 1;
+            }
+        }
+        assert_eq!(patched, 1, "seed marker must match once");
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]
+        .into_iter()
+        .collect();
+        let mut core = InterpreterCore::new(config, "text-decoder-ifc");
+        core.seed_register(255, seed_value).unwrap();
+        core.set_register_label(255, label).unwrap();
+        let outcome = core.execute(&module).expect("decoder IFC executes");
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+        (outcome.value, outcome.completion_label)
+    };
+
+    // 1. A fatal TypeError triggered on a Public suffix after a Secret buffered
+    //    prefix must retain Secret provenance on the caught error.
+    let fatal_source = r#"
+        const d = new TextDecoder('utf-8', { fatal: true });
+        const lead = '__secret_lead_byte__';
+        d.decode(new Uint8Array([lead, 0x82]), { stream: true });
+        let caught;
+        try { d.decode(new Uint8Array([0x00])); }
+        catch (error) { caught = error.name; }
+        caught;
+    "#;
+    for label in [Label::Public, Label::Secret] {
+        assert_eq!(
+            run_seeded(
+                fatal_source,
+                "__secret_lead_byte__",
+                Value::Int(0xE2),
+                label.clone()
+            ),
+            (Value::str("TypeError"), label),
+            "fatal decode error must preserve buffered streaming provenance"
+        );
+    }
+
+    // 2. A Secret `options.stream` getter must taint the decoder's buffered
+    //    state so a subsequent Public suffix cannot declassify the carried chunk.
+    let getter_source = r#"
+        const d = new TextDecoder('utf-8');
+        globalThis.__streamFlag = '__secret_stream_flag__';
+        d.decode(new Uint8Array([0xE2, 0x82]), { get stream() { return globalThis.__streamFlag; } });
+        d.decode(new Uint8Array([0xAC]));
+    "#;
+    for label in [Label::Public, Label::Secret] {
+        assert_eq!(
+            run_seeded(
+                getter_source,
+                "__secret_stream_flag__",
+                Value::Bool(true),
+                label.clone()
+            ),
+            (Value::str("€"), label),
+            "secret options.stream getter must taint carried streaming output"
+        );
+    }
 }

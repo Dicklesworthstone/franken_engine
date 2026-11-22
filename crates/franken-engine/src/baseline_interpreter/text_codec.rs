@@ -259,9 +259,13 @@ impl InterpreterCore {
                 let carried = state.streaming;
                 // Incomplete bytes and the BOM decision carry information into
                 // later calls. Admit that provenance before publishing state;
-                // a public suffix must not declassify a secret prefix.
+                // a public suffix must not declassify a secret prefix, and a
+                // secret `options.stream` getter must taint the buffered state.
                 if stream || state.streaming {
-                    let label = self.join_arg_range_with_object_mutation_label(args)?;
+                    let mut label = self.join_arg_range_with_object_mutation_label(args)?;
+                    if let Some(pending) = &self.pending_hostcall_result_label {
+                        label = label.join(pending);
+                    }
                     self.join_object_mutation_label(decoder, &label)?;
                 }
                 let decoded = self.with_text_codec_input_bytes(&input, |bytes| {
@@ -273,21 +277,18 @@ impl InterpreterCore {
                         slots.state = packed_state;
                     }
                 });
+                // Both the decoded text and any fatal decode TypeError depend on
+                // previously buffered bytes, so publish the decoder's provenance
+                // before rejecting invalid data: "\u20ac" (or a fatal error) from
+                // a secret E2 82 and a public suffix must not declassify to Public.
+                if carried {
+                    let state_label = self.object_mutation_labels.get(&decoder).cloned();
+                    self.join_into_pending_hostcall_result_label(state_label)?;
+                }
                 let text = decoded.ok_or_else(|| InterpreterError::TypeError {
                     expected: format!("valid {encoding} data"),
                     got: format!("The encoded data was not valid for encoding {encoding}"),
                 })?;
-                // The text such a call returns depends on the buffered bytes,
-                // so it carries the decoder's provenance, not only this
-                // call's arguments: "\u20ac" from a secret E2 82 and a public
-                // AC was Public.
-                if carried && let Some(state_label) = self.object_mutation_labels.get(&decoder) {
-                    let pending = self
-                        .pending_hostcall_result_label
-                        .as_ref()
-                        .map_or_else(|| state_label.clone(), |pending| pending.join(state_label));
-                    self.replace_pending_hostcall_result_label(Some(pending))?;
-                }
                 Ok(Value::Str(text))
             }
             _ => Err(InterpreterError::TypeError {

@@ -1678,8 +1678,12 @@ impl InterpreterCore {
                             // capability's once-guard has already fired). As in
                             // the PromiseReaction arm, a budget, containment or
                             // exit error ends the run instead.
+                            let pending = self
+                                .take_pending_hostcall_result_label()
+                                .unwrap_or(Label::Public);
+                            let job_error_label = task_label.join(&pending);
                             let (reason, reason_label) =
-                                self.thrown_completion_value(err, task_label)?;
+                                self.thrown_completion_value(err, &job_error_label)?;
                             if self.promise_resolvers_live(*promise, job_epoch) {
                                 let reason = self.promise_value(&reason)?;
                                 self.reject_promise(*promise, reason, reason_label)?;
@@ -14903,6 +14907,13 @@ impl InterpreterCore {
         self.register_width = saved_register_width;
         self.ip = saved_ip;
 
+        let native_error_label = match &run {
+            Err(error) if Self::js_catchable_error_name(error).is_some() => self
+                .active_execution_context_label()
+                .cloned()
+                .filter(|label| *label != Label::Public),
+            _ => None,
+        };
         let previous_context_bytes = self.active_inline_callback_context_memory_bytes();
         self.active_inline_callback_context_label = saved_context;
         let context_bytes = self.active_inline_callback_context_memory_bytes();
@@ -14910,6 +14921,9 @@ impl InterpreterCore {
         unwound?;
         popped?;
         restored?;
+        if let Some(label) = native_error_label {
+            self.join_into_pending_hostcall_result_label(Some(label))?;
+        }
         run
     }
 

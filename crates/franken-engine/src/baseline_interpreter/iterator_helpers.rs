@@ -456,7 +456,15 @@ impl InterpreterCore {
         iterator: &Value,
         error: InterpreterError,
     ) -> InterpreterError {
-        let (thrown, label) = match self.thrown_completion_value(error, &Label::Public) {
+        let pending = self
+            .take_pending_hostcall_result_label()
+            .unwrap_or(Label::Public);
+        let error_label = self
+            .active_execution_context_label()
+            .cloned()
+            .unwrap_or(Label::Public)
+            .join(&pending);
+        let (thrown, label) = match self.thrown_completion_value(error, &error_label) {
             Ok(thrown) => thrown,
             Err(fatal) => return fatal,
         };
@@ -479,6 +487,7 @@ impl InterpreterCore {
                 }
             }
         }
+        let _ = self.take_pending_hostcall_result_label();
         self.throw_guest_value(thrown, label)
             .unwrap_or_else(|error| error)
     }

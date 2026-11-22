@@ -775,3 +775,121 @@ fn custom_inspect_seeded_value(source: &str, label: Label) -> (Value, Label) {
     );
     (outcome.value, outcome.completion_label)
 }
+
+#[test]
+fn native_error_ifc_labels_survive_nested_callbacks_iterators_events_buffers_and_generated_code() {
+    for (name, source, expected) in [
+        (
+            "nested_callback_builtin_native_error",
+            r#"
+                globalThis.__inspectPayload = '__inspect_callback_payload__';
+                let caught;
+                try { [globalThis.__inspectPayload].map((s) => s.repeat(-1)); }
+                catch (error) { caught = error.name; }
+                caught;
+            "#,
+            "RangeError",
+        ),
+        (
+            "nested_callback_non_builtin_native_error",
+            r#"
+                globalThis.__inspectPayload = '__inspect_callback_payload__';
+                let caught;
+                try { [globalThis.__inspectPayload].forEach(() => { null.boom; }); }
+                catch (error) { caught = error.name; }
+                caught;
+            "#,
+            "TypeError",
+        ),
+        (
+            "iterator_helper_native_error",
+            r#"
+                globalThis.__inspectPayload = '__inspect_callback_payload__';
+                let caught;
+                try { [1].values().map(() => globalThis.__inspectPayload.repeat(-1)).toArray(); }
+                catch (error) { caught = error.name; }
+                caught;
+            "#,
+            "RangeError",
+        ),
+        (
+            "event_target_listener_native_error",
+            r#"
+                globalThis.__inspectPayload = '__inspect_callback_payload__';
+                const target = new EventTarget();
+                target.addEventListener('ping', () => globalThis.__inspectPayload.repeat(-1));
+                let caught;
+                try { target.dispatchEvent(new Event('ping')); }
+                catch (error) { caught = error.name; }
+                caught;
+            "#,
+            "RangeError",
+        ),
+        (
+            "buffer_binary_storage_label_native_error",
+            r#"
+                globalThis.__inspectPayload = '__inspect_callback_payload__';
+                const buf = Buffer.alloc(4);
+                buf.write(globalThis.__inspectPayload);
+                let caught;
+                try { buf.readUInt32BE(999); }
+                catch (error) { caught = error.name; }
+                caught;
+            "#,
+            "RangeError",
+        ),
+        (
+            "generated_function_native_error",
+            r#"
+                globalThis.__inspectPayload = '__inspect_callback_payload__';
+                const gen = new Function('s', 'return s.repeat(-1)');
+                let caught;
+                try { gen(globalThis.__inspectPayload); }
+                catch (error) { caught = error.name; }
+                caught;
+            "#,
+            "RangeError",
+        ),
+    ] {
+        for label in [Label::Public, Label::Secret] {
+            let mut module = lower(source).unwrap_or_else(|err| panic!("{name} lowers: {err}"));
+            let mut patched = 0;
+            for instruction in &mut module.instructions {
+                if let Ir3Instruction::LoadStr { dst, pool_index } = *instruction
+                    && module.constant_pool[pool_index as usize].as_str()
+                        == Some("__inspect_callback_payload__")
+                {
+                    *instruction = Ir3Instruction::Move { dst, src: 255 };
+                    patched += 1;
+                }
+            }
+            assert_eq!(patched, 1, "{name}: seed the input payload once");
+            let mut config = InterpreterConfig::quickjs_defaults();
+            config.granted_capabilities = [
+                RuntimeCapability::VmDispatch,
+                RuntimeCapability::HeapAllocate,
+                RuntimeCapability::Builtin,
+                RuntimeCapability::IrLowering,
+            ]
+            .into_iter()
+            .collect();
+            let mut core = InterpreterCore::new(config, name);
+            core.seed_register(255, Value::str("classified payload"))
+                .unwrap();
+            core.set_register_label(255, label.clone()).unwrap();
+            let outcome = core
+                .execute(&module)
+                .unwrap_or_else(|err| panic!("{name} ({label:?}) executes: {err}"));
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes(),
+                "{name} ({label:?}) memory accounting drift"
+            );
+            assert_eq!(
+                (outcome.value, outcome.completion_label),
+                (Value::str(expected), label),
+                "{name}: caught native error lost IFC label"
+            );
+        }
+    }
+}

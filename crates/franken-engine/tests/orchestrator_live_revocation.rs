@@ -9,8 +9,8 @@ use std::time::Duration;
 use frankenengine_engine::baseline_interpreter::{InterpreterError, LaneChoice};
 use frankenengine_engine::capability_token::PrincipalId;
 use frankenengine_engine::capability_witness::{
-    CapabilityWitness, CapabilityWitnessTrustRoot, LifecycleState, PromotionTheoremInput, ProofKind,
-    ProofObligation, SourceCapabilitySet, WitnessBuilder,
+    CapabilityWitness, CapabilityWitnessTrustRoot, ConfidenceInterval, LifecycleState,
+    PromotionTheoremInput, ProofKind, ProofObligation, SourceCapabilitySet, WitnessBuilder,
 };
 use frankenengine_engine::checkpoint::CancellationToken;
 use frankenengine_engine::engine_object_id::{EngineObjectId, ObjectDomain, SchemaId, derive_id};
@@ -480,7 +480,8 @@ fn witness_filesystem_package(source: &str) -> ExtensionPackage {
 }
 
 /// A signed fixture for this test's explicit filesystem capability model.
-/// These theorem inputs are test data, not a production shadow-validation claim.
+/// The theorem model and confidence counts are synthetic test inputs, not
+/// observations or a claim of production shadow validation.
 fn active_live_witness(source: &str) -> (CapabilityWitness, CapabilityWitnessTrustRoot) {
     let key = SigningKey::from_bytes([0x71; 32]).unwrap();
     let schema = SchemaId::from_definition(b"live-witness-test-v1");
@@ -505,6 +506,9 @@ fn active_live_witness(source: &str) -> (CapabilityWitness, CapabilityWitnessTru
         1_700_000_000_000_000,
         key.clone(),
     )
+    .confidence(ConfidenceInterval::from_trials(200, 195))
+    .transcript_hash(ContentHash::compute(b"synthetic-live-revocation-test-evidence"))
+    .meta("fixture_evidence_kind", "synthetic-test-inputs")
     .meta(
         "trusted_synthesizer_verification_key",
         key.verification_key().to_hex(),

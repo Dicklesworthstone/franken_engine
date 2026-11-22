@@ -21117,7 +21117,7 @@ mod tests {
         };
         let check_exit = execute_check(check_args).expect("clean check --emit-witness succeeds");
         assert_eq!(check_exit, 0);
-        let mut emitted: CapabilityWitness =
+        let emitted: CapabilityWitness =
             load_json_file(&witness_path).expect("witness json must deserialize");
         emitted
             .verify_integrity()
@@ -21160,8 +21160,38 @@ mod tests {
         );
         assert!(!report_out.exists());
 
-        // An explicit policy-authority test fixture approves this exact small
-        // capability model. The check command itself never performs promotion.
+        // Keep the emitted zero-trial Draft honest. Positive runtime/replay
+        // coverage uses a separately synthesized and signed test artifact:
+        // these counts are synthetic policy inputs, not observed shadow runs.
+        let mut fixture_builder = WitnessBuilder::new(
+            emitted.extension_id.clone(),
+            emitted.policy_id.clone(),
+            emitted.epoch,
+            emitted.timestamp_ns,
+            signer.clone(),
+        )
+        .require_all(emitted.required_capabilities.clone())
+        .confidence(ConfidenceInterval::from_trials(200, 195))
+        .replay_seed(emitted.replay_seed)
+        .transcript_hash(ContentHash::compute(b"synthetic-cli-runtime-test-evidence"));
+        for proof in &emitted.proof_obligations {
+            fixture_builder = fixture_builder.proof(proof.clone());
+        }
+        for denial in &emitted.denial_records {
+            fixture_builder =
+                fixture_builder.deny(denial.capability.clone(), denial.reason.clone());
+        }
+        for (key, value) in &emitted.metadata {
+            fixture_builder = fixture_builder.meta(key.clone(), value.clone());
+        }
+        let mut emitted = fixture_builder
+            .meta("witness_purpose", "synthetic_runtime_validation_fixture")
+            .meta("fixture_evidence_kind", "synthetic-test-inputs")
+            .build()
+            .expect("new signed synthetic runtime fixture");
+
+        // An explicit test authority approves this small capability model.
+        // The check command itself never performs promotion or activation.
         let theorem_input = PromotionTheoremInput {
             source_capability_sets: vec![SourceCapabilitySet {
                 source_id: "pure-arithmetic-cli-fixture".to_string(),

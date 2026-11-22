@@ -4141,9 +4141,9 @@ fn plas_capability_witness_enforces_least_authority_and_persists_typed_entry_rc_
     );
 }
 
-/// Build a genuinely signed active fixture through the existing theorem and
-/// approval APIs. The small arithmetic capability model here is test input,
-/// not a claim about source-analysis completeness or a production trust root.
+/// Build a signed active fixture through the existing theorem and approval
+/// APIs. Its model and confidence counts are synthetic test inputs, not
+/// observations, source-completeness evidence, or a production trust root.
 fn active_plas_runtime_witness(
     signing_key: &SigningKey,
     epoch: u64,
@@ -4152,9 +4152,37 @@ fn active_plas_runtime_witness(
     frankenengine_engine::capability_witness::CapabilityWitness,
     frankenengine_engine::capability_witness::CapabilityWitnessTrustRoot,
 ) {
+    active_plas_runtime_witness_with_fixture(
+        signing_key,
+        epoch,
+        source,
+        PlasRuntimeSecurityFixture::Sufficient,
+        false,
+    )
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PlasRuntimeSecurityFixture {
+    Sufficient,
+    ZeroTrials,
+    LowConfidence,
+    MissingDenialRecord,
+    FutureRollbackEpoch,
+}
+
+fn active_plas_runtime_witness_with_fixture(
+    signing_key: &SigningKey,
+    epoch: u64,
+    source: Option<&str>,
+    fixture: PlasRuntimeSecurityFixture,
+    include_console: bool,
+) -> (
+    frankenengine_engine::capability_witness::CapabilityWitness,
+    frankenengine_engine::capability_witness::CapabilityWitnessTrustRoot,
+) {
     use frankenengine_engine::capability_witness::{
-        CapabilityWitnessTrustRoot, LifecycleState, PromotionTheoremInput, ProofKind,
-        ProofObligation, SourceCapabilitySet, WitnessBuilder,
+        CapabilityWitnessTrustRoot, ConfidenceInterval, LifecycleState, PromotionTheoremInput,
+        ProofKind, ProofObligation, RollbackToken, SourceCapabilitySet, WitnessBuilder,
     };
     use frankenengine_engine::engine_object_id::{ObjectDomain, SchemaId, derive_id};
     use frankenengine_engine::hash_tiers::ContentHash;
@@ -4172,6 +4200,13 @@ fn active_plas_runtime_witness(
         1_700_000_000_000_000,
         signing_key.clone(),
     )
+    .confidence(match fixture {
+        PlasRuntimeSecurityFixture::ZeroTrials => ConfidenceInterval::from_trials(0, 0),
+        PlasRuntimeSecurityFixture::LowConfidence => ConfidenceInterval::from_trials(10, 5),
+        _ => ConfidenceInterval::from_trials(200, 195),
+    })
+    .transcript_hash(ContentHash::compute(b"synthetic-runtime-security-test-inputs"))
+    .meta("fixture_evidence_kind", "synthetic-test-inputs")
     .require(vm_cap.clone())
     .deny(Capability::new("env_read"), "env access forbidden")
     .proof(ProofObligation {
@@ -4193,7 +4228,60 @@ fn active_plas_runtime_witness(
             )
             .meta("parse_goal", "script");
     }
+    if include_console {
+        for tag in ["console", "heap_allocate", "builtin"] {
+            let capability = Capability::new(tag);
+            builder = builder.require(capability.clone()).proof(ProofObligation {
+                capability,
+                kind: ProofKind::StaticAnalysis,
+                proof_artifact_id: derive_id(
+                    ObjectDomain::EvidenceRecord,
+                    "rc-d2",
+                    &schema_id,
+                    tag.as_bytes(),
+                )
+                .unwrap(),
+                justification: "explicit test console and allocation model".to_string(),
+                artifact_hash: ContentHash::compute(tag.as_bytes()),
+            });
+        }
+    }
+    if matches!(fixture, PlasRuntimeSecurityFixture::FutureRollbackEpoch) {
+        builder = builder.rollback(RollbackToken {
+            previous_witness_hash: ContentHash::compute(b"synthetic-predecessor"),
+            previous_witness_id: None,
+            created_epoch: SecurityEpoch::from_raw(epoch + 1),
+            sequence: 1,
+        });
+    }
     let mut witness = builder.build().expect("signed draft witness");
+    if matches!(fixture, PlasRuntimeSecurityFixture::MissingDenialRecord) {
+        // Deliberately model a faulty trusted producer, not an unsigned
+        // attacker mutation. Recompute the canonical synthesis identity and
+        // sign the incomplete record set before theorem evaluation/approval,
+        // so only security-policy validation can explain the refusal.
+        use frankenengine_engine::signature_preimage::sign_preimage;
+        witness.denial_records.clear();
+        let unsigned = witness.synthesis_unsigned_bytes();
+        witness.content_hash = ContentHash::compute(&unsigned);
+        let mut canonical = Vec::new();
+        canonical.extend_from_slice(witness.extension_id.as_bytes());
+        canonical.extend_from_slice(witness.policy_id.as_bytes());
+        canonical.extend_from_slice(&witness.epoch.as_u64().to_be_bytes());
+        canonical.extend_from_slice(&witness.timestamp_ns.to_be_bytes());
+        canonical.extend_from_slice(witness.content_hash.as_bytes());
+        witness.witness_id = derive_id(
+            ObjectDomain::Attestation,
+            "capability-witness",
+            &SchemaId::from_definition(b"CapabilityWitness.v1"),
+            &canonical,
+        )
+        .unwrap();
+        witness.synthesizer_signature = sign_preimage(signing_key, &unsigned)
+            .unwrap()
+            .to_bytes()
+            .to_vec();
+    }
     let input = PromotionTheoremInput {
         source_capability_sets: vec![SourceCapabilitySet {
             source_id: "arithmetic-fixture".to_string(),
@@ -4437,4 +4525,108 @@ fn plas_runtime_witness_rechecks_replaced_trust_root_without_changing_optional_e
         OrchestratorError::CapabilityWitnessRejected { .. }
     ));
     assert_eq!(orch.execution_count(), 2);
+}
+
+#[test]
+fn plas_runtime_applies_full_security_policy_before_persistence_or_console_effects() {
+    use frankenengine_engine::capability_witness::WitnessValidator;
+
+    let signer = SigningKey::from_bytes([0x42; 32]).unwrap();
+    let source = "console.log('validation-fixture'); 1 + 2;";
+    let package = simple_package("plas-security-validation", source);
+    let (valid, trust_root) = active_plas_runtime_witness_with_fixture(
+        &signer,
+        1,
+        Some(source),
+        PlasRuntimeSecurityFixture::Sufficient,
+        true,
+    );
+    assert!(
+        WitnessValidator::with_trust_root(trust_root.clone())
+            .validate_for_security_decision(&valid)
+            .is_empty()
+    );
+
+    // Both optional-witness execution and a fully accepted signed fixture
+    // really reach the console effect. Refusals below must stop that source.
+    for witness in [None, Some(valid)] {
+        let mut control = ExecutionOrchestrator::with_defaults();
+        control.set_capability_witness_trust_root(trust_root.clone());
+        if let Some(witness) = witness {
+            control.set_capability_witness(witness);
+        }
+        let result = control.execute(&package).unwrap();
+        assert_eq!(result.execution_value, "3");
+        assert_eq!(
+            result
+                .console_output
+                .iter()
+                .map(|entry| entry.message.as_str())
+                .collect::<Vec<_>>(),
+            ["validation-fixture"]
+        );
+        assert_eq!(control.execution_count(), 1);
+    }
+
+    for (fixture, expected) in [
+        (PlasRuntimeSecurityFixture::ZeroTrials, "zero ablation trials"),
+        (PlasRuntimeSecurityFixture::LowConfidence, "lower bound"),
+        (
+            PlasRuntimeSecurityFixture::MissingDenialRecord,
+            "missing denial record",
+        ),
+        (
+            PlasRuntimeSecurityFixture::FutureRollbackEpoch,
+            "rollback token epoch",
+        ),
+    ] {
+        let (witness, root) =
+            active_plas_runtime_witness_with_fixture(&signer, 1, Some(source), fixture, true);
+        witness
+            .verify_active_acceptance_with_trust_root(&root)
+            .expect("the rejected fixture is genuinely authenticated and approved");
+        assert!(
+            !WitnessValidator::with_trust_root(root.clone())
+                .validate_for_security_decision(&witness)
+                .is_empty(),
+            "fixture must exercise a policy failure beyond signature verification"
+        );
+        let mut runtime = ExecutionOrchestrator::with_defaults();
+        runtime.set_capability_witness_trust_root(root);
+        runtime.set_capability_witness(witness);
+        assert_plas_runtime_refusal(&mut runtime, &package, expected);
+    }
+}
+
+#[test]
+fn plas_runtime_authentication_errors_precede_confidence_policy_errors() {
+    use frankenengine_engine::capability_witness::CapabilityWitnessTrustRoot;
+
+    let signer = SigningKey::from_bytes([0x42; 32]).unwrap();
+    let (witness, root) = active_plas_runtime_witness_with_fixture(
+        &signer,
+        1,
+        None,
+        PlasRuntimeSecurityFixture::ZeroTrials,
+        false,
+    );
+    let package = simple_package("plas-auth-before-policy", "1 + 2;");
+    let stranger = SigningKey::from_bytes([0x43; 32]).unwrap();
+    let mut untrusted = ExecutionOrchestrator::with_defaults();
+    untrusted.set_capability_witness_trust_root(CapabilityWitnessTrustRoot::single_authority(
+        stranger.verification_key(),
+    ));
+    untrusted.set_capability_witness(witness.clone());
+    assert_plas_runtime_refusal(&mut untrusted, &package, "not authorized by the trust root");
+
+    let mut corrupted = witness;
+    corrupted.promotion_signatures = vec![vec![0; 64]];
+    let mut runtime = ExecutionOrchestrator::with_defaults();
+    runtime.set_capability_witness_trust_root(root);
+    runtime.set_capability_witness(corrupted);
+    assert_plas_runtime_refusal(
+        &mut runtime,
+        &package,
+        "authentication or promotion check failed",
+    );
 }

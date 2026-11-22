@@ -32,7 +32,7 @@ use crate::baseline_interpreter::{
 use crate::bayesian_posterior::{Evidence, Posterior, RiskState, UpdateResult, UpdaterStore};
 use crate::capability::RuntimeCapability;
 use crate::capability_witness::{
-    CapabilityWitness, CapabilityWitnessTrustRoot, WitnessSchemaVersion,
+    CapabilityWitness, CapabilityWitnessTrustRoot, WitnessSchemaVersion, WitnessValidator,
 };
 use crate::checkpoint::CancellationToken;
 use crate::containment_executor::{
@@ -5075,6 +5075,26 @@ impl ExecutionOrchestrator {
             .map_err(|err| OrchestratorError::CapabilityWitnessRejected {
                 detail: format!("witness authentication or promotion check failed: {err}"),
             })?;
+
+        // Authentication alone does not satisfy the existing security policy:
+        // reported empirical confidence, denial coverage, and rollback shape
+        // must also pass before persistence or native execution. Keep the
+        // cryptographic check above first so malformed policy data cannot
+        // obscure an unknown signer or invalid promotion approval.
+        let validation_errors = WitnessValidator::with_trust_root(trust_root.clone())
+            .validate_for_security_decision(&witness);
+        if !validation_errors.is_empty() {
+            return Err(OrchestratorError::CapabilityWitnessRejected {
+                detail: format!(
+                    "witness security-decision validation failed: {}",
+                    validation_errors
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                ),
+            });
+        }
         // Recheck after lowering and authentication; an authority can be
         // invalidated while either phase is in progress.
         self.ensure_capability_witness_revocation_admission()?;

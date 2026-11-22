@@ -8,21 +8,22 @@
 //! its string form. Expected strings are Node v22.2.0's completion values
 //! for the same programs.
 //!
-//! No-claim: on a RegExp the methods run the engine's RegExp algorithm; a
-//! user-overridden `exec`, a RegExp subclass's species constructor and the
-//! generic (non-RegExp receiver) forms of the spec algorithms are not
-//! consulted, and a non-RegExp receiver is a TypeError.
+//! Generic receiver regressions also cover callable and exotic objects,
+//! observable lastIndex writes, and callable species-created matchers.
+//! Their expected traces were checked in a reference V8 runtime.
 //!
 //! No mocks: real source through the public `HybridRouter::eval` path.
 
+#![forbid(unsafe_code)]
+
 use frankenengine_engine::HybridRouter;
 
-fn check(source: &str, node: &str) {
+fn check(source: &str, expected: &str) {
     let value = match HybridRouter::default().eval(source) {
         Ok(outcome) => outcome.value,
         Err(err) => format!("ERROR: {err:?}"),
     };
-    assert_eq!(value, node, "`{source}` must match Node v22.2.0");
+    assert_eq!(value, expected, "`{source}` must preserve observable behavior");
 }
 
 /// A regex literal that starts with `=` in an argument or element list
@@ -232,5 +233,174 @@ console.log(k(function () { return 'aa'.replaceAll(fakeFlags, 'b'); }), k(functi
             "RangeError RangeError RangeError",
             "TypeError bb TypeError RangeError",
         ]
+    );
+}
+
+#[test]
+fn generic_regexp_object_like_receivers() {
+    check(
+        r#"
+function ordinary() {}
+function* generator() { yield 1; }
+async function* asyncGenerator() { yield 1; }
+var receivers = [
+  ordinary, ordinary.bind(null), Math.max, Promise.resolve(1),
+  generator(), asyncGenerator(), [1][Symbol.iterator]()
+];
+var out = [];
+for (var i = 0; i < receivers.length; i++) {
+  var rx = receivers[i];
+  rx.flags = 'g';
+  rx.global = true;
+  rx.exec = function() { return null; };
+  rx.lastIndex = 7;
+  out.push(RegExp.prototype[Symbol.match].call(rx, 'abc') === null, rx.lastIndex);
+  rx.lastIndex = 3;
+  out.push(RegExp.prototype[Symbol.search].call(rx, 'abc'), rx.lastIndex);
+  out.push(RegExp.prototype[Symbol.replace].call(rx, 'abc', 'x'), rx.lastIndex);
+}
+out.join('|');
+        "#,
+        "true|0|-1|3|abc|0|true|0|-1|3|abc|0|true|0|-1|3|abc|0|true|0|-1|3|abc|0|true|0|-1|3|abc|0|true|0|-1|3|abc|0|true|0|-1|3|abc|0",
+    );
+}
+
+#[test]
+fn generic_regexp_inherited_setters() {
+    check(
+        r#"
+var events = [], index = 7;
+function rx() {}
+Object.setPrototypeOf(rx, {
+  get lastIndex() { events.push('get:' + (this === rx)); return index; },
+  set lastIndex(value) { events.push('set:' + (this === rx) + ':' + value); index = value; }
+});
+rx.flags = 'g';
+rx.global = true;
+rx.exec = function() { events.push('exec:' + (this === rx)); return null; };
+var match = RegExp.prototype[Symbol.match].call(rx, 'abc');
+index = 3;
+var search = RegExp.prototype[Symbol.search].call(rx, 'abc');
+[match === null, search, index, events.join(',')].join('|');
+        "#,
+        "true|-1|3|set:true:0,exec:true,get:true,set:true:0,exec:true,get:true,set:true:3",
+    );
+}
+
+#[test]
+fn generic_regexp_callable_proxy() {
+    check(
+        r#"
+var events = [];
+function target() {}
+target.flags = 'g';
+target.global = true;
+target.lastIndex = 7;
+target.exec = function() { events.push('exec:' + (this === proxy)); return null; };
+var proxy = new Proxy(target, {
+  set(t, key, value, receiver) {
+    if (key === 'lastIndex') events.push('set:' + value + ':' + (receiver === proxy));
+    return Reflect.set(t, key, value, receiver);
+  },
+  defineProperty(t, key, desc) {
+    if (key === 'lastIndex') events.push('define:' + desc.value);
+    return Reflect.defineProperty(t, key, desc);
+  }
+});
+var result = RegExp.prototype[Symbol.match].call(proxy, 'abc');
+[result === null, target.lastIndex, events.join(',')].join('|');
+        "#,
+        "true|0|set:0:true,define:0,exec:true",
+    );
+}
+
+#[test]
+fn generic_regexp_refusal_and_throw() {
+    check(
+        r#"
+var out = [], calls = 0;
+function locked() {}
+locked.flags = 'g';
+locked.global = true;
+locked.exec = function() { calls++; return null; };
+Object.defineProperty(locked, 'lastIndex', {value: 4, writable: false});
+try { RegExp.prototype[Symbol.match].call(locked, 'abc'); } catch (e) { out.push(e instanceof TypeError); }
+out.push(locked.lastIndex, calls);
+function sealed() {}
+sealed.flags = 'g';
+sealed.global = true;
+sealed.exec = function() { calls++; return null; };
+Object.preventExtensions(sealed);
+try { RegExp.prototype[Symbol.replace].call(sealed, 'abc', 'x'); } catch (e) { out.push(e instanceof TypeError); }
+out.push(calls);
+var sentinel = {};
+function throwing() {}
+throwing.flags = 'g';
+throwing.global = true;
+throwing.exec = function() { calls++; return null; };
+Object.defineProperty(throwing, 'lastIndex', {set(v) { throw sentinel; }});
+try { RegExp.prototype[Symbol.match].call(throwing, 'abc'); } catch (e) { out.push(e === sentinel); }
+out.push(calls);
+var proxy = new Proxy(throwing, {set() { return false; }});
+try { RegExp.prototype[Symbol.match].call(proxy, 'abc'); } catch (e) { out.push(e instanceof TypeError); }
+out.push(calls);
+out.join('|');
+        "#,
+        "true|4|0|true|0|true|0|true|0",
+    );
+}
+
+#[test]
+fn generic_regexp_species_function_matchers() {
+    check(
+        r#"
+var calls = 0;
+function matcher() {}
+matcher.exec = function() { calls++; return null; };
+var pattern = {flags: 'g', global: true, lastIndex: 4, constructor: {}};
+pattern.constructor[Symbol.species] = function() { return matcher; };
+var iterator = RegExp.prototype[Symbol.matchAll].call(pattern, 'abc');
+var before = [matcher.lastIndex, calls].join(':');
+var done = iterator.next().done;
+var split = RegExp.prototype[Symbol.split].call(pattern, 'ab');
+[before, done, calls, matcher.lastIndex, split.join(',')].join('|');
+        "#,
+        "4:0|true|3|1|ab",
+    );
+}
+
+#[test]
+fn generic_regexp_empty_match_progress() {
+    check(
+        r#"
+var indices = [];
+function rx() {}
+rx.flags = 'gu';
+rx.global = true;
+rx.unicode = true;
+rx.exec = function() {
+  indices.push(this.lastIndex);
+  return indices.length < 3 ? {0:'', index:this.lastIndex, length:1} : null;
+};
+var matches = RegExp.prototype[Symbol.match].call(rx, '\uD83D\uDE00x');
+[matches.length, rx.lastIndex, indices.join(',')].join('|');
+        "#,
+        "2|3|0,2,3",
+    );
+}
+
+#[test]
+fn generic_regexp_search_abrupt_completion() {
+    check(
+        r#"
+var sentinel = {}, calls = 0;
+function rx() {}
+rx.lastIndex = 9;
+rx.exec = function() { calls++; throw sentinel; };
+var same = false;
+try { RegExp.prototype[Symbol.search].call(rx, 'abc'); } catch (e) { same = e === sentinel; }
+[same, rx.lastIndex, calls].join('|');
+        "#,
+        "true|0|1",
     );
 }

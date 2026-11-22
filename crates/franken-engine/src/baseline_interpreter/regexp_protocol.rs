@@ -18,8 +18,9 @@
 //! flags and copies `lastIndex` (ES2024 22.2.6.9); its RegExpStringIterator
 //! runs one RegExpExec per `next` (bd-9vouw.498).
 //!
-//! No-claim: `lastIndex` writes reach object receivers only (a function
-//! receiver's are not modeled).
+//! `lastIndex` writes use the same ordinary-property backing and Proxy
+//! machinery as Reflect.set, including callable and exotic receivers. The
+//! original receiver remains observable to accessors and Proxy traps.
 
 use super::*;
 
@@ -307,7 +308,10 @@ impl InterpreterCore {
         key: &str,
         value: Value,
     ) -> Result<(), InterpreterError> {
-        let Value::Object(id) = object else {
+        // Functions, promises, generators and iterators are objects too.
+        // Resolve their ordinary storage without substituting that backing
+        // object for the receiver seen by a setter or Proxy trap.
+        let Some(id) = self.own_property_holder(Some(module), object, true)? else {
             return Err(InterpreterError::TypeError {
                 expected: format!("an object whose {key} can be set"),
                 got: object.type_name().to_string(),
@@ -315,7 +319,7 @@ impl InterpreterCore {
         };
         let set = self.proxy_aware_set_runtime_property(
             Some(module),
-            *id,
+            id,
             &RuntimePropertyKey::String(JsString::from(key)),
             value,
             object.clone(),

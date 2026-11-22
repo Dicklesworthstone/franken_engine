@@ -37,8 +37,9 @@ use frankenengine_engine::agent_sandbox::{
 };
 use frankenengine_engine::capability::{CapabilityProfile, RuntimeCapability};
 use frankenengine_engine::capability_witness::{
-    CapabilityWitness, CapabilityWitnessTrustRoot, ConfidenceInterval, ProofKind, ProofObligation,
-    WitnessBuilder,
+    CapabilityWitness, CapabilityWitnessTrustRoot, ConfidenceInterval, LifecycleState, ProofKind,
+    ProofObligation, PromotionTheoremInput, PromotionTheoremReport, WitnessBuilder,
+    WitnessSchemaVersion, WitnessValidator,
 };
 use frankenengine_engine::data_contract::{
     DEFAULT_DATA_CONTRACT_PURPOSE, DataContract, DataContractIfcIngress, DataContractRunBinding,
@@ -138,7 +139,7 @@ use frankenengine_engine::runtime_explain_views::{
     EXPLAIN_META_LANE_REASON, build_explain_bundle,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
-use frankenengine_engine::signature_preimage::{SIGNING_KEY_LEN, SigningKey};
+use frankenengine_engine::signature_preimage::{SIGNING_KEY_LEN, SigningKey, VerificationKey};
 use frankenengine_engine::third_party_verifier::{
     BenchmarkClaimBundle, ClaimedBenchmarkOutcome, THIRD_PARTY_VERIFIER_COMPONENT,
     ThirdPartyVerificationReport, VerificationCheckResult, VerificationVerdict, VerifierEvent,
@@ -215,6 +216,7 @@ enum CommandSpec {
     HelpTopic(HelpTopic),
     Compile(CompileArgs),
     Check(CheckArgs),
+    Witness(WitnessArgs),
     Onboard(OnboardArgs),
     DiffBehavior(DiffBehaviorArgs),
     Run(Box<RunArgs>),
@@ -242,6 +244,7 @@ enum CommandSpec {
 enum HelpTopic {
     Compile,
     Check,
+    Witness,
     Onboard,
     DiffBehavior,
     Run,
@@ -286,6 +289,7 @@ impl HelpTopic {
         match self {
             Self::Compile => compile_usage(),
             Self::Check => check_usage(),
+            Self::Witness => witness_usage(),
             Self::Onboard => onboard_usage(),
             Self::DiffBehavior => diff_behavior_usage(),
             Self::Run => run_usage(),
@@ -355,6 +359,30 @@ struct CheckArgs {
     emit_witness: Option<PathBuf>,
     witness_signing_key: Option<PathBuf>,
     witness_epoch: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WitnessArgs {
+    TrustRoot {
+        synthesizer_keys: Vec<String>,
+        promotion_keys: Vec<String>,
+        quorum: usize,
+        out: PathBuf,
+    },
+    Evaluate {
+        witness: PathBuf,
+        theorem_input: PathBuf,
+        signing_key: PathBuf,
+        trust: WitnessTrustArgs,
+        out: PathBuf,
+    },
+    Approve {
+        witness: PathBuf,
+        theorem_report: PathBuf,
+        approval_keys: Vec<PathBuf>,
+        trust: WitnessTrustArgs,
+        out: PathBuf,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2148,6 +2176,7 @@ fn run(raw_args: Vec<String>) -> Result<i32, String> {
         }
         CommandSpec::Compile(args) => execute_compile(args),
         CommandSpec::Check(args) => execute_check(args),
+        CommandSpec::Witness(args) => execute_witness(args),
         CommandSpec::Onboard(args) => execute_onboard(args),
         CommandSpec::DiffBehavior(args) => execute_diff_behavior(args),
         CommandSpec::Run(args) => execute_run(*args),
@@ -2191,6 +2220,7 @@ fn parse_command(args: &[String]) -> Result<CommandSpec, String> {
         "version" => Ok(CommandSpec::Version),
         "compile" => parse_compile_command(&args[1..]),
         "check" => parse_check_command(&args[1..]),
+        "witness" => parse_witness_command(&args[1..]),
         "onboard" => parse_onboard_command(&args[1..]),
         "diff-behavior" => parse_diff_behavior_command(&args[1..]),
         "run" => parse_run_command(&args[1..]),
@@ -2223,6 +2253,16 @@ fn parse_help_command(args: &[String]) -> Result<CommandSpec, String> {
     match args[0].as_str() {
         "compile" => parse_leaf_help_topic("compile", HelpTopic::Compile, &args[1..]),
         "check" => parse_leaf_help_topic("check", HelpTopic::Check, &args[1..]),
+        "witness" => {
+            let rest = if args.get(1).is_some_and(|value| {
+                matches!(value.as_str(), "trust-root" | "evaluate" | "approve")
+            }) {
+                &args[2..]
+            } else {
+                &args[1..]
+            };
+            parse_leaf_help_topic("witness", HelpTopic::Witness, rest)
+        }
         "onboard" => parse_leaf_help_topic("onboard", HelpTopic::Onboard, &args[1..]),
         "diff-behavior" => {
             parse_leaf_help_topic("diff-behavior", HelpTopic::DiffBehavior, &args[1..])
@@ -2255,7 +2295,7 @@ fn parse_help_command(args: &[String]) -> Result<CommandSpec, String> {
         "orchestrate" => parse_leaf_help_topic("orchestrate", HelpTopic::Orchestrate, &args[1..]),
         "runtime" => parse_leaf_help_topic("runtime", HelpTopic::Runtime, &args[1..]),
         other => Err(format!(
-            "unknown help topic `{other}` (expected compile|check|onboard|diff-behavior|run|evidence|agent-sandbox|explain|claims|doctor|verify|benchmark|replay|differential-oracle|oracle|react|gates|reports|test|synth|orchestrate|runtime)"
+            "unknown help topic `{other}` (expected compile|check|witness|onboard|diff-behavior|run|evidence|agent-sandbox|explain|claims|doctor|verify|benchmark|replay|differential-oracle|oracle|react|gates|reports|test|synth|orchestrate|runtime)"
         )),
     }
 }
@@ -2434,6 +2474,124 @@ fn parse_compile_command(args: &[String]) -> Result<CommandSpec, String> {
         policy_id,
         generated_unix_ns,
     }))
+}
+
+fn parse_witness_command(args: &[String]) -> Result<CommandSpec, String> {
+    if args.is_empty() || has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::Witness));
+    }
+    let subcommand = args[0].as_str();
+    if !matches!(subcommand, "trust-root" | "evaluate" | "approve") {
+        return Err(format!("unknown witness command `{subcommand}`"));
+    }
+    let mut synthesizer_keys = Vec::new();
+    let mut promotion_keys = Vec::new();
+    let mut quorum = None;
+    let mut witness = None;
+    let mut theorem_input = None;
+    let mut theorem_report = None;
+    let mut signing_key = None;
+    let mut approval_keys = Vec::new();
+    let mut root = None;
+    let mut expected_digest = None;
+    let mut epoch = None;
+    let mut out = None;
+    let mut index = 1;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--synthesizer-key" if subcommand == "trust-root" => {
+                synthesizer_keys.push(next_arg(args, &mut index, "--synthesizer-key")?);
+            }
+            "--promotion-key" if subcommand == "trust-root" => {
+                promotion_keys.push(next_arg(args, &mut index, "--promotion-key")?);
+            }
+            "--quorum" if subcommand == "trust-root" => {
+                let value = parse_positive_u64(
+                    &next_arg(args, &mut index, "--quorum")?,
+                    "--quorum",
+                )?;
+                quorum = Some(usize::try_from(value).map_err(|_| "--quorum is too large")?);
+            }
+            "--witness" if subcommand != "trust-root" => {
+                witness = Some(PathBuf::from(next_arg(args, &mut index, "--witness")?));
+            }
+            "--theorem-input" if subcommand == "evaluate" => {
+                theorem_input = Some(PathBuf::from(next_arg(args, &mut index, "--theorem-input")?));
+            }
+            "--theorem-report" if subcommand == "approve" => {
+                theorem_report = Some(PathBuf::from(next_arg(args, &mut index, "--theorem-report")?));
+            }
+            "--signing-key" if subcommand == "evaluate" => {
+                signing_key = Some(PathBuf::from(next_arg(args, &mut index, "--signing-key")?));
+            }
+            "--approval-key" if subcommand == "approve" => {
+                approval_keys.push(PathBuf::from(next_arg(args, &mut index, "--approval-key")?));
+            }
+            "--witness-trust-root" if subcommand != "trust-root" => {
+                root = Some(PathBuf::from(next_arg(args, &mut index, "--witness-trust-root")?));
+            }
+            "--expected-witness-trust-digest" if subcommand != "trust-root" => {
+                expected_digest = Some(parse_expected_trust_digest(&next_arg(
+                    args, &mut index, "--expected-witness-trust-digest",
+                )?)?);
+            }
+            "--witness-epoch" if subcommand != "trust-root" => {
+                epoch = Some(parse_positive_u64(
+                    &next_arg(args, &mut index, "--witness-epoch")?,
+                    "--witness-epoch",
+                )?);
+            }
+            "--out" => {
+                out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?));
+            }
+            flag => return Err(format!("unknown witness {subcommand} flag `{flag}`")),
+        }
+        index += 1;
+    }
+    let out = out.ok_or_else(|| "witness commands require --out <new-file.json>".to_string())?;
+    if subcommand == "trust-root" {
+        if synthesizer_keys.is_empty() || promotion_keys.is_empty() {
+            return Err("trust-root requires explicit --synthesizer-key and --promotion-key public keys".to_string());
+        }
+        return Ok(CommandSpec::Witness(WitnessArgs::TrustRoot {
+            synthesizer_keys,
+            promotion_keys,
+            quorum: quorum.ok_or_else(|| "trust-root requires --quorum <n>".to_string())?,
+            out,
+        }));
+    }
+    let witness = witness.ok_or_else(|| {
+        "witness command requires --witness <candidate.json>".to_string()
+    })?;
+    let trust = parse_witness_trust_args(root, expected_digest, epoch)?
+        .ok_or_else(|| "witness command requires the independently pinned root and epoch flags".to_string())?;
+    let command = if subcommand == "evaluate" {
+        WitnessArgs::Evaluate {
+            witness,
+            theorem_input: theorem_input.ok_or_else(|| {
+                "evaluate requires --theorem-input <model.json>".to_string()
+            })?,
+            signing_key: signing_key.ok_or_else(|| {
+                "evaluate requires --signing-key <private.seed>".to_string()
+            })?,
+            trust,
+            out,
+        }
+    } else {
+        if approval_keys.is_empty() {
+            return Err("approve requires at least one explicit --approval-key <private.seed>".to_string());
+        }
+        WitnessArgs::Approve {
+            witness,
+            theorem_report: theorem_report.ok_or_else(|| {
+                "approve requires --theorem-report <signed-report.json>".to_string()
+            })?,
+            approval_keys,
+            trust,
+            out,
+        }
+    };
+    Ok(CommandSpec::Witness(command))
 }
 
 fn parse_check_command(args: &[String]) -> Result<CommandSpec, String> {
@@ -4914,6 +5072,200 @@ fn execute_compile(args: CompileArgs) -> Result<i32, String> {
     };
     print_json(&output)?;
     Ok(0)
+}
+
+fn parse_witness_public_key(value: &str) -> Result<VerificationKey, String> {
+    let bytes = hex::decode(value)
+        .map_err(|_| "witness public keys must contain 64 hexadecimal characters".to_string())?;
+    let bytes: [u8; 32] = bytes.try_into()
+        .map_err(|_| "witness public keys must contain exactly 32 bytes".to_string())?;
+    VerificationKey::from_bytes(bytes)
+        .map_err(|error| format!("invalid witness verification key: {error}"))
+}
+
+/// Preserve source witnesses, trust configuration, and private keys even if an
+/// operator accidentally supplies an existing path as the output destination.
+fn write_new_witness_artifact<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
+    use std::io::Write;
+    let bytes = encode_json_value(value, "witness artifact")?;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| {
+            format!("cannot create new witness artifact `{}`: {error}", path.display())
+        })?;
+    file.write_all(&bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|error| {
+            format!("failed to write witness artifact `{}`: {error}", path.display())
+        })
+}
+
+fn load_authenticated_witness_candidate(
+    path: &Path,
+    trust: &WitnessTrustArgs,
+) -> Result<(CapabilityWitness, CapabilityWitnessTrustRoot), String> {
+    let witness: CapabilityWitness = load_json_file(path)?;
+    let root = load_pinned_capability_witness_trust(
+        Some(&witness),
+        Some(trust),
+        witness.epoch.as_u64(),
+    )?.ok_or_else(|| "witness candidate requires an external trust root".to_string())?;
+    if !WitnessSchemaVersion::CURRENT.is_compatible_with(&witness.schema_version) {
+        return Err("witness candidate schema is incompatible".to_string());
+    }
+    if !matches!(
+        witness.lifecycle_state,
+        LifecycleState::Draft | LifecycleState::Validated | LifecycleState::Promoted
+    ) {
+        return Err("witness approval requires a Draft, Validated, or Promoted candidate; active and terminal artifacts are immutable".to_string());
+    }
+    if witness.required_capabilities.is_empty()
+        || !witness.required_capabilities.is_disjoint(&witness.denied_capabilities)
+    {
+        return Err("witness candidate has an empty or contradictory capability envelope".to_string());
+    }
+    witness.verify_integrity()
+        .map_err(|error| format!("witness candidate integrity failed: {error}"))?;
+    witness.verify_proof_coverage()
+        .map_err(|error| format!("witness candidate proof coverage failed: {error}"))?;
+    if !root.synthesizer_verification_keys.iter()
+        .any(|key| witness.verify_synthesizer_signature(key).is_ok())
+    {
+        return Err("witness candidate synthesis signer is not authorized by the pinned root".to_string());
+    }
+    let theorem_key = witness
+        .metadata
+        .get("trusted_synthesizer_verification_key")
+        .ok_or_else(|| "witness candidate is missing its signed theorem authority".to_string())?;
+    let theorem_key = parse_witness_public_key(theorem_key)?;
+    if !root.synthesizer_verification_keys.contains(&theorem_key)
+        || witness.verify_synthesizer_signature(&theorem_key).is_err()
+    {
+        return Err(
+            "witness theorem authority must be the root-authorized candidate synthesizer"
+                .to_string(),
+        );
+    }
+    Ok((witness, root))
+}
+
+fn execute_witness(args: WitnessArgs) -> Result<i32, String> {
+    match args {
+        WitnessArgs::TrustRoot { synthesizer_keys, promotion_keys, quorum, out } => {
+            let synthesizer_keys = synthesizer_keys.iter()
+                .map(|key| parse_witness_public_key(key)).collect::<Result<Vec<_>, _>>()?;
+            let promotion_keys = promotion_keys.iter()
+                .map(|key| parse_witness_public_key(key)).collect::<Result<Vec<_>, _>>()?;
+            let root = CapabilityWitnessTrustRoot::new(synthesizer_keys, promotion_keys, quorum)
+                .map_err(|error| format!("invalid witness trust configuration: {error}"))?;
+            let digest = root.canonical_digest().map_err(|error| error.to_string())?.to_hex();
+            write_new_witness_artifact(&out, &root)?;
+            print_json(&serde_json::json!({
+                "command": "witness trust-root",
+                "path": out,
+                "canonical_digest": digest,
+                "required_promotion_signatures": root.required_promotion_signatures,
+                "synthesizer_keys": root.synthesizer_verification_keys.len(),
+                "promotion_keys": root.promotion_verification_keys.len(),
+            }))?;
+            Ok(0)
+        }
+        WitnessArgs::Evaluate { witness, theorem_input, signing_key, trust, out } => {
+            let (candidate, root) = load_authenticated_witness_candidate(&witness, &trust)?;
+            let key = read_private_evidence_signing_key(&signing_key)?;
+            let public_key = key.verification_key();
+            if !root.synthesizer_verification_keys.contains(&public_key)
+                || candidate.verify_synthesizer_signature(&public_key).is_err()
+                || candidate.metadata.get("trusted_synthesizer_verification_key")
+                    != Some(&public_key.to_hex())
+            {
+                return Err("theorem evaluation key must match the authenticated candidate synthesizer and its signed theorem-key binding".to_string());
+            }
+            let input: PromotionTheoremInput = load_json_file(&theorem_input)?;
+            let report = candidate.evaluate_promotion_theorems_signed_by(&input, &key)
+                .map_err(|error| format!("witness theorem evaluation failed: {error}"))?;
+            write_new_witness_artifact(&out, &report)?;
+            print_json(&serde_json::json!({
+                "command": "witness evaluate",
+                "path": out,
+                "witness_id": candidate.witness_id,
+                "all_passed": report.all_passed,
+                "checks": report.results.len(),
+                "empirical_trials": candidate.confidence.n_trials,
+            }))?;
+            Ok(if report.all_passed { 0 } else { 3 })
+        }
+        WitnessArgs::Approve { witness, theorem_report, approval_keys, trust, out } => {
+            if approval_keys.is_empty() {
+                return Err("witness approval requires an explicit private approval key".to_string());
+            }
+            let (mut candidate, root) = load_authenticated_witness_candidate(&witness, &trust)?;
+            let structural_errors = WitnessValidator::new().validate_structural(&candidate);
+            if !structural_errors.is_empty() {
+                return Err(format!(
+                    "witness approval requires valid observed evidence under the existing confidence policy: {structural_errors:?}"
+                ));
+            }
+            let report: PromotionTheoremReport = load_json_file(&theorem_report)?;
+            candidate.apply_promotion_theorem_report(&report)
+                .map_err(|error| format!("witness theorem report authentication failed: {error}"))?;
+            if !report.all_passed {
+                return Err("witness theorem report contains failed policy checks".to_string());
+            }
+            // Never discard earlier signatures when an altered theorem report
+            // or candidate is presented to the next independent approver.
+            let existing = candidate.verified_promotion_signers(&root)
+                .map_err(|error| format!("collected witness approvals are invalid: {error}"))?;
+            if candidate.lifecycle_state == LifecycleState::Promoted
+                && existing.len() < root.required_promotion_signatures
+            {
+                return Err("promoted witness does not meet the pinned approval quorum".to_string());
+            }
+            if candidate.lifecycle_state == LifecycleState::Draft {
+                candidate.transition_to(LifecycleState::Validated)
+                    .map_err(|error| error.to_string())?;
+            }
+            for path in approval_keys {
+                let key = read_private_evidence_signing_key(&path)?;
+                if !root.promotion_verification_keys.contains(&key.verification_key()) {
+                    return Err("approval key is not an authorized promotion signer in the pinned root".to_string());
+                }
+                candidate.add_promotion_signature(&key)
+                    .map_err(|error| format!("witness approval failed: {error}"))?;
+            }
+            let signers = candidate.verified_promotion_signers(&root)
+                .map_err(|error| format!("witness approval verification failed: {error}"))?;
+            let quorum_met = signers.len() >= root.required_promotion_signatures;
+            if quorum_met {
+                if candidate.lifecycle_state == LifecycleState::Validated {
+                    candidate.transition_to_with_trust_root(LifecycleState::Promoted, &root)
+                        .map_err(|error| format!("witness promotion failed: {error}"))?;
+                }
+                let errors = WitnessValidator::with_trust_root(root.clone())
+                    .validate_for_security_decision(&candidate);
+                if !errors.is_empty() {
+                    return Err(format!("witness promotion validation failed: {errors:?}"));
+                }
+            }
+            // The theorem model and explicit approvals do not create shadow
+            // observations. Preserve the signed empirical evidence exactly;
+            // this workflow never marks a candidate Active.
+            write_new_witness_artifact(&out, &candidate)?;
+            print_json(&serde_json::json!({
+                "command": "witness approve",
+                "path": out,
+                "witness_id": candidate.witness_id,
+                "lifecycle_state": candidate.lifecycle_state,
+                "quorum_met": quorum_met,
+                "approval_signers": signers.iter().map(VerificationKey::to_hex).collect::<Vec<_>>(),
+                "required_promotion_signatures": root.required_promotion_signatures,
+                "empirical_trials": candidate.confidence.n_trials,
+            }))?;
+            Ok(if quorum_met { 0 } else { 3 })
+        }
+    }
 }
 
 fn execute_check(args: CheckArgs) -> Result<i32, String> {
@@ -16513,6 +16865,7 @@ fn usage() -> String {
         "  frankenctl react compile|build|doctor|contract [options]  # React integration surfaces",
         "",
         "OPERATOR/DEVELOPMENT SURFACES (unsupported in production):",
+        "  frankenctl witness trust-root|evaluate|approve [options]  # explicit policy assessment and independent approvals",
         "  frankenctl gates <gate-type> [options]  # validation gates - use for dev/CI only",
         "  frankenctl reports <report-type> [options]  # analysis reports - use for dev/CI only",
         "  frankenctl test <test-type> [options]  # testing tools - use for dev/CI only",
@@ -16541,6 +16894,7 @@ fn command_label(command: &CommandSpec) -> &'static str {
         CommandSpec::HelpTopic(_) => "help",
         CommandSpec::Compile(_) => "compile",
         CommandSpec::Check(_) => "check",
+        CommandSpec::Witness(_) => "witness",
         CommandSpec::Onboard(_) => "onboard",
         CommandSpec::DiffBehavior(_) => "diff-behavior",
         CommandSpec::Run(_) => "run",
@@ -16600,6 +16954,7 @@ fn command_remediation(command: &str) -> &'static str {
             "Verify the source path and parse goal (try --goal module for files with imports), then rerun `frankenctl check`."
         }
         "run" => "Verify extension source path and `--extension-id`, then rerun `frankenctl run`.",
+        "witness" => "Verify the independently pinned root, epoch, signed candidate/report, private key permissions, and unused output path; see `frankenctl witness --help`.",
         "evidence-init" => {
             "Choose unused key/snapshot paths in existing directories; retain the private seed and independently pin the public snapshot digest."
         }
@@ -16691,6 +17046,45 @@ const EXECUTION_LIMITS_HELP: &str =
   --max-console-entries sizes the console transcript (default 100000 /
   1000000; past it the run fails closed). --max-source-bytes caps the
   source size (default 1 MiB).";
+
+fn witness_usage() -> String {
+    [
+        "witness usage:",
+        "  frankenctl witness trust-root --synthesizer-key <public-key-hex>...",
+        "      --promotion-key <public-key-hex>... --quorum <n> --out <new-root.json>",
+        "  frankenctl witness evaluate --witness <candidate.json> --theorem-input <model.json>",
+        "      --signing-key <private.seed> --out <new-theorem-report.json> <trust-flags>",
+        "  frankenctl witness approve --witness <candidate-or-partial.json>",
+        "      --theorem-report <signed-report.json> --approval-key <private.seed>...",
+        "      --out <new-candidate.json> <trust-flags>",
+        "",
+        "trust-flags (all required for evaluate and approve):",
+        "  --witness-trust-root <root.json> --expected-witness-trust-digest <digest> --witness-epoch <n>",
+        "",
+        "notes:",
+        "  trust-root accepts explicit 32-byte Ed25519 PUBLIC keys encoded as 64 hex characters.",
+        "  It prints the canonical role/quorum digest to pin independently for run/replay.",
+        "  Obtain each key through the corresponding authority's trusted channel; the",
+        "  command validates the configuration but does not establish the owners' identities.",
+        "  evaluate authenticates the candidate and signs checks of the supplied",
+        "  PromotionTheoremInput model with the candidate synthesizer's private key.",
+        "  The signed report records failed checks too (exit 3); these cannot be approved.",
+        "  Model checks do not create shadow observations or establish source completeness.",
+        "  approve authenticates the report and preserves the existing empirical evidence.",
+        "  Zero-trial check drafts and candidates below the validator's confidence floor",
+        "  require real observed evidence from the synthesizer before approval is permitted.",
+        "  Each operator can add their own approval without disclosing private keys to peers.",
+        "  Incomplete quorum writes a Validated candidate and exits 3; the next operator",
+        "  supplies that candidate and the same report. Quorum writes Promoted and exits 0.",
+        "  Duplicate keys cannot increase quorum; altered or unknown earlier approvals fail.",
+        "  No command marks a witness Active. Activation still requires real shadow",
+        "  validation and a trusted host; a Promoted file cannot authorize frankenctl run.",
+        "  Private key files contain exactly 32 raw seed bytes with private Unix permissions.",
+        "  Output paths must be new files in existing directories; input artifacts and",
+        "  existing output files are never overwritten by these commands.",
+    ]
+    .join("\n")
+}
 
 fn evidence_usage() -> String {
     [
@@ -20066,6 +20460,452 @@ mod tests {
             ReactPipelineInputLanguage::Jsx,
         );
         assert_eq!(body, ReactDoctorSourceHazards::default());
+    }
+
+    #[test]
+    fn witness_operator_commands_require_explicit_roles_and_trust() {
+        let parse = |args: &[&str]| {
+            parse_command(&args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>())
+        };
+        assert_eq!(
+            parse(&["witness", "--help"]).unwrap(),
+            CommandSpec::HelpTopic(HelpTopic::Witness)
+        );
+        assert_eq!(
+            parse(&["help", "witness", "approve"]).unwrap(),
+            CommandSpec::HelpTopic(HelpTopic::Witness)
+        );
+        assert!(parse(&["witness", "activate"]).is_err());
+        assert!(parse(&[
+            "witness", "trust-root", "--synthesizer-key", "aa", "--out", "root.json",
+        ]).is_err());
+        assert!(parse(&[
+            "witness", "evaluate", "--witness", "draft.json", "--out", "report.json",
+        ]).is_err());
+        let digest = "ab".repeat(32);
+        let base = [
+            "witness", "approve", "--witness", "partial.json",
+            "--theorem-report", "report.json", "--witness-trust-root", "root.json",
+            "--expected-witness-trust-digest", digest.as_str(),
+            "--witness-epoch", "3", "--out", "next.json",
+        ];
+        assert!(parse(&base).is_err(), "approval key must be explicit");
+        let mut complete = base.to_vec();
+        complete.extend(["--approval-key", "operator.seed"]);
+        assert!(matches!(
+            parse(&complete).unwrap(),
+            CommandSpec::Witness(WitnessArgs::Approve { .. })
+        ));
+        complete.extend(["--theorem-input", "unreviewed.json"]);
+        assert!(parse(&complete).is_err(), "approval consumes an authenticated report");
+    }
+
+    #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+    struct WitnessApprovalFixture {
+        directory: PathBuf,
+        candidate: PathBuf,
+        static_draft: PathBuf,
+        theorem_input: PathBuf,
+        theorem_report: PathBuf,
+        synthesizer_key: PathBuf,
+        first_key: PathBuf,
+        second_key: PathBuf,
+        trust: WitnessTrustArgs,
+    }
+
+    #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+    fn witness_approval_fixture() -> WitnessApprovalFixture {
+        witness_approval_fixture_with_theorem_authority(None)
+    }
+
+    #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+    fn witness_approval_fixture_with_theorem_authority(
+        theorem_authority: Option<VerificationKey>,
+    ) -> WitnessApprovalFixture {
+        use frankenengine_engine::capability_witness::SourceCapabilitySet;
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let directory = std::env::temp_dir().join(format!(
+            "frankenctl-witness-approval-{}", current_unix_ns()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let seeds = [[0x65; 32], [0x66; 32], [0x67; 32]];
+        let paths = [
+            directory.join("synth.seed"),
+            directory.join("first.seed"),
+            directory.join("second.seed"),
+        ];
+        for (path, seed) in paths.iter().zip(&seeds) {
+            let mut file = fs::OpenOptions::new()
+                .write(true).create_new(true).mode(0o600).open(path).unwrap();
+            std::io::Write::write_all(&mut file, seed).unwrap();
+        }
+        let signer = SigningKey::from_bytes(seeds[0]).unwrap();
+        let first = SigningKey::from_bytes(seeds[1]).unwrap();
+        let second = SigningKey::from_bytes(seeds[2]).unwrap();
+        let root = CapabilityWitnessTrustRoot::new(
+            [signer.verification_key()],
+            [first.verification_key(), second.verification_key()],
+            2,
+        ).unwrap();
+        let root_path = directory.join("root.json");
+        assert_eq!(execute_witness(WitnessArgs::TrustRoot {
+            synthesizer_keys: vec![signer.verification_key().to_hex()],
+            promotion_keys: vec![
+                second.verification_key().to_hex(),
+                first.verification_key().to_hex(),
+            ],
+            quorum: 2,
+            out: root_path.clone(),
+        }).unwrap(), 0);
+        assert_eq!(
+            load_json_file::<CapabilityWitnessTrustRoot>(&root_path).unwrap(), root
+        );
+        let report = analyze_authority_footprint(
+            "1 + 2;", "approval-fixture.js", ParseGoal::Script
+        );
+        let draft = synthesize_check_capability_witness(
+            &report, ParseGoal::Script, signer.clone(), SecurityEpoch::from_raw(3)
+        ).unwrap();
+        let static_draft = directory.join("static-draft.json");
+        write_json_file(&static_draft, &draft).unwrap();
+        // A signed unit-test attestation exercises the pre-existing empirical
+        // policy. These fixture counts are not a claim of live shadow execution.
+        let mut builder = WitnessBuilder::new(
+            draft.extension_id.clone(),
+            draft.policy_id.clone(),
+            draft.epoch,
+            0,
+            signer,
+        )
+        .confidence(ConfidenceInterval::from_trials(100, 100))
+        .transcript_hash(ContentHash::compute(b"unit-test-observation-fixture"));
+        for capability in &draft.required_capabilities {
+            builder = builder.require(capability.clone());
+        }
+        for proof in &draft.proof_obligations {
+            builder = builder.proof(proof.clone());
+        }
+        for (key, value) in &draft.metadata {
+            builder = builder.meta(key.clone(), value.clone());
+        }
+        builder = builder.meta("witness_purpose", "unit_test_observation_fixture");
+        if let Some(theorem_authority) = theorem_authority {
+            builder = builder.meta(
+                "trusted_synthesizer_verification_key",
+                theorem_authority.to_hex(),
+            );
+        }
+        let candidate = builder.build().unwrap();
+        let candidate_path = directory.join("observed-candidate.json");
+        write_json_file(&candidate_path, &candidate).unwrap();
+        let theorem_input = directory.join("model.json");
+        write_json_file(&theorem_input, &PromotionTheoremInput {
+            source_capability_sets: vec![SourceCapabilitySet {
+                source_id: "unit-test-model".to_string(),
+                capabilities: candidate.required_capabilities.clone(),
+            }],
+            manifest_capabilities: candidate.required_capabilities.clone(),
+            capability_lattice: BTreeMap::new(),
+            non_interference_dependencies: BTreeMap::new(),
+            custom_extensions: Vec::new(),
+        }).unwrap();
+        WitnessApprovalFixture {
+            candidate: candidate_path,
+            static_draft,
+            theorem_input,
+            theorem_report: directory.join("theorem.json"),
+            synthesizer_key: paths[0].clone(),
+            first_key: paths[1].clone(),
+            second_key: paths[2].clone(),
+            trust: WitnessTrustArgs {
+                root: root_path,
+                expected_digest: root.canonical_digest().unwrap().to_hex(),
+                epoch: 3,
+            },
+            directory,
+        }
+    }
+
+    #[test]
+    #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+    fn witness_cli_collects_independent_approvals_without_activating_or_changing_evidence() {
+        let f = witness_approval_fixture();
+        let original: CapabilityWitness = load_json_file(&f.candidate).unwrap();
+        assert_eq!(execute_witness(WitnessArgs::Evaluate {
+            witness: f.candidate.clone(),
+            theorem_input: f.theorem_input.clone(),
+            signing_key: f.synthesizer_key.clone(),
+            trust: f.trust.clone(),
+            out: f.theorem_report.clone(),
+        }).unwrap(), 0);
+        let partial_path = f.directory.join("partial.json");
+        let approve = |input: PathBuf, key: PathBuf, output: PathBuf| WitnessArgs::Approve {
+            witness: input,
+            theorem_report: f.theorem_report.clone(),
+            approval_keys: vec![key],
+            trust: f.trust.clone(),
+            out: output,
+        };
+        assert_eq!(execute_witness(approve(
+            f.candidate.clone(), f.first_key.clone(), partial_path.clone()
+        )).unwrap(), 3);
+        let partial: CapabilityWitness = load_json_file(&partial_path).unwrap();
+        assert_eq!(partial.lifecycle_state, LifecycleState::Validated);
+        assert_eq!(partial.promotion_signatures.len(), 1);
+        let duplicate_path = f.directory.join("same-signer.json");
+        assert_eq!(execute_witness(approve(
+            partial_path.clone(), f.first_key.clone(), duplicate_path.clone()
+        )).unwrap(), 3);
+        assert_eq!(
+            load_json_file::<CapabilityWitness>(&duplicate_path).unwrap()
+                .promotion_signatures.len(),
+            1
+        );
+        let promoted_path = f.directory.join("promoted.json");
+        assert_eq!(execute_witness(approve(
+            partial_path.clone(), f.second_key.clone(), promoted_path.clone()
+        )).unwrap(), 0);
+        let promoted: CapabilityWitness = load_json_file(&promoted_path).unwrap();
+        let root: CapabilityWitnessTrustRoot = load_json_file(&f.trust.root).unwrap();
+        assert_eq!(promoted.lifecycle_state, LifecycleState::Promoted);
+        assert!(!promoted.lifecycle_state.is_active());
+        assert_eq!(promoted.verified_promotion_signers(&root).unwrap().len(), 2);
+        assert!(
+            WitnessValidator::with_trust_root(root)
+                .validate_for_security_decision(&promoted).is_empty()
+        );
+        assert_eq!(promoted.confidence, original.confidence);
+        assert_eq!(promoted.content_hash, original.content_hash);
+        assert_eq!(promoted.synthesizer_signature, original.synthesizer_signature);
+        assert_eq!(load_json_file::<CapabilityWitness>(&f.candidate).unwrap(), original);
+        let before = fs::read(&promoted_path).unwrap();
+        assert!(execute_witness(approve(
+            partial_path, f.second_key, promoted_path.clone()
+        )).unwrap_err().contains("cannot create new witness artifact"));
+        assert_eq!(fs::read(promoted_path).unwrap(), before);
+    }
+
+    #[test]
+    #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+    fn witness_cli_refuses_static_trials_role_confusion_and_tampered_approval_inputs() {
+        let f = witness_approval_fixture();
+        assert_eq!(execute_witness(WitnessArgs::Evaluate {
+            witness: f.candidate.clone(),
+            theorem_input: f.theorem_input.clone(),
+            signing_key: f.synthesizer_key.clone(),
+            trust: f.trust.clone(),
+            out: f.theorem_report.clone(),
+        }).unwrap(), 0);
+        let output = f.directory.join("must-not-publish.json");
+        let base = WitnessArgs::Approve {
+            witness: f.candidate.clone(),
+            theorem_report: f.theorem_report.clone(),
+            approval_keys: vec![f.first_key.clone()],
+            trust: f.trust.clone(),
+            out: output.clone(),
+        };
+        let mut static_args = base.clone();
+        if let WitnessArgs::Approve { witness, .. } = &mut static_args {
+            *witness = f.static_draft.clone();
+        }
+        assert!(execute_witness(static_args).unwrap_err().contains("observed evidence"));
+        let mut wrong_role = base.clone();
+        if let WitnessArgs::Approve { approval_keys, .. } = &mut wrong_role {
+            *approval_keys = vec![f.synthesizer_key.clone()];
+        }
+        assert!(execute_witness(wrong_role).unwrap_err()
+            .contains("not an authorized promotion signer"));
+        let mut wrong_pin = base.clone();
+        if let WitnessArgs::Approve { trust, .. } = &mut wrong_pin {
+            trust.expected_digest = "00".repeat(32);
+        }
+        assert!(execute_witness(wrong_pin).unwrap_err().contains("independent pin"));
+        let mut wrong_epoch = base.clone();
+        if let WitnessArgs::Approve { trust, .. } = &mut wrong_epoch {
+            trust.epoch = 4;
+        }
+        assert!(execute_witness(wrong_epoch).unwrap_err()
+            .contains("differs from execution epoch"));
+        let mut report: PromotionTheoremReport = load_json_file(&f.theorem_report).unwrap();
+        report.signature[0] ^= 1;
+        let tampered_report = f.directory.join("tampered-theorem.json");
+        write_json_file(&tampered_report, &report).unwrap();
+        let mut bad_report = base.clone();
+        if let WitnessArgs::Approve { theorem_report, .. } = &mut bad_report {
+            *theorem_report = tampered_report;
+        }
+        assert!(execute_witness(bad_report).unwrap_err().contains("report authentication failed"));
+        for mutation in ["report-hash", "report-id", "description", "counterexample"] {
+            let mut altered: PromotionTheoremReport = load_json_file(&f.theorem_report).unwrap();
+            match mutation {
+                "report-hash" => {
+                    altered.report_artifact_hash = ContentHash::compute(b"substituted-report");
+                }
+                "report-id" => {
+                    altered.report_artifact_id = altered.results[0].proof_artifact_id.clone();
+                }
+                "description" => altered.results[0].detail.push_str(" (altered)"),
+                "counterexample" => {
+                    altered.results[0].counterexample = Some("invented evidence".to_string());
+                }
+                _ => unreachable!(),
+            }
+            let altered_path = f.directory.join(format!("altered-{mutation}.json"));
+            write_json_file(&altered_path, &altered).unwrap();
+            let mut altered_args = base.clone();
+            if let WitnessArgs::Approve { theorem_report, .. } = &mut altered_args {
+                *theorem_report = altered_path;
+            }
+            assert!(
+                execute_witness(altered_args)
+                    .unwrap_err()
+                    .contains("report authentication failed"),
+                "modified {mutation} must be refused before the first approval"
+            );
+            assert!(!output.exists());
+        }
+        assert!(!output.exists(), "no rejected operation publishes a candidate");
+        let partial_path = f.directory.join("partial.json");
+        let mut partial_args = base;
+        if let WitnessArgs::Approve { out, .. } = &mut partial_args {
+            *out = partial_path.clone();
+        }
+        assert_eq!(execute_witness(partial_args).unwrap(), 3);
+        let mut partial: CapabilityWitness = load_json_file(&partial_path).unwrap();
+        partial.promotion_signatures[0][0] ^= 1;
+        let corrupt_path = f.directory.join("corrupt-partial.json");
+        write_json_file(&corrupt_path, &partial).unwrap();
+        assert!(execute_witness(WitnessArgs::Approve {
+            witness: corrupt_path,
+            theorem_report: f.theorem_report,
+            approval_keys: vec![f.second_key],
+            trust: f.trust,
+            out: output.clone(),
+        }).unwrap_err().contains("collected witness approvals are invalid"));
+        assert!(!output.exists());
+    }
+
+    #[test]
+    #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+    fn witness_cli_requires_theorem_authority_to_match_authenticated_synthesis() {
+        let delegated = SigningKey::from_bytes([0x66; 32]).unwrap();
+        let f = witness_approval_fixture_with_theorem_authority(
+            Some(delegated.verification_key()),
+        );
+        let candidate: CapabilityWitness = load_json_file(&f.candidate).unwrap();
+        let synthesizer = SigningKey::from_bytes([0x65; 32]).unwrap();
+        candidate
+            .verify_synthesizer_signature(&synthesizer.verification_key())
+            .unwrap();
+        let input: PromotionTheoremInput = load_json_file(&f.theorem_input).unwrap();
+        let report = candidate
+            .evaluate_promotion_theorems_signed_by(&input, &delegated)
+            .unwrap();
+        assert!(report.all_passed);
+        write_json_file(&f.theorem_report, &report).unwrap();
+
+        let assessed = f.directory.join("must-not-assess.json");
+        assert!(
+            execute_witness(WitnessArgs::Evaluate {
+                witness: f.candidate.clone(),
+                theorem_input: f.theorem_input,
+                signing_key: f.first_key.clone(),
+                trust: f.trust.clone(),
+                out: assessed.clone(),
+            })
+            .unwrap_err()
+            .contains("theorem authority must be the root-authorized candidate synthesizer")
+        );
+        assert!(!assessed.exists());
+        let approved = f.directory.join("must-not-approve.json");
+        assert!(
+            execute_witness(WitnessArgs::Approve {
+                witness: f.candidate,
+                theorem_report: f.theorem_report,
+                approval_keys: vec![f.first_key, f.second_key],
+                trust: f.trust,
+                out: approved.clone(),
+            })
+            .unwrap_err()
+            .contains("theorem authority must be the root-authorized candidate synthesizer")
+        );
+        assert!(!approved.exists());
+    }
+
+    #[test]
+    #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+    fn witness_cli_keeps_failed_model_checks_and_zero_trial_assessments_honest() {
+        let f = witness_approval_fixture();
+        let static_report = f.directory.join("static-theorem.json");
+        assert_eq!(execute_witness(WitnessArgs::Evaluate {
+            witness: f.static_draft.clone(),
+            theorem_input: f.theorem_input.clone(),
+            signing_key: f.synthesizer_key.clone(),
+            trust: f.trust.clone(),
+            out: static_report.clone(),
+        }).unwrap(), 0);
+        assert_eq!(
+            load_json_file::<CapabilityWitness>(&f.static_draft).unwrap().confidence.n_trials,
+            0
+        );
+        let output = f.directory.join("must-not-promote.json");
+        assert!(execute_witness(WitnessArgs::Approve {
+            witness: f.static_draft,
+            theorem_report: static_report,
+            approval_keys: vec![f.first_key.clone(), f.second_key],
+            trust: f.trust.clone(),
+            out: output.clone(),
+        }).unwrap_err().contains("zero ablation trials"));
+        let mut input: PromotionTheoremInput = load_json_file(&f.theorem_input).unwrap();
+        input.manifest_capabilities.clear();
+        let invalid_model = f.directory.join("excess-authority-model.json");
+        write_json_file(&invalid_model, &input).unwrap();
+        assert_eq!(execute_witness(WitnessArgs::Evaluate {
+            witness: f.candidate.clone(),
+            theorem_input: invalid_model,
+            signing_key: f.synthesizer_key,
+            trust: f.trust.clone(),
+            out: f.theorem_report.clone(),
+        }).unwrap(), 3);
+        let report: PromotionTheoremReport = load_json_file(&f.theorem_report).unwrap();
+        assert!(!report.all_passed);
+        assert_eq!(report.signature.len(), 64);
+        assert!(execute_witness(WitnessArgs::Approve {
+            witness: f.candidate,
+            theorem_report: f.theorem_report,
+            approval_keys: vec![f.first_key],
+            trust: f.trust,
+            out: output.clone(),
+        }).unwrap_err().contains("failed policy checks"));
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn witness_cli_trust_configuration_rejects_duplicate_quorum_and_preserves_output() {
+        let directory = std::env::temp_dir().join(format!(
+            "frankenctl-witness-root-{}", current_unix_ns()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let key = SigningKey::from_bytes([0x68; 32])
+            .unwrap().verification_key().to_hex();
+        let output = directory.join("existing.json");
+        fs::write(&output, b"preserve existing artifact").unwrap();
+        let mut args = WitnessArgs::TrustRoot {
+            synthesizer_keys: vec![key.clone()],
+            promotion_keys: vec![key.clone(), key],
+            quorum: 2,
+            out: output.clone(),
+        };
+        assert!(execute_witness(args.clone()).unwrap_err()
+            .contains("exceeds authorized key count"));
+        if let WitnessArgs::TrustRoot { quorum, .. } = &mut args {
+            *quorum = 1;
+        }
+        assert!(execute_witness(args).unwrap_err()
+            .contains("cannot create new witness artifact"));
+        assert_eq!(fs::read(output).unwrap(), b"preserve existing artifact");
+        assert!(parse_witness_public_key(&"00".repeat(32)).is_err());
     }
 
     #[test]

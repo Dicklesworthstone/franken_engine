@@ -57,6 +57,12 @@ fn check(source: &str, expected: &[&str], memory_limit: u64, memory_error: bool)
                 matches!(result, Err(InterpreterError::MemoryBudgetExceeded { .. })),
                 "expected typed memory refusal (v8={v8_profile}), got {result:?}"
             );
+            let output: Vec<&str> = core
+                .console_output()
+                .iter()
+                .map(|entry| entry.message.as_str())
+                .collect();
+            assert_eq!(output, expected, "refusal stage (v8={v8_profile})");
         } else {
             let output: Vec<String> = result
                 .unwrap_or_else(|error| panic!("fixture executes (v8={v8_profile}): {error}"))
@@ -332,6 +338,144 @@ fn iterable_constructor_finishes_iteration_before_converting_values() {
         console.log(events.join(','), copy.join(','));
         "#,
         &["yield1,yield2,done,value1,value2 2,3"],
+        1_048_576,
+        false,
+    );
+}
+
+#[test]
+fn typed_array_from_mapper_allocations_include_the_collected_source() {
+    let slots = 4096 * std::mem::size_of::<Value>() as u64;
+    let allocation = 262_144 + slots;
+    for constructor in [
+        "Uint8Array",
+        "function(length) { return new Uint8Array(length); }",
+    ] {
+        let source = format!(
+            "let held; const result = Uint8Array.from.call({constructor}, new Uint8Array(4096), function(value, index) {{ if (index === 0) {{ console.log('mapper'); held = new Uint8Array({allocation}); }} return value; }}); console.log(result.length);"
+        );
+        // The managed source, collected native list, and mapper allocation
+        // must share one ceiling, including for a custom destination.
+        check(&source, &["mapper"], 262_144 + 3 * slots, true);
+        check(&source, &["mapper", "4096"], 16_777_216, false);
+    }
+}
+
+#[test]
+fn typed_array_from_streams_large_mapper_payloads_into_the_destination() {
+    check(
+        r#"
+        const result = Uint8Array.from({ length: 128 }, function() {
+          return '0'.repeat(16384);
+        });
+        console.log(result.length, result[0], result[127]);
+        console.log(BigInt64Array.of(true, '2', 3n).join(','));
+        console.log(Uint8Array.of().length, Uint8Array.from([]).length);
+        "#,
+        &["128 0 0", "1,2,3", "0 0"],
+        524_288,
+        false,
+    );
+}
+
+#[test]
+fn typed_array_static_calls_convert_and_write_before_the_next_element() {
+    check(
+        r#"
+        const events = [];
+        const target = new Uint8Array(3);
+        function Destination(length) { events.push('ctor:' + length); return target; }
+        try {
+          Uint8Array.from.call(Destination, [3, 4, 5], function(value, index) {
+            events.push('map:' + index + ':' + target[0]);
+            return { valueOf() {
+              events.push('value:' + index);
+              if (index === 1) throw Error('stop');
+              return value + 10;
+            }};
+          });
+        } catch (error) { console.log(error.message); }
+        console.log(events.join(','), target.join(','));
+        events.length = 0;
+        target[0] = 0;
+        const first = { valueOf() { events.push('first'); return 7; } };
+        const second = { valueOf() { events.push('second:' + target[0]); return 9; } };
+        const result = Uint8Array.of.call(Destination, first, second);
+        console.log(result === target, events.join(','), target.join(','));
+        "#,
+        &[
+            "stop",
+            "ctor:3,map:0:0,value:0,map:1:13,value:1 13,0,0",
+            "true ctor:2,first,second:7 7,9,0",
+        ],
+        1_048_576,
+        false,
+    );
+}
+
+#[test]
+fn typed_array_from_keeps_iterator_and_mapper_validation_order() {
+    check(
+        r#"
+        let reads = 0;
+        const untouched = { get [Symbol.iterator]() { reads++; throw Error('read'); } };
+        try { Uint8Array.from(untouched, 7); }
+        catch (error) { console.log(error.name, reads); }
+        const events = [];
+        const source = { *[Symbol.iterator]() {
+          events.push('yield1'); yield 1;
+          events.push('yield2'); yield 2;
+          events.push('done');
+        }};
+        const result = Uint8Array.from(source, function(value, index) {
+          events.push('map' + index);
+          return value + 1;
+        });
+        console.log(events.join(','), result.join(','));
+        "#,
+        &["TypeError 0", "yield1,yield2,done,map0,map1 2,3"],
+        1_048_576,
+        false,
+    );
+}
+
+#[test]
+fn typed_array_static_calls_release_sources_after_abrupt_completion() {
+    check(
+        r#"
+        const source = new Uint8Array(128);
+        const bad = { valueOf() { throw Error('conversion'); } };
+        let caught = 0;
+        for (let round = 0; round < 32; round++) {
+          try {
+            Uint8Array.from(source, function() {
+              if (round % 2 === 0) throw Error('mapper');
+              return bad;
+            });
+          } catch (error) { caught++; }
+          try { Uint8Array.of(bad, 1, 2, 3); }
+          catch (error) { caught++; }
+        }
+        console.log(caught, new Uint8Array(655360).length);
+        "#,
+        &["64 655360"],
+        1_048_576,
+        false,
+    );
+}
+
+#[test]
+fn ordinary_array_sort_converts_comparator_objects_and_rejects_bigint() {
+    check(
+        r#"
+        const source = [3, 1, 2];
+        source.sort(function(a, b) { return { valueOf() { return a - b; } }; });
+        console.log(source.join(','));
+        const unchanged = [3, 1, 2];
+        try { unchanged.sort(function() { return 1n; }); }
+        catch (error) { console.log(error.name, unchanged.join(',')); }
+        "#,
+        &["1,2,3", "TypeError 3,1,2"],
         1_048_576,
         false,
     );

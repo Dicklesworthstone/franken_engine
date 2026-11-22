@@ -11195,99 +11195,104 @@ impl InterpreterCore {
                 got: receiver.type_name().to_string(),
             });
         }
-        let (values, mapper, this_arg) = if builtin.display_name() == "of" {
-            let mut items = Vec::with_capacity(args.count as usize);
-            for index in 0..args.count {
-                items.push(self.builtin_arg(args, index)?.unwrap_or(Value::Undefined));
-            }
-            (items, Value::Undefined, Value::Undefined)
-        } else {
-            let mapper = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
-            if !matches!(mapper, Value::Undefined) && !mapper.is_callable() {
-                return Err(InterpreterError::TypeError {
-                    expected: "callable %TypedArray%.from mapper".to_string(),
-                    got: mapper.type_name().to_string(),
-                });
-            }
-            let this_arg = self.builtin_arg(args, 2)?.unwrap_or(Value::Undefined);
-            let source_only = RegRange {
-                start: args.start,
-                count: args.count.min(1),
-            };
-            let Value::Object(list) = self.array_from_builtin(Some(module), source_only)? else {
-                return Err(InterpreterError::TypeError {
-                    expected: "array from %TypedArray%.from source".to_string(),
-                    got: "non-array".to_string(),
-                });
-            };
-            (self.array_like_values(list)?, mapper, this_arg)
-        };
-        // Guest code (the constructor, the mapper, valueOf) runs while
-        // native locals hold values: no collection until this returns.
-        self.gc_nested_request = None;
-        let target = match intrinsic_kind {
-            Some(_) => None,
-            None => Some(self.typed_array_create(module, receiver, values.len())?),
-        };
-        let kind = match (intrinsic_kind, target) {
-            (Some(kind), _) => kind,
-            (None, Some(target)) => self
-                .typed_array_view_for_object(target)?
-                .map(|view| view.kind)
-                .ok_or_else(|| InterpreterError::TypeError {
-                    expected: "typed array from the %TypedArray%.from constructor".to_string(),
-                    got: "object".to_string(),
-                })?,
-            (None, None) => unreachable!("a non-intrinsic constructor creates its target"),
-        };
-        let argument_label = self.join_arg_range_label(args)?;
-        let mut converted = Vec::with_capacity(values.len());
-        for (index, value) in values.into_iter().enumerate() {
-            let mapped = if matches!(mapper, Value::Undefined) {
-                value
-            } else {
-                let (mapped, label) = self.invoke_inline_method_call_with_argument_label(
-                    Some(module),
-                    mapper.clone(),
-                    this_arg.clone(),
-                    vec![value, Value::Int(index as i64)],
-                    Some(argument_label.clone()),
-                )?;
-                let joined = self
-                    .pending_hostcall_result_label
-                    .as_ref()
-                    .unwrap_or(&Label::Public)
-                    .join(&label);
-                self.replace_pending_hostcall_result_label(Some(joined))?;
-                mapped
-            };
-            // ToNumber/ToBigInt runs the value's valueOf (bd-9vouw.273).
-            let element = self
-                .typed_array_element_values(Some(module), kind, vec![mapped])?
-                .pop()
-                .unwrap_or(Value::Undefined);
-            match target {
-                Some(target) => {
-                    self.typed_array_indexed_set_property(target, &index.to_string(), &element)?;
+        let mut retained = 0;
+        let outcome = (|| {
+            let (values, mapper, this_arg) = if builtin.display_name() == "of" {
+                let length = args.count as usize;
+                let mut items = Vec::new();
+                StringOutputBuffer::grow_vec(self, &mut items, length, length, &mut retained)?;
+                for index in 0..args.count {
+                    let value = self.builtin_arg(args, index)?.unwrap_or(Value::Undefined);
+                    StringOutputBuffer::reserve(
+                        self,
+                        &mut retained,
+                        Self::estimate_value_bytes(&value),
+                    )?;
+                    items.push(value);
                 }
-                None => converted.push(element),
+                (items, Value::Undefined, Value::Undefined)
+            } else {
+                let mapper = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+                if !matches!(mapper, Value::Undefined) && !mapper.is_callable() {
+                    return Err(InterpreterError::TypeError {
+                        expected: "callable %TypedArray%.from mapper".to_string(),
+                        got: mapper.type_name().to_string(),
+                    });
+                }
+                let this_arg = self.builtin_arg(args, 2)?.unwrap_or(Value::Undefined);
+                let source_only = RegRange {
+                    start: args.start,
+                    count: args.count.min(1),
+                };
+                let Value::Object(list) = self.array_from_builtin(Some(module), source_only)?
+                else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "array from %TypedArray%.from source".to_string(),
+                        got: "non-array".to_string(),
+                    });
+                };
+                let values = self.array_like_values(list)?;
+                let bytes = Self::estimate_value_vec_bytes(&values).saturating_add(
+                    ((values.capacity() - values.len()) as u64)
+                        .saturating_mul(std::mem::size_of::<Value>() as u64),
+                );
+                StringOutputBuffer::reserve(self, &mut retained, bytes)?;
+                (values, mapper, this_arg)
+            };
+            // Keep the collected source admitted across constructor, mapper,
+            // and valueOf calls. Native locals also keep the target alive.
+            self.gc_nested_request = None;
+            let target = match intrinsic_kind {
+                Some(kind) => self.alloc_typed_array_with_fresh_buffer(kind, values.len())?,
+                None => self.typed_array_create(module, receiver, values.len())?,
+            };
+            let kind = match intrinsic_kind {
+                Some(kind) => kind,
+                None => self
+                    .typed_array_view_for_object(target)?
+                    .map(|view| view.kind)
+                    .ok_or_else(|| InterpreterError::TypeError {
+                        expected: "typed array from the %TypedArray%.from constructor".to_string(),
+                        got: "object".to_string(),
+                    })?,
+            };
+            let argument_label = self.join_arg_range_label(args)?;
+            for (index, value) in values.into_iter().enumerate() {
+                let mapped = if matches!(mapper, Value::Undefined) {
+                    value
+                } else {
+                    let (mapped, label) = self.invoke_inline_method_call_with_argument_label(
+                        Some(module),
+                        mapper.clone(),
+                        this_arg.clone(),
+                        vec![value, Value::Int(index as i64)],
+                        Some(argument_label.clone()),
+                    )?;
+                    let joined = self
+                        .pending_hostcall_result_label
+                        .as_ref()
+                        .unwrap_or(&Label::Public)
+                        .join(&label);
+                    self.replace_pending_hostcall_result_label(Some(joined))?;
+                    mapped
+                };
+                // TypedArrayCreate precedes mapping; each mapped result is
+                // converted and written before the next mapper runs. There is
+                // no second native list retaining every mapped payload.
+                let element = self.typed_array_element_value(Some(module), kind, mapped)?;
+                self.typed_array_indexed_set_property(target, &index.to_string(), &element)?;
             }
-        }
-        match target {
-            Some(target) => {
-                // The constructed target's bytes take what was written into
-                // them: the source's and the mapper's labels.
-                let label = self
-                    .pending_hostcall_result_label
-                    .clone()
-                    .unwrap_or(Label::Public);
-                self.join_binary_storage_label(target, &label)?;
-                Ok(Value::Object(target))
-            }
-            None => Ok(Value::Object(
-                self.alloc_typed_array_from_values(kind, &converted)?,
-            )),
-        }
+            // Both intrinsic and constructed results retain the source's and
+            // mapper's provenance in their binary storage.
+            let label = self
+                .pending_hostcall_result_label
+                .clone()
+                .unwrap_or(Label::Public);
+            self.join_binary_storage_label(target, &label)?;
+            Ok(Value::Object(target))
+        })();
+        self.json_release_temporary(retained);
+        outcome
     }
 
     /// ES2020 22.2.4.6 TypedArrayCreate(constructor, «length»): construct

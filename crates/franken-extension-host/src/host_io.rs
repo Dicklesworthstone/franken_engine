@@ -403,6 +403,77 @@ pub enum HostIoResponse {
     },
 }
 
+/// Stable classification of a local TLS server-authentication refusal.
+///
+/// These reasons describe the client's certificate verifier, not a TLS alert
+/// sent by the peer or a transport failure. They are retained in host-effect
+/// transcripts so consumers never need to parse rustls diagnostic text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum TlsTrustFailure {
+    UnknownIssuer,
+    Expired,
+    NotValidYet,
+    NameMismatch,
+    Revoked,
+    RevocationUnavailable,
+    InvalidSignature,
+    InvalidCertificate,
+    MissingCertificate,
+}
+
+impl TlsTrustFailure {
+    /// Stable public diagnostic code, independent of the TLS implementation's
+    /// human-readable error messages.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::UnknownIssuer => "TLS_UNKNOWN_ISSUER",
+            Self::Expired => "TLS_CERTIFICATE_EXPIRED",
+            Self::NotValidYet => "TLS_CERTIFICATE_NOT_YET_VALID",
+            Self::NameMismatch => "TLS_NAME_MISMATCH",
+            Self::Revoked => "TLS_CERTIFICATE_REVOKED",
+            Self::RevocationUnavailable => "TLS_REVOCATION_UNAVAILABLE",
+            Self::InvalidSignature => "TLS_INVALID_SIGNATURE",
+            Self::InvalidCertificate => "TLS_INVALID_CERTIFICATE",
+            Self::MissingCertificate => "TLS_MISSING_CERTIFICATE",
+        }
+    }
+
+    fn from_rustls(error: &rustls::Error) -> Option<Self> {
+        use rustls::{CertificateError, Error};
+
+        match error {
+            Error::InvalidCertificate(error) => Some(match error {
+                CertificateError::UnknownIssuer => Self::UnknownIssuer,
+                CertificateError::Expired | CertificateError::ExpiredContext { .. } => {
+                    Self::Expired
+                }
+                CertificateError::NotValidYet | CertificateError::NotValidYetContext { .. } => {
+                    Self::NotValidYet
+                }
+                CertificateError::NotValidForName
+                | CertificateError::NotValidForNameContext { .. } => Self::NameMismatch,
+                CertificateError::Revoked => Self::Revoked,
+                CertificateError::UnknownRevocationStatus
+                | CertificateError::ExpiredRevocationList
+                | CertificateError::ExpiredRevocationListContext { .. }
+                | CertificateError::InvalidOcspResponse => Self::RevocationUnavailable,
+                CertificateError::BadSignature => Self::InvalidSignature,
+                // New verifier refusal variants must remain typed failures,
+                // never be accepted or mistaken for transport problems.
+                _ => Self::InvalidCertificate,
+            }),
+            Error::NoCertificatesPresented => Some(Self::MissingCertificate),
+            Error::InvalidCertRevocationList(_) => Some(Self::RevocationUnavailable),
+            // In particular, a peer's CertificateUnknown/UnknownCA alert does
+            // not prove that our verifier rejected the peer's certificate.
+            _ => None,
+        }
+    }
+}
+
 /// Failure result of a host I/O request.
 ///
 /// Every variant is fail-closed: a host that cannot positively authorize and
@@ -428,6 +499,13 @@ pub enum HostIoError {
         code: String,
         detail: String,
     },
+    /// The local TLS verifier refused to authenticate the server. This remains
+    /// an ordinary failed network effect, distinct from capability denial,
+    /// supervisor cancellation, and a transient transport error.
+    TlsTrust {
+        reason: TlsTrustFailure,
+        detail: String,
+    },
     Io {
         detail: String,
     },
@@ -443,6 +521,9 @@ impl core::fmt::Display for HostIoError {
             Self::NotImplemented { what } => write!(f, "host I/O not implemented: {what}"),
             Self::SandboxViolation { detail } => write!(f, "host I/O sandbox violation: {detail}"),
             Self::Fs { code, detail } => write!(f, "host filesystem error {code}: {detail}"),
+            Self::TlsTrust { reason, detail } => {
+                write!(f, "host TLS trust failure {}: {detail}", reason.code())
+            }
             Self::Io { detail } => write!(f, "host I/O error: {detail}"),
         }
     }
@@ -3237,24 +3318,36 @@ impl SandboxedHostIo {
             })?;
         let stream = self.connect(endpoint, deadline)?;
         let mut tls = rustls::StreamOwned::new(conn, stream);
-        tls.write_all(payload).map_err(|err| HostIoError::Io {
-            detail: format!("TLS send to {endpoint}: {err}"),
-        })?;
-        tls.flush().map_err(|err| HostIoError::Io {
-            detail: format!("TLS flush to {endpoint}: {err}"),
-        })?;
+        tls.write_all(payload)
+            .map_err(|err| Self::tls_io_error(&format!("TLS send to {endpoint}"), err))?;
+        tls.flush()
+            .map_err(|err| Self::tls_io_error(&format!("TLS flush to {endpoint}"), err))?;
         // rustls reports a missing close_notify as UnexpectedEof. Never turn
         // that into success unless framing already completed the message (in
         // which case the reader returns before asking TLS for another byte).
-        let response = http_response::read_response(&mut tls, payload, cap).map_err(|err| {
-            HostIoError::Io {
-                detail: format!("TLS HTTP recv from {endpoint}: {err}"),
-            }
-        })?;
+        let response = http_response::read_response(&mut tls, payload, cap)
+            .map_err(|err| Self::tls_io_error(&format!("TLS HTTP recv from {endpoint}"), err))?;
         tls.sock.check_active().map_err(|err| HostIoError::Io {
             detail: format!("TLS HTTP completion from {endpoint}: {err}"),
         })?;
         Ok(HostIoResponse::NetworkRequest { response })
+    }
+
+    fn tls_io_error(context: &str, error: std::io::Error) -> HostIoError {
+        // rustls::Connection::complete_io retains its protocol error as the
+        // inner value of io::Error. Downcast that value; neither the message nor
+        // io::ErrorKind identifies a certificate-authentication failure.
+        let reason = error
+            .get_ref()
+            .and_then(|source| source.downcast_ref::<rustls::Error>())
+            .and_then(TlsTrustFailure::from_rustls);
+        let detail = format!("{context}: {error}");
+        // run_controlled_network checks live revocation and supervisor control
+        // after this result, preserving their precedence over TLS failures.
+        match reason {
+            Some(reason) => HostIoError::TlsTrust { reason, detail },
+            None => HostIoError::Io { detail },
+        }
     }
 }
 

@@ -1927,12 +1927,29 @@ fn spawn_tls_http_server(
     String,
     std::thread::JoinHandle<Vec<u8>>,
 ) {
+    spawn_tls_http_server_with_params(
+        response,
+        rcgen::CertificateParams::new(vec!["127.0.0.1".to_string()])
+            .expect("certificate parameters"),
+    )
+}
+
+fn spawn_tls_http_server_with_params(
+    response: &'static [u8],
+    parameters: rcgen::CertificateParams,
+) -> (
+    std::net::SocketAddr,
+    String,
+    std::thread::JoinHandle<Vec<u8>>,
+) {
     use std::net::TcpListener;
-    let certified = rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_string()])
+    let key_pair = rcgen::KeyPair::generate().expect("generate test certificate key");
+    let certificate = parameters
+        .self_signed(&key_pair)
         .expect("generate self-signed certificate");
-    let cert_pem = certified.cert.pem();
-    let cert_der = certified.cert.der().clone();
-    let key_der = rustls_pki_types::PrivateKeyDer::Pkcs8(certified.key_pair.serialize_der().into());
+    let cert_pem = certificate.pem();
+    let cert_der = certificate.der().clone();
+    let key_der = rustls_pki_types::PrivateKeyDer::Pkcs8(key_pair.serialize_der().into());
     let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
     let config = rustls::ServerConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
@@ -1942,9 +1959,30 @@ fn spawn_tls_http_server(
         .expect("server certificate");
     let config = std::sync::Arc::new(config);
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind TLS listener");
+    listener
+        .set_nonblocking(true)
+        .expect("nonblocking listener");
     let addr = listener.local_addr().expect("local addr");
     let server = std::thread::spawn(move || {
-        let (tcp, _) = listener.accept().expect("accept");
+        let accept_deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let tcp = loop {
+            match listener.accept() {
+                Ok((tcp, _)) => break tcp,
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock
+                        && std::time::Instant::now() < accept_deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                other => panic!("bounded TLS accept failed: {other:?}"),
+            }
+        };
+        tcp.set_nonblocking(false)
+            .expect("blocking accepted stream");
+        tcp.set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("server read timeout");
+        tcp.set_write_timeout(Some(Duration::from_secs(5)))
+            .expect("server write timeout");
         let conn = match rustls::ServerConnection::new(config) {
             Ok(conn) => conn,
             Err(_) => return Vec::new(),
@@ -1952,7 +1990,8 @@ fn spawn_tls_http_server(
         let mut tls = rustls::StreamOwned::new(conn, tcp);
         // Read the request up to the header terminator (the test requests
         // are bodyless GETs). A client that aborts the handshake (untrusted
-        // anchor) surfaces here as a read error: report an empty request.
+        // anchor) surfaces here as a read error. Retain any observed bytes so
+        // a broken authentication boundary cannot hide a leaked prefix.
         let mut request = Vec::new();
         let mut buf = [0u8; 1024];
         loop {
@@ -1964,7 +2003,7 @@ fn spawn_tls_http_server(
                         break;
                     }
                 }
-                Err(_) => return Vec::new(),
+                Err(_) => return request,
             }
         }
         let _ = tls.write_all(response);
@@ -2034,7 +2073,13 @@ fn sandboxed_tls_untrusted_anchor_fails_closed_bd_3894s() {
         &[HostIoCapability::NetworkSend],
     );
     assert!(
-        matches!(out, Err(HostIoError::Io { .. })),
+        matches!(
+            out,
+            Err(HostIoError::TlsTrust {
+                reason: TlsTrustFailure::UnknownIssuer,
+                ..
+            })
+        ),
         "untrusted TLS anchor must fail closed, got {out:?}"
     );
     let request = server.join().expect("server thread");
@@ -2042,6 +2087,186 @@ fn sandboxed_tls_untrusted_anchor_fails_closed_bd_3894s() {
         request.is_empty(),
         "no request bytes may reach the peer when certificate verification fails"
     );
+}
+
+#[test]
+fn sandboxed_tls_trust_failures_have_stable_replayable_reasons_bd_9vouw_65() {
+    let loopback_certificate = || {
+        rcgen::CertificateParams::new(vec!["127.0.0.1".to_string()])
+            .expect("certificate parameters")
+    };
+    let wrong_name = rcgen::CertificateParams::new(vec!["different.example".to_string()])
+        .expect("wrong-name certificate parameters");
+    let mut expired = loopback_certificate();
+    expired.not_before = rcgen::date_time_ymd(2000, 1, 1);
+    expired.not_after = rcgen::date_time_ymd(2001, 1, 1);
+    let mut not_yet_valid = loopback_certificate();
+    not_yet_valid.not_before = rcgen::date_time_ymd(4090, 1, 1);
+    not_yet_valid.not_after = rcgen::date_time_ymd(4091, 1, 1);
+    let scratch = ScratchDir::new();
+
+    for (parameters, install_anchor, expected_reason) in [
+        (loopback_certificate(), false, "unknown_issuer"),
+        (wrong_name, true, "name_mismatch"),
+        (expired, true, "expired"),
+        (not_yet_valid, true, "not_valid_yet"),
+    ] {
+        for pinned in [false, true] {
+            let (address, certificate, server) = spawn_tls_http_server_with_params(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nbody",
+                parameters.clone(),
+            );
+            let mut provider = SandboxedHostIo::with_root(&scratch.path).expect("provider");
+            if install_anchor {
+                provider = provider
+                    .with_extra_tls_roots_pem(certificate.as_bytes())
+                    .expect("install test trust anchor");
+            }
+            let request = HostIoRequest::NetworkRequest {
+                endpoint: address.to_string(),
+                payload: b"GET /private HTTP/1.1\r\nHost: local\r\nConnection: close\r\n\r\n"
+                    .to_vec(),
+                max_len: 4096,
+                use_tls: true,
+            };
+            let outcome = if pinned {
+                provider.perform_pinned_network(
+                    &request,
+                    &[HostIoCapability::NetworkSend],
+                    address,
+                    std::time::Instant::now() + Duration::from_secs(5),
+                )
+            } else {
+                provider.perform(&request, &[HostIoCapability::NetworkSend])
+            };
+            let observed = server.join().expect("TLS server joined");
+            assert!(
+                observed.is_empty(),
+                "certificate refusal must precede application bytes: {expected_reason}, pinned={pinned}"
+            );
+            let error = outcome.as_ref().expect_err("TLS authentication must fail");
+            let encoded = serde_json::to_value(error).expect("serialize trust refusal");
+            assert_eq!(encoded["kind"], "tls_trust", "pinned={pinned}, {error:?}");
+            assert_eq!(
+                encoded["reason"], expected_reason,
+                "pinned={pinned}, {error:?}"
+            );
+
+            // Preserve the actual provider outcome through the same typed wire
+            // format and exact-request transcript used by deterministic replay.
+            let recorder = InMemoryHostIoTranscript::recording();
+            recorder.begin_execution().expect("begin recording");
+            recorder.record(&request, &outcome);
+            let entries = recorder.finish_execution().expect("finish recording");
+            let wire = serde_json::to_vec(&entries).expect("serialize transcript");
+            let decoded = serde_json::from_slice(&wire).expect("deserialize transcript");
+            let replay = InMemoryHostIoTranscript::replaying(decoded);
+            replay.begin_execution().expect("begin replay");
+            assert_eq!(replay.replay(&request), Some(outcome));
+            assert_eq!(replay.finish_execution().expect("finish replay"), entries);
+        }
+    }
+}
+
+#[test]
+fn tls_trust_classification_requires_local_verifier_evidence_bd_9vouw_65() {
+    for (error, expected) in [
+        (
+            rustls::Error::InvalidCertificate(rustls::CertificateError::Revoked),
+            TlsTrustFailure::Revoked,
+        ),
+        (
+            rustls::Error::InvalidCertificate(rustls::CertificateError::BadSignature),
+            TlsTrustFailure::InvalidSignature,
+        ),
+        (
+            rustls::Error::InvalidCertificate(rustls::CertificateError::BadEncoding),
+            TlsTrustFailure::InvalidCertificate,
+        ),
+        (
+            rustls::Error::InvalidCertificate(rustls::CertificateError::UnknownRevocationStatus),
+            TlsTrustFailure::RevocationUnavailable,
+        ),
+        (
+            rustls::Error::NoCertificatesPresented,
+            TlsTrustFailure::MissingCertificate,
+        ),
+    ] {
+        let mapped = SandboxedHostIo::tls_io_error(
+            "TLS send to localhost:443",
+            std::io::Error::new(std::io::ErrorKind::InvalidData, error),
+        );
+        assert!(matches!(mapped, HostIoError::TlsTrust { reason, .. } if reason == expected));
+        assert!(mapped.to_string().contains(expected.code()));
+        let encoded = serde_json::to_vec(&mapped).expect("serialize verifier refusal");
+        assert_eq!(
+            serde_json::from_slice::<HostIoError>(&encoded).expect("deserialize verifier refusal"),
+            mapped
+        );
+    }
+
+    // A peer alert, forged message, truncation, or timeout does not establish
+    // that the local verifier rejected a server certificate.
+    for error in [
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            rustls::Error::AlertReceived(rustls::AlertDescription::UnknownCA),
+        ),
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "invalid peer certificate: UnknownIssuer",
+        ),
+        std::io::Error::from(std::io::ErrorKind::UnexpectedEof),
+        std::io::Error::from(std::io::ErrorKind::TimedOut),
+        std::io::Error::from(std::io::ErrorKind::ConnectionReset),
+    ] {
+        let mapped = SandboxedHostIo::tls_io_error("TLS HTTP recv from localhost:443", error);
+        assert!(matches!(mapped, HostIoError::Io { .. }), "{mapped:?}");
+    }
+}
+
+#[test]
+fn tls_trust_failure_cannot_mask_supervisor_or_network_revocation_bd_9vouw_65() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[derive(Debug, Default)]
+    struct Cancelled(AtomicBool);
+    impl HostIoControl for Cancelled {
+        fn checkpoint(&self) -> Result<(), HostIoError> {
+            if self.0.load(Ordering::SeqCst) {
+                Err(HostIoError::Denied {
+                    reason: "test supervisor refused".to_string(),
+                })
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    let scratch = ScratchDir::new();
+    for revoke_network in [false, true] {
+        let provider = SandboxedHostIo::with_root(&scratch.path).expect("provider");
+        let supervisor = Arc::new(Cancelled::default());
+        let outcome = provider.run_controlled_network(supervisor.clone(), |_| {
+            // Exercise the post-effect refusal boundary independently of TLS
+            // scheduling: either authority is withdrawn before it sees the
+            // already classified authentication result.
+            if revoke_network {
+                provider.network_revocation().revoke();
+            } else {
+                supervisor.0.store(true, Ordering::SeqCst);
+            }
+            Err(HostIoError::TlsTrust {
+                reason: TlsTrustFailure::UnknownIssuer,
+                detail: "certificate rejected".to_string(),
+            })
+        });
+        assert!(
+            matches!(outcome, Err(HostIoError::Denied { .. })),
+            "{outcome:?}"
+        );
+    }
 }
 
 /// bd-3894s slice (5): a `use_tls` request against a plaintext peer fails

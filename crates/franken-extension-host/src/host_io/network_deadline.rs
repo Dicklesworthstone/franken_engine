@@ -582,9 +582,10 @@ impl super::SandboxedHostIo {
     ) -> super::HostIoOutcome {
         use super::{HostIoError, HostIoRequest, HostIoResponse};
 
-        let fail = |error: io::Error| HostIoError::Io {
-            detail: format!("pinned network {endpoint}: {error}"),
-        };
+        // Preserve the same diagnostic context while retaining local TLS
+        // verifier refusals for the product's signed effect ledger.
+        let fail =
+            |error: io::Error| Self::tls_io_error(&format!("pinned network {endpoint}"), error);
         if destinations.is_empty() || destinations.len() > 64 {
             return Err(HostIoError::SandboxViolation {
                 detail: "pinned network requires between 1 and 64 approved addresses".to_string(),
@@ -905,6 +906,7 @@ mod tests {
 mod pinned_tests {
     use super::super::{
         HostIoCapability, HostIoError, HostIoRequest, HostIoResponse, SandboxedHostIo,
+        TlsTrustFailure,
     };
     use super::*;
     use std::net::TcpListener;
@@ -1223,7 +1225,13 @@ mod pinned_tests {
             Instant::now() + Duration::from_secs(5),
         );
         let (_, received) = server.join().unwrap();
-        assert!(result.is_err());
+        assert!(matches!(
+            result,
+            Err(HostIoError::TlsTrust {
+                reason: TlsTrustFailure::NameMismatch,
+                ..
+            })
+        ));
         assert!(received.is_empty());
         assert_eq!(
             second.accept().unwrap_err().kind(),

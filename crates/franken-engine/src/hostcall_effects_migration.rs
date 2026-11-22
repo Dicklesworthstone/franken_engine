@@ -651,6 +651,11 @@ impl FullCapsHandler {
                 message: detail,
                 code: Some(code),
             }),
+            Err(HostIoError::TlsTrust { reason, detail }) => Err(EffectError::HandlerError {
+                handler: "full_caps_handler".to_string(),
+                message: detail,
+                code: Some(reason.code().to_string()),
+            }),
             Err(HostIoError::Denied { reason }) => {
                 match HostIoBudgetError::from_code(&reason) {
                     Some(error) => Err(EffectError::HandlerError {
@@ -3520,6 +3525,51 @@ mod tests {
         for (request, granted) in seen.iter() {
             assert_eq!(granted.as_slice(), &[request.required_capability()]);
         }
+    }
+
+    #[test]
+    fn full_caps_replays_tls_trust_failure_without_capability_denial_bd_9vouw_65() {
+        use frankenengine_extension_host::host_io::{InMemoryHostIoTranscript, TlsTrustFailure};
+
+        let effect = NetworkHostcallEffect {
+            url: "https://certificate.example:443/".to_string(),
+            method: "GET".to_string(),
+            headers: Vec::new(),
+            body: None,
+        };
+        let request = create_network_host_io_request(
+            &effect.url,
+            &effect.method,
+            &effect.headers,
+            effect.body.as_deref(),
+        );
+        let recorded = vec![(
+            request,
+            Err(HostIoError::TlsTrust {
+                reason: TlsTrustFailure::Expired,
+                detail: "recorded certificate expiry".to_string(),
+            }),
+        )];
+        let recorder = Arc::new(InMemoryHostIoTranscript::replaying(recorded.clone()));
+        recorder
+            .begin_execution()
+            .expect("begin TLS failure replay");
+        let handler =
+            FullCapsHandler::with_host_io_recorded(Arc::new(NeverCalledHostIo), recorder.clone());
+        let error = handler
+            .handle(&effect)
+            .expect_err("replay must retain TLS refusal");
+        assert!(
+            matches!(
+                error,
+                EffectError::HandlerError { handler, message, code: Some(code) }
+                    if handler == "full_caps_handler"
+                        && message == "recorded certificate expiry"
+                        && code == "TLS_CERTIFICATE_EXPIRED"
+            ),
+            "TLS verification failure must remain a network error, not denied capability"
+        );
+        assert_eq!(recorder.finish_execution().unwrap(), recorded);
     }
 
     fn replay_host_io_denial(reason: &str) -> EffectError {

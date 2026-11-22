@@ -11,7 +11,7 @@ use frankenengine_extension_host::host_effect_journal::{
 };
 use frankenengine_extension_host::host_io::{
     HostIoCapability, HostIoError, HostIoOutcome, HostIoProvider, HostIoRequest, HostIoResponse,
-    SandboxedHostIo,
+    SandboxedHostIo, TlsTrustFailure,
 };
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -825,7 +825,10 @@ fn hostname_tls_cannot_authenticate_only_the_resolved_address() {
     let named = named_exchange("127.0.0.1:0", Some("localhost"), Some("127.0.0.1"));
     assert!(matches!(
         named.exchange.outcome,
-        Err(HostIoError::Io { .. })
+        Err(HostIoError::TlsTrust {
+            reason: TlsTrustFailure::NameMismatch,
+            ..
+        })
     ));
     assert!(
         named.observed.is_err(),
@@ -838,7 +841,10 @@ fn ipv6_tls_rejects_a_trusted_certificate_for_another_ip() {
     let named = named_exchange("[::1]:0", None, Some("127.0.0.1"));
     assert!(matches!(
         named.exchange.outcome,
-        Err(HostIoError::Io { .. })
+        Err(HostIoError::TlsTrust {
+            reason: TlsTrustFailure::NameMismatch,
+            ..
+        })
     ));
     assert!(
         named.observed.is_err(),

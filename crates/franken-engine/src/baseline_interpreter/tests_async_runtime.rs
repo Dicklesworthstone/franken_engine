@@ -9001,7 +9001,7 @@ fn url_state_is_memory_exact_ifc_labeled_and_seed_cleared_bd_8y0gs() {
     core.set_register_label(0, Label::Secret)
         .expect("URL source label");
     let Value::Object(url_id) = core
-        .construct_url(RegRange { start: 0, count: 1 })
+        .construct_url(None, RegRange { start: 0, count: 1 })
         .expect("construct authenticated URL")
     else {
         panic!("URL constructor must return an object");
@@ -9048,7 +9048,7 @@ fn url_constructor_and_linked_mutation_refusals_are_atomic_bd_8y0gs() {
     let baseline_bytes = refused.estimated_memory_bytes();
     refused.config.max_total_memory_bytes = baseline_bytes;
     assert!(matches!(
-        refused.construct_url(RegRange { start: 0, count: 1 }),
+        refused.construct_url(None, RegRange { start: 0, count: 1 }),
         Err(InterpreterError::MemoryBudgetExceeded { .. })
     ));
     assert_eq!(refused.heap.len(), baseline_heap_len);
@@ -9066,7 +9066,7 @@ fn url_constructor_and_linked_mutation_refusals_are_atomic_bd_8y0gs() {
         .unwrap_or(u32::MAX)
         .saturating_add(1);
     assert!(matches!(
-        second_allocation_refused.construct_url(RegRange { start: 0, count: 1 }),
+        second_allocation_refused.construct_url(None, RegRange { start: 0, count: 1 }),
         Err(InterpreterError::MemoryBudgetExceeded { .. })
     ));
     assert_eq!(second_allocation_refused.heap.len(), baseline_heap_len);
@@ -9104,7 +9104,7 @@ fn url_constructor_and_linked_mutation_refusals_are_atomic_bd_8y0gs() {
     core.write_reg(0, Value::str("http://example.com/?a=1"))
         .expect("URL source register");
     let Value::Object(url_id) = core
-        .construct_url(RegRange { start: 0, count: 1 })
+        .construct_url(None, RegRange { start: 0, count: 1 })
         .expect("construct URL before mutation")
     else {
         panic!("URL constructor must return an object");

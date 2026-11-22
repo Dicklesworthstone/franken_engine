@@ -1975,21 +1975,107 @@ impl InterpreterCore {
             )
     }
 
-    /// Conservative allocation bound for the engine's primitive string
-    /// coercion. URL entry points reserve this before calling
-    /// `value_to_string`, so even Buffer/Error object coercions cannot create
-    /// an unmetered host allocation before URL parsing starts.
-    /// A URL constructor or static argument as a string: a URL object gives
-    /// its href, its stringifier (URL Standard 6.1), where the engine's
-    /// conversion gave "[object URL]"; anything else that conversion
-    /// (bd-9vouw.168: a user toString is not called).
-    pub(super) fn url_input_to_string(&self, value: &Value) -> String {
-        if let Value::Object(id) = value
-            && let Some(state) = self.url_objects.get(id)
-        {
-            return state.href.clone();
-        }
-        self.value_to_string(value)
+    /// Web IDL USVString: observable ToString, then replace lone UTF-16
+    /// surrogates with U+FFFD. Even a branded URL must use its live hooks;
+    /// reading its internal href directly skips an overridden stringifier.
+    fn url_input_to_string(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: Value,
+    ) -> Result<String, InterpreterError> {
+        self.json_observe_reachable_value(&value)?;
+        let text = self.conversion_to_string(module, value)?;
+        let projection = text.as_utf8_projection();
+        self.check_temporary_memory_budget(Self::estimate_string_bytes(projection))?;
+        Ok(projection.to_owned())
+    }
+
+    /// URL conversion hooks may reenter the VM. Preserve every observation
+    /// across later hooks and attach it to either the result or the original
+    /// abrupt completion before the callback context is restored.
+    fn url_conversion_scope<T>(
+        &mut self,
+        input_label: Label,
+        operation: impl FnOnce(&mut Self) -> Result<T, InterpreterError>,
+    ) -> Result<T, InterpreterError> {
+        // URL inputs and the setter receiver are held in native locals while
+        // guest hooks run. As with generic Array algorithms, defer nested GC
+        // until the outer dispatch exposes its complete set of roots again.
+        self.gc_nested_request = None;
+        self.scoped_conversion(|core| {
+            let label = core.json_parse_context_label()?;
+            let label = core.join_owned_label_with_temporary_budget(label, &input_label)?;
+            drop(input_label);
+            core.json_observe_label(label)?;
+            let mut outcome = operation(core);
+            if let Err(error) = core.observe_scoped_callback_result() {
+                outcome = Err(error);
+            }
+            match outcome {
+                Err(error) if Self::js_catchable_error_name(&error).is_some() => {
+                    Err(core.scoped_native_error(&error)?)
+                }
+                Err(error @ InterpreterError::UncaughtException { .. }) => {
+                    let label = core.json_parse_context_label()?;
+                    core.join_pending_exception_label(&label)?;
+                    Err(error)
+                }
+                other => other,
+            }
+        })
+    }
+
+    /// Capture the arguments before invoking guest code, convert input then
+    /// base exactly once, and retain both strings in the canonical temporary
+    /// memory component across reentrant calls and native URL parsing.
+    fn with_url_arguments<T>(
+        &mut self,
+        module: Option<&Ir3Module>,
+        args: RegRange,
+        operation: impl FnOnce(&mut Self, &str, Option<&str>) -> Result<T, InterpreterError>,
+    ) -> Result<T, InterpreterError> {
+        let input_value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let base_value = match self.builtin_arg(args, 1)? {
+            None | Some(Value::Undefined) => None,
+            Some(value) => Some(value),
+        };
+        let input_label = self
+            .join_arg_range_label(args)?
+            .join(&self.url_argument_state_label(&[Some(&input_value), base_value.as_ref()]));
+        self.url_conversion_scope(input_label, |core| {
+            if args.count == 0 {
+                return Err(core.throw_legacy_url_type_error(
+                    "ERR_MISSING_ARGS",
+                    "The \"url\" argument must be specified".to_string(),
+                ));
+            }
+            let input = core.url_input_to_string(module, input_value)?;
+            let input_bytes = Self::estimate_string_bytes(&input);
+            core.json_reserve_temporary(input_bytes)?;
+            let outcome = (|| {
+                let base = base_value
+                    .map(|value| core.url_input_to_string(module, value))
+                    .transpose()?;
+                let base_bytes = base
+                    .as_deref()
+                    .map(Self::estimate_string_bytes)
+                    .unwrap_or(0);
+                core.json_reserve_temporary(base_bytes)?;
+                let outcome = (|| {
+                    core.check_temporary_memory_budget(Self::url_parse_working_upper_bound(
+                        input_bytes,
+                        base_bytes,
+                    ))?;
+                    operation(core, &input, base.as_deref())
+                })();
+                drop(base);
+                core.json_release_temporary(base_bytes);
+                outcome
+            })();
+            drop(input);
+            core.json_release_temporary(input_bytes);
+            outcome
+        })
     }
 
     /// The join of the state labels of the URL objects among `values`: a
@@ -2127,77 +2213,53 @@ impl InterpreterCore {
         Ok(object_id)
     }
 
-    /// `URL.canParse(input, base)`: whether `new URL(input, base)` would
-    /// succeed; `URL.parse(input, base)`: that URL, or null where the
-    /// constructor throws (URL Standard 6.1). Neither allocates an error.
+    /// URL Standard 6.1: parsing failure returns false or null, while
+    /// failures in the preceding Web IDL argument conversions still throw.
     pub(super) fn url_static(
         &mut self,
+        module: Option<&Ir3Module>,
         method: &str,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        let input_value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-        let base_value = match self.builtin_arg(args, 1)? {
-            None | Some(Value::Undefined) => None,
-            Some(value) => Some(value),
-        };
-        let input_bound = self.url_value_to_string_upper_bound(&input_value);
-        let base_bound = base_value
-            .as_ref()
-            .map(|value| self.url_value_to_string_upper_bound(value))
-            .unwrap_or(0);
-        self.check_temporary_memory_budget(Self::url_parse_working_upper_bound(
-            input_bound,
-            base_bound,
-        ))?;
-        let url_label = self.url_argument_state_label(&[Some(&input_value), base_value.as_ref()]);
-        if url_label != Label::Public {
-            let label = self
-                .pending_hostcall_result_label
-                .clone()
-                .unwrap_or(Label::Public)
-                .join(&url_label);
-            self.replace_pending_hostcall_result_label(Some(label))?;
-        }
-        let input = self.url_input_to_string(&input_value);
-        let base = base_value.map(|value| self.url_input_to_string(&value));
-        let parses = match base.as_deref() {
-            Some(base) => Url::parse(base)
-                .ok()
-                .is_some_and(|base| base.join(&input).is_ok()),
-            None => Url::parse(&input).is_ok(),
-        };
-        match (method, parses) {
-            ("parse", true) => self.construct_url(args),
-            ("parse", false) => Ok(Value::Null),
-            (_, parses) => Ok(Value::Bool(parses)),
-        }
+        self.with_url_arguments(module, args, |core, input, base| {
+            let parsed = match base {
+                Some(base) => Url::parse(base).and_then(|base| base.join(input)),
+                None => Url::parse(input),
+            };
+            match (method, parsed) {
+                ("parse", Ok(parsed)) => {
+                    let label = core.json_parse_context_label()?;
+                    core.allocate_parsed_url(parsed, label)
+                }
+                ("parse", Err(_)) => Ok(Value::Null),
+                (_, parsed) => Ok(Value::Bool(parsed.is_ok())),
+            }
+        })
     }
 
-    pub(super) fn construct_url(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
-        let input_value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-        let base_value = match self.builtin_arg(args, 1)? {
-            None | Some(Value::Undefined) => None,
-            Some(value) => Some(value),
-        };
-        let input_bound = self.url_value_to_string_upper_bound(&input_value);
-        let base_bound = base_value
-            .as_ref()
-            .map(|value| self.url_value_to_string_upper_bound(value))
-            .unwrap_or(0);
-        self.check_temporary_memory_budget(Self::url_parse_working_upper_bound(
-            input_bound,
-            base_bound,
-        ))?;
-        let url_label = self.url_argument_state_label(&[Some(&input_value), base_value.as_ref()]);
-        let input = self.url_input_to_string(&input_value);
-        let base = base_value.map(|value| self.url_input_to_string(&value));
-        let parsed = self.parse_whatwg_url(&input, base.as_deref())?;
+    pub(super) fn construct_url(
+        &mut self,
+        module: Option<&Ir3Module>,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        self.with_url_arguments(module, args, |core, input, base| {
+            let parsed = core.parse_whatwg_url(input, base)?;
+            let label = core.json_parse_context_label()?;
+            core.allocate_parsed_url(parsed, label)
+        })
+    }
+
+    /// Initialize a URL and its linked searchParams from the already-parsed
+    /// result. URL.parse must not call the constructor and coerce again.
+    fn allocate_parsed_url(
+        &mut self,
+        parsed: Url,
+        lifecycle_label: Label,
+    ) -> Result<Value, InterpreterError> {
+        self.check_string_limit(parsed.as_str().len())?;
         let href = parsed.as_str().to_string();
         let pairs = Self::url_pairs(&parsed);
         drop(parsed);
-        drop(input);
-        drop(base);
-        let lifecycle_label = self.join_arg_range_label(args)?.join(&url_label);
 
         let projected_state_bytes = MEMORY_ESTIMATE_MAP_ENTRY_BYTES
             .saturating_mul(2)
@@ -2539,6 +2601,7 @@ impl InterpreterCore {
 
     pub(super) fn set_url_object_property(
         &mut self,
+        module: Option<&Ir3Module>,
         object_id: ObjectId,
         key: &str,
         value: &Value,
@@ -2564,12 +2627,37 @@ impl InterpreterCore {
         {
             return Ok(false);
         }
+        self.url_conversion_scope(mutation_label.clone(), |core| {
+            let text = core.url_input_to_string(module, value.clone())?;
+            let text_bytes = Self::estimate_string_bytes(&text);
+            core.json_reserve_temporary(text_bytes)?;
+            let outcome = (|| {
+                let label = core.json_parse_context_label()?;
+                core.join_object_mutation_label(object_id, &label)?;
+                core.set_url_object_property_text(object_id, key, &text, &label)
+            })();
+            drop(text);
+            core.json_release_temporary(text_bytes);
+            outcome
+        })
+    }
+
+    /// Web IDL converts the assigned value before the URL setter algorithm.
+    /// Read the live state only now: a conversion hook may have changed the
+    /// URL or its linked searchParams, and those effects must not be lost.
+    fn set_url_object_property_text(
+        &mut self,
+        object_id: ObjectId,
+        key: &str,
+        text: &str,
+        mutation_label: &Label,
+    ) -> Result<bool, InterpreterError> {
         let current = self
             .url_objects
             .get(&object_id)
             .expect("URL brand checked before state read");
         let clone_bytes = Self::estimate_url_state_bytes(current);
-        let value_bound = self.url_value_to_string_upper_bound(value);
+        let value_bound = Self::estimate_string_bytes(text);
         let href_bytes = Self::estimate_string_bytes(&current.href);
         // `href` and `search` also rebuild the linked searchParams list.
         let params_rebuild_bound = if matches!(key, "href" | "search") {
@@ -2589,38 +2677,37 @@ impl InterpreterCore {
             Url::parse(&projected.href).map_err(|error| InterpreterError::InternalError {
                 details: format!("authenticated URL state failed to reparse: {error}"),
             })?;
-        let text = self.value_to_string(value);
         // The setters other than `href` ignore a value they cannot apply, as
         // the standard's basic URL parser with a state override does.
         match key {
-            "pathname" => parsed.set_path(&text),
+            "pathname" => parsed.set_path(text),
             "hash" if text.is_empty() => parsed.set_fragment(None),
-            "hash" => parsed.set_fragment(Some(text.strip_prefix('#').unwrap_or(&text))),
-            "href" => parsed = self.parse_whatwg_url(&text, None)?,
+            "hash" => parsed.set_fragment(Some(text.strip_prefix('#').unwrap_or(text))),
+            "href" => parsed = self.parse_whatwg_url(text, None)?,
             "protocol" => {
-                let _ = url::quirks::set_protocol(&mut parsed, &text);
+                let _ = url::quirks::set_protocol(&mut parsed, text);
             }
             "username" => {
-                let _ = url::quirks::set_username(&mut parsed, &text);
+                let _ = url::quirks::set_username(&mut parsed, text);
             }
             "password" => {
-                let _ = url::quirks::set_password(&mut parsed, &text);
+                let _ = url::quirks::set_password(&mut parsed, text);
             }
             "host" => {
-                let _ = url::quirks::set_host(&mut parsed, &text);
+                let _ = url::quirks::set_host(&mut parsed, text);
             }
             "hostname" => {
-                let _ = url::quirks::set_hostname(&mut parsed, &text);
+                let _ = url::quirks::set_hostname(&mut parsed, text);
             }
             "port" => {
-                let _ = url::quirks::set_port(&mut parsed, &text);
+                let _ = url::quirks::set_port(&mut parsed, text);
             }
-            "search" => url::quirks::set_search(&mut parsed, &text),
+            "search" => url::quirks::set_search(&mut parsed, text),
             _ => unreachable!("URL setter key was validated"),
         }
         let rebuilt_pairs = matches!(key, "href" | "search").then(|| Self::url_pairs(&parsed));
+        self.check_string_limit(parsed.as_str().len())?;
         projected.href = parsed.into();
-        drop(text);
         projected.lifecycle_label = projected.lifecycle_label.join(mutation_label);
         let previous_bytes = clone_bytes;
         let next_bytes = Self::estimate_url_state_bytes(&projected);
@@ -9522,7 +9609,7 @@ impl InterpreterCore {
             "builtin:String" => {
                 self.primitive_conversion_builtin(module, args, PrimitiveConversion::String)
             }
-            "builtin:Url" => self.construct_url(args),
+            "builtin:Url" => self.construct_url(module, args),
             "builtin:UrlSearchParams" => self.construct_url_search_params(module, args),
             "builtin:UrlFileUrlToPath" => self.legacy_url_file_url_to_path(args),
             "builtin:UrlFormat" => self.legacy_url_format(args),

@@ -4819,7 +4819,7 @@ impl InterpreterCore {
                 let method = builtin.display_name();
                 self.dispatch_console_hostcall(&format!("console:{method}"), args, Some(module))
             }
-            BuiltinFunctionKind::UrlStatic => self.url_static(builtin.display_name(), args),
+            BuiltinFunctionKind::UrlStatic => self.url_static(Some(module), builtin.display_name(), args),
             BuiltinFunctionKind::ObjectLegacyAccessor => {
                 let method = builtin.display_name();
                 self.legacy_accessor_method(module, method, receiver.unwrap_or(Value::Undefined), args)
@@ -15090,6 +15090,7 @@ impl InterpreterCore {
                                 self.join_object_mutation_label(oid, &mutation_label)?;
                                 let handled_url = match property_key.as_str() {
                                     Some(key) => self.set_url_object_property(
+                                        Some(module),
                                         oid,
                                         key,
                                         &set_val,

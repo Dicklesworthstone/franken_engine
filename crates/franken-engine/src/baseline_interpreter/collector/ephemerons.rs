@@ -175,17 +175,29 @@ impl InterpreterCore {
         marker: &mut GcMarker,
         limit: usize,
     ) -> Option<ConditionalIndex<'_>> {
+        // The fast index watches heap-object marks. A native capability
+        // backed by a promise or iterator needs the existing carrier-aware
+        // scanning fixpoint instead, including under zero scratch headroom.
+        if self.function_prototypes.keys().any(|(owner, id)| {
+            self.gc_prototype_carrier(owner, *id)
+                .is_some_and(PrototypeCarrier::needs_carrier_scan)
+        }) {
+            return None;
+        }
         let mut count = self
             .url_objects
             .len()
             .checked_add(self.url_search_params.len())?
             .checked_add(self.child_process_streams.len())?
             .checked_add(self.function_prototypes.len())?;
-        let bound_owner = Self::bound_function_own_property_owner();
         count = count.checked_add(
             self.function_prototypes
                 .keys()
-                .filter(|(owner, _)| *owner == bound_owner)
+                .filter(|(owner, id)| {
+                    self.gc_prototype_carrier(owner, *id)
+                        .and_then(|carrier| carrier.forward_object(*id))
+                        .is_some()
+                })
                 .count(),
         )?;
         for storage in self.weakmap_storage.values() {
@@ -236,14 +248,13 @@ impl InterpreterCore {
             // A bound function keeps its target/this/arguments in a private
             // heap state. Reaching that state keeps its own properties; the
             // reverse edge below preserves identity through prototype links.
-            if *owner == bound_owner {
-                index.add(marker, *id, None, EdgeTarget::Object(*object));
-            }
-            if let Some(carrier) = self
-                .gc_prototype_carrier(owner, *id)
-                .filter(|carrier| carrier.is_identity())
-            {
-                index.add(marker, object.0, None, EdgeTarget::Carrier(carrier, *id));
+            if let Some(carrier) = self.gc_prototype_carrier(owner, *id) {
+                if let Some(receiver) = carrier.forward_object(*id) {
+                    index.add(marker, receiver.0, None, EdgeTarget::Object(*object));
+                }
+                if carrier.is_identity() {
+                    index.add(marker, object.0, None, EdgeTarget::Carrier(carrier, *id));
+                }
             }
         }
         index.watchers.sort_unstable();
@@ -286,15 +297,15 @@ impl InterpreterCore {
                 }
             }
             for ((owner, id), object) in self.function_prototypes.iter() {
-                if *owner == Self::bound_function_own_property_owner() && marker.is_marked(*id) {
-                    marker.object(*object);
-                }
-                if marker.is_marked(object.0)
-                    && let Some(carrier) = self
-                        .gc_prototype_carrier(owner, *id)
-                        .filter(|carrier| carrier.is_identity())
-                {
-                    carrier.mark(marker, *id);
+                if let Some(carrier) = self.gc_prototype_carrier(owner, *id) {
+                    if (carrier.forward_object(*id).is_some() || carrier.needs_carrier_scan())
+                        && carrier.is_marked(marker, *id)
+                    {
+                        marker.object(*object);
+                    }
+                    if marker.is_marked(object.0) && carrier.is_identity() {
+                        carrier.mark(marker, *id);
+                    }
                 }
             }
 
@@ -304,6 +315,23 @@ impl InterpreterCore {
             let mut discovered_object = false;
             self.gc_drain_with_objects(marker, |_, _| discovered_object = true);
             if !discovered_object {
+                // Draining a newly reached native capability can mark only
+                // its promise/iterator table entry. Give that carrier's
+                // forward edge a turn even if no heap object was discovered.
+                if self
+                    .function_prototypes
+                    .iter()
+                    .any(|((owner, id), object)| {
+                        !marker.is_marked(object.0)
+                            && self
+                                .gc_prototype_carrier(owner, *id)
+                                .is_some_and(|carrier| {
+                                    carrier.needs_carrier_scan() && carrier.is_marked(marker, *id)
+                                })
+                    })
+                {
+                    continue;
+                }
                 return;
             }
         }

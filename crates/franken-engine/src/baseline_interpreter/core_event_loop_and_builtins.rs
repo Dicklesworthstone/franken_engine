@@ -13362,7 +13362,10 @@ impl InterpreterCore {
                         }
                         HostObjectSlots::TextDecoder(_)
                         | HostObjectSlots::FsEntryKind(_)
-                        | HostObjectSlots::TimerHandle(_) => {}
+                        | HostObjectSlots::TimerHandle(_)
+                        // Recovering identity does not inspect captured
+                        // environments or add a new callable observation.
+                        | HostObjectSlots::CallableIdentity(_) => {}
                     }
                 }
             }

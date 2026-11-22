@@ -9617,6 +9617,17 @@ enum HostObjectSlots {
     Event(EventSlots),
     AbortController(ObjectId),
     AbortSignal(AbortSignalSlots),
+    /// Immutable identity of the callable represented by this property
+    /// backing. It is not a guest property or a new invocation authority.
+    CallableIdentity(CallableIdentitySlots),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct CallableIdentitySlots {
+    value: Value,
+    // Only bare IR function indices are module-local. Other callable values
+    // carry globally scoped closure ids or native provenance themselves.
+    module_owner: Option<ContentHash>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -9720,6 +9731,13 @@ struct AbortSignalSlots {
 }
 
 impl HeapObject {
+    fn callable_identity(&self) -> Option<&CallableIdentitySlots> {
+        match self.host_slots.as_deref() {
+            Some(HostObjectSlots::CallableIdentity(identity)) => Some(identity),
+            _ => None,
+        }
+    }
+
     fn legacy_client_request_slots(&self) -> Option<&LegacyClientRequestSlots> {
         match self.host_slots.as_deref() {
             Some(HostObjectSlots::LegacyClientRequest(slots)) => Some(slots),
@@ -10302,6 +10320,14 @@ impl<'de> Deserialize<'de> for HeapObject {
         }
 
         let wire = HeapObjectWire::deserialize(deserializer)?;
+        if let Some(HostObjectSlots::CallableIdentity(identity)) = wire.host_slots.as_deref()
+            && (!identity.value.is_callable()
+                || matches!(identity.value, Value::Function(_)) != identity.module_owner.is_some())
+        {
+            return Err(D::Error::custom(
+                "callable identity must retain valid callable provenance",
+            ));
+        }
         let has_parent = wire.derived_constructor_parent.is_some();
         let has_parent_label = wire.derived_constructor_parent_label.is_some();
         if has_parent != has_parent_label {
@@ -10605,6 +10631,9 @@ fn validate_heap_symbol_references(
             }
             HostObjectSlots::AbortSignal(signal) => {
                 validate_symbol_value(state, &signal.reason)?;
+            }
+            HostObjectSlots::CallableIdentity(identity) => {
+                validate_symbol_value(state, &identity.value)?;
             }
             HostObjectSlots::TextDecoder(_)
             | HostObjectSlots::IntlResolved(_)

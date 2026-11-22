@@ -1575,14 +1575,11 @@ impl InterpreterCore {
                 _ => Ok(false),
             };
         }
-        // A callable proxy and %Function.prototype% have complete property
-        // chains on their backing objects (bd-9vouw.132, bd-9vouw.346).
-        if let Value::BuiltinFunction(builtin) = function
-            && matches!(
-                builtin.kind,
-                BuiltinFunctionKind::CallableProxy | BuiltinFunctionKind::FunctionPrototype
-            )
-            && let Some(backing) = Self::builtin_function_property_object(builtin)
+        // Once storage exists, absence is authoritative as well as presence:
+        // an explicit null/custom parent must not regain intrinsic members.
+        // An unmaterialized intrinsic own `prototype` keeps its lazy path.
+        if self.function_property_uses_materialized_chain(module, function, key)?
+            && let Some(backing) = self.own_property_holder(Some(module), function, false)?
         {
             return self.proxy_aware_has_runtime_property(Some(module), backing, key, 0);
         }
@@ -1600,11 +1597,6 @@ impl InterpreterCore {
                 self.standard_constructor_property(builtin, name)?,
                 Value::Undefined
             )
-        {
-            return Ok(true);
-        }
-        if let Some(backing) = self.function_own_property_object(module, function)?
-            && self.proxy_aware_has_runtime_property(Some(module), backing, key, 0)?
         {
             return Ok(true);
         }
@@ -10828,24 +10820,12 @@ impl InterpreterCore {
                     .map(Some)
             };
         }
-        let name_or_length = matches!(key.as_str(), Some("name" | "length"));
-        if (key.as_str() != Some("prototype")
-            || !self.function_has_intrinsic_prototype(function)
-            || self.function_backing_has_own_property(module, function, key)?)
-            && let Some(backing) = self.function_own_property_object(module, function)?
+        if self.function_property_uses_materialized_chain(module, function, key)?
+            && let Some(backing) = self.own_property_holder(Some(module), function, false)?
         {
-            let own = self
-                .heap
-                .get(backing.0 as usize)
-                .is_some_and(|object| object.contains_own_runtime_property(key));
-            if own || (!name_or_length && self.chain_contains_runtime_property(backing, key)) {
-                return self
-                    .proxy_aware_get_runtime_property(Some(module), backing, key, receiver, depth)
-                    .map(Some);
-            }
-            if name_or_length {
-                return Ok(None);
-            }
+            return self
+                .proxy_aware_get_runtime_property(Some(module), backing, key, receiver, depth)
+                .map(Some);
         }
         let Some(name) = key.as_str() else {
             return Ok(None);

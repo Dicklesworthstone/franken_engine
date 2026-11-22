@@ -4393,6 +4393,10 @@ impl InterpreterCore {
             HostObjectSlots::AbortSignal(signal) => (std::mem::size_of::<AbortSignalSlots>()
                 as u64)
                 .saturating_add(Self::estimate_execution_seed_value_bytes(&signal.reason)),
+            HostObjectSlots::CallableIdentity(identity) => {
+                (std::mem::size_of::<CallableIdentitySlots>() as u64)
+                    .saturating_add(Self::estimate_execution_seed_value_bytes(&identity.value))
+            }
         }
     }
 
@@ -9929,7 +9933,7 @@ impl InterpreterCore {
         let previous_bytes = Self::estimate_heap_object_bytes(previous);
         let mut projected = previous.clone();
         projected.derived_constructor_parent = Some(Box::new(parent.clone()));
-        projected.derived_constructor_parent_label = Some(Box::new(parent_label));
+        projected.derived_constructor_parent_label = Some(Box::new(parent_label.clone()));
         projected.is_derived_constructor = true;
         projected.is_default_derived_constructor = default_constructor;
         let projected_bytes = Self::estimate_heap_object_bytes(&projected);
@@ -9941,13 +9945,16 @@ impl InterpreterCore {
         // method (whose [[HomeObject]] is that object) finds the parent's.
         if let Some(child_backing) =
             self.ensure_function_own_property_object(module, constructor)?
-            && let Some(parent_backing) =
-                self.ensure_function_own_property_object(module, &parent)?
-            && child_backing != parent_backing
-            && !self.chain_contains_object(parent_backing, child_backing)
         {
-            let child_index = child_backing.0 as usize;
-            self.mutate_heap(|heap| heap[child_index].prototype = Some(parent_backing));
+            // Metadata can be registered after static-member storage was
+            // allocated. Install the class-definition parent once here;
+            // subsequent SetPrototypeOf operations own this link.
+            let parent = self.initial_function_value_prototype(Some(module), constructor)?;
+            if let Some(link) = self.prototype_link_for_value(Some(module), &parent)? {
+                self.join_direct_object_mutation_label(child_backing, &parent_label)?;
+                self.store_prototype_link(child_backing, link);
+                self.gc_write_barrier(child_backing);
+            }
         }
         Ok(())
     }
@@ -11527,7 +11534,7 @@ impl InterpreterCore {
     }
 
     /// bd-9vouw.272: [[Set]] of `caller` or `arguments` on a user function
-    /// that defines neither (its backing objects never received them). A
+    /// that has not yet materialized its property storage. A
     /// sloppy ordinary function's own ones are read-only (null): a sloppy
     /// write is ignored and a strict one throws. Any other function inherits
     /// Function.prototype's accessors, so their setter (%ThrowTypeError%)
@@ -11554,7 +11561,9 @@ impl InterpreterCore {
             }
             _ => self.function_own_property_object(module, function)?,
         };
-        if own_object.is_some_and(|object| self.chain_contains_runtime_property(object, key)) {
+        // A materialized callable's real chain is authoritative, even if
+        // the program removed Function.prototype from it entirely.
+        if own_object.is_some() {
             return Ok(false);
         }
         if self.is_sloppy_ordinary_function(module, function)? {
@@ -11629,44 +11638,76 @@ impl InterpreterCore {
         ContentHash::from_bytes(digest.finalize().into())
     }
 
-    /// The user function (defined by `module`) whose own-property backing
-    /// object is `backing`, if any. Inverse of `function_own_property_key`.
+    /// The exact callable represented by a property backing. Identity lives
+    /// in an immutable private slot, independent of configurable name/length,
+    /// global bindings and structural hash inversion. Bare IR function
+    /// indices retain the same module-ownership check as their registry key.
     pub(super) fn function_value_for_backing(
         &self,
         module: &Ir3Module,
         backing: ObjectId,
     ) -> Option<Value> {
-        let ((owner, id), _) = self
-            .function_prototypes
-            .iter()
-            .find(|(_, object)| **object == backing)?;
-        if owner == &Self::bound_function_own_property_owner() {
-            return Some(Value::BuiltinFunction(BuiltinFunction::bound_to(
-                BuiltinFunctionKind::BoundFunction,
-                ObjectId(*id),
-            )));
+        self.callable_identity_for_backing(Some(module), backing)
+    }
+
+    pub(super) fn callable_identity_for_backing(
+        &self,
+        module: Option<&Ir3Module>,
+        backing: ObjectId,
+    ) -> Option<Value> {
+        let identity = self.heap.get(backing.0 as usize)?.callable_identity()?;
+        if let Some(owner) = identity.module_owner
+            && module.is_none_or(|module| self.prototype_owner_ids(module).own_property[0] != owner)
+        {
+            return None;
         }
-        let value_of_kind = |ids: PrototypeOwnerIds| {
-            (0u8..=4).find_map(|kind| {
-                (ids.own_property[usize::from(kind)] == *owner).then_some(match kind {
-                    0 => Value::Function(*id),
-                    1 => Value::Closure(*id),
-                    2 => Value::GeneratorFunction(*id),
-                    3 => Value::AsyncFunction(*id),
-                    _ => Value::AsyncGeneratorFunction(*id),
+        Some(identity.value.clone())
+    }
+
+    pub(super) fn initialize_callable_backing_identity(
+        &mut self,
+        module: Option<&Ir3Module>,
+        backing: ObjectId,
+        function: &Value,
+    ) -> Result<(), InterpreterError> {
+        let object = self
+            .heap
+            .get(backing.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: backing.0 })?;
+        if let Some(identity) = object.callable_identity() {
+            return if &identity.value == function {
+                Ok(())
+            } else {
+                Err(InterpreterError::InternalError {
+                    details: "callable backing identity cannot change".into(),
                 })
-            })
-        };
-        if let Some(value) = value_of_kind(self.prototype_owner_ids(module)) {
-            return Some(value);
+            };
         }
-        // A closure of another module (a parent class from another file that
-        // babel's `_inherits` set as a constructor's [[Prototype]]): its owner
-        // ids are its own module's. Closure ids are global, so the owner
-        // module is the closure's recorded origin (bd-9vouw.209).
-        let origin = self.closure_module_origins.get(id)?;
-        let owner_module = self.retained_closure_module(*id, origin).ok()?;
-        value_of_kind(self.prototype_owner_ids(&owner_module))
+        if object.host_slots.is_some() || !function.is_callable() {
+            return Err(InterpreterError::InternalError {
+                details: "callable identity requires its own property backing".into(),
+            });
+        }
+        let module_owner = if matches!(function, Value::Function(_)) {
+            Some(
+                self.prototype_owner_ids(module.ok_or_else(|| {
+                    InterpreterError::InternalError {
+                        details: "bare function identity requires its owning module".into(),
+                    }
+                })?)
+                .own_property[0],
+            )
+        } else {
+            None
+        };
+        let slots = HostObjectSlots::CallableIdentity(CallableIdentitySlots {
+            value: function.clone(),
+            module_owner,
+        });
+        self.apply_memory_component_delta(0, Self::estimate_host_object_slots_bytes(&slots))?;
+        self.mutate_heap(|heap| heap[backing.0 as usize].host_slots = Some(Box::new(slots)));
+        self.gc_write_barrier(backing);
+        Ok(())
     }
 
     /// Existing own-property backing object for a user function, if any.
@@ -11700,6 +11741,7 @@ impl InterpreterCore {
         if matches!(function, Value::BuiltinFunction(_)) {
             self.builtin_function_backings = true;
         }
+        self.initialize_function_backing_prototype(Some(module), function, backing)?;
         // bd-9vouw.17: from here on the backing object is the authority on the
         // function's own properties, so it starts with the standard `length`
         // and `name` (in that order, as OrdinaryFunctionCreate creates them).
@@ -11709,6 +11751,24 @@ impl InterpreterCore {
                 let key = RuntimePropertyKey::String(JsString::from(key));
                 self.set_object_runtime_property(backing, key.clone(), value)?;
                 self.set_own_property_attributes(backing, &key, FUNCTION_NAME_LENGTH_ATTRIBUTES)?;
+            }
+        }
+        // Sloppy ordinary functions shadow the inherited throwing accessors
+        // with non-configurable, read-only own properties. Materialize them
+        // before exposing the backing as an ordinary prototype or receiver.
+        if self.is_sloppy_ordinary_function(module, function)? {
+            for name in ["arguments", "caller"] {
+                let key = RuntimePropertyKey::String(JsString::from(name));
+                self.set_object_runtime_property(backing, key.clone(), Value::Null)?;
+                self.set_own_property_attributes(
+                    backing,
+                    &key,
+                    PropertyAttributes {
+                        writable: false,
+                        enumerable: false,
+                        configurable: false,
+                    },
+                )?;
             }
         }
         if let Value::BuiltinFunction(builtin) = function
@@ -11937,10 +11997,38 @@ impl InterpreterCore {
         function: &Value,
         key: &RuntimePropertyKey,
     ) -> Result<bool, InterpreterError> {
-        Ok(self
-            .function_own_property_object(module, function)?
+        let backing = match function {
+            Value::BuiltinFunction(builtin)
+                if Self::builtin_function_property_object(builtin).is_some() =>
+            {
+                Self::builtin_function_property_object(builtin)
+            }
+            _ => self.function_own_property_object(module, function)?,
+        };
+        Ok(backing
             .and_then(|backing| self.heap.get(backing.0 as usize))
             .is_some_and(|object| object.contains_own_runtime_property(key)))
+    }
+
+    /// Materialized storage owns normal callable properties. Some intrinsic
+    /// own members still have a lazy or dynamic representation: instance
+    /// prototypes, RegExp match-state statics, and CommonJS require members.
+    /// An explicit own override always wins over those intrinsic paths.
+    pub(super) fn function_property_uses_materialized_chain(
+        &self,
+        module: &Ir3Module,
+        function: &Value,
+        key: &RuntimePropertyKey,
+    ) -> Result<bool, InterpreterError> {
+        let virtual_own = (key.as_str() == Some("prototype")
+            && self.function_has_intrinsic_prototype(function))
+            || matches!(function, Value::BuiltinFunction(builtin)
+                if (builtin.kind == BuiltinFunctionKind::StandardConstructor
+                    && &*builtin.module_specifier == "RegExp"
+                    && key.as_str().is_some_and(is_legacy_regexp_static))
+                    || (builtin.kind == BuiltinFunctionKind::Require
+                        && matches!(key.as_str(), Some("main" | "resolve"))));
+        Ok(!virtual_own || self.function_backing_has_own_property(module, function, key)?)
     }
 
     /// Whether `value` is a promise, generator, async generator or iterator
@@ -12087,6 +12175,9 @@ impl InterpreterCore {
                 self.function_own_property_object(module, value)?
             }
         };
+        if let Some(backing) = holder {
+            self.initialize_function_backing_prototype(module, value, backing)?;
+        }
         if create
             && let Some(backing) = holder
             && let Value::BuiltinFunction(builtin) = value

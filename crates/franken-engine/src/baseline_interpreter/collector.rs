@@ -259,6 +259,9 @@ type AddressSet = HashSet<usize, BuildHasherDefault<AddressHasher>>;
 #[derive(Clone, Copy)]
 enum PrototypeCarrier {
     BoundFunction,
+    NativeReceiver(ObjectId),
+    NativePromise(u32),
+    NativeIterator(u32),
     ClosurePrototype,
     Closure,
     Promise,
@@ -269,13 +272,16 @@ enum PrototypeCarrier {
 
 impl PrototypeCarrier {
     fn is_marked(&self, marker: &GcMarker, id: u32) -> bool {
-        let marks = match self {
-            Self::BoundFunction => &marker.objects,
-            Self::ClosurePrototype | Self::Closure => &marker.closures,
-            Self::Promise => &marker.promises,
-            Self::Generator => &marker.generators,
-            Self::AsyncGenerator => &marker.async_generators,
-            Self::Iterator => &marker.iterators,
+        let (marks, id) = match self {
+            Self::BoundFunction => (&marker.objects, id),
+            Self::NativeReceiver(receiver) => (&marker.objects, receiver.0),
+            Self::NativePromise(handle) => (&marker.promises, *handle),
+            Self::NativeIterator(handle) => (&marker.iterators, *handle),
+            Self::ClosurePrototype | Self::Closure => (&marker.closures, id),
+            Self::Promise => (&marker.promises, id),
+            Self::Generator => (&marker.generators, id),
+            Self::AsyncGenerator => (&marker.async_generators, id),
+            Self::Iterator => (&marker.iterators, id),
         };
         marks.is_marked(id as usize)
     }
@@ -283,6 +289,9 @@ impl PrototypeCarrier {
     fn mark(self, marker: &mut GcMarker, id: u32) {
         match self {
             Self::BoundFunction => marker.object(ObjectId(id)),
+            Self::NativeReceiver(receiver) => marker.object(receiver),
+            Self::NativePromise(handle) => marker.promise(handle),
+            Self::NativeIterator(handle) => marker.iterator_handle(handle),
             Self::ClosurePrototype | Self::Closure => marker.closure(id),
             Self::Promise => marker.promise(id),
             Self::Generator => marker.generator_id(id),
@@ -293,6 +302,18 @@ impl PrototypeCarrier {
 
     fn is_identity(self) -> bool {
         !matches!(self, Self::ClosurePrototype)
+    }
+
+    fn forward_object(self, id: u32) -> Option<ObjectId> {
+        match self {
+            Self::BoundFunction => Some(ObjectId(id)),
+            Self::NativeReceiver(receiver) => Some(receiver),
+            _ => None,
+        }
+    }
+
+    fn needs_carrier_scan(self) -> bool {
+        matches!(self, Self::NativePromise(_) | Self::NativeIterator(_))
     }
 }
 
@@ -1793,6 +1814,11 @@ impl InterpreterCore {
                     HostObjectSlots::RegExpStringIterator(rsi) => {
                         marker.value(&rsi.regexp);
                     }
+                    HostObjectSlots::CallableIdentity(identity) => {
+                        // A prototype link can be the only remaining root
+                        // of a closure, bound function, or native callable.
+                        marker.value(&identity.value);
+                    }
                     HostObjectSlots::EventTarget(target) => {
                         if let Some(listeners) = target.listeners {
                             marker.object(listeners);
@@ -1869,6 +1895,34 @@ impl InterpreterCore {
     fn gc_prototype_carrier(&self, owner: &ContentHash, id: u32) -> Option<PrototypeCarrier> {
         if owner == &Self::bound_function_own_property_owner() {
             return Some(PrototypeCarrier::BoundFunction);
+        }
+        if let Some(backing) = self.function_prototypes.get(&(*owner, id))
+            && let Some(identity) = self.heap.get(backing.0 as usize)?.callable_identity()
+            && let Value::BuiltinFunction(builtin) = &identity.value
+            && builtin.kind != BuiltinFunctionKind::BoundFunction
+        {
+            // Mirror GcMarker::value: native receiver handles are objects,
+            // except resolve/reject capabilities, whose handle is a promise.
+            if let Some(receiver) = builtin.bound_object {
+                return Some(
+                    if matches!(
+                        builtin.kind,
+                        BuiltinFunctionKind::PromiseResolve | BuiltinFunctionKind::PromiseReject
+                    ) {
+                        PrototypeCarrier::NativePromise(receiver)
+                    } else {
+                        PrototypeCarrier::NativeReceiver(ObjectId(receiver))
+                    },
+                );
+            }
+            if let Some(handle) = builtin.iterator_handle
+                && matches!(
+                    builtin.kind,
+                    BuiltinFunctionKind::IteratorNext | BuiltinFunctionKind::IteratorSelf
+                )
+            {
+                return Some(PrototypeCarrier::NativeIterator(handle));
+            }
         }
         let owners = Self::exotic_object_own_property_owners();
         if owner == &owners[0] {
@@ -2752,6 +2806,7 @@ mod tests {
             for force_scanning in [false, true] {
                 let module = carrier_module(&format!(
                     "(() => {{ const payload = {{ answer: 42 }}; {declaration} \
+                     delete callable.name; delete callable.length; \
                      return [Object.create(callable), callable, payload]; }})()"
                 ));
                 let mut core = carrier_core();
@@ -2977,6 +3032,7 @@ mod tests {
                  function target(value) { return captured.answer + this.offset + value; } \
                  const bound = target.bind({ offset: 7 }, 5); \
                  bound.tag = { value: 9 }; \
+                 delete bound.name; delete bound.length; \
                  return [Object.create(bound), bound, captured]; })()",
             );
             let mut core = carrier_core();
@@ -2996,6 +3052,20 @@ mod tests {
             let backing = core.heap[holder.0 as usize]
                 .prototype
                 .expect("backing prototype");
+            let (_, Value::Object(receiver), _, _) = core
+                .bound_function_parts(bound)
+                .expect("bound receiver state")
+            else {
+                panic!("fixture binds an object receiver");
+            };
+            core.join_direct_object_mutation_label(receiver, &Label::Secret)
+                .expect("late retained-state mutation");
+            assert_eq!(
+                core.native_builtin_state_label_with_floor(&module, holder, Label::Public)
+                    .expect("bounded retained-state walk"),
+                Label::Secret,
+                "a callable reached only through its backing must retain bound-state labels"
+            );
             core.clear_current_register_frame();
             core.set_reg(0, Value::Object(holder));
             let memory_limit = core.config.max_total_memory_bytes;
@@ -3034,6 +3104,224 @@ mod tests {
                 core.recompute_estimated_memory_bytes()
             );
         }
+    }
+
+    #[test]
+    fn native_callable_receivers_and_backings_have_conditional_lifetimes() {
+        for source in [
+            "(() => { const receiver = new Intl.NumberFormat('en-US'); \
+             const callable = receiver.format; callable.tag = { kept: 1 }; \
+             return [Object.create(callable), callable, receiver]; })()",
+            "(() => { let callable; const receiver = new Promise(resolve => { callable = resolve; }); \
+             callable(7); callable.tag = { kept: 1 }; \
+             return [Object.create(callable), callable, receiver]; })()",
+            "(() => { const receiver = [3, 9].values(); const callable = receiver.next; \
+             callable.tag = { kept: 1 }; return [Object.create(callable), callable, receiver]; })()",
+        ] {
+            for force_scanning in [false, true] {
+                for root_callable in [false, true] {
+                    let module = carrier_module(source);
+                    let mut core = carrier_core();
+                    let Value::Object(result) = core
+                        .execute(&module)
+                        .expect("native receiver fixture")
+                        .value
+                    else {
+                        panic!("fixture returns witnesses");
+                    };
+                    let values = core.read_array_like_values(result);
+                    let (Value::Object(holder), Value::BuiltinFunction(callable)) =
+                        (&values[0], &values[1])
+                    else {
+                        panic!("holder and native callable");
+                    };
+                    let (holder, callable, receiver) =
+                        (*holder, callable.clone(), values[2].clone());
+                    let key =
+                        InterpreterCore::builtin_function_own_property_key(&callable).unwrap();
+                    let backing = core.function_prototypes[&key];
+                    assert!(
+                        core.gc_prototype_carrier(&key.0, key.1).is_some(),
+                        "receiver-bearing native backings must not become permanent roots"
+                    );
+                    if matches!(receiver, Value::Promise(_) | Value::Iterator(_)) {
+                        assert_eq!(
+                            core.native_builtin_state_label_with_floor(
+                                &module,
+                                holder,
+                                Label::Public
+                            )
+                            .unwrap(),
+                            Label::TopSecret,
+                            "unmodeled retained capabilities stay opaque to bounded imports"
+                        );
+                    }
+                    core.clear_current_register_frame();
+                    core.set_reg(
+                        0,
+                        if root_callable {
+                            Value::BuiltinFunction(callable.clone())
+                        } else {
+                            Value::Object(holder)
+                        },
+                    );
+                    let memory_limit = core.config.max_total_memory_bytes;
+                    if force_scanning {
+                        core.config.max_total_memory_bytes = core.estimated_memory_bytes();
+                    }
+                    core.collect_garbage();
+                    core.config.max_total_memory_bytes = memory_limit;
+                    assert_eq!(core.function_prototypes.get(&key), Some(&backing));
+                    assert_eq!(
+                        core.callable_identity_for_backing(None, backing),
+                        Some(Value::BuiltinFunction(callable.clone()))
+                    );
+                    assert!(core.heap[backing.0 as usize].properties.contains_key("tag"));
+                    match &receiver {
+                        Value::Object(id) => {
+                            assert!(core.heap.get(id.0 as usize).is_some());
+                            assert_eq!(
+                                core.invoke_inline_method_call(
+                                    Some(&module),
+                                    Value::BuiltinFunction(callable),
+                                    Value::Undefined,
+                                    vec![Value::Int(1234)]
+                                ),
+                                Ok(Value::str("1,234"))
+                            );
+                        }
+                        Value::Promise(handle) => assert!(
+                            core.promise_store
+                                .get(crate::promise_model::PromiseHandle(*handle))
+                                .is_ok()
+                        ),
+                        Value::Iterator(handle) => {
+                            assert!(core.iterators.get(*handle as usize).is_some())
+                        }
+                        _ => panic!("native receiver carrier"),
+                    }
+                    core.clear_current_register_frame();
+                    core.collect_garbage();
+                    assert!(!core.function_prototypes.contains_key(&key));
+                    assert!(core.heap.is_reclaimed(backing.0 as usize));
+                    match receiver {
+                        Value::Object(id) => assert!(core.heap.is_reclaimed(id.0 as usize)),
+                        Value::Promise(handle) => assert!(
+                            core.promise_store
+                                .get(crate::promise_model::PromiseHandle(handle))
+                                .is_err()
+                        ),
+                        Value::Iterator(handle) => {
+                            assert!(core.iterators.get(handle as usize).is_none())
+                        }
+                        _ => unreachable!(),
+                    }
+                    assert_eq!(
+                        core.estimated_memory_bytes(),
+                        core.recompute_estimated_memory_bytes()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn native_callable_identity_survives_collection_serialization_and_seeds() {
+        for force_scanning in [false, true] {
+            let module = carrier_module(
+                "(() => { const target = Math.max; const holder = Object.create(target); \
+                 delete target.name; delete target.length; return [holder, target]; })()",
+            );
+            let mut core = carrier_core();
+            let Value::Object(result) = core
+                .execute(&module)
+                .expect("native identity fixture")
+                .value
+            else {
+                panic!("fixture returns witnesses");
+            };
+            let values = core.read_array_like_values(result);
+            let Value::Object(holder) = values[0] else {
+                panic!("holder object");
+            };
+            let target = values[1].clone();
+            let backing = core.heap[holder.0 as usize]
+                .prototype
+                .expect("callable backing");
+            let encoded = serde_json::to_value(&core.heap[backing.0 as usize])
+                .expect("serialize callable backing");
+            let decoded: HeapObject =
+                serde_json::from_value(encoded.clone()).expect("deserialize callable backing");
+            assert_eq!(
+                decoded.callable_identity(),
+                core.heap[backing.0 as usize].callable_identity()
+            );
+            let mut invalid = encoded;
+            invalid["host_slots"]["CallableIdentity"]["value"] =
+                serde_json::to_value(Value::Function(0)).expect("bare function wire value");
+            assert!(
+                serde_json::from_value::<HeapObject>(invalid).is_err(),
+                "module-local function identities require ownership metadata"
+            );
+            core.clear_current_register_frame();
+            core.set_reg(0, Value::Object(holder));
+            let seed = core
+                .capture_execution_seed()
+                .expect("capture identity slot");
+            let memory_limit = core.config.max_total_memory_bytes;
+            if force_scanning {
+                core.config.max_total_memory_bytes = core.estimated_memory_bytes();
+            }
+            core.collect_garbage();
+            core.config.max_total_memory_bytes = memory_limit;
+            assert_eq!(
+                core.callable_identity_for_backing(None, backing),
+                Some(target.clone())
+            );
+            core.reset_execution_state_from_seed(&seed)
+                .expect("restore identity slot");
+            let recovered = core.prototype_value_for_link(Some(&module), Some(backing));
+            assert_eq!(recovered, target);
+            assert_eq!(
+                core.invoke_inline_method_call(
+                    Some(&module),
+                    recovered,
+                    Value::Undefined,
+                    vec![Value::Int(3), Value::Int(9)]
+                ),
+                Ok(Value::Int(9))
+            );
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn bare_function_backing_identity_retains_its_module_owner() {
+        let module = carrier_module("function owned() {} owned;");
+        let mut foreign = module.clone();
+        foreign.header.source_label = "foreign-identity.js".into();
+        let mut core = carrier_core();
+        let function = Value::Function(0);
+        let backing = core
+            .ensure_function_own_property_object(&module, &function)
+            .expect("materialize bare function")
+            .expect("function backing");
+        assert_eq!(
+            core.callable_identity_for_backing(Some(&module), backing),
+            Some(function)
+        );
+        assert_eq!(
+            core.callable_identity_for_backing(Some(&foreign), backing),
+            None
+        );
+        assert_eq!(core.callable_identity_for_backing(None, backing), None);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]

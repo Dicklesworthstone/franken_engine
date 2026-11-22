@@ -14319,7 +14319,6 @@ impl InterpreterCore {
                             &obj_val,
                             &property_key,
                         )?;
-                    let mut inherited_function_standard = None;
                     let function_backing = match &obj_val {
                         _ if authoritative_standard_backing.is_some() => {
                             authoritative_standard_backing
@@ -14330,48 +14329,16 @@ impl InterpreterCore {
                         | Value::AsyncFunction(_)
                         | Value::AsyncGeneratorFunction(_)
                         | Value::BuiltinFunction(_)
-                            if property_key.as_str() != Some("prototype")
-                                || !self.function_has_intrinsic_prototype(&obj_val)
-                                || self.function_backing_has_own_property(
-                                    module,
-                                    &obj_val,
-                                    &property_key,
-                                )? =>
+                            if self.function_property_uses_materialized_chain(
+                                module,
+                                &obj_val,
+                                &property_key,
+                            )? =>
                         {
-                            match self.function_own_property_object(module, &obj_val)? {
-                                // Own `name`/`length` are the function's (never
-                                // inherited from a parent class). Once the
-                                // backing object exists a deleted one reads
-                                // Function.prototype's (`0`, `""`). Other keys
-                                // may be statics inherited from the parent
-                                // constructor (bd-9vouw.24).
-                                Some(backing)
-                                    if matches!(property_key.as_str(), Some("name" | "length")) =>
-                                {
-                                    if self.heap.get(backing.0 as usize).is_some_and(|object| {
-                                        object.contains_own_runtime_property(&property_key)
-                                    }) {
-                                        Some(backing)
-                                    } else {
-                                        inherited_function_standard =
-                                            Some(if property_key.as_str() == Some("length") {
-                                                Value::Int(0)
-                                            } else {
-                                                Value::str("")
-                                            });
-                                        None
-                                    }
-                                }
-                                Some(backing)
-                                    if self.chain_contains_runtime_property(
-                                        backing,
-                                        &property_key,
-                                    ) =>
-                                {
-                                    Some(backing)
-                                }
-                                _ => None,
-                            }
+                            // The materialized chain decides both presence
+                            // and absence, including deleted name/length,
+                            // inherited accessors and explicit null parents.
+                            self.own_property_holder(Some(module), &obj_val, false)?
                         }
                         _ => None,
                     };
@@ -14398,9 +14365,7 @@ impl InterpreterCore {
                     // The prototype object a primitive base's property came
                     // from, for the stored-label join below.
                     let mut primitive_owner = None;
-                    let prop = if let Some(value) = inherited_function_standard {
-                        value
-                    } else if let Some(backing) = function_backing {
+                    let prop = if let Some(backing) = function_backing {
                         self.run_pre_runtime_property_access_hook(module, backing, &property_key)?;
                         if authoritative_standard_backing.is_some() {
                             self.get_v(module, &obj_val, &property_key)?
@@ -15284,11 +15249,19 @@ impl InterpreterCore {
                                     return Err(Self::read_only_property_error(&property_key));
                                 }
                             }
-                            // bd-9vouw.17: a built-in's own `name` and `length`
-                            // are non-writable too.
+                            // Before storage exists, a built-in's initial
+                            // `name` and `length` are non-writable. Once it
+                            // exists, ordinary descriptors and inheritance
+                            // decide the write, including deleted members.
                             Value::BuiltinFunction(ref builtin)
                                 if Self::builtin_function_property_object(builtin).is_none()
-                                    && matches!(property_key.as_str(), Some("name" | "length")) =>
+                                    && matches!(property_key.as_str(), Some("name" | "length"))
+                                    && self
+                                        .function_own_property_object(
+                                            module,
+                                            &Value::BuiltinFunction(builtin.clone()),
+                                        )?
+                                        .is_none() =>
                             {
                                 if strict {
                                     return Err(Self::read_only_property_error(&property_key));
@@ -15310,23 +15283,16 @@ impl InterpreterCore {
                                         strict,
                                     )? => {}
                             Value::BuiltinFunction(builtin) => {
-                                let property_object =
-                                    match Self::builtin_function_property_object(&builtin) {
-                                        Some(property_object) => property_object,
-                                        // Other built-ins keep assigned properties
-                                        // (`fn.displayName = ...`) on a backing object.
-                                        None => self
-                                            .own_property_holder(
-                                                Some(module),
-                                                &Value::BuiltinFunction(builtin.clone()),
-                                                true,
-                                            )?
-                                            .ok_or_else(|| InterpreterError::TypeError {
-                                                expected: "object with writable properties"
-                                                    .to_string(),
-                                                got: builtin.display_name().to_string(),
-                                            })?,
-                                    };
+                                let property_object = self
+                                    .own_property_holder(
+                                        Some(module),
+                                        &Value::BuiltinFunction(builtin.clone()),
+                                        true,
+                                    )?
+                                    .ok_or_else(|| InterpreterError::TypeError {
+                                        expected: "object with writable properties".to_string(),
+                                        got: builtin.display_name().to_string(),
+                                    })?;
                                 let mut mutation_label = self
                                     .get_register_label(obj)?
                                     .join(self.get_register_label(key)?)
@@ -15355,46 +15321,12 @@ impl InterpreterCore {
                             | Value::AsyncFunction(_)
                             | Value::AsyncGeneratorFunction(_))
                                 if matches!(property_key.as_str(), Some("name" | "length"))
-                                    && !self.function_backing_has_own_property(
-                                        module,
-                                        function,
-                                        &property_key,
-                                    )? =>
+                                    && self
+                                        .function_own_property_object(module, function)?
+                                        .is_none() =>
                             {
                                 if strict {
                                     return Err(Self::read_only_property_error(&property_key));
-                                }
-                            }
-                            // bd-9vouw.216: `F.__proto__ = P` runs Object.prototype's
-                            // `__proto__` setter (ES2020 B.2.2.1.2): an object, a
-                            // function or null becomes F's [[Prototype]] (`F.s`
-                            // then inherits P's statics), anything else is
-                            // ignored, and a cycle is a TypeError. It stored an
-                            // own property named `__proto__`.
-                            ref function @ (Value::Function(_)
-                            | Value::Closure(_)
-                            | Value::GeneratorFunction(_)
-                            | Value::AsyncFunction(_)
-                            | Value::AsyncGeneratorFunction(_))
-                                if property_key.as_str() == Some("__proto__")
-                                    && !self.function_backing_has_own_property(
-                                        module,
-                                        function,
-                                        &property_key,
-                                    )? =>
-                            {
-                                if (set_val.is_object_like() || matches!(set_val, Value::Null))
-                                    && !self.set_function_value_prototype(
-                                        Some(module),
-                                        function,
-                                        &set_val,
-                                    )?
-                                {
-                                    return Err(InterpreterError::TypeError {
-                                        expected: "acyclic __proto__ value".to_string(),
-                                        got: "a prototype chain that reaches the function"
-                                            .to_string(),
-                                    });
                                 }
                             }
                             // bd-9vouw.272: `caller` / `arguments` the function

@@ -161,12 +161,11 @@ impl InterpreterCore {
             // The internal operation retains its required validation order.
             self.json_observe_reachable_value(&target)?;
             self.json_observe_reachable_value(&proposed)?;
-            // A function value without ordinary property storage: its
-            // [[Prototype]] lives on its own-property backing object.
+            // Ordinary callable values share the internal methods of their
+            // backing objects. Callable proxies retain their exotic methods.
             if target.is_callable()
-                && self
-                    .iterator_carrier_backing_id(&target, "object target")?
-                    .is_none()
+                && !matches!(&target, Value::BuiltinFunction(builtin)
+                    if builtin.kind == BuiltinFunctionKind::CallableProxy)
             {
                 return match operation {
                     ObjectIntegrityOperation::GetPrototype => {
@@ -502,13 +501,22 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
         function: &Value,
     ) -> Result<Value, InterpreterError> {
-        if let Value::BuiltinFunction(builtin) = function
-            && builtin.kind == BuiltinFunctionKind::FunctionPrototype
-            && let Some(backing) = Self::builtin_function_property_object(builtin)
-        {
+        if let Some(backing) = self.own_property_holder(module, function, false)? {
+            self.integrity_step(backing, 0)?;
             let link = self.ordinary_get_prototype_of(backing)?;
             return Ok(self.prototype_value_for_link(module, link));
         }
+        self.initial_function_value_prototype(module, function)
+    }
+
+    /// Intrinsic or class-definition parent, used only until a callable has
+    /// property storage. Once materialized, its ordinary link is authoritative,
+    /// including an explicit null link or a later change to a derived class.
+    pub(super) fn initial_function_value_prototype(
+        &mut self,
+        module: Option<&Ir3Module>,
+        function: &Value,
+    ) -> Result<Value, InterpreterError> {
         if let Some(module) = module {
             let is_constructor_candidate = match function {
                 Value::Function(_) => true,
@@ -519,17 +527,24 @@ impl InterpreterCore {
             // `extends null` that is %Function.prototype% (ES2020 14.6.13
             // step 6.e.ii), the default below (bd-9vouw.325).
             if is_constructor_candidate
-                && let Ok((true, _, parent, _)) =
+                && let Ok((true, _, parent, parent_label)) =
                     self.derived_constructor_metadata(module, function)
                 && parent != Value::Null
             {
-                return Ok(parent);
-            }
-            if let Some(backing) = self.function_own_property_object(module, function)?
-                && let Some(object) = self.heap.get(backing.0 as usize)
-                && (object.prototype.is_some() || object.is_null_prototype)
-            {
-                return Ok(self.prototype_value_for_link(Some(module), object.prototype));
+                if self.active_inline_callback_context_label.is_some() {
+                    self.json_observe_label(parent_label)?;
+                }
+                return Ok(match parent {
+                    Value::Str(name) => STANDARD_CONSTRUCTOR_GLOBALS
+                        .iter()
+                        .copied()
+                        .find(|candidate| Some(*candidate) == name.as_str())
+                        .map(|name| {
+                            Value::BuiltinFunction(BuiltinFunction::standard_constructor(name))
+                        })
+                        .unwrap_or(Value::Str(name)),
+                    parent => parent,
+                });
             }
         }
         // ES2020 22.2.5: every concrete typed array constructor's
@@ -563,57 +578,49 @@ impl InterpreterCore {
         )
     }
 
-    /// [[SetPrototypeOf]] of a user function value (`Object.setPrototypeOf(D,
-    /// B)` in compiled `extends`). The link lives on the backing objects, so
-    /// `D`'s own-property lookups inherit `B`'s statics. A builtin parent
-    /// (`Error`) has no backing object to link to; the change is accepted but
-    /// only `Function.prototype` remains observable, a documented gap.
+    /// Initialize lazy callable storage with its actual intrinsic parent.
+    /// This does not invoke guest code or overwrite an explicit stored link.
+    pub(super) fn initialize_function_backing_prototype(
+        &mut self,
+        module: Option<&Ir3Module>,
+        function: &Value,
+        backing: ObjectId,
+    ) -> Result<(), InterpreterError> {
+        if !function.is_callable()
+            || matches!(function, Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::CallableProxy)
+        {
+            return Ok(());
+        }
+        self.initialize_callable_backing_identity(module, backing, function)?;
+        if self
+            .heap
+            .get(backing.0 as usize)
+            .is_some_and(|object| object.prototype.is_some() || object.is_null_prototype)
+        {
+            return Ok(());
+        }
+        let parent = self.initial_function_value_prototype(module, function)?;
+        if let Some(link) = self.prototype_link_for_value(module, &parent)? {
+            self.store_prototype_link(backing, link);
+            self.gc_write_barrier(backing);
+        }
+        Ok(())
+    }
+
+    /// A callable's [[SetPrototypeOf]] uses the same extensibility, cycle,
+    /// proxy-boundary and mutation-label checks as an ordinary object.
     pub(super) fn set_function_value_prototype(
         &mut self,
         module: Option<&Ir3Module>,
         function: &Value,
         proposed: &Value,
     ) -> Result<bool, InterpreterError> {
-        let Some(module) = module else {
+        let Some(backing) = self.own_property_holder(module, function, true)? else {
             return Ok(false);
         };
-        let Some(backing) = self.ensure_function_own_property_object(module, function)? else {
-            return Ok(false);
-        };
-        let prototype = match proposed {
-            Value::Null => None,
-            Value::Object(id) => Some(*id),
-            callable if callable.is_callable() => {
-                match self.own_property_holder(Some(module), callable, true)? {
-                    Some(parent_backing) => Some(parent_backing),
-                    None => return Ok(true),
-                }
-            }
-            other => {
-                return Err(Self::integrity_type_error(
-                    "object or null prototype",
-                    other.type_name(),
-                ));
-            }
-        };
-        let mut current = prototype;
-        let mut depth = 0u32;
-        while let Some(candidate) = current {
-            if candidate == backing {
-                return Ok(false);
-            }
-            if depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
-                return Ok(false);
-            }
-            current = self
-                .heap
-                .get(candidate.0 as usize)
-                .and_then(|object| object.prototype);
-            depth += 1;
-        }
-        self.store_prototype_link(backing, prototype);
-        self.gc_write_barrier(backing);
-        Ok(true)
+        let prototype = self.integrity_prototype(module, proposed)?;
+        self.object_set_prototype(module, backing, prototype, 0)
     }
 
     /// The [[Prototype]] link a proposed prototype value stands for
@@ -621,9 +628,8 @@ impl InterpreterCore {
     /// function's own-property backing object, so an ordinary object can
     /// inherit from a function (`Object.create(Parent)` in bundlers'
     /// `__toESM`, `Object.setPrototypeOf(o, F)`, `{ __proto__: F }`); its
-    /// statics are inherited through the backing. `None` for any other value.
-    /// Not modelled: Function.prototype's members through such a link
-    /// (`o.call`, `o instanceof Function`), since backings do not inherit it.
+    /// statics and intrinsic members are inherited through the backing.
+    /// `None` for any other value.
     pub(super) fn prototype_link_for_value(
         &mut self,
         module: Option<&Ir3Module>,
@@ -632,25 +638,17 @@ impl InterpreterCore {
         Ok(match value {
             Value::Null => Some(None),
             Value::Object(id) => Some(Some(*id)),
-            Value::BuiltinFunction(builtin)
-                if Self::builtin_function_property_object(builtin).is_some() =>
-            {
-                Self::builtin_function_property_object(builtin).map(Some)
+            callable if callable.is_callable() => {
+                self.own_property_holder(module, callable, true)?.map(Some)
             }
-            callable if callable.is_callable() => match module {
-                Some(module) => self
-                    .ensure_function_own_property_object(module, callable)?
-                    .map(Some),
-                None => None,
-            },
             _ => None,
         })
     }
 
     /// The value [[GetPrototypeOf]] reports for a stored link: a function's
     /// own-property backing object stands for the function itself
-    /// (bd-9vouw.98). Backings start with own `length` and `name`, which
-    /// keeps the reverse lookup off ordinary prototypes.
+    /// (bd-9vouw.98). Deleting configurable function properties does not
+    /// change that identity.
     pub(super) fn prototype_value_for_link(
         &self,
         module: Option<&Ir3Module>,
@@ -665,16 +663,17 @@ impl InterpreterCore {
                 id,
             ));
         }
-        if let Some(module) = module
-            && self.heap.get(id.0 as usize).is_some_and(|object| {
-                ["length", "name"].iter().all(|key| {
-                    object.contains_own_runtime_property(&RuntimePropertyKey::String(
-                        JsString::from(*key),
-                    ))
-                })
-            })
-            && let Some(function) = self.function_value_for_backing(module, id)
+        if self
+            .heap
+            .get(id.0 as usize)
+            .is_some_and(|object| object.brand() == Some(PROXY_TYPE_TAG))
+            && self.proxy_call_target(id).is_some()
         {
+            // The private call-target slot retains callable identity even
+            // after revocation; merely reporting a link invokes no trap.
+            return Self::callable_proxy_value(id);
+        }
+        if let Some(function) = self.callable_identity_for_backing(module, id) {
             return function;
         }
         Value::Object(id)
@@ -687,20 +686,15 @@ impl InterpreterCore {
         }
     }
 
-    fn integrity_prototype(value: &Value) -> Result<Option<ObjectId>, InterpreterError> {
-        match value {
-            Value::Object(id) => Ok(Some(*id)),
-            Value::BuiltinFunction(builtin)
-                if Self::builtin_function_property_object(builtin).is_some() =>
-            {
-                Ok(Self::builtin_function_property_object(builtin))
-            }
-            Value::Null => Ok(None),
-            other => Err(Self::integrity_type_error(
-                "object or null prototype",
-                other.type_name(),
-            )),
-        }
+    fn integrity_prototype(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: &Value,
+    ) -> Result<Option<ObjectId>, InterpreterError> {
+        self.prototype_link_for_value(module, value)?
+            .ok_or_else(|| {
+                Self::integrity_type_error("object or null prototype", value.type_name())
+            })
     }
 
     fn integrity_step(&mut self, id: ObjectId, depth: u32) -> Result<(), InterpreterError> {
@@ -747,12 +741,12 @@ impl InterpreterCore {
             return self.object_get_prototype(module, target, depth + 1);
         };
         self.observe_scoped_callback_result()?;
-        let reported = Self::integrity_prototype(&result)?;
+        let reported = self.integrity_prototype(module, &result)?;
         if self.object_is_extensible(module, target, depth + 1)? {
             return Ok(result);
         }
         let actual = self.object_get_prototype(module, target, depth + 1)?;
-        if reported != Self::integrity_prototype(&actual)? {
+        if reported != self.integrity_prototype(module, &actual)? {
             return Err(Self::integrity_type_error(
                 "non-extensible target's actual prototype",
                 "inconsistent getPrototypeOf trap",
@@ -790,7 +784,7 @@ impl InterpreterCore {
                 return Ok(true);
             }
             let actual = self.object_get_prototype(module, target, depth + 1)?;
-            if prototype != Self::integrity_prototype(&actual)? {
+            if prototype != self.integrity_prototype(module, &actual)? {
                 return Err(Self::integrity_type_error(
                     "non-extensible target's actual prototype",
                     "inconsistent setPrototypeOf trap",
@@ -1451,6 +1445,32 @@ mod tests {
                 "constructor reflection must release all temporary charges"
             );
         }
+    }
+
+    #[test]
+    fn callable_backing_chains_preserve_native_identity_and_memory_accounting() {
+        assert_native_true(
+            r#"
+            function Parent() {}
+            function Child() {}
+            const object = Object.create(Child);
+            const inherited = object.call === Function.prototype.call && object instanceof Function;
+            Object.setPrototypeOf(Child, Parent);
+            delete Parent.name;
+            delete Parent.length;
+            const identity = Object.getPrototypeOf(Child) === Parent;
+            Object.setPrototypeOf(Child, null);
+            const removed = Child.call === undefined && !Reflect.has(Child, 'bind');
+            Object.preventExtensions(Child);
+            const integrity = Reflect.setPrototypeOf(Child, null) &&
+                !Reflect.setPrototypeOf(Child, Parent);
+            const target = Object.create(Parent);
+            Object.preventExtensions(target);
+            const proxy = new Proxy(target, { getPrototypeOf() { return Parent; } });
+            inherited && identity && removed && integrity &&
+                Object.getPrototypeOf(proxy) === Parent;
+            "#,
+        );
     }
 
     #[test]

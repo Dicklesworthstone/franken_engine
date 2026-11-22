@@ -850,6 +850,71 @@ console.log(JSON.stringify(o.EOL), typeof os.platform, os.platform.name, require
 /// core module, and throws a catchable MODULE_NOT_FOUND Error for a miss. It
 /// was undefined ("expected function, got undefined").
 #[test]
+fn native_module_callable_prototype_links_preserve_identity_and_provenance() {
+    let lines = run_tree(
+        "fe_run_cjs_native_callable_identity",
+        &[(
+            "app.js",
+            r#"const path = require('node:path');
+const http = require('node:http');
+const net = require('node:net');
+const values = [path.join, http.Agent, net.Socket];
+const checks = [];
+for (const value of values) {
+    const keys = Reflect.ownKeys(value).join();
+    const inherited = Object.create(value);
+    checks.push(Object.getPrototypeOf(inherited) === value,
+        Reflect.ownKeys(value).join() === keys, inherited.call === Function.prototype.call);
+    delete value.name;
+    delete value.length;
+    checks.push(Reflect.getPrototypeOf(inherited) === value);
+}
+class AgentChild extends http.Agent {}
+class SocketChild extends net.Socket {}
+console.log(checks.join());
+console.log(Object.getPrototypeOf(AgentChild) === http.Agent,
+    Object.getPrototypeOf(SocketChild) === net.Socket);
+console.log(Object.getPrototypeOf(Object.create(path.join))('a', 'b'));
+"#,
+        )],
+    );
+    assert_eq!(
+        lines,
+        [
+            "true,true,true,true,true,true,true,true,true,true,true,true",
+            "true true",
+            "a/b",
+        ]
+    );
+}
+
+#[test]
+fn require_own_members_survive_callable_materialization() {
+    let lines = run_tree(
+        "fe_run_cjs_callable_backing",
+        &[(
+            "app.js",
+            r#"const main = require.main;
+const resolve = require.resolve;
+require.marker = 1;
+Object.setPrototypeOf(require, null);
+console.log(require.main === main, Reflect.get(require, 'main') === main,
+    require.resolve === resolve, Reflect.get(require, 'resolve') === resolve,
+    typeof require.resolve.paths, require.call);
+require.resolve = () => 'own';
+require.main = { custom: true };
+console.log(require.resolve(), require.main.custom,
+    Reflect.get(require, 'resolve') === require.resolve);
+"#,
+        )],
+    );
+    assert_eq!(
+        lines,
+        ["true true true true function undefined", "own true true"]
+    );
+}
+
+#[test]
 fn require_resolve_names_the_module_require_would_load_bd_9vouw_199() {
     let lines = run_tree(
         "fe_run_cjs_require_resolve",

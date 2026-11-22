@@ -9264,7 +9264,10 @@ impl InterpreterCore {
                         }
                         HostObjectSlots::TextDecoder(_)
                         | HostObjectSlots::FsEntryKind(_)
-                        | HostObjectSlots::TimerHandle(_) => {}
+                        | HostObjectSlots::TimerHandle(_)
+                        // This projection follows ordinary object values;
+                        // callable internals retain their existing IFC rules.
+                        | HostObjectSlots::CallableIdentity(_) => {}
                     }
                 }
                 if let Some(prototype) = object.prototype {
@@ -14410,7 +14413,8 @@ impl InterpreterCore {
             let edges = object
                 .properties
                 .exact_len()
-                .saturating_add(object.properties.baseline_symbol_key_order().len());
+                .saturating_add(object.properties.baseline_symbol_key_order().len())
+                .saturating_add(usize::from(object.callable_identity().is_some()));
             let work = u64::try_from(edges).unwrap_or(u64::MAX).saturating_mul(3);
             if work
                 > self
@@ -14481,6 +14485,24 @@ impl InterpreterCore {
                 }
             }
             let mut opaque = false;
+            if let Some(identity) = object.callable_identity() {
+                if identity
+                    .module_owner
+                    .is_some_and(|owner| self.prototype_owner_ids(module).own_property[0] != owner)
+                {
+                    opaque = true;
+                } else {
+                    // A retained prototype can be the only path to bound
+                    // receivers/arguments or native callable state. Charge
+                    // and follow the same edges as a direct callable value.
+                    opaque |= self.queue_native_builtin_value(
+                        module,
+                        &identity.value,
+                        !snapshot_lookup,
+                        &mut pending,
+                    )?;
+                }
+            }
             for value in object.properties.values_unordered() {
                 opaque |=
                     self.queue_native_builtin_value(module, value, !snapshot_lookup, &mut pending)?;
@@ -14544,7 +14566,23 @@ impl InterpreterCore {
             | Value::AsyncGeneratorObject(_) => return Ok(true),
             function if function.is_callable() => {
                 if let Value::BuiltinFunction(builtin) = function {
-                    if builtin.kind == BuiltinFunctionKind::CallableProxy {
+                    if builtin.kind == BuiltinFunctionKind::CallableProxy
+                        || (builtin.bound_object.is_some()
+                            && matches!(
+                                builtin.kind,
+                                BuiltinFunctionKind::PromiseResolve
+                                    | BuiltinFunctionKind::PromiseReject
+                            ))
+                        || (builtin.iterator_handle.is_some()
+                            && matches!(
+                                builtin.kind,
+                                BuiltinFunctionKind::IteratorNext
+                                    | BuiltinFunctionKind::IteratorSelf
+                            ))
+                    {
+                        // These handles name private runtime carriers, not
+                        // ordinary heap receivers. Match the opaque policy
+                        // for direct Promise/Iterator values above.
                         return Ok(true);
                     }
                     if let Some(receiver) = builtin.bound_object {

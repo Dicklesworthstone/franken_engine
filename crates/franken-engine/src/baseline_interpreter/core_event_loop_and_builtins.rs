@@ -5683,7 +5683,11 @@ impl InterpreterCore {
         self.buffer_numeric_length(&value, "size", false)
     }
 
-    pub(super) fn buffer_from(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+    pub(super) fn buffer_from(
+        &mut self,
+        module: Option<&Ir3Module>,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
         let source = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
         match source {
             Value::Str(text) => {
@@ -5698,7 +5702,7 @@ impl InterpreterCore {
                     .is_some_and(|object| object.array_buffer.is_some()) =>
             {
                 let (byte_offset, byte_length, _, _) = self.typed_array_buffer_view_shape(
-                    None,
+                    module,
                     TypedArrayKind::Uint8,
                     object_id,
                     args,
@@ -5748,13 +5752,14 @@ impl InterpreterCore {
                     self.check_buffer_temporary_bytes(length)?;
                     let mut bytes = Vec::with_capacity(length);
                     for index in 0..length {
-                        let value = self
-                            .array_index_value(object_id, index)?
+                        let raw_value = self
+                            .array_index_get(module, object_id, index)?
                             .unwrap_or(Value::Undefined);
-                        if matches!(value, Value::BigInt(_)) {
+                        let value = self.object_to_number_primitive(module, raw_value)?;
+                        if matches!(value, Value::BigInt(_) | Value::Symbol(_)) {
                             return Err(InterpreterError::TypeError {
                                 expected: "Buffer element convertible to number".to_string(),
-                                got: "bigint".to_string(),
+                                got: value.type_name().to_string(),
                             });
                         }
                         bytes.push(Self::typed_array_u8_value(&value));

@@ -11663,7 +11663,7 @@ impl InterpreterCore {
                 let view_id = self.construct_data_view(module, args)?;
                 Ok(Value::Object(view_id))
             }
-            "builtin:BufferFrom" => self.buffer_from(args),
+            "builtin:BufferFrom" => self.buffer_from(module, args),
             "builtin:BufferAlloc" | "builtin:BufferAllocUnsafe" => self.buffer_alloc(args),
             "builtin:BufferByteLength" => self.buffer_byte_length(args),
             "builtin:BufferConcat" => self.buffer_concat(args),

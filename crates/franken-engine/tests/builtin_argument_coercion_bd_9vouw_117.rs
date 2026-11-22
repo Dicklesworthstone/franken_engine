@@ -310,3 +310,37 @@ fn array_like_sources_and_bigint_bits_convert_like_node() {
         NODE_OUTPUT_ARRAY_LIKE_AND_BITS.lines().count()
     );
 }
+
+#[test]
+fn buffer_from_coerces_array_buffer_bounds_and_elements_like_node() {
+    let source = r#"
+        const log = [];
+        const tracked = (name, value) => ({ valueOf() { log.push(name); return value; } });
+        const ab = new Uint8Array([10, 20, 30, 40, 50, 60]).buffer;
+        const b1 = Buffer.from(ab, tracked('off', 2), tracked('len', 3));
+        const b2 = Buffer.from([{ valueOf() { return 65; } }, { valueOf() { return 66; } }]);
+        const b3 = Buffer.from({ length: 2, 0: { valueOf() { return 7; } }, 1: 8 });
+        console.log(Array.from(b1).join(), log.join(), Array.from(b2).join(), Array.from(b3).join());
+        for (const [label, run] of [
+            ['ab symbol offset', () => Buffer.from(ab, Symbol('s'))],
+            ['ab bigint length', () => Buffer.from(ab, 0, 1n)],
+            ['array symbol element', () => Buffer.from([Symbol('s')])],
+            ['array bigint element', () => Buffer.from([1n])],
+            ['abrupt offset', () => Buffer.from(ab, { valueOf() { throw new RangeError('boom'); } })],
+        ]) {
+            try { run(); console.log(label, 'no throw'); }
+            catch (e) { console.log(label, e.message === 'boom' ? 'RangeError boom' : e.constructor.name); }
+        }
+    "#;
+    let expected = [
+        "30,40,50 off,len 65,66 7,8",
+        "ab symbol offset TypeError",
+        "ab bigint length TypeError",
+        "array symbol element TypeError",
+        "array bigint element TypeError",
+        "abrupt offset RangeError boom",
+    ]
+    .join("\n");
+    let output = console_output(source).expect("Buffer.from coercion program runs");
+    assert_eq!(output, expected);
+}

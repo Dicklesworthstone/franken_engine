@@ -5,10 +5,12 @@
 //! Before this, `Function.prototype` was `undefined` (so the Test262 harness
 //! file propertyHelper.js could not load), `f.bind` was `undefined`, and
 //! `Object.setPrototypeOf(Child, Parent)` threw, which crashed TypeScript's
-//! ES5 `__extends`. Expected strings are what Node v22.2.0 prints for the
-//! same programs.
+//! ES5 `__extends`. Original expectations were captured from Node v22.2.0;
+//! the later prototype-capture probes were checked separately in reference V8.
 //!
 //! No mocks: real source through the public `HybridRouter::eval` path.
+
+#![forbid(unsafe_code)]
 
 use frankenengine_engine::HybridRouter;
 
@@ -19,11 +21,11 @@ fn eval_to_string(source: &str) -> String {
     }
 }
 
-fn check(source: &str, node: &str) {
+fn check(source: &str, expected: &str) {
     assert_eq!(
         eval_to_string(source),
-        node,
-        "`{source}` must match Node v22.2.0"
+        expected,
+        "unexpected observable behavior for `{source}`"
     );
 }
 
@@ -287,4 +289,320 @@ console.log(new WithStatic() instanceof WithStatic, {} instanceof WithStatic, Re
             "true false true",
         ]
     );
+}
+
+// ES2020 BoundFunctionCreate observes and captures [[Prototype]] before
+// reading the target's length/name. These exact programs were checked in V8.
+#[test]
+fn bind_captures_custom_and_null_prototypes() {
+    check(
+        r#"
+const bind = Function.prototype.bind;
+const first = {marker: 'first', get receiver() { return this; }};
+const second = {marker: 'second'};
+function Target(a, b) { return this.value + a + b; }
+Object.setPrototypeOf(Target, first);
+const bound = Reflect.apply(bind, Target, [{value: 10}, 2]);
+Object.setPrototypeOf(Target, second);
+const rebound = Reflect.apply(bind, bound, [null, 3]);
+function NullTarget(x) { return x + 1; }
+Object.setPrototypeOf(NullTarget, null);
+const nullBound = Reflect.apply(bind, NullTarget, [null, 4]);
+[Object.getPrototypeOf(bound) === first, bound.marker, bound.receiver === bound,
+ Object.getPrototypeOf(rebound) === first, rebound(), bound.length, bound.name,
+ Object.getPrototypeOf(nullBound) === null, nullBound(), nullBound.call === undefined].join(' ');
+"#,
+        "true first true true 15 1 bound Target true 5 true",
+    );
+}
+
+#[test]
+fn bind_observes_proxy_prototype_before_metadata() {
+    check(
+        r#"
+const events = [], proto = {marker: 'captured'};
+function Target(a, b) { return a + b; }
+const handler = {
+ getPrototypeOf(target) { events.push('proto:' + (this === handler) + ':' + (target === Target)); return proto; },
+ getOwnPropertyDescriptor(target, key) { events.push('own:' + key); return Reflect.getOwnPropertyDescriptor(target, key); },
+ get(target, key, receiver) { events.push('get:' + key); return Reflect.get(target, key, receiver); }
+};
+const proxy = new Proxy(Target, handler);
+const bound = Function.prototype.bind.call(proxy, null, 4);
+[events.join(','), Object.getPrototypeOf(bound) === proto, bound.marker,
+ bound(5), bound.length, bound.name].join(' ');
+"#,
+        "proto:true:true,own:length,get:length,get:name true captured 9 1 bound Target",
+    );
+}
+
+#[test]
+fn bind_prototype_capture_precedes_metadata_side_effects() {
+    check(
+        r#"
+const first = {marker: 'first'}, second = {marker: 'second'}, events = [];
+function Target() {}
+Object.setPrototypeOf(Target, first);
+Object.defineProperty(Target, 'length', {
+ get() { events.push('length'); Object.setPrototypeOf(Target, second); return 3; }
+});
+Object.defineProperty(Target, 'name', {get() { events.push('name'); return 'Renamed'; }});
+const bound = Function.prototype.bind.call(Target, null, 1);
+[Object.getPrototypeOf(bound) === first, Object.getPrototypeOf(Target) === second,
+ bound.marker, bound.length, bound.name, events.join(',')].join(' ');
+"#,
+        "true true first 2 bound Renamed length,name",
+    );
+}
+
+#[test]
+fn bind_prototype_errors_short_circuit_metadata() {
+    check(
+        r#"
+const bind = Function.prototype.bind, sentinel = {}, events = [];
+function Target() {}
+const throwing = new Proxy(Target, {
+ getPrototypeOf() { events.push('proto'); throw sentinel; },
+ getOwnPropertyDescriptor() { events.push('descriptor'); return undefined; },
+ get() { events.push('get'); return 0; }
+});
+let caught;
+try { bind.call(throwing); } catch (error) { caught = error === sentinel; }
+const invalid = new Proxy(Target, {
+ getPrototypeOf() { events.push('invalid'); return 1; },
+ getOwnPropertyDescriptor() { events.push('descriptor'); return undefined; }
+});
+let invalidType = false;
+try { bind.call(invalid); } catch (error) { invalidType = error instanceof TypeError; }
+const revoked = Proxy.revocable(Target, {});
+revoked.revoke();
+let revokedType = false;
+try { bind.call(revoked.proxy); } catch (error) { revokedType = error instanceof TypeError; }
+const noncallable = new Proxy({}, {getPrototypeOf() { events.push('noncallable'); return null; }});
+let callableType = false;
+try { bind.call(noncallable); } catch (error) { callableType = error instanceof TypeError; }
+[caught, invalidType, revokedType, callableType, events.join(',')].join(' ');
+"#,
+        "true true true true proto,invalid",
+    );
+}
+
+#[test]
+fn bind_preserves_function_kind_prototypes_and_construction() {
+    check(
+        r#"
+function* generator(value) { yield value; }
+async function asyncFunction() { return 1; }
+async function* asyncGenerator() { yield 2; }
+const boundGenerator = generator.bind(null, 7);
+const kinds = [generator, asyncFunction, asyncGenerator].map(function(target) {
+ const bound = target.bind(null);
+ return Object.getPrototypeOf(bound) === Object.getPrototypeOf(target);
+});
+class Parent { static inherited() { return 11; } }
+class Child extends Parent { constructor(value) { super(); this.value = value; this.target = new.target; } }
+const Bound = Child.bind(null, 8);
+const instance = new Bound();
+[kinds.join(','), boundGenerator().next().value, Object.getPrototypeOf(Bound) === Parent,
+ Bound.inherited(), instance.value, instance.target === Child, instance instanceof Child,
+ Object.prototype.hasOwnProperty.call(Bound, 'prototype')].join(' ');
+"#,
+        "true,true,true 7 true 11 8 true true false",
+    );
+}
+
+#[test]
+fn bind_proxy_callable_prototype_identity_and_invariants() {
+    check(
+        r#"
+function Prototype() {}
+Prototype.marker = 'callable';
+function Target() {}
+const proxy = new Proxy(Target, {getPrototypeOf() { return Prototype; }});
+const bound = Function.prototype.bind.call(proxy);
+const nullProxy = new Proxy(Target, {getPrototypeOf() { return null; }});
+const nullBound = Function.prototype.bind.call(nullProxy);
+const original = Object.getPrototypeOf(Target), events = [];
+Object.preventExtensions(Target);
+const good = new Proxy(Target, {getPrototypeOf() { events.push('good'); return original; }});
+const goodBound = Function.prototype.bind.call(good);
+const bad = new Proxy(Target, {
+ getPrototypeOf() { events.push('bad'); return Prototype; },
+ getOwnPropertyDescriptor() { events.push('descriptor'); return undefined; }
+});
+let rejected = false;
+try { Function.prototype.bind.call(bad); } catch (error) { rejected = error instanceof TypeError; }
+[Object.getPrototypeOf(bound) === Prototype, bound.marker,
+ Object.getPrototypeOf(nullBound) === null, Object.getPrototypeOf(goodBound) === original,
+ rejected, events.join(',')].join(' ');
+"#,
+        "true callable true true true good,bad",
+    );
+}
+
+#[test]
+fn bind_retains_prototype_observations_and_restores_caller_context() {
+    use frankenengine_engine::ast::ParseGoal;
+    use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore, Value};
+    use frankenengine_engine::capability::RuntimeCapability;
+    use frankenengine_engine::ifc_artifacts::Label;
+    use frankenengine_engine::ir_contract::{Ir0Module, Ir3Instruction};
+    use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+    use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
+
+    let cases = [
+        (
+            "proxy_prototype_selection",
+            r#"
+const choice = '__bind_input__';
+const prototype = {};
+const target = new Proxy(function Target() {}, {
+    getPrototypeOf() { return choice ? prototype : null; }
+});
+const bound = Function.prototype.bind.call(target);
+Object.getPrototypeOf(bound) === prototype;
+"#,
+            Value::Bool(true),
+            true,
+        ),
+        (
+            "stored_prototype_selection",
+            r#"
+const choice = '__bind_input__', prototype = {};
+function Target() {}
+Object.setPrototypeOf(Target, choice ? prototype : null);
+const bound = Function.prototype.bind.call(Target);
+Object.getPrototypeOf(bound) === prototype;
+"#,
+            Value::Bool(true),
+            true,
+        ),
+        (
+            "length_getter_before_public_name",
+            r#"
+const choice = '__bind_input__';
+function Target() {}
+Object.defineProperty(Target, 'length', { get() { return choice ? 3 : 0; } });
+Object.defineProperty(Target, 'name', { get() { return 'public'; } });
+Function.prototype.bind.call(Target).length;
+"#,
+            Value::Int(3),
+            true,
+        ),
+        (
+            "own_length_trap_before_public_metadata",
+            r#"
+const choice = '__bind_input__';
+function Target(a, b) {}
+const target = new Proxy(Target, {
+    getOwnPropertyDescriptor(object, key) {
+        return choice ? Reflect.getOwnPropertyDescriptor(object, key) : undefined;
+    }
+});
+Function.prototype.bind.call(target).length;
+"#,
+            Value::Int(2),
+            true,
+        ),
+        (
+            "prototype_trap_throw",
+            r#"
+const choice = '__bind_input__';
+const target = new Proxy(function Target() {}, {
+    getPrototypeOf() {
+        if (choice) throw new RangeError('prototype');
+        return null;
+    }
+});
+let caught = false;
+try { Function.prototype.bind.call(target); }
+catch (error) { caught = error instanceof RangeError; }
+caught;
+"#,
+            Value::Bool(true),
+            true,
+        ),
+        (
+            "successful_bind_restores_context",
+            r#"
+const choice = '__bind_input__';
+const target = new Proxy(function Target() {}, {
+    getPrototypeOf() { return choice ? {} : null; }
+});
+Function.prototype.bind.call(target);
+17;
+"#,
+            Value::Int(17),
+            false,
+        ),
+    ];
+
+    for (name, source, expected, retains_input_label) in cases {
+        let tree = CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource {
+                    label: format!("{name}.js"),
+                    text: source.into(),
+                },
+                ParseGoal::Script,
+                &ParserOptions::default(),
+            )
+            .unwrap_or_else(|error| panic!("{name} parses: {error}"));
+        let mut module = lower_ir0_to_ir3(
+            &Ir0Module::from_syntax_tree(tree, format!("{name}.js")),
+            &LoweringContext::new(name, "bound-prototype-observation", "builtin-only"),
+        )
+        .unwrap_or_else(|error| panic!("{name} lowers: {error}"))
+        .ir3;
+        let mut patched = 0;
+        for instruction in &mut module.instructions {
+            if let Ir3Instruction::LoadStr { dst, pool_index } = *instruction
+                && module.constant_pool[pool_index as usize].as_str() == Some("__bind_input__")
+            {
+                *instruction = Ir3Instruction::Move { dst, src: 255 };
+                patched += 1;
+            }
+        }
+        assert_eq!(patched, 1, "{name}: exactly one labelled input");
+        for v8 in [false, true] {
+            for stress in [None, Some(7)] {
+                for label in [Label::Public, Label::Secret] {
+                    let mut config = if v8 {
+                        InterpreterConfig::v8_defaults()
+                    } else {
+                        InterpreterConfig::quickjs_defaults()
+                    };
+                    config.granted_capabilities = [
+                        RuntimeCapability::VmDispatch,
+                        RuntimeCapability::HeapAllocate,
+                        RuntimeCapability::Builtin,
+                    ]
+                    .into_iter()
+                    .collect();
+                    let mut core = InterpreterCore::new(config, name);
+                    core.seed_register(255, Value::Bool(true)).unwrap();
+                    core.set_register_label(255, label.clone()).unwrap();
+                    core.set_gc_stress_interval(stress);
+                    let outcome = core.execute(&module).unwrap_or_else(|error| {
+                        panic!("{name}: profile={v8}, GC={stress:?}, label={label:?}: {error}")
+                    });
+                    assert_eq!(outcome.value, expected, "{name}: result");
+                    assert_eq!(
+                        outcome.completion_label,
+                        if retains_input_label {
+                            label
+                        } else {
+                            Label::Public
+                        },
+                        "{name}: profile={v8}, GC={stress:?}"
+                    );
+                    assert_eq!(
+                        core.estimated_memory_bytes(),
+                        core.recompute_estimated_memory_bytes(),
+                        "{name}: retained observation or bound backing accounting drift"
+                    );
+                }
+            }
+        }
+    }
 }

@@ -12421,9 +12421,10 @@ impl InterpreterCore {
 
     /// ES2020 19.2.3.2 Function.prototype.bind. The bound function's private
     /// state object holds the target, the bound `this`, the bound arguments
-    /// and the `name` and `length` read from the target at bind time; its
-    /// mutation label carries every input's label, and every call through
-    /// the bound function joins that label into its arguments.
+    /// and the `name` and `length` read from the target at bind time. Its
+    /// ordinary backing captures the target's [[Prototype]] before either
+    /// metadata property is observed. Every observation contributes to the
+    /// retained label used by later calls through the bound function.
     pub(super) fn function_prototype_bind(
         &mut self,
         module: &Ir3Module,
@@ -12437,29 +12438,62 @@ impl InterpreterCore {
                 got: target.type_name().to_string(),
             });
         }
+        let end =
+            args.start
+                .checked_add(args.count)
+                .ok_or(InterpreterError::RegisterOutOfBounds {
+                    register: args.start,
+                    max: self.config.max_registers,
+                })?;
+        let observation =
+            self.begin_property_observation(target_register.into_iter().chain(args.start..end))?;
+        let outcome = self.function_prototype_bind_observed(module, target, args);
+        self.finish_property_read_observation(observation, outcome)
+    }
+
+    fn function_prototype_bind_observed(
+        &mut self,
+        module: &Ir3Module,
+        target: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
         let bound_this = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
         let mut bound_arguments = Vec::with_capacity(args.count.saturating_sub(1) as usize);
         for index in 1..args.count {
             bound_arguments.push(self.builtin_arg(args, index)?.unwrap_or(Value::Undefined));
         }
-        let mut label = self.join_arg_range_label(args)?;
-        if let Some(register) = target_register {
-            label = label.join(self.get_register_label(register)?);
-        }
-        // Steps 4-8 (ES2024 20.2.3.2): HasOwnProperty(Target, "length"),
-        // then Get(Target, "length") and Get(Target, "name"). A getter or a
-        // proxy trap runs (and may throw) now; later changes to the target
-        // do not reach the bound function. Guest code runs while native
-        // locals hold values: no collection until this returns.
+        // BoundFunctionCreate (ES2020 9.4.1.3) first observes
+        // target.[[GetPrototypeOf]], including a Proxy trap and its invariants.
+        // Guest code runs while native locals hold values: no collection
+        // until this returns.
         self.gc_nested_request = None;
+        let prototype = match self.integrity_proxy_id(&target)? {
+            Some(proxy) => self.object_get_prototype(Some(module), proxy, 0)?,
+            None => self.function_value_prototype(Some(module), &target)?,
+        };
+        self.observe_scoped_callback_result()?;
+        let prototype = self
+            .prototype_link_for_value(Some(module), &prototype)?
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "object or null bound function prototype".to_string(),
+                got: prototype.type_name().to_string(),
+            })?;
+        // HasOwnProperty(Target, "length"), then Get(Target, "length") and
+        // Get(Target, "name") run after the prototype has been captured.
+        // Observe each callback before another can replace its result label.
         let mut length = Value::Int(0);
-        if self.value_has_own_property(Some(module), &target, &Value::str("length"))? {
+        let has_length =
+            self.value_has_own_property(Some(module), &target, &Value::str("length"))?;
+        self.observe_scoped_callback_result()?;
+        if has_length {
             let bound_count = i64::try_from(bound_arguments.len()).unwrap_or(i64::MAX);
-            length = match self.get_v(
+            let target_length = self.get_v(
                 module,
                 &target,
                 &RuntimePropertyKey::String(JsString::from("length")),
-            )? {
+            )?;
+            self.observe_scoped_callback_result()?;
+            length = match target_length {
                 Value::Int(target_length) => {
                     Value::Int(target_length.saturating_sub(bound_count).max(0))
                 }
@@ -12477,17 +12511,17 @@ impl InterpreterCore {
                 _ => Value::Int(0),
             };
         }
-        let name = match self.get_v(
+        let target_name = self.get_v(
             module,
             &target,
             &RuntimePropertyKey::String(JsString::from("name")),
-        )? {
+        )?;
+        self.observe_scoped_callback_result()?;
+        let name = match target_name {
             Value::Str(target_name) => format!("bound {target_name}"),
             _ => "bound ".to_string(),
         };
-        if let Some(getter_label) = self.take_pending_hostcall_result_label() {
-            label = label.join(&getter_label);
-        }
+        let label = self.json_parse_context_label()?;
         let arguments_id = self.alloc_array_from_values(&bound_arguments)?;
         let state = self.alloc_object_with_prototype(None)?;
         self.set_object_property(state, "target".to_string(), target)?;
@@ -12499,8 +12533,17 @@ impl InterpreterCore {
         self.join_object_mutation_label(arguments_id, &label)?;
         let mut bound = BuiltinFunction::new_kind(BuiltinFunctionKind::BoundFunction);
         bound.bound_object = Some(state.0);
+        let bound = Value::BuiltinFunction(bound);
+        let backing = self
+            .ensure_function_own_property_object(module, &bound)?
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: "bound function has no own-property storage".to_string(),
+            })?;
+        self.store_prototype_link(backing, prototype);
+        self.join_object_mutation_label(backing, &label)?;
+        self.gc_write_barrier(backing);
         self.replace_pending_hostcall_result_label(Some(label))?;
-        Ok(Value::BuiltinFunction(bound))
+        Ok(bound)
     }
 
     /// A bound function's [[BoundTargetFunction]], [[BoundThis]] and

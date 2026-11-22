@@ -674,6 +674,11 @@ mod native {
     fn cat(scratch: &Scratch) -> (Arc<NativeProcessSpawn>, ProcessLaunch) {
         let mut policy = ProcessSpawnPolicy::jailed(&scratch.0).unwrap();
         policy.limits.max_runtime_millis = 2000;
+        #[cfg(target_os = "linux")]
+        let executable = policy
+            .authorize_trusted_system_executable("/bin/cat")
+            .unwrap();
+        #[cfg(not(target_os = "linux"))]
         let executable = policy.authorize_executable("/bin/cat").unwrap();
         let provider = Arc::new(NativeProcessSpawn::new(policy).unwrap());
         (

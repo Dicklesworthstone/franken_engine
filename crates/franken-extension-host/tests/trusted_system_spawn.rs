@@ -212,7 +212,7 @@ fn readonly_image_in_a_writable_tree_is_not_a_protected_system_image() {
 #[test]
 fn forged_serialized_grant_cannot_bypass_source_protection() {
     let root = tempfile::tempdir().expect("forged policy fixture");
-    let executable = copy_echo(root.path(), "forged-system-image", 0o755);
+    let executable = copy_echo(root.path(), "forged-system-image", 0o777);
     let mut policy = ProcessSpawnPolicy::jailed(root.path()).unwrap();
     let canonical = policy.authorize_executable(&executable).unwrap();
     let mut serialized = serde_json::to_value(&policy).unwrap();

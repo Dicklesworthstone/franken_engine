@@ -10,6 +10,9 @@ on:
       - Cargo.lock
       - rust-toolchain.toml
       - crates/franken-extension-host/**
+      - crates/franken-core/src/host_effect_budget/**
+      - crates/franken-engine/tests/process_spawn_foundation_bd_x85a7.rs
+      - crates/franken-engine/tests/process_work_pool_integration.rs
   workflow_dispatch:
 
 permissions:
@@ -209,14 +212,18 @@ jobs:
           cargo clippy --locked --no-default-features \
             -p frankenengine-extension-host --all-targets -- -D warnings
 
-      - name: Build library and trusted system integration tests
+      - name: Build host library tests and trusted system integration tests
         id: tests
         run: |
           set -euo pipefail
           cargo test --locked --no-default-features \
-            -p frankenengine-extension-host --lib --test trusted_system_spawn \
+            -p frankenengine-extension-host --lib \
             --no-run --message-format=json-render-diagnostics \
             > /tmp/frankenengine-process-spawn-artifacts.jsonl
+          cargo test --locked --no-default-features \
+            -p frankenengine-extension-host --test trusted_system_spawn \
+            --no-run --message-format=json-render-diagnostics \
+            >> /tmp/frankenengine-process-spawn-artifacts.jsonl
           python3 - <<'PY'
           import json
           import os
@@ -275,6 +282,50 @@ jobs:
           cd crates/franken-extension-host
           setpriv --reuid=1000 --regid=1000 --clear-groups -- \
             "$TEST_BINARY" --test-threads=1
+
+      - name: Build core library regression tests
+        id: core_tests
+        run: |
+          set -euo pipefail
+          cargo test --locked --no-default-features \
+            -p frankenengine-core --lib \
+            --no-run --message-format=json-render-diagnostics \
+            > /tmp/frankenengine-core-process-artifacts.jsonl
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+
+          found = set()
+          for line in pathlib.Path("/tmp/frankenengine-core-process-artifacts.jsonl").read_text().splitlines():
+              item = json.loads(line)
+              if (
+                  item.get("reason") == "compiler-artifact"
+                  and item.get("target", {}).get("name") == "frankenengine_core"
+                  and item.get("profile", {}).get("test")
+                  and item.get("executable")
+              ):
+                  found.add(item["executable"])
+          if len(found) != 1:
+              raise SystemExit(f"Expected one core test executable, found {found}")
+          executable = found.pop()
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"library={executable}\n")
+          print(f"Exact core test executable: {executable}")
+          PY
+          chmod -R a+rX "$CARGO_TARGET_DIR"
+          chmod a+rx "$GITHUB_WORKSPACE/crates/franken-core"
+
+      - name: Run native core process and cleanup regressions as UID 1000
+        env:
+          TEST_BINARY: ${{ steps.core_tests.outputs.library }}
+        run: |
+          set -euo pipefail
+          cd crates/franken-core
+          setpriv --reuid=1000 --regid=1000 --clear-groups -- \
+            "$TEST_BINARY" host_effect_budget::process::tests::native:: --test-threads=1
+          setpriv --reuid=1000 --regid=1000 --clear-groups -- \
+            "$TEST_BINARY" host_effect_budget::drain::tests::native:: --test-threads=1
 
       - name: Record tested source identity
         if: always()

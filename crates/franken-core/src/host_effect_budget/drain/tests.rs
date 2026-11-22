@@ -564,6 +564,11 @@ mod native {
         };
         let scratch = Scratch::new();
         let mut policy = ProcessSpawnPolicy::jailed(&scratch.0).unwrap();
+        #[cfg(target_os = "linux")]
+        let executable = policy
+            .authorize_trusted_system_executable("/bin/cat")
+            .unwrap();
+        #[cfg(not(target_os = "linux"))]
         let executable = policy.authorize_executable("/bin/cat").unwrap();
         policy.limits.max_runtime_millis = 2000;
         let native = Arc::new(NativeProcessSpawn::new(policy).unwrap());

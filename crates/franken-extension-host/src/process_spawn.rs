@@ -9,14 +9,14 @@
 //! The default [`DenyAllProcessSpawn`] provider performs no effects. The native
 //! provider is suitable only when the product layer has installed an explicit
 //! policy: it clears the ambient environment, confines working directories,
-//! opens the canonical executable once and launches a verified immutable image
-//! of its bytes instead of reopening a mutable pathname, pins working
-//! directories beneath an owned jail descriptor through launch, bounds
+//! opens the canonical executable once and, by default, launches a verified
+//! immutable image of its bytes instead of reopening a mutable pathname, pins
+//! working directories beneath an owned jail descriptor through launch, bounds
 //! input/output/runtime, and exposes only provider-scoped opaque handles (never
 //! native process identifiers).
 //!
-//! Linux executes a sealed anonymous snapshot whose immutable bytes match the
-//! policy digest, after checking execution permission on the held source file.
+//! By default, Linux executes a sealed anonymous snapshot whose immutable bytes
+//! match the policy digest, after checking execution permission on the held source file.
 //! The main executable is pinned; its dynamic loader, libraries and other files
 //! remain host dependencies. `/proc/self/exe` names the anonymous image, so
 //! executable-relative resource and `$ORIGIN` lookup need compatible packaging.

@@ -84,7 +84,9 @@ temporary-copy/ptrace workaround or reinterpret existing immutable policies.
 
 The Linux workflow installs actual Ubuntu 26.04 uutils, first reproduces the old
 sealed-memfd name failure, then runs the trusted-system integration tests and all
-extension-host library tests as UID 1000. The positive utility case is required.
+extension-host library tests as UID 1000. It also runs the core's native process
+and child-cleanup tests against those installed utilities. The positive utility
+case is required.
 Separate immutable-mode tests still rewrite and truncate the authorized inode,
 attempt writes and resizing through aliases, and check source execution
 permissions and resource admission. Those fixtures use a standalone shell image

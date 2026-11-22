@@ -50,7 +50,7 @@ fn native(scratch: &Scratch) -> Arc<NativeProcessSpawn> {
         .expect("native printf fixture");
     let mut policy = ProcessSpawnPolicy::jailed(&scratch.0).expect("jail");
     policy
-        .authorize_alias("budget-printf", executable)
+        .authorize_trusted_system_alias("budget-printf", executable)
         .expect("pin executable digest");
     policy.limits.max_runtime_millis = 2000;
     Arc::new(NativeProcessSpawn::new(policy).expect("native provider"))
@@ -183,7 +183,7 @@ fn supervised_drain_preserves_the_real_js_process_failure_journal() {
         .expect("native sleep fixture");
     let mut policy = ProcessSpawnPolicy::jailed(&scratch.0).expect("jail");
     policy
-        .authorize_alias("budget-sleep", executable)
+        .authorize_trusted_system_alias("budget-sleep", executable)
         .expect("pin native executable");
     policy.limits.max_runtime_millis = 10_000;
     let native = Arc::new(NativeProcessSpawn::new(policy).expect("native provider"));
@@ -445,7 +445,9 @@ fn native_descendant_process_and_sibling_io_share_concurrency_and_separate_close
         .find(|path| path.is_file())
         .expect("native sleep");
     let mut policy = ProcessSpawnPolicy::jailed(&scratch.0).unwrap();
-    policy.authorize_alias("tenant-sleep", executable).unwrap();
+    policy
+        .authorize_trusted_system_alias("tenant-sleep", executable)
+        .unwrap();
     policy.limits.max_runtime_millis = 10_000;
     let root = HostEffectWorkPool::new(HostEffectLimits {
         operations: 2,
@@ -536,7 +538,9 @@ fn ancestor_close_does_not_disable_native_descendant_child_cleanup() {
 
     let scratch = Scratch::new();
     let mut policy = ProcessSpawnPolicy::jailed(&scratch.0).unwrap();
-    let executable = policy.authorize_executable("/bin/cat").unwrap();
+    let executable = policy
+        .authorize_trusted_system_executable("/bin/cat")
+        .unwrap();
     policy.limits.max_runtime_millis = 2000;
     let root = HostEffectWorkPool::new(HostEffectLimits {
         operations: 2,

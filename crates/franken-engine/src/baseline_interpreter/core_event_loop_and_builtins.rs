@@ -3806,8 +3806,21 @@ impl InterpreterCore {
                 ),
             });
         }
+        // A byte-backed array can be small while its native Value carrier is
+        // much larger. Admit the carrier before allocation, including the
+        // decimal payload materialized for each 64-bit BigInt element.
+        let element_bytes =
+            (std::mem::size_of::<Value>() as u64).saturating_add(if view.kind.is_bigint() {
+                Self::estimate_string_bytes("18446744073709551615")
+            } else {
+                0
+            });
+        self.check_temporary_memory_budget(((end - start) as u64).saturating_mul(element_bytes))?;
         self.with_array_buffer_bytes(view.buffer, |bytes| {
-            let mut values = Vec::with_capacity(end - start);
+            let mut values = Vec::new();
+            values
+                .try_reserve_exact(end - start)
+                .map_err(|_| self.memory_budget_error(u64::MAX, self.heap_object_count_u32()))?;
             for index in start..end {
                 values.push(Self::read_typed_array_element_bytes(view, bytes, index)?);
             }
@@ -3852,14 +3865,24 @@ impl InterpreterCore {
             message: format!("array-like length {length} exceeds host addressable size"),
         })?;
         let mut values = self.element_buffer(length)?;
-        for index in 0..length {
-            values.push(self.generic_get(
-                module,
-                object_id,
-                &Self::generic_index_key(index as u64),
-            )?);
-        }
-        Ok(values)
+        let mut retained =
+            (values.capacity() as u64).saturating_mul(std::mem::size_of::<Value>() as u64);
+        self.json_reserve_temporary(retained)?;
+        let outcome = (|| {
+            for index in 0..length {
+                let value =
+                    self.generic_get(module, object_id, &Self::generic_index_key(index as u64))?;
+                StringOutputBuffer::reserve(
+                    self,
+                    &mut retained,
+                    Self::estimate_value_bytes(&value),
+                )?;
+                values.push(value);
+            }
+            Ok(values)
+        })();
+        self.json_release_temporary(retained);
+        outcome
     }
 
     pub(super) fn typed_array_source_values(
@@ -4293,14 +4316,23 @@ impl InterpreterCore {
         let count = Value::Int(i64::try_from(end.saturating_sub(start)).unwrap_or(i64::MAX));
         let species = self.typed_array_species_result(module, target_id, view.kind, vec![count])?;
         let values = self.typed_array_values_in_range(&view, start, end.max(start))?;
-        let result = match species {
-            Some(created) => {
-                self.typed_array_write_values(created, target_id, &values)?;
-                created
-            }
-            None => self.alloc_typed_array_from_values(view.kind, &values)?,
-        };
-        Ok(Value::Object(result))
+        let retained = Self::estimate_value_vec_bytes(&values).saturating_add(
+            ((values.capacity() - values.len()) as u64)
+                .saturating_mul(std::mem::size_of::<Value>() as u64),
+        );
+        self.json_reserve_temporary(retained)?;
+        let outcome = (|| {
+            let result = match species {
+                Some(created) => {
+                    self.typed_array_write_values(created, target_id, &values)?;
+                    created
+                }
+                None => self.alloc_typed_array_from_values(view.kind, &values)?,
+            };
+            Ok(Value::Object(result))
+        })();
+        self.json_release_temporary(retained);
+        outcome
     }
 
     /// ES2020 24.1.4.3 ArrayBuffer.prototype.slice(start, end): a new
@@ -4564,151 +4596,214 @@ impl InterpreterCore {
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         let (target_id, view) = self.typed_array_receiver_view(receiver, method)?;
-        let values = self.typed_array_values_in_range(&view, 0, view.length)?;
-        let reordered = match method {
-            "map" | "filter" => {
-                let callback = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-                if !callback.is_callable() {
-                    return Err(InterpreterError::TypeError {
-                        expected: format!("callable callback for TypedArray.prototype.{method}"),
-                        got: callback.type_name().to_string(),
-                    });
+        if matches!(method, "sort" | "toSorted") {
+            let comparator = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+            if !matches!(comparator, Value::Undefined) && !comparator.is_callable() {
+                return Err(InterpreterError::TypeError {
+                    expected: format!(
+                        "comparator function or undefined for TypedArray.prototype.{method}"
+                    ),
+                    got: comparator.type_name().to_string(),
+                });
+            }
+        }
+        if method == "reverse" {
+            // Reordering the backing bytes uses constant space and preserves
+            // the exact representation of floating-point NaNs.
+            let width = view.kind.element_size();
+            self.with_array_buffer_bytes_mut(view.buffer, |bytes| {
+                for index in 0..view.length / 2 {
+                    let left = view.byte_offset + index * width;
+                    let right = view.byte_offset + (view.length - index - 1) * width;
+                    for byte in 0..width {
+                        bytes.swap(left + byte, right + byte);
+                    }
                 }
-                let this_arg = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
-                let len = view.length;
-                if method == "map" {
-                    // ES2024 23.2.3.22: the result exists before the
-                    // callbacks run (step 4). Each step reads O[k] when it
-                    // runs (undefined once a resize left k out of bounds)
-                    // and Sets the result's element, converting the mapped
-                    // value then (steps 6.b-6.d).
-                    let length = Value::Int(i64::try_from(len).unwrap_or(i64::MAX));
-                    let species = self.typed_array_species_result(
-                        module,
-                        target_id,
-                        view.kind,
-                        vec![length],
-                    )?;
-                    let created = match species {
-                        Some(created) => created,
-                        None => self.alloc_typed_array_with_fresh_buffer(view.kind, len)?,
-                    };
-                    // A species constructor may return another element type.
-                    let created_kind = self
-                        .typed_array_view_for_object(created)?
-                        .map_or(view.kind, |created_view| created_view.kind);
+            })?;
+            return Ok(Value::Object(target_id));
+        }
+        if method == "toReversed" {
+            let created = self.alloc_typed_array_with_fresh_buffer(view.kind, view.length)?;
+            for index in 0..view.length {
+                let value = self.with_array_buffer_bytes(view.buffer, |bytes| {
+                    Self::read_typed_array_element_bytes(&view, bytes, view.length - index - 1)
+                })??;
+                self.typed_array_indexed_set_property(created, &index.to_string(), &value)?;
+            }
+            return Ok(Value::Object(created));
+        }
+        // map/filter read the live source for each callback; with converts its
+        // operands before reading elements. None needs an eager source copy.
+        let values = if matches!(method, "map" | "filter" | "with") {
+            Vec::new()
+        } else {
+            self.typed_array_values_in_range(&view, 0, view.length)?
+        };
+        let mut retained = Self::estimate_value_vec_bytes(&values).saturating_add(
+            ((values.capacity() - values.len()) as u64)
+                .saturating_mul(std::mem::size_of::<Value>() as u64),
+        );
+        self.json_reserve_temporary(retained)?;
+        let outcome = (|| {
+            let reordered = match method {
+                "map" | "filter" => {
+                    let callback = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                    if !callback.is_callable() {
+                        return Err(InterpreterError::TypeError {
+                            expected: format!(
+                                "callable callback for TypedArray.prototype.{method}"
+                            ),
+                            got: callback.type_name().to_string(),
+                        });
+                    }
+                    let this_arg = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+                    let len = view.length;
+                    if method == "map" {
+                        // ES2024 23.2.3.22: the result exists before the
+                        // callbacks run (step 4). Each step reads O[k] when it
+                        // runs (undefined once a resize left k out of bounds)
+                        // and Sets the result's element, converting the mapped
+                        // value then (steps 6.b-6.d).
+                        let length = Value::Int(i64::try_from(len).unwrap_or(i64::MAX));
+                        let species = self.typed_array_species_result(
+                            module,
+                            target_id,
+                            view.kind,
+                            vec![length],
+                        )?;
+                        let created = match species {
+                            Some(created) => created,
+                            None => self.alloc_typed_array_with_fresh_buffer(view.kind, len)?,
+                        };
+                        // A species constructor may return another element type.
+                        let created_kind = self
+                            .typed_array_view_for_object(created)?
+                            .map_or(view.kind, |created_view| created_view.kind);
+                        for index in 0..len {
+                            let element = self
+                                .array_loop_element(Some(module), target_id, index, true)?
+                                .unwrap_or(Value::Undefined);
+                            // Set converts the mapped value (its valueOf runs)
+                            // before the next callback.
+                            let converted = self.with_gc_nested_request(
+                                vec![Value::Object(created)],
+                                |core| {
+                                    let mapped = core.invoke_array_callback(
+                                        Some(module),
+                                        &callback,
+                                        this_arg.clone(),
+                                        element,
+                                        index,
+                                        target_id,
+                                    )?;
+                                    core.typed_array_element_value(
+                                        Some(module),
+                                        created_kind,
+                                        mapped,
+                                    )
+                                },
+                            )?;
+                            self.typed_array_indexed_set_property(
+                                created,
+                                &index.to_string(),
+                                &converted,
+                            )?;
+                        }
+                        // As before: a species result joins the receiver's
+                        // storage label (typed_array_write_values); the
+                        // default result is a fresh array of the mapped values.
+                        if species.is_some() {
+                            self.join_typed_array_source_label(created, target_id)?;
+                        }
+                        return Ok(Value::Object(created));
+                    }
+                    // ES2024 23.2.3.10: each step reads O[k] when it runs; the
+                    // kept values go to a result created after the callbacks
+                    // (step 9).
+                    let mut kept = Vec::new();
                     for index in 0..len {
                         let element = self
                             .array_loop_element(Some(module), target_id, index, true)?
                             .unwrap_or(Value::Undefined);
-                        // Set converts the mapped value (its valueOf runs)
-                        // before the next callback.
-                        let converted =
-                            self.with_gc_nested_request(vec![Value::Object(created)], |core| {
-                                let mapped = core.invoke_array_callback(
-                                    Some(module),
-                                    &callback,
-                                    this_arg.clone(),
-                                    element,
-                                    index,
-                                    target_id,
-                                )?;
-                                core.typed_array_element_value(Some(module), created_kind, mapped)
-                            })?;
-                        self.typed_array_indexed_set_property(
-                            created,
-                            &index.to_string(),
-                            &converted,
+                        let selected = self.invoke_array_callback(
+                            Some(module),
+                            &callback,
+                            this_arg.clone(),
+                            element.clone(),
+                            index,
+                            target_id,
                         )?;
+                        if selected.is_truthy() {
+                            let required = kept.len().saturating_add(1);
+                            StringOutputBuffer::grow_vec(
+                                self,
+                                &mut kept,
+                                required,
+                                len,
+                                &mut retained,
+                            )?;
+                            StringOutputBuffer::reserve(
+                                self,
+                                &mut retained,
+                                Self::estimate_value_bytes(&element),
+                            )?;
+                            kept.push(element);
+                        }
                     }
-                    // As before: a species result joins the receiver's
-                    // storage label (typed_array_write_values); the
-                    // default result is a fresh array of the mapped values.
-                    if species.is_some() {
-                        self.join_typed_array_source_label(created, target_id)?;
-                    }
+                    let length = Value::Int(i64::try_from(kept.len()).unwrap_or(i64::MAX));
+                    let created = match self.typed_array_species_result(
+                        module,
+                        target_id,
+                        view.kind,
+                        vec![length],
+                    )? {
+                        Some(created) => {
+                            self.typed_array_write_values(created, target_id, &kept)?;
+                            created
+                        }
+                        None => self.alloc_typed_array_from_values(view.kind, &kept)?,
+                    };
                     return Ok(Value::Object(created));
                 }
-                // ES2024 23.2.3.10: each step reads O[k] when it runs; the
-                // kept values go to a result created after the callbacks
-                // (step 9).
-                let mut kept = Vec::new();
-                for index in 0..len {
-                    let element = self
-                        .array_loop_element(Some(module), target_id, index, true)?
-                        .unwrap_or(Value::Undefined);
-                    let selected = self.invoke_array_callback(
-                        Some(module),
-                        &callback,
-                        this_arg.clone(),
-                        element.clone(),
-                        index,
-                        target_id,
-                    )?;
-                    if selected.is_truthy() {
-                        kept.push(element);
-                    }
+                "sort" => self.typed_array_sorted_values(module, args, values, method)?,
+                // ES2023 23.2.3.32 toReversed and 23.2.3.33 toSorted: the
+                // reordered elements in a new array of the receiver's type
+                // (TypedArrayCreateSameType, never the species), the receiver
+                // unchanged (bd-9vouw.258).
+                "toSorted" => {
+                    let values = self.typed_array_sorted_values(module, args, values, method)?;
+                    return Ok(Value::Object(
+                        self.alloc_typed_array_from_values(view.kind, &values)?,
+                    ));
                 }
-                let length = Value::Int(i64::try_from(kept.len()).unwrap_or(i64::MAX));
-                let created = match self.typed_array_species_result(
-                    module,
-                    target_id,
-                    view.kind,
-                    vec![length],
-                )? {
-                    Some(created) => {
-                        self.typed_array_write_values(created, target_id, &kept)?;
-                        created
-                    }
-                    None => self.alloc_typed_array_from_values(view.kind, &kept)?,
-                };
-                return Ok(Value::Object(created));
-            }
-            "reverse" => {
-                let mut values = values;
-                values.reverse();
-                values
-            }
-            "sort" => self.typed_array_sorted_values(module, args, values, method)?,
-            // ES2023 23.2.3.32 toReversed and 23.2.3.33 toSorted: the
-            // reordered elements in a new array of the receiver's type
-            // (TypedArrayCreateSameType, never the species), the receiver
-            // unchanged (bd-9vouw.258).
-            "toReversed" | "toSorted" => {
-                let values = if method == "toSorted" {
-                    self.typed_array_sorted_values(module, args, values, method)?
-                } else {
-                    values.into_iter().rev().collect()
-                };
-                return Ok(Value::Object(
-                    self.alloc_typed_array_from_values(view.kind, &values)?,
-                ));
-            }
-            "with" => return self.typed_array_with(module, target_id, &view, args),
-            other => {
-                return Err(InterpreterError::TypeError {
-                    expected: "TypedArray.prototype method".to_string(),
-                    got: other.to_string(),
-                });
-            }
-        };
-        // A comparator may have shrunk the buffer: a write past the current
-        // length is a no-op Set (bd-9vouw.256).
-        let view = self.typed_array_view_for_object(target_id)?.unwrap_or(view);
-        let reordered = &reordered[..reordered.len().min(view.length)];
-        self.with_array_buffer_bytes_mut(view.buffer, |bytes| {
-            for (index, value) in reordered.iter().enumerate() {
-                Self::write_typed_array_element_bytes_at_offset(
-                    view.kind,
-                    view.byte_offset,
-                    bytes,
-                    index,
-                    value,
-                )?;
-            }
-            Ok(())
-        })??;
-        Ok(Value::Object(target_id))
+                "with" => return self.typed_array_with(module, target_id, &view, args),
+                other => {
+                    return Err(InterpreterError::TypeError {
+                        expected: "TypedArray.prototype method".to_string(),
+                        got: other.to_string(),
+                    });
+                }
+            };
+            // A comparator may have shrunk the buffer: a write past the current
+            // length is a no-op Set (bd-9vouw.256).
+            let view = self.typed_array_view_for_object(target_id)?.unwrap_or(view);
+            let reordered = &reordered[..reordered.len().min(view.length)];
+            self.with_array_buffer_bytes_mut(view.buffer, |bytes| {
+                for (index, value) in reordered.iter().enumerate() {
+                    Self::write_typed_array_element_bytes_at_offset(
+                        view.kind,
+                        view.byte_offset,
+                        bytes,
+                        index,
+                        value,
+                    )?;
+                }
+                Ok(())
+            })??;
+            Ok(Value::Object(target_id))
+        })();
+        self.json_release_temporary(retained);
+        outcome
     }
 
     /// `values` sorted for %TypedArray%.prototype.sort / toSorted: by the
@@ -4722,7 +4817,13 @@ impl InterpreterCore {
     ) -> Result<Vec<Value>, InterpreterError> {
         let comparator = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
         if matches!(comparator, Value::Undefined) {
+            // Rust's stable sort may allocate a scratch array. Its capacity
+            // remains part of this operation's peak, alongside the admitted
+            // input carrier owned by typed_array_method.
+            let scratch = (values.len() as u64).saturating_mul(std::mem::size_of::<Value>() as u64);
+            self.json_reserve_temporary(scratch)?;
             values.sort_by(Self::typed_array_default_order);
+            self.json_release_temporary(scratch);
             Ok(values)
         } else if comparator.is_callable() {
             self.merge_sort_with_comparator(module, &comparator, values)
@@ -4781,9 +4882,9 @@ impl InterpreterCore {
             });
         }
         let actual = actual as usize;
-        let mut values = Vec::with_capacity(len);
+        let created = self.alloc_typed_array_with_fresh_buffer(view.kind, len)?;
         for index in 0..len {
-            values.push(if index == actual {
+            let element = if index == actual {
                 value.clone()
             } else if index < current.length {
                 self.with_array_buffer_bytes(current.buffer, |bytes| {
@@ -4791,11 +4892,11 @@ impl InterpreterCore {
                 })??
             } else {
                 Value::Undefined
-            });
+            };
+            let element = self.typed_array_prepare_value(view.kind, element)?;
+            self.typed_array_indexed_set_property(created, &index.to_string(), &element)?;
         }
-        Ok(Value::Object(
-            self.alloc_typed_array_from_values(view.kind, &values)?,
-        ))
+        Ok(Value::Object(created))
     }
 
     /// ES2020 22.2.3.26 step 2 (TypedArray SortCompare without a comparator).
@@ -4837,19 +4938,15 @@ impl InterpreterCore {
                 .min(view.length.saturating_sub(to));
         }
         if count > 0 {
-            let values = self.typed_array_values_in_range(&view, from, from + count)?;
+            // copyWithin is a memmove of the representation, including
+            // overlapping ranges. No boxed Value carrier is needed.
+            let width = view.kind.element_size();
+            let source = view.byte_offset + from * width;
+            let destination = view.byte_offset + to * width;
+            let byte_count = count * width;
             self.with_array_buffer_bytes_mut(view.buffer, |bytes| {
-                for (relative, value) in values.iter().enumerate() {
-                    Self::write_typed_array_element_bytes_at_offset(
-                        view.kind,
-                        view.byte_offset,
-                        bytes,
-                        to + relative,
-                        value,
-                    )?;
-                }
-                Ok(())
-            })??;
+                bytes.copy_within(source..source + byte_count, destination);
+            })?;
         }
         Ok(Value::Object(target_id))
     }
@@ -9449,37 +9546,49 @@ impl InterpreterCore {
         elements: Vec<Value>,
     ) -> Result<Vec<Value>, InterpreterError> {
         let len = elements.len();
-        let mut source = elements;
-        let mut merged: Vec<Value> = Vec::with_capacity(len);
-        let mut width = 1usize;
-        while width < len {
-            merged.clear();
-            let mut start = 0usize;
-            while start < len {
-                let middle = start.saturating_add(width).min(len);
-                let end = start.saturating_add(width.saturating_mul(2)).min(len);
-                let (mut left, mut right) = (start, middle);
-                while left < middle && right < end {
-                    // Take the right run's element only when it orders strictly
-                    // before the left one, which keeps equal elements stable.
-                    let ordering =
-                        self.sort_compare(module, comparator, &source[left], &source[right])?;
-                    if ordering == std::cmp::Ordering::Greater {
-                        merged.push(source[right].clone());
-                        right += 1;
-                    } else {
-                        merged.push(source[left].clone());
-                        left += 1;
-                    }
-                }
-                merged.extend_from_slice(&source[left..middle]);
-                merged.extend_from_slice(&source[right..end]);
-                start = end;
-            }
-            std::mem::swap(&mut source, &mut merged);
-            width = width.saturating_mul(2);
+        if len < 2 {
+            return Ok(elements);
         }
-        Ok(source)
+        let scratch_bytes = Self::estimate_value_vec_bytes(&elements);
+        self.json_reserve_temporary(scratch_bytes)?;
+        let outcome = (|| {
+            let mut source = elements;
+            let mut merged: Vec<Value> = Vec::new();
+            merged
+                .try_reserve_exact(len)
+                .map_err(|_| self.memory_budget_error(u64::MAX, self.heap_object_count_u32()))?;
+            let mut width = 1usize;
+            while width < len {
+                merged.clear();
+                let mut start = 0usize;
+                while start < len {
+                    let middle = start.saturating_add(width).min(len);
+                    let end = start.saturating_add(width.saturating_mul(2)).min(len);
+                    let (mut left, mut right) = (start, middle);
+                    while left < middle && right < end {
+                        // Take the right run's element only when it orders strictly
+                        // before the left one, which keeps equal elements stable.
+                        let ordering =
+                            self.sort_compare(module, comparator, &source[left], &source[right])?;
+                        if ordering == std::cmp::Ordering::Greater {
+                            merged.push(source[right].clone());
+                            right += 1;
+                        } else {
+                            merged.push(source[left].clone());
+                            left += 1;
+                        }
+                    }
+                    merged.extend_from_slice(&source[left..middle]);
+                    merged.extend_from_slice(&source[right..end]);
+                    start = end;
+                }
+                std::mem::swap(&mut source, &mut merged);
+                width = width.saturating_mul(2);
+            }
+            Ok(source)
+        })();
+        self.json_release_temporary(scratch_bytes);
+        outcome
     }
 
     /// Compare two elements via a user `Array.prototype.sort` comparator: the
@@ -9500,11 +9609,9 @@ impl InterpreterCore {
         )?;
         // ToNumber of the result: a boolean comparator (`(a, b) => a > b`)
         // orders by 1 / 0, and NaN is +0.
-        let n = match result {
-            Value::Int(i) => i as f64,
-            Value::Float(f) => f.inner(),
-            other => Self::coerce_to_float(&other).unwrap_or(0.0),
-        };
+        let mut label = None;
+        let n = self.builtin_argument_to_number(Some(module), result, &mut label)?;
+        self.join_into_pending_hostcall_result_label(label)?;
         Ok(if n < 0.0 {
             std::cmp::Ordering::Less
         } else if n > 0.0 {

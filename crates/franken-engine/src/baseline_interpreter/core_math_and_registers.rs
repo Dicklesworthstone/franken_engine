@@ -4359,15 +4359,16 @@ impl InterpreterCore {
                 (std::mem::size_of::<TimersPromisesIntervalSlots>() as u64)
                     .saturating_add(Self::estimate_execution_seed_value_bytes(&interval.value))
             }
-            HostObjectSlots::IteratorHelper(helper) => {
-                (std::mem::size_of::<IteratorHelperSlots>() as u64)
-                    .saturating_add(Self::estimate_execution_seed_value_bytes(&helper.iterated))
-                    .saturating_add(Self::estimate_execution_seed_value_bytes(&helper.next))
-                    .saturating_add(Self::estimate_execution_seed_value_bytes(&helper.callback))
-                    .saturating_add(Self::estimate_execution_seed_value_bytes(&helper.remaining))
-                    .saturating_add(Self::estimate_execution_seed_value_bytes(&helper.inner))
-                    .saturating_add(Self::estimate_execution_seed_value_bytes(&helper.inner_next))
-            }
+            HostObjectSlots::IteratorHelper(helper) => (std::mem::size_of::<IteratorHelperSlots>()
+                as u64)
+                .saturating_add(Self::estimate_execution_seed_value_bytes(&helper.iterated))
+                .saturating_add(Self::estimate_execution_seed_value_bytes(&helper.next))
+                .saturating_add(Self::estimate_execution_seed_value_bytes(&helper.callback))
+                .saturating_add(Self::estimate_execution_seed_value_bytes(&helper.remaining))
+                .saturating_add(Self::estimate_execution_seed_value_bytes(&helper.inner))
+                .saturating_add(Self::estimate_execution_seed_value_bytes(
+                    &helper.inner_next,
+                )),
             HostObjectSlots::RegExpStringIterator(rsi) => {
                 (std::mem::size_of::<RegExpStringIteratorSlots>() as u64)
                     .saturating_add(Self::estimate_execution_seed_value_bytes(&rsi.regexp))
@@ -6563,8 +6564,44 @@ impl InterpreterCore {
         kind: TypedArrayKind,
         values: &[Value],
     ) -> Result<ObjectId, InterpreterError> {
-        let values = self.typed_array_prepare_values(kind, values.to_vec())?;
-        let values = values.as_slice();
+        if kind.is_bigint()
+            && values
+                .iter()
+                .any(|value| !matches!(value, Value::BigInt(_)))
+        {
+            // Most callers already converted their primitive values. Keep
+            // the exceptional boolean/string-to-BigInt path admitted too,
+            // without imposing a second carrier on every ordinary copy.
+            let mut retained = 0;
+            let outcome = (|| {
+                let mut prepared = Vec::new();
+                StringOutputBuffer::grow_vec(
+                    self,
+                    &mut prepared,
+                    values.len(),
+                    values.len(),
+                    &mut retained,
+                )?;
+                for value in values {
+                    let value = self.typed_array_prepare_value(kind, value.clone())?;
+                    StringOutputBuffer::reserve(
+                        self,
+                        &mut retained,
+                        Self::estimate_value_bytes(&value),
+                    )?;
+                    prepared.push(value);
+                }
+                self.alloc_typed_array_from_values(kind, &prepared)
+            })();
+            self.json_release_temporary(retained);
+            return outcome;
+        }
+        // Validate before allocation as before, without cloning the entire
+        // source carrier. These are primitive conversions; observable
+        // ToPrimitive already ran at the caller's required point.
+        for value in values {
+            self.typed_array_prepare_value(kind, value.clone())?;
+        }
         let view = self.alloc_typed_array_with_fresh_buffer(kind, values.len())?;
         let buffer = self
             .heap
@@ -6621,6 +6658,7 @@ impl InterpreterCore {
         &mut self,
         module: Option<&Ir3Module>,
         source: &Value,
+        retained: &mut u64,
     ) -> Result<Option<Vec<Value>>, InterpreterError> {
         let iterate = match source {
             Value::Iterator(_) | Value::Generator(_) => true,
@@ -6649,12 +6687,44 @@ impl InterpreterCore {
         if !iterate {
             return Ok(None);
         }
+        // Iteration can execute guest code while the collected objects only
+        // live in this native carrier. Match the constructor's conversion
+        // phase, which defers nested collection until these locals unwind.
+        self.gc_nested_request = None;
         let iterator = self.init_for_of_iterator(module, source.clone())?;
         let mut values = Vec::new();
         while let Some(value) = self.advance_for_of_iterator(module, iterator.clone())? {
+            let required = values.len().saturating_add(1);
+            StringOutputBuffer::grow_vec(self, &mut values, required, usize::MAX, retained)?;
+            StringOutputBuffer::reserve(self, retained, Self::estimate_value_bytes(&value))?;
             values.push(value);
         }
         Ok(Some(values))
+    }
+
+    /// Convert an admitted constructor list in place. Its carrier and any
+    /// converted payload remain charged while later valueOf calls allocate.
+    pub(super) fn construct_typed_array_from_list(
+        &mut self,
+        module: Option<&Ir3Module>,
+        kind: TypedArrayKind,
+        mut values: Vec<Value>,
+        retained: &mut u64,
+    ) -> Result<ObjectId, InterpreterError> {
+        self.gc_nested_request = None;
+        for value in &mut values {
+            let previous = Self::estimate_value_bytes(value);
+            let converted = self.typed_array_element_value(module, kind, value.clone())?;
+            let next = Self::estimate_value_bytes(&converted);
+            if next > previous {
+                StringOutputBuffer::reserve(self, retained, next - previous)?;
+            } else {
+                self.json_release_temporary(previous - next);
+                *retained -= previous - next;
+            }
+            *value = converted;
+        }
+        self.alloc_typed_array_from_values(kind, &values)
     }
 
     pub(super) fn construct_typed_array(
@@ -6697,9 +6767,19 @@ impl InterpreterCore {
         // before any is converted; each conversion runs a value's
         // @@toPrimitive/valueOf and may throw (bd-9vouw.273). They were
         // converted without running guest code.
-        if let Some(values) = self.typed_array_iterable_source(module, &first_arg)? {
-            let values = self.typed_array_element_values(module, kind, values)?;
-            return self.alloc_typed_array_from_values(kind, &values);
+        let mut retained = 0;
+        let iterable_result = (|| {
+            let Some(values) =
+                self.typed_array_iterable_source(module, &first_arg, &mut retained)?
+            else {
+                return Ok(None);
+            };
+            self.construct_typed_array_from_list(module, kind, values, &mut retained)
+                .map(Some)
+        })();
+        self.json_release_temporary(retained);
+        if let Some(view) = iterable_result? {
+            return Ok(view);
         }
 
         if let Value::Object(object_id) = first_arg {
@@ -6714,8 +6794,15 @@ impl InterpreterCore {
                 // An Array with the built-in iterator (iterated: its values
                 // are read before any conversion) or a typed array.
                 let values = self.observable_array_like_values(module, object_id)?;
-                let values = self.typed_array_element_values(module, kind, values)?;
-                return self.alloc_typed_array_from_values(kind, &values);
+                let mut retained = Self::estimate_value_vec_bytes(&values).saturating_add(
+                    ((values.capacity() - values.len()) as u64)
+                        .saturating_mul(std::mem::size_of::<Value>() as u64),
+                );
+                self.json_reserve_temporary(retained)?;
+                let outcome =
+                    self.construct_typed_array_from_list(module, kind, values, &mut retained);
+                self.json_release_temporary(retained);
+                return outcome;
             }
             // InitializeTypedArrayFromArrayLike (23.2.5.1.5): its length,
             // the allocation (a RangeError for an impossible length, before

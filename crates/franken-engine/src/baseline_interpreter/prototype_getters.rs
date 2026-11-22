@@ -326,6 +326,21 @@ impl InterpreterCore {
         if unbranded {
             return Err(incompatible());
         }
+        // Built-in accessors read private internal slots (`[[MapData]]`,
+        // `[[SetData]]`, `[[BlobData]]`, binary backing storage, etc.) whose
+        // provenance lives on the receiver's mutation/storage label rather than
+        // an own property entry. Publish it so `m.size`, `s.size`, `blob.size`,
+        // `blob.type`, and binary-view getters cannot declassify Secret state.
+        if let Some(mutation_label) = self.object_mutation_labels.get(&id).cloned()
+            && mutation_label != Label::Public
+        {
+            self.join_into_pending_hostcall_result_label(Some(mutation_label))?;
+        }
+        if let Some(storage_label) = self.binary_storage_label_ref(id).cloned()
+            && storage_label != Label::Public
+        {
+            self.join_into_pending_hostcall_result_label(Some(storage_label))?;
+        }
         // A RegExp keeps `source` and `flags`; each boolean flag getter
         // reads its letter from `flags` (ES2020 21.2.5.4, ...).
         let flag = match key {

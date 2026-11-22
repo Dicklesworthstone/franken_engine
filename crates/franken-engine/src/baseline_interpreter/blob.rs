@@ -72,10 +72,11 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let parts = self.arg_or_undefined(args, 0)?;
         let mut bytes = Vec::new();
+        let mut observed_label = Label::Public;
         match parts {
             Value::Undefined => {}
             parts if parts.is_object_like() => {
-                self.append_blob_parts(module, parts, &mut bytes)?;
+                self.append_blob_parts(module, parts, &mut bytes, &mut observed_label)?;
             }
             other => {
                 return Err(InterpreterError::TypeError {
@@ -88,21 +89,36 @@ impl InterpreterCore {
             Value::Undefined | Value::Null => String::new(),
             options if options.is_object_like() => {
                 let key = RuntimePropertyKey::String(JsString::from("type"));
-                match self.get_v(module, &options, &key)? {
-                    Value::Undefined => String::new(),
-                    value => normalized_blob_type(&self.value_to_string(&value)),
+                match self.get_v(module, &options, &key) {
+                    Ok(Value::Undefined) => String::new(),
+                    Ok(value) => normalized_blob_type(&self.value_to_string(&value)),
+                    Err(error) => {
+                        if observed_label != Label::Public {
+                            self.join_into_pending_hostcall_result_label(Some(observed_label))?;
+                        }
+                        return Err(error);
+                    }
                 }
             }
             other => {
+                if observed_label != Label::Public {
+                    self.join_into_pending_hostcall_result_label(Some(observed_label))?;
+                }
                 return Err(InterpreterError::TypeError {
                     expected: "an options object for new Blob".to_string(),
                     got: other.type_name().to_string(),
                 });
             }
         };
+        observed_label = observed_label.join(&self.json_parse_context_label()?);
+        let label = self
+            .join_arg_range_with_object_mutation_label(args)?
+            .join(&observed_label);
         let blob = self.alloc_blob(bytes, content_type)?;
-        let label = self.join_arg_range_label(args)?;
         self.join_object_mutation_label(blob, &label)?;
+        if label != Label::Public {
+            self.join_into_pending_hostcall_result_label(Some(label))?;
+        }
         Ok(Value::Object(blob))
     }
 
@@ -110,8 +126,15 @@ impl InterpreterCore {
         &mut self,
         part: &Value,
         bytes: &mut Vec<u8>,
+        observed_label: &mut Label,
     ) -> Result<(), InterpreterError> {
         if let Value::Object(id) = part {
+            if let Some(part_label) = self.object_mutation_labels.get(id) {
+                *observed_label = observed_label.join(part_label);
+            }
+            if let Some(storage_label) = self.binary_storage_label_ref(*id) {
+                *observed_label = observed_label.join(storage_label);
+            }
             let object = self
                 .heap
                 .get(id.0 as usize)
@@ -170,6 +193,7 @@ impl InterpreterCore {
         module: &Ir3Module,
         parts: Value,
         bytes: &mut Vec<u8>,
+        observed_label: &mut Label,
     ) -> Result<(), InterpreterError> {
         let iterator = self.init_for_of_iterator(Some(module), parts)?;
         loop {
@@ -178,10 +202,30 @@ impl InterpreterCore {
             self.json_reserve_temporary(scratch)?;
             let next = self.advance_for_of_iterator(Some(module), iterator.clone());
             self.json_release_temporary(scratch);
-            let Some(value) = next? else {
-                break;
+            let step_label = self.json_parse_context_label()?;
+            *observed_label = observed_label.join(&step_label);
+            let value = match next {
+                Ok(Some(value)) => {
+                    let _ = self.take_pending_hostcall_result_label();
+                    value
+                }
+                Ok(None) => {
+                    let _ = self.take_pending_hostcall_result_label();
+                    break;
+                }
+                Err(error) => {
+                    if *observed_label != Label::Public {
+                        self.join_into_pending_hostcall_result_label(Some(observed_label.clone()))?;
+                    }
+                    return Err(error);
+                }
             };
-            self.append_blob_part(&value, bytes)?;
+            if let Err(error) = self.append_blob_part(&value, bytes, observed_label) {
+                if *observed_label != Label::Public {
+                    self.join_into_pending_hostcall_result_label(Some(observed_label.clone()))?;
+                }
+                return Err(error);
+            }
         }
         Ok(())
     }
@@ -344,12 +388,16 @@ impl InterpreterCore {
                     Value::Undefined => String::new(),
                     value => normalized_blob_type(&self.value_to_string(&value)),
                 };
+                label = label.join(&self.json_parse_context_label()?);
                 // Reborrow only after argument conversion. Builtin callbacks
                 // do not arm nested GC while their Rust locals are live (see
                 // collector.rs), and guest code cannot mutate a blob's bytes.
                 let bytes = self.copy_blob_range(&receiver, start, end)?;
                 let blob = self.alloc_blob(bytes, content_type)?;
                 self.join_object_mutation_label(blob, &label)?;
+                if label != Label::Public {
+                    self.join_into_pending_hostcall_result_label(Some(label))?;
+                }
                 Ok(Value::Object(blob))
             }
             "text" => {
@@ -360,9 +408,13 @@ impl InterpreterCore {
             }
             "arrayBuffer" | "bytes" => {
                 let buffer = self.copy_blob_binary(&receiver, method == "bytes")?;
-                // Preserve provenance on the object AND its backing store,
-                // rather than relying only on the fulfilled Promise's label.
+                // Preserve provenance on the object AND its backing binary
+                // store, rather than relying only on the fulfilled Promise's
+                // label.
                 self.join_object_mutation_label(buffer, &label)?;
+                if label != Label::Public {
+                    self.join_binary_storage_label(buffer, &label)?;
+                }
                 let backing = self
                     .heap
                     .get(buffer.0 as usize)

@@ -171,3 +171,159 @@ blob.bytes().then(bytes => console.log(bytes.join(','), source[0], blob.size));
 "#;
     assert_eq!(run(source), ["65,66,68 67 3"]);
 }
+
+#[test]
+fn blob_and_collection_prototype_getters_preserve_secret_ifc_labels() {
+    use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore, Value};
+    use frankenengine_engine::capability::RuntimeCapability;
+    use frankenengine_engine::ifc_artifacts::Label;
+    use frankenengine_engine::ir_contract::{Ir0Module, Ir3Instruction};
+    use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+    use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
+
+    let run_seeded = |name: &str, source: &str, marker: &str, seed_value: Value, label: Label| {
+        let tree = CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource {
+                    label: format!("{name}.js"),
+                    text: source.into(),
+                },
+                ParseGoal::Script,
+                &ParserOptions::default(),
+            )
+            .unwrap_or_else(|err| panic!("{name} parses: {err}"));
+        let mut module = lower_ir0_to_ir3(
+            &Ir0Module::from_syntax_tree(tree, format!("{name}.js")),
+            &LoweringContext::new(name, "bd-9vouw.226", "builtin-only"),
+        )
+        .unwrap_or_else(|err| panic!("{name} lowers: {err}"))
+        .ir3;
+        let mut patched = 0;
+        for instruction in &mut module.instructions {
+            if let Ir3Instruction::LoadStr { dst, pool_index } = *instruction
+                && module.constant_pool[pool_index as usize].as_str() == Some(marker)
+            {
+                *instruction = Ir3Instruction::Move { dst, src: 255 };
+                patched += 1;
+            }
+        }
+        assert_eq!(patched, 1, "{name}: seed marker must match once");
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]
+        .into_iter()
+        .collect();
+        let mut core = InterpreterCore::new(config, name);
+        core.seed_register(255, seed_value).unwrap();
+        core.set_register_label(255, label).unwrap();
+        let outcome = core
+            .execute(&module)
+            .unwrap_or_else(|err| panic!("{name} executes: {err}"));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "{name} memory accounting drift"
+        );
+        (outcome.value, outcome.completion_label)
+    };
+
+    for (name, source, marker, seed, expected) in [
+        (
+            "map_size_getter",
+            r#"
+                const m = new Map();
+                m.set('__secret_key__', 1);
+                m.set('guess', 1);
+                m.size;
+            "#,
+            "__secret_key__",
+            Value::str("guess"),
+            Value::Int(1),
+        ),
+        (
+            "map_size_descriptor_call",
+            r#"
+                const m = new Map();
+                m.set('__secret_key__', 1);
+                Object.getOwnPropertyDescriptor(Map.prototype, 'size').get.call(m);
+            "#,
+            "__secret_key__",
+            Value::str("secret"),
+            Value::Int(1),
+        ),
+        (
+            "set_size_getter",
+            r#"
+                const s = new Set();
+                s.add('__secret_item__');
+                s.add('guess');
+                s.size;
+            "#,
+            "__secret_item__",
+            Value::str("guess"),
+            Value::Int(1),
+        ),
+        (
+            "blob_from_tainted_uint8_storage",
+            r#"
+                const buf = new Uint8Array(2);
+                buf[0] = '__secret_byte__';
+                buf[1] = 0x42;
+                const b = new Blob([buf]);
+                b.size;
+            "#,
+            "__secret_byte__",
+            Value::Int(0x41),
+            Value::Int(2),
+        ),
+        (
+            "blob_from_generator_yielding_secret_then_public",
+            r#"
+                globalThis.__secretPart = '__secret_part__';
+                function* gen() {
+                    yield globalThis.__secretPart;
+                    yield 'pub';
+                }
+                const b = new Blob(gen());
+                b.size;
+            "#,
+            "__secret_part__",
+            Value::str("ab"),
+            Value::Int(5),
+        ),
+        (
+            "blob_options_type_getter",
+            r#"
+                globalThis.__secretType = '__secret_type__';
+                const b = new Blob(['hi'], { get type() { return globalThis.__secretType; } });
+                b.type;
+            "#,
+            "__secret_type__",
+            Value::str("text/plain"),
+            Value::str("text/plain"),
+        ),
+        (
+            "blob_slice_valueof_hook",
+            r#"
+                globalThis.__secretEnd = '__secret_end__';
+                const b = new Blob(['abcdef']);
+                const sliced = b.slice(0, { valueOf() { return globalThis.__secretEnd; } });
+                sliced.size;
+            "#,
+            "__secret_end__",
+            Value::Int(3),
+            Value::Int(3),
+        ),
+    ] {
+        for label in [Label::Public, Label::Secret] {
+            assert_eq!(
+                run_seeded(name, source, marker, seed.clone(), label.clone()),
+                (expected.clone(), label),
+                "{name}: prototype getter or Blob IFC label dropped"
+            );
+        }
+    }
+}

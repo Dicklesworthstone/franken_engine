@@ -613,6 +613,7 @@ pub enum NativeBuiltinModule {
     Http,
     Https,
     ChildProcess,
+    Console,
 }
 
 impl NativeBuiltinModule {
@@ -627,6 +628,7 @@ impl NativeBuiltinModule {
             "http" | "node:http" => Some(Self::Http),
             "https" | "node:https" => Some(Self::Https),
             "child_process" | "node:child_process" => Some(Self::ChildProcess),
+            "console" | "node:console" => Some(Self::Console),
             "events" | "node:events" => Some(Self::Events),
             "os" | "node:os" => Some(Self::Os),
             "querystring" | "node:querystring" => Some(Self::Querystring),
@@ -664,6 +666,7 @@ impl NativeBuiltinModule {
             Self::Http => "node:http",
             Self::Https => "node:https",
             Self::ChildProcess => "node:child_process",
+            Self::Console => "node:console",
             Self::Events => "node:events",
             Self::Os => "node:os",
             Self::Querystring => "node:querystring",
@@ -4227,6 +4230,7 @@ mod tests {
             "http",
             "https",
             "child_process",
+            "console",
             "fs",
             "fs/promises",
             "module",
@@ -4318,6 +4322,7 @@ mod tests {
             "stream/unknown",
             "readline/unknown",
             "diagnostics_channel/unknown",
+            "console/unknown",
             "node:unknown",
             "node:node:buffer",
             "./buffer",
@@ -4339,6 +4344,7 @@ mod tests {
             NativeBuiltinModule::Http,
             NativeBuiltinModule::Https,
             NativeBuiltinModule::ChildProcess,
+            NativeBuiltinModule::Console,
             NativeBuiltinModule::Fs,
             NativeBuiltinModule::FsPromises,
             NativeBuiltinModule::StreamConsumers,

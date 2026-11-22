@@ -161,6 +161,7 @@ impl OpaqueResolver {
             NativeBuiltinModule::Http,
             NativeBuiltinModule::Https,
             NativeBuiltinModule::ChildProcess,
+            NativeBuiltinModule::Console,
             NativeBuiltinModule::Module,
             NativeBuiltinModule::Events,
             NativeBuiltinModule::Fs,
@@ -3851,6 +3852,250 @@ outgoing.end();
                 assert_eq!(result.host_effect_transcript.len(), 2);
             }
         }
+    }
+}
+
+#[test]
+fn delivered_console_commonjs_aliases_share_the_realm_object_and_methods() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![
+                (
+                    "entry.cjs",
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        r#"
+const native = require('console');
+const child = require('./child.cjs');
+const log = native.log;
+log(native === console, native === child, native === require('node:console'));
+native.marker = 42;
+log(child.marker, child.log === log);
+child.log = function(value) { log('replacement', value); };
+console.log('shared');
+log('retained', native.log === child.log);
+const count = native.count;
+count('cross-module');
+child.count('cross-module');
+"#,
+                    )
+                    .with_dependency(ModuleDependency::new("./child.cjs", ImportStyle::Require)),
+                ),
+                (
+                    "child.cjs",
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        "module.exports = require('node:console');",
+                    ),
+                ),
+            ])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let result = orchestrator(lane, ModuleSyntax::CommonJs)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("console imports reuse the real realm console");
+        assert_eq!(
+            lines(&result),
+            [
+                "true true true",
+                "42 true",
+                "replacement shared",
+                "retained true",
+                "cross-module: 1",
+                "cross-module: 2",
+            ]
+        );
+    }
+}
+
+#[test]
+fn delivered_console_preserves_original_identity_before_its_first_import() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for mutation in [
+            "globalThis.console = { log() { throw new Error('replacement called'); } };",
+            "delete globalThis.console;",
+        ] {
+            let program = format!(
+                "const original = console; {mutation} const imported = require('node:console'); original.log(imported === original, imported === require('console'));"
+            );
+            let resolver = Arc::new(
+                OpaqueResolver::new(vec![(
+                    "entry.cjs",
+                    definition(ModuleSyntax::CommonJs, &program),
+                )])
+                .with_native_builtins(),
+            );
+            let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+            let installed = ExecutionModuleResolver::new(
+                &source.module.record.id,
+                resolver,
+                Arc::new(AllowAllPolicy),
+            );
+            let result = orchestrator(lane, ModuleSyntax::CommonJs)
+                .execute_resolved_entry_with_resolver(&package(), &source, installed)
+                .unwrap_or_else(|error| panic!("{lane:?}: {mutation}: {error}"));
+            assert_eq!(lines(&result), ["true true"]);
+        }
+    }
+}
+
+#[test]
+fn delivered_console_esm_namespaces_share_commonjs_and_remain_readonly() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![
+                (
+                    "entry.mjs",
+                    definition(
+                        ModuleSyntax::EsModule,
+                        r#"
+import native, {log, count} from 'node:console';
+import * as namespace from 'console';
+import child from './child.cjs';
+log(native === console, child === native, namespace.default === native);
+log(log === native.log, count === native.count, typeof namespace.table);
+log(Reflect.set(namespace, 'log', null),
+    Reflect.defineProperty(namespace, 'default', {value: null}),
+    Object.getOwnPropertyDescriptor(namespace, 'log').writable);
+import('node:console').then(function(dynamic) {
+    log(dynamic === namespace, dynamic.log === log, dynamic.default === native);
+});
+"#,
+                    )
+                    .with_dependency(ModuleDependency::new("./child.cjs", ImportStyle::Import)),
+                ),
+                (
+                    "child.cjs",
+                    definition(ModuleSyntax::CommonJs, "module.exports = require('console');"),
+                ),
+            ])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let result = orchestrator(lane, ModuleSyntax::EsModule)
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect("console exposes ordinary native ESM exports");
+        assert_eq!(
+            lines(&result),
+            [
+                "true true true",
+                "true true function",
+                "false false true",
+                "true true true",
+            ]
+        );
+    }
+}
+
+#[test]
+fn delivered_console_rechecks_descriptor_authority_and_cached_alias_policy() {
+    for capability in ["builtin", "module_load"] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![(
+                "entry.cjs",
+                definition(
+                    ModuleSyntax::CommonJs,
+                    "require('console'); console.log('must not run');",
+                ),
+            )])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let mut execution = package();
+        execution.capabilities.retain(|grant| grant != capability);
+        let mut engine = orchestrator(LaneChoice::QuickJs, ModuleSyntax::CommonJs);
+        let error = engine
+            .execute_resolved_entry_with_resolver(&execution, &source, installed)
+            .expect_err("a console descriptor cannot supply missing module authority");
+        assert!(error.to_string().contains(capability), "{capability}: {error}");
+        assert!(engine.last_failed_console_output().is_empty());
+    }
+    let resolver = Arc::new(
+        OpaqueResolver::new(vec![(
+            "entry.cjs",
+            definition(
+                ModuleSyntax::CommonJs,
+                "require('console').log('allowed'); require('node:console').log('must not run');",
+            ),
+        )])
+        .with_native_builtins(),
+    );
+    let source = entry(&resolver, "entry.cjs", ModuleSyntax::CommonJs);
+    let policy = Arc::new(RecordingPolicy {
+        denied: Some(("node:console".into(), 1)),
+        allow_native_builtins: true,
+        ..RecordingPolicy::default()
+    });
+    let installed = ExecutionModuleResolver::new(&source.module.record.id, resolver, policy);
+    let mut engine = orchestrator(LaneChoice::QuickJs, ModuleSyntax::CommonJs);
+    let error = engine
+        .execute_resolved_entry_with_resolver(&package(), &source, installed)
+        .expect_err("a cached console cannot bypass alias authorization");
+    assert!(
+        error.to_string().contains("closed-world module resolution refused"),
+        "{error}"
+    );
+    assert_eq!(
+        engine
+            .last_failed_console_output()
+            .iter()
+            .map(|entry| entry.message.as_str())
+            .collect::<Vec<_>>(),
+        ["allowed"]
+    );
+}
+
+#[test]
+fn delivered_console_namespace_rejects_guest_getters_before_observation() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let resolver = Arc::new(
+            OpaqueResolver::new(vec![
+                (
+                    "entry.mjs",
+                    definition(
+                        ModuleSyntax::EsModule,
+                        "import './mutator.cjs'; import {log} from 'node:console'; log('must not run');",
+                    )
+                    .with_dependency(ModuleDependency::new("./mutator.cjs", ImportStyle::Import)),
+                ),
+                (
+                    "mutator.cjs",
+                    definition(
+                        ModuleSyntax::CommonJs,
+                        "const log = console.log; Object.defineProperty(console, 'log', {get() { log('guest getter ran'); return log; }});",
+                    ),
+                ),
+            ])
+            .with_native_builtins(),
+        );
+        let source = entry(&resolver, "entry.mjs", ModuleSyntax::EsModule);
+        let installed = ExecutionModuleResolver::new(
+            &source.module.record.id,
+            resolver,
+            Arc::new(AllowAllPolicy),
+        );
+        let mut engine = orchestrator(lane, ModuleSyntax::EsModule);
+        let error = engine
+            .execute_resolved_entry_with_resolver(&package(), &source, installed)
+            .expect_err("a native console descriptor does not authenticate guest getters");
+        assert!(error.to_string().contains("bounded-import contract"), "{error}");
+        assert!(engine.last_failed_console_output().is_empty());
     }
 }
 

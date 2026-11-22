@@ -1,5 +1,7 @@
 use super::*;
 
+const CONSOLE_MODULE_KEY: &str = "\0franken-engine/native-console";
+
 impl InterpreterCore {
     pub(super) fn allocate_readable_with_state(
         &mut self,
@@ -10288,6 +10290,23 @@ impl InterpreterCore {
         Ok(Value::Object(console))
     }
 
+    /// Keep the original realm console for both core-module spellings, even
+    /// after guest code replaces the global. The methods retain their normal
+    /// call-time Console authority and confidentiality checks.
+    pub(super) fn console_core_module(&mut self) -> Result<Value, InterpreterError> {
+        if let Some(console) = self.builtin_prototypes.get(CONSOLE_MODULE_KEY) {
+            return Ok(Value::Object(*console));
+        }
+        let value = self.alloc_console_global()?;
+        if let Value::Object(console) = &value {
+            let console = *console;
+            self.mutate_builtin_prototypes(|prototypes| {
+                prototypes.insert(CONSOLE_MODULE_KEY.to_string(), console);
+            });
+        }
+        Ok(value)
+    }
+
     /// The global `Promise`: a constructible builtin (bd-auy04) whose statics
     /// live on its bound property object, like `Date`, in Node's order, with
     /// its own `get [Symbol.species]` (bd-9vouw.278).
@@ -10896,6 +10915,17 @@ impl InterpreterCore {
         {
             self.process_global_object = None;
         }
+        // The first injection also roots the original console for core-module
+        // imports. A failed attempt must not retain its truncated heap id.
+        if self
+            .builtin_prototypes
+            .get(CONSOLE_MODULE_KEY)
+            .is_some_and(|console| console.0 as usize >= heap_checkpoint)
+        {
+            self.mutate_builtin_prototypes(|prototypes| {
+                prototypes.remove(CONSOLE_MODULE_KEY);
+            });
+        }
         self.estimated_memory_bytes = memory_checkpoint;
     }
 
@@ -10947,7 +10977,7 @@ impl InterpreterCore {
         // or replaces (reflect-metadata's `Reflect.defineMetadata`, a console
         // wrapper) is seen by the others and `globalThis.console === console`.
         // Each module made its own copies.
-        let console = self.realm_namespace_global("console", Self::alloc_console_global)?;
+        let console = self.realm_namespace_global("console", Self::console_core_module)?;
         // bd-1piai: these ordinary JavaScript globals live in the realm-owned
         // name map, not in the replaceable module scope. Seed each one exactly
         // once so assignments, aliases, and nested module execution all observe
@@ -13807,6 +13837,7 @@ impl InterpreterCore {
         import_bound: Option<&Label>,
     ) -> Result<Value, InterpreterError> {
         match native {
+            NativeBuiltinModule::Console => self.console_core_module(),
             NativeBuiltinModule::Crypto => self.crypto_core_module(),
             NativeBuiltinModule::Zlib => self.zlib_core_module(),
             NativeBuiltinModule::Http => self.http_core_module(module, false),
@@ -13849,6 +13880,10 @@ impl InterpreterCore {
     /// facade inventories where the provider itself is table-driven.
     pub(crate) fn native_builtin_export_names(native: NativeBuiltinModule) -> Vec<&'static str> {
         match native {
+            NativeBuiltinModule::Console => ["log", "error", "warn", "info"]
+                .into_iter()
+                .chain(CONSOLE_EXTRA_METHODS)
+                .collect(),
             NativeBuiltinModule::ChildProcess => CHILD_PROCESS_FUNCTIONS
                 .iter()
                 .map(|(_, name, _)| *name)
@@ -14721,6 +14756,7 @@ impl InterpreterCore {
         import_bound: Option<&Label>,
     ) -> Result<Value, InterpreterError> {
         let specifier = match native {
+            NativeBuiltinModule::Console => "\0franken-engine/native-console/esm",
             NativeBuiltinModule::Buffer => "\0franken-engine/native-buffer/esm",
             NativeBuiltinModule::Crypto => "\0franken-engine/native-crypto/esm",
             NativeBuiltinModule::Zlib => "\0franken-engine/native-zlib/esm",

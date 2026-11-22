@@ -367,4 +367,91 @@ fn fatal_streaming_decode_error_and_stream_getter_keep_secret_labels() {
             "secret options.stream getter must taint carried streaming output"
         );
     }
+
+    // 3. `TextEncoder.prototype.encodeInto(secret, publicDest)` must taint
+    //    `publicDest`'s backing binary storage so subsequent indexed reads
+    //    and non-streaming `TextDecoder.prototype.decode(publicDest)` cannot
+    //    declassify the written bytes.
+    let encode_into_index_source = r#"
+        const dest = new Uint8Array(4);
+        new TextEncoder().encodeInto('__secret_encode_into__', dest);
+        dest[0];
+    "#;
+    let encode_into_decode_source = r#"
+        const dest = new Uint8Array(4);
+        new TextEncoder().encodeInto('__secret_encode_into__', dest);
+        new TextDecoder('utf-8').decode(dest);
+    "#;
+    let non_streaming_storage_source = r#"
+        const buf = new Uint8Array(2);
+        buf[0] = '__secret_storage_byte__';
+        buf[1] = 0x21;
+        new TextDecoder('utf-8').decode(buf);
+    "#;
+    let fatal_storage_source = r#"
+        const buf = new Uint8Array(2);
+        buf[0] = '__secret_bad_byte__';
+        buf[1] = 0x00;
+        let caught;
+        try { new TextDecoder('utf-8', { fatal: true }).decode(buf); }
+        catch (error) { caught = error.name; }
+        caught;
+    "#;
+    let encode_buffer_source = r#"
+        const view = new TextEncoder().encode('__secret_encode_buf__');
+        const alias = new Uint8Array(view.buffer);
+        new TextDecoder('utf-8').decode(alias);
+    "#;
+    for label in [Label::Public, Label::Secret] {
+        assert_eq!(
+            run_seeded(
+                encode_into_index_source,
+                "__secret_encode_into__",
+                Value::str("hi!"),
+                label.clone()
+            ),
+            (Value::Int(0x68), label.clone()),
+            "encodeInto must taint destination Uint8Array storage for indexed reads"
+        );
+        assert_eq!(
+            run_seeded(
+                encode_into_decode_source,
+                "__secret_encode_into__",
+                Value::str("hi!"),
+                label.clone()
+            ),
+            (Value::str("hi!\0"), label.clone()),
+            "encodeInto + non-streaming decode must preserve binary storage provenance"
+        );
+        assert_eq!(
+            run_seeded(
+                non_streaming_storage_source,
+                "__secret_storage_byte__",
+                Value::Int(0x41),
+                label.clone()
+            ),
+            (Value::str("A!"), label.clone()),
+            "non-streaming decode must preserve backing ArrayBuffer provenance"
+        );
+        assert_eq!(
+            run_seeded(
+                fatal_storage_source,
+                "__secret_bad_byte__",
+                Value::Int(0xFF),
+                label.clone()
+            ),
+            (Value::str("TypeError"), label.clone()),
+            "fatal non-streaming decode error must preserve backing ArrayBuffer provenance"
+        );
+        assert_eq!(
+            run_seeded(
+                encode_buffer_source,
+                "__secret_encode_buf__",
+                Value::str("ok"),
+                label.clone()
+            ),
+            (Value::str("ok"), label),
+            "encode must taint returned Uint8Array backing buffer provenance"
+        );
+    }
 }

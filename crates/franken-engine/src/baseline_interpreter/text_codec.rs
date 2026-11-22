@@ -149,21 +149,27 @@ impl InterpreterCore {
             "encode" => {
                 self.text_codec_receiver(&receiver, TEXT_ENCODER_TYPE, method)?;
                 let text = self.text_codec_input_string(args)?;
+                let label = self.join_arg_range_with_object_mutation_label(args)?;
                 // The canonical projection already implements USVString's
                 // lone-surrogate replacement; do not transcode it twice.
                 let bytes = text.as_utf8_projection().as_bytes();
-                Ok(Value::Object(self.alloc_uint8_array_from_bytes(bytes)?))
+                let view = self.alloc_uint8_array_from_bytes(bytes)?;
+                if label != Label::Public {
+                    self.join_binary_storage_label(view, &label)?;
+                }
+                Ok(Value::Object(view))
             }
             "encodeInto" => {
                 self.text_codec_receiver(&receiver, TEXT_ENCODER_TYPE, method)?;
                 let text = self.text_codec_input_string(args)?;
                 let destination = self.arg_or_undefined(args, 1)?;
-                let view = match &destination {
+                let (dest_id, view) = match &destination {
                     Value::Object(object_id) => self
                         .heap
                         .get(object_id.0 as usize)
                         .and_then(|object| object.typed_array.as_deref().cloned())
-                        .filter(|view| view.kind == TypedArrayKind::Uint8),
+                        .filter(|view| view.kind == TypedArrayKind::Uint8)
+                        .map(|view| (*object_id, view)),
                     _ => None,
                 }
                 .ok_or_else(|| InterpreterError::TypeError {
@@ -194,6 +200,10 @@ impl InterpreterCore {
                                 .to_string(),
                         got: "a detached or out-of-bounds view".to_string(),
                     });
+                }
+                let label = self.join_arg_range_with_object_mutation_label(args)?;
+                if label != Label::Public {
+                    self.join_binary_storage_label(dest_id, &label)?;
                 }
                 let result = self.alloc_object_with_prototype(None)?;
                 self.set_object_property(
@@ -230,6 +240,18 @@ impl InterpreterCore {
                         });
                     }
                 };
+                // Input views may carry Secret bytes in their backing
+                // ArrayBuffer even when the view register itself is Public
+                // (e.g., `buf[0] = secret; decoder.decode(buf)`). Publish
+                // storage provenance before validating/decoding so non-streaming
+                // output, carried streaming state, and fatal/detached TypeErrors
+                // all retain it.
+                if let Value::Object(input_id) = &input {
+                    let input_storage_label = self.binary_storage_label(*input_id);
+                    if input_storage_label != Label::Public {
+                        self.join_into_pending_hostcall_result_label(Some(input_storage_label))?;
+                    }
+                }
                 // Option accessors may reenter decode or mutate the input.
                 // Validate after them, before admitting decoder provenance.
                 // This performs no input copy. The second access below holds

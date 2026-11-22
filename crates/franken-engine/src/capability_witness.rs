@@ -1226,6 +1226,14 @@ impl CapabilityWitness {
     ) -> Result<(), WitnessError> {
         // SECURITY: Verify report signature before accepting metadata to prevent forgery
         self.verify_promotion_theorem_report_signature(report)?;
+        // Rebuild only the report-owned projection. Synthesis does not sign
+        // these fields, so an existing Draft projection cannot supply evidence.
+        // Keep approval signatures: changing the report must invalidate old
+        // approvals, while reapplying the same report remains idempotent.
+        self.metadata
+            .retain(|key, _| !key.starts_with("promotion_theorem."));
+        self.proof_obligations
+            .retain(|proof| proof.kind != ProofKind::PolicyTheoremCheck);
         self.metadata.insert(
             "promotion_theorem.report_artifact_id".to_string(),
             report.report_artifact_id.to_string(),
@@ -1271,13 +1279,6 @@ impl CapabilityWitness {
             .cloned()
             .collect::<Vec<_>>();
         for capability in required {
-            let theorem_already_covered = self.proof_obligations.iter().any(|proof| {
-                proof.kind == ProofKind::PolicyTheoremCheck && proof.capability == capability
-            });
-            if theorem_already_covered {
-                continue;
-            }
-
             self.proof_obligations.push(ProofObligation {
                 capability,
                 kind: ProofKind::PolicyTheoremCheck,
@@ -1311,9 +1312,57 @@ impl CapabilityWitness {
             });
         }
 
-        // Reconstruct the canonical bytes that should have been signed
+        // The signature commits to result hashes and IDs, not directly to their
+        // textual evidence or the report's own content-addressed coordinates.
+        // Rebuild those commitments before accepting any report metadata.
+        for result in &report.results {
+            // The v1 preimage encodes None and Some("") identically. The
+            // evaluator never emits an empty counterexample; reject this
+            // alternate representation without changing honest signatures.
+            if result.counterexample.as_deref() == Some("") {
+                return Err(WitnessError::SignatureInvalid {
+                    detail: format!(
+                        "promotion theorem result {} has a non-canonical empty counterexample",
+                        result.theorem
+                    ),
+                });
+            }
+            let expected = self.build_theorem_result(
+                result.theorem.clone(),
+                result.passed,
+                result.detail.clone(),
+                result.counterexample.clone(),
+            )?;
+            if result.artifact_hash != expected.artifact_hash
+                || result.proof_artifact_id != expected.proof_artifact_id
+            {
+                return Err(WitnessError::SignatureInvalid {
+                    detail: format!(
+                        "promotion theorem result {} commitment does not match its contents",
+                        result.theorem
+                    ),
+                });
+            }
+        }
+
         let unsigned_bytes =
             Self::theorem_report_canonical_bytes(self, &report.results, report.all_passed);
+        let expected_hash = ContentHash::compute(&unsigned_bytes);
+        let expected_id = engine_object_id::derive_id(
+            ObjectDomain::EvidenceRecord,
+            WITNESS_THEOREM_REPORT_ZONE,
+            &SchemaId::from_definition(WITNESS_THEOREM_REPORT_SCHEMA_DEF),
+            expected_hash.as_bytes(),
+        )
+        .map_err(|error| WitnessError::IdDerivation(error.to_string()))?;
+        if report.report_artifact_hash != expected_hash
+            || report.report_artifact_id != expected_id
+        {
+            return Err(WitnessError::SignatureInvalid {
+                detail: "promotion theorem report commitment does not match its contents"
+                    .to_string(),
+            });
+        }
 
         // Convert signature to the expected format
         let mut sig_bytes = [0u8; 64];
@@ -1558,6 +1607,32 @@ impl CapabilityWitness {
         &self,
         trust_root: &CapabilityWitnessTrustRoot,
     ) -> Result<(), WitnessError> {
+        let accepted_keys = self.verified_promotion_signers(trust_root)?;
+        if accepted_keys.len() < trust_root.required_promotion_signatures {
+            return Err(WitnessError::SignatureInvalid {
+                detail: format!(
+                    "promotion quorum has {} trusted signatures, required {}",
+                    accepted_keys.len(),
+                    trust_root.required_promotion_signatures
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    /// Authenticate every collected approval, including an incomplete quorum.
+    ///
+    /// This supports independent operators co-signing the exact same candidate
+    /// without sharing private keys. Unknown, malformed, duplicate-key, or
+    /// stale approvals fail instead of being silently discarded. An empty set
+    /// is valid while collecting approvals. This method does not establish
+    /// synthesis trust, theorem validity, empirical confidence, or activation;
+    /// security-decision consumers must use the full acceptance gates.
+    pub fn verified_promotion_signers(
+        &self,
+        trust_root: &CapabilityWitnessTrustRoot,
+    ) -> Result<BTreeSet<VerificationKey>, WitnessError> {
+        trust_root.validate()?;
         let unsigned = self.promotion_unsigned_bytes();
         let mut accepted_keys = BTreeSet::new();
         for raw_signature in &self.promotion_signatures {
@@ -1577,17 +1652,7 @@ impl CapabilityWitness {
             };
             accepted_keys.insert(authorized_key);
         }
-
-        if accepted_keys.len() < trust_root.required_promotion_signatures {
-            return Err(WitnessError::SignatureInvalid {
-                detail: format!(
-                    "promotion quorum has {} trusted signatures, required {}",
-                    accepted_keys.len(),
-                    trust_root.required_promotion_signatures
-                ),
-            });
-        }
-        Ok(())
+        Ok(accepted_keys)
     }
 
     fn signature_from_bytes(raw: &[u8], label: &str) -> Result<Signature, WitnessError> {
@@ -4992,6 +5057,271 @@ mod tests {
             && event.policy_id == "policy-a"
             && !event.component.is_empty()
             && !event.event.is_empty()));
+    }
+
+    #[test]
+    fn promotion_theorem_report_rebuilds_injected_draft_projection() {
+        let mut witness = build_test_witness();
+        assert_eq!(witness.lifecycle_state, LifecycleState::Draft);
+        let original = witness.clone();
+        let report = witness
+            .evaluate_promotion_theorems_signed_by(
+                &promotion_theorem_input_for(&witness),
+                &test_signing_key(),
+            )
+            .expect("sign authenticated report");
+        for proof in &mut witness.proof_obligations {
+            if proof.kind == ProofKind::PolicyTheoremCheck {
+                proof.proof_artifact_id = test_proof_artifact_id();
+                proof.artifact_hash = ContentHash::compute(b"injected theorem reference");
+                proof.justification = "unreviewed evidence".to_string();
+            }
+        }
+        witness.metadata.insert(
+            "promotion_theorem.unreviewed".to_string(),
+            "pass".to_string(),
+        );
+        witness.metadata.insert(
+            "promotion_theorem.merge_legality.counterexample".to_string(),
+            "injected counterexample".to_string(),
+        );
+        witness
+            .verify_integrity()
+            .expect("theorem projection is outside the synthesis commitment");
+        witness
+            .verify_synthesizer_signature(&test_signing_key().verification_key())
+            .expect("an authenticated synthesis alone cannot authenticate its projection");
+        assert_ne!(witness, original);
+        witness
+            .apply_promotion_theorem_report(&report)
+            .expect("replace injected fields with authenticated evidence");
+        assert_eq!(
+            witness, original,
+            "only the exact report projection may survive"
+        );
+    }
+
+    #[test]
+    fn promotion_theorem_report_preserves_same_report_partial_approval() {
+        let mut witness = build_test_witness();
+        let first = test_signing_key();
+        let second = SigningKey::from_bytes([0x74; 32]).expect("independent test key");
+        let root = CapabilityWitnessTrustRoot::new(
+            [first.verification_key()],
+            [first.verification_key(), second.verification_key()],
+            2,
+        )
+        .expect("two distinct promotion authorities");
+        let report = witness
+            .evaluate_promotion_theorems_signed_by(
+                &promotion_theorem_input_for(&witness),
+                &first,
+            )
+            .expect("sign authenticated report");
+        witness
+            .transition_to(LifecycleState::Validated)
+            .expect("validate candidate");
+        witness
+            .add_promotion_signature(&first)
+            .expect("first independent approval");
+        let before = witness.clone();
+        let signers = witness
+            .verified_promotion_signers(&root)
+            .expect("authenticate incomplete quorum");
+        assert_eq!(signers.len(), 1);
+        witness
+            .apply_promotion_theorem_report(&report)
+            .expect("same report may be used by the next operator");
+        assert_eq!(witness, before, "reapplication must preserve every signed byte");
+        assert_eq!(
+            witness.verified_promotion_signers(&root).unwrap(),
+            signers
+        );
+        witness
+            .add_promotion_signature(&second)
+            .expect("second independent approval");
+        witness
+            .transition_to_with_trust_root(LifecycleState::Promoted, &root)
+            .expect("both approvals remain valid");
+    }
+
+    #[test]
+    fn failed_theorem_report_replaces_stale_success_without_erasing_approvals() {
+        let mut witness = build_test_witness();
+        witness
+            .transition_to(LifecycleState::Validated)
+            .expect("validate candidate");
+        witness
+            .add_promotion_signature(&test_signing_key())
+            .expect("approve original successful report");
+        let approvals = witness.promotion_signatures.clone();
+        assert!(witness.proof_obligations.iter().any(|proof| {
+            proof.kind == ProofKind::PolicyTheoremCheck
+        }));
+        let mut input = promotion_theorem_input_for(&witness);
+        input.manifest_capabilities.clear();
+        let failed = witness
+            .evaluate_promotion_theorems_signed_by(&input, &test_signing_key())
+            .expect("sign a failed assessment");
+        assert!(!failed.all_passed);
+        witness
+            .apply_promotion_theorem_report(&failed)
+            .expect("honest failure replaces the stale success projection");
+        assert_eq!(
+            witness
+                .metadata
+                .get("promotion_theorem.all_passed")
+                .map(String::as_str),
+            Some("false")
+        );
+        assert!(witness.proof_obligations.iter().all(|proof| {
+            proof.kind != ProofKind::PolicyTheoremCheck
+        }));
+        assert_eq!(witness.promotion_signatures, approvals);
+        assert!(
+            witness
+                .verified_promotion_signers(&test_trust_root())
+                .is_err(),
+            "retained signatures must not approve different theorem outcomes"
+        );
+        assert!(witness.transition_to(LifecycleState::Promoted).is_err());
+    }
+
+    #[test]
+    fn promotion_theorem_report_authenticates_honest_passing_and_failed_assessments() {
+        let witness = build_test_witness();
+        for passing in [true, false] {
+            let mut input = promotion_theorem_input_for(&witness);
+            if !passing {
+                input.manifest_capabilities.clear();
+            }
+            let report = witness
+                .evaluate_promotion_theorems_signed_by(&input, &test_signing_key())
+                .expect("sign theorem assessment");
+            assert_eq!(report.all_passed, passing);
+            if !passing {
+                assert!(report.results.iter().any(|result| {
+                    !result.passed
+                        && result
+                            .counterexample
+                            .as_deref()
+                            .is_some_and(|counterexample| !counterexample.is_empty())
+                }));
+            }
+            let encoded = serde_json::to_vec(&report).expect("serialize signed report");
+            let restored: PromotionTheoremReport =
+                serde_json::from_slice(&encoded).expect("restore signed report");
+            let mut candidate = witness.clone();
+            candidate
+                .apply_promotion_theorem_report(&restored)
+                .expect("honest assessment remains authenticated");
+            assert_eq!(
+                candidate
+                    .metadata
+                    .get("promotion_theorem.all_passed")
+                    .map(String::as_str),
+                Some(if passing { "true" } else { "false" })
+            );
+        }
+    }
+
+    #[test]
+    fn promotion_theorem_report_rejects_tampered_content_addressed_fields_atomically() {
+        let witness = build_test_witness();
+        let report = witness
+            .evaluate_promotion_theorems_signed_by(
+                &promotion_theorem_input_for(&witness),
+                &test_signing_key(),
+            )
+            .expect("sign passing report");
+        assert!(report.all_passed);
+        assert!(report.results[0].passed);
+        let original = witness.clone();
+        for field in [
+            "detail",
+            "counterexample",
+            "empty_counterexample",
+            "result_hash",
+            "result_id",
+            "report_hash",
+            "report_id",
+        ] {
+            let mut tampered = report.clone();
+            match field {
+                "detail" => tampered.results[0].detail.push_str(" forged evidence"),
+                "counterexample" => {
+                    tampered.results[0].counterexample =
+                        Some("fabricated counterexample".to_string());
+                }
+                "empty_counterexample" => {
+                    tampered.results[0].counterexample = Some(String::new());
+                }
+                "result_hash" => {
+                    tampered.results[0].artifact_hash = ContentHash::compute(b"unrelated result");
+                }
+                "result_id" => tampered.results[0].proof_artifact_id = test_proof_artifact_id(),
+                "report_hash" => {
+                    tampered.report_artifact_hash = ContentHash::compute(b"unrelated report");
+                }
+                "report_id" => tampered.report_artifact_id = test_proof_artifact_id(),
+                _ => unreachable!("fixed tamper matrix"),
+            }
+            assert_eq!(tampered.signature, report.signature);
+            let mut candidate = witness.clone();
+            let error = candidate
+                .apply_promotion_theorem_report(&tampered)
+                .expect_err("altered authenticated evidence must be rejected");
+            assert!(
+                matches!(error, WitnessError::SignatureInvalid { .. }),
+                "{field}: {error}"
+            );
+            assert_eq!(candidate, original, "{field} must not mutate the candidate");
+        }
+    }
+
+    #[test]
+    fn promotion_theorem_report_rejects_refreshed_commitments_without_new_signature() {
+        let witness = build_test_witness();
+        let report = witness
+            .evaluate_promotion_theorems_signed_by(
+                &promotion_theorem_input_for(&witness),
+                &test_signing_key(),
+            )
+            .expect("sign passing report");
+        let mut tampered = report.clone();
+        let result = &tampered.results[0];
+        tampered.results[0] = witness
+            .build_theorem_result(
+                result.theorem.clone(),
+                result.passed,
+                format!("{} forged evidence", result.detail),
+                result.counterexample.clone(),
+            )
+            .expect("an attacker can recompute public result coordinates");
+        tampered.report_artifact_hash = ContentHash::compute(
+            &CapabilityWitness::theorem_report_canonical_bytes(
+                &witness,
+                &tampered.results,
+                tampered.all_passed,
+            ),
+        );
+        tampered.report_artifact_id = engine_object_id::derive_id(
+            ObjectDomain::EvidenceRecord,
+            WITNESS_THEOREM_REPORT_ZONE,
+            &SchemaId::from_definition(WITNESS_THEOREM_REPORT_SCHEMA_DEF),
+            tampered.report_artifact_hash.as_bytes(),
+        )
+        .expect("an attacker can recompute public report coordinates");
+        assert_eq!(tampered.signature, report.signature);
+        let mut candidate = witness.clone();
+        let error = candidate
+            .apply_promotion_theorem_report(&tampered)
+            .expect_err("public commitments cannot replace the signing authority");
+        assert!(
+            matches!(error, WitnessError::SignatureInvalid { .. }),
+            "{error}"
+        );
+        assert_eq!(candidate, witness);
     }
 
     #[test]

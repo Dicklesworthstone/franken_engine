@@ -12,8 +12,8 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Weak};
 
 use serde::{Deserialize, Serialize};
 
@@ -160,6 +160,64 @@ impl Default for DensityConfig {
 // CancellationToken — shared cancellation signal
 // ---------------------------------------------------------------------------
 
+/// Read-only, irreversible invalidation from a live security authority.
+///
+/// The source owns the strong reference. Losing that source fails closed; an
+/// observer cannot keep abandoned authority alive or reset its revocation.
+#[derive(Debug, Clone)]
+pub struct RevocationSignal {
+    state: Weak<AtomicBool>,
+}
+
+impl RevocationSignal {
+    pub fn is_invalidated(&self) -> bool {
+        self.state
+            .upgrade()
+            .is_none_or(|state| state.load(Ordering::Acquire))
+    }
+
+    pub(crate) fn invalidated() -> Self {
+        Self { state: Weak::new() }
+    }
+}
+
+/// Only authenticated authority owners may publish invalidation. Consumers
+/// receive the read-only signal, never a cancellation token they could reset.
+#[derive(Debug)]
+pub(crate) struct RevocationSignalOwner {
+    state: Arc<AtomicBool>,
+}
+
+impl RevocationSignalOwner {
+    pub(crate) fn new() -> Self {
+        Self {
+            state: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub(crate) fn signal(&self) -> RevocationSignal {
+        RevocationSignal {
+            state: Arc::downgrade(&self.state),
+        }
+    }
+
+    pub(crate) fn invalidate(&self) {
+        self.state.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn has_observers(&self) -> bool {
+        Arc::weak_count(&self.state) != 0
+    }
+}
+
+impl Drop for RevocationSignalOwner {
+    fn drop(&mut self) {
+        // Publish before releasing the owner, including to a concurrent
+        // observer that already upgraded its weak reference.
+        self.invalidate();
+    }
+}
+
 /// Shared cancellation token that loops check at checkpoint sites.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CancellationToken {
@@ -168,6 +226,9 @@ pub struct CancellationToken {
     /// Live, read-only tenant signals. Serialization cannot transfer authority.
     #[serde(skip)]
     work_scopes: Arc<[frankenengine_core::execution_work_budget::WorkScopeRevocation]>,
+    /// Live security authority is process-local and cannot be serialized.
+    #[serde(skip)]
+    revocations: Arc<[RevocationSignal]>,
 }
 
 #[derive(Debug, Default)]
@@ -182,6 +243,7 @@ impl CancellationToken {
         Self {
             state: Arc::new(CancellationState::default()),
             work_scopes: Arc::from([]),
+            revocations: Arc::from([]),
         }
     }
 
@@ -197,11 +259,26 @@ impl CancellationToken {
         Self {
             state: Arc::clone(&self.state),
             work_scopes: work_scopes.into(),
+            revocations: Arc::clone(&self.revocations),
         }
     }
 
-    fn work_scope_revoked(&self) -> bool {
+    /// Attach authenticated authority without replacing caller cancellation
+    /// epochs or existing tenant and security attachments. Resetting the token
+    /// cannot reset this signal.
+    pub fn with_revocation_signal(&self, signal: RevocationSignal) -> Self {
+        let mut revocations = self.revocations.to_vec();
+        revocations.push(signal);
+        Self {
+            state: Arc::clone(&self.state),
+            work_scopes: Arc::clone(&self.work_scopes),
+            revocations: revocations.into(),
+        }
+    }
+
+    fn authority_revoked(&self) -> bool {
         self.work_scopes.iter().any(|scope| scope.is_revoked())
+            || self.revocations.iter().any(RevocationSignal::is_invalidated)
     }
 
     /// Signal cancellation.
@@ -212,7 +289,7 @@ impl CancellationToken {
     /// Check if cancellation has been requested.
     pub fn is_cancelled(&self) -> bool {
         self.cancel_epoch() > self.state.reset_epoch.load(Ordering::Acquire)
-            || self.work_scope_revoked()
+            || self.authority_revoked()
     }
 
     /// Reset the token for new sessions after existing guards drain/finalize.
@@ -232,7 +309,7 @@ impl CancellationToken {
         let cancel_epoch = self.cancel_epoch();
         if cancel_epoch > observed_cancel_epoch
             || cancel_epoch > self.state.reset_epoch.load(Ordering::Acquire)
-            || self.work_scope_revoked()
+            || self.authority_revoked()
         {
             Some(cancel_epoch)
         } else {
@@ -564,6 +641,88 @@ mod tests {
         let token2 = token1.clone();
         token1.cancel();
         assert!(token2.is_cancelled());
+    }
+
+    #[test]
+    fn security_revocation_survives_reset_and_retains_other_attachments() {
+        use frankenengine_core::execution_work_budget::ExecutionWorkPool;
+        let first = RevocationSignalOwner::new();
+        let second = RevocationSignalOwner::new();
+        let pool = ExecutionWorkPool::new(128);
+        let caller = CancellationToken::new();
+        let token = caller
+            .with_revocation_signal(first.signal())
+            .with_work_scope_revocation(pool.revocation_signal())
+            .with_revocation_signal(second.signal());
+        let mut existing = CheckpointGuard::new(
+            LoopSite::BytecodeDispatch,
+            "runtime",
+            "security-existing",
+            DensityConfig::default(),
+            token.clone(),
+        );
+
+        first.invalidate();
+        caller.reset();
+        token.reset();
+        assert!(token.is_cancelled());
+        assert!(!caller.is_cancelled(), "security must not cancel its caller");
+        assert!(!pool.is_revoked(), "security must not revoke a sibling scope");
+        assert!(!second.signal().is_invalidated());
+        existing.tick();
+        assert_eq!(existing.check(), CheckpointAction::Drain);
+        let mut fresh = CheckpointGuard::new(
+            LoopSite::BytecodeDispatch,
+            "runtime",
+            "security-fresh",
+            DensityConfig::default(),
+            token,
+        );
+        fresh.tick();
+        assert_eq!(fresh.check(), CheckpointAction::Drain);
+    }
+
+    #[test]
+    fn losing_security_authority_fails_closed_without_cancelling_the_caller() {
+        let owner = RevocationSignalOwner::new();
+        let signal = owner.signal();
+        let caller = CancellationToken::new();
+        let token = caller.with_revocation_signal(signal.clone());
+        assert!(!token.is_cancelled());
+        assert!(!signal.is_invalidated());
+        drop(owner);
+        token.reset();
+        assert!(signal.is_invalidated());
+        assert!(token.is_cancelled());
+        assert!(!caller.is_cancelled());
+    }
+
+    #[test]
+    fn security_attachment_preserves_caller_epochs_and_work_scope_revocation() {
+        use frankenengine_core::execution_work_budget::ExecutionWorkPool;
+        let owner = RevocationSignalOwner::new();
+        let pool = ExecutionWorkPool::new(128);
+        let caller = CancellationToken::new();
+        let token = caller
+            .with_work_scope_revocation(pool.revocation_signal())
+            .with_revocation_signal(owner.signal());
+        let mut guard = CheckpointGuard::new(
+            LoopSite::BytecodeDispatch,
+            "runtime",
+            "security-caller",
+            DensityConfig::default(),
+            token.clone(),
+        );
+
+        caller.cancel();
+        caller.reset();
+        assert!(!token.is_cancelled());
+        guard.tick();
+        assert_eq!(guard.check(), CheckpointAction::Drain);
+        pool.revoke();
+        token.reset();
+        assert!(token.is_cancelled());
+        assert!(!owner.signal().is_invalidated());
     }
 
     #[test]

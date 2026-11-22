@@ -10,9 +10,10 @@
 #![forbid(unsafe_code)]
 
 use frankenengine_engine::ast::ParseGoal;
-use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore};
+use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore, Value};
 use frankenengine_engine::capability::RuntimeCapability;
-use frankenengine_engine::ir_contract::Ir0Module;
+use frankenengine_engine::ifc_artifacts::Label;
+use frankenengine_engine::ir_contract::{Ir0Module, Ir3Instruction, Ir3Module};
 use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 
@@ -140,11 +141,7 @@ fn console_output(source: &str) -> Result<String, String> {
     console_output_with_config(source, InterpreterConfig::quickjs_defaults(), None)
 }
 
-fn console_output_with_config(
-    source: &str,
-    mut config: InterpreterConfig,
-    stress: Option<u64>,
-) -> Result<String, String> {
+fn lower_source(source: &str) -> Result<Ir3Module, String> {
     let tree = CanonicalEs2020Parser
         .parse_with_options(
             ParserSource {
@@ -155,7 +152,7 @@ fn console_output_with_config(
             &ParserOptions::default(),
         )
         .map_err(|error| format!("parse: {error:?}"))?;
-    let module = lower_ir0_to_ir3(
+    Ok(lower_ir0_to_ir3(
         &Ir0Module::from_syntax_tree(tree, "arrayproto.js"),
         &LoweringContext::new(
             "arrayproto-trace",
@@ -164,7 +161,15 @@ fn console_output_with_config(
         ),
     )
     .map_err(|error| format!("lower: {error:?}"))?
-    .ir3;
+    .ir3)
+}
+
+fn console_output_with_config(
+    source: &str,
+    mut config: InterpreterConfig,
+    stress: Option<u64>,
+) -> Result<String, String> {
+    let module = lower_source(source)?;
     config.granted_capabilities = [
         RuntimeCapability::VmDispatch,
         RuntimeCapability::HeapAllocate,
@@ -250,6 +255,304 @@ console.log(units(converted.join({toString() {return '';}})));
                 Ok(expected),
                 "GC={stress:?}"
             );
+        }
+    }
+}
+
+fn assert_locale_output(source: &str, expected: &str) {
+    for config in [
+        InterpreterConfig::quickjs_defaults(),
+        InterpreterConfig::v8_defaults(),
+    ] {
+        for stress in [None, Some(1), Some(7)] {
+            assert_eq!(
+                console_output_with_config(source, config.clone(), stress).as_deref(),
+                Ok(expected),
+                "GC={stress:?}: {source}"
+            );
+        }
+    }
+}
+
+// The locale regression outputs below were observed with Node v24.22.3.
+#[test]
+fn locale_string_forwards_two_uncoerced_arguments_to_each_element() {
+    let source = r#"
+const locales = {mustStayOpaque:true}, options = {mustStayOpaque:true}, calls = [];
+const element = {toLocaleString(l, o) {
+  calls.push([this === element, arguments.length, l === locales, o === options].join('/'));
+  return 'X';
+}};
+console.log([element, null, undefined, [element]].toLocaleString(locales, options, 'ignored'));
+console.log(calls.join('|'));
+let defaults = '';
+console.log([{toLocaleString(l, o) {
+  defaults = [arguments.length, l === undefined, o === undefined].join('/');
+  return 7;
+}}].toLocaleString(), defaults);
+const inaccessible = new Proxy({}, {get() {throw 'read options';}});
+console.log([null, undefined].toLocaleString(inaccessible, inaccessible) === ',');
+console.log([1234.5, 2].toLocaleString('de-DE', {useGrouping:false, minimumFractionDigits:2}));
+console.log(new Float64Array([1234.5, 2]).toLocaleString('de-DE', {useGrouping:false, minimumFractionDigits:2}));
+console.log([1234n, 2n].toLocaleString('en-US', {useGrouping:false}));
+console.log(new BigInt64Array([1234n, 2n]).toLocaleString('en-US', {useGrouping:false}));
+"#;
+    assert_locale_output(
+        source,
+        "X,,,X\ntrue/2/true/true|true/2/true/true\n7 2/true/true\ntrue\n1234,50,2,00\n1234,50,2,00\n1234,2\n1234,2",
+    );
+}
+
+#[test]
+fn locale_string_is_generic_on_callable_and_exotic_receivers() {
+    let source = r#"
+const order = [];
+function callable(a,b) {}
+Object.defineProperty(callable, 'length', {get() {
+  order.push(this === callable ? 'length' : 'bad');
+  return {valueOf() {order.push('coerce'); return 2;}};
+}});
+Object.defineProperty(callable, '0', {get() {
+  order.push(this === callable ? '0' : 'bad');
+  return {toLocaleString() {
+    order.push('call0'); callable[1] = 'changed'; callable[2] = 'late'; return 'first';
+  }};
+}});
+callable[1] = 'old';
+console.log(Array.prototype.toLocaleString.call(callable), order.join('/'));
+const bound = function(a,b) {}.bind(null); bound[0] = 'B'; bound[1] = 'C';
+console.log(Array.prototype.toLocaleString.call(bound));
+const proxyOrder = [];
+const target = function(a,b) {}; target[0] = 'P'; target[1] = 'Q';
+const proxy = new Proxy(target, {get(t,k,r) {
+  proxyOrder.push(String(k) + ':' + (r === proxy)); return Reflect.get(t,k,r);
+}});
+console.log(Array.prototype.toLocaleString.call(proxy), proxyOrder.join('/'));
+const promise = Promise.resolve(0); promise.length = 2; promise[0] = 'promise'; promise[1] = null;
+const generator = (function* () {})(); generator.length = 1; generator[0] = 'generator';
+const iterator = [1].values(); iterator.length = 1; iterator[0] = 'iterator';
+console.log(Array.prototype.toLocaleString.call(promise), Array.prototype.toLocaleString.call(generator), Array.prototype.toLocaleString.call(iterator));
+console.log(Array.prototype.toLocaleString.call('ab'), Array.prototype.toLocaleString.call(true) === '');
+"#;
+    assert_locale_output(
+        source,
+        "first,changed length/coerce/0/call0\nB,C\nP,Q length:true/0:true/1:true\npromise, generator iterator\na,b true",
+    );
+}
+
+#[test]
+fn locale_string_preserves_exact_utf16_across_guest_conversions() {
+    let source = r#"
+function units(text) {
+  const output = [];
+  for (let i=0;i<text.length;i++) output.push(text.charCodeAt(i));
+  return output.join(',');
+}
+const high = '\ud800', low = '\udc00';
+const a = {toLocaleString() {return high;}}, b = {toLocaleString() {return low;}};
+console.log(units([a, b].toLocaleString()));
+console.log(units([['é' + high + '🚀'], [low]].toLocaleString()));
+console.log(units(Array.prototype.toLocaleString.call(high + low)));
+console.log(units(Array.prototype.toLocaleString.call({0:a, 2:b, length:3})));
+const order = [];
+const value = {get toLocaleString() {
+  order.push('get');
+  return function() {
+    order.push(this === value ? 'call' : 'bad');
+    return {[Symbol.toPrimitive](hint) {order.push(hint); return high;}};
+  };
+}};
+console.log(units([value].toLocaleString()), order.join('/'));
+const old = Number.prototype.toLocaleString;
+try {
+  Number.prototype.toLocaleString = function() {return Number(this) === 1 ? high : low;};
+  console.log(units(new Uint8Array([1,2]).toLocaleString()));
+} finally {Number.prototype.toLocaleString = old;}
+"#;
+    assert_locale_output(
+        source,
+        "55296,44,56320\n233,55296,55357,56960,44,56320\n55296,44,56320\n55296,44,44,56320\n55296 get/call/string\n55296,44,56320",
+    );
+}
+
+#[test]
+fn typed_locale_string_uses_internal_length_and_observes_mid_call_resize() {
+    let source = r#"
+const own = new Uint8Array([1,2]); let reads = 0;
+Object.defineProperty(own, 'length', {get() {reads++; return 1;}});
+console.log(own.toLocaleString(), Array.prototype.toLocaleString.call(own), reads);
+const throwLength = new Uint8Array([3,4]), token = {};
+Object.defineProperty(throwLength, 'length', {get() {throw token;}});
+let caught = false;
+try {Array.prototype.toLocaleString.call(throwLength);} catch(error) {caught = error === token;}
+console.log(throwLength.toLocaleString(), caught);
+const buffer = new ArrayBuffer(3, {maxByteLength:3}), view = new Uint8Array(buffer);
+view.set([1,2,3]); const locales = {}, options = {}; let calls = '';
+const old = Number.prototype.toLocaleString;
+try {
+  Number.prototype.toLocaleString = function(l,o) {
+    calls += [Number(this), arguments.length, l === locales, o === options].join('/') + ';';
+    buffer.resize(1); return String(Number(this));
+  };
+  console.log(view.toLocaleString(locales, options), calls, view.length);
+} finally {Number.prototype.toLocaleString = old;}
+const fixedBuffer = new ArrayBuffer(3, {maxByteLength:3}), fixed = new Uint8Array(fixedBuffer, 0, 3);
+fixedBuffer.resize(1);
+let invalid = '';
+for (const receiver of [[], new Proxy(new Uint8Array([1]), {}), fixed]) {
+  try {Uint8Array.prototype.toLocaleString.call(receiver); invalid += 'miss/';}
+  catch(error) {invalid += error.constructor.name + '/';}
+}
+console.log(invalid, Array.prototype.toLocaleString.call(fixed) === '');
+"#;
+    assert_locale_output(
+        source,
+        "1,2 1 1\n3,4 true\n1,, 1/2/true/true; 1\nTypeError/TypeError/TypeError/ true",
+    );
+}
+
+#[test]
+fn locale_string_stops_at_abrupt_completions_and_releases_output_capacity() {
+    let source = r#"
+const traces = [], thrown = {};
+let lengthReads = 0;
+const source = {
+  get length() {lengthReads++; return 3;},
+  get 0() {
+    traces.push('0');
+    return {get toLocaleString() {
+      traces.push('method');
+      return function() {
+        traces.push('call'); return {toString() {traces.push('string'); throw thrown;}};
+      };
+    }};
+  },
+  get 1() {traces.push('1'); return 'bad';}
+};
+let same = false;
+try {Array.prototype.toLocaleString.call(source);} catch(error) {same = error === thrown;}
+console.log(same, lengthReads, traces.join('/'));
+let negative = '';
+for (const receiver of [null, undefined]) {
+  try {Array.prototype.toLocaleString.call(receiver); negative += 'miss/';}
+  catch(error) {negative += error.constructor.name + '/';}
+}
+for (const element of [
+  {toLocaleString:1}, {toLocaleString(){return Symbol();}},
+  {get toLocaleString(){throw thrown;}}, {toLocaleString(){throw thrown;}}
+]) {
+  try {[element].toLocaleString(); negative += 'miss/';}
+  catch(error) {negative += (error === thrown ? 'token' : error.constructor.name) + '/';}
+}
+const revoked = Proxy.revocable({length:1, 0:'bad'}, {}); revoked.revoke();
+try {Array.prototype.toLocaleString.call(revoked.proxy);}
+catch(error) {negative += error.constructor.name;}
+console.log(negative);
+let released = false;
+try {
+  [{toLocaleString() {return '\ud800'.repeat(300);}},
+   {toLocaleString() {throw thrown;}}].toLocaleString();
+} catch(error) {released = error === thrown;}
+console.log(released, ['after'].toLocaleString());
+"#;
+    assert_locale_output(
+        source,
+        "true 1 0/method/call/string\nTypeError/TypeError/TypeError/TypeError/token/token/TypeError\ntrue after",
+    );
+}
+
+#[test]
+fn locale_string_native_work_and_output_share_runtime_budgets() {
+    for mut config in [
+        InterpreterConfig::quickjs_defaults(),
+        InterpreterConfig::v8_defaults(),
+    ] {
+        config.instruction_budget = 4096;
+        let source = "try { Array.prototype.toLocaleString.call({length:10000}); } catch(error) { console.log('caught'); }";
+        let error = console_output_with_config(source, config.clone(), None).expect_err(source);
+        assert!(error.contains("BudgetExhausted"), "{error}");
+
+        config.instruction_budget = 1_000_000;
+        config.max_string_size = 1024;
+        for source in [
+            "Array.prototype.toLocaleString.call({length:2 ** 53 - 1});",
+            "const item = {toLocaleString() {return '\\ud800'.repeat(200);}}; [item,item].toLocaleString();",
+        ] {
+            let error = console_output_with_config(source, config.clone(), None).expect_err(source);
+            assert!(error.contains("StringLimitExceeded"), "{source}: {error}");
+        }
+    }
+}
+
+#[test]
+fn locale_string_retains_observed_labels_across_later_callbacks_and_catch() {
+    let cases = [
+        (
+            "const array = ['label-marker', {toLocaleString() {return 'public';}}]; array.toLocaleString();",
+            Value::str("secret"),
+            "secret,public",
+        ),
+        (
+            "function source(a) {} Object.defineProperty(source, 'length', {value:'label-marker'}); source[0] = {toLocaleString() {return 'public';}}; Array.prototype.toLocaleString.call(source);",
+            Value::Int(1),
+            "public",
+        ),
+        (
+            "const array = ['label-marker', {toLocaleString() {throw 'public';}}]; let caught = ''; try {array.toLocaleString();} catch(error) {caught = error;} caught;",
+            Value::str("secret"),
+            "public",
+        ),
+    ];
+    for mut config in [
+        InterpreterConfig::quickjs_defaults(),
+        InterpreterConfig::v8_defaults(),
+    ] {
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]
+        .into_iter()
+        .collect();
+        for (source, input, expected) in &cases {
+            let input_register = config.max_registers - 1;
+            let mut module = lower_source(source).expect("locale label source lowers");
+            let pool_index = module
+                .constant_pool
+                .iter()
+                .position(|text| text == "label-marker")
+                .expect("unique labelled input literal") as u32;
+            let mut replacements = 0;
+            for instruction in &mut module.instructions {
+                if let Ir3Instruction::LoadStr {
+                    dst,
+                    pool_index: index,
+                } = instruction
+                    && *index == pool_index
+                {
+                    *instruction = Ir3Instruction::Move {
+                        dst: *dst,
+                        src: input_register,
+                    };
+                    replacements += 1;
+                }
+            }
+            assert_eq!(replacements, 1, "only the input literal is labelled");
+            for stress in [None, Some(1), Some(7)] {
+                let mut core = InterpreterCore::new(config.clone(), "locale-label");
+                core.seed_register(input_register, input.clone()).unwrap();
+                core.set_register_label(input_register, Label::Secret)
+                    .unwrap();
+                core.set_gc_stress_interval(stress);
+                let execution = core.execute(&module).expect("locale label execution");
+                assert_eq!(execution.value, Value::str(*expected), "{source}");
+                assert_eq!(execution.completion_label, Label::Secret, "{source}");
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes(),
+                    "GC={stress:?}: {source}"
+                );
+            }
         }
     }
 }

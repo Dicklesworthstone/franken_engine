@@ -2131,64 +2131,85 @@ impl InterpreterCore {
         })
     }
 
-    /// Array.prototype.toLocaleString (ES2020 22.1.3.27; %TypedArray%'s,
-    /// 22.2.3.28, after its receiver check): each element's toLocaleString
-    /// (Invoke), ToString'd, "," between, undefined and null as "". It did
-    /// not exist (`[1234].toLocaleString()` threw); the typed array one was
-    /// an "unsupported TypedArray method" TypeError.
+    /// Array.prototype.toLocaleString (ECMA-402 2020 16.5.1): ToObject,
+    /// capture the length, then Invoke each non-nullish element with exactly
+    /// `locales` and `options`. GetV preserves callable and exotic receivers,
+    /// including the `this` observed by their getters. The TypedArray entry
+    /// has already validated its receiver and uses its internal array length.
     pub(super) fn array_to_locale_string(
         &mut self,
         module: &Ir3Module,
         receiver: Value,
+        args: RegRange,
+        typed_array_method: bool,
     ) -> Result<Value, InterpreterError> {
-        let o = match receiver {
-            Value::Object(object_id) => object_id,
-            Value::Undefined | Value::Null => {
-                return Err(InterpreterError::TypeError {
-                    expected: "object-coercible this for Array.prototype.toLocaleString"
-                        .to_string(),
-                    got: receiver.type_name().to_string(),
-                });
-            }
-            other if other.is_object_like() => {
-                return Err(InterpreterError::TypeError {
-                    expected: "array-like this for Array.prototype.toLocaleString".to_string(),
-                    got: other.type_name().to_string(),
-                });
-            }
-            primitive => self.alloc_primitive_wrapper(primitive)?,
-        };
-        let m = Some(module);
-        let len = self.generic_length(m, o)?;
-        // The separators alone must fit: a huge length fails here, not after
-        // a long walk.
-        self.check_string_limit(usize::try_from(len.saturating_sub(1)).unwrap_or(usize::MAX))?;
-        let to_locale_string = RuntimePropertyKey::String(JsString::from("toLocaleString"));
-        let mut out = String::new();
-        for k in 0..len {
-            if k > 0 {
-                out.push(',');
-            }
-            let element = self.generic_get(m, o, &Self::generic_index_key(k))?;
-            if matches!(element, Value::Undefined | Value::Null) {
-                // No guest call runs for it, so the step is metered here
-                // (bd-9vouw.112).
-                self.charge_native_hole_read()?;
-                continue;
-            }
-            let method = self.get_v(module, &element, &to_locale_string)?;
-            if !method.is_callable() {
-                return Err(InterpreterError::TypeError {
-                    expected: "callable toLocaleString of an element".to_string(),
-                    got: method.type_name().to_string(),
-                });
-            }
-            let result = self.call_conversion_method(module, method, &element, Vec::new())?;
-            let text = self.generic_to_string(m, result)?;
-            self.check_string_limit(out.len().saturating_add(text.len()))?;
-            out.push_str(&text);
-        }
-        Ok(Value::str(out))
+        // As in the generic array algorithms, native locals retained across
+        // guest calls are not enumerated by nested GC. Defer that collection
+        // until the outer dispatch regains its ordinary roots.
+        self.gc_nested_request = None;
+        self.generic_species_scope(|core| {
+            let object = match receiver {
+                Value::Undefined | Value::Null => {
+                    return Err(InterpreterError::TypeError {
+                        expected: "object-coercible this for Array.prototype.toLocaleString"
+                            .to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                }
+                other if other.is_object_like() => other,
+                primitive => Value::Object(core.alloc_primitive_wrapper(primitive)?),
+            };
+            let locales = core.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+            let options = core.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+            let len = match (&object, typed_array_method) {
+                (Value::Object(object_id), true) => {
+                    core.array_method_length(*object_id, true)? as u64
+                }
+                _ => {
+                    let length = core.get_v(module, &object, &Self::generic_length_key())?;
+                    core.generic_to_integer(Some(module), length)?
+                        .clamp(0.0, MAX_SAFE_LENGTH as f64) as u64
+                }
+            };
+            // The separators alone must fit: a huge length fails here, not
+            // after a long walk. The buffer admits every subsequent growth.
+            core.check_string_limit(
+                usize::try_from(len.saturating_sub(1)).unwrap_or(usize::MAX),
+            )?;
+            let separator = JsString::from(",");
+            let to_locale_string = RuntimePropertyKey::String(JsString::from("toLocaleString"));
+            let mut out = StringOutputBuffer::default();
+            let outcome = (|| {
+                for k in 0..len {
+                    core.json_charge_work()?;
+                    if k > 0 {
+                        out.push(core, &separator)?;
+                    }
+                    let element = core.get_v(module, &object, &Self::generic_index_key(k))?;
+                    if matches!(element, Value::Undefined | Value::Null) {
+                        continue;
+                    }
+                    let method = core.get_v(module, &element, &to_locale_string)?;
+                    if !method.is_callable() {
+                        return Err(InterpreterError::TypeError {
+                            expected: "callable toLocaleString of an element".to_string(),
+                            got: method.type_name().to_string(),
+                        });
+                    }
+                    let result = core.call_conversion_method(
+                        module,
+                        method,
+                        &element,
+                        vec![locales.clone(), options.clone()],
+                    )?;
+                    let text = core.generic_to_js_string(Some(module), result)?;
+                    out.push(core, &text)?;
+                }
+                out.finish(core)
+            })();
+            out.release(core);
+            outcome.map(Value::Str)
+        })
     }
 
     fn generic_same_value_zero(a: &Value, b: &Value) -> bool {

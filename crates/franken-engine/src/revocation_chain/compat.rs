@@ -22,6 +22,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::capability_token::PrincipalId;
+use crate::checkpoint::{RevocationSignal, RevocationSignalOwner};
 use crate::deterministic_serde::{self, CanonicalValue, SchemaHash};
 use crate::engine_object_id::{self, EngineObjectId, ObjectDomain, SchemaId};
 use crate::epoch_barrier::{CriticalOpKind, EpochBarrier};
@@ -41,6 +42,7 @@ const REVOCATION_SCHEMA_DEF: &[u8] = b"FrankenEngine.Revocation.v1";
 const REVOCATION_EVENT_SCHEMA_DEF: &[u8] = b"FrankenEngine.RevocationEvent.v1";
 const REVOCATION_HEAD_SCHEMA_DEF: &[u8] = b"FrankenEngine.RevocationHead.v1";
 const MAX_REVOCATION_HEAD_EPOCH_STALENESS: u64 = 0;
+const MAX_LIVE_REVOCATION_WATCH_TARGETS: usize = 4096;
 
 fn default_security_epoch() -> SecurityEpoch {
     SecurityEpoch::GENESIS
@@ -493,6 +495,35 @@ pub struct ChainEvent {
 // RevocationChain — the chain manager
 // ---------------------------------------------------------------------------
 
+/// Read-only observation of one target in an authenticated chain epoch.
+///
+/// A verified matching append, epoch advance, or loss of the chain invalidates
+/// the observation permanently. Watches cannot mutate the chain or reset it.
+#[derive(Debug, Clone)]
+pub struct RevocationWatch {
+    target_id: EngineObjectId,
+    epoch: SecurityEpoch,
+    signal: RevocationSignal,
+}
+
+impl RevocationWatch {
+    pub fn target_id(&self) -> &EngineObjectId {
+        &self.target_id
+    }
+
+    pub fn epoch(&self) -> SecurityEpoch {
+        self.epoch
+    }
+
+    pub fn is_invalidated(&self) -> bool {
+        self.signal.is_invalidated()
+    }
+
+    pub fn signal(&self) -> RevocationSignal {
+        self.signal.clone()
+    }
+}
+
 /// Manages an append-only revocation chain with O(1) revocation lookup.
 #[derive(Debug)]
 pub struct RevocationChain {
@@ -507,6 +538,8 @@ pub struct RevocationChain {
     authorized_head_keys: BTreeMap<PrincipalId, VerificationKey>,
     /// O(1) revocation lookup: target_id -> event_seq.
     revocation_index: BTreeMap<EngineObjectId, u64>,
+    /// Source-owned live authority for bounded, observed targets only.
+    live_watches: BTreeMap<EngineObjectId, RevocationSignalOwner>,
     /// Rolling chain hash.
     chain_hash: ContentHash,
     /// Current verifier epoch used to reject stale signed heads.
@@ -525,6 +558,7 @@ impl RevocationChain {
             authorized_revocation_keys: BTreeMap::new(),
             authorized_head_keys: BTreeMap::new(),
             revocation_index: BTreeMap::new(),
+            live_watches: BTreeMap::new(),
             chain_hash: ContentHash::compute(b"revocation-chain-genesis"),
             current_epoch: SecurityEpoch::GENESIS,
             audit_events: Vec::new(),
@@ -607,8 +641,63 @@ impl RevocationChain {
                 ),
             });
         }
-        self.current_epoch = epoch;
+        if epoch > self.current_epoch {
+            for signal in self.live_watches.values() {
+                signal.invalidate();
+            }
+            self.live_watches.clear();
+            self.current_epoch = epoch;
+        }
         Ok(())
+    }
+
+    /// Watch a target using the independently configured issuer and head keys.
+    ///
+    /// Existing history and the exact current head epoch are authenticated
+    /// before issuing authority. A caller must retain this chain and deliver
+    /// verified appends to it; dropping the source fails its observers closed.
+    /// This local signal does not establish remote frontier freshness.
+    pub fn watch_target(
+        &mut self,
+        target_id: &EngineObjectId,
+    ) -> Result<RevocationWatch, ChainError> {
+        if self.authorized_revocation_keys.is_empty() || self.authorized_head_keys.is_empty() {
+            return Err(ChainError::SignatureInvalid {
+                detail: "live revocation watches require authorized issuer and head keys".to_string(),
+            });
+        }
+        self.verify_chain("revocation-watch")?;
+        if let Some(head) = &self.head
+            && head.epoch_id != self.current_epoch
+        {
+            return Err(ChainError::ChainIntegrity {
+                detail: format!(
+                    "live revocation head epoch {} does not match verifier epoch {}",
+                    head.epoch_id, self.current_epoch
+                ),
+            });
+        }
+        let signal = if self.is_revoked(target_id) {
+            RevocationSignal::invalidated()
+        } else {
+            if !self.live_watches.contains_key(target_id) {
+                self.live_watches.retain(|_, owner| owner.has_observers());
+                if self.live_watches.len() >= MAX_LIVE_REVOCATION_WATCH_TARGETS {
+                    return Err(ChainError::ChainIntegrity {
+                        detail: "live revocation watch target limit exceeded".to_string(),
+                    });
+                }
+            }
+            self.live_watches
+                .entry(target_id.clone())
+                .or_insert_with(RevocationSignalOwner::new)
+                .signal()
+        };
+        Ok(RevocationWatch {
+            target_id: target_id.clone(),
+            epoch: self.current_epoch,
+            signal,
+        })
     }
 
     /// O(1) revocation lookup: check if a target has been revoked.
@@ -734,6 +823,9 @@ impl RevocationChain {
         let target_type = revocation.target_type;
         self.events.push(event);
         self.head = Some(new_head);
+        if let Some(signal) = self.live_watches.remove(&revocation.target_id) {
+            signal.invalidate();
+        }
 
         self.audit_events.push(ChainEvent {
             event_type: ChainEventType::RevocationAppended {
@@ -1362,6 +1454,150 @@ mod tests {
             .expect("operation should succeed for valid inputs");
         rev.signature = sig;
         rev
+    }
+
+    #[test]
+    fn live_watch_requires_external_authorities_even_for_an_empty_chain() {
+        let target = EngineObjectId([70; 32]);
+        for mut chain in [
+            RevocationChain::new(TEST_ZONE),
+            RevocationChain::new(TEST_ZONE)
+                .with_authorized_head_key(test_signing_key().verification_key()),
+            RevocationChain::new(TEST_ZONE)
+                .with_authorized_revocation_key(test_revocation_key().verification_key()),
+        ] {
+            assert!(matches!(
+                chain.watch_target(&target),
+                Err(ChainError::SignatureInvalid { .. })
+            ));
+            assert!(chain.live_watches.is_empty());
+        }
+    }
+
+    #[test]
+    fn live_watch_changes_only_after_authenticated_matching_append() {
+        let target = EngineObjectId([71; 32]);
+        let unrelated = EngineObjectId([72; 32]);
+        let mut chain = trusted_test_chain();
+        let watch = chain.watch_target(&target).unwrap();
+        let same_target = chain.watch_target(&target).unwrap();
+        let other = chain.watch_target(&unrelated).unwrap();
+        assert_eq!(watch.target_id(), &target);
+        assert_eq!(watch.epoch(), SecurityEpoch::GENESIS);
+        assert!(!watch.is_invalidated());
+
+        let mut forged = make_revocation(
+            RevocationTargetType::Attestation,
+            RevocationReason::Superseded,
+            [71; 32],
+            &test_revocation_key(),
+        );
+        forged.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
+        assert!(
+            chain
+                .append(forged, &test_signing_key(), "forged-revocation")
+                .is_err()
+        );
+        let signed = make_revocation(
+            RevocationTargetType::Attestation,
+            RevocationReason::Superseded,
+            [71; 32],
+            &test_revocation_key(),
+        );
+        assert!(
+            chain
+                .append(signed.clone(), &alternate_revocation_key(), "unknown-head")
+                .is_err()
+        );
+        assert!(chain.is_empty());
+        assert!(!watch.is_invalidated() && !same_target.is_invalidated());
+
+        chain
+            .append(signed, &test_signing_key(), "signed-revocation")
+            .unwrap();
+        assert!(watch.is_invalidated() && same_target.is_invalidated());
+        assert!(!other.is_invalidated(), "another target retains authority");
+        assert!(chain.watch_target(&target).unwrap().is_invalidated());
+        chain.verify_chain("after-live-revocation").unwrap();
+    }
+
+    #[test]
+    fn live_watch_epoch_change_and_source_loss_are_irreversible() {
+        let target = EngineObjectId([73; 32]);
+        let mut chain = trusted_test_chain();
+        let old = chain.watch_target(&target).unwrap();
+        chain.set_current_epoch(SecurityEpoch::GENESIS).unwrap();
+        assert!(!old.is_invalidated());
+        chain.set_current_epoch(SecurityEpoch::from_raw(1)).unwrap();
+        assert!(old.is_invalidated());
+        assert!(chain.set_current_epoch(SecurityEpoch::GENESIS).is_err());
+        let current = chain.watch_target(&target).unwrap();
+        assert_eq!(current.epoch(), SecurityEpoch::from_raw(1));
+        assert!(!current.is_invalidated());
+        drop(chain);
+        assert!(old.is_invalidated() && current.is_invalidated());
+    }
+
+    #[test]
+    fn live_watch_rebuild_retains_revocation_and_rejects_head_epoch_mismatch() {
+        let mut chain = trusted_test_chain();
+        chain.set_current_epoch(SecurityEpoch::from_raw(2)).unwrap();
+        chain
+            .append(
+                make_revocation(
+                    RevocationTargetType::Extension,
+                    RevocationReason::PolicyViolation,
+                    [74; 32],
+                    &test_revocation_key(),
+                ),
+                &test_signing_key(),
+                "before-rebuild",
+            )
+            .unwrap();
+        let mut restored = RevocationChain::rebuild_from_events_verified(
+            TEST_ZONE,
+            chain.events().to_vec(),
+            chain.head().cloned(),
+            [test_revocation_key().verification_key()],
+            [test_signing_key().verification_key()],
+        )
+        .unwrap();
+        // Rebuild does not choose the verifier's independently supplied epoch.
+        assert!(restored.watch_target(&EngineObjectId([74; 32])).is_err());
+        restored
+            .set_current_epoch(SecurityEpoch::from_raw(2))
+            .unwrap();
+        assert!(
+            restored
+                .watch_target(&EngineObjectId([74; 32]))
+                .unwrap()
+                .is_invalidated()
+        );
+        let other = restored.watch_target(&EngineObjectId([75; 32])).unwrap();
+        assert!(!other.is_invalidated());
+        restored
+            .set_current_epoch(SecurityEpoch::from_raw(3))
+            .unwrap();
+        assert!(other.is_invalidated());
+        assert!(restored.watch_target(&EngineObjectId([76; 32])).is_err());
+    }
+
+    #[test]
+    fn live_watch_storage_is_bounded_and_reclaims_abandoned_targets() {
+        let mut chain = trusted_test_chain();
+        let mut watches = Vec::new();
+        for i in 0..MAX_LIVE_REVOCATION_WATCH_TARGETS {
+            let mut bytes = [0u8; 32];
+            bytes[..8].copy_from_slice(&(i as u64).to_be_bytes());
+            watches.push(chain.watch_target(&EngineObjectId(bytes)).unwrap());
+        }
+        let extra = EngineObjectId([0xFA; 32]);
+        assert!(chain.watch_target(&extra).is_err());
+        assert!(!watches[0].is_invalidated());
+        watches.pop();
+        let replacement = chain.watch_target(&extra).unwrap();
+        assert!(!replacement.is_invalidated());
+        assert_eq!(chain.live_watches.len(), MAX_LIVE_REVOCATION_WATCH_TARGETS);
     }
 
     // -- Genesis and basic append --

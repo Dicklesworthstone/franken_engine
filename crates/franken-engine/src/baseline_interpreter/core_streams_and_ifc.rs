@@ -8969,9 +8969,20 @@ impl InterpreterCore {
                 .filter(|widths| !widths.is_empty()),
             None => CompactTier1Program::verified_frame_widths(module),
         };
+        let entry_identity = EntryModuleIdentity::new(
+            module,
+            self.module_state
+                .modules
+                .get(&entry_specifier)
+                .and_then(|record| record.compiled_module.clone()),
+        );
         let previous_entry_frame_widths = std::mem::replace(
             &mut self.entry_frame_widths,
-            entry_frame_widths.map(|widths| (Self::module_address(module), widths)),
+            entry_frame_widths.map(|widths| (entry_identity.clone(), widths)),
+        );
+        let previous_compact_tier1 = std::mem::replace(
+            &mut self.top_level_compact_tier1,
+            compact_tier1.map(|program| (entry_identity, program.clone())),
         );
         let result = match self.run_top_level_execution(module, compact_tier1) {
             // `process.exit(code)` ends the program normally (bd-my9hk): the
@@ -8985,6 +8996,7 @@ impl InterpreterCore {
             }
             other => other,
         };
+        self.top_level_compact_tier1 = previous_compact_tier1;
         self.entry_frame_widths = previous_entry_frame_widths;
         // Final capture opportunity: a request equal to the trace's final
         // event count observes end-of-execution state (bd-fqlfw.3.5.5).
@@ -9658,14 +9670,9 @@ impl InterpreterCore {
                 label: Label::Public,
             })
         } else {
-            let previous_compact_tier1 = std::mem::replace(
-                &mut self.top_level_compact_tier1,
-                compact_tier1.map(|program| (Self::module_address(module), program.clone())),
-            );
             let previous_gc_depth = self.gc_arm_top_level();
             let result = self.run_loop_labeled_with_compact_tier1(module, compact_tier1);
             self.gc_restore_safe_depth(previous_gc_depth);
-            self.top_level_compact_tier1 = previous_compact_tier1;
             result
         };
         // A terminal runtime/security failure revokes guest execution, not

@@ -14366,6 +14366,33 @@ impl ExecutionResult {
     }
 }
 
+/// Identity of the entry module for one `execute` scope. Continuations retain
+/// an owned copy of their defining module, so their address can differ from
+/// the original borrowed entry. Accept that one copy only after an exact IR
+/// comparison, and keep it alive so its address cannot be reused mid-run.
+#[derive(Debug, Clone)]
+struct EntryModuleIdentity {
+    borrowed_address: usize,
+    retained_module: Option<Arc<Ir3Module>>,
+}
+
+impl EntryModuleIdentity {
+    fn new(module: &Ir3Module, retained_module: Option<Arc<Ir3Module>>) -> Self {
+        Self {
+            borrowed_address: InterpreterCore::module_address(module),
+            retained_module: retained_module.filter(|retained| retained.as_ref() == module),
+        }
+    }
+
+    fn matches(&self, module: &Ir3Module) -> bool {
+        self.borrowed_address == InterpreterCore::module_address(module)
+            || self
+                .retained_module
+                .as_ref()
+                .is_some_and(|retained| std::ptr::eq(retained.as_ref(), module))
+    }
+}
+
 /// Immutable compact dispatch plan compiled from canonical IR3.
 ///
 /// The plan is deliberately private to the crate and non-serializable. It is
@@ -17329,20 +17356,20 @@ pub struct InterpreterCore {
     /// call of a 3-register function cleared 200 values and labels (1,000,000
     /// calls took 4.60 s instead of 1.61 s).
     register_dirty_end: usize,
-    /// The top-level run's compact Tier-I plan and the address of the module
-    /// it was compiled for. Nested builtin callbacks in that same module
-    /// dispatch through it too (verified frame widths, scope-inert leaves,
-    /// compact opcodes) instead of the full-width baseline path.
-    top_level_compact_tier1: Option<(usize, CompactTier1Program)>,
+    /// The entry's compact Tier-I plan and exact module identity, held through
+    /// the whole execution including CommonJS evaluation and event-loop jobs.
+    /// Same-module callbacks and retained continuations share the plan; other
+    /// modules keep baseline dispatch. Explicit Tier-R execution installs None.
+    top_level_compact_tier1: Option<(EntryModuleIdentity, CompactTier1Program)>,
     /// Verified frame widths (`frame_size` per function) of the module the
-    /// running `execute` call was given, with that module's address
+    /// running `execute` call was given, with that module's exact identity
     /// (bd-9vouw.72). A callee window of that module is its function's
     /// verified width whether or not a compact plan runs, so a plain
     /// `execute` recurses as deep as the planned path. Held for the whole
     /// call, event loop included, and restored on return; frames of any
     /// other module (a required module, a generated function) keep
     /// `max_registers` windows.
-    entry_frame_widths: Option<(usize, Arc<[u32]>)>,
+    entry_frame_widths: Option<(EntryModuleIdentity, Arc<[u32]>)>,
     /// Stack of active try/catch frames for exception unwinding.
     catch_frames: Vec<CatchFrame>,
     /// A pending exception value during an unwind edge, consumed by

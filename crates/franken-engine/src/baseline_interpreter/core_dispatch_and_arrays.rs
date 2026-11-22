@@ -11187,7 +11187,8 @@ impl InterpreterCore {
         module: &Ir3Module,
         trampoline: &[Ir3Instruction],
     ) -> Result<Value, InterpreterError> {
-        self.run_loop_labeled_with_trampoline(module, None, trampoline)
+        let compact_tier1 = self.top_level_compact_tier1_for(module);
+        self.run_loop_labeled_with_trampoline(module, compact_tier1.as_ref(), trampoline)
             .map(|completion| completion.value)
     }
 
@@ -11218,7 +11219,8 @@ impl InterpreterCore {
         &mut self,
         module: &Ir3Module,
     ) -> Result<LabeledReturn, InterpreterError> {
-        self.run_loop_labeled_with_compact_tier1(module, None)
+        let compact_tier1 = self.top_level_compact_tier1_for(module);
+        self.run_loop_labeled_with_compact_tier1(module, compact_tier1.as_ref())
     }
 
     /// Finish a builtin call after the dispatch frame has returned. Generator

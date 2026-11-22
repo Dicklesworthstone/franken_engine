@@ -2035,8 +2035,8 @@ impl InterpreterCore {
         module: &Ir3Module,
         function_index: u32,
     ) -> Option<usize> {
-        let (address, widths) = self.entry_frame_widths.as_ref()?;
-        if *address != Self::module_address(module) {
+        let (identity, widths) = self.entry_frame_widths.as_ref()?;
+        if !identity.matches(module) {
             return None;
         }
         widths

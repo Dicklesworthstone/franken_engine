@@ -8,6 +8,8 @@ use std::sync::{Arc, Mutex};
 mod compact_constants;
 #[path = "tests_core_suite/compact_properties.rs"]
 mod compact_properties;
+#[path = "tests_core_suite/compact_resumption.rs"]
+mod compact_resumption;
 
 // -- helpers --------------------------------------------------------
 

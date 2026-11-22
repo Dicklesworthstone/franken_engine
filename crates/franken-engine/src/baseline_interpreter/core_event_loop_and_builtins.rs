@@ -14725,15 +14725,16 @@ impl InterpreterCore {
         std::ptr::from_ref(module) as usize
     }
 
-    /// The top-level compact plan when `module` is the module it was compiled
-    /// for (O(1): the plan's tables are shared).
+    /// The entry's compact plan for its borrowed module or the exact retained
+    /// copy authenticated at execution entry (O(1): identities and shared
+    /// tables). An imported or generated module never inherits this plan.
     pub(super) fn top_level_compact_tier1_for(
         &self,
         module: &Ir3Module,
     ) -> Option<CompactTier1Program> {
         self.top_level_compact_tier1
             .as_ref()
-            .filter(|(address, _)| *address == Self::module_address(module))
+            .filter(|(identity, _)| identity.matches(module))
             .map(|(_, program)| program.clone())
     }
 

@@ -2944,9 +2944,20 @@ impl LaneRouter {
     /// bypass the opcode recorder. Enabling again discards the previous session.
     pub fn enable_profiling(&mut self, config: crate::profiling::ProfilingConfig) {
         let (profiler, collector) = crate::profiling::Profiler::router_session(config);
+        self.install_profiling_collector(collector);
+        self.profiling_data = Some(profiler);
+    }
+
+    /// Attach a caller-owned session to an ephemeral router without creating
+    /// a second aggregate. The caller retains its stable public report handle;
+    /// each lane publishes only its local core profile on completion.
+    pub(crate) fn install_profiling_collector(
+        &mut self,
+        collector: crate::profiling::ProfileCollector,
+    ) {
         self.quickjs.profiling_collector = Some(collector.clone());
         self.v8.profiling_collector = Some(collector);
-        self.profiling_data = Some(profiler);
+        self.profiling_data = None;
     }
 
     /// Stop collecting and return the completed session. Later executions

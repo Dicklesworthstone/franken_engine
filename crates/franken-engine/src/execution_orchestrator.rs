@@ -2138,6 +2138,12 @@ pub struct ExecutionOrchestrator {
     trusted_declassification_authorizers: BTreeMap<String, BTreeSet<VerificationKey>>,
     attempt_counter: u64,
     execution_counter: u64,
+    /// Host-owned diagnostic session shared by the fresh routers created for
+    /// each execution. Its wall-clock observations never enter run evidence.
+    profiling_session: Option<(
+        crate::profiling::Profiler,
+        crate::profiling::ProfileCollector,
+    )>,
     /// Optional sandboxed host-I/O provider (+ recorder) installed into the
     /// interpreter lane so authorized host effects perform and record real I/O
     /// (bd-f5b04.2.7). `None` keeps the fail-closed baseline (no host effects).
@@ -2506,6 +2512,7 @@ impl ExecutionOrchestrator {
             trusted_declassification_authorizers: BTreeMap::new(),
             attempt_counter: 0,
             execution_counter: 0,
+            profiling_session: None,
             host_io: None,
             host_io_recorder: None,
             process_spawn_attempt: None,
@@ -2542,6 +2549,33 @@ impl ExecutionOrchestrator {
             config,
             runtime_config,
         })
+    }
+
+    /// Start a fresh cumulative session of real interpreter observations.
+    ///
+    /// Each execution still creates an isolated lane core. Completed runs,
+    /// including the dispatched prefix of typed failures, publish into this
+    /// session. Failures before interpreter dispatch contribute no opcodes.
+    /// Profiling selects canonical Tier R so compact dispatch cannot bypass
+    /// the recorder; it does not measure production Tier-I handler timings.
+    /// Enabling again discards the previous session. Reports are host-side
+    /// diagnostics and are excluded from deterministic execution evidence.
+    pub fn enable_profiling(&mut self, config: crate::profiling::ProfilingConfig) {
+        self.profiling_session = Some(crate::profiling::Profiler::router_session(config));
+    }
+
+    /// Stop collecting and return the completed session. Subsequent runs
+    /// cannot change the returned report; disabling twice returns `None`.
+    pub fn disable_profiling(&mut self) -> Option<crate::profiling::Profiler> {
+        self.profiling_session.take().map(|(profiler, _)| profiler)
+    }
+
+    /// Read accumulated observations from completed interpreter attempts.
+    /// Elapsed time includes execution, rather than idle time between calls.
+    pub fn profiling_data(&self) -> Option<&crate::profiling::Profiler> {
+        self.profiling_session
+            .as_ref()
+            .map(|(profiler, _)| profiler)
     }
 
     /// Install a data-contract IFC ingress binding (bd-fqlfw.8.2). The next
@@ -4850,6 +4884,9 @@ impl ExecutionOrchestrator {
             memory_budget_bytes,
             widest_frame,
         )?;
+        if let Some((_, collector)) = &self.profiling_session {
+            lane_router.install_profiling_collector(collector.clone());
+        }
         // bd-f5b04.2.7: thread the installed sandboxed host-I/O provider (+ recorder)
         // into whichever lane runs, so authorized `fs:` hostcalls perform and record
         // real host effects through the algebraic-effects stack.

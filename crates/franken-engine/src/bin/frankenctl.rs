@@ -94,6 +94,7 @@ use frankenengine_engine::parser_oracle::{
     run_parser_oracle,
 };
 use frankenengine_engine::policy_theorem_compiler::Capability as PolicyCapability;
+use frankenengine_engine::profiling::{ProfilingConfig, ProfilingReport};
 use frankenengine_engine::react_client_build::{
     ReactClientBuild, ReactClientBuildConfig, build_react_client,
 };
@@ -460,6 +461,9 @@ struct RunArgs {
     /// here (`bd-9vouw.7` / `FE-CLAIM-012`), keeping wall-clock telemetry
     /// outside the deterministic run report.
     emit_guardplane_latency: Option<PathBuf>,
+    /// Collect canonical Tier-R opcode/allocation telemetry in a separate
+    /// unsigned file. The selected dispatch mode is retained for replay.
+    emit_profile: Option<PathBuf>,
     /// Optional starting virtual wall-clock epoch override (`bd-9vouw.59`).
     clock_epoch: Option<ClockEpochSelection>,
     /// Export public verification material for an operator to retain and pin
@@ -1170,6 +1174,17 @@ struct RunCommandOutput {
     observability_mode: ObservabilityModeOutput,
 }
 
+/// Optional wall-clock telemetry, separate from signed deterministic output.
+#[derive(Debug, Serialize)]
+struct RunProfileOutput<'a> {
+    schema_version: &'static str,
+    execution_tier: &'static str,
+    execution_status: &'static str,
+    extension_id: &'a str,
+    trace_id: Option<&'a str>,
+    profile: ProfilingReport,
+}
+
 /// Deterministic material needed to reproduce a successful `frankenctl run`.
 /// The original run signs these bytes in a separate detached envelope; a
 /// replay owns a fresh signing key, so the signature is excluded from input
@@ -1214,6 +1229,10 @@ struct RunReplayInput {
     /// `--goal commonjs` (bd-rff5g); absent for script and module runs.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     commonjs_entry: bool,
+    /// Profiling executes canonical Tier R. Bind that deterministic choice
+    /// without signing wall-clock telemetry or the operator's output path.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    profile_execution: bool,
     /// `--module-root` (bd-rff5g); absent when unset. Files the run loaded
     /// are read again on replay, not recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1324,6 +1343,8 @@ struct FailedRunReplayInput {
     limits: ExecutionLimitOverrides,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     commonjs_entry: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    profile_execution: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     module_root: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3047,6 +3068,7 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
     let mut explain_out: Option<PathBuf> = None;
     let mut emit_trace: Option<PathBuf> = None;
     let mut emit_guardplane_latency: Option<PathBuf> = None;
+    let mut emit_profile: Option<PathBuf> = None;
     let mut clock_epoch: Option<ClockEpochSelection> = None;
     let mut emit_evidence_trust: Option<PathBuf> = None;
     let mut evidence_key_file = None;
@@ -3172,6 +3194,9 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
                     "--emit-guardplane-latency",
                 )?));
             }
+            "--emit-profile" => {
+                emit_profile = Some(PathBuf::from(next_arg(args, &mut index, "--emit-profile")?));
+            }
             "--clock-epoch" => {
                 clock_epoch = Some(parse_clock_epoch_flag(&next_arg(
                     args,
@@ -3274,6 +3299,7 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
         explain_out,
         emit_trace,
         emit_guardplane_latency,
+        emit_profile,
         clock_epoch,
         emit_evidence_trust,
         evidence_authority,
@@ -6472,7 +6498,159 @@ mod configured_evidence_tests {
     }
 }
 
+/// Keep the unsigned telemetry file separate from inputs and replay artifacts.
+/// This must run before opening the state store or executing any guest code.
+fn validate_run_profile_path(args: &RunArgs) -> Result<(), String> {
+    let Some(profile) = args.emit_profile.as_deref() else {
+        return Ok(());
+    };
+    let profile_identity = resolve_run_profile_path(profile, "--emit-profile")?;
+    let explain = resolve_run_explain_path(args);
+    let certificate_paths = args.certificate_out.as_ref().map(|directory| {
+        use frankenengine_engine::non_use_certificate::{
+            AUDIT_FILE, CAPABILITY_TRACE_FILE, DECLASSIFICATION_RECEIPTS_FILE,
+            NON_USE_CERTIFICATE_FILE, REPRO_LOCK_FILE, USE_CERTIFICATE_FILE,
+        };
+
+        [
+            NON_USE_CERTIFICATE_FILE,
+            USE_CERTIFICATE_FILE,
+            DECLASSIFICATION_RECEIPTS_FILE,
+            CAPABILITY_TRACE_FILE,
+            REPRO_LOCK_FILE,
+            AUDIT_FILE,
+        ]
+        .map(|name| directory.join(name))
+    });
+    let mut protected = vec![("--input", args.input.as_path())];
+    protected.extend(
+        [
+            ("--out", args.out.as_deref()),
+            ("--emit-trace", args.emit_trace.as_deref()),
+            (
+                "--emit-guardplane-latency",
+                args.emit_guardplane_latency.as_deref(),
+            ),
+            ("--emit-evidence-trust", args.emit_evidence_trust.as_deref()),
+            ("--explain", explain.as_deref()),
+            ("--data-contract", args.data_contract.as_deref()),
+            ("--witness", args.witness.as_deref()),
+            ("--state-db", args.state_db.as_deref()),
+        ]
+        .into_iter()
+        .filter_map(|(flag, path)| path.map(|path| (flag, path))),
+    );
+    if let Some(authority) = args.evidence_authority.as_ref() {
+        protected.push(("--evidence-key-file", authority.key_file.as_path()));
+        protected.push(("--trust-snapshot", authority.trust.snapshot.as_path()));
+    }
+    if let Some(trust) = args.witness_trust.as_ref() {
+        protected.push(("--witness-trust-root", trust.root.as_path()));
+    }
+    if let Some(paths) = certificate_paths.as_ref() {
+        protected.extend(
+            paths
+                .iter()
+                .map(|path| ("--certificate-out", path.as_path())),
+        );
+    }
+    for (flag, path) in protected {
+        let identity = resolve_run_profile_path(path, flag)?;
+        let aliases = run_profile_paths_alias(&profile_identity, &identity)
+            .map_err(|error| format!("failed to compare --emit-profile with {flag}: {error}"))?;
+        if aliases {
+            return Err(format!(
+                "--emit-profile destination `{}` conflicts with {flag} path `{}`; choose a separate telemetry file",
+                profile.display(),
+                path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn resolve_run_profile_path(path: &Path, flag: &str) -> Result<PathBuf, String> {
+    let resolve = || -> std::io::Result<PathBuf> {
+        let absolute = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            env::current_dir()?.join(path)
+        };
+        resolve_run_profile_components(&absolute, &mut 0)
+    };
+    resolve().map_err(|error| {
+        format!(
+            "failed to resolve {flag} path `{}` for --emit-profile: {error}",
+            path.display()
+        )
+    })
+}
+
+/// Resolve symlinks before consuming `..`: normalizing first would give the
+/// wrong identity for `symlink/../output`. Missing components remain lexical
+/// so output directories need not exist, and dangling links are still followed.
+fn resolve_run_profile_components(
+    path: &Path,
+    followed_links: &mut usize,
+) -> std::io::Result<PathBuf> {
+    use std::path::Component;
+
+    let mut resolved = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => resolved.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                resolved.pop();
+            }
+            Component::Normal(_) => {
+                resolved.push(component.as_os_str());
+                match fs::symlink_metadata(&resolved) {
+                    Ok(metadata) if metadata.file_type().is_symlink() => {
+                        if *followed_links >= 40 {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::InvalidInput,
+                                "too many symbolic links in output path",
+                            ));
+                        }
+                        *followed_links += 1;
+                        let target = fs::read_link(&resolved)?;
+                        resolved.pop();
+                        resolved =
+                            resolve_run_profile_components(&resolved.join(target), followed_links)?;
+                    }
+                    Ok(_) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+    }
+    Ok(resolved)
+}
+
+fn run_profile_paths_alias(left: &Path, right: &Path) -> std::io::Result<bool> {
+    if left == right {
+        return Ok(true);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        let metadata = |path: &Path| match fs::metadata(path) {
+            Ok(metadata) => Ok(Some(metadata)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        };
+        if let (Some(left), Some(right)) = (metadata(left)?, metadata(right)?) {
+            return Ok(left.dev() == right.dev() && left.ino() == right.ino());
+        }
+    }
+    Ok(false)
+}
+
 fn execute_run(args: RunArgs) -> Result<i32, String> {
+    validate_run_profile_path(&args)?;
     let configured_evidence = args
         .evidence_authority
         .as_ref()
@@ -6574,6 +6752,9 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
                 .map_or(&[], |configured| configured.snapshot.identities.as_slice()),
         )
         .map_err(|error| format!("failed to initialize execution orchestrator: {error}"))?;
+    if args.emit_profile.is_some() {
+        orchestrator.enable_profiling(ProfilingConfig::default());
+    }
     if let Some(state_db) = args.state_db.as_ref() {
         orchestrator.open_state_db(state_db).map_err(|error| {
             format!(
@@ -6611,6 +6792,7 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
                 parser_max_token_count: args.parser_max_token_count,
                 limits: args.limits,
                 commonjs_entry: args.commonjs_entry,
+                profile_execution: args.emit_profile.is_some(),
                 emit_evidence_trust: args.emit_evidence_trust.as_deref(),
                 package: &package,
                 source_label: &source_label,
@@ -6624,23 +6806,29 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
                 data_contract_ingress: data_contract_ingress.as_ref(),
                 agent_sandbox_manifest: None,
             };
-            if let Some(rejection) = lowering_rejection(&error) {
-                return emit_lowering_rejection(
+            let emitted = if let Some(rejection) = lowering_rejection(&error) {
+                emit_lowering_rejection("run", &failed_ctx, &mut orchestrator, &error, rejection)
+            } else {
+                emit_orchestration_failure(
                     "run",
-                    &failed_ctx,
-                    &mut orchestrator,
+                    &args.input,
+                    args.out.as_deref(),
+                    &orchestrator,
                     &error,
-                    rejection,
-                );
+                    Some(&failed_ctx),
+                )
+            };
+            if emitted.is_ok() {
+                emit_run_profile(
+                    args.emit_profile.as_deref(),
+                    &orchestrator,
+                    &args.extension_id,
+                    &source_label,
+                    orchestrator.last_failed_trace_id(),
+                    false,
+                )?;
             }
-            return emit_orchestration_failure(
-                "run",
-                &args.input,
-                args.out.as_deref(),
-                &orchestrator,
-                &error,
-                Some(&failed_ctx),
-            );
+            return emitted;
         }
     };
     // Authenticate the exact emitted entries against the composition root's
@@ -6694,6 +6882,14 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
     if let Some(path) = args.emit_guardplane_latency.as_ref() {
         write_json_file(path, &result.export_guardplane_latency_report(&policy_id))?;
     }
+    emit_run_profile(
+        args.emit_profile.as_deref(),
+        &orchestrator,
+        &args.extension_id,
+        &source_label,
+        Some(&result.trace_id),
+        true,
+    )?;
     let explain_bundle_path = resolve_run_explain_path(&args);
 
     let explain_bundle_path_string = explain_bundle_path
@@ -6770,6 +6966,7 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         parser_max_token_count: args.parser_max_token_count,
         limits: args.limits,
         commonjs_entry: args.commonjs_entry,
+        profile_execution: args.emit_profile.is_some(),
         module_root,
         imported_module_hashes: result.imported_module_hashes.clone(),
         module_hashes_exact: true,
@@ -6836,6 +7033,481 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
     print_json(&output)?;
 
     Ok(0)
+}
+
+fn emit_run_profile(
+    path: Option<&Path>,
+    orchestrator: &ExecutionOrchestrator,
+    extension_id: &str,
+    source_label: &str,
+    trace_id: Option<&str>,
+    completed: bool,
+) -> Result<(), String> {
+    let Some(path) = path else {
+        return Ok(());
+    };
+    let profiler = orchestrator
+        .profiling_data()
+        .ok_or_else(|| "requested execution profile was not collected".to_string())?;
+    write_json_file(
+        path,
+        &RunProfileOutput {
+            schema_version: "franken-engine.runtime-profile.v1",
+            execution_tier: "canonical_tier_r",
+            execution_status: if completed { "completed" } else { "failed" },
+            extension_id,
+            trace_id,
+            profile: profiler.generate_report(source_label.to_string()),
+        },
+    )
+}
+
+#[cfg(test)]
+mod run_profile_tests {
+    use super::*;
+
+    struct Fixture {
+        directory: PathBuf,
+        report: PathBuf,
+        profile: PathBuf,
+        trust: PathBuf,
+        args: RunArgs,
+    }
+
+    fn fixture(source: &str, goal: &str) -> Fixture {
+        let directory = std::env::temp_dir().join(format!(
+            "frankenctl-profile-{}-{}",
+            std::process::id(),
+            current_unix_ns()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let input = directory.join("program.js");
+        let report = directory.join("run.json");
+        let profile = directory.join("profile.json");
+        let trust = directory.join("trust.json");
+        fs::write(&input, source).unwrap();
+        let CommandSpec::Run(args) = parse_run_command(&[
+            "--input".to_string(),
+            input.display().to_string(),
+            "--extension-id".to_string(),
+            "profile-cli-test".to_string(),
+            "--goal".to_string(),
+            goal.to_string(),
+            "--out".to_string(),
+            report.display().to_string(),
+            "--emit-profile".to_string(),
+            profile.display().to_string(),
+            "--emit-evidence-trust".to_string(),
+            trust.display().to_string(),
+        ])
+        .unwrap() else {
+            panic!("run arguments must parse");
+        };
+        Fixture {
+            directory,
+            report,
+            profile,
+            trust,
+            args: *args,
+        }
+    }
+
+    fn replay_args(fixture: &Fixture) -> ReplayArgs {
+        let trust: EvidenceTrustSnapshot = load_json_file(&fixture.trust).unwrap();
+        ReplayArgs {
+            trace: fixture.report.clone(),
+            compare_trace: None,
+            mode: ReplayMode::Strict,
+            out: Some(fixture.directory.join("replay.json")),
+            fleet_trace: None,
+            evidence_trust: Some(ReplayEvidenceTrustArgs {
+                snapshot: fixture.trust.clone(),
+                expected_digest: trust.canonical_digest().unwrap().to_hex(),
+            }),
+            witness_trust: None,
+        }
+    }
+
+    fn assert_mode_is_authenticated(fixture: &Fixture, mut report: serde_json::Value) {
+        report["replay_input"]["profile_execution"] = false.into();
+        let tampered = fixture.directory.join("changed-dispatch-mode.json");
+        write_json_file(&tampered, &report).unwrap();
+        let mut replay = replay_args(fixture);
+        replay.trace = tampered;
+        let error = execute_replay(replay).expect_err("dispatch mode must be authenticated");
+        assert!(error.contains("signed replay input rejected"), "{error}");
+    }
+
+    #[test]
+    fn run_profile_exports_real_counts_and_replays_all_entry_modes() {
+        for goal in ["script", "module", "commonjs"] {
+            let fixture = fixture(
+                "const items = [1, 2, 3]; const o = {offset: 4}; let total = 0; for (let i = 0; i < 3; i++) total += items[i]; console.log(total + o.offset);",
+                goal,
+            );
+            assert_eq!(execute_run(fixture.args.clone()).unwrap(), 0);
+            let report: serde_json::Value = load_json_file(&fixture.report).unwrap();
+            let profile: serde_json::Value = load_json_file(&fixture.profile).unwrap();
+            assert_eq!(report["console_output"][0]["message"], "10");
+            assert_eq!(report["replay_input"]["profile_execution"], true);
+            assert_eq!(
+                profile["schema_version"],
+                "franken-engine.runtime-profile.v1"
+            );
+            assert_eq!(profile["execution_tier"], "canonical_tier_r");
+            assert_eq!(profile["execution_status"], "completed");
+            assert_eq!(profile["trace_id"], report["trace_id"]);
+            assert!(
+                profile["profile"]["instruction_stats"]["GetProperty"]["count"]
+                    .as_u64()
+                    .unwrap()
+                    >= 3
+            );
+            assert!(
+                profile["profile"]["memory_stats"]["arrays_allocated"]
+                    .as_u64()
+                    .unwrap()
+                    >= 1
+            );
+            assert!(
+                profile["profile"]["memory_stats"]["objects_allocated"]
+                    .as_u64()
+                    .unwrap()
+                    >= 1
+            );
+            assert!(report.get("profile").is_none());
+            assert!(
+                report["replay_input"]
+                    .get("total_execution_time_ns")
+                    .is_none()
+            );
+            let telemetry = fs::read(&fixture.profile).unwrap();
+            assert_eq!(execute_replay(replay_args(&fixture)).unwrap(), 0);
+            assert_eq!(fs::read(&fixture.profile).unwrap(), telemetry);
+            assert_mode_is_authenticated(&fixture, report);
+        }
+    }
+
+    #[test]
+    fn run_profile_retains_failed_prefix_and_its_authenticated_replay_mode() {
+        let mut fixture = fixture("let n = 0; while (true) { n++; }", "script");
+        fixture.args.instruction_budget = Some(40);
+        assert_eq!(execute_run(fixture.args.clone()).unwrap(), 2);
+        let report: serde_json::Value = load_json_file(&fixture.report).unwrap();
+        let profile: serde_json::Value = load_json_file(&fixture.profile).unwrap();
+        assert_eq!(profile["execution_status"], "failed");
+        assert_eq!(profile["trace_id"], report["trace_id"]);
+        assert_eq!(report["replay_input"]["profile_execution"], true);
+        assert!(
+            profile["profile"]["instruction_stats"]
+                .as_object()
+                .unwrap()
+                .values()
+                .any(|stats| stats["count"].as_u64().unwrap() > 0)
+        );
+        assert_eq!(execute_replay(replay_args(&fixture)).unwrap(), 0);
+        assert_mode_is_authenticated(&fixture, report);
+    }
+
+    #[test]
+    fn run_profile_is_opt_in_and_unprofiled_signed_inputs_keep_the_old_shape() {
+        let mut fixture = fixture("console.log(7);", "script");
+        fixture.args.emit_profile = None;
+        assert_eq!(execute_run(fixture.args.clone()).unwrap(), 0);
+        assert!(!fixture.profile.exists());
+        let report: serde_json::Value = load_json_file(&fixture.report).unwrap();
+        assert!(report["replay_input"].get("profile_execution").is_none());
+        assert_eq!(execute_replay(replay_args(&fixture)).unwrap(), 0);
+        let mut incomplete = vec![
+            "--input".to_string(),
+            "program.js".to_string(),
+            "--extension-id".to_string(),
+            "profile-cli-test".to_string(),
+        ];
+        let CommandSpec::Run(defaults) = parse_run_command(&incomplete).unwrap() else {
+            panic!("default run");
+        };
+        assert!(defaults.emit_profile.is_none());
+        incomplete.push("--emit-profile".to_string());
+        assert!(parse_run_command(&incomplete).is_err());
+    }
+
+    fn assert_profile_collision(args: RunArgs, flag: &str) {
+        let error = execute_run(args).expect_err("profile path must be rejected before execution");
+        assert!(error.contains("--emit-profile destination"), "{error}");
+        assert!(
+            error.contains(&format!("conflicts with {flag} path")),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn run_profile_refuses_report_collision_before_success_or_failure_changes_state() {
+        for source in [
+            "console.log('guest ran');",
+            "console.log('guest ran'); throw new Error('guest failure');",
+        ] {
+            let mut fixture = fixture(source, "script");
+            let state = fixture.directory.join("unopened-state.db");
+            fixture.args.state_db = Some(state.clone());
+            fixture.args.emit_profile = Some(fixture.report.clone());
+            fs::write(&fixture.report, b"previous signed report").unwrap();
+            fs::write(&fixture.trust, b"previous public trust").unwrap();
+
+            assert_profile_collision(fixture.args, "--out");
+
+            assert_eq!(
+                fs::read(&fixture.report).unwrap(),
+                b"previous signed report"
+            );
+            assert_eq!(fs::read(&fixture.trust).unwrap(), b"previous public trust");
+            assert!(
+                !state.exists(),
+                "validation must precede opening the state store"
+            );
+            assert!(!fixture.profile.exists());
+        }
+    }
+
+    #[test]
+    fn run_profile_preserves_other_outputs_and_resolved_explain_destinations() {
+        for destination in [
+            "--emit-trace",
+            "--emit-guardplane-latency",
+            "--emit-evidence-trust",
+            "--explain-out",
+            "explain-from-report",
+            "explain-from-input",
+        ] {
+            let mut fixture = fixture("console.log('guest ran');", "script");
+            let explicit = fixture.directory.join("protected-output.json");
+            let path = match destination {
+                "--emit-trace" => {
+                    fixture.args.emit_trace = Some(explicit.clone());
+                    explicit
+                }
+                "--emit-guardplane-latency" => {
+                    fixture.args.emit_guardplane_latency = Some(explicit.clone());
+                    explicit
+                }
+                "--emit-evidence-trust" => fixture.trust.clone(),
+                "--explain-out" => {
+                    fixture.args.explain = true;
+                    fixture.args.explain_out = Some(explicit.clone());
+                    explicit
+                }
+                "explain-from-report" => {
+                    fixture.args.explain = true;
+                    fixture.report.with_extension("explain.json")
+                }
+                "explain-from-input" => {
+                    fixture.args.explain = true;
+                    fixture.args.out = None;
+                    fixture.args.input.with_extension("explain.json")
+                }
+                _ => unreachable!(),
+            };
+            let input = fs::read(&fixture.args.input).unwrap();
+            fs::write(&path, b"existing authenticated artifact").unwrap();
+            fixture.args.emit_profile = Some(path.clone());
+            let flag = if destination.contains("explain") {
+                "--explain"
+            } else {
+                destination
+            };
+
+            assert_profile_collision(fixture.args.clone(), flag);
+
+            assert_eq!(fs::read(&path).unwrap(), b"existing authenticated artifact");
+            assert_eq!(fs::read(&fixture.args.input).unwrap(), input);
+            assert!(!fixture.report.exists());
+            assert!(!fixture.profile.exists());
+        }
+    }
+
+    #[test]
+    fn run_profile_preserves_configured_inputs_before_loading_them() {
+        for flag in [
+            "--input",
+            "--data-contract",
+            "--witness",
+            "--state-db",
+            "--evidence-key-file",
+            "--trust-snapshot",
+            "--witness-trust-root",
+        ] {
+            let mut fixture = fixture("console.log('guest ran');", "script");
+            let path = fixture.directory.join("protected-input");
+            match flag {
+                "--input" => fixture.args.input = path.clone(),
+                "--data-contract" => fixture.args.data_contract = Some(path.clone()),
+                "--witness" => fixture.args.witness = Some(path.clone()),
+                "--state-db" => fixture.args.state_db = Some(path.clone()),
+                "--evidence-key-file" | "--trust-snapshot" => {
+                    fixture.args.evidence_authority = Some(RunEvidenceAuthorityArgs {
+                        key_file: if flag == "--evidence-key-file" {
+                            path.clone()
+                        } else {
+                            fixture.directory.join("unread-private-key")
+                        },
+                        producer_id: "profile-collision-test".to_string(),
+                        trust: ReplayEvidenceTrustArgs {
+                            snapshot: if flag == "--trust-snapshot" {
+                                path.clone()
+                            } else {
+                                fixture.directory.join("unread-trust-snapshot")
+                            },
+                            expected_digest: "0".repeat(64),
+                        },
+                    });
+                }
+                "--witness-trust-root" => {
+                    fixture.args.witness_trust = Some(WitnessTrustArgs {
+                        root: path.clone(),
+                        expected_digest: "0".repeat(64),
+                        epoch: 1,
+                    });
+                }
+                _ => unreachable!(),
+            }
+            // Deliberately invalid as source, JSON, a key, or a state database:
+            // the collision must be reported before any consumer opens it.
+            fs::write(&path, b"preserve these input bytes").unwrap();
+            fixture.args.emit_profile = Some(path.clone());
+
+            assert_profile_collision(fixture.args, flag);
+
+            assert_eq!(fs::read(&path).unwrap(), b"preserve these input bytes");
+            assert!(!fixture.report.exists());
+            assert!(!fixture.trust.exists());
+            assert!(!fixture.profile.exists());
+        }
+    }
+
+    #[test]
+    fn run_profile_preserves_each_certificate_bundle_file() {
+        use frankenengine_engine::non_use_certificate::{
+            AUDIT_FILE, CAPABILITY_TRACE_FILE, DECLASSIFICATION_RECEIPTS_FILE,
+            NON_USE_CERTIFICATE_FILE, REPRO_LOCK_FILE, USE_CERTIFICATE_FILE,
+        };
+
+        for name in [
+            NON_USE_CERTIFICATE_FILE,
+            USE_CERTIFICATE_FILE,
+            DECLASSIFICATION_RECEIPTS_FILE,
+            CAPABILITY_TRACE_FILE,
+            REPRO_LOCK_FILE,
+            AUDIT_FILE,
+        ] {
+            let mut fixture = fixture("console.log('guest ran');", "script");
+            let directory = fixture.directory.join("certificates");
+            fs::create_dir_all(&directory).unwrap();
+            let path = directory.join(name);
+            fs::write(&path, b"previous certificate bundle member").unwrap();
+            fixture.args.certificate_out = Some(directory.clone());
+            fixture.args.data_contract = Some(fixture.directory.join("unread-contract.json"));
+            fixture.args.emit_profile = Some(path.clone());
+
+            assert_profile_collision(fixture.args.clone(), "--certificate-out");
+
+            assert_eq!(
+                fs::read(&path).unwrap(),
+                b"previous certificate bundle member"
+            );
+            assert!(!fixture.report.exists());
+            fixture.args.emit_profile = Some(directory.join("profile.json"));
+            validate_run_profile_path(&fixture.args).unwrap();
+        }
+    }
+
+    #[test]
+    fn run_profile_resolves_relative_parent_aliases_without_creating_directories() {
+        let mut fixture = fixture("console.log('guest ran');", "script");
+        let relative = PathBuf::from("target").join(fixture.directory.file_name().unwrap());
+        assert!(!relative.exists());
+        fixture.args.out = Some(env::current_dir().unwrap().join(&relative).join("run.json"));
+        fixture.args.emit_profile = Some(relative.join("missing").join("..").join("run.json"));
+
+        assert_profile_collision(fixture.args.clone(), "--out");
+
+        assert!(!relative.exists());
+        assert!(!fixture.trust.exists());
+        fixture.args.emit_profile = Some(relative.join("missing").join("profile.json"));
+        validate_run_profile_path(&fixture.args).unwrap();
+        assert!(!relative.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_profile_resolves_symlink_parents_dangling_links_and_hard_links() {
+        use std::os::unix::fs::symlink;
+
+        for alias in ["file-link", "parent-link", "dangling-link", "hard-link"] {
+            let mut fixture = fixture("console.log('guest ran');", "script");
+            let destination = fixture.directory.join("profile-alias");
+            if alias != "dangling-link" {
+                fs::write(&fixture.report, b"preserved report bytes").unwrap();
+            }
+            match alias {
+                "file-link" | "dangling-link" => {
+                    symlink("run.json", &destination).unwrap();
+                    fixture.args.emit_profile = Some(destination);
+                }
+                "parent-link" => {
+                    symlink(&fixture.directory, &destination).unwrap();
+                    fixture.args.emit_profile = Some(destination.join("run.json"));
+                }
+                "hard-link" => {
+                    fs::hard_link(&fixture.report, &destination).unwrap();
+                    fixture.args.emit_profile = Some(destination);
+                }
+                _ => unreachable!(),
+            }
+
+            assert_profile_collision(fixture.args, "--out");
+
+            if alias == "dangling-link" {
+                assert!(!fixture.report.exists());
+            } else {
+                assert_eq!(
+                    fs::read(&fixture.report).unwrap(),
+                    b"preserved report bytes"
+                );
+            }
+            assert!(!fixture.trust.exists());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_profile_resolves_symlinks_before_parent_components_and_rejects_cycles() {
+        use std::os::unix::fs::symlink;
+
+        let mut fixture = fixture("console.log('guest ran');", "script");
+        let real_parent = fixture.directory.join("actual");
+        fs::create_dir_all(real_parent.join("child")).unwrap();
+        let alias = fixture.directory.join("alias");
+        symlink("actual/child", &alias).unwrap();
+        fixture.args.out = Some(real_parent.join("run.json"));
+        fixture.args.emit_profile = Some(alias.join("..").join("run.json"));
+        assert_profile_collision(fixture.args.clone(), "--out");
+        assert!(!real_parent.join("run.json").exists());
+
+        // Lexically collapsing `alias/..` first would falsely identify this
+        // distinct report destination as the telemetry file.
+        fixture.args.out = Some(fixture.report.clone());
+        validate_run_profile_path(&fixture.args).unwrap();
+
+        let cycle = fixture.directory.join("cycle");
+        symlink("cycle", &cycle).unwrap();
+        fixture.args.emit_profile = Some(cycle);
+        let error = execute_run(fixture.args.clone()).unwrap_err();
+        assert!(error.contains("too many symbolic links"), "{error}");
+        assert!(!fixture.report.exists());
+        assert!(!fixture.trust.exists());
+        fixture.args.emit_profile = None;
+        validate_run_profile_path(&fixture.args).unwrap();
+    }
 }
 
 fn load_and_bind_data_contract(
@@ -7093,6 +7765,7 @@ fn execute_agent_sandbox(args: AgentSandboxArgs) -> Result<i32, String> {
                 parser_max_token_count: None,
                 limits: args.limits,
                 commonjs_entry: false,
+                profile_execution: false,
                 emit_evidence_trust: args.emit_evidence_trust.as_deref(),
                 package: &package,
                 source_label: &source_label,
@@ -7205,6 +7878,7 @@ fn execute_agent_sandbox(args: AgentSandboxArgs) -> Result<i32, String> {
         parser_max_token_count: None,
         limits: args.limits,
         commonjs_entry: false,
+        profile_execution: false,
         module_root: package.module_root.clone(),
         imported_module_hashes: result.imported_module_hashes.clone(),
         module_hashes_exact: true,
@@ -9075,6 +9749,7 @@ struct FailedRunEmitContext<'a> {
     parser_max_token_count: Option<u64>,
     limits: ExecutionLimitOverrides,
     commonjs_entry: bool,
+    profile_execution: bool,
     emit_evidence_trust: Option<&'a Path>,
     package: &'a ExtensionPackage,
     source_label: &'a str,
@@ -9257,6 +9932,7 @@ fn emit_orchestration_failure(
                     parser_max_token_count: ctx.parser_max_token_count,
                     limits: ctx.limits,
                     commonjs_entry: ctx.commonjs_entry,
+                    profile_execution: ctx.profile_execution,
                     module_root: ctx.package.module_root.clone(),
                     denied_capability,
                     capabilities: Some(ctx.package.capabilities.clone()),
@@ -12045,6 +12721,9 @@ fn execute_run_report_replay(args: ReplayArgs) -> Result<i32, String> {
         evidence_authority,
     )
     .map_err(|error| format!("failed to initialize replay execution orchestrator: {error}"))?;
+    if input.profile_execution {
+        orchestrator.enable_profiling(ProfilingConfig::default());
+    }
     if let Some(witness) = input.capability_witness.as_ref() {
         orchestrator.set_capability_witness(witness.clone());
     }
@@ -12452,6 +13131,9 @@ fn execute_failed_run_report_replay(
     .map_err(|error| format!("failed to initialize replay execution orchestrator: {error}"))?;
     if let Some(witness) = input.capability_witness.as_ref() {
         orchestrator.set_capability_witness(witness.clone());
+    }
+    if input.profile_execution {
+        orchestrator.enable_profiling(ProfilingConfig::default());
     }
     if let Some(trust_root) = witness_trust {
         orchestrator.set_capability_witness_trust_root(trust_root);
@@ -17089,6 +17771,7 @@ fn usage() -> String {
         "  frankenctl run --input <source.js> --extension-id <id> [--goal script|module] [--out <report.json>]",
         "      [--data-contract <contract.json>] [--purpose <purpose>] [--certificate-out <bundle-dir>]",
         "      [--explain [bundle.json]] [--explain-out <bundle.json>]",
+        "      [--emit-profile <profile.json>]",
         "  frankenctl evidence init --producer-id <id> --key-out <private.seed> --trust-out <public.json> [--epoch <u64>]",
         "  frankenctl agent-sandbox --manifest <manifest.json> --input <generated.js> [--goal script|module]",
         "      [--data-contract <contract.json>] [--purpose <purpose>] [--certificate-out <bundle-dir>] [--out <report.json>]",
@@ -17405,6 +18088,7 @@ fn run_usage() -> String {
         "      [--data-contract <contract.json>] [--purpose <purpose>] [--certificate-out <bundle-dir>]",
         "      [--explain [bundle.json]] [--explain-out <bundle.json>]",
         "      [--emit-trace <trace.json>] [--emit-guardplane-latency <latency.json>]",
+        "      [--emit-profile <profile.json>]",
         "      [--clock-epoch <ms|now>] [--cell-close-budget-ms <n>]",
         "      [--emit-evidence-trust <public-trust.json>]",
         "      [--evidence-key-file <private.seed> --evidence-producer-id <id>",
@@ -17434,6 +18118,13 @@ fn run_usage() -> String {
         "  --emit-trace writes the run's recorded nondeterminism trace — the",
         "  exact input `frankenctl replay debug --trace` consumes, enabling",
         "  end-to-end interpreter-state inspection with `--input <source>`.",
+        "",
+        "  --emit-profile writes unsigned opcode counts, handler timing samples,",
+        "  hotspots, and object/array allocation counters to a separate JSON file.",
+        "  It selects canonical Tier R and includes instrumentation overhead;",
+        "  these timings do not measure compact Tier-I performance. The signed",
+        "  replay input retains the dispatch choice, but never the timing data.",
+        "  Verified interpreter failures also export their collected prefix.",
         "",
         "  --emit-evidence-trust exports only the run signer's public runtime",
         "  trust snapshot; the report prints its evidence_trust_snapshot_digest.",

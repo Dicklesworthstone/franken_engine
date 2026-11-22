@@ -15,6 +15,8 @@ on:
       - 'rust-toolchain.toml'
       - 'crates/franken-engine/src/checkpoint.rs'
       - 'crates/franken-engine/src/execution_orchestrator.rs'
+      - 'crates/franken-engine/src/profiling.rs'
+      - 'crates/franken-engine/src/profiling/**'
       - 'crates/franken-engine/src/containment_executor.rs'
       - 'crates/franken-engine/src/module_resolver.rs'
       - 'crates/franken-engine/src/guardplane_adapter.rs'
@@ -22,6 +24,7 @@ on:
       - 'crates/franken-engine/src/bin/franken_shipped_path_parity.rs'
       - 'crates/franken-engine/tests/orchestrator_execution_budgets.rs'
       - 'crates/franken-engine/tests/execution_orchestrator.rs'
+      - 'crates/franken-engine/tests/orchestrator_profiling.rs'
       - 'crates/franken-engine/tests/execution_resolved_entry.rs'
       - 'crates/franken-engine/tests/runtime_module_resolver_execution.rs'
       - 'crates/franken-engine/tests/guardplane_adapter_integration.rs'
@@ -727,6 +730,16 @@ jobs:
           done
           cargo test --locked -j1 -p frankenengine-engine --no-default-features \
             --test baseline_interpreter_refactor_coverage -- --nocapture --test-threads=1
+      - name: Execute orchestrator profiling regressions
+        if: always()
+        run: |
+          cargo test --locked -j1 -p frankenengine-engine --no-default-features \
+            --test orchestrator_profiling -- --nocapture --test-threads=1
+      - name: Execute CLI profiling and authenticated replay regressions
+        if: always()
+        run: |
+          cargo test --locked -j1 -p frankenengine-engine --no-default-features \
+            --bin frankenctl run_profile_ -- --nocapture --test-threads=1
       - name: Execute JSX and TSX parser tests
         if: always()
         run: |

@@ -6938,9 +6938,13 @@ impl InterpreterCore {
         self.mutate_heap(|h| h.push(object));
         self.estimated_memory_bytes = requested_bytes;
 
-        // Record object allocation profiling
+        // Classify each admitted allocation once, including its bytes.
         if let Some(profiler) = &mut self.profiling_data {
-            profiler.record_object_allocation(object_size);
+            if is_array {
+                profiler.record_array_allocation(object_size);
+            } else {
+                profiler.record_object_allocation(object_size);
+            }
         }
 
         Ok(id)

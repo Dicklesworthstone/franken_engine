@@ -67,3 +67,97 @@ fn a_read_only_last_index_makes_its_writes_throw() {
         "TypeError,TypeError,TypeError,TypeError,ok,TypeError"
     );
 }
+
+/// RegExpBuiltinExec maps a UTF-16 lastIndex to its containing character.
+/// In u/v mode the trailing surrogate therefore starts at the same scalar
+/// as the leading surrogate; code-unit mode still matches the trailing half.
+#[test]
+fn unicode_exec_starts_at_the_character_containing_last_index() {
+    let source = r#"
+        const text = 'é😀\u{10000}z';
+        const out = [];
+        for (const flags of ['g', 'y', 'gu', 'uy', 'guy', 'gv', 'vy']) {
+            const re = new RegExp('.', flags);
+            re.lastIndex = 2;
+            const match = re.exec(text);
+            out.push(flags + ':' + match[0].codePointAt(0) + ':' + match.index + ':' + re.lastIndex);
+        }
+        const indexed = /(.)/dgu;
+        indexed.lastIndex = 4;
+        const match = indexed.exec(text);
+        out.push(match[0].codePointAt(0), match.index, indexed.lastIndex,
+                 match.indices[0].join('-'), match.indices[1].join('-'));
+        out.join(',');
+    "#;
+    let value = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .value;
+    assert_eq!(
+        value,
+        "g:56832:2:3,y:56832:2:3,gu:128512:1:3,uy:128512:1:3,guy:128512:1:3,gv:128512:1:3,vy:128512:1:3,65536,3,5,3-5,3-5"
+    );
+}
+
+#[test]
+fn unicode_test_match_replace_and_match_all_share_surrogate_start_semantics() {
+    let source = r#"
+        const text = 'A😀B';
+        const out = [];
+        const tested = /./uy;
+        tested.lastIndex = 2;
+        out.push(tested.test(text), tested.lastIndex);
+        const matched = /./uy;
+        matched.lastIndex = 2;
+        const match = text.match(matched);
+        out.push(match[0].codePointAt(0), match.index, matched.lastIndex);
+        const replaced = /./uy;
+        replaced.lastIndex = 2;
+        out.push(text.replace(replaced, function (value, index) {
+            out.push(value.codePointAt(0), index);
+            return 'X';
+        }), replaced.lastIndex);
+        const all = /./ug;
+        all.lastIndex = 2;
+        out.push(Array.from(text.matchAll(all), function (m) {
+            return m[0].codePointAt(0) + ':' + m.index;
+        }).join('|'), all.lastIndex);
+        out.join(',');
+    "#;
+    let value = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .value;
+    assert_eq!(value, "true,3,128512,1,3,128512,1,AXB,3,128512:1|66:3,2");
+}
+
+#[test]
+fn unicode_surrogate_starts_preserve_empty_matches_and_failure_boundaries() {
+    let source = r#"
+        const text = 'A😀B';
+        const out = [];
+        const empty = /(?:)/uy;
+        empty.lastIndex = 2;
+        out.push(empty.exec(text).index, empty.lastIndex);
+        const searched = /B/ug;
+        searched.lastIndex = 2;
+        out.push(searched.exec(text).index, searched.lastIndex);
+        const sticky = /B/uy;
+        sticky.lastIndex = 2;
+        out.push(sticky.exec(text) === null, sticky.lastIndex);
+        const end = /$/uy;
+        end.lastIndex = text.length;
+        out.push(end.exec(text).index, end.lastIndex);
+        end.lastIndex = text.length + 1;
+        out.push(end.exec(text) === null, end.lastIndex);
+        const lone = /./uy;
+        lone.lastIndex = 1;
+        out.push(lone.exec('\uD800x').index, lone.lastIndex);
+        out.join(',');
+    "#;
+    let value = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .value;
+    assert_eq!(value, "1,1,3,4,true,0,4,4,true,0,1,2");
+}

@@ -137,14 +137,20 @@ impl<'a> RegExpInput<'a> {
         }
         let mut units = 0usize;
         for (offset, character) in self.text.char_indices() {
-            if units >= index {
-                return offset;
-            }
-            units += if self.full_unicode {
+            let width = if self.full_unicode {
                 character.len_utf16()
             } else {
                 1
             };
+            // RegExpBuiltinExec maps lastIndex to the character obtained
+            // from that UTF-16 code unit. In Unicode mode both halves of a
+            // surrogate pair name the same character: an interior offset
+            // must start at its leading byte, not skip to the next scalar.
+            // Non-Unicode input encodes each code unit separately.
+            if index < units + width {
+                return offset;
+            }
+            units += width;
         }
         self.text.len()
     }
@@ -574,6 +580,27 @@ mod tests {
                 Cow::Borrowed(_)
             ));
         }
+    }
+
+    #[test]
+    fn unicode_start_offsets_select_the_character_containing_the_code_unit() {
+        let text = JsString::from("a😀\u{10000}b");
+        let unicode = RegExpInput::new(&text, true);
+        let expected_bytes = [0, 1, 1, 5, 5, 9, 10];
+        let expected_units = [0, 1, 1, 3, 3, 5, 6];
+        for (index, (&byte, &unit)) in expected_bytes.iter().zip(&expected_units).enumerate() {
+            assert_eq!(unicode.byte_index(index), byte, "start code unit {index}");
+            assert_eq!(unicode.unit_index(byte), unit, "match code unit {index}");
+        }
+        assert_eq!(unicode.byte_index(usize::MAX), text.len());
+
+        // Without u/v, even the trailing half remains independently addressable.
+        let code_units = RegExpInput::new(&text, false);
+        for index in 0..=text.utf16_len() {
+            assert_eq!(code_units.unit_index(code_units.byte_index(index)), index);
+        }
+        let empty = JsString::from("");
+        assert_eq!(RegExpInput::new(&empty, true).byte_index(0), 0);
     }
 
     #[test]

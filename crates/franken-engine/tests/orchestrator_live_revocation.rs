@@ -7,12 +7,29 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use frankenengine_engine::baseline_interpreter::{InterpreterError, LaneChoice};
+use frankenengine_engine::capability_token::PrincipalId;
+use frankenengine_engine::capability_witness::{
+    CapabilityWitness, CapabilityWitnessTrustRoot, LifecycleState, PromotionTheoremInput, ProofKind,
+    ProofObligation, SourceCapabilitySet, WitnessBuilder,
+};
+use frankenengine_engine::checkpoint::CancellationToken;
+use frankenengine_engine::engine_object_id::{EngineObjectId, ObjectDomain, SchemaId, derive_id};
 use frankenengine_engine::execution_cell::{CellError, CellExecutionError};
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExecutionWorkPool, ExtensionPackage, OrchestratorConfig,
     OrchestratorError, WorkBudgetError,
 };
+use frankenengine_engine::hash_tiers::ContentHash;
+use frankenengine_engine::policy_checkpoint::DeterministicTimestamp;
+use frankenengine_engine::policy_theorem_compiler::Capability;
+use frankenengine_engine::revocation_chain::{
+    Revocation, RevocationChain, RevocationReason, RevocationTargetType, revocation_schema_id,
+};
 use frankenengine_engine::runtime_config::RuntimeConfig;
+use frankenengine_engine::security_epoch::SecurityEpoch;
+use frankenengine_engine::signature_preimage::{
+    SIGNATURE_SENTINEL, Signature, SignaturePreimage, SigningKey, sign_preimage,
+};
 use frankenengine_extension_host::host_io::{
     HostIoCapability, HostIoError, HostIoExceptionProvenance, HostIoOutcome, HostIoProvider,
     HostIoRecorder, HostIoRequest, InMemoryHostIoTranscript, SandboxedHostIo,
@@ -450,5 +467,508 @@ fn work_scope_revocation_interrupts_inflight_network_and_preserves_shared_provid
         assert!(
             matches!(&entries[0].1, Ok(frankenengine_extension_host::host_io::HostIoResponse::NetworkRequest { response }) if response.ends_with(b"\r\n\r\nok"))
         );
+    }
+}
+
+const LIVE_WITNESS_ZONE: &str = "orchestrator-live-witness";
+
+fn witness_filesystem_package(source: &str) -> ExtensionPackage {
+    let mut work = filesystem_package(source);
+    // The native fs facade itself is an engine builtin.
+    work.capabilities.push("builtin".to_string());
+    work
+}
+
+/// A signed fixture for this test's explicit filesystem capability model.
+/// These theorem inputs are test data, not a production shadow-validation claim.
+fn active_live_witness(source: &str) -> (CapabilityWitness, CapabilityWitnessTrustRoot) {
+    let key = SigningKey::from_bytes([0x71; 32]).unwrap();
+    let schema = SchemaId::from_definition(b"live-witness-test-v1");
+    let extension_id = derive_id(
+        ObjectDomain::Attestation,
+        LIVE_WITNESS_ZONE,
+        &schema,
+        b"host-effects",
+    )
+    .unwrap();
+    let policy_id = derive_id(
+        ObjectDomain::Attestation,
+        LIVE_WITNESS_ZONE,
+        &schema,
+        b"filesystem-policy",
+    )
+    .unwrap();
+    let mut builder = WitnessBuilder::new(
+        extension_id,
+        policy_id,
+        SecurityEpoch::from_raw(1),
+        1_700_000_000_000_000,
+        key.clone(),
+    )
+    .meta(
+        "trusted_synthesizer_verification_key",
+        key.verification_key().to_hex(),
+    )
+    .meta("source_sha256", ContentHash::compute(source.as_bytes()).to_hex())
+    .meta("parse_goal", "script");
+    for tag in ["vm_dispatch", "heap_allocate", "fs_read", "fs_write", "builtin"] {
+        let capability = Capability::new(tag);
+        let proof_artifact_id = derive_id(
+            ObjectDomain::EvidenceRecord,
+            LIVE_WITNESS_ZONE,
+            &schema,
+            tag.as_bytes(),
+        )
+        .unwrap();
+        builder = builder.require(capability.clone()).proof(ProofObligation {
+            capability,
+            kind: ProofKind::StaticAnalysis,
+            proof_artifact_id,
+            justification: "explicit filesystem fixture capability model".to_string(),
+            artifact_hash: ContentHash::compute(tag.as_bytes()),
+        });
+    }
+    let mut witness = builder.build().unwrap();
+    let input = PromotionTheoremInput {
+        source_capability_sets: vec![SourceCapabilitySet {
+            source_id: "filesystem-fixture".to_string(),
+            capabilities: witness.required_capabilities.clone(),
+        }],
+        manifest_capabilities: witness.required_capabilities.clone(),
+        capability_lattice: BTreeMap::new(),
+        non_interference_dependencies: BTreeMap::new(),
+        custom_extensions: Vec::new(),
+    };
+    let report = witness
+        .evaluate_promotion_theorems_signed_by(&input, &key)
+        .unwrap();
+    assert!(report.all_passed);
+    witness.apply_promotion_theorem_report(&report).unwrap();
+    witness.transition_to(LifecycleState::Validated).unwrap();
+    witness.add_promotion_signature(&key).unwrap();
+    let root = CapabilityWitnessTrustRoot::single_authority(key.verification_key());
+    witness
+        .transition_to_with_trust_root(LifecycleState::Promoted, &root)
+        .unwrap();
+    witness
+        .transition_to_with_trust_root(LifecycleState::Active, &root)
+        .unwrap();
+    (witness, root)
+}
+
+fn live_revocation_authority() -> (Arc<Mutex<RevocationChain>>, SigningKey, SigningKey) {
+    let issuer = SigningKey::from_bytes([0x72; 32]).unwrap();
+    let head = SigningKey::from_bytes([0x73; 32]).unwrap();
+    let mut chain = RevocationChain::new(LIVE_WITNESS_ZONE)
+        .with_authorized_revocation_key(issuer.verification_key())
+        .with_authorized_head_key(head.verification_key());
+    chain.set_current_epoch(SecurityEpoch::from_raw(1)).unwrap();
+    (Arc::new(Mutex::new(chain)), issuer, head)
+}
+
+fn signed_live_revocation(
+    target_id: &EngineObjectId,
+    target_type: RevocationTargetType,
+    reason: RevocationReason,
+    issuer: &SigningKey,
+) -> Revocation {
+    let revocation_id = derive_id(
+        ObjectDomain::Revocation,
+        LIVE_WITNESS_ZONE,
+        &revocation_schema_id(),
+        target_id.as_bytes(),
+    )
+    .unwrap();
+    let mut revocation = Revocation {
+        revocation_id,
+        target_type,
+        target_id: target_id.clone(),
+        reason,
+        issued_by: PrincipalId::from_verification_key(&issuer.verification_key()),
+        issued_at: DeterministicTimestamp(1000),
+        zone: LIVE_WITNESS_ZONE.to_string(),
+        signature: Signature::from_bytes(SIGNATURE_SENTINEL),
+    };
+    revocation.signature = sign_preimage(issuer, &revocation.preimage_bytes()).unwrap();
+    revocation
+}
+
+#[derive(Debug)]
+struct AppendWitnessRevocationAfterWrite {
+    inner: SandboxedHostIo,
+    chain: Arc<Mutex<RevocationChain>>,
+    revocation: Revocation,
+    head_key: SigningKey,
+    writes: Arc<AtomicUsize>,
+    accepted: Arc<AtomicUsize>,
+    rejected: Arc<AtomicUsize>,
+}
+
+impl HostIoProvider for AppendWitnessRevocationAfterWrite {
+    fn name(&self) -> &str {
+        "signed-witness-revocation-after-real-write"
+    }
+
+    fn filesystem_exception_provenance(&self) -> HostIoExceptionProvenance {
+        self.inner.filesystem_exception_provenance()
+    }
+
+    fn perform(&self, request: &HostIoRequest, granted: &[HostIoCapability]) -> HostIoOutcome {
+        let outcome = self.inner.perform(request, granted);
+        if matches!(request, HostIoRequest::FsWrite { .. })
+            && outcome.is_ok()
+            && self.writes.fetch_add(1, Ordering::Relaxed) == 0
+        {
+            // The callback commits through the real authenticated chain. It
+            // has no cancellation token or work-pool revocation handle.
+            let appended = self.chain.lock().unwrap().append(
+                self.revocation.clone(),
+                &self.head_key,
+                "native-host-callback",
+            );
+            if appended.is_ok() {
+                self.accepted.fetch_add(1, Ordering::Relaxed);
+            } else {
+                self.rejected.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        outcome
+    }
+}
+
+#[test]
+fn signed_witness_revocation_during_host_effect_stops_execution_and_reinstallation() {
+    let source = "require('fs').writeFileSync('first.txt', 'committed'); \
+                  require('fs').writeFileSync('second.txt', 'forbidden');";
+    for lane in [Some(LaneChoice::QuickJs), Some(LaneChoice::V8), None] {
+        for (extension_target, reason) in [
+            (false, RevocationReason::Compromised),
+            (false, RevocationReason::Superseded),
+            (true, RevocationReason::PolicyViolation),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let pool = ExecutionWorkPool::new(8192);
+            let (witness, root) = active_live_witness(source);
+            let (chain, issuer, head_key) = live_revocation_authority();
+            let (target, target_type) = if extension_target {
+                (&witness.extension_id, RevocationTargetType::Extension)
+            } else {
+                (&witness.witness_id, RevocationTargetType::Attestation)
+            };
+            let revocation = signed_live_revocation(target, target_type, reason, &issuer);
+            let writes = Arc::new(AtomicUsize::new(0));
+            let accepted = Arc::new(AtomicUsize::new(0));
+            let rejected = Arc::new(AtomicUsize::new(0));
+            let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+            let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+            let caller = CancellationToken::new();
+            let mut runtime = orchestrator(&pool, lane);
+            runtime.set_capability_witness_trust_root(root);
+            runtime.set_capability_witness(witness.clone());
+            runtime
+                .bind_capability_witness_revocation(&mut chain.lock().unwrap())
+                .unwrap();
+            runtime.set_cancellation_token(caller.clone());
+            runtime.set_host_io(
+                Arc::new(AppendWitnessRevocationAfterWrite {
+                    inner: SandboxedHostIo::with_root(directory.path()).unwrap(),
+                    chain: Arc::clone(&chain),
+                    revocation,
+                    head_key,
+                    writes: Arc::clone(&writes),
+                    accepted: Arc::clone(&accepted),
+                    rejected: Arc::clone(&rejected),
+                }),
+                Some(recorder_dyn),
+            );
+
+            let work = witness_filesystem_package(source);
+            let error = runtime.execute(&work).unwrap_err();
+            assert_live_refusal(&error);
+            assert_eq!(accepted.load(Ordering::Relaxed), 1);
+            assert_eq!(rejected.load(Ordering::Relaxed), 0);
+            assert_eq!(writes.load(Ordering::Relaxed), 1);
+            assert_eq!(
+                std::fs::read(directory.path().join("first.txt")).unwrap(),
+                b"committed"
+            );
+            assert!(!directory.path().join("second.txt").exists());
+            assert!(!pool.is_revoked(), "witness authority does not revoke a tenant pool");
+            assert!(!caller.is_cancelled(), "witness authority does not cancel its caller");
+            assert_eq!(runtime.execution_count(), 0);
+            let history = recorder.entries();
+            assert_eq!(history.len(), 1);
+            assert_eq!(runtime.last_failed_host_effect_journal().len(), 1);
+
+            // Old authenticated artifacts and mutable supervisor tokens cannot
+            // restore the now-invalidated source-owned authority.
+            runtime.set_capability_witness(witness);
+            caller.reset();
+            let retry = runtime.execute(&work).unwrap_err();
+            assert!(matches!(
+                retry.primary_error(),
+                OrchestratorError::CapabilityWitnessRejected { detail }
+                    if detail.contains("revocation authority is invalidated")
+            ));
+            assert_eq!(writes.load(Ordering::Relaxed), 1);
+            assert_eq!(recorder.entries(), history);
+            assert!(!directory.path().join("second.txt").exists());
+        }
+    }
+}
+
+#[test]
+fn forged_or_unrelated_revocations_preserve_real_authorized_execution() {
+    let source = "require('fs').writeFileSync('first.txt', 'committed'); \
+                  require('fs').writeFileSync('second.txt', 'authorized');";
+    for lane in [Some(LaneChoice::QuickJs), Some(LaneChoice::V8), None] {
+        for forged in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let pool = ExecutionWorkPool::new(8192);
+            let (witness, root) = active_live_witness(source);
+            let (chain, issuer, head_key) = live_revocation_authority();
+            let target = if forged {
+                witness.witness_id.clone()
+            } else {
+                EngineObjectId([0x79; 32])
+            };
+            let mut revocation = signed_live_revocation(
+                &target,
+                RevocationTargetType::Attestation,
+                RevocationReason::Superseded,
+                &issuer,
+            );
+            if forged {
+                revocation.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
+            }
+            let writes = Arc::new(AtomicUsize::new(0));
+            let accepted = Arc::new(AtomicUsize::new(0));
+            let rejected = Arc::new(AtomicUsize::new(0));
+            let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+            let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+            let mut runtime = orchestrator(&pool, lane);
+            runtime.set_capability_witness_trust_root(root);
+            runtime.set_capability_witness(witness);
+            runtime
+                .bind_capability_witness_revocation(&mut chain.lock().unwrap())
+                .unwrap();
+            runtime.set_host_io(
+                Arc::new(AppendWitnessRevocationAfterWrite {
+                    inner: SandboxedHostIo::with_root(directory.path()).unwrap(),
+                    chain: Arc::clone(&chain),
+                    revocation,
+                    head_key,
+                    writes: Arc::clone(&writes),
+                    accepted: Arc::clone(&accepted),
+                    rejected: Arc::clone(&rejected),
+                }),
+                Some(recorder_dyn),
+            );
+            let result = runtime.execute(&witness_filesystem_package(source));
+            assert!(result.is_ok(), "valid authority must remain usable: {result:?}");
+            assert_eq!(accepted.load(Ordering::Relaxed), usize::from(!forged));
+            assert_eq!(rejected.load(Ordering::Relaxed), usize::from(forged));
+            assert_eq!(writes.load(Ordering::Relaxed), 2);
+            assert_eq!(
+                std::fs::read(directory.path().join("first.txt")).unwrap(),
+                b"committed"
+            );
+            assert_eq!(
+                std::fs::read(directory.path().join("second.txt")).unwrap(),
+                b"authorized"
+            );
+            assert_eq!(recorder.entries().len(), 2);
+            assert_eq!(runtime.execution_count(), 1);
+            assert!(!pool.is_revoked());
+        }
+    }
+}
+
+fn assert_witness_admission_refusal(
+    runtime: &mut ExecutionOrchestrator,
+    work: &ExtensionPackage,
+    expected: &str,
+) {
+    use frankenengine_engine::storage_adapter::{EventContext, StoreKind, StoreQuery};
+
+    let error = runtime.execute(work).unwrap_err();
+    assert!(matches!(
+        error.primary_error(),
+        OrchestratorError::CapabilityWitnessRejected { detail } if detail.contains(expected)
+    ), "expected {expected:?}, got {error:?}");
+    assert_eq!(runtime.execution_count(), 0);
+    assert!(runtime.last_failed_console_output().is_empty());
+    assert!(runtime.last_failed_host_effect_journal().is_empty());
+    let context = EventContext::new("revocation-read", "revocation-read", "revocation-read").unwrap();
+    assert!(
+        runtime
+            .storage_adapter_mut()
+            .query(StoreKind::PlasWitness, &StoreQuery::default(), &context)
+            .unwrap()
+            .is_empty(),
+        "revoked or mismatched authority must be refused before witness persistence"
+    );
+}
+
+#[test]
+fn witness_revocation_epoch_advance_and_source_loss_refuse_before_execution() {
+    for invalidation in ["already-revoked", "signed", "epoch", "dropped"] {
+        let pool = ExecutionWorkPool::new(8192);
+        let source = "1 + 2;";
+        let (witness, root) = active_live_witness(source);
+        let (chain, issuer, head) = live_revocation_authority();
+        if invalidation == "already-revoked" {
+            chain
+                .lock()
+                .unwrap()
+                .append(
+                    signed_live_revocation(
+                        &witness.witness_id,
+                        RevocationTargetType::Attestation,
+                        RevocationReason::Superseded,
+                        &issuer,
+                    ),
+                    &head,
+                    "before-binding",
+                )
+                .unwrap();
+        }
+        let mut runtime = orchestrator(&pool, None);
+        runtime.set_capability_witness_trust_root(root);
+        runtime.set_capability_witness(witness.clone());
+        runtime
+            .bind_capability_witness_revocation(&mut chain.lock().unwrap())
+            .unwrap();
+        match invalidation {
+            "already-revoked" => {}
+            "signed" => {
+                chain
+                    .lock()
+                    .unwrap()
+                    .append(
+                        signed_live_revocation(
+                            &witness.witness_id,
+                            RevocationTargetType::Attestation,
+                            RevocationReason::Superseded,
+                            &issuer,
+                        ),
+                        &head,
+                        "before-execution",
+                    )
+                    .unwrap();
+            }
+            "epoch" => {
+                chain
+                    .lock()
+                    .unwrap()
+                    .set_current_epoch(SecurityEpoch::from_raw(2))
+                    .unwrap();
+            }
+            "dropped" => drop(chain),
+            _ => unreachable!(),
+        }
+        runtime.set_capability_witness(witness);
+        assert_witness_admission_refusal(
+            &mut runtime,
+            &witness_filesystem_package(source),
+            "revocation authority is invalidated",
+        );
+        assert_eq!(pool.committed(), 0);
+    }
+}
+
+#[test]
+fn failed_revocation_binding_is_not_silently_optional() {
+    let source = "1 + 2;";
+    let (witness, root) = active_live_witness(source);
+    for epoch_mismatch in [false, true] {
+        let pool = ExecutionWorkPool::new(8192);
+        let mut runtime = orchestrator(&pool, None);
+        runtime.set_capability_witness_trust_root(root.clone());
+        runtime.set_capability_witness(witness.clone());
+        let mut chain = if epoch_mismatch {
+            RevocationChain::new(LIVE_WITNESS_ZONE)
+                .with_authorized_revocation_key(
+                    SigningKey::from_bytes([0x72; 32]).unwrap().verification_key(),
+                )
+                .with_authorized_head_key(
+                    SigningKey::from_bytes([0x73; 32]).unwrap().verification_key(),
+                )
+        } else {
+            RevocationChain::new(LIVE_WITNESS_ZONE)
+        };
+        chain
+            .set_current_epoch(SecurityEpoch::from_raw(if epoch_mismatch { 2 } else { 1 }))
+            .unwrap();
+        assert!(runtime.bind_capability_witness_revocation(&mut chain).is_err());
+        runtime.set_capability_witness(witness.clone());
+        assert_witness_admission_refusal(
+            &mut runtime,
+            &witness_filesystem_package(source),
+            if epoch_mismatch {
+                "epochs must match"
+            } else {
+                "require authorized issuer and head keys"
+            },
+        );
+        assert_eq!(pool.committed(), 0);
+    }
+}
+
+#[test]
+fn replacing_witness_identity_requires_explicit_matching_revocation_binding() {
+    let pool = ExecutionWorkPool::new(8192);
+    let (old_witness, root) = active_live_witness("1 + 2;");
+    let (new_witness, _) = active_live_witness("3 + 4;");
+    assert_ne!(old_witness.content_hash, new_witness.content_hash);
+    let (chain, _, _) = live_revocation_authority();
+    let mut runtime = orchestrator(&pool, None);
+    runtime.set_capability_witness_trust_root(root);
+    runtime.set_capability_witness(old_witness);
+    runtime
+        .bind_capability_witness_revocation(&mut chain.lock().unwrap())
+        .unwrap();
+    runtime.set_capability_witness(new_witness);
+    let work = witness_filesystem_package("3 + 4;");
+    assert_witness_admission_refusal(
+        &mut runtime,
+        &work,
+        "does not match its current identity or epoch",
+    );
+    assert_eq!(pool.committed(), 0);
+    runtime
+        .bind_capability_witness_revocation(&mut chain.lock().unwrap())
+        .unwrap();
+    runtime.execute(&work).unwrap();
+    assert_eq!(runtime.execution_count(), 1);
+}
+
+#[test]
+fn live_revocation_binding_does_not_replace_witness_authentication() {
+    let source = "1 + 2;";
+    let (witness, root) = active_live_witness(source);
+    for corrupt_signature in [false, true] {
+        let pool = ExecutionWorkPool::new(8192);
+        let (chain, _, _) = live_revocation_authority();
+        let mut runtime = orchestrator(&pool, None);
+        let mut supplied = witness.clone();
+        if corrupt_signature {
+            supplied.synthesizer_signature = vec![0; 64];
+            runtime.set_capability_witness_trust_root(root.clone());
+        }
+        runtime.set_capability_witness(supplied);
+        runtime
+            .bind_capability_witness_revocation(&mut chain.lock().unwrap())
+            .unwrap();
+        assert_witness_admission_refusal(
+            &mut runtime,
+            &witness_filesystem_package(source),
+            if corrupt_signature {
+                "not authorized by the trust root"
+            } else {
+                "externally pinned trust root"
+            },
+        );
+        assert_eq!(pool.committed(), 0);
     }
 }

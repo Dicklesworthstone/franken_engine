@@ -42,6 +42,7 @@ use crate::containment_executor::{
 use crate::control_plane::{Budget, Cx, KernelContext, NoCaps, TraceId};
 use crate::data_contract::DataContractIfcIngress;
 use crate::deterministic_replay::NondeterminismTrace;
+use crate::engine_object_id::EngineObjectId;
 use crate::entropy_evidence_compressor::{
     ArithmeticCoder, CompressionCertificate, EntropyError, EntropyEstimator,
 };
@@ -89,6 +90,7 @@ use crate::regret_bounded_router::{
     LaneArm as AdaptiveLaneArm, ROUTING_SCHEMA_VERSION, RegimeKind, RegretBoundedRouter,
     RewardSignal as AdaptiveRewardSignal, RouterSummary,
 };
+use crate::revocation_chain::{RevocationChain, RevocationWatch};
 use crate::runtime_config::{
     HIGH_CORE_CONCURRENCY_SAGAS_FLOOR, MAX_CONCURRENT_SAGAS_LIMIT, RuntimeConfig,
 };
@@ -2099,6 +2101,15 @@ fn clearance_ceiling_label(clearance: &ClearanceClass) -> Label {
     }
 }
 
+#[derive(Debug)]
+struct CapabilityWitnessRevocationBinding {
+    witness_id: EngineObjectId,
+    extension_id: EngineObjectId,
+    content_hash: ContentHash,
+    epoch: SecurityEpoch,
+    watches: [RevocationWatch; 2],
+}
+
 pub struct ExecutionOrchestrator {
     config: OrchestratorConfig,
     /// Explicit lowering-time ambient grant for the submitted top-level unit.
@@ -2172,6 +2183,8 @@ pub struct ExecutionOrchestrator {
     /// Host-pinned authority for witness synthesis and promotion. Witness
     /// metadata and replay input never establish their own trust roots.
     capability_witness_trust_root: Option<CapabilityWitnessTrustRoot>,
+    /// A failed explicit binding remains a refusal, never optional authority.
+    capability_witness_revocation: Option<Result<CapabilityWitnessRevocationBinding, String>>,
     /// Pluggable control-plane storage adapter (`g2vrp.13`); defaults to
     /// deterministic in-memory storage and upgrades to FrankenSQLite via
     /// [`Self::open_state_db`].
@@ -2511,6 +2524,7 @@ impl ExecutionOrchestrator {
             data_contract_flow_events: Vec::new(),
             capability_witness: None,
             capability_witness_trust_root: None,
+            capability_witness_revocation: None,
             storage_adapter: Box::new(InMemoryStorageAdapter::new()),
             #[cfg(test)]
             evidence_compression_status_override: None,
@@ -2585,6 +2599,95 @@ impl ExecutionOrchestrator {
 
     pub fn capability_witness_trust_root(&self) -> Option<&CapabilityWitnessTrustRoot> {
         self.capability_witness_trust_root.as_ref()
+    }
+
+    /// Bind the installed witness and its extension to a live signed
+    /// revocation chain configured by the host with independent issuer and
+    /// head keys. The chain, witness and runtime must share one exact epoch.
+    ///
+    /// Retain the chain and append verified revocations to it while execution
+    /// runs. A matching revocation (including signed supersession), epoch
+    /// advance, or loss of that authority cancels native dispatch and cell
+    /// effect boundaries. An effect already in progress is not rolled back.
+    /// This local binding does not establish remote frontier freshness.
+    ///
+    /// Binding never substitutes for witness authentication. Reinstalling an
+    /// old witness or resetting caller cancellation cannot erase revocation.
+    /// Installing a different witness requires an explicit matching rebind.
+    /// A rejected binding remains fail-closed even if its error is ignored.
+    pub fn bind_capability_witness_revocation(
+        &mut self,
+        chain: &mut RevocationChain,
+    ) -> Result<(), OrchestratorError> {
+        let binding = (|| -> Result<CapabilityWitnessRevocationBinding, String> {
+            let witness = self
+                .capability_witness
+                .as_ref()
+                .ok_or_else(|| "live revocation binding requires an installed witness".to_string())?;
+            if witness.epoch != self.config.epoch || chain.current_epoch() != self.config.epoch {
+                return Err(
+                    "capability witness, revocation chain and execution epochs must match"
+                        .to_string(),
+                );
+            }
+            let witness_watch = chain
+                .watch_target(&witness.witness_id)
+                .map_err(|error| format!("witness revocation authority rejected: {error}"))?;
+            let extension_watch = chain
+                .watch_target(&witness.extension_id)
+                .map_err(|error| format!("extension revocation authority rejected: {error}"))?;
+            Ok(CapabilityWitnessRevocationBinding {
+                witness_id: witness.witness_id.clone(),
+                extension_id: witness.extension_id.clone(),
+                content_hash: witness.content_hash,
+                epoch: witness.epoch,
+                watches: [witness_watch, extension_watch],
+            })
+        })();
+        let result = binding.as_ref().map(|_| ()).map_err(|detail| {
+            OrchestratorError::CapabilityWitnessRejected {
+                detail: detail.clone(),
+            }
+        });
+        self.capability_witness_revocation = Some(binding);
+        result
+    }
+
+    fn ensure_capability_witness_revocation_admission(&self) -> Result<(), OrchestratorError> {
+        let Some(binding) = &self.capability_witness_revocation else {
+            return Ok(());
+        };
+        let binding = binding.as_ref().map_err(|detail| {
+            OrchestratorError::CapabilityWitnessRejected {
+                detail: detail.clone(),
+            }
+        })?;
+        let witness = self.capability_witness.as_ref().ok_or_else(|| {
+            OrchestratorError::CapabilityWitnessRejected {
+                detail: "live revocation binding has no installed capability witness".to_string(),
+            }
+        })?;
+        if witness.witness_id != binding.witness_id
+            || witness.extension_id != binding.extension_id
+            || witness.content_hash != binding.content_hash
+            || witness.epoch != binding.epoch
+            || self.config.epoch != binding.epoch
+        {
+            return Err(OrchestratorError::CapabilityWitnessRejected {
+                detail: "capability witness revocation binding does not match its current identity or epoch"
+                    .to_string(),
+            });
+        }
+        if let Some(watch) = binding.watches.iter().find(|watch| watch.is_invalidated()) {
+            return Err(OrchestratorError::CapabilityWitnessRejected {
+                detail: format!(
+                    "live capability witness revocation authority is invalidated for target {} at epoch {}",
+                    watch.target_id(),
+                    watch.epoch()
+                ),
+            });
+        }
+        Ok(())
     }
 
     /// Install a custom [`StorageAdapter`] backing IFC provenance, replay-index
@@ -3183,6 +3286,7 @@ impl ExecutionOrchestrator {
                 .admit_once()
                 .map_err(OrchestratorError::ProcessSpawnAttempt)?;
         }
+        self.ensure_capability_witness_revocation_admission()?;
         Ok(process_spawn_attempt)
     }
 
@@ -3289,7 +3393,12 @@ impl ExecutionOrchestrator {
             // invalid or tampered routing evidence must not reach host effects.
             adaptive_routing_decision.verify_for_replay(&adaptive_routing_context)?;
 
-            let cancellation_token = self.cancellation_token.clone().unwrap_or_default();
+            let mut cancellation_token = self.cancellation_token.clone().unwrap_or_default();
+            if let Some(Ok(binding)) = &self.capability_witness_revocation {
+                for watch in &binding.watches {
+                    cancellation_token = cancellation_token.with_revocation_signal(watch.signal());
+                }
+            }
             let (instruction_budget, memory_budget_bytes) =
                 self.execution_budget_for_lane(adaptive_routing_decision.selected_lane);
             // Admission precedes recorder setup and native/host entry. A
@@ -4966,6 +5075,9 @@ impl ExecutionOrchestrator {
             .map_err(|err| OrchestratorError::CapabilityWitnessRejected {
                 detail: format!("witness authentication or promotion check failed: {err}"),
             })?;
+        // Recheck after lowering and authentication; an authority can be
+        // invalidated while either phase is in progress.
+        self.ensure_capability_witness_revocation_admission()?;
 
         // Static witnesses emitted by `frankenctl check` bind the exact source
         // bytes and parse goal they analyzed. Authenticate those fields above

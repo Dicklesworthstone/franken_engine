@@ -8480,6 +8480,25 @@ impl InterpreterCore {
         trap: Value,
         arguments: Vec<Value>,
     ) -> Result<Value, InterpreterError> {
+        self.call_proxy_trap_with_argument_label(
+            module,
+            handler_id,
+            trap_name,
+            trap,
+            arguments,
+            None,
+        )
+    }
+
+    fn call_proxy_trap_with_argument_label(
+        &mut self,
+        module: Option<&Ir3Module>,
+        handler_id: ObjectId,
+        trap_name: &str,
+        trap: Value,
+        arguments: Vec<Value>,
+        argument_label: Option<Label>,
+    ) -> Result<Value, InterpreterError> {
         let module = module.ok_or_else(|| InterpreterError::TypeError {
             expected: format!("module-backed Proxy.{trap_name} trap dispatch"),
             got: "missing module context".to_string(),
@@ -8489,7 +8508,7 @@ impl InterpreterCore {
             trap,
             Value::Object(handler_id),
             arguments,
-            None,
+            argument_label,
         )?;
         let label = self
             .pending_hostcall_result_label
@@ -8571,22 +8590,18 @@ impl InterpreterCore {
     /// ES2020 9.5.13 [[Construct]] of a proxy over a function: the target
     /// must be a constructor; the handler's `construct` trap gets (target,
     /// CreateArrayFromList(args), newTarget) and must return an object, else
-    /// the target is constructed. No-claim: `new.target` is the target, not
-    /// the proxy, when there is no trap (a `get` trap does not see the
-    /// `prototype` read of OrdinaryCreateFromConstructor).
+    /// the target is constructed with the same newTarget. Only bound
+    /// functions substitute their target for a matching newTarget; a proxy
+    /// must retain its identity and observable `prototype` lookup.
     pub(super) fn construct_callable_proxy(
         &mut self,
         module: &Ir3Module,
         builtin: &BuiltinFunction,
         args: RegRange,
-        new_target: Option<Value>,
+        callee_label: &Label,
+        new_target: (Value, Label),
     ) -> Result<(Value, Label), InterpreterError> {
-        // `new P()` passes the proxy itself; Reflect.construct its newTarget.
-        let explicit_new_target = new_target.filter(|value| {
-            !matches!(value, Value::BuiltinFunction(other)
-                if other.kind == BuiltinFunctionKind::CallableProxy
-                    && other.bound_object == builtin.bound_object)
-        });
+        let (new_target, new_target_label) = new_target;
         let (_proxy, handler, function) = self.callable_proxy_parts(builtin)?;
         if !self.is_constructible_value(&function) {
             return Err(InterpreterError::TypeError {
@@ -8601,16 +8616,17 @@ impl InterpreterCore {
         let label = self.join_arg_range_label(args)?;
         if let Some(trap) = self.proxy_trap_value(Some(module), handler, "construct")? {
             let list = self.alloc_array_from_values(&arguments)?;
-            let result = self.call_proxy_trap(
+            self.join_object_mutation_label(list, &label)?;
+            let context_label = self.join_owned_label_with_temporary_budget(label, callee_label)?;
+            let context_label =
+                self.join_owned_label_with_temporary_budget(context_label, &new_target_label)?;
+            let result = self.call_proxy_trap_with_argument_label(
                 Some(module),
                 handler,
                 "construct",
                 trap,
-                vec![
-                    function,
-                    Value::Object(list),
-                    explicit_new_target.unwrap_or_else(|| Value::BuiltinFunction(builtin.clone())),
-                ],
+                vec![function, Value::Object(list), new_target],
+                Some(context_label.clone()),
             )?;
             if !result.is_object_like() {
                 return Err(InterpreterError::TypeError {
@@ -8618,21 +8634,22 @@ impl InterpreterCore {
                     got: result.type_name().to_string(),
                 });
             }
-            return Ok((result, label));
+            let result_label = self
+                .pending_hostcall_result_label
+                .as_ref()
+                .unwrap_or(&Label::Public)
+                .join(&context_label);
+            return Ok((result, result_label));
         }
-        let target_is_proxy = Self::is_callable_proxy(&function);
         let (value, result_label) = self.invoke_inline_construct_with_labels(
             Some(module),
             function,
             arguments,
             Some(IsolatedCallLabels {
-                receiver: Label::Public,
+                receiver: callee_label.clone(),
                 arguments: IsolatedArgumentLabels::Uniform(label.clone()),
             }),
-            // A callable proxy target receives this proxy as newTarget too.
-            explicit_new_target
-                .or_else(|| target_is_proxy.then(|| Value::BuiltinFunction(builtin.clone())))
-                .map(|value| (value, Label::Public)),
+            Some((new_target, new_target_label)),
         )?;
         Ok((value, result_label.join(&label)))
     }

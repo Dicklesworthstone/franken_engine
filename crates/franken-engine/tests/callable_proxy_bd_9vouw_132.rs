@@ -5,13 +5,14 @@
 //! its chainable color stub, call tracers, spies) failed at construction.
 //! A callable proxy is now callable and constructible through its `apply` /
 //! `construct` traps (or its target), and its other traps receive the
-//! function. Reflect's property operations accept functions. Expected
-//! strings are Node v22.2.0's output for the same programs.
+//! function. Reflect's property operations accept functions. The original
+//! probes below use expected strings captured from Node v22.2.0. The later
+//! constructor-forwarding probes identify their reference V8 checks separately.
 //!
-//! No-claim: without a `construct` trap, `new.target` is the target rather
-//! than the proxy; `class X extends proxyOverFn` and util.inspect's
-//! showProxy form are not covered; `Object.create(fn)` with a plain function
-//! (not a proxy) is still refused.
+//! Construction forwards the original newTarget through missing traps,
+//! including nested proxies, bound targets, and derived constructors.
+
+#![forbid(unsafe_code)]
 
 use frankenengine_engine::HybridRouter;
 
@@ -161,4 +162,215 @@ fn callable_proxy_proxy_new_target_prototype() {
          var mine = Reflect.construct(ArrayProxy, [], MyArray);\n\
          [Array.isArray(arr), arr.join(), f.made, f.kind, Object.getPrototypeOf(f) === F.prototype, viaTrap.kind, viaTrap.made, Array.isArray(viaArray), viaArray.length, mine instanceof MyArray].join(' ');";
     assert_eq!(eval(source), "true 1,2,3 true F true trap true true 5 true");
+}
+
+// The constructor forwarding probes below were checked against reference V8;
+// the Rust tests execute the same programs through the native engine.
+
+#[test]
+fn callable_proxy_construct_preserves_own_new_target_and_prototype_trap() {
+    let source = r#"
+        var log = [], prototype = { marker: 'selected' }, observed;
+        function Target(x) { log.push('body'); observed = new.target; this.x = x; }
+        var P = new Proxy(Target, {
+            get(t, key, receiver) {
+                if (key === 'prototype') {
+                    log.push('prototype:' + (t === Target) + ':' + (receiver === P));
+                    return prototype;
+                }
+                return Reflect.get(t, key, receiver);
+            }
+        });
+        var instance = new P(42);
+        [observed === P, Object.getPrototypeOf(instance) === prototype,
+         instance.marker, instance.x, log.join(',')].join(' ');
+    "#;
+    assert_eq!(eval(source), "true true selected 42 prototype:true:true,body");
+}
+
+#[test]
+fn callable_proxy_reflect_construct_preserves_default_and_explicit_new_target() {
+    let source = r#"
+        var observed, reads = 0;
+        function Target() { observed = new.target; }
+        var P = new Proxy(Target, {
+            get(t, key, receiver) {
+                if (key === 'prototype') reads++;
+                return Reflect.get(t, key, receiver);
+            }
+        });
+        function Other() {}
+        var first = Reflect.construct(P, []), defaultTarget = observed === P;
+        var second = Reflect.construct(P, [], P), sameTarget = observed === P;
+        var third = Reflect.construct(P, [], Other), explicitTarget = observed === Other;
+        [defaultTarget, sameTarget, explicitTarget, reads,
+         Object.getPrototypeOf(first) === Target.prototype,
+         Object.getPrototypeOf(second) === Target.prototype,
+         Object.getPrototypeOf(third) === Other.prototype].join(' ');
+    "#;
+    assert_eq!(eval(source), "true true true 2 true true true");
+}
+
+#[test]
+fn callable_proxy_nested_construct_preserves_outer_identity_and_get_order() {
+    let source = r#"
+        var log = [], observed;
+        function Target() { observed = new.target; log.push('body'); }
+        var inner = new Proxy(Target, {
+            get(t, key, receiver) {
+                if (key === 'prototype') log.push('inner:' + (receiver === outer));
+                return Reflect.get(t, key, receiver);
+            }
+        });
+        var outer = new Proxy(inner, {
+            get(t, key, receiver) {
+                if (key === 'prototype') log.push('outer:' + (receiver === outer));
+                return Reflect.get(t, key, receiver);
+            }
+        });
+        var instance = new outer();
+        [observed === outer, Object.getPrototypeOf(instance) === Target.prototype,
+         log.join(',')].join(' ');
+    "#;
+    assert_eq!(eval(source), "true true outer:true,inner:true,body");
+}
+
+#[test]
+fn callable_proxy_and_bound_construction_apply_distinct_new_target_rules() {
+    let source = r#"
+        var observed, prototype = { marker: 'proxy' }, reads = 0;
+        function Target(a, b) { observed = new.target; this.total = a + b; }
+        var bound = Target.bind(null, 3);
+        var P = new Proxy(bound, {
+            get(t, key, receiver) {
+                if (key === 'prototype') { reads++; return prototype; }
+                return Reflect.get(t, key, receiver);
+            }
+        });
+        var first = new P(4), proxyTarget = observed === P;
+        var rebound = P.bind(null, 5);
+        var second = new rebound(), reboundTarget = observed === P;
+        var plain = new bound(6), plainTarget = observed === Target;
+        [proxyTarget, reboundTarget, plainTarget, first.total, second.total, plain.total,
+         Object.getPrototypeOf(first) === prototype,
+         Object.getPrototypeOf(second) === prototype, reads].join(' ');
+    "#;
+    assert_eq!(eval(source), "true true true 7 8 9 true true 2");
+}
+
+#[test]
+fn callable_proxy_construct_preserves_derived_new_target() {
+    let source = r#"
+        var observed;
+        class Base { constructor(x) { observed = new.target; this.x = x; } }
+        class Derived extends Base { constructor(x) { super(x); this.doubled = x * 2; } }
+        var P = new Proxy(Derived, {});
+        var instance = new P(7);
+        [observed === P, instance.x, instance.doubled,
+         instance instanceof Base, instance instanceof Derived,
+         Object.getPrototypeOf(instance) === Derived.prototype].join(' ');
+    "#;
+    assert_eq!(eval(source), "true 7 14 true true true");
+}
+
+#[test]
+fn callable_proxy_can_be_a_derived_constructor_parent() {
+    let source = r#"
+        var observed, log = [];
+        function Base(x) { observed = new.target; this.x = x; log.push('base'); }
+        var Parent = new Proxy(Base, {});
+        class Explicit extends Parent { constructor(x) { super(x); log.push('derived'); } }
+        class Implicit extends Parent {}
+        var explicit = new Explicit(8), explicitTarget = observed === Explicit;
+        var implicit = new Implicit(9), implicitTarget = observed === Implicit;
+        [explicitTarget, implicitTarget, explicit.x, implicit.x,
+         explicit instanceof Explicit, implicit instanceof Implicit,
+         log.join(',')].join(' ');
+    "#;
+    assert_eq!(eval(source), "true true 8 9 true true base,derived,base");
+}
+
+#[test]
+fn callable_proxy_construct_prototype_throw_precedes_body_and_preserves_exception() {
+    let source = r#"
+        var sentinel = {}, bodies = 0, reads = 0, seen;
+        function Target() { bodies++; }
+        var P = new Proxy(Target, {
+            get(t, key, receiver) {
+                if (key === 'prototype') { reads++; throw sentinel; }
+                return Reflect.get(t, key, receiver);
+            }
+        });
+        try { new P(); } catch (error) { seen = error; }
+        var first = seen === sentinel;
+        try { Reflect.construct(P, []); } catch (error) { seen = error; }
+        [first, seen === sentinel, bodies, reads].join(' ');
+    "#;
+    assert_eq!(eval(source), "true true 0 2");
+}
+
+#[test]
+fn callable_proxy_construct_trap_return_skips_prototype_read() {
+    let source = r#"
+        var sentinel = {}, observations = [];
+        function Target() { throw 'body must not run'; }
+        var P = new Proxy(Target, {
+            get() { throw 'prototype must not be read'; },
+            construct(target, args, newTarget) {
+                observations.push(target === Target, newTarget === P, args.join(','));
+                return sentinel;
+            }
+        });
+        var result = new P(1, 2);
+        [result === sentinel, observations.join('|')].join(' ');
+    "#;
+    assert_eq!(eval(source), "true true|true|1,2");
+}
+
+#[test]
+fn callable_proxy_construct_builtin_fallback_and_revocation() {
+    let source = r#"
+        var reads = 0;
+        var P = new Proxy(Array.bind(null), {
+            get(t, key, receiver) {
+                if (key === 'prototype') { reads++; return 1; }
+                return Reflect.get(t, key, receiver);
+            }
+        });
+        var values = new P(2, 3);
+        var revoked = Proxy.revocable(function () {}, {});
+        revoked.revoke();
+        var failed = false;
+        try { new revoked.proxy(); } catch (error) { failed = error instanceof TypeError; }
+        [Array.isArray(values), values.join(),
+         Object.getPrototypeOf(values) === Array.prototype, reads, failed].join(' ');
+    "#;
+    assert_eq!(eval(source), "true 2,3 true 1 true");
+}
+
+#[test]
+fn callable_proxy_constructs_builtin_subclasses() {
+    let source = r#"
+        var reads = 0;
+        class Numbers extends Array {
+            constructor(size) { super(size); this.observed = new.target; }
+        }
+        var P = new Proxy(Numbers, {
+            get(t, key, receiver) {
+                if (key === 'prototype') reads++;
+                return Reflect.get(t, key, receiver);
+            }
+        });
+        var numbers = new P(3);
+        class Entries extends Map {}
+        var entries = new (new Proxy(Entries, {}))([['key', 7]]);
+        var Parent = new Proxy(Array, {});
+        class Child extends Parent {}
+        var child = new Child(4);
+        [Array.isArray(numbers), numbers.length, numbers.observed === P,
+         numbers instanceof Numbers, reads, entries instanceof Entries,
+         entries.get('key'), Array.isArray(child), child.length,
+         child instanceof Child].join(' ');
+    "#;
+    assert_eq!(eval(source), "true 3 true true 1 true 7 true 4 true");
 }

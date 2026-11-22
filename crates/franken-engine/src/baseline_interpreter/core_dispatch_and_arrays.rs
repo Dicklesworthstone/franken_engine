@@ -9092,7 +9092,9 @@ impl InterpreterCore {
         let mut active_default_prototype = None;
         let mut forwarding_depth = 0usize;
         loop {
-            if matches!(&active_callee, Value::Str(_)) {
+            if matches!(&active_callee, Value::Str(_)) || Self::is_callable_proxy(&active_callee) {
+                // A proxy is a construction boundary: its trap lookup and
+                // newTarget forwarding must precede entering the target.
                 break;
             }
             let default_prototype =
@@ -9132,10 +9134,18 @@ impl InterpreterCore {
                 } else {
                     self.alloc_object_with_prototype(Some(prototype))?
                 };
-                let constructor_index = self.constructor_function_index(&new_target_value)?;
+                // This optional diagnostic index exists only for module-local
+                // functions. A valid newTarget may instead be a proxy or bound
+                // constructor; its observable prototype was resolved above.
+                let constructor_index = match &new_target_value {
+                    Value::Function(_) | Value::Closure(_) => {
+                        Some(self.constructor_function_index(&new_target_value)?)
+                    }
+                    _ => None,
+                };
                 self.mutate_heap(|heap| {
                     if let Some(object) = heap.get_mut(object_id.0 as usize) {
-                        object.constructor_function = Some(constructor_index);
+                        object.constructor_function = constructor_index;
                     }
                 });
                 self.initialize_builtin_subclass_instance(
@@ -9152,7 +9162,9 @@ impl InterpreterCore {
             Value::BuiltinFunction(builtin)
                 if !matches!(
                     builtin.kind,
-                    BuiltinFunctionKind::BoundFunction | BuiltinFunctionKind::GeneratedFunction
+                    BuiltinFunctionKind::BoundFunction
+                        | BuiltinFunctionKind::GeneratedFunction
+                        | BuiltinFunctionKind::CallableProxy
                 ) =>
             {
                 Some(self.construct_builtin_with_new_target_and_labels(
@@ -9175,6 +9187,19 @@ impl InterpreterCore {
         // (bd-9vouw.203).
         let (builtin_parent_object, foreign_parent_label) = match builtin_parent_object {
             Some(result) => (Some(result), None),
+            None if Self::is_callable_proxy(&active_callee) => {
+                let Value::BuiltinFunction(builtin) = &active_callee else {
+                    unreachable!("callable proxy matched above");
+                };
+                let (result, label) = self.construct_callable_proxy(
+                    module,
+                    builtin,
+                    args,
+                    &active_callee_label,
+                    (new_target_value.clone(), new_target_label.clone()),
+                )?;
+                (Some(result), Some(label))
+            }
             None if matches!(&active_callee, Value::BuiltinFunction(builtin)
                 if builtin.kind == BuiltinFunctionKind::GeneratedFunction) =>
             {
@@ -16228,7 +16253,8 @@ impl InterpreterCore {
                             module,
                             builtin,
                             args,
-                            Some(new_target_value.clone()),
+                            &callee_label,
+                            (new_target_value.clone(), new_target_label.clone()),
                         ) {
                             Ok(value) => value,
                             Err(error) => {
@@ -16371,9 +16397,13 @@ impl InterpreterCore {
                     if let Value::BuiltinFunction(builtin) = &callee_val
                         && builtin.kind == BuiltinFunctionKind::CallableProxy
                     {
-                        let (result, result_label) = match self
-                            .construct_callable_proxy(module, builtin, args, None)
-                        {
+                        let (result, result_label) = match self.construct_callable_proxy(
+                            module,
+                            builtin,
+                            args,
+                            &callee_label,
+                            (callee_val.clone(), callee_label.clone()),
+                        ) {
                             Ok(value) => value,
                             Err(err) => match self.route_isolated_explicit_throw(module, err)? {
                                 None => continue,

@@ -20,6 +20,10 @@
 //! The main executable is pinned; its dynamic loader, libraries and other files
 //! remain host dependencies. `/proc/self/exe` names the anonymous image, so
 //! executable-relative resource and `$ORIGIN` lookup need compatible packaging.
+//! A separate, explicit trusted-system grant instead pins and authenticates a
+//! named root-protected host executable. That grant trusts privileged host and
+//! backing-store updates, preserves native executable names, and never changes
+//! the default immutable-snapshot authorization.
 //!
 //! FreeBSD native launch fails closed until an immutable executable-image
 //! backend exists. Its anonymous shared-memory descriptors cannot replace the
@@ -50,6 +54,9 @@ use std::os::fd::AsFd;
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
+
+#[cfg(target_os = "linux")]
+mod trusted_system;
 
 /// Capability a caller must present for every process operation.
 ///
@@ -759,6 +766,18 @@ impl Default for ProcessSpawnLimits {
 #[serde(deny_unknown_fields)]
 pub struct ProcessSpawnPolicy {
     pub allowed_executables: BTreeMap<String, [u8; 32]>,
+    /// Linux executables whose named host inode may be used directly.
+    ///
+    /// Each path must also have a digest in `allowed_executables`. This is an
+    /// explicit trust grant to privileged host administration and the backing
+    /// storage, including container image layers. The source and every parent
+    /// must be root-owned and not writable by group or other users; setid and
+    /// file-capability executables are refused. These files are authenticated
+    /// before launch but are not immutable snapshots of privileged updates.
+    ///
+    /// Empty grants preserve the original serialized policy and its identity.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub trusted_system_executables: BTreeSet<String>,
     /// Signed deterministic resolution for bare executable names.
     ///
     /// Values must also be exact keys in `allowed_executables`. The ambient
@@ -789,6 +808,10 @@ impl fmt::Debug for ProcessSpawnPolicy {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ProcessSpawnPolicy")
             .field("allowed_executable_count", &self.allowed_executables.len())
+            .field(
+                "trusted_system_executable_count",
+                &self.trusted_system_executables.len(),
+            )
             .field("executable_alias_count", &self.executable_aliases.len())
             .field("allow_shell", &self.allow_shell)
             .field(
@@ -809,6 +832,7 @@ impl Default for ProcessSpawnPolicy {
     fn default() -> Self {
         Self {
             allowed_executables: BTreeMap::new(),
+            trusted_system_executables: BTreeSet::new(),
             executable_aliases: BTreeMap::new(),
             allow_shell: false,
             shell_executable_alias: None,
@@ -857,7 +881,51 @@ impl ProcessSpawnPolicy {
         )?;
         let digest = digest_file(Path::new(&canonical), self.limits.max_executable_bytes)?;
         self.allowed_executables.insert(canonical.clone(), digest);
+        self.trusted_system_executables.remove(&canonical);
         Ok(canonical)
+    }
+
+    /// Authorize a named, root-protected Linux system executable and its digest.
+    ///
+    /// Use this deliberate host-trust grant for programs such as Ubuntu uutils
+    /// that require their real executable basename. Unlike `authorize_executable`,
+    /// it trusts privileged host updates after the launch-time digest check.
+    /// The validator rejects ordinary-user writable ancestry and privilege-
+    /// granting file metadata, and launch rechecks the same requirements.
+    /// Failure leaves both authorization maps unchanged.
+    pub fn authorize_trusted_system_executable(
+        &mut self,
+        executable: impl AsRef<Path>,
+    ) -> Result<String, ProcessSpawnError> {
+        #[cfg(target_os = "linux")]
+        {
+            let canonical = std::fs::canonicalize(executable.as_ref())
+                .map_err(executable_canonicalize_error)?;
+            let canonical_string = path_string(&canonical)?;
+            enforce_limit(
+                "executable_path_bytes",
+                u64::try_from(canonical_string.len()).unwrap_or(u64::MAX),
+                self.limits.max_executable_path_bytes,
+            )?;
+            let (_, digest) = trusted_system::open(
+                &canonical,
+                None,
+                self.limits.max_executable_bytes,
+                &UnrestrictedProcessSpawnControl,
+            )?;
+            self.allowed_executables
+                .insert(canonical_string.clone(), digest);
+            self.trusted_system_executables
+                .insert(canonical_string.clone());
+            Ok(canonical_string)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = executable;
+            Err(ProcessSpawnError::NotImplemented {
+                what: "trusted system executable grants require the Linux backend".to_string(),
+            })
+        }
     }
 
     /// Authorize a bare executable alias and bind it to one exact executable.
@@ -869,6 +937,19 @@ impl ProcessSpawnPolicy {
         let alias = alias.into();
         validate_executable_alias(&alias)?;
         let canonical = self.authorize_executable(executable)?;
+        self.executable_aliases.insert(alias, canonical.clone());
+        Ok(canonical)
+    }
+
+    /// Bind a bare alias using the explicit trusted-system executable grant.
+    pub fn authorize_trusted_system_alias(
+        &mut self,
+        alias: impl Into<String>,
+        executable: impl AsRef<Path>,
+    ) -> Result<String, ProcessSpawnError> {
+        let alias = alias.into();
+        validate_executable_alias(&alias)?;
+        let canonical = self.authorize_trusted_system_executable(executable)?;
         self.executable_aliases.insert(alias, canonical.clone());
         Ok(canonical)
     }
@@ -1418,6 +1499,29 @@ impl NativeProcessSpawn {
             env.insert(key.clone(), value.clone());
         }
 
+        #[cfg(target_os = "linux")]
+        let executable_file = if self
+            .policy
+            .trusted_system_executables
+            .contains(&executable_string)
+        {
+            trusted_system::open(
+                &executable,
+                Some(expected_digest),
+                self.policy.limits.max_executable_bytes,
+                control,
+            )?
+            .0
+        } else {
+            open_verified_executable(
+                &executable,
+                expected_digest,
+                &executable_string,
+                self.policy.limits.max_executable_bytes,
+                control,
+            )?
+        };
+        #[cfg(not(target_os = "linux"))]
         let executable_file = open_verified_executable(
             &executable,
             expected_digest,
@@ -2274,6 +2378,20 @@ fn validate_policy(policy: &ProcessSpawnPolicy) -> Result<(), ProcessSpawnError>
             executable_bytes,
             policy.limits.max_executable_bytes,
         )?;
+    }
+    #[cfg(not(target_os = "linux"))]
+    if !policy.trusted_system_executables.is_empty() {
+        return Err(ProcessSpawnError::NotImplemented {
+            what: "trusted system executable grants require the Linux backend".to_string(),
+        });
+    }
+    for executable in &policy.trusted_system_executables {
+        if !policy.allowed_executables.contains_key(executable) {
+            return Err(policy_error(
+                "trusted_system_executable_denied",
+                "trusted system grant requires an allowlisted executable digest",
+            ));
+        }
     }
     for (alias, executable) in &policy.executable_aliases {
         validate_executable_alias(alias)?;
@@ -3745,11 +3863,21 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn authorize_system_test_executable(
+        policy: &mut ProcessSpawnPolicy,
+        executable: &Path,
+    ) -> String {
+        #[cfg(target_os = "linux")]
+        let authorized = policy.authorize_trusted_system_executable(executable);
+        #[cfg(not(target_os = "linux"))]
+        let authorized = policy.authorize_executable(executable);
+        authorized.expect("authorize protected system test executable")
+    }
+
+    #[cfg(unix)]
     fn provider_for(executable: &Path) -> (NativeProcessSpawn, String) {
         let mut policy = ProcessSpawnPolicy::jailed("/").expect("rooted policy");
-        let canonical = policy
-            .authorize_executable(executable)
-            .expect("authorize executable");
+        let canonical = authorize_system_test_executable(&mut policy, executable);
         // Keep ordinary lifecycle tests insulated from scheduler stalls when
         // the full module runs in parallel. Timeout-specific tests supply a
         // much smaller per-request bound explicitly.
@@ -4541,21 +4669,24 @@ mod tests {
     fn verified_executable_snapshot_survives_in_place_rewrites_and_truncation() {
         use std::os::unix::fs::MetadataExt;
 
-        let echo = executable(&["/bin/echo", "/usr/bin/echo"]);
-        let replacement = std::fs::read(executable(&["/bin/false", "/usr/bin/false"]))
-            .expect("replacement executable bytes");
+        // A shell fixture exercises the immutable mode without depending on a
+        // multicall utility's real-name requirement. Ubuntu echo/false can also
+        // be hardlinks to identical bytes, so use an unmistakably different
+        // replacement for this content-substitution attack.
+        let shell = executable(&["/bin/sh", "/usr/bin/sh"]);
+        let replacement = b"not the authorized executable\n";
         for truncate in [false, true] {
             let root = tempfile::tempdir()
                 .expect("in-place executable fixture")
                 .keep();
             let authorized = root.join("authorized-image");
-            std::fs::copy(&echo, &authorized).expect("copy authorized image");
+            std::fs::copy(&shell, &authorized).expect("copy authorized image");
             let mut policy = ProcessSpawnPolicy::jailed(&root).expect("jailed policy");
             let canonical = policy
                 .authorize_executable(&authorized)
                 .expect("authorize original bytes");
             let provider = NativeProcessSpawn::new(policy).expect("native provider");
-            let request = run_request(canonical, vec!["authorized-image"]);
+            let request = run_request(canonical, vec!["-c", "printf 'authorized-image\\n'"]);
             let ProcessSpawnRequest::Run { launch, .. } = request else {
                 unreachable!()
             };
@@ -4565,11 +4696,7 @@ mod tests {
             // Preserve the exact inode that old descriptor pinning executes.
             // Closing the writer before spawn also avoids ETXTBSY masking the
             // content-substitution defect with an unrelated kernel refusal.
-            let changed = if truncate {
-                &[][..]
-            } else {
-                replacement.as_slice()
-            };
+            let changed = if truncate { &[][..] } else { &replacement[..] };
             std::fs::write(&authorized, changed).expect("change authorized inode in place");
             let after = std::fs::metadata(&authorized).expect("unchanged inode");
             assert_eq!((before.dev(), before.ino()), (after.dev(), after.ino()));
@@ -4597,9 +4724,15 @@ mod tests {
         use rustix::fs::SealFlags;
         use std::os::unix::fs::FileExt;
 
-        let echo = executable(&["/bin/echo", "/usr/bin/echo"]);
-        let (provider, canonical) = provider_for(&echo);
-        let ProcessSpawnRequest::Run { launch, .. } = run_request(canonical, vec!["sealed"]) else {
+        let shell = executable(&["/bin/sh", "/usr/bin/sh"]);
+        let mut policy = ProcessSpawnPolicy::jailed("/").expect("rooted snapshot policy");
+        let canonical = policy
+            .authorize_executable(&shell)
+            .expect("authorize sealed image");
+        let provider = NativeProcessSpawn::new(policy).expect("snapshot provider");
+        let ProcessSpawnRequest::Run { launch, .. } =
+            run_request(canonical, vec!["-c", "printf 'sealed\\n'"])
+        else {
             unreachable!()
         };
         let validated = provider.validate_launch(&launch).expect("sealed image");
@@ -4644,8 +4777,7 @@ mod tests {
             .expect("executable permission fixture")
             .keep();
         let authorized = root.join("authorized-image");
-        std::fs::copy(executable(&["/bin/echo", "/usr/bin/echo"]), &authorized)
-            .expect("copy image");
+        std::fs::copy(executable(&["/bin/sh", "/usr/bin/sh"]), &authorized).expect("copy image");
         std::fs::set_permissions(&authorized, std::fs::Permissions::from_mode(0o644))
             .expect("remove source execute permission");
         let mut policy = ProcessSpawnPolicy::jailed(&root).expect("jailed policy");
@@ -4653,7 +4785,7 @@ mod tests {
             .authorize_executable(&authorized)
             .expect("authorize digest");
         let provider = NativeProcessSpawn::new(policy).expect("native provider");
-        let request = run_request(canonical, vec!["permitted"]);
+        let request = run_request(canonical, vec!["-c", "printf 'permitted\\n'"]);
         assert!(matches!(
             provider.perform(&request, &[ProcessSpawnCapability::Spawn]),
             Err(ProcessSpawnError::Io { operation, .. })
@@ -4674,13 +4806,13 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn verified_executable_snapshot_admission_bounds_preparation_and_releases_failures() {
-        let original = std::fs::read(executable(&["/bin/echo", "/usr/bin/echo"]))
+        let original = std::fs::read(executable(&["/bin/sh", "/usr/bin/sh"]))
             .expect("authorized executable bytes");
         let root = tempfile::tempdir()
             .expect("snapshot admission fixture")
             .keep();
         let authorized = root.join("authorized-image");
-        std::fs::copy(executable(&["/bin/echo", "/usr/bin/echo"]), &authorized)
+        std::fs::copy(executable(&["/bin/sh", "/usr/bin/sh"]), &authorized)
             .expect("copy image with execute permissions");
         let mut policy = ProcessSpawnPolicy::jailed(&root).expect("jailed policy");
         policy.limits.max_children = 1;
@@ -4688,7 +4820,7 @@ mod tests {
             .authorize_executable(&authorized)
             .expect("authorize digest");
         let provider = NativeProcessSpawn::new(policy).expect("native provider");
-        let request = run_request(canonical, vec!["capacity-restored"]);
+        let request = run_request(canonical, vec!["-c", "printf 'capacity-restored\\n'"]);
 
         let occupied = provider
             .reserve_child()
@@ -4771,7 +4903,7 @@ mod tests {
             std::fs::write(cwd.join("marker"), b"verified-cwd").expect("authorized marker");
             std::fs::write(outside_cwd.join("marker"), b"outside-cwd").expect("outside marker");
             let mut policy = ProcessSpawnPolicy::jailed(&jail).expect("jailed policy");
-            let canonical = policy.authorize_executable(&cat).expect("authorize cat");
+            let canonical = authorize_system_test_executable(&mut policy, &cat);
             let provider = NativeProcessSpawn::new(policy).expect("native provider");
             let ProcessSpawnRequest::Run { mut launch, .. } =
                 run_request(canonical, vec!["marker"])
@@ -4849,7 +4981,7 @@ mod tests {
         std::fs::write(jail.join("work/marker"), b"installed-work")
             .expect("authorized child marker");
         let mut policy = ProcessSpawnPolicy::jailed(&jail).expect("jailed policy");
-        let canonical = policy.authorize_executable(&cat).expect("authorize cat");
+        let canonical = authorize_system_test_executable(&mut policy, &cat);
         let provider = NativeProcessSpawn::new(policy).expect("native provider");
 
         std::fs::rename(&jail, temporary.join("retained-jail")).expect("retain installed jail");
@@ -4960,7 +5092,7 @@ mod tests {
         std::os::unix::fs::symlink("parent/work", temporary.join("alias"))
             .expect("relative in-jail symlink");
         let mut policy = ProcessSpawnPolicy::jailed(&temporary).expect("jailed policy");
-        let canonical = policy.authorize_executable(&cat).expect("authorize cat");
+        let canonical = authorize_system_test_executable(&mut policy, &cat);
         let provider = NativeProcessSpawn::new(policy).expect("native provider");
         let mut request = run_request(canonical, vec!["marker"]);
         for cwd in [
@@ -5161,7 +5293,7 @@ mod tests {
     fn output_overflow_is_drained_then_rejected() {
         let echo = executable(&["/bin/echo", "/usr/bin/echo"]);
         let mut policy = ProcessSpawnPolicy::jailed("/").expect("rooted policy");
-        let canonical = policy.authorize_executable(&echo).expect("authorize echo");
+        let canonical = authorize_system_test_executable(&mut policy, &echo);
         policy.limits.max_output_bytes = 4;
         let provider = NativeProcessSpawn::new(policy).expect("native provider");
         assert!(matches!(
@@ -5257,7 +5389,7 @@ mod tests {
     fn cwd_is_confined_to_the_canonical_jail() {
         let pwd = executable(&["/bin/pwd", "/usr/bin/pwd"]);
         let mut policy = ProcessSpawnPolicy::jailed("/tmp").expect("tmp jail");
-        let canonical = policy.authorize_executable(&pwd).expect("authorize pwd");
+        let canonical = authorize_system_test_executable(&mut policy, &pwd);
         let provider = NativeProcessSpawn::new(policy).expect("native provider");
         let mut request = run_request(canonical, Vec::new());
         if let ProcessSpawnRequest::Run { launch, .. } = &mut request {
@@ -5274,7 +5406,7 @@ mod tests {
     fn piped_stdin_and_fixed_environment_are_real_and_bounded() {
         let env = executable(&["/usr/bin/env", "/bin/env"]);
         let mut policy = ProcessSpawnPolicy::jailed("/").expect("rooted policy");
-        let canonical = policy.authorize_executable(&env).expect("authorize env");
+        let canonical = authorize_system_test_executable(&mut policy, &env);
         policy
             .fixed_env
             .insert("FRANKEN_FIXED".to_string(), "yes".to_string());
@@ -5440,7 +5572,7 @@ mod tests {
     fn lifecycle_stdin_write_end_round_trips_through_cat_bd_m42c2() {
         let cat = executable(&["/bin/cat", "/usr/bin/cat"]);
         let mut policy = ProcessSpawnPolicy::jailed("/").expect("rooted policy");
-        let canonical = policy.authorize_executable(&cat).expect("authorize cat");
+        let canonical = authorize_system_test_executable(&mut policy, &cat);
         policy.limits.max_stdin_bytes = 1024;
         let provider = NativeProcessSpawn::new(policy).expect("native provider");
         let response = provider
@@ -5514,7 +5646,7 @@ mod tests {
     fn bounded_stdin_enforces_the_cumulative_limit_bd_m42c2() {
         let cat = executable(&["/bin/cat", "/usr/bin/cat"]);
         let mut policy = ProcessSpawnPolicy::jailed("/").expect("rooted policy");
-        let canonical = policy.authorize_executable(&cat).expect("authorize cat");
+        let canonical = authorize_system_test_executable(&mut policy, &cat);
         policy.limits.max_stdin_bytes = 8;
         let provider = NativeProcessSpawn::new(policy).expect("native provider");
         let response = provider
@@ -5572,9 +5704,7 @@ mod tests {
             (ProcessSignal::Kill, 9),
         ] {
             let mut policy = ProcessSpawnPolicy::jailed("/").expect("rooted policy");
-            let canonical = policy
-                .authorize_executable(&sleep)
-                .expect("authorize sleep");
+            let canonical = authorize_system_test_executable(&mut policy, &sleep);
             policy.allowed_signals.insert(signal);
             let provider = NativeProcessSpawn::new(policy).expect("native provider");
             let response = provider
@@ -5929,9 +6059,7 @@ mod tests {
     fn zero_timeout_uses_the_policy_deadline_instead_of_immediate_expiry() {
         let sleep = executable(&["/bin/sleep", "/usr/bin/sleep"]);
         let mut policy = ProcessSpawnPolicy::jailed("/").expect("rooted policy");
-        let canonical = policy
-            .authorize_executable(&sleep)
-            .expect("authorize sleep");
+        let canonical = authorize_system_test_executable(&mut policy, &sleep);
         policy.limits.max_runtime_millis = 500;
         let provider = NativeProcessSpawn::new(policy).expect("native provider");
         let mut request = run_request(canonical, vec!["0.05"]);
@@ -5953,9 +6081,7 @@ mod tests {
     fn no_reader_cannot_block_run_stdin_past_timeout() {
         let sleep = executable(&["/bin/sleep", "/usr/bin/sleep"]);
         let mut policy = ProcessSpawnPolicy::jailed("/").expect("rooted policy");
-        let canonical = policy
-            .authorize_executable(&sleep)
-            .expect("authorize sleep");
+        let canonical = authorize_system_test_executable(&mut policy, &sleep);
         policy.limits.max_stdin_bytes = 1024 * 1024;
         let provider = NativeProcessSpawn::new(policy).expect("native provider");
         let mut request = run_request(canonical, vec!["5"]);
@@ -6154,9 +6280,7 @@ mod tests {
     fn watchdog_timeout_remains_observable_until_wait_consumes_it() {
         let sleep = executable(&["/bin/sleep", "/usr/bin/sleep"]);
         let mut policy = ProcessSpawnPolicy::jailed("/").expect("rooted policy");
-        let canonical = policy
-            .authorize_executable(&sleep)
-            .expect("authorize sleep");
+        let canonical = authorize_system_test_executable(&mut policy, &sleep);
         policy.limits.max_runtime_millis = 10;
         let provider = NativeProcessSpawn::new(policy).expect("native provider");
         let response = provider
@@ -6225,7 +6349,26 @@ mod tests {
             Ok(ProcessSpawnResponse::StdinWritten { bytes_written: 11 })
         ));
         assert!(handle.starts_with("ps-"));
-        assert!(!handle.contains(&std::process::id().to_string()));
+        // Random opaque bytes can coincidentally contain decimal PID digits.
+        // Test the actual authority boundary: a native child PID cannot be
+        // substituted for the provider-scoped handle.
+        let child_pid = {
+            let children = lock_unpoison(&provider.children);
+            let Some(LifecycleChild::Running(running)) = children.get(&handle) else {
+                panic!("sleep must remain live until the explicit kill");
+            };
+            running.child.id().to_string()
+        };
+        assert!(matches!(
+            provider.perform(
+                &ProcessSpawnRequest::Wait {
+                    handle: child_pid,
+                    timeout_millis: Some(0)
+                },
+                &[ProcessSpawnCapability::Spawn],
+            ),
+            Err(ProcessSpawnError::UnknownHandle { .. })
+        ));
         let kill = provider.perform(
             &ProcessSpawnRequest::Kill {
                 handle: handle.clone(),

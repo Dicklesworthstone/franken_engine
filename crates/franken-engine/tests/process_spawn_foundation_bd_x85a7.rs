@@ -669,7 +669,7 @@ fn native_process_provider(
     let executable = unix_executable(candidates);
     let mut policy = ProcessSpawnPolicy::jailed("/").expect("rooted native process policy");
     let canonical = policy
-        .authorize_alias(alias, executable)
+        .authorize_trusted_system_alias(alias, executable)
         .expect("authorize exact native process alias");
     policy.limits.max_runtime_millis = max_runtime_millis;
     policy.limits.max_children = 1;

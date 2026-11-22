@@ -1,0 +1,239 @@
+name: Linux process spawning
+
+on:
+  push:
+    branches: [main, verify/issue-11-secure-spawn]
+    paths:
+      - .github/workflows/linux-process-spawn.yml
+      - .cargo/**
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - crates/franken-extension-host/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-process-spawn-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ubuntu-uutils:
+    name: Ubuntu uutils and trusted system executable policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    container:
+      image: ubuntu:26.04
+    defaults:
+      run:
+        shell: bash
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      RUSTUP_HOME: /opt/frankenengine-rustup
+      CARGO_HOME: /opt/frankenengine-cargo
+      CARGO_TARGET_DIR: /tmp/frankenengine-process-spawn-target
+      CARGO_BUILD_JOBS: "1"
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_HTTP_USER_AGENT: franken_engine-agent (+https://github.com/Dicklesworthstone/franken_engine)
+      RUST_BACKTRACE: "1"
+
+    steps:
+      - name: Install Ubuntu build tools and actual uutils
+        run: |
+          set -euo pipefail
+          apt-get -o Acquire::http::User-Agent="$CARGO_HTTP_USER_AGENT" \
+            -o Acquire::https::User-Agent="$CARGO_HTTP_USER_AGENT" update
+          apt-get -o Acquire::http::User-Agent="$CARGO_HTTP_USER_AGENT" \
+            -o Acquire::https::User-Agent="$CARGO_HTTP_USER_AGENT" \
+            install -y --no-install-recommends \
+            build-essential curl ca-certificates git python3 pkg-config \
+            rust-coreutils coreutils-from-uutils util-linux
+          git config --global http.userAgent "$CARGO_HTTP_USER_AGENT"
+          dpkg-query -W rust-coreutils coreutils-from-uutils libc6
+
+      - name: Check out the exact source revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install the repository's pinned Rust toolchain
+        run: |
+          set -euo pipefail
+          toolchain="$(python3 - <<'PY'
+          import pathlib
+          import tomllib
+          print(tomllib.loads(pathlib.Path("rust-toolchain.toml").read_text())["toolchain"]["channel"])
+          PY
+          )"
+          curl --proto '=https' --tlsv1.2 --fail --location \
+            --user-agent "$CARGO_HTTP_USER_AGENT" \
+            https://sh.rustup.rs -o /tmp/frankenengine-rustup-init.sh
+          sh /tmp/frankenengine-rustup-init.sh -y --no-modify-path \
+            --profile minimal --default-toolchain "$toolchain" \
+            --component rustfmt,clippy
+          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+          echo "RUSTUP_TOOLCHAIN=$toolchain" >> "$GITHUB_ENV"
+          "$CARGO_HOME/bin/rustc" --version
+          "$CARGO_HOME/bin/cargo" --version
+
+      - name: Prove actual Ubuntu uutils rejects the original sealed-memfd launch
+        run: |
+          set -euo pipefail
+          setpriv --reuid=1000 --regid=1000 --clear-groups -- python3 - <<'PY'
+          import fcntl
+          import os
+          import shutil
+          import subprocess
+
+          assert os.geteuid() == 1000
+          executable = "/bin/echo"
+          marker = "frankenengine-uutils-regression"
+          direct = subprocess.run([executable, marker], capture_output=True, check=True)
+          assert direct.stdout == (marker + "\n").encode()
+          assert not direct.stderr
+          flags = os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING | getattr(os, "MFD_EXEC", 0x10)
+          fd = os.memfd_create("frankenengine-process-image", flags)
+          try:
+              with open(executable, "rb") as original, os.fdopen(os.dup(fd), "wb") as image:
+                  shutil.copyfileobj(original, image)
+              os.fchmod(fd, 0o500)
+              seals = (
+                  fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW
+                  | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_SEAL
+              )
+              fcntl.fcntl(fd, fcntl.F_ADD_SEALS, seals)
+              snapshot = subprocess.run(
+                  [executable, marker],
+                  executable=f"/proc/self/fd/{fd}",
+                  pass_fds=(fd,),
+                  capture_output=True,
+                  timeout=10,
+              )
+          finally:
+              os.close(fd)
+          assert snapshot.returncode == 1, snapshot
+          assert b"Security violation: Requested utility" in snapshot.stderr, snapshot.stderr
+          assert b"frankenengine-process-image (deleted)" in snapshot.stderr
+          print(snapshot.stderr.decode(), end="")
+          print("Confirmed the original regression against actual Ubuntu uutils as UID 1000.")
+          PY
+
+      - name: Check pinned formatting of changed Rust files
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+          import subprocess
+
+          event = json.loads(pathlib.Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+          if os.environ["GITHUB_REF"] == "refs/heads/verify/issue-11-secure-spawn":
+              base = subprocess.check_output(
+                  ["git", "merge-base", "origin/main", "HEAD"], text=True
+              ).strip()
+          else:
+              base = event.get("before", "")
+              if len(base) != 40 or not all(c in "0123456789abcdef" for c in base) or set(base) == {"0"}:
+                  base = "HEAD^"
+          changed = subprocess.check_output([
+              "git", "diff", "--name-only", "--diff-filter=ACMR", "-z",
+              base, "HEAD", "--", "*.rs",
+          ])
+          paths = [path.decode() for path in changed.split(b"\0") if path]
+          for path in paths:
+              subprocess.run([
+                  "rustfmt", "--edition", "2024", "--config", "skip_children=true",
+                  "--check", "--", path,
+              ], check=True)
+          print(f"Checked pinned formatting for {len(paths)} changed Rust files.")
+          PY
+
+      - name: Check all extension-host targets
+        run: |
+          cargo check --locked --no-default-features \
+            -p frankenengine-extension-host --all-targets
+
+      - name: Run strict Clippy for all extension-host targets
+        run: |
+          cargo clippy --locked --no-default-features \
+            -p frankenengine-extension-host --all-targets -- -D warnings
+
+      - name: Build library and trusted system integration tests
+        id: tests
+        run: |
+          set -euo pipefail
+          cargo test --locked --no-default-features \
+            -p frankenengine-extension-host --lib --test trusted_system_spawn \
+            --no-run --message-format=json-render-diagnostics \
+            > /tmp/frankenengine-process-spawn-artifacts.jsonl
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+
+          wanted = {
+              "frankenengine_extension_host": "library",
+              "trusted_system_spawn": "integration",
+          }
+          found = {name: set() for name in wanted}
+          for line in pathlib.Path("/tmp/frankenengine-process-spawn-artifacts.jsonl").read_text().splitlines():
+              item = json.loads(line)
+              name = item.get("target", {}).get("name")
+              if (
+                  item.get("reason") == "compiler-artifact"
+                  and name in wanted
+                  and item.get("profile", {}).get("test")
+                  and item.get("executable")
+              ):
+                  found[name].add(item["executable"])
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              for name, key in wanted.items():
+                  if len(found[name]) != 1:
+                      raise SystemExit(f"Expected one {name} executable, found {found[name]}")
+                  executable = found[name].pop()
+                  output.write(f"{key}={executable}\n")
+                  print(f"Exact {key} test executable: {executable}")
+          PY
+          chmod -R a+rX "$CARGO_TARGET_DIR"
+          chmod a+rx "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/crates" \
+            "$GITHUB_WORKSPACE/crates/franken-extension-host"
+
+      - name: Test trusted system policy against actual uutils as UID 1000
+        env:
+          TEST_BINARY: ${{ steps.tests.outputs.integration }}
+        run: |
+          set -euo pipefail
+          cd crates/franken-extension-host
+          setpriv --reuid=1000 --regid=1000 --clear-groups -- \
+            "$TEST_BINARY" --test-threads=1
+
+      - name: Run focused process spawning tests as UID 1000
+        env:
+          TEST_BINARY: ${{ steps.tests.outputs.library }}
+        run: |
+          set -euo pipefail
+          cd crates/franken-extension-host
+          setpriv --reuid=1000 --regid=1000 --clear-groups -- \
+            "$TEST_BINARY" process_spawn:: --test-threads=1
+
+      - name: Run the complete extension-host library suite as UID 1000
+        env:
+          TEST_BINARY: ${{ steps.tests.outputs.library }}
+        run: |
+          set -euo pipefail
+          cd crates/franken-extension-host
+          setpriv --reuid=1000 --regid=1000 --clear-groups -- \
+            "$TEST_BINARY" --test-threads=1
+
+      - name: Record tested source identity
+        if: always()
+        run: |
+          printf 'Source revision: %s\n' "$GITHUB_SHA"
+          printf 'Native regression UID: 1000\n'

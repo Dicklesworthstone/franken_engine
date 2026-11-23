@@ -25,7 +25,9 @@ mod fd_write;
 mod http_response;
 mod network_deadline;
 pub use control::{HostIoControl, UnrestrictedHostIoControl};
-pub use http_response::{ParsedHttpResponse, parse_http_response};
+pub use http_response::{
+    IncomingHttpHeaderValue, IncomingHttpHeaders, ParsedHttpResponse, parse_http_response,
+};
 use network_deadline::{DeadlineTcpStream, NetworkDeadline};
 pub use network_deadline::{NetworkDestinationAllowlist, NetworkEgressPolicy, NetworkRevocation};
 

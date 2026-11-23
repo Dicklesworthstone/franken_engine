@@ -6501,10 +6501,11 @@ impl InterpreterCore {
     /// - `status` is the final numeric status code, after informational replies,
     /// - `statusText` is the reason phrase,
     /// - `ok` is `true` for a 2xx status (WHATWG `Response.ok` semantics),
-    /// - `headers` is a plain object of lower-cased header name -> value (the
-    ///   lower-casing matches `fetch` `Headers` / Node's `res.headers`; the last
-    ///   value wins on a duplicate name, which is `alloc_object_with_properties`'s
-    ///   natural overwrite behavior),
+    /// - `headers` follows Node's incoming-header rules: lower-cased names,
+    ///   arrays for `set-cookie`, `; `-joined cookies, `, `-joined ordinary
+    ///   duplicates, and first values for singleton fields,
+    /// - `rawHeaders` preserves every final-response field's name, value and
+    ///   order, including duplicate fields discarded from `headers`,
     /// - `body` is the transfer-decoded body as a UTF-8 (lossy) string. Chunk
     ///   boundaries are removed before UTF-8 decoding, so a multi-byte scalar
     ///   split between chunks is not replaced by multiple U+FFFD characters.
@@ -6519,7 +6520,7 @@ impl InterpreterCore {
         method: &str,
     ) -> Result<Value, InterpreterError> {
         use frankenengine_extension_host::host_io::{
-            SANDBOXED_HOST_IO_MAX_BYTES, parse_http_response,
+            IncomingHttpHeaderValue, SANDBOXED_HOST_IO_MAX_BYTES, parse_http_response,
         };
 
         let raw_bytes = u64::try_from(raw.len()).unwrap_or(u64::MAX);
@@ -6536,13 +6537,23 @@ impl InterpreterCore {
         let field_vectors = parsed
             .header_count()
             .saturating_mul(
-                std::mem::size_of::<(String, Value)>()
+                std::mem::size_of::<(String, Vec<String>)>()
+                    .saturating_add(std::mem::size_of::<(String, usize)>())
+                    .saturating_add(std::mem::size_of::<String>())
+                    .saturating_add(2usize.saturating_mul(std::mem::size_of::<Value>()))
+                    .saturating_add(std::mem::size_of::<(String, Value)>())
                     .saturating_add(std::mem::size_of::<(&str, Value)>()),
             )
             .saturating_mul(2);
+        let header_bytes = parsed.headers().fold(0u64, |bytes, (name, value)| {
+            bytes.saturating_add(
+                u64::try_from(name.len().saturating_add(value.len())).unwrap_or(u64::MAX),
+            )
+        });
         self.check_temporary_memory_budget(
             raw_bytes
                 .saturating_mul(8)
+                .saturating_add(header_bytes.saturating_mul(8))
                 .saturating_add(u64::try_from(field_vectors).unwrap_or(u64::MAX)),
         )?;
         let body = parsed
@@ -6555,44 +6566,61 @@ impl InterpreterCore {
             .trim()
             .to_string();
 
-        // Collect header name/value pairs (lower-cased names, trimmed values).
-        // Hold the owned strings so the `&str` keys handed to
-        // `alloc_object_with_properties` stay valid for the call.
-        let header_pairs: Vec<(String, Value)> = parsed
-            .headers()
-            .map(|(name, value)| {
-                (
-                    String::from_utf8_lossy(name).to_ascii_lowercase(),
-                    Value::str(String::from_utf8_lossy(value).as_ref()),
-                )
-            })
-            .collect();
-        let header_props: Vec<(&str, Value)> = header_pairs
-            .iter()
-            .map(|(name, value)| (name.as_str(), value.clone()))
-            .collect();
-        let headers_id = self.alloc_object_with_properties(&header_props)?;
+        let incoming_headers = parsed.incoming_headers();
 
-        let body_str = String::from_utf8_lossy(body.as_ref()).into_owned();
-        let ok = (200..300).contains(&status);
-        // bd-3894s slice (2d): tag the response `IncomingMessage` so `res.on('data'|
-        // 'end'|'error', …)` resolves to the shared `EventEmitter.prototype.on` via
-        // the `__type` member-access path. Populate both Node's `http.IncomingMessage`
-        // properties (`statusCode`/`statusMessage`, bd-slb7a) and the legacy
-        // `status`/`statusText`/`ok`/`body` fields alongside `headers`.
-        let response_id = self.alloc_branded_object(
-            "IncomingMessage",
-            &[
-                ("status", Value::Int(status)),
-                ("statusCode", Value::Int(status)),
-                ("statusText", Value::str(status_text.as_str())),
-                ("statusMessage", Value::str(status_text.as_str())),
-                ("ok", Value::Bool(ok)),
-                ("headers", Value::Object(headers_id)),
-                ("body", Value::str(body_str.as_str())),
-            ],
-        )?;
-        Ok(Value::Object(response_id))
+        let previous_heap_len = self.heap.len();
+        let previous_estimated_bytes = self.estimated_memory_bytes;
+        let result = (|| {
+            let mut header_pairs = Vec::with_capacity(incoming_headers.headers.len());
+            for (name, value) in incoming_headers.headers {
+                let value = match value {
+                    IncomingHttpHeaderValue::Single(value) => Value::str(value),
+                    IncomingHttpHeaderValue::Array(values) => {
+                        let values: Vec<Value> = values
+                            .iter()
+                            .map(|value| Value::str(value.as_str()))
+                            .collect();
+                        Value::Object(self.alloc_array_from_values(&values)?)
+                    }
+                };
+                header_pairs.push((name, value));
+            }
+            let header_props: Vec<(&str, Value)> = header_pairs
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.clone()))
+                .collect();
+            let headers_id = self.alloc_object_with_properties(&header_props)?;
+            let raw_headers: Vec<Value> = incoming_headers
+                .raw_headers
+                .iter()
+                .map(|value| Value::str(value.as_str()))
+                .collect();
+            let raw_headers_id = self.alloc_array_from_values(&raw_headers)?;
+
+            let body_str = String::from_utf8_lossy(body.as_ref()).into_owned();
+            let ok = (200..300).contains(&status);
+            // The legacy IncomingMessage brand supplies the readable event API.
+            // Keep the status/statusText aliases alongside Node's metadata.
+            let response_id = self.alloc_branded_object(
+                "IncomingMessage",
+                &[
+                    ("status", Value::Int(status)),
+                    ("statusCode", Value::Int(status)),
+                    ("statusText", Value::str(status_text.as_str())),
+                    ("statusMessage", Value::str(status_text.as_str())),
+                    ("ok", Value::Bool(ok)),
+                    ("headers", Value::Object(headers_id)),
+                    ("rawHeaders", Value::Object(raw_headers_id)),
+                    ("body", Value::str(body_str.as_str())),
+                ],
+            )?;
+            Ok(Value::Object(response_id))
+        })();
+        if result.is_err() {
+            self.rollback_heap_to_len(previous_heap_len);
+            self.estimated_memory_bytes = previous_estimated_bytes;
+        }
+        result
     }
 
     // ---------------------------------------------------------------------------

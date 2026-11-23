@@ -9869,10 +9869,13 @@ fn client_request_on_error_fires_on_failed_egress_bd_3894s() {
 /// `undefined`; the readable stream is scheduled to drive afterward.
 #[test]
 fn client_request_on_response_listener_receives_response_bd_3894s() {
-    use frankenengine_extension_host::host_io::{InMemoryHostIoTranscript, SandboxedHostIo};
+    use frankenengine_extension_host::host_io::{
+        HostIoResponse, InMemoryHostIoTranscript, SandboxedHostIo,
+    };
     use std::io::{Read, Write};
     use std::time::Duration;
 
+    const RESPONSE: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nSet-Cookie: session=a\r\nsEt-CoOkIe: csrf=b\r\nX-Trace: first\r\nx-trace: second\r\nCookie: a=1\r\nCOOKIE: b=2\r\nContent-Type: text/plain\r\ncontent-type: ignored\r\n\r\nok";
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
     let addr = listener.local_addr().expect("listener addr");
     let server = std::thread::spawn(move || {
@@ -9880,10 +9883,19 @@ fn client_request_on_response_listener_receives_response_bd_3894s() {
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
             .expect("server read timeout");
+        stream
+            .set_write_timeout(Some(Duration::from_secs(5)))
+            .expect("server write timeout");
         let mut received = Vec::new();
-        let _ = stream.read_to_end(&mut received);
-        let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
-        let _ = stream.flush();
+        while !received.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+            let mut buffer = [0; 1024];
+            let count = stream.read(&mut buffer).expect("read request head");
+            assert!(count > 0, "request must finish its header block");
+            received.extend_from_slice(&buffer[..count]);
+            assert!(received.len() <= 8192, "bounded request head");
+        }
+        stream.write_all(RESPONSE).expect("write response");
+        stream.flush().expect("flush response");
         received
     });
 
@@ -9987,7 +9999,68 @@ fn client_request_on_response_listener_receives_response_bd_3894s() {
     };
     let resp = core.heap.get(resp_id.0 as usize).expect("response object");
     assert_eq!(resp.properties.get("status"), Some(&Value::Int(200)));
+    assert_eq!(resp.properties.get("statusCode"), Some(&Value::Int(200)));
     assert_eq!(resp.properties.get("body"), Some(&Value::str("ok")));
+    let Some(Value::Object(headers)) = resp.properties.get("headers") else {
+        panic!("response must carry parsed headers");
+    };
+    let headers = &core.heap[headers.0 as usize];
+    assert_eq!(
+        headers.properties.get("x-trace"),
+        Some(&Value::str("first, second"))
+    );
+    assert_eq!(
+        headers.properties.get("cookie"),
+        Some(&Value::str("a=1; b=2"))
+    );
+    assert_eq!(
+        headers.properties.get("content-type"),
+        Some(&Value::str("text/plain"))
+    );
+    let Some(Value::Object(cookies)) = headers.properties.get("set-cookie") else {
+        panic!("Set-Cookie must be an array");
+    };
+    assert_eq!(
+        core.read_array_like_values(*cookies),
+        vec![Value::str("session=a"), Value::str("csrf=b")]
+    );
+    let Some(Value::Object(raw_headers)) = resp.properties.get("rawHeaders") else {
+        panic!("response must preserve raw header fields");
+    };
+    assert_eq!(
+        core.read_array_like_values(*raw_headers),
+        [
+            "Content-Length",
+            "2",
+            "Set-Cookie",
+            "session=a",
+            "sEt-CoOkIe",
+            "csrf=b",
+            "X-Trace",
+            "first",
+            "x-trace",
+            "second",
+            "Cookie",
+            "a=1",
+            "COOKIE",
+            "b=2",
+            "Content-Type",
+            "text/plain",
+            "content-type",
+            "ignored"
+        ]
+        .map(Value::str)
+        .to_vec()
+    );
+    let entries = recorder.entries();
+    assert_eq!(entries.len(), 1, "one authorized network effect");
+    assert!(
+        matches!(
+            &entries[0].1,
+            Ok(HostIoResponse::NetworkRequest { response }) if response == RESPONSE
+        ),
+        "guest header normalization must preserve exact replay bytes"
+    );
     // The readable stream is scheduled to drive 'data'/'end' after the delivery.
     assert_eq!(
         core.pending_stream_emissions.len(),
@@ -10053,6 +10126,63 @@ fn build_net_response_value_parses_status_headers_body_bd_3894s() {
     assert_eq!(headers.properties.get("x-trace"), Some(&Value::str("abc")));
 }
 
+#[test]
+fn build_net_response_value_keeps_single_cookie_arrays_and_raw_latin1_headers() {
+    let mut core = test_interpreter();
+    let raw = b"HTTP/1.0 200 OK\r\nSet-Cookie: only=one\r\nX-Name: caf\xe9\r\nContent-Type:\r\nCONTENT-TYPE: ignored\r\n\r\n";
+    let Value::Object(response) = core.build_net_response_value(raw, "GET").unwrap() else {
+        panic!("valid response must produce an object");
+    };
+    let response = &core.heap[response.0 as usize];
+    let Some(Value::Object(headers)) = response.properties.get("headers") else {
+        panic!("response must contain headers");
+    };
+    let headers = &core.heap[headers.0 as usize];
+    assert_eq!(headers.properties.get("x-name"), Some(&Value::str("café")));
+    assert_eq!(
+        headers.properties.get("content-type"),
+        Some(&Value::str(""))
+    );
+    let Some(Value::Object(cookies)) = headers.properties.get("set-cookie") else {
+        panic!("one Set-Cookie field must still create an array");
+    };
+    assert_eq!(
+        core.read_array_like_values(*cookies),
+        vec![Value::str("only=one")]
+    );
+    let Some(Value::Object(raw_headers)) = response.properties.get("rawHeaders") else {
+        panic!("response must contain rawHeaders");
+    };
+    assert_eq!(
+        core.read_array_like_values(*raw_headers),
+        [
+            "Set-Cookie",
+            "only=one",
+            "X-Name",
+            "café",
+            "Content-Type",
+            "",
+            "CONTENT-TYPE",
+            "ignored"
+        ]
+        .map(Value::str)
+        .to_vec()
+    );
+}
+
+#[test]
+fn build_net_response_value_admits_header_materialization_before_allocating() {
+    let mut core = test_interpreter();
+    let previous_heap_len = core.heap.len();
+    let previous_bytes = core.estimated_memory_bytes;
+    core.config.max_total_memory_bytes = previous_bytes.saturating_add(1);
+    let raw = b"HTTP/1.0 200 OK\r\nSet-Cookie: only=one\r\n\r\n";
+    core.build_net_response_value(raw, "GET")
+        .expect_err("response header materialization must honor the memory budget");
+    assert_eq!(core.heap.len(), previous_heap_len);
+    assert_eq!(core.estimated_memory_bytes, previous_bytes);
+}
+
 /// Empty or malformed recorded/provider outcomes must not fabricate a
 /// response object. Failure leaves guest heap state unchanged.
 #[test]
@@ -10083,6 +10213,16 @@ fn build_net_response_value_decodes_chunks_after_final_status() {
     assert_eq!(
         core.heap[headers.0 as usize].properties.get("x-source"),
         Some(&Value::str("final"))
+    );
+    let Some(Value::Object(raw_headers)) = response.properties.get("rawHeaders") else {
+        panic!("final response must contain rawHeaders");
+    };
+    assert_eq!(
+        core.read_array_like_values(*raw_headers),
+        ["Transfer-Encoding", "chunked", "X-Source", "final"]
+            .map(Value::str)
+            .to_vec(),
+        "interim and trailer fields must not leak into final response headers"
     );
 }
 
@@ -10258,8 +10398,18 @@ fn decode_fs_read_result_preserves_exact_utf16_code_units() {
 #[test]
 fn decode_fs_read_result_admits_string_memory_before_decoding() {
     for encoding in [
-        "utf8", "utf-8", "utf16le", "utf-16le", "ucs2", "ucs-2", "latin1", "binary", "ascii", "hex",
-        "base64", "base64url",
+        "utf8",
+        "utf-8",
+        "utf16le",
+        "utf-16le",
+        "ucs2",
+        "ucs-2",
+        "latin1",
+        "binary",
+        "ascii",
+        "hex",
+        "base64",
+        "base64url",
     ] {
         let mut core = test_interpreter();
         core.sync_estimated_memory_bytes()

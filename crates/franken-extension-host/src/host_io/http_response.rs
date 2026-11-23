@@ -8,6 +8,7 @@
 //! framing and informational responses, are retained for the effect journal.
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::io::{self, Read};
 
 const MAX_HEAD_BYTES: usize = 64 * 1024;
@@ -37,6 +38,23 @@ pub struct ParsedHttpResponse<'a> {
     body_len: usize,
 }
 
+/// Node-compatible value for an incoming HTTP header. `set-cookie` always uses
+/// an array, including when the response contains just one cookie.
+#[derive(Debug, PartialEq, Eq)]
+pub enum IncomingHttpHeaderValue {
+    Single(String),
+    Array(Vec<String>),
+}
+
+/// Final-response fields for an IncomingMessage consumer. Normalized header
+/// names retain first-occurrence order; raw fields retain original name casing,
+/// duplicate values, and wire order as alternating name/value strings.
+#[derive(Debug, PartialEq, Eq)]
+pub struct IncomingHttpHeaders {
+    pub headers: Vec<(String, IncomingHttpHeaderValue)>,
+    pub raw_headers: Vec<String>,
+}
+
 impl<'a> ParsedHttpResponse<'a> {
     /// Original final-response fields, without merging or rewriting duplicates.
     pub fn headers(&self) -> impl Iterator<Item = (&'a [u8], &'a [u8])> + 'a {
@@ -50,6 +68,70 @@ impl<'a> ParsedHttpResponse<'a> {
 
     pub fn header_count(&self) -> usize {
         self.header_count
+    }
+
+    /// Build the default Node incoming-header view without changing framing or
+    /// the recorded wire bytes. This deliberately does not opt into Node's
+    /// `joinDuplicateHeaders` option: singleton fields keep their first value.
+    ///
+    /// Allocation is linear in the validated header bytes and field count.
+    /// Callers with an allocation budget must admit this materialization first.
+    pub fn incoming_headers(&self) -> IncomingHttpHeaders {
+        let mut indices = BTreeMap::<String, usize>::new();
+        let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+        let mut raw_headers = Vec::with_capacity(self.header_count.saturating_mul(2));
+        for (name, value) in self.headers() {
+            // Validated token names are ASCII. Field values may contain
+            // obs-text, which Node exposes as Latin-1 rather than lossy UTF-8.
+            let original_name = String::from_utf8_lossy(name);
+            let value: String = value.iter().copied().map(char::from).collect();
+            raw_headers.push(original_name.to_string());
+            raw_headers.push(value.clone());
+            let name = original_name.to_ascii_lowercase();
+            let index = *indices.entry(name.clone()).or_insert_with(|| {
+                let index = groups.len();
+                groups.push((name, Vec::new()));
+                index
+            });
+            groups[index].1.push(value);
+        }
+
+        let headers = groups
+            .into_iter()
+            .map(|(name, values)| {
+                let value = match name.as_str() {
+                    "set-cookie" => IncomingHttpHeaderValue::Array(values),
+                    "age"
+                    | "authorization"
+                    | "content-length"
+                    | "content-type"
+                    | "etag"
+                    | "expires"
+                    | "from"
+                    | "host"
+                    | "if-modified-since"
+                    | "if-unmodified-since"
+                    | "last-modified"
+                    | "location"
+                    | "max-forwards"
+                    | "proxy-authorization"
+                    | "referer"
+                    | "retry-after"
+                    | "server"
+                    | "user-agent" => {
+                        // Every group was created by its first validated field.
+                        IncomingHttpHeaderValue::Single(values[0].clone())
+                    }
+                    "cookie" => IncomingHttpHeaderValue::Single(values.join("; ")),
+                    _ => IncomingHttpHeaderValue::Single(values.join(", ")),
+                };
+                (name, value)
+            })
+            .collect();
+        IncomingHttpHeaders {
+            headers,
+            raw_headers,
+        }
     }
 
     /// Exact decoded size, available before a caller admits a body allocation.
@@ -948,7 +1030,224 @@ mod tests {
         );
         assert_eq!(parsed.body_len(), 4);
         assert_eq!(parsed.body_bytes().unwrap().as_ref(), b"\x00\xffok");
+        assert_eq!(
+            parsed.incoming_headers().raw_headers,
+            ["Transfer-Encoding", "chunked", "X-Source", "final"]
+        );
         assert_eq!(raw, before, "decoding must not change replay bytes");
+    }
+
+    #[test]
+    fn incoming_headers_preserve_cookie_multiplicity_and_join_other_duplicates() {
+        let raw = b"HTTP/1.1 200 OK\r\nX-Trace: one\r\nSet-Cookie: session=a; Expires=Wed, 21 Oct 2030 07:28:00 GMT\r\nCookie: a=1\r\nx-trace: two\r\nsEt-CoOkIe: csrf=b\r\ncOOkie: b=2\r\nContent-Type: text/plain\r\ncontent-type: application/json\r\nContent-Length: 0\r\n\r\n";
+        let headers = parse_http_response(raw, "GET").unwrap().incoming_headers();
+        assert_eq!(
+            headers.headers,
+            vec![
+                (
+                    "x-trace".into(),
+                    IncomingHttpHeaderValue::Single("one, two".into())
+                ),
+                (
+                    "set-cookie".into(),
+                    IncomingHttpHeaderValue::Array(vec![
+                        "session=a; Expires=Wed, 21 Oct 2030 07:28:00 GMT".into(),
+                        "csrf=b".into(),
+                    ])
+                ),
+                (
+                    "cookie".into(),
+                    IncomingHttpHeaderValue::Single("a=1; b=2".into())
+                ),
+                (
+                    "content-type".into(),
+                    IncomingHttpHeaderValue::Single("text/plain".into())
+                ),
+                (
+                    "content-length".into(),
+                    IncomingHttpHeaderValue::Single("0".into())
+                ),
+            ]
+        );
+        assert_eq!(
+            headers.raw_headers,
+            [
+                "X-Trace",
+                "one",
+                "Set-Cookie",
+                "session=a; Expires=Wed, 21 Oct 2030 07:28:00 GMT",
+                "Cookie",
+                "a=1",
+                "x-trace",
+                "two",
+                "sEt-CoOkIe",
+                "csrf=b",
+                "cOOkie",
+                "b=2",
+                "Content-Type",
+                "text/plain",
+                "content-type",
+                "application/json",
+                "Content-Length",
+                "0",
+            ]
+        );
+    }
+
+    #[test]
+    fn incoming_headers_keep_first_singletons_even_when_the_first_value_is_empty() {
+        for name in [
+            "age",
+            "authorization",
+            "content-type",
+            "etag",
+            "expires",
+            "from",
+            "host",
+            "if-modified-since",
+            "if-unmodified-since",
+            "last-modified",
+            "location",
+            "max-forwards",
+            "proxy-authorization",
+            "referer",
+            "retry-after",
+            "server",
+            "user-agent",
+        ] {
+            let raw = format!(
+                "HTTP/1.0 200 OK\r\n{name}:\r\n{}: must-not-replace-first\r\n\r\n",
+                name.to_ascii_uppercase()
+            );
+            let headers = parse_http_response(raw.as_bytes(), "GET")
+                .unwrap()
+                .incoming_headers();
+            assert_eq!(
+                headers.headers,
+                vec![(name.into(), IncomingHttpHeaderValue::Single(String::new()))],
+                "singleton {name} must preserve its first field"
+            );
+            assert_eq!(headers.raw_headers.len(), 4);
+            assert_eq!(headers.raw_headers[3], "must-not-replace-first");
+        }
+        let parsed = parse_http_response(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\ncontent-length: 0\r\n\r\n",
+            "GET",
+        )
+        .unwrap();
+        assert_eq!(
+            parsed.incoming_headers().headers,
+            vec![(
+                "content-length".into(),
+                IncomingHttpHeaderValue::Single("0".into())
+            )]
+        );
+    }
+
+    #[test]
+    fn incoming_headers_keep_single_cookie_arrays_and_latin1_field_octets() {
+        let raw = b"HTTP/1.0 200 OK\r\nSet-Cookie: only=one\r\nX-Name:  caf\xe9\t\r\n\r\n";
+        let headers = parse_http_response(raw, "GET").unwrap().incoming_headers();
+        assert_eq!(
+            headers.headers,
+            vec![
+                (
+                    "set-cookie".into(),
+                    IncomingHttpHeaderValue::Array(vec!["only=one".into()])
+                ),
+                (
+                    "x-name".into(),
+                    IncomingHttpHeaderValue::Single("café".into())
+                ),
+            ]
+        );
+        assert_eq!(
+            headers.raw_headers,
+            ["Set-Cookie", "only=one", "X-Name", "café"]
+        );
+        let empty = parse_http_response(b"HTTP/1.0 200 OK\r\n\r\n", "GET")
+            .unwrap()
+            .incoming_headers();
+        assert!(empty.headers.is_empty());
+        assert!(empty.raw_headers.is_empty());
+    }
+
+    #[test]
+    fn incoming_headers_survive_a_real_socket_exchange_with_informational_and_trailer_fields() {
+        use std::io::Write;
+        use std::net::{TcpListener, TcpStream};
+        use std::time::{Duration, Instant};
+
+        const RESPONSE: &[u8] = b"HTTP/1.1 103 Early Hints\r\nX-Phase: interim\r\n\r\nHTTP/1.1 200 OK\r\nSet-Cookie: a=1\r\nsEt-CoOkIe: b=2\r\nX-Phase: final\r\nX-Phase: second\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nok\r\n0\r\nX-Phase: trailer\r\n\r\n";
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let server = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut peer = loop {
+                match listener.accept() {
+                    Ok((peer, _)) => break peer,
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        assert!(Instant::now() < deadline, "client did not connect");
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(error) => panic!("loopback accept: {error}"),
+                }
+            };
+            peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            peer.set_write_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut request = [0; GET.len()];
+            peer.read_exact(&mut request).unwrap();
+            assert_eq!(request, GET);
+            peer.write_all(RESPONSE).unwrap();
+        });
+        let mut client = TcpStream::connect_timeout(&address, Duration::from_secs(5)).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        client
+            .set_write_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        client.write_all(GET).unwrap();
+        let recorded = read_response(&mut client, GET, RESPONSE.len() as u64).unwrap();
+        server.join().unwrap();
+        assert_eq!(recorded, RESPONSE);
+        let parsed = parse_http_response(&recorded, "GET").unwrap();
+        assert_eq!(parsed.body_bytes().unwrap().as_ref(), b"ok");
+        assert_eq!(
+            parsed.incoming_headers(),
+            IncomingHttpHeaders {
+                headers: vec![
+                    (
+                        "set-cookie".into(),
+                        IncomingHttpHeaderValue::Array(vec!["a=1".into(), "b=2".into()])
+                    ),
+                    (
+                        "x-phase".into(),
+                        IncomingHttpHeaderValue::Single("final, second".into())
+                    ),
+                    (
+                        "transfer-encoding".into(),
+                        IncomingHttpHeaderValue::Single("chunked".into())
+                    ),
+                ],
+                raw_headers: [
+                    "Set-Cookie",
+                    "a=1",
+                    "sEt-CoOkIe",
+                    "b=2",
+                    "X-Phase",
+                    "final",
+                    "X-Phase",
+                    "second",
+                    "Transfer-Encoding",
+                    "chunked"
+                ]
+                .map(String::from)
+                .to_vec(),
+            }
+        );
     }
 
     #[test]

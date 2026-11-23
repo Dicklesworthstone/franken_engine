@@ -174,7 +174,9 @@ for (const encoding of encodings) {
     assert_eq!(console_messages(&result), expected);
     assert_eq!(
         std::fs::read(root.join("units.bin")).expect("original UTF-16 bytes on disk"),
-        vec![255, 254, 0, 216, 65, 0, 0, 220, 61, 216, 128, 222, 0, 0, 171],
+        vec![
+            255, 254, 0, 216, 65, 0, 0, 220, 61, 216, 128, 222, 0, 0, 171
+        ],
         "decoding must not change the file or consume its odd trailing byte"
     );
 }

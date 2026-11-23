@@ -136,3 +136,84 @@ fn await_and_yield_stay_usable_where_node_allows_them() {
         assert_eq!(eval(source).as_deref(), Ok(node), "{source}");
     }
 }
+
+#[test]
+fn adjacent_await_operands_execute_with_exact_values() {
+    let source = r#"
+async function f() {
+    let x = 3;
+    const values = [await[1, 2], await{n: 3}, await'quoted', await`template`,
+        await/a+/.test('aa'), await!0, await~1, await+2, await-2, await.5,
+        await++x, await--x];
+    console.log(values[0].join(':'), values[1].n, values.slice(2).join('|'));
+}
+f();
+"#;
+    let outcome = HybridRouter::default()
+        .eval(source)
+        .expect("adjacent await operands must execute");
+    let output: Vec<_> = outcome
+        .console_output
+        .iter()
+        .map(|entry| entry.message.as_str())
+        .collect();
+    assert_eq!(output, ["1:2 3 quoted|template|true|true|-2|2|-2|0.5|4|3"]);
+}
+
+#[test]
+fn adjacent_await_preserves_binary_precedence_and_microtask_order() {
+    let source = r#"
+const order = [];
+function right() { order.push('right'); return 3; }
+async function f() {
+    order.push('start');
+    const result = await+2 + right();
+    order.push('done:' + result);
+}
+f();
+order.push('sync');
+queueMicrotask(() => console.log(order.join(',')));
+"#;
+    let outcome = HybridRouter::default()
+        .eval(source)
+        .expect("await must suspend before the binary right operand runs");
+    let output: Vec<_> = outcome
+        .console_output
+        .iter()
+        .map(|entry| entry.message.as_str())
+        .collect();
+    assert_eq!(output, ["start,sync,right,done:5"]);
+}
+
+#[test]
+fn yield_accepts_full_assignment_operands_and_adjacent_unary_operands() {
+    let source = r#"
+function* g() {
+    let x = 1;
+    yield x = 7;
+    yield x += 2;
+    yield x => x + 1;
+    yield x ? 11 : 12;
+    yield+3 * 2;
+    yield-2 + 1;
+    yield.5;
+    yield++x;
+    yield--x;
+}
+[...g()].map(value => typeof value === 'function' ? value(5) : value).join(',');
+"#;
+    assert_eq!(eval(source).as_deref(), Ok("7,9,6,11,6,-1,0.5,10,9"));
+}
+
+#[test]
+fn suspension_keyword_prefixes_remain_ordinary_identifiers() {
+    let source = r#"
+function f(await, yield) {
+    const awaitValue = 10;
+    const yieldValue = 20;
+    return await+1 + yield-1 + awaitValue + yieldValue;
+}
+f(2, 3);
+"#;
+    assert_eq!(eval(source).as_deref(), Ok("35"));
+}

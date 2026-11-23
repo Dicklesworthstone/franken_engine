@@ -7049,6 +7049,24 @@ fn parse_expression_inner(
         return Ok(Expression::SpreadElement(Box::new(inner)));
     }
 
+    // YieldExpression owns an AssignmentExpression, including an assignment,
+    // arrow function or conditional. Recognize the leading keyword before
+    // those splits: `yield x = 1` is not an assignment to `yield x`, and
+    // `yield x => x` does not declare an arrow parameter named `yield x`.
+    let yields_assignment_expr = !yield_names_identifier_operand(expression, context)
+        && expression.strip_prefix("yield").is_some_and(|rest| {
+            rest.is_empty()
+                || rest.starts_with(' ')
+                || rest.starts_with('*')
+                || rest.starts_with(';')
+                || rest.starts_with(')')
+                || rest.starts_with('}')
+                || (context.yield_context && suspension_operand_follows_directly(rest))
+        });
+    if yields_assignment_expr {
+        return parse_primary_expression(expression, span, context, recursion_depth);
+    }
+
     // Arrow function: lowest precedence (lower than assignment).
     if let Some(result) = try_parse_arrow_function(expression, span, context, recursion_depth) {
         return result;
@@ -7102,26 +7120,8 @@ fn parse_expression_inner(
         return result;
     }
 
-    // `yield` binds looser than every binary operator: its operand is a full
-    // AssignmentExpression, so `yield 1 + 1` is `yield (1 + 1)`, never
-    // `(yield 1) + 1`. (`await` is a UnaryExpression per ES2020 §12.5, so
-    // `await p !== 91` is `(await p) !== 91`, handled via `try_parse_binary`
-    // and unary prefix / primary fallback.)
-    let yields_assignment_expr = !yield_names_identifier_operand(expression, context)
-        && expression.strip_prefix("yield").is_some_and(|rest| {
-            rest.is_empty()
-                || rest.starts_with(' ')
-                || rest.starts_with('*')
-                || rest.starts_with(';')
-                || rest.starts_with(')')
-                || rest.starts_with('}')
-                || yield_operand_follows_directly(rest, context)
-        });
-    if yields_assignment_expr {
-        return parse_primary_expression(expression, span, context, recursion_depth);
-    }
-
-    // Try binary expression with precedence scanning.
+    // `await` owns only a UnaryExpression (ES2020 12.5), so the binary
+    // scanner must run first: `await p + q` is `(await p) + q`.
     if let Some(result) = try_parse_binary(expression, span, context, recursion_depth) {
         return result;
     }
@@ -7253,37 +7253,29 @@ fn parse_primary_expression(
     }
     if let Some(rest) = expression.strip_prefix("await")
         && !await_names_identifier_operand(expression, context)
+        && (rest.starts_with(char::is_whitespace)
+            || (context.await_context && suspension_operand_follows_directly(rest)))
     {
-        if rest.starts_with(' ') {
-            if !context.await_context {
-                return Err(ParseError::new(
-                    ParseErrorCode::AwaitOutsideAsync,
-                    "await expression is only valid inside an async function",
-                    context.source_label.to_string(),
-                    Some(span.clone()),
-                ));
-            }
-            if context.formal_parameters {
-                return Err(invalid_syntax_error(
-                    "an `await` expression cannot be in a parameter list",
-                    span,
-                    context,
-                ));
-            }
-            let nested = parse_expression(rest.trim_start(), span, context, recursion_depth + 1)?;
-            return Ok(Expression::Await(Box::new(nested)));
+        if !context.await_context {
+            return Err(ParseError::new(
+                ParseErrorCode::AwaitOutsideAsync,
+                "await expression is only valid inside an async function",
+                context.source_label.to_string(),
+                Some(span.clone()),
+            ));
         }
-        if rest.starts_with('(') && context.await_context {
-            if context.formal_parameters {
-                return Err(invalid_syntax_error(
-                    "an `await` expression cannot be in a parameter list",
-                    span,
-                    context,
-                ));
-            }
-            let nested = parse_expression(rest.trim_start(), span, context, recursion_depth + 1)?;
-            return Ok(Expression::Await(Box::new(nested)));
+        if context.formal_parameters {
+            return Err(invalid_syntax_error(
+                "an `await` expression cannot be in a parameter list",
+                span,
+                context,
+            ));
         }
+        let nested = parse_expression(rest.trim_start(), span, context, recursion_depth + 1)?;
+        if let Some(error) = unparenthesized_yield_operand(rest, &nested, span, context) {
+            return Err(error);
+        }
+        return Ok(Expression::Await(Box::new(nested)));
     }
 
     // Inside an async function or module `await` is an operator and needs
@@ -7338,7 +7330,7 @@ fn parse_primary_expression(
             || rest.starts_with(';')
             || rest.starts_with(')')
             || rest.starts_with('}')
-            || yield_operand_follows_directly(rest, context))
+            || (context.yield_context && suspension_operand_follows_directly(rest)))
     {
         if context.formal_parameters {
             return Err(invalid_syntax_error(
@@ -9833,19 +9825,22 @@ fn try_parse_unary_prefix(
     None
 }
 
+/// A token that can begin an operand immediately after `await` or `yield`,
+/// when the enclosing function makes that keyword an operator. Minifiers
+/// omit this whitespace for literals, unary signs and update expressions.
+/// A dot starts an operand only when it begins a decimal literal; it must
+/// not reinterpret property access or a spread as a suspension operand.
+fn suspension_operand_follows_directly(rest: &str) -> bool {
+    rest.starts_with(['(', '[', '{', '/', '"', '\'', '`', '!', '~', '+', '-'])
+        || rest
+            .strip_prefix('.')
+            .is_some_and(|fraction| fraction.starts_with(|ch: char| ch.is_ascii_digit()))
+}
+
 /// Whether `expression` starts with `yield` naming an identifier operand:
 /// outside a generator in non-strict code, followed by an operator that
 /// continues the expression (`yield + x`, `yield * 2`, `yield(1)`), so it is
 /// parsed as an operand rather than a yield expression (bd-9vouw.396).
-/// Whether, in a generator, `yield` is followed with no space by a token that
-/// can only begin its operand: `yield(x)`, `yield[a, b]`, `yield/re/g`,
-/// `yield{}`, `yield"s"`, `yield!0`, as minifiers write them. They were read
-/// as a call or member of a bare `yield`, so `const r = yield(1)` yielded
-/// undefined and then called the resumed value (bd-9vouw.460).
-fn yield_operand_follows_directly(rest: &str, context: &ParseExecutionContext<'_>) -> bool {
-    context.yield_context && rest.starts_with(['(', '[', '{', '/', '"', '\'', '`', '!', '~'])
-}
-
 fn yield_names_identifier_operand(expression: &str, context: &ParseExecutionContext<'_>) -> bool {
     !context.yield_context
         && !context.strict_mode

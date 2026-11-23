@@ -5286,6 +5286,189 @@ fn await_binds_tighter_than_binary_operators_and_rejects_unparenthesized_exponen
 }
 
 #[test]
+fn suspension_keywords_accept_adjacent_operands() {
+    for operand in [
+        "[1]",
+        "{answer: 42}",
+        "\"text\"",
+        "'text'",
+        "`text`",
+        "/ok/.test('ok')",
+        "!0",
+        "~1",
+        "+2",
+        "-2",
+        ".5",
+        "++x",
+        "--x",
+    ] {
+        for (declaration, keyword) in [("async function", "await"), ("function*", "yield")] {
+            let source = format!("{declaration} f(x) {{ return {keyword}{operand}; }}");
+            let tree = CanonicalEs2020Parser
+                .parse(&source, ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("{source}: {error}"));
+            let Statement::FunctionDeclaration(function) = &tree.body[0] else {
+                panic!("expected function declaration: {source}");
+            };
+            let Statement::Return(returned) = &function.body.body[0] else {
+                panic!("expected return statement: {source}");
+            };
+            assert!(
+                matches!(returned.argument, Some(Expression::Await(_)))
+                    || matches!(
+                        returned.argument,
+                        Some(Expression::Yield {
+                            argument: Some(_),
+                            delegate: false,
+                        })
+                    ),
+                "{source}: suspension must own the adjacent operand, got {:?}",
+                returned.argument
+            );
+        }
+    }
+}
+
+#[test]
+fn yield_owns_assignment_and_arrow_operands() {
+    for operand in ["x = 7", "x += 2", "x => x + 1", "x ? 2 : 3"] {
+        let source = format!("function* g(x) {{ return yield {operand}; }}");
+        let tree = CanonicalEs2020Parser
+            .parse(&source, ParseGoal::Script)
+            .unwrap_or_else(|error| panic!("{source}: {error}"));
+        let Statement::FunctionDeclaration(function) = &tree.body[0] else {
+            panic!("expected generator declaration");
+        };
+        let Statement::Return(returned) = &function.body.body[0] else {
+            panic!("expected return statement");
+        };
+        let Some(Expression::Yield {
+            argument: Some(argument),
+            delegate: false,
+        }) = &returned.argument
+        else {
+            panic!("yield must own the full assignment expression: {source}");
+        };
+        assert!(
+            matches!(
+                argument.as_ref(),
+                Expression::Assignment { .. }
+                    | Expression::ArrowFunction { .. }
+                    | Expression::Conditional { .. }
+            ),
+            "{source}: unexpected yield operand {argument:?}"
+        );
+    }
+}
+
+#[test]
+fn suspension_keyword_whitespace_and_sloppy_identifier_forms() {
+    let parser = CanonicalEs2020Parser;
+    for whitespace in ["\t", "\n", "\u{feff}", "\u{2028}"] {
+        let source = format!("async function f() {{ return await{whitespace}[1]; }}");
+        let tree = parser.parse(&source, ParseGoal::Script).unwrap();
+        let Statement::FunctionDeclaration(decl) = &tree.body[0] else {
+            panic!("expected FunctionDeclaration: {source:?}");
+        };
+        let Statement::Return(ret) = &decl.body.body[0] else {
+            panic!("expected Return statement: {source:?}");
+        };
+        assert!(matches!(ret.argument, Some(Expression::Await(_))));
+    }
+
+    for line_terminator in ["\n", "\r", "\u{2028}", "\u{2029}"] {
+        let source = format!("function* g() {{ yield{line_terminator}+1; }}");
+        let tree = parser.parse(&source, ParseGoal::Script).unwrap();
+        let Statement::FunctionDeclaration(decl) = &tree.body[0] else {
+            panic!("expected FunctionDeclaration: {source:?}");
+        };
+        assert_eq!(decl.body.body.len(), 2, "ASI must end yield: {source:?}");
+        let Statement::Expression(first) = &decl.body.body[0] else {
+            panic!("expected bare yield statement: {source:?}");
+        };
+        assert!(matches!(
+            first.expression,
+            Expression::Yield {
+                argument: None,
+                delegate: false
+            }
+        ));
+        let Statement::Expression(second) = &decl.body.body[1] else {
+            panic!("expected separate numeric expression: {source:?}");
+        };
+        assert!(matches!(second.expression, Expression::NumericLiteral(1)));
+    }
+
+    for operand in [
+        "yield=1",
+        "yield+=1",
+        "yield => yield + 1",
+        "await(1)",
+        "await.value",
+        "await[0]",
+    ] {
+        let source = format!("function f(await, yield) {{ return {operand}; }}");
+        let tree = parser.parse(&source, ParseGoal::Script).unwrap();
+        let Statement::FunctionDeclaration(decl) = &tree.body[0] else {
+            panic!("expected FunctionDeclaration: {source}");
+        };
+        let Statement::Return(ret) = &decl.body.body[0] else {
+            panic!("expected Return statement: {source}");
+        };
+        let expression = ret.argument.as_ref().expect("return has an argument");
+        match operand {
+            "yield=1" | "yield+=1" => {
+                assert!(matches!(expression, Expression::Assignment { left, .. }
+                    if matches!(left.as_ref(), Expression::Identifier(name) if name == "yield")));
+            }
+            "yield => yield + 1" => {
+                assert!(matches!(expression, Expression::ArrowFunction { .. }));
+            }
+            "await(1)" => {
+                assert!(matches!(expression, Expression::Call { callee, .. }
+                    if matches!(callee.as_ref(), Expression::Identifier(name) if name == "await")));
+            }
+            _ => {
+                assert!(matches!(expression, Expression::Member { object, .. }
+                    if matches!(object.as_ref(), Expression::Identifier(name) if name == "await")));
+            }
+        }
+    }
+}
+
+#[test]
+fn await_requires_a_unary_operand_and_keeps_keyword_boundaries() {
+    for source in [
+        "async function* g() { await yield 1; }",
+        "async function* g() { await yield; }",
+        "async function f(x = await[1]) {}",
+        "function* g(x = yield+1) {}",
+        "async function f() { return await!0 ** 2; }",
+        "async function f() { return await.5 ** 2; }",
+    ] {
+        assert!(
+            CanonicalEs2020Parser
+                .parse(source, ParseGoal::Script)
+                .is_err(),
+            "must reject invalid suspension grammar: {source}"
+        );
+    }
+    for source in [
+        "async function* g() { await (yield 1); }",
+        "async function f() { return (await!0) ** 2; }",
+        "async function f() { return await\n[1]; }",
+        "async function f() { return await/**/[1]; }",
+        "async function f() { return awaitValue + await$Value + await_1; }",
+        "function* g() { return yieldValue + yield$Value + yield_1; }",
+        "function f(await, yield) { return await+1 + yield-1; }",
+    ] {
+        CanonicalEs2020Parser
+            .parse(source, ParseGoal::Script)
+            .unwrap_or_else(|error| panic!("valid keyword boundary in {source}: {error}"));
+    }
+}
+
+#[test]
 fn grammar_completeness_summary_empty_families() {
     let matrix = GrammarCompletenessMatrix {
         schema_version: GrammarCompletenessMatrix::SCHEMA_VERSION.to_string(),

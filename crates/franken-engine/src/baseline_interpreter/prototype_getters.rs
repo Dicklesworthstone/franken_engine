@@ -19,7 +19,7 @@ use super::*;
 /// are real own properties of the prototype, installed when it is created.
 /// The [`SPECIES_GETTER_KEY`] rows are the constructors' own
 /// `get [Symbol.species]` (bd-9vouw.278), installed on the constructor.
-pub(super) const PROTOTYPE_GETTERS: [(&str, &str, &str); 59] = [
+pub(super) const PROTOTYPE_GETTERS: [(&str, &str, &str); 62] = [
     // Annex B.2.2.1 (bd-9vouw.284): the one accessor here with a setter
     // ([`InterpreterCore::prototype_accessor_setter`]). Ordinary `o.__proto__`
     // reads and writes keep their direct path while they reach it.
@@ -60,6 +60,11 @@ pub(super) const PROTOTYPE_GETTERS: [(&str, &str, &str); 59] = [
     ("RegExp", "unicode", "get unicode"),
     ("RegExp", "unicodeSets", "get unicodeSets"),
     ("Symbol", "description", "get description"),
+    // ECMA-402's three legacy accessors return stable bound functions;
+    // newer Intl methods are ordinary unbound prototype methods.
+    ("NumberFormat", "format", "get format"),
+    ("DateTimeFormat", "format", "get format"),
+    ("Collator", "compare", "get compare"),
     // DOM events and aborting (bd-9vouw.170).
     ("Event", "type", "get type"),
     ("Event", "bubbles", "get bubbles"),
@@ -243,6 +248,9 @@ impl InterpreterCore {
         }
         if owner == "Object" {
             return self.object_proto_getter(module, receiver);
+        }
+        if intl::service_name(owner).is_some() {
+            return self.intl_bound_method_getter(owner, key, &receiver);
         }
         // ES2020 22.2.3.32: the receiver's [[TypedArrayName]], and undefined
         // (never a TypeError) for anything else (bd-9vouw.155).

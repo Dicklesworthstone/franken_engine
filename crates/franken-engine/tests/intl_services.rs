@@ -177,3 +177,165 @@ fn unsupported_locales_and_options_are_refused() {
         );
     }
 }
+
+#[test]
+fn intl_services_use_shared_intrinsic_prototypes() {
+    let source = r#"
+        for (const name of ['NumberFormat', 'DateTimeFormat', 'Collator', 'PluralRules', 'RelativeTimeFormat', 'ListFormat', 'Segmenter']) {
+            const C = Intl[name], p = C.prototype, value = new C('en');
+            const descriptor = Object.getOwnPropertyDescriptor(C, 'prototype');
+            console.log(name, value instanceof C, Object.getPrototypeOf(value) === p,
+                Object.getPrototypeOf(p) === Object.prototype, p.constructor === C,
+                Object.getOwnPropertyNames(value).length, Object.getOwnPropertySymbols(value).length,
+                Object.prototype.toString.call(p), descriptor.writable,
+                descriptor.enumerable, descriptor.configurable);
+        }
+    "#;
+    let expected = [
+        "NumberFormat true true true true 0 0 [object Intl.NumberFormat] false false false",
+        "DateTimeFormat true true true true 0 0 [object Intl.DateTimeFormat] false false false",
+        "Collator true true true true 0 0 [object Intl.Collator] false false false",
+        "PluralRules true true true true 0 0 [object Intl.PluralRules] false false false",
+        "RelativeTimeFormat true true true true 0 0 [object Intl.RelativeTimeFormat] false false false",
+        "ListFormat true true true true 0 0 [object Intl.ListFormat] false false false",
+        "Segmenter true true true true 0 0 [object Intl.Segmenter] false false false",
+    ].join("\n");
+    assert_eq!(console_output(source).unwrap(), expected);
+}
+
+#[test]
+fn intl_bound_accessors_preserve_identity_and_receiver() {
+    let source = r#"
+        for (const entry of [['NumberFormat', 'format', 1], ['DateTimeFormat', 'format', 1], ['Collator', 'compare', 2]]) {
+            const C = Intl[entry[0]], key = entry[1], a = new C('en'), b = new C('en');
+            const descriptor = Object.getOwnPropertyDescriptor(C.prototype, key), f = a[key];
+            f.marker = 23;
+            console.log(entry[0], f === a[key], f !== b[key], descriptor.get.call(a) === f,
+                a[key].marker, f.name === '', f.length === entry[2],
+                descriptor.get.name, descriptor.get.length, descriptor.set === undefined,
+                descriptor.enumerable, descriptor.configurable, a.hasOwnProperty(key),
+                f.hasOwnProperty('prototype'));
+        }
+        const nf = new Intl.NumberFormat('en-US'), format = nf.format;
+        console.log(format.call(new Intl.NumberFormat('de-DE'), 1234.5));
+        const dtf = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC' }), dateFormat = dtf.format;
+        console.log(dateFormat.call(new Intl.DateTimeFormat('de-DE'), 0));
+        const collator = new Intl.Collator('en', { sensitivity: 'base' }), compare = collator.compare;
+        console.log(compare.call(new Intl.Collator('en', { sensitivity: 'variant' }), 'a', 'A'));
+    "#;
+    assert_eq!(
+        console_output(source).unwrap(),
+        "NumberFormat true true true 23 true true get format 0 true false true false false\n\
+         DateTimeFormat true true true 23 true true get format 0 true false true false false\n\
+         Collator true true true 23 true true get compare 0 true false true false false\n\
+         1,234.5\n1/1/1970\n0"
+    );
+}
+
+#[test]
+fn intl_prototype_methods_require_authentic_matching_receivers() {
+    let source = r#"
+        function attempt(f) { try { f(); return 'accepted'; } catch (e) { return e.name; } }
+        for (const name of ['NumberFormat', 'DateTimeFormat', 'Collator', 'PluralRules', 'RelativeTimeFormat', 'ListFormat', 'Segmenter']) {
+            const C = Intl[name], a = new C('en'), method = C.prototype.resolvedOptions;
+            console.log(name, method === a.resolvedOptions,
+                method.call(a).locale === a.resolvedOptions().locale, method.length,
+                attempt(() => method()), attempt(() => method.call(C.prototype)),
+                attempt(() => method.call(Object.create(C.prototype))),
+                attempt(() => method.call(new Proxy(a, {}))),
+                attempt(() => method.call({ [Symbol.toStringTag]: 'Intl.' + name })));
+        }
+        const dtf = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC' });
+        console.log(Intl.DateTimeFormat.prototype.formatToParts.call(dtf, 0).map(p => p.value).join(''));
+        console.log(Intl.PluralRules.prototype.select.call(new Intl.PluralRules('en'), 1));
+        console.log(Intl.RelativeTimeFormat.prototype.format.call(new Intl.RelativeTimeFormat('en'), -1, 'day'));
+        console.log(Intl.ListFormat.prototype.format.call(new Intl.ListFormat('en'), ['a', 'b']));
+        console.log([...Intl.Segmenter.prototype.segment.call(new Intl.Segmenter('en'), 'ab')].length);
+        let conversions = 0;
+        const value = { valueOf() { conversions++; return 0; } };
+        console.log(attempt(() => Intl.DateTimeFormat.prototype.formatToParts.call(new Intl.NumberFormat('en'), value)), conversions);
+        console.log(attempt(() => Object.getOwnPropertyDescriptor(Intl.Collator.prototype, 'compare').get.call(dtf)));
+    "#;
+    let mut expected = Vec::new();
+    for name in [
+        "NumberFormat",
+        "DateTimeFormat",
+        "Collator",
+        "PluralRules",
+        "RelativeTimeFormat",
+        "ListFormat",
+        "Segmenter",
+    ] {
+        expected.push(format!(
+            "{name} true true 0 TypeError TypeError TypeError TypeError TypeError"
+        ));
+    }
+    expected.extend(
+        [
+            "1/1/1970",
+            "one",
+            "1 day ago",
+            "a and b",
+            "2",
+            "TypeError 0",
+            "TypeError",
+        ]
+        .map(str::to_string),
+    );
+    assert_eq!(console_output(source).unwrap(), expected.join("\n"));
+}
+
+#[test]
+fn intl_construction_preserves_new_target_prototypes_and_order() {
+    let source = r#"
+        for (const name of ['NumberFormat', 'DateTimeFormat', 'Collator', 'PluralRules', 'RelativeTimeFormat', 'ListFormat', 'Segmenter']) {
+            const C = Intl[name];
+            class Derived extends C {}
+            const derived = new Derived('en');
+            function Target() {}
+            Target.prototype = { marker: name };
+            const replacement = Reflect.construct(C, ['en'], Target);
+            Target.prototype = 7;
+            const fallback = Reflect.construct(C, ['en'], Target);
+            console.log(name, derived instanceof Derived, derived instanceof C,
+                derived.constructor === Derived, replacement.marker === name,
+                typeof C.prototype.resolvedOptions.call(replacement).locale,
+                Object.getPrototypeOf(fallback) === C.prototype);
+        }
+        const order = [];
+        const target = new Proxy(function () {}, { get(target, key) { order.push(key); return target[key]; } });
+        const options = { get localeMatcher() { order.push('options'); return 'lookup'; } };
+        Reflect.construct(Intl.NumberFormat, ['en', options], target);
+        console.log(order.join(','));
+    "#;
+    let expected = [
+        "NumberFormat",
+        "DateTimeFormat",
+        "Collator",
+        "PluralRules",
+        "RelativeTimeFormat",
+        "ListFormat",
+        "Segmenter",
+    ]
+    .map(|name| format!("{name} true true true true string true"))
+    .into_iter()
+    .chain(["prototype,options".to_string()])
+    .collect::<Vec<_>>()
+    .join("\n");
+    assert_eq!(console_output(source).unwrap(), expected);
+}
+
+#[test]
+fn intl_constructor_callability_matches_each_service() {
+    let source = r#"
+        for (const name of ['NumberFormat', 'DateTimeFormat', 'Collator', 'PluralRules', 'RelativeTimeFormat', 'ListFormat', 'Segmenter']) {
+            const C = Intl[name];
+            try { console.log(name, C('en') instanceof C); }
+            catch (error) { console.log(name, error.name); }
+        }
+    "#;
+    assert_eq!(
+        console_output(source).unwrap(),
+        "NumberFormat true\nDateTimeFormat true\nCollator true\nPluralRules TypeError\nRelativeTimeFormat TypeError\nListFormat TypeError\nSegmenter TypeError"
+    );
+}

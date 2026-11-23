@@ -8,8 +8,10 @@
 //! RelativeTimeFormat and ListFormat over pattern tables generated from Node
 //! v22.2.0's ICU (en, de, ja, zh, ko; bd-9vouw.171), and
 //! getCanonicalLocales. A service object reads its options once, at
-//! construction, into the object `resolvedOptions()` copies; its `format` /
-//! `compare` / `select` are bound to it, so `values.map(nf.format)` works.
+//! construction, into the object `resolvedOptions()` copies. Methods live
+//! on realm-owned intrinsic prototypes. NumberFormat / DateTimeFormat
+//! `format` and Collator `compare` accessors return stable bound functions,
+//! so `values.map(nf.format)` works; other methods use their actual receiver.
 //!
 //! A locale, option or combination the formatters do not cover is a typed
 //! refusal at construction, never output that differs from Node's.
@@ -19,9 +21,9 @@
 //! `generic`, which falls back to en-US as in Node); DateTimeFormat has
 //! formatToParts (the pieces `format` joins), NumberFormat does not; no
 //! formatRange, BigInt formatting, DisplayNames or Locale, and no
-//! supportedLocalesOf. Segmenter is UAX #29 (see `intl_segmenter`). The methods are own properties of each
-//! object, not prototype methods: `Intl.DateTimeFormat.prototype` is
-//! undefined and `instanceof Intl.NumberFormat` is false.
+//! supportedLocalesOf. Segmenter is UAX #29 (see `intl_segmenter`). The
+//! optional legacy constructor mode that initializes an existing receiver
+//! is not implemented.
 
 use super::*;
 
@@ -54,6 +56,35 @@ const SERVICES: [&str; 7] = [
     "Segmenter",
 ];
 
+pub(super) fn service_name(name: &str) -> Option<&'static str> {
+    SERVICES.iter().copied().find(|service| *service == name)
+}
+
+fn service_constructor(service: &str) -> Value {
+    Value::BuiltinFunction(BuiltinFunction {
+        kind: BuiltinFunctionKind::IntlConstructor,
+        module_specifier: BuiltinModuleSpecifier::from_nonempty(service),
+        iterator_handle: None,
+        bound_object: None,
+    })
+}
+
+fn service_method(service: &str, method: &str, bound: Option<ObjectId>) -> Value {
+    Value::BuiltinFunction(BuiltinFunction {
+        kind: BuiltinFunctionKind::IntlMethod,
+        module_specifier: BuiltinModuleSpecifier::from_nonempty(&format!("{service}.{method}")),
+        iterator_handle: None,
+        bound_object: bound.map(|object| object.0),
+    })
+}
+
+fn bound_service_method(service: &str, method: &str) -> bool {
+    matches!(
+        (service, method),
+        ("NumberFormat" | "DateTimeFormat", "format") | ("Collator", "compare")
+    )
+}
+
 /// The languages RelativeTimeFormat and ListFormat have patterns for (and
 /// whose numbers number_locale formats).
 const PATTERN_LANGUAGES: [&str; 5] = ["en", "de", "ja", "zh", "ko"];
@@ -81,17 +112,7 @@ impl InterpreterCore {
     pub(super) fn alloc_intl_object(&mut self) -> Result<ObjectId, InterpreterError> {
         let mut members: Vec<(&str, Value)> = SERVICES
             .iter()
-            .map(|service| {
-                (
-                    *service,
-                    Value::BuiltinFunction(BuiltinFunction {
-                        kind: BuiltinFunctionKind::IntlConstructor,
-                        module_specifier: BuiltinModuleSpecifier::from_nonempty(service),
-                        iterator_handle: None,
-                        bound_object: None,
-                    }),
-                )
-            })
+            .map(|service| (*service, service_constructor(service)))
             .collect();
         members.push((
             "getCanonicalLocales",
@@ -111,6 +132,116 @@ impl InterpreterCore {
         Ok(intl)
     }
 
+    /// Install one intrinsic's actual property descriptors in the existing
+    /// realm prototype registry. These objects participate in ordinary
+    /// mutation, GC and execution-seed restoration like the other intrinsics.
+    pub(super) fn install_intl_prototype_members(
+        &mut self,
+        service: &str,
+        prototype: ObjectId,
+    ) -> Result<(), InterpreterError> {
+        if service_name(service).is_none() {
+            return Ok(());
+        }
+        self.install_prototype_constructor(prototype, service_constructor(service))?;
+        let methods: &[&str] = match service {
+            "NumberFormat" => &["format", "resolvedOptions"],
+            "DateTimeFormat" => &["format", "formatToParts", "resolvedOptions"],
+            "Collator" => &["compare", "resolvedOptions"],
+            "RelativeTimeFormat" | "ListFormat" => &["format", "formatToParts", "resolvedOptions"],
+            "Segmenter" => &["segment", "resolvedOptions"],
+            _ => &["select", "resolvedOptions"],
+        };
+        for method in methods {
+            let key = RuntimePropertyKey::String(JsString::from(*method));
+            if bound_service_method(service, method) {
+                self.define_accessor_property(
+                    prototype,
+                    key.clone(),
+                    Value::BuiltinFunction(BuiltinFunction::prototype_getter(service, method)),
+                    AccessorKind::Get,
+                )?;
+                self.set_own_property_attributes(
+                    prototype,
+                    &key,
+                    PropertyAttributes {
+                        writable: false,
+                        enumerable: false,
+                        configurable: true,
+                    },
+                )?;
+            } else {
+                self.set_object_runtime_property(
+                    prototype,
+                    key.clone(),
+                    service_method(service, method, None),
+                )?;
+                self.set_own_property_attributes(prototype, &key, NON_ENUMERABLE_DATA_ATTRIBUTES)?;
+            }
+        }
+        self.intl_to_string_tag(prototype, &format!("Intl.{service}"))
+    }
+
+    /// The initialized internal slots, rather than a prototype or public
+    /// @@toStringTag, authenticate each service. A Proxy does not acquire its
+    /// target's Intl slots; a different Intl service is also incompatible.
+    fn intl_service_receiver(
+        &mut self,
+        service: &str,
+        receiver: &Value,
+    ) -> Result<(ObjectId, ObjectId), InterpreterError> {
+        let Value::Object(object) = receiver else {
+            return Err(InterpreterError::TypeError {
+                expected: format!("an initialized Intl.{service} receiver"),
+                got: receiver.type_name().to_string(),
+            });
+        };
+        let brand = format!("Intl.{service}");
+        let resolved = self
+            .heap
+            .get(object.0 as usize)
+            .filter(|object| object.brand.as_deref().and_then(JsString::as_str) == Some(&brand))
+            .and_then(HeapObject::intl_resolved_id)
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: format!("an initialized {brand} receiver"),
+                got: "an object without matching Intl internal slots".to_string(),
+            })?;
+        if let Some(label) = self.object_mutation_labels.get(object).cloned() {
+            self.join_into_pending_hostcall_result_label(Some(label))?;
+        }
+        Ok((*object, resolved))
+    }
+
+    pub(super) fn intl_bound_method_getter(
+        &mut self,
+        service: &str,
+        method: &str,
+        receiver: &Value,
+    ) -> Result<Value, InterpreterError> {
+        let (object, _) = self.intl_service_receiver(service, receiver)?;
+        // Builtin identity includes the immutable private object handle. The
+        // same receiver therefore returns the same callable identity, whose
+        // mutable own properties use the ordinary builtin backing registry.
+        Ok(service_method(service, method, Some(object)))
+    }
+
+    /// ECMA-402 preserves callable construction only for these three legacy
+    /// services. The others require [[Construct]] before reading arguments.
+    pub(super) fn call_intl_constructor(
+        &mut self,
+        module: &Ir3Module,
+        service: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        if !matches!(service, "NumberFormat" | "DateTimeFormat" | "Collator") {
+            return Err(InterpreterError::TypeError {
+                expected: format!("new Intl.{service}(...)"),
+                got: format!("Intl.{service} called without new"),
+            });
+        }
+        self.construct_intl_service(module, service, args)
+    }
+
     fn intl_to_string_tag(&mut self, object: ObjectId, tag: &str) -> Result<(), InterpreterError> {
         let key = RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id());
         self.set_object_runtime_property(object, key.clone(), Value::str(tag))?;
@@ -125,8 +256,9 @@ impl InterpreterCore {
         )
     }
 
-    /// `new Intl.<service>(locales, options)`; calling one without `new`
-    /// constructs too.
+    /// `new Intl.<service>(locales, options)` with its intrinsic prototype.
+    /// The ordinary builtin construction boundary replaces that prototype
+    /// when an explicit new.target chooses a subclass or custom object.
     pub(super) fn construct_intl_service(
         &mut self,
         module: &Ir3Module,
@@ -135,13 +267,13 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let locales = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
         let options = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+        let requested = self.intl_requested_locale(module, &locales)?;
         if matches!(options, Value::Null) {
             return Err(InterpreterError::TypeError {
                 expected: format!("an options object for Intl.{service}"),
                 got: "null".to_string(),
             });
         }
-        let requested = self.intl_requested_locale(&locales)?;
         let resolved = match service {
             "NumberFormat" => self.intl_number_format_options(module, requested, &options)?,
             "DateTimeFormat" => self.intl_date_time_format_options(
@@ -165,39 +297,20 @@ impl InterpreterCore {
             }
         };
         let resolved_id = self.alloc_object_with_properties(&resolved)?;
-        let object = self.alloc_object_with_prototype(None)?;
+        let prototype = self.ensure_builtin_prototype(service)?;
+        let object = self.alloc_object_with_prototype(Some(prototype))?;
         self.set_object_brand(object, &format!("Intl.{service}"))?;
         self.set_host_slots(object, HostObjectSlots::IntlResolved(resolved_id))?;
-        let methods: &[&str] = match service {
-            "NumberFormat" => &["format", "resolvedOptions"],
-            "DateTimeFormat" => &["format", "formatToParts", "resolvedOptions"],
-            "Collator" => &["compare", "resolvedOptions"],
-            "RelativeTimeFormat" | "ListFormat" => &["format", "formatToParts", "resolvedOptions"],
-            "Segmenter" => &["segment", "resolvedOptions"],
-            _ => &["select", "resolvedOptions"],
-        };
-        for method in methods {
-            let bound = Value::BuiltinFunction(BuiltinFunction {
-                kind: BuiltinFunctionKind::IntlMethod,
-                module_specifier: BuiltinModuleSpecifier::from_nonempty(&format!(
-                    "{service}.{method}"
-                )),
-                iterator_handle: None,
-                bound_object: Some(object.0),
-            });
-            self.set_object_property(object, (*method).to_string(), bound)?;
-        }
-        self.hide_internal_slots(object, methods)?;
-        self.intl_to_string_tag(object, &format!("Intl.{service}"))?;
         Ok(Value::Object(object))
     }
 
-    /// A bound service method: `format`, `compare`, `select` or
-    /// `resolvedOptions`.
+    /// Service methods use the actual receiver. Only the three legacy
+    /// accessor-created functions retain an initialized receiver privately.
     pub(super) fn intl_method(
         &mut self,
         module: &Ir3Module,
         builtin: &BuiltinFunction,
+        receiver: Value,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         let name = builtin
@@ -210,17 +323,15 @@ impl InterpreterCore {
         if service == "Segments" {
             return self.intl_segments_method(module, builtin, method, args);
         }
-        let resolved = builtin
-            .bound_object
-            .map(ObjectId)
-            .and_then(|object| self.heap.get(object.0 as usize))
-            .and_then(HeapObject::intl_resolved_id);
-        let Some(resolved) = resolved else {
-            return Err(InterpreterError::TypeError {
-                expected: format!("an Intl.{service} object"),
-                got: "an object without Intl state".to_string(),
-            });
+        let receiver = if bound_service_method(service, method) {
+            builtin
+                .bound_object
+                .map(|object| Value::Object(ObjectId(object)))
+                .unwrap_or(receiver)
+        } else {
+            receiver
         };
+        let (_, resolved) = self.intl_service_receiver(service, &receiver)?;
         let arg = |core: &Self, index: u32| -> Result<Value, InterpreterError> {
             Ok(core.builtin_arg(args, index)?.unwrap_or(Value::Undefined))
         };
@@ -360,56 +471,125 @@ impl InterpreterCore {
     /// `Intl.getCanonicalLocales(locales)` (ECMA-402 8.3.1).
     pub(super) fn intl_get_canonical_locales(
         &mut self,
+        module: &Ir3Module,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         let locales = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
         let list: Vec<Value> = self
-            .intl_locale_list(&locales)?
+            .intl_locale_list(module, &locales)?
             .into_iter()
             .map(Value::str)
             .collect();
         Ok(Value::Object(self.alloc_array_from_values(&list)?))
     }
 
-    /// CanonicalizeLocaleList (ECMA-402 9.2.1): the canonical, unique tags.
-    fn intl_locale_list(&self, locales: &Value) -> Result<Vec<String>, InterpreterError> {
-        let tags = match locales {
-            Value::Undefined => return Ok(Vec::new()),
-            Value::Str(tag) => vec![tag.to_string()],
-            Value::Object(list) => {
-                let values = self.array_like_values(*list)?;
-                let mut tags = Vec::with_capacity(values.len());
-                for value in values {
-                    match value {
-                        Value::Str(tag) => tags.push(tag.to_string()),
-                        other => {
-                            return Err(InterpreterError::TypeError {
-                                expected: "a string locale tag".to_string(),
-                                got: other.type_name().to_string(),
-                            });
-                        }
-                    }
-                }
-                tags
+    /// CanonicalizeLocaleList (ECMA-402 9.2.1). Capture length once, then
+    /// interleave HasProperty, Get and ToString. Copying element storage first
+    /// loses holes, inherited indices, getters, Proxy traps and their order.
+    fn intl_locale_list(
+        &mut self,
+        module: &Ir3Module,
+        locales: &Value,
+    ) -> Result<Vec<String>, InterpreterError> {
+        let saved = self.begin_property_observation([])?;
+        let mut retained_bytes = 0u64;
+        let outcome = (|| {
+            if matches!(locales, Value::Undefined) {
+                return Ok(Vec::new());
             }
-            other => {
+            let mut canonical = Vec::new();
+            let mut seen = BTreeSet::new();
+            if let Value::Str(_) = locales {
+                self.intl_append_locale(
+                    module,
+                    locales.clone(),
+                    &mut canonical,
+                    &mut seen,
+                    &mut retained_bytes,
+                )?;
+                return Ok(canonical);
+            }
+            if matches!(locales, Value::Null) {
                 return Err(InterpreterError::TypeError {
-                    expected: "a locale tag or a list of them".to_string(),
-                    got: other.type_name().to_string(),
+                    expected: "an object-coercible locale list".to_string(),
+                    got: "null".to_string(),
                 });
             }
-        };
-        let mut canonical: Vec<String> = Vec::with_capacity(tags.len());
-        for tag in tags {
-            let tag =
-                canonicalize_locale_tag(&tag).ok_or_else(|| InterpreterError::RangeError {
-                    message: format!("Incorrect locale information provided: {tag}"),
-                })?;
-            if !canonical.contains(&tag) {
-                canonical.push(tag);
+            let (object, receiver) = if locales.is_object_like() {
+                let Some(object) = self.own_property_holder(Some(module), locales, true)? else {
+                    return Ok(canonical);
+                };
+                (object, locales.clone())
+            } else {
+                // ToObject also applies to numbers, booleans, symbols and
+                // BigInts. Usually their length is absent, but inherited
+                // accessors must see the wrapper as their receiver.
+                let object = self.alloc_primitive_wrapper(locales.clone())?;
+                (object, Value::Object(object))
+            };
+            let length = self.json_reviver_array_length(Some(module), object, receiver.clone())?;
+            for index in 0..length {
+                // Even an all-hole array-like is guest-controlled native
+                // work. Keep cancellation and the instruction limit active.
+                self.json_charge_work()?;
+                let key = Self::generic_index_key(index);
+                let present =
+                    self.proxy_aware_has_runtime_property(Some(module), object, &key, 0)?;
+                self.observe_scoped_callback_result()?;
+                if !present {
+                    continue;
+                }
+                let value =
+                    self.iterator_protocol_property(Some(module), object, &key, receiver.clone())?;
+                self.intl_append_locale(
+                    module,
+                    value,
+                    &mut canonical,
+                    &mut seen,
+                    &mut retained_bytes,
+                )?;
             }
+            Ok(canonical)
+        })();
+        // Retained tags are charged across guest callbacks and released on
+        // every exit, including a getter/conversion throw or budget refusal.
+        self.json_release_temporary(retained_bytes);
+        self.finish_property_read_observation(saved, outcome)
+    }
+
+    fn intl_append_locale(
+        &mut self,
+        module: &Ir3Module,
+        value: Value,
+        canonical: &mut Vec<String>,
+        seen: &mut BTreeSet<String>,
+        retained_bytes: &mut u64,
+    ) -> Result<(), InterpreterError> {
+        if !matches!(value, Value::Str(_)) && !value.is_object_like() {
+            return Err(InterpreterError::TypeError {
+                expected: "a string or object locale tag".to_string(),
+                got: value.type_name().to_string(),
+            });
         }
-        Ok(canonical)
+        let text = self.conversion_to_string(Some(module), value)?;
+        self.observe_scoped_callback_result()?;
+        let scratch = (text.len() as u64).saturating_mul(4).saturating_add(128);
+        self.json_reserve_temporary(scratch)?;
+        let tag = text.to_string();
+        let result = canonicalize_locale_tag(&tag).ok_or_else(|| InterpreterError::RangeError {
+            message: format!("Incorrect locale information provided: {tag}"),
+        });
+        self.json_release_temporary(scratch);
+        let tag = result?;
+        if !seen.contains(&tag) {
+            // Covers both owned strings, vector growth and tree bookkeeping.
+            let bytes = (tag.len() as u64).saturating_mul(2).saturating_add(256);
+            self.json_reserve_temporary(bytes)?;
+            *retained_bytes = retained_bytes.saturating_add(bytes);
+            seen.insert(tag.clone());
+            canonical.push(tag);
+        }
+        Ok(())
     }
 
     fn intl_option(
@@ -692,11 +872,12 @@ impl InterpreterCore {
     /// falls back to its default locale, en-US, as the services do here
     /// (`None`). A real language the formatters do not cover still refuses.
     pub(super) fn intl_requested_locale(
-        &self,
+        &mut self,
+        module: &Ir3Module,
         locales: &Value,
     ) -> Result<Option<String>, InterpreterError> {
         Ok(self
-            .intl_locale_list(locales)?
+            .intl_locale_list(module, locales)?
             .into_iter()
             .next()
             .filter(|tag| !(5..=8).contains(&tag.split('-').next().unwrap_or_default().len())))
@@ -712,13 +893,13 @@ impl InterpreterCore {
         locales: &Value,
         options: &Value,
     ) -> Result<Value, InterpreterError> {
+        let requested = self.intl_requested_locale(module, locales)?;
         if matches!(options, Value::Null) {
             return Err(InterpreterError::TypeError {
                 expected: "an options object for toLocaleString".to_string(),
                 got: "null".to_string(),
             });
         }
-        let requested = self.intl_requested_locale(locales)?;
         let resolved = self.intl_number_format_options(module, requested, options)?;
         let (locale, options) = intl_number_options_from_lookup(|key| {
             resolved
@@ -916,13 +1097,13 @@ impl InterpreterCore {
         locales: &Value,
         options: &Value,
     ) -> Result<Value, InterpreterError> {
+        let requested = self.intl_locale_list(module, locales)?.into_iter().next();
         if matches!(options, Value::Null) {
             return Err(InterpreterError::TypeError {
                 expected: "an options object for Date.prototype.toLocaleString".to_string(),
                 got: "null".to_string(),
             });
         }
-        let requested = self.intl_locale_list(locales)?.into_iter().next();
         let resolved = self.intl_date_time_format_options(module, requested, options, caller)?;
         let resolved_id = self.alloc_object_with_properties(&resolved)?;
         let request = self.intl_date_request_from(resolved_id)?;

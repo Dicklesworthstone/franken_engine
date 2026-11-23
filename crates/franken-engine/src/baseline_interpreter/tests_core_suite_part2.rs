@@ -7656,7 +7656,13 @@ fn date_value_provenance_survives_conversion_formatting_and_copying() {
         else {
             panic!("Intl constructor must return an object");
         };
-        let format = core.prototype_chain_get(formatter, "format").unwrap();
+        let format = core
+            .get_v(
+                &empty_module,
+                &Value::Object(formatter),
+                &RuntimePropertyKey::String(JsString::from("format")),
+            )
+            .unwrap();
         core.mutate_registers(|registers| {
             registers[0] = Value::Object(date);
             registers[1] = Value::Object(date);

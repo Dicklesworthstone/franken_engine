@@ -1474,6 +1474,13 @@ fn canonical_builtin_prototype_name(name: &str) -> Option<&'static str> {
         "AbortSignal" => Some("AbortSignal"),
         "DOMException" => Some("DOMException"),
         "Blob" => Some("Blob"),
+        "NumberFormat" => Some("NumberFormat"),
+        "DateTimeFormat" => Some("DateTimeFormat"),
+        "Collator" => Some("Collator"),
+        "PluralRules" => Some("PluralRules"),
+        "RelativeTimeFormat" => Some("RelativeTimeFormat"),
+        "ListFormat" => Some("ListFormat"),
+        "Segmenter" => Some("Segmenter"),
         // %GeneratorFunction%, %AsyncFunction%, %AsyncGeneratorFunction%:
         // not global bindings (FUNCTION_KIND_INTRINSICS).
         "GeneratorFunction" => Some("GeneratorFunction"),
@@ -4176,9 +4183,10 @@ pub enum BuiltinFunctionKind {
     /// `Intl.PluralRules` (ECMA-402, intl.rs); the service name travels in
     /// `module_specifier`. Append only.
     IntlConstructor,
-    /// A service object's `format`, `compare`, `select` or
-    /// `resolvedOptions`, bound to it (`bound_object`); `module_specifier`
-    /// holds `<service>.<method>`. Append only.
+    /// An Intl prototype method; `module_specifier` holds
+    /// `<service>.<method>`. Only legacy format/compare accessors produce a
+    /// bound callable (`bound_object`); the other methods use `this`.
+    /// Append only.
     IntlMethod,
     /// `Intl.getCanonicalLocales` (ECMA-402 8.3.1). Append only.
     IntlGetCanonicalLocales,
@@ -6712,6 +6720,17 @@ impl BuiltinFunction {
             self.kind,
             BuiltinFunctionKind::PromiseResolve | BuiltinFunctionKind::PromiseReject
         ) && self.bound_object.is_some()
+        {
+            return "";
+        }
+        // ECMA-402's cached format/compare functions are anonymous even
+        // though the accessor returning them has a named getter.
+        if self.kind == BuiltinFunctionKind::IntlMethod
+            && self.bound_object.is_some()
+            && matches!(
+                &*self.module_specifier,
+                "NumberFormat.format" | "DateTimeFormat.format" | "Collator.compare"
+            )
         {
             return "";
         }

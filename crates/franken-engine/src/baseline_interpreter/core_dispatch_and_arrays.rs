@@ -2991,11 +2991,13 @@ impl InterpreterCore {
                     .as_deref()
                     .unwrap_or_default()
                     .to_string();
-                self.construct_intl_service(module, &service, args)
+                self.call_intl_constructor(module, &service, args)
             }
-            BuiltinFunctionKind::IntlMethod => self.intl_method(module, builtin, args),
+            BuiltinFunctionKind::IntlMethod => {
+                self.intl_method(module, builtin, receiver.unwrap_or(Value::Undefined), args)
+            }
             BuiltinFunctionKind::IntlGetCanonicalLocales => {
-                self.intl_get_canonical_locales(args)
+                self.intl_get_canonical_locales(module, args)
             }
             BuiltinFunctionKind::FinalizationRegistryMethod => {
                 let method = builtin
@@ -16410,6 +16412,8 @@ impl InterpreterCore {
                             self.clear_pending_hostcall_result_label();
                         }
                         let mut result = match standard_name {
+                            _ if builtin.kind == BuiltinFunctionKind::IntlConstructor => self
+                                .construct_intl_service(module, &builtin.module_specifier, args)?,
                             _ if matches!(
                                 builtin.kind,
                                 BuiltinFunctionKind::NativeChildProcessFunction

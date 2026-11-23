@@ -8268,6 +8268,9 @@ impl InterpreterCore {
             ));
         }
         let mut result = match standard_name {
+            _ if builtin.kind == BuiltinFunctionKind::IntlConstructor => {
+                self.construct_intl_service(module, &builtin.module_specifier, args)?
+            }
             _ if builtin.kind == BuiltinFunctionKind::DateConstructor => {
                 self.dispatch_builtin_hostcall("builtin:Date", args, Some(module))?
             }
@@ -10073,6 +10076,9 @@ impl InterpreterCore {
             "CustomEvent" => Some(self.ensure_builtin_prototype("Event")?),
             "AbortSignal" => Some(self.ensure_builtin_prototype("EventTarget")?),
             "DOMException" => Some(self.ensure_builtin_prototype("Error")?),
+            name if intl::service_name(name).is_some() => {
+                Some(self.ensure_builtin_prototype("Object")?)
+            }
             _ => None,
         };
         let prototype = self.alloc_object_with_prototype(parent)?;
@@ -10277,6 +10283,7 @@ impl InterpreterCore {
             self.set_own_property_attributes(prototype, &key, NON_ENUMERABLE_DATA_ATTRIBUTES)?;
         }
         self.install_iteration_prototype_members(canonical, prototype)?;
+        self.install_intl_prototype_members(canonical, prototype)?;
         if canonical == "Array" {
             self.install_array_unscopables(prototype)?;
         }
@@ -11405,6 +11412,7 @@ impl InterpreterCore {
             // `class S extends EventEmitter` links S.prototype to it
             // (bd-9vouw.165).
             BuiltinFunctionKind::EventEmitterConstructor => Some("EventEmitter"),
+            BuiltinFunctionKind::IntlConstructor => intl::service_name(&builtin.module_specifier),
             _ => None,
         }
     }

@@ -2987,7 +2987,7 @@ impl InterpreterCore {
         };
         let message = self.error_message_from_args(module, message_args)?;
         self.initialize_error_object(error_id, message)?;
-        self.install_error_cause(error_id, message_args)?;
+        self.install_error_cause(module, error_id, message_args)?;
         let errors = self.iterable_to_array(
             module,
             RegRange {
@@ -3020,19 +3020,19 @@ impl InterpreterCore {
         let prototype = self.ensure_builtin_prototype(name)?;
         let error_id = self.alloc_object_with_prototype(Some(prototype))?;
         self.initialize_error_object(error_id, message)?;
-        self.install_error_cause(error_id, args)?;
+        self.install_error_cause(module, error_id, args)?;
 
         Ok(Value::Object(error_id))
     }
 
     /// ES2022 20.5.8.1 InstallErrorCause: when the second constructor
     /// argument is an object that has a `cause` (own or inherited), the error
-    /// gets an own non-enumerable `cause` with that value and its IFC label.
-    /// `new Error(m, { cause })` used to drop it, so `err.cause.message`
-    /// threw. An accessor `cause` would need a guest getter call and is left
-    /// uninstalled.
+    /// gets an own non-enumerable `cause`. HasProperty precedes Get, so Proxy
+    /// traps, inherited accessors and abrupt completions remain observable.
+    /// Function, promise and iterator carriers are objects here too.
     pub(super) fn install_error_cause(
         &mut self,
+        module: Option<&Ir3Module>,
         object_id: ObjectId,
         args: RegRange,
     ) -> Result<(), InterpreterError> {
@@ -3040,21 +3040,96 @@ impl InterpreterCore {
             return Ok(());
         }
         let options_register = args.start + 1;
-        let Value::Object(options) = self.read_reg(options_register)? else {
+        let options = self.read_reg(options_register)?;
+        if !options.is_object_like() {
             return Ok(());
-        };
-        let Some(cause) = self
-            .chain_data_property(options, "cause")
-            .filter(|value| !matches!(value, Value::Accessor { .. }))
-            .cloned()
-        else {
-            return Ok(());
-        };
+        }
         let key = RuntimePropertyKey::String(JsString::from("cause"));
-        let label = self.get_register_label(options_register)?.clone();
-        self.set_own_runtime_property_label(object_id, &key, &label)?;
-        self.set_object_property(object_id, "cause".to_string(), cause)?;
-        self.set_own_property_attributes(object_id, &key, NON_ENUMERABLE_DATA_ATTRIBUTES)
+        let observation = self.begin_property_observation([options_register])?;
+        // The new error is still a native local. Request collection through
+        // the callback boundary so it pins both these values and the caller's
+        // isolated execution snapshot. A direct GC arm here would miss that
+        // snapshot. Has and Get each need their own one-call request.
+        let mut held = self.gc_nested_request.take().unwrap_or_default();
+        held.extend([Value::Object(object_id), options.clone()]);
+        let outcome = (|| {
+            self.json_charge_work()?;
+            let has_cause = self.with_gc_nested_request(held.clone(), |core| {
+                let backing = core.own_property_holder(module, &options, false)?;
+                if let Some(backing) = backing {
+                    if let Some(module) = module {
+                        core.run_pre_runtime_property_access_hook(module, backing, &key)?;
+                    }
+                    core.reflect_observe_selected_property(backing, &key)?;
+                }
+                // An exotic may inherit without ever allocating own storage.
+                // Observe that selection before HasProperty, including a Proxy
+                // prototype whose has trap returns false or throws.
+                let inherited = if let Some(module) = module {
+                    if Self::has_exotic_backing_object(&options)
+                        && backing.is_none_or(|backing| {
+                            !core
+                                .heap
+                                .get(backing.0 as usize)
+                                .is_some_and(|object| object.contains_own_runtime_property(&key))
+                        })
+                    {
+                        core.exotic_prototype_override(module, &options)?
+                            .or_else(|| {
+                                core.exotic_intrinsic_prototype_name(&options)
+                                    .and_then(|name| core.builtin_prototypes.get(name).copied())
+                            })
+                            .or_else(|| core.builtin_prototypes.get("Object").copied())
+                    } else if options.is_callable() && backing.is_none() {
+                        let prototype = core.function_value_prototype(Some(module), &options)?;
+                        core.prototype_link_for_value(Some(module), &prototype)?
+                            .flatten()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                if let Some(inherited) = inherited
+                    && Some(inherited) != backing
+                {
+                    core.reflect_observe_selected_property(inherited, &key)?;
+                }
+                let has_cause = match (&options, module) {
+                    (Value::Object(options), _) => {
+                        core.proxy_aware_has_runtime_property(module, *options, &key, 0)?
+                    }
+                    (function, Some(module)) if function.is_callable() => {
+                        core.function_has_property(module, function, &key)?
+                    }
+                    (exotic, Some(module)) if Self::has_exotic_backing_object(exotic) => {
+                        core.exotic_has_property(module, exotic, &key)?
+                    }
+                    _ => match backing {
+                        Some(backing) => {
+                            core.proxy_aware_has_runtime_property(module, backing, &key, 0)?
+                        }
+                        None => false,
+                    },
+                };
+                Ok(has_cause)
+            })?;
+            self.observe_scoped_callback_result()?;
+            if !has_cause {
+                return Ok(());
+            }
+            // HasProperty may have changed the selected descriptor or its
+            // prototype. Read it again with the original options receiver.
+            let cause = self.with_gc_nested_request(held, |core| {
+                core.iterator_protocol_value_property(module, options.clone(), &key)
+            })?;
+            self.observe_scoped_callback_result()?;
+            let label = self.json_parse_context_label()?;
+            self.set_own_runtime_property_label(object_id, &key, &label)?;
+            self.set_object_property(object_id, "cause".to_string(), cause)?;
+            self.set_own_property_attributes(object_id, &key, NON_ENUMERABLE_DATA_ATTRIBUTES)
+        })();
+        self.finish_property_read_observation(observation, outcome)
     }
 
     /// An engine-raised error named `name` (native faults, host errors). Its

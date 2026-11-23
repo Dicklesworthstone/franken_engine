@@ -10585,7 +10585,7 @@ impl InterpreterCore {
             | "EvalError" | "URIError" => {
                 let message = self.error_message_from_args(module, args)?;
                 self.initialize_error_object(object_id, message)?;
-                self.install_error_cause(object_id, args)?;
+                self.install_error_cause(module, object_id, args)?;
             }
             "Map" => {
                 let entries_id = self.alloc_object_with_prototype(None)?;

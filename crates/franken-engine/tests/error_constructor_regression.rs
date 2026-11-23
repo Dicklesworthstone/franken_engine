@@ -15,12 +15,72 @@
 //! per ES2020 §13.3 `new X(a).b` == `(new X(a)).b`).
 
 use frankenengine_engine::HybridRouter;
+use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore, Value};
+use frankenengine_engine::capability::RuntimeCapability;
+use frankenengine_engine::ifc_artifacts::Label;
+use frankenengine_engine::ir_contract::{
+    CapabilityTag, Ir0Module, Ir3FunctionDesc, Ir3Instruction, Ir3Module, RegRange,
+};
+use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+use frankenengine_engine::parser_api_stability::parse_script;
 
 fn eval_value(source: &str) -> String {
     let mut engine = HybridRouter::default();
     match engine.eval(source) {
         Ok(outcome) => outcome.value,
         Err(err) => format!("ERR:{err}"),
+    }
+}
+
+fn lower_error_source(source: &str) -> Ir3Module {
+    let tree = parse_script(source).expect("error constructor regression parses");
+    lower_ir0_to_ir3(
+        &Ir0Module::from_syntax_tree(tree, "error-constructor-regression.js"),
+        &LoweringContext::new("error-constructor", "cause", "builtin-only"),
+    )
+    .expect("error constructor regression lowers")
+    .ir3
+}
+
+fn error_cores() -> impl Iterator<Item = InterpreterCore> {
+    [
+        InterpreterConfig::quickjs_defaults(),
+        InterpreterConfig::v8_defaults(),
+    ]
+    .into_iter()
+    .map(|mut config| {
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+            RuntimeCapability::Console,
+        ]
+        .into_iter()
+        .collect();
+        InterpreterCore::new(config, "error-constructor-regression")
+    })
+}
+
+fn assert_native_error_output(source: &str, expected: &[&str]) {
+    let module = lower_error_source(source);
+    for stress in [None, Some(1)] {
+        for mut core in error_cores() {
+            core.set_gc_stress_interval(stress);
+            let result = core
+                .execute(&module)
+                .expect("native error regression executes");
+            let actual: Vec<&str> = result
+                .console_output
+                .iter()
+                .map(|entry| entry.message.as_str())
+                .collect();
+            assert_eq!(actual, expected, "GC stress: {stress:?}");
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes(),
+                "GC stress: {stress:?}"
+            );
+        }
     }
 }
 
@@ -270,6 +330,498 @@ const d = Object.getOwnPropertyDescriptor(e2, 'cause');
         ),
         "1 false true true true inner why 2 3 false true {} 0"
     );
+}
+
+#[test]
+fn error_cause_getters_keep_receiver_order_and_undefined_presence() {
+    assert_native_error_output(
+        r#"
+        const calls = [];
+        const inherited = Object.create({
+            get cause() { calls.push('cause:' + (this === inherited)); return undefined; }
+        });
+        const error = new Error({ toString() { calls.push('message'); return 'outer'; } }, inherited);
+        const descriptor = Object.getOwnPropertyDescriptor(error, 'cause');
+        console.log(calls.join('|'), error.message, error.hasOwnProperty('cause'),
+            descriptor.value === undefined, descriptor.writable, descriptor.enumerable,
+            descriptor.configurable);
+        let reads = 0;
+        const options = { get cause() { reads++; return this; } };
+        const own = Error('own', options);
+        console.log(own.cause === options, reads, new Error('absent', {}).hasOwnProperty('cause'));
+        "#,
+        &[
+            "message|cause:true outer true true true false true",
+            "true 1 false",
+        ],
+    );
+}
+
+#[test]
+fn error_cause_proxy_has_precedes_get_and_can_change_the_property() {
+    assert_native_error_output(
+        r#"
+        const calls = [];
+        const target = { cause: 'before' };
+        const options = new Proxy(target, {
+            has(t, key) { calls.push('has:' + key); t.cause = 'after'; return true; },
+            get(t, key, receiver) {
+                calls.push('get:' + key + ':' + (receiver === options));
+                return Reflect.get(t, key, receiver);
+            }
+        });
+        console.log(new Error('proxy', options).cause, calls.join('|'));
+        const absent = new Proxy({ cause: 1 }, {
+            has(t, key) { calls.push('absent:' + key); return false; },
+            get() { throw 'Get must not run after false HasProperty'; }
+        });
+        console.log(new Error('absent', absent).hasOwnProperty('cause'), calls[2]);
+        let callable;
+        callable = new Proxy(function () {}, {
+            has(t, key) { calls.push('function-has:' + key); return true; },
+            get(t, key, receiver) {
+                calls.push('function-get:' + key + ':' + (receiver === callable));
+                return 42;
+            }
+        });
+        console.log(Error('callable', callable).cause, calls.slice(3).join('|'));
+        function localSurvivor() {
+            const survivor = { value: 17 };
+            const trace = [];
+            const options = new Proxy({}, {
+                has() {
+                    trace.push('has');
+                    for (let i = 0; i < 32; i++) {
+                        const garbage = { value: i };
+                        if (garbage.value < 0) throw 'unreachable';
+                    }
+                    return true;
+                },
+                get() {
+                    trace.push('get');
+                    for (let i = 0; i < 32; i++) {
+                        const garbage = { value: i };
+                        if (garbage.value < 0) throw 'unreachable';
+                    }
+                    return { value: 23 };
+                }
+            });
+            const error = new Error('outer', options);
+            return [survivor.value, error.message, error.cause.value, trace.join('|')].join(' ');
+        }
+        console.log(localSurvivor());
+        "#,
+        &[
+            "after has:cause|get:cause:true",
+            "false absent:cause",
+            "42 function-has:cause|function-get:cause:true",
+            "17 outer 23 has|get",
+        ],
+    );
+}
+
+#[test]
+fn error_cause_accepts_callable_promise_generator_and_iterator_options() {
+    assert_native_error_output(
+        r#"
+        const token = {};
+        const options = [function () {}, () => 0, async function () {}, function* () {},
+            async function* () {}, Promise.resolve(0), (function* () {})(),
+            (async function* () {})(), [1].values()];
+        let reads = 0;
+        const results = [];
+        for (let i = 0; i < options.length; i++) {
+            const option = options[i];
+            Object.defineProperty(option, 'cause', {
+                get() { reads++; if (this !== option) throw 'wrong receiver'; return token; }
+            });
+            results.push(new Error('carrier', option).cause === token);
+        }
+        console.log(results.join(','), reads);
+        function inherited() {}
+        Object.setPrototypeOf(inherited, { get cause() { return this; } });
+        console.log(new Error('inherited', inherited).cause === inherited);
+        "#,
+        &["true,true,true,true,true,true,true,true,true 9", "true"],
+    );
+}
+
+#[test]
+fn all_native_errors_and_subclasses_observe_cause_getters() {
+    assert_native_error_output(
+        r#"
+        const constructors = [Error, TypeError, RangeError, ReferenceError, SyntaxError, EvalError, URIError];
+        const token = {};
+        let reads = 0;
+        const options = { get cause() { reads++; return token; } };
+        const results = [];
+        for (let i = 0; i < constructors.length; i++) {
+            const Constructor = constructors[i];
+            results.push(Constructor('call', options).cause === token);
+            results.push(new Constructor('new', options).cause === token);
+        }
+        class Derived extends TypeError { constructor(message, option) { super(message, option); } }
+        const derived = new Derived('derived', options);
+        console.log(results.join(','), reads, derived.cause === token, derived instanceof Derived);
+        const calls = [];
+        const errors = { [Symbol.iterator]() {
+            calls.push('iterator');
+            return { next() { calls.push('next'); return { done: true }; } };
+        } };
+        const aggregate = new AggregateError(errors,
+            { toString() { calls.push('message'); return 'aggregate'; } },
+            { get cause() { calls.push('cause'); return token; } });
+        class DerivedAggregate extends AggregateError {}
+        const derivedAggregate = new DerivedAggregate([], 'derived aggregate', options);
+        console.log(calls.join('|'), aggregate.cause === token, aggregate.errors.length,
+            derivedAggregate.cause === token, derivedAggregate instanceof DerivedAggregate);
+        "#,
+        &[
+            "true,true,true,true,true,true,true,true,true,true,true,true,true,true 15 true true",
+            "message|cause|iterator|next true 0 true true",
+        ],
+    );
+}
+
+#[test]
+fn error_cause_preserves_abrupt_completion_and_skips_later_steps() {
+    assert_native_error_output(
+        r#"
+        const token = {};
+        const options = [
+            { get cause() { throw token; } },
+            new Proxy({}, { has() { throw token; }, get() { throw 'unexpected get'; } }),
+            new Proxy({}, { has() { return true; }, get() { throw token; } })
+        ];
+        const caught = [];
+        for (let i = 0; i < options.length; i++) {
+            try { new Error('failure', options[i]); caught.push(false); }
+            catch (error) { caught.push(error === token); }
+        }
+        console.log(caught.join(','));
+        const revoked = Proxy.revocable({}, {});
+        revoked.revoke();
+        try { new Error('revoked', revoked.proxy); }
+        catch (error) { console.log(error instanceof TypeError); }
+        const fixed = Object.defineProperty({}, 'cause', { value: 1, configurable: false });
+        try { new Error('invariant', new Proxy(fixed, { has() { return false; } })); }
+        catch (error) { console.log(error instanceof TypeError); }
+        let iterated = false;
+        const errors = { [Symbol.iterator]() { iterated = true; throw 'late iterator'; } };
+        try { new AggregateError(errors, 'aggregate', options[0]); }
+        catch (error) { console.log(error === token, iterated); }
+        let causeRead = false;
+        try {
+            new Error({ toString() { throw token; } }, { get cause() { causeRead = true; } });
+        } catch (error) { console.log(error === token, causeRead); }
+        console.log(new Error('after', { get cause() { return 42; } }).cause);
+        "#,
+        &[
+            "true,true,true",
+            "true",
+            "true",
+            "true false",
+            "true false",
+            "42",
+        ],
+    );
+}
+
+#[test]
+fn error_cause_ignores_primitive_options_without_boxing() {
+    assert_native_error_output(
+        r#"
+        let reads = 0;
+        Object.defineProperty(Object.prototype, 'cause', {
+            get() { reads++; throw 'primitive options must not be boxed'; }, configurable: true
+        });
+        const options = [undefined, null, true, 1, 'text', Symbol('key'), 1n];
+        const present = [];
+        for (let i = 0; i < options.length; i++) {
+            present.push(new Error('primitive', options[i]).hasOwnProperty('cause'));
+        }
+        console.log(present.join(','), reads);
+        "#,
+        &["false,false,false,false,false,false,false 0"],
+    );
+}
+
+#[test]
+fn error_cause_preserves_stored_property_labels_through_public_options_aliases() {
+    for inherited in [false, true] {
+        for mut core in error_cores() {
+            let holder = core.alloc_object_with_prototype(None).unwrap();
+            let options = if inherited {
+                core.alloc_object_with_prototype(Some(holder)).unwrap()
+            } else {
+                holder
+            };
+            for (register, value) in [
+                (0, Value::str("outer")),
+                (1, Value::Object(options)),
+                (5, Value::str("cause")),
+                (6, Value::Int(42)),
+                (7, Value::Object(options)),
+                (8, Value::Object(holder)),
+            ] {
+                core.seed_register(register, value).unwrap();
+            }
+            core.set_register_label(6, Label::Secret).unwrap();
+            let mut module = lower_error_source("0;");
+            module.instructions = vec![
+                Ir3Instruction::SetProperty {
+                    obj: 8,
+                    key: 5,
+                    val: 6,
+                },
+                Ir3Instruction::Move { dst: 1, src: 7 },
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("builtin:Error".into()),
+                    args: RegRange { start: 0, count: 2 },
+                    dst: 3,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 3,
+                    key: 5,
+                    dst: 4,
+                },
+                Ir3Instruction::Return { value: 4 },
+            ];
+            let result = core.execute(&module).expect("labeled error cause executes");
+            assert_eq!(result.value, Value::Int(42));
+            assert_eq!(result.completion_label, Label::Secret);
+            assert_eq!(core.get_register_label(1).unwrap(), &Label::Public);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+}
+
+#[test]
+fn error_cause_observes_inherited_callable_and_generator_labels_without_own_storage() {
+    for generator in [false, true] {
+        for source in ["data", "getter", "absent shape"] {
+            for mut core in error_cores() {
+                let property = if source == "absent shape" {
+                    "unrelated"
+                } else {
+                    "cause"
+                };
+                let stored = if source == "getter" {
+                    Value::Accessor {
+                        get: Some(std::sync::Arc::new(Value::Function(1))),
+                        set: None,
+                    }
+                } else {
+                    Value::Int(42)
+                };
+                for (register, value) in [
+                    (0, Value::str("outer")),
+                    (1, Value::Function(0)),
+                    (5, Value::str(property)),
+                    (6, stored),
+                    (9, Value::str("cause")),
+                ] {
+                    core.seed_register(register, value).unwrap();
+                }
+                core.set_register_label(
+                    if source == "absent shape" { 5 } else { 6 },
+                    Label::Secret,
+                )
+                .unwrap();
+                let mut module = lower_error_source("0;");
+                module.instructions = if generator {
+                    vec![
+                        Ir3Instruction::CreateGenerator {
+                            dst: 10,
+                            function_index: 0,
+                            capture_count: 0,
+                        },
+                        Ir3Instruction::Call {
+                            callee: 10,
+                            args: RegRange {
+                                start: 11,
+                                count: 0,
+                            },
+                            dst: 1,
+                        },
+                    ]
+                } else {
+                    Vec::new()
+                };
+                module.instructions.extend([
+                    Ir3Instruction::HostCall {
+                        capability: CapabilityTag("builtin:ObjectGetPrototypeOf".into()),
+                        args: RegRange { start: 1, count: 1 },
+                        dst: 8,
+                    },
+                    Ir3Instruction::Move { dst: 7, src: 1 },
+                    Ir3Instruction::SetProperty {
+                        obj: 8,
+                        key: 5,
+                        val: 6,
+                    },
+                    Ir3Instruction::HostCall {
+                        capability: CapabilityTag("builtin:Error".into()),
+                        args: RegRange { start: 0, count: 2 },
+                        dst: 3,
+                    },
+                    Ir3Instruction::GetProperty {
+                        obj: 3,
+                        key: 9,
+                        dst: 4,
+                    },
+                    Ir3Instruction::Return { value: 4 },
+                ]);
+                let entry = module.instructions.len() as u32;
+                module.instructions.extend([
+                    Ir3Instruction::LoadUndefined { dst: 0 },
+                    Ir3Instruction::Return { value: 0 },
+                    Ir3Instruction::LoadInt { dst: 0, value: 42 },
+                    Ir3Instruction::Return { value: 0 },
+                ]);
+                module.function_table = vec![
+                    Ir3FunctionDesc {
+                        entry,
+                        arity: 0,
+                        frame_size: 1,
+                        name: Some("options".into()),
+                        is_generator: generator,
+                        rest_param_index: None,
+                    },
+                    Ir3FunctionDesc {
+                        entry: entry + 2,
+                        arity: 0,
+                        frame_size: 1,
+                        name: Some("cause_getter".into()),
+                        is_generator: false,
+                        rest_param_index: None,
+                    },
+                ];
+                let result = core
+                    .execute(&module)
+                    .expect("inherited carrier cause executes");
+                let expected = if source == "absent shape" {
+                    Value::Undefined
+                } else {
+                    Value::Int(42)
+                };
+                assert_eq!(
+                    result.value, expected,
+                    "generator={generator}, source={source}"
+                );
+                assert_eq!(
+                    result.completion_label,
+                    Label::Secret,
+                    "generator={generator}, source={source}"
+                );
+                assert_eq!(core.get_register_label(7).unwrap(), &Label::Public);
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn error_cause_observes_proxy_prototype_shape_when_has_hides_the_property() {
+    for mut core in error_cores() {
+        let target = core.alloc_object_with_prototype(None).unwrap();
+        let handler = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(handler, "has".into(), Value::Function(1))
+            .unwrap();
+        for (register, value) in [
+            (0, Value::str("outer")),
+            (5, Value::str("cause")),
+            (6, Value::Int(42)),
+            (11, Value::str("prototype")),
+            (14, Value::Object(target)),
+            (15, Value::Object(handler)),
+        ] {
+            core.seed_register(register, value).unwrap();
+        }
+        core.set_register_label(5, Label::Secret).unwrap();
+        let mut module = lower_error_source("0;");
+        module.instructions = vec![
+            Ir3Instruction::CreateGenerator {
+                dst: 10,
+                function_index: 0,
+                capture_count: 0,
+            },
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("builtin:Proxy".into()),
+                args: RegRange {
+                    start: 14,
+                    count: 2,
+                },
+                dst: 16,
+            },
+            Ir3Instruction::SetProperty {
+                obj: 10,
+                key: 11,
+                val: 16,
+            },
+            Ir3Instruction::Call {
+                callee: 10,
+                args: RegRange {
+                    start: 17,
+                    count: 0,
+                },
+                dst: 1,
+            },
+            Ir3Instruction::Move { dst: 7, src: 1 },
+            Ir3Instruction::SetProperty {
+                obj: 14,
+                key: 5,
+                val: 6,
+            },
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("builtin:Error".into()),
+                args: RegRange { start: 0, count: 2 },
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+            Ir3Instruction::LoadUndefined { dst: 0 },
+            Ir3Instruction::Return { value: 0 },
+            Ir3Instruction::LoadBool {
+                dst: 0,
+                value: false,
+            },
+            Ir3Instruction::Return { value: 0 },
+        ];
+        module.function_table = vec![
+            Ir3FunctionDesc {
+                entry: 8,
+                arity: 0,
+                frame_size: 1,
+                name: Some("options".into()),
+                is_generator: true,
+                rest_param_index: None,
+            },
+            Ir3FunctionDesc {
+                entry: 10,
+                arity: 2,
+                frame_size: 2,
+                name: Some("hide_cause".into()),
+                is_generator: false,
+                rest_param_index: None,
+            },
+        ];
+        let result = core
+            .execute(&module)
+            .expect("Proxy prototype cause executes");
+        assert!(matches!(result.value, Value::Object(_)));
+        assert_eq!(result.completion_label, Label::Secret);
+        assert_eq!(core.get_register_label(7).unwrap(), &Label::Public);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
 }
 
 /// V8's Error.captureStackTrace, which npm error classes call unguarded

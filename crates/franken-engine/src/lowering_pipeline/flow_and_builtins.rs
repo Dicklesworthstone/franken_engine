@@ -1321,6 +1321,14 @@ pub(super) fn crypto_cipher_object_alias_sentinel(name: &str) -> String {
     format!("\0cryptoobj\0cipher\0{name}")
 }
 
+pub(super) fn crypto_sign_object_alias_sentinel(name: &str) -> String {
+    format!("\0cryptoobj\0sign\0{name}")
+}
+
+pub(super) fn crypto_verify_object_alias_sentinel(name: &str) -> String {
+    format!("\0cryptoobj\0verify\0{name}")
+}
+
 pub(super) fn crypto_object_alias_surface(
     name: &str,
     binding_lookup: &BTreeMap<String, BindingId>,
@@ -1331,6 +1339,10 @@ pub(super) fn crypto_object_alias_surface(
         Some(LoweringOnlyModuleAliasSurface::CryptoHmacObject)
     } else if binding_lookup.contains_key(&crypto_cipher_object_alias_sentinel(name)) {
         Some(LoweringOnlyModuleAliasSurface::CryptoCipherObject)
+    } else if binding_lookup.contains_key(&crypto_sign_object_alias_sentinel(name)) {
+        Some(LoweringOnlyModuleAliasSurface::CryptoSignObject)
+    } else if binding_lookup.contains_key(&crypto_verify_object_alias_sentinel(name)) {
+        Some(LoweringOnlyModuleAliasSurface::CryptoVerifyObject)
     } else {
         None
     }
@@ -1346,6 +1358,10 @@ pub(super) fn insert_crypto_object_alias_sentinel(
         LoweringOnlyModuleAliasSurface::CryptoHmacObject => crypto_hmac_object_alias_sentinel(name),
         LoweringOnlyModuleAliasSurface::CryptoCipherObject => {
             crypto_cipher_object_alias_sentinel(name)
+        }
+        LoweringOnlyModuleAliasSurface::CryptoSignObject => crypto_sign_object_alias_sentinel(name),
+        LoweringOnlyModuleAliasSurface::CryptoVerifyObject => {
+            crypto_verify_object_alias_sentinel(name)
         }
         _ => unreachable!("only crypto-object surfaces have object sentinels"),
     };
@@ -1371,7 +1387,7 @@ pub(super) fn is_require_crypto_module_initializer(
 /// Supported native crypto exports, shared by lowering and runtime providers.
 /// Randomness still requires RandomRead at the invocation boundary; loading
 /// the crypto module supplies no entropy or additional authority.
-pub(crate) const CRYPTO_METHOD_NAMES: [&str; 17] = [
+pub(crate) const CRYPTO_METHOD_NAMES: [&str; 19] = [
     "createHash",
     "createHmac",
     "timingSafeEqual",
@@ -1385,6 +1401,8 @@ pub(crate) const CRYPTO_METHOD_NAMES: [&str; 17] = [
     "generateKeyPairSync",
     "sign",
     "verify",
+    "createSign",
+    "createVerify",
     "randomBytes",
     "randomUUID",
     "randomInt",
@@ -1410,6 +1428,8 @@ pub(crate) fn crypto_method_capability(method: &str) -> Option<&'static str> {
         // handles; Ed25519-only in this slice.
         "sign" => Some("builtin:CryptoSign"),
         "verify" => Some("builtin:CryptoVerify"),
+        "createSign" => Some("builtin:CryptoCreateSign"),
+        "createVerify" => Some("builtin:CryptoCreateVerify"),
         "randomBytes" => Some("builtin:CryptoRandomBytes"),
         "randomUUID" => Some("builtin:CryptoRandomUUID"),
         "randomInt" => Some("builtin:CryptoRandomInt"),
@@ -1506,6 +1526,8 @@ pub(super) fn crypto_object_method_capability(method: &str) -> Option<&'static s
         "final" => Some("builtin:CryptoObjectFinal"),
         "getAuthTag" => Some("builtin:CryptoObjectGetAuthTag"),
         "setAuthTag" => Some("builtin:CryptoObjectSetAuthTag"),
+        "sign" => Some("builtin:CryptoObjectSign"),
+        "verify" => Some("builtin:CryptoObjectVerify"),
         _ => None,
     }
 }
@@ -1523,6 +1545,10 @@ pub(super) fn crypto_object_factory_surface(
     match crypto_builtin_call_capability(callee, arguments, binding_lookup) {
         Some("builtin:CryptoCreateHash") => Some(LoweringOnlyModuleAliasSurface::CryptoHashObject),
         Some("builtin:CryptoCreateHmac") => Some(LoweringOnlyModuleAliasSurface::CryptoHmacObject),
+        Some("builtin:CryptoCreateSign") => Some(LoweringOnlyModuleAliasSurface::CryptoSignObject),
+        Some("builtin:CryptoCreateVerify") => {
+            Some(LoweringOnlyModuleAliasSurface::CryptoVerifyObject)
+        }
         Some("builtin:CryptoCreateCipheriv" | "builtin:CryptoCreateDecipheriv") => {
             Some(LoweringOnlyModuleAliasSurface::CryptoCipherObject)
         }
@@ -1572,6 +1598,11 @@ pub(super) fn crypto_object_expression_surface(
     match (surface, method) {
         (LoweringOnlyModuleAliasSurface::CryptoHashObject, "update" | "copy") => Some(surface),
         (LoweringOnlyModuleAliasSurface::CryptoHmacObject, "update") => Some(surface),
+        (
+            LoweringOnlyModuleAliasSurface::CryptoSignObject
+            | LoweringOnlyModuleAliasSurface::CryptoVerifyObject,
+            "update",
+        ) => Some(surface),
         _ => None,
     }
 }
@@ -1612,6 +1643,14 @@ pub(super) fn crypto_object_builtin_call_capability(
         }
         LoweringOnlyModuleAliasSurface::CryptoCipherObject
             if matches!(method, "update" | "final" | "getAuthTag" | "setAuthTag") =>
+        {
+            Some(capability)
+        }
+        LoweringOnlyModuleAliasSurface::CryptoSignObject if matches!(method, "update" | "sign") => {
+            Some(capability)
+        }
+        LoweringOnlyModuleAliasSurface::CryptoVerifyObject
+            if matches!(method, "update" | "verify") =>
         {
             Some(capability)
         }
@@ -1663,6 +1702,8 @@ pub(super) fn is_crypto_object_alias_usage(
             LoweringOnlyModuleAliasSurface::CryptoCipherObject => {
                 matches!(method, "update" | "final" | "getAuthTag" | "setAuthTag")
             }
+            LoweringOnlyModuleAliasSurface::CryptoSignObject => matches!(method, "update" | "sign"),
+            LoweringOnlyModuleAliasSurface::CryptoVerifyObject => matches!(method, "update" | "verify"),
             _ => false,
         })
             && arguments
@@ -1686,7 +1727,9 @@ pub(super) fn is_discarded_crypto_identity_call(
             LoweringOnlyModuleAliasSurface::CryptoHashObject => {
                 matches!(method, "update" | "copy")
             }
-            LoweringOnlyModuleAliasSurface::CryptoHmacObject => method == "update",
+            LoweringOnlyModuleAliasSurface::CryptoHmacObject
+            | LoweringOnlyModuleAliasSurface::CryptoSignObject
+            | LoweringOnlyModuleAliasSurface::CryptoVerifyObject => method == "update",
             LoweringOnlyModuleAliasSurface::CryptoCipherObject => method == "setAuthTag",
             _ => false,
         })
@@ -1732,7 +1775,9 @@ pub(super) fn crypto_object_alias_identity_chain_rejected_use(
         LoweringOnlyModuleAliasSurface::CryptoHashObject => {
             matches!(method, "update" | "copy")
         }
-        LoweringOnlyModuleAliasSurface::CryptoHmacObject => method == "update",
+        LoweringOnlyModuleAliasSurface::CryptoHmacObject
+        | LoweringOnlyModuleAliasSurface::CryptoSignObject
+        | LoweringOnlyModuleAliasSurface::CryptoVerifyObject => method == "update",
         _ => false,
     };
     returns_authenticated_identity.then(|| {
@@ -1778,7 +1823,8 @@ pub(super) fn crypto_object_alias_closed_result_call_rejected_use(
             LoweringOnlyModuleAliasSurface::CryptoHashObject
                 | LoweringOnlyModuleAliasSurface::CryptoHmacObject,
             "digest"
-        )
+        ) | (LoweringOnlyModuleAliasSurface::CryptoSignObject, "sign")
+            | (LoweringOnlyModuleAliasSurface::CryptoVerifyObject, "verify")
     );
     returns_closed_result.then(|| {
         receiver_rejected
@@ -3058,6 +3104,8 @@ pub(super) enum LoweringOnlyModuleAliasSurface {
     CryptoHashObject,
     CryptoHmacObject,
     CryptoCipherObject,
+    CryptoSignObject,
+    CryptoVerifyObject,
     BufferObject,
     Cluster,
     ChildProcess,
@@ -3075,7 +3123,11 @@ impl LoweringOnlyModuleAliasSurface {
     pub(super) fn is_crypto_object(self) -> bool {
         matches!(
             self,
-            Self::CryptoHashObject | Self::CryptoHmacObject | Self::CryptoCipherObject
+            Self::CryptoHashObject
+                | Self::CryptoHmacObject
+                | Self::CryptoCipherObject
+                | Self::CryptoSignObject
+                | Self::CryptoVerifyObject
         )
     }
 
@@ -3193,7 +3245,9 @@ pub(super) fn is_module_alias_usage(
         LoweringOnlyModuleAliasSurface::Crypto => is_crypto_alias_usage(expr, alias),
         LoweringOnlyModuleAliasSurface::CryptoHashObject
         | LoweringOnlyModuleAliasSurface::CryptoHmacObject
-        | LoweringOnlyModuleAliasSurface::CryptoCipherObject => {
+        | LoweringOnlyModuleAliasSurface::CryptoCipherObject
+        | LoweringOnlyModuleAliasSurface::CryptoSignObject
+        | LoweringOnlyModuleAliasSurface::CryptoVerifyObject => {
             is_crypto_object_alias_usage(expr, alias, surface)
         }
         LoweringOnlyModuleAliasSurface::BufferObject => is_buffer_object_alias_usage(expr, alias),
@@ -3737,7 +3791,9 @@ pub(super) fn module_alias_expr_has_rejected_use(
                 .is_some_and(|method| crypto_method_call_capability(method, arguments).is_some()),
             LoweringOnlyModuleAliasSurface::CryptoHashObject
             | LoweringOnlyModuleAliasSurface::CryptoHmacObject
-            | LoweringOnlyModuleAliasSurface::CryptoCipherObject => {
+            | LoweringOnlyModuleAliasSurface::CryptoCipherObject
+            | LoweringOnlyModuleAliasSurface::CryptoSignObject
+            | LoweringOnlyModuleAliasSurface::CryptoVerifyObject => {
                 is_crypto_object_alias_usage(expr, alias, surface)
             }
             LoweringOnlyModuleAliasSurface::BufferObject => {
@@ -9450,6 +9506,8 @@ pub(super) enum CryptoFlowObjectKind {
     Hash,
     Hmac,
     Cipher,
+    Sign,
+    Verify,
 }
 
 pub(super) fn crypto_flow_kind_supports_capability(
@@ -9466,6 +9524,14 @@ pub(super) fn crypto_flow_kind_supports_capability(
         CryptoFlowObjectKind::Hmac => matches!(
             capability,
             "builtin:CryptoObjectUpdate" | "builtin:CryptoObjectDigest"
+        ),
+        CryptoFlowObjectKind::Sign => matches!(
+            capability,
+            "builtin:CryptoObjectUpdate" | "builtin:CryptoObjectSign"
+        ),
+        CryptoFlowObjectKind::Verify => matches!(
+            capability,
+            "builtin:CryptoObjectUpdate" | "builtin:CryptoObjectVerify"
         ),
         CryptoFlowObjectKind::Cipher => matches!(
             capability,
@@ -10100,6 +10166,8 @@ pub(super) fn hostcall_exception_is_operand_derived(
         capability,
         "builtin:CryptoCreateHash"
             | "builtin:CryptoCreateHmac"
+            | "builtin:CryptoCreateSign"
+            | "builtin:CryptoCreateVerify"
             | "builtin:CryptoTimingSafeEqual"
             | "builtin:CryptoPbkdf2Sync"
             | "builtin:CryptoPbkdf2"
@@ -10118,6 +10186,8 @@ pub(super) fn hostcall_exception_is_operand_derived(
             | "builtin:CryptoObjectFinal"
             | "builtin:CryptoObjectGetAuthTag"
             | "builtin:CryptoObjectSetAuthTag"
+            | "builtin:CryptoObjectSign"
+            | "builtin:CryptoObjectVerify"
             // bd-53l89 slice 2: pure-compute Ed25519 sign/verify over
             // KeyPairActive handles and closed inputs.
             | "builtin:CryptoSign"
@@ -11617,6 +11687,8 @@ pub(super) fn simulate_ir2_flow_labels<O: FlowOp>(
                 let constructor_kind = match capability.as_str() {
                     "builtin:CryptoCreateHash" => Some(CryptoFlowObjectKind::Hash),
                     "builtin:CryptoCreateHmac" => Some(CryptoFlowObjectKind::Hmac),
+                    "builtin:CryptoCreateSign" => Some(CryptoFlowObjectKind::Sign),
+                    "builtin:CryptoCreateVerify" => Some(CryptoFlowObjectKind::Verify),
                     "builtin:CryptoCreateCipheriv" | "builtin:CryptoCreateDecipheriv" => {
                         Some(CryptoFlowObjectKind::Cipher)
                     }
@@ -11639,6 +11711,8 @@ pub(super) fn simulate_ir2_flow_labels<O: FlowOp>(
                         | "builtin:CryptoObjectFinal"
                         | "builtin:CryptoObjectGetAuthTag"
                         | "builtin:CryptoObjectSetAuthTag"
+                        | "builtin:CryptoObjectSign"
+                        | "builtin:CryptoObjectVerify"
                 ) {
                     let receiver_origin = inputs.last().and_then(|value| value.crypto_origin);
                     if let Some((origin, prior)) = receiver_origin
@@ -11653,6 +11727,16 @@ pub(super) fn simulate_ir2_flow_labels<O: FlowOp>(
                         })
                     {
                         result_label = prior.lifecycle_label.join(&operation_data_label);
+                        if matches!(
+                            prior.kind,
+                            CryptoFlowObjectKind::Sign | CryptoFlowObjectKind::Verify
+                        ) {
+                            // The original context binding predates secret
+                            // key/message ingress. A later lifecycle error
+                            // observes retained state even with public direct
+                            // operands (for example update after sign).
+                            operation_exception_label_override = Some(result_label.clone());
+                        }
                         match capability.as_str() {
                             "builtin:CryptoObjectUpdate" => {
                                 if prior.kind == CryptoFlowObjectKind::Hmac {
@@ -11680,7 +11764,10 @@ pub(super) fn simulate_ir2_flow_labels<O: FlowOp>(
                                 );
                                 if matches!(
                                     prior.kind,
-                                    CryptoFlowObjectKind::Hash | CryptoFlowObjectKind::Hmac
+                                    CryptoFlowObjectKind::Hash
+                                        | CryptoFlowObjectKind::Hmac
+                                        | CryptoFlowObjectKind::Sign
+                                        | CryptoFlowObjectKind::Verify
                                 ) {
                                     result_origin = Some(origin);
                                 } else {
@@ -11743,6 +11830,31 @@ pub(super) fn simulate_ir2_flow_labels<O: FlowOp>(
                                     },
                                 );
                                 result_shape = FlowValueShape::BufferObject;
+                            }
+                            "builtin:CryptoObjectSign" | "builtin:CryptoObjectVerify" => {
+                                crypto_flow_states.insert(
+                                    origin,
+                                    CryptoFlowObjectState {
+                                        kind: prior.kind,
+                                        lifecycle_label: result_label.clone(),
+                                    },
+                                );
+                                // Inputs are popped in reverse argument order.
+                                // Final signatures and verdicts retain the key
+                                // and every previously supplied message label.
+                                let arguments = &inputs[..inputs.len() - 1];
+                                result_shape = if capability == "builtin:CryptoObjectVerify" {
+                                    FlowValueShape::Primitive
+                                } else {
+                                    match arguments {
+                                        [_key] => FlowValueShape::BufferObject,
+                                        // A falsy optional encoding returns a
+                                        // Buffer, while a nonempty encoding
+                                        // returns text. Primitive shape alone
+                                        // cannot distinguish those cases.
+                                        _ => FlowValueShape::ClosedResult,
+                                    }
+                                };
                             }
                             "builtin:CryptoObjectSetAuthTag" => {
                                 crypto_flow_states.insert(

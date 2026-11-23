@@ -4218,6 +4218,32 @@ impl InterpreterCore {
                 ("digest", BuiltinFunctionKind::CryptoDigest),
             ],
             Some(
+                CryptoObjectState::SignatureActive {
+                    direction: CryptoSignatureDirection::Sign,
+                    ..
+                }
+                | CryptoObjectState::SignatureFinalized {
+                    direction: CryptoSignatureDirection::Sign,
+                    ..
+                },
+            ) => &[
+                ("update", BuiltinFunctionKind::CryptoUpdate),
+                ("sign", BuiltinFunctionKind::CryptoSignFinal),
+            ],
+            Some(
+                CryptoObjectState::SignatureActive {
+                    direction: CryptoSignatureDirection::Verify,
+                    ..
+                }
+                | CryptoObjectState::SignatureFinalized {
+                    direction: CryptoSignatureDirection::Verify,
+                    ..
+                },
+            ) => &[
+                ("update", BuiltinFunctionKind::CryptoUpdate),
+                ("verify", BuiltinFunctionKind::CryptoVerifyFinal),
+            ],
+            Some(
                 CryptoObjectState::CipherActive {
                     algorithm: CryptoCipherAlgorithm::Aes256Gcm,
                     direction: CryptoCipherDirection::Encrypt,
@@ -4556,6 +4582,34 @@ impl InterpreterCore {
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         let object_id = self.crypto_receiver_id(receiver, builtin, "update")?;
+        let result = self.crypto_update_inner(object_id, args);
+        match result {
+            Err(error)
+                if matches!(
+                    self.crypto_objects.get(&object_id),
+                    Some(
+                        CryptoObjectState::SignatureActive { .. }
+                            | CryptoObjectState::SignatureFinalized { .. }
+                    )
+                ) && !matches!(error, InterpreterError::UncaughtException { .. })
+                    && Self::js_catchable_error_name(&error).is_some() =>
+            {
+                Err(self.crypto_rethrow_lifecycle_error(
+                    &error,
+                    object_id,
+                    "builtin:CryptoObjectUpdate",
+                    args,
+                )?)
+            }
+            result => result,
+        }
+    }
+
+    fn crypto_update_inner(
+        &mut self,
+        object_id: ObjectId,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
         let invocation_label = self.crypto_invocation_label(args)?;
         if self.crypto_objects.get(&object_id).is_some_and(|state| {
             matches!(
@@ -4569,7 +4623,19 @@ impl InterpreterCore {
             )?;
         }
         let value = self.crypto_required_arg(args, 0, "crypto update input")?;
-        let encoding = self.builtin_arg(args, 1)?;
+        let mut encoding = self.builtin_arg(args, 1)?;
+        // Node's Sign/Verify update treats an unrecognized string encoding as
+        // UTF-8. Binary views ignore the encoding argument entirely.
+        if matches!(
+            self.crypto_objects.get(&object_id),
+            Some(
+                CryptoObjectState::SignatureActive { .. }
+                    | CryptoObjectState::SignatureFinalized { .. }
+            )
+        ) && !matches!(&encoding, Some(Value::Str(name)) if Self::crypto_canonical_buffer_encoding(name).is_some())
+        {
+            encoding = None;
+        }
         let retained_state_bytes = self
             .crypto_objects
             .get(&object_id)
@@ -4584,7 +4650,9 @@ impl InterpreterCore {
         let previous = self.crypto_state_snapshot(object_id)?;
         if matches!(
             previous,
-            CryptoObjectState::HashFinalized { .. } | CryptoObjectState::HmacFinalized { .. }
+            CryptoObjectState::HashFinalized { .. }
+                | CryptoObjectState::HmacFinalized { .. }
+                | CryptoObjectState::SignatureFinalized { .. }
         ) {
             let label = self.clone_dominant_label_with_temporary_budget(
                 previous.lifecycle_label(),
@@ -4592,10 +4660,16 @@ impl InterpreterCore {
                 Self::estimate_crypto_object_state_bytes(&previous)
                     .saturating_add(Self::estimate_label_bytes(&invocation_label)),
             )?;
+            let (code, message) =
+                if matches!(previous, CryptoObjectState::SignatureFinalized { .. }) {
+                    ("ERR_CRYPTO_INVALID_STATE", "Not initialised")
+                } else {
+                    ("ERR_CRYPTO_HASH_FINALIZED", "Digest already called")
+                };
             return Err(self.crypto_throw_node_error_with_temporary_budget(
                 "Error",
-                "ERR_CRYPTO_HASH_FINALIZED",
-                "Digest already called".to_string(),
+                code,
+                message.to_string(),
                 &label,
                 retained_state_bytes.saturating_add(Self::estimate_label_bytes(&invocation_label)),
             ));
@@ -4603,10 +4677,11 @@ impl InterpreterCore {
         let bytes = Zeroizing::new(self.crypto_update_input_bytes(&value, encoding.as_ref())?);
         let previous_input_len = match &previous {
             CryptoObjectState::HashActive { input, .. }
-            | CryptoObjectState::HmacActive { input, .. } => input.len(),
+            | CryptoObjectState::HmacActive { input, .. }
+            | CryptoObjectState::SignatureActive { input, .. } => input.len(),
             _ => {
                 return Err(InterpreterError::TypeError {
-                    expected: "hash or HMAC receiver".to_string(),
+                    expected: "hash, HMAC, Sign or Verify receiver".to_string(),
                     got: "cipher receiver".to_string(),
                 });
             }
@@ -4623,7 +4698,15 @@ impl InterpreterCore {
                 ),
             });
         }
-        self.charge_crypto_work(Self::crypto_byte_work(bytes.len()))?;
+        let work_bytes = if matches!(previous, CryptoObjectState::SignatureActive { .. }) {
+            // These bounded contexts retain the message until finalization.
+            // A tiny chunk still copies its accumulated prefix; charge that
+            // work so repeated one-byte updates cannot evade CPU budgeting.
+            previous_input_len.saturating_add(bytes.len())
+        } else {
+            bytes.len()
+        };
+        self.charge_crypto_work(Self::crypto_byte_work(work_bytes))?;
         self.check_temporary_memory_budget(
             Self::estimate_crypto_object_state_bytes(&previous)
                 .saturating_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX))
@@ -4675,7 +4758,19 @@ impl InterpreterCore {
                     lifecycle_label: next_lifecycle_label,
                 }
             }
-            _ => unreachable!("active hash/HMAC state was checked"),
+            CryptoObjectState::SignatureActive {
+                direction, input, ..
+            } => {
+                let mut next_input = Zeroizing::new(Vec::with_capacity(next_input_len));
+                next_input.extend_from_slice(input);
+                next_input.extend_from_slice(&bytes);
+                CryptoObjectState::SignatureActive {
+                    direction: *direction,
+                    input: next_input,
+                    lifecycle_label: next_lifecycle_label,
+                }
+            }
+            _ => unreachable!("active hash/HMAC/signature state was checked"),
         };
         let previous_bytes = Self::estimate_crypto_object_state_bytes(&previous);
         let next_bytes = Self::estimate_crypto_object_state_bytes(&next);
@@ -4724,6 +4819,8 @@ impl InterpreterCore {
             | CryptoObjectState::HashFinalized { .. }
             | CryptoObjectState::CipherActive { .. }
             | CryptoObjectState::CipherFinalized { .. }
+            | CryptoObjectState::SignatureActive { .. }
+            | CryptoObjectState::SignatureFinalized { .. }
             // bd-53l89: key pair handles expose no digest/final lifecycle.
             | CryptoObjectState::PrivateKey { .. }
             | CryptoObjectState::PublicKey { .. } => 0,
@@ -4789,7 +4886,10 @@ impl InterpreterCore {
                     lifecycle_label: lifecycle_label.clone(),
                 },
             ),
-            CryptoObjectState::CipherActive { .. } | CryptoObjectState::CipherFinalized { .. } => {
+            CryptoObjectState::CipherActive { .. }
+            | CryptoObjectState::CipherFinalized { .. }
+            | CryptoObjectState::SignatureActive { .. }
+            | CryptoObjectState::SignatureFinalized { .. } => {
                 return Err(InterpreterError::TypeError {
                     expected: "hash or HMAC receiver".to_string(),
                     got: "cipher receiver".to_string(),
@@ -7309,7 +7409,7 @@ impl InterpreterCore {
             // the two peaks cannot pass independent non-reserving checks.
             let thrown = self.native_error_to_thrown_value(error)?;
             let invocation_label = self.crypto_invocation_label(method_args)?;
-            let error_label = match self.crypto_objects.get(&object_id) {
+            let mut error_label = match self.crypto_objects.get(&object_id) {
                 Some(state) if state.supports_lifecycle_capability(capability) => self
                     .join_owned_label_with_temporary_budget(
                         invocation_label,
@@ -7317,6 +7417,20 @@ impl InterpreterCore {
                     )?,
                 _ => Label::TopSecret,
             };
+            // Key-type validation can fail before the key helper returns its
+            // private label. Even a register carrying a lower label cannot
+            // declassify which authenticated key kind was supplied.
+            if matches!(
+                capability,
+                "builtin:CryptoObjectSign" | "builtin:CryptoObjectVerify"
+            ) && let Some(Value::Object(key_id)) = self.builtin_arg(method_args, 0)?
+                && let Some(key_state) = self.crypto_objects.get(&key_id)
+            {
+                error_label = self.join_owned_label_with_temporary_budget(
+                    error_label,
+                    key_state.lifecycle_label(),
+                )?;
+            }
             self.replace_pending_abrupt_slots(Some((thrown.clone(), error_label)), None)?;
             Ok(InterpreterError::UncaughtException {
                 value: self.uncaught_exception_description(&thrown),
@@ -7374,7 +7488,9 @@ impl InterpreterCore {
                 CryptoObjectState::HashActive { .. }
                 | CryptoObjectState::HashFinalized { .. }
                 | CryptoObjectState::HmacActive { .. }
-                | CryptoObjectState::HmacFinalized { .. } => BuiltinFunctionKind::CryptoUpdate,
+                | CryptoObjectState::HmacFinalized { .. }
+                | CryptoObjectState::SignatureActive { .. }
+                | CryptoObjectState::SignatureFinalized { .. } => BuiltinFunctionKind::CryptoUpdate,
                 CryptoObjectState::CipherActive { .. }
                 | CryptoObjectState::CipherFinalized { .. } => {
                     BuiltinFunctionKind::CryptoCipherUpdate
@@ -7392,6 +7508,8 @@ impl InterpreterCore {
             "builtin:CryptoObjectFinal" => BuiltinFunctionKind::CryptoCipherFinal,
             "builtin:CryptoObjectGetAuthTag" => BuiltinFunctionKind::CryptoGetAuthTag,
             "builtin:CryptoObjectSetAuthTag" => BuiltinFunctionKind::CryptoSetAuthTag,
+            "builtin:CryptoObjectSign" => BuiltinFunctionKind::CryptoSignFinal,
+            "builtin:CryptoObjectVerify" => BuiltinFunctionKind::CryptoVerifyFinal,
             _ => {
                 return Err(InterpreterError::InternalError {
                     details: format!(
@@ -7433,6 +7551,18 @@ impl InterpreterCore {
             BuiltinFunctionKind::CryptoSetAuthTag => {
                 self.crypto_set_auth_tag(receiver, &builtin, method_args)
             }
+            BuiltinFunctionKind::CryptoSignFinal => self.crypto_signature_final(
+                receiver,
+                &builtin,
+                method_args,
+                CryptoSignatureDirection::Sign,
+            ),
+            BuiltinFunctionKind::CryptoVerifyFinal => self.crypto_signature_final(
+                receiver,
+                &builtin,
+                method_args,
+                CryptoSignatureDirection::Verify,
+            ),
             _ => unreachable!("finite crypto lifecycle capability selected a crypto method"),
         };
         match result {
@@ -9711,6 +9841,12 @@ impl InterpreterCore {
             "builtin:ZlibInflate" => self.dispatch_zlib_hostcall(cap, args),
             "builtin:CryptoCreateHash" => self.crypto_create_hash(args),
             "builtin:CryptoCreateHmac" => self.crypto_create_hmac(args),
+            "builtin:CryptoCreateSign" => {
+                self.crypto_create_signature(args, CryptoSignatureDirection::Sign)
+            }
+            "builtin:CryptoCreateVerify" => {
+                self.crypto_create_signature(args, CryptoSignatureDirection::Verify)
+            }
             "builtin:CryptoTimingSafeEqual" => self.crypto_timing_safe_equal(args),
             "builtin:CryptoPbkdf2Sync" => self.crypto_pbkdf2(args, false),
             "builtin:CryptoPbkdf2" => self.crypto_pbkdf2(args, true),
@@ -9737,7 +9873,9 @@ impl InterpreterCore {
             | "builtin:CryptoObjectCopy"
             | "builtin:CryptoObjectFinal"
             | "builtin:CryptoObjectGetAuthTag"
-            | "builtin:CryptoObjectSetAuthTag" => self.crypto_object_hostcall(cap, args),
+            | "builtin:CryptoObjectSetAuthTag"
+            | "builtin:CryptoObjectSign"
+            | "builtin:CryptoObjectVerify" => self.crypto_object_hostcall(cap, args),
             "builtin:HttpCreateServer" => self.construct_http_server(args),
             "builtin:HttpGet" => self.construct_http_client_request(args, true),
             "builtin:HttpRequest" => self.construct_http_client_request(args, false),

@@ -1692,6 +1692,167 @@ fn ed25519_sign_verify_roundtrip_executes_both_paths_bd_53l89() {
 }
 
 #[test]
+fn streaming_p256_sign_verify_chains_and_replay_bd_53l89() {
+    // The private key, signature and verdict remain Secret. The unit tests
+    // assert their values; this exercises real parsing, lowering, hostcall
+    // authorization, binary encodings, retained state and replay together.
+    let source = r#"
+        const crypto = require('node:crypto');
+        const { publicKey, privateKey } = crypto.generateKeyPairSync('ec', {
+            namedCurve: 'prime256v1'
+        });
+        const signer = crypto.createSign('SHA256');
+        signer.update('61', 'hex');
+        const signature = signer.update(Buffer.from('bc')).sign(privateKey, 'base64');
+        const verifier = crypto.createVerify('RSA-SHA256');
+        verifier.update('a');
+        verifier.update('bc').verify(publicKey, signature, 'base64');
+        crypto.createVerify('sha256').update('changed').verify(privateKey, signature, 'base64');
+        const detached = crypto.sign('sha256', Buffer.from('abc'), privateKey);
+        crypto.createVerify('sha256').update('abc').verify(publicKey, detached);
+        const streamed = crypto.createSign('sha256').update('abc').sign(privateKey);
+        crypto.verify('sha256', Buffer.from('abc'), publicKey, streamed);
+        console.log('streaming-signatures-ok');
+    "#;
+    let provider = Arc::new(ScriptedRandomHostIo::bytes([vec![0x42; 32]]));
+    let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+    let recorded = execute_crypto(source, provider.clone(), recorder);
+    assert_eq!(orchestrated_console(&recorded), "streaming-signatures-ok");
+    assert_eq!(provider.calls.load(Ordering::Acquire), 1);
+    assert_eq!(recorded.host_effect_transcript.len(), 1);
+
+    let never = Arc::new(ScriptedRandomHostIo::never());
+    let replay = Arc::new(InMemoryHostIoTranscript::replaying(
+        recorded.host_effect_transcript.clone(),
+    ));
+    let replayed = execute_crypto(source, never.clone(), replay);
+    assert_eq!(never.calls.load(Ordering::Acquire), 0);
+    assert_eq!(orchestrated_console(&replayed), "streaming-signatures-ok");
+    assert_eq!(
+        replayed.host_effect_transcript,
+        recorded.host_effect_transcript
+    );
+}
+
+#[test]
+fn streaming_p256_lifecycle_and_key_errors_bd_53l89() {
+    for (body, expected) in [
+        ("crypto.createSign('sha512');", "Invalid digest"),
+        (
+            "crypto.createSign('sha256').update('abc').sign(pair.publicKey);",
+            "private key handle",
+        ),
+        (
+            "const s = crypto.createSign('sha256'); s.sign(pair.privateKey); s.update('late');",
+            "Not initialised",
+        ),
+        (
+            "const s = crypto.createSign('sha256'); s.sign(pair.privateKey); s.sign(pair.privateKey);",
+            "Not initialised",
+        ),
+        (
+            "const v = crypto.createVerify('sha256'); v.verify(pair.publicKey, Buffer.from('invalid')); v.update('late');",
+            "Not initialised",
+        ),
+        (
+            "const s = crypto.createSign('sha256'); s.sign(pair.privateKey, 'unknown');",
+            "Unknown encoding",
+        ),
+    ] {
+        let error = eval_crypto_error(&format!(
+            "const crypto = require('crypto'); \
+             const pair = crypto.generateKeyPairSync('ec', {{ namedCurve: 'prime256v1' }}); \
+             {body}"
+        ));
+        assert!(
+            error.contains(expected),
+            "{body}: expected {expected:?}, got {error}"
+        );
+    }
+}
+
+#[test]
+fn streaming_p256_signature_and_verdict_cannot_cross_console_bd_53l89() {
+    for output in ["signature", "verdict"] {
+        let source = format!(
+            "const crypto = require('crypto'); \
+             const pair = crypto.generateKeyPairSync('ec', {{ namedCurve: 'prime256v1' }}); \
+             const signature = crypto.createSign('sha256').update('abc').sign(pair.privateKey); \
+             const verdict = crypto.createVerify('sha256').update('abc').verify(pair.publicKey, signature); \
+             console.log({output});"
+        );
+        let never = Arc::new(ScriptedRandomHostIo::never());
+        let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+        orchestrator.set_host_io(never.clone(), None);
+        let error = orchestrator
+            .execute(&crypto_package(&source, true))
+            .expect_err("streaming signatures and verdicts retain the private-key label");
+        assert!(
+            matches!(
+                error.primary_error(),
+                OrchestratorError::Lowering(lowering_error)
+                    if matches!(lowering_error.as_ref(), LoweringPipelineError::UnauthorizedFlow {
+                        source_label: Label::Secret, sink_clearance: Label::Internal, ..
+                    })
+            ),
+            "{output}: expected Secret-to-Internal refusal, got {error:?}"
+        );
+        assert_eq!(never.calls.load(Ordering::Acquire), 0);
+    }
+
+    let source = "const crypto = require('crypto'); \
+        const pair = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' }); \
+        const signer = crypto.createSign('sha256'); signer.update('abc'); \
+        signer.sign(pair.privateKey); \
+        try { signer.update('late'); } catch (error) { console.log(error); }";
+    let never = Arc::new(ScriptedRandomHostIo::never());
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator.set_host_io(never.clone(), None);
+    let error = orchestrator
+        .execute(&crypto_package(source, true))
+        .expect_err("a finalized context's exception retains the signing-key provenance");
+    assert!(
+        matches!(
+            error.primary_error(),
+            OrchestratorError::Lowering(lowering_error)
+                if matches!(lowering_error.as_ref(), LoweringPipelineError::UnauthorizedFlow {
+                    source_label: Label::Secret, sink_clearance: Label::Internal, ..
+                })
+        ),
+        "expected retained Secret lifecycle on catch, got {error:?}"
+    );
+    assert_eq!(never.calls.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn streaming_p256_contexts_require_builtin_but_no_entropy_grant_bd_53l89() {
+    let source = "const crypto = require('crypto'); \
+        const s = crypto.createSign('sha256'); s.update('abc'); \
+        const v = crypto.createVerify('sha256'); v.update('abc'); \
+        console.log('contexts-without-entropy');";
+    let never = Arc::new(ScriptedRandomHostIo::never());
+    let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator.set_host_io(never.clone(), Some(recorder.clone()));
+    let result = orchestrator
+        .execute(&crypto_package(source, false))
+        .expect("context allocation and update only exercise builtin authority");
+    assert_eq!(orchestrated_console(&result), "contexts-without-entropy");
+    assert_eq!(never.calls.load(Ordering::Acquire), 0);
+    assert!(recorder.recorded_entries().is_empty());
+
+    let mut package = crypto_package("require('crypto').createSign('sha256');", false);
+    package.capabilities.clear();
+    let mut denied = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    denied.set_host_io(never.clone(), None);
+    assert!(
+        denied.execute(&package).is_err(),
+        "the factory cannot bypass builtin authorization"
+    );
+    assert_eq!(never.calls.load(Ordering::Acquire), 0);
+}
+
+#[test]
 fn ed25519_signature_is_never_public_bd_53l89() {
     // Contract §6: a signature is derivative of Secret-floor key material, so
     // even over a Public message its label is at least Secret and console

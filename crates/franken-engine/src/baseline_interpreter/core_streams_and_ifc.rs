@@ -17461,6 +17461,8 @@ impl InterpreterCore {
             BuiltinFunctionKind::CryptoCipherFinal => "builtin:CryptoObjectFinal",
             BuiltinFunctionKind::CryptoGetAuthTag => "builtin:CryptoObjectGetAuthTag",
             BuiltinFunctionKind::CryptoSetAuthTag => "builtin:CryptoObjectSetAuthTag",
+            BuiltinFunctionKind::CryptoSignFinal => "builtin:CryptoObjectSign",
+            BuiltinFunctionKind::CryptoVerifyFinal => "builtin:CryptoObjectVerify",
             // StaticHostcall already gates its exact tag. Direct HostCall
             // dispatch does not enter this function and keeps its own gate.
             _ => return None,

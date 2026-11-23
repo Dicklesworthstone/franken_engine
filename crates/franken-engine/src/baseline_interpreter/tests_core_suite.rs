@@ -10,6 +10,8 @@ mod compact_constants;
 mod compact_properties;
 #[path = "tests_core_suite/compact_resumption.rs"]
 mod compact_resumption;
+#[path = "tests_core_suite/crypto_signatures.rs"]
+mod crypto_signatures;
 
 // -- helpers --------------------------------------------------------
 

@@ -1215,6 +1215,15 @@ enum CryptoObjectState {
     HmacFinalized {
         lifecycle_label: Label,
     },
+    SignatureActive {
+        direction: CryptoSignatureDirection,
+        input: Zeroizing<Vec<u8>>,
+        lifecycle_label: Label,
+    },
+    SignatureFinalized {
+        direction: CryptoSignatureDirection,
+        lifecycle_label: Label,
+    },
     CipherActive {
         algorithm: CryptoCipherAlgorithm,
         direction: CryptoCipherDirection,
@@ -1254,6 +1263,12 @@ enum CryptoKeyPairAlgorithm {
     EcP256,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CryptoSignatureDirection {
+    Sign,
+    Verify,
+}
+
 impl CryptoObjectState {
     fn lifecycle_label(&self) -> &Label {
         match self {
@@ -1265,6 +1280,12 @@ impl CryptoObjectState {
                 lifecycle_label, ..
             }
             | Self::HmacFinalized { lifecycle_label }
+            | Self::SignatureActive {
+                lifecycle_label, ..
+            }
+            | Self::SignatureFinalized {
+                lifecycle_label, ..
+            }
             | Self::CipherActive {
                 lifecycle_label, ..
             }
@@ -1292,6 +1313,18 @@ impl CryptoObjectState {
                 capability,
                 "builtin:CryptoObjectUpdate" | "builtin:CryptoObjectDigest"
             ),
+            Self::SignatureActive { direction, .. }
+            | Self::SignatureFinalized { direction, .. } => {
+                capability == "builtin:CryptoObjectUpdate"
+                    || matches!(
+                        (direction, capability),
+                        (CryptoSignatureDirection::Sign, "builtin:CryptoObjectSign")
+                            | (
+                                CryptoSignatureDirection::Verify,
+                                "builtin:CryptoObjectVerify"
+                            )
+                    )
+            }
             Self::CipherActive {
                 algorithm,
                 direction,
@@ -4328,6 +4361,10 @@ pub enum BuiltinFunctionKind {
     /// First-class net/tls exports retain their existing native operation.
     /// Append only: builtin ordinals participate in register hashing.
     NativeNetFunction,
+    /// Authenticated P-256/SHA-256 streaming signature finalizers. Append only:
+    /// builtin ordinals participate in deterministic register hashing.
+    CryptoSignFinal,
+    CryptoVerifyFinal,
 }
 
 /// Annex B B.2.2.2-14: each String HTML method's tag and attribute name.
@@ -6186,6 +6223,8 @@ impl BuiltinFunction {
             BuiltinFunctionKind::CryptoCipherFinal => "final",
             BuiltinFunctionKind::CryptoGetAuthTag => "getAuthTag",
             BuiltinFunctionKind::CryptoSetAuthTag => "setAuthTag",
+            BuiltinFunctionKind::CryptoSignFinal => "sign",
+            BuiltinFunctionKind::CryptoVerifyFinal => "verify",
             BuiltinFunctionKind::DateConstructor => "Date",
             BuiltinFunctionKind::PromiseConstructor => "Promise",
             BuiltinFunctionKind::DateNow => "now",
@@ -18026,6 +18065,7 @@ mod core_init_and_state;
 mod core_math_and_registers;
 mod core_objects_and_descriptors;
 mod core_streams_and_ifc;
+mod crypto_signatures;
 mod lane_router;
 
 #[allow(unused_imports)]

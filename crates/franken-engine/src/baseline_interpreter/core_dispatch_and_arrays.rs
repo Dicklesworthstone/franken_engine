@@ -4811,6 +4811,12 @@ impl InterpreterCore {
             BuiltinFunctionKind::CryptoSetAuthTag => {
                 self.crypto_set_auth_tag(receiver, builtin, args)
             }
+            BuiltinFunctionKind::CryptoSignFinal => self.crypto_signature_final(
+                receiver, builtin, args, CryptoSignatureDirection::Sign,
+            ),
+            BuiltinFunctionKind::CryptoVerifyFinal => self.crypto_signature_final(
+                receiver, builtin, args, CryptoSignatureDirection::Verify,
+            ),
             BuiltinFunctionKind::ConsoleLog => self.dispatch_console_hostcall("console:log", args, Some(module)),
             BuiltinFunctionKind::ConsoleError => {
                 self.dispatch_console_hostcall("console:error", args, Some(module))

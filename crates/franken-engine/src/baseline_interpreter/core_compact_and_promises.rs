@@ -6783,7 +6783,9 @@ impl InterpreterCore {
                 CryptoObjectState::HashActive { .. }
                 | CryptoObjectState::HashFinalized { .. }
                 | CryptoObjectState::HmacActive { .. }
-                | CryptoObjectState::HmacFinalized { .. },
+                | CryptoObjectState::HmacFinalized { .. }
+                | CryptoObjectState::SignatureActive { .. }
+                | CryptoObjectState::SignatureFinalized { .. },
                 "update",
             ) => BuiltinFunctionKind::CryptoUpdate,
             (
@@ -6793,6 +6795,28 @@ impl InterpreterCore {
                 | CryptoObjectState::HmacFinalized { .. },
                 "digest",
             ) => BuiltinFunctionKind::CryptoDigest,
+            (
+                CryptoObjectState::SignatureActive {
+                    direction: CryptoSignatureDirection::Sign,
+                    ..
+                }
+                | CryptoObjectState::SignatureFinalized {
+                    direction: CryptoSignatureDirection::Sign,
+                    ..
+                },
+                "sign",
+            ) => BuiltinFunctionKind::CryptoSignFinal,
+            (
+                CryptoObjectState::SignatureActive {
+                    direction: CryptoSignatureDirection::Verify,
+                    ..
+                }
+                | CryptoObjectState::SignatureFinalized {
+                    direction: CryptoSignatureDirection::Verify,
+                    ..
+                },
+                "verify",
+            ) => BuiltinFunctionKind::CryptoVerifyFinal,
             (
                 CryptoObjectState::HashActive { .. } | CryptoObjectState::HashFinalized { .. },
                 "copy",

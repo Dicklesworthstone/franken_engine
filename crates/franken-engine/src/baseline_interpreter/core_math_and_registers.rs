@@ -5361,7 +5361,8 @@ impl InterpreterCore {
 
     pub(super) fn estimate_crypto_object_state_bytes(state: &CryptoObjectState) -> u64 {
         let dynamic_bytes = match state {
-            CryptoObjectState::HashActive { input, .. } => input.capacity(),
+            CryptoObjectState::HashActive { input, .. }
+            | CryptoObjectState::SignatureActive { input, .. } => input.capacity(),
             CryptoObjectState::HmacActive { key, input, .. } => {
                 key.capacity().saturating_add(input.capacity())
             }
@@ -5383,7 +5384,9 @@ impl InterpreterCore {
             CryptoObjectState::CipherFinalized { auth_tag, .. } => {
                 auth_tag.as_ref().map_or(0, |tag| tag.capacity())
             }
-            CryptoObjectState::HashFinalized { .. } | CryptoObjectState::HmacFinalized { .. } => 0,
+            CryptoObjectState::HashFinalized { .. }
+            | CryptoObjectState::HmacFinalized { .. }
+            | CryptoObjectState::SignatureFinalized { .. } => 0,
             CryptoObjectState::PrivateKey {
                 private_key,
                 public_key,
@@ -12812,6 +12815,8 @@ impl InterpreterCore {
                     | "builtin:CryptoCreateHmac"
                     | "builtin:CryptoCreateCipheriv"
                     | "builtin:CryptoCreateDecipheriv"
+                    | "builtin:CryptoCreateSign"
+                    | "builtin:CryptoCreateVerify"
             )
         {
             self.install_crypto_runtime_methods(*object_id)?;

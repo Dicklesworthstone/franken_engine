@@ -293,6 +293,229 @@ fn async_delegation_prefers_async_method_and_caches_next() {
 }
 
 #[test]
+fn async_generator_source_observes_its_own_async_iterator_hook() {
+    assert_output(
+        r#"
+        async function* original() { console.log('wrong body'); yield 1; }
+        const source = original();
+        Object.defineProperty(source, Symbol.asyncIterator, {
+            get() {
+                console.log('get-hook', this === source);
+                return function() {
+                    console.log('call-hook', this === source);
+                    return { next() { return Promise.resolve({value: 41, done: true}); } };
+                };
+            }
+        });
+        async function* outer() { return yield* source; }
+        outer().next().then(r => console.log('done', r.value, r.done));
+        console.log('sync');
+        "#,
+        &["get-hook true", "call-hook true", "sync", "done 41 true"],
+    );
+}
+
+#[test]
+fn async_iterator_returning_a_generator_caches_its_own_next_getter() {
+    assert_output(
+        r#"
+        async function* original() { console.log('wrong body'); yield 1; }
+        const iterator = original(); let count = 0;
+        Object.defineProperty(iterator, 'next', {
+            configurable: true,
+            get() {
+                console.log('get-next', this === iterator);
+                return function(value) {
+                    console.log('step', ++count, value, this === iterator);
+                    Object.defineProperty(iterator, 'next', {
+                        value() { throw 'next must be cached'; }, configurable: true
+                    });
+                    return Promise.resolve({value: count * 10, done: count > 1});
+                };
+            }
+        });
+        const source = { [Symbol.asyncIterator]() { console.log('hook'); return iterator; } };
+        async function* outer() { return yield* source; }
+        const g = outer();
+        g.next(99).then(r => {
+            console.log('one', r.value, r.done);
+            return g.next(7);
+        }).then(r => console.log('two', r.value, r.done));
+        console.log('sync');
+        "#,
+        &[
+            "hook",
+            "get-next true",
+            "step 1 undefined true",
+            "sync",
+            "one 10 false",
+            "step 2 7 true",
+            "two 20 true",
+        ],
+    );
+}
+
+#[test]
+fn absent_async_generator_hook_uses_its_sync_iterator_override() {
+    for absent in ["null", "undefined"] {
+        let source = format!(
+            r#"
+            async function* original() {{ console.log('wrong body'); yield 1; }}
+            const source = original();
+            source[Symbol.asyncIterator] = {absent};
+            source[Symbol.iterator] = function*() {{
+                console.log('sync-hook', this === source);
+                yield Promise.resolve(5); return Promise.resolve(6);
+            }};
+            async function* outer() {{ return yield* source; }}
+            const g = outer();
+            g.next().then(r => {{
+                console.log('one', r.value, r.done);
+                return g.next();
+            }}).then(r => console.log('two', r.value, r.done));
+            console.log('sync');
+            "#
+        );
+        assert_output(
+            &source,
+            &["sync-hook true", "sync", "one 5 false", "two 6 true"],
+        );
+    }
+}
+
+#[test]
+fn noncallable_async_generator_hook_rejects_before_body_or_sync_fallback() {
+    assert_output(
+        r#"
+        async function* original() { console.log('wrong body'); yield 1; }
+        const source = original();
+        source[Symbol.asyncIterator] = 1;
+        source[Symbol.iterator] = function*() { console.log('wrong fallback'); yield 2; };
+        async function* outer() {
+            try { yield* source; }
+            catch (error) { console.log('caught', error.name); yield 7; }
+        }
+        outer().next().then(r => console.log('done', r.value, r.done));
+        console.log('sync');
+        "#,
+        &["caught TypeError", "sync", "done 7 false"],
+    );
+}
+
+#[test]
+fn async_generator_protocol_getter_throws_preserve_identity_and_order() {
+    for property in ["Symbol.asyncIterator", "'next'"] {
+        let source = format!(
+            r#"
+            const marker = {{}};
+            async function* original() {{ console.log('wrong body'); yield 1; }}
+            const source = original();
+            Object.defineProperty(source, {property}, {{
+                get() {{ console.log('get', this === source); throw marker; }}
+            }});
+            async function* outer() {{
+                try {{ yield* source; }}
+                catch (error) {{ console.log('caught', error === marker); yield 7; }}
+            }}
+            outer().next().then(r => console.log('done', r.value, r.done));
+            console.log('sync');
+            "#
+        );
+        assert_output(
+            &source,
+            &["get true", "caught true", "sync", "done 7 false"],
+        );
+    }
+}
+
+#[test]
+fn async_generator_delegate_observes_dynamic_throw_and_return_overrides() {
+    assert_output(
+        r#"
+        async function* original() { yield 1; yield 2; }
+        const source = original();
+        async function* outer() { return yield* source; }
+        const g = outer();
+        g.next().then(r => {
+            console.log('first', r.value, r.done);
+            Object.defineProperty(source, 'throw', { get() {
+                console.log('get-throw', this === source);
+                return function(value) {
+                    console.log('throw', value, this === source);
+                    return Promise.resolve({value: value * 10, done: false});
+                };
+            } });
+            return g.throw(7);
+        }).then(r => {
+            console.log('thrown', r.value, r.done);
+            Object.defineProperty(source, 'return', { get() {
+                console.log('get-return', this === source);
+                return function(value) {
+                    console.log('return', value, this === source);
+                    return Promise.resolve({value: value * 10, done: true});
+                };
+            } });
+            return g.return(9);
+        }).then(r => console.log('returned', r.value, r.done));
+        console.log('sync');
+        "#,
+        &[
+            "sync",
+            "first 1 false",
+            "get-throw true",
+            "throw 7 true",
+            "thrown 70 false",
+            "get-return true",
+            "return 9 true",
+            "returned 90 true",
+        ],
+    );
+}
+
+#[test]
+fn absent_async_generator_throw_observes_return_override_before_type_error() {
+    for absent in ["null", "undefined"] {
+        let source = format!(
+            r#"
+            async function* original() {{ yield 1; yield 2; }}
+            const source = original(); source.throw = {absent};
+            Object.defineProperty(source, 'return', {{ get() {{
+                console.log('get-return', this === source);
+                return function() {{
+                    console.log('close', arguments.length, this === source);
+                    return Promise.resolve({{
+                        get done() {{ throw 'done must not be read'; }},
+                        get value() {{ throw 'value must not be read'; }}
+                    }});
+                }};
+            }} }});
+            async function* outer() {{
+                try {{ yield* source; }}
+                catch (error) {{ console.log('caught', error.name); yield 9; }}
+            }}
+            const g = outer();
+            g.next().then(r => {{
+                console.log('first', r.value, r.done);
+                return g.throw(3);
+            }}).then(r => console.log('handled', r.value, r.done));
+            console.log('sync');
+            "#
+        );
+        assert_output(
+            &source,
+            &[
+                "sync",
+                "first 1 false",
+                "get-return true",
+                "close 0 true",
+                "caught TypeError",
+                "handled 9 false",
+            ],
+        );
+    }
+}
+
+#[test]
 fn async_delegated_return_can_yield_before_finishing() {
     assert_output(
         r#"const log=console.log;let n=0;const source={[Symbol.asyncIterator](){return this;},next(value){log('next',value);return Promise.resolve({value:++n,done:n>1});},return(value){log('return',value);return Promise.resolve({value:9,done:false});}};async function* outer(){try{return yield* source;}finally{log('finally');}}const g=outer();g.next().then(r=>log('one',r.value,r.done));g.return(Promise.resolve(42)).then(r=>log('two',r.value,r.done));g.next(8).then(r=>log('three',r.value,r.done));log('sync');"#,

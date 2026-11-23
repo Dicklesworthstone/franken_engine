@@ -2198,21 +2198,6 @@ impl InterpreterCore {
         ))
     }
 
-    pub(super) fn optional_callable_property(
-        &mut self,
-        module: Option<&Ir3Module>,
-        object_id: ObjectId,
-        key: &str,
-        receiver: Value,
-    ) -> Result<Option<Value>, InterpreterError> {
-        self.optional_callable_runtime_property(
-            module,
-            object_id,
-            &RuntimePropertyKey::String(JsString::from(key)),
-            receiver,
-        )
-    }
-
     /// Get an iterator protocol member through its actual property storage.
     /// Generators and native iterators have mutable own properties and
     /// prototypes just like ordinary objects. Their internal runtime tag is

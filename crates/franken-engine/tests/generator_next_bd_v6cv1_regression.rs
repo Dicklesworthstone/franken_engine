@@ -1,5 +1,10 @@
 //! End-to-end synchronous generator protocol: next, return, throw, and isolated completions.
 use frankenengine_engine::HybridRouter;
+use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore};
+use frankenengine_engine::capability::RuntimeCapability;
+use frankenengine_engine::ir_contract::Ir0Module;
+use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+use frankenengine_engine::parser_api_stability::parse_script;
 
 fn eval(src: &str) -> String {
     let mut e = HybridRouter::default();
@@ -226,6 +231,309 @@ fn generator_methods_reject_non_generator_receivers() {
         ),
         "3:1"
     );
+}
+
+#[test]
+fn for_of_observes_generator_iterator_override() {
+    assert_eq!(
+        eval(
+            r#"
+            let trace = '';
+            function* values() { trace += 'body'; yield 1; }
+            const it = values();
+            it[Symbol.iterator] = function() {
+                trace += this === it ? 'iterator' : 'wrong-this';
+                return [7, 8].values();
+            };
+            let sum = 0;
+            for (const value of it) sum += value;
+            trace + ':' + sum;
+            "#,
+        ),
+        "iterator:15",
+    );
+}
+
+#[test]
+fn generator_protocol_reads_inherited_iterator_and_caches_own_next() {
+    assert_eq!(
+        eval(
+            r#"
+            let trace = '', calls = 0;
+            function* values() { throw 'intrinsic body must not run'; }
+            const it = values();
+            Object.defineProperty(values.prototype, Symbol.iterator, {
+                get: function() {
+                    trace += this === it ? 'i' : 'wrong-this';
+                    return function() { trace += 'c'; return this; };
+                }
+            });
+            Object.defineProperty(it, 'next', {
+                configurable: true,
+                get: function() {
+                    trace += this === it ? 'n' : 'wrong-this';
+                    return function() {
+                        calls += 1;
+                        Object.defineProperty(it, 'next', {
+                            value: function() { throw 'next must be cached'; }
+                        });
+                        return {value: calls * 10, done: calls > 2};
+                    };
+                }
+            });
+            let sum = 0;
+            for (const value of it) sum += value;
+            trace + ':' + sum + ':' + calls;
+            "#,
+        ),
+        "icn:30:3",
+    );
+}
+
+#[test]
+fn generator_noncallable_iterator_hooks_are_not_bypassed() {
+    assert_eq!(
+        eval(
+            r#"
+            let bodies = 0, errors = 0;
+            function* values() { bodies += 1; yield 1; }
+            const missing = values();
+            missing[Symbol.iterator] = null;
+            try { [...missing]; } catch (error) { errors += error instanceof TypeError; }
+            const invalid = values();
+            invalid[Symbol.iterator] = 7;
+            try { for (const value of invalid) {} }
+            catch (error) { errors += error instanceof TypeError; }
+            const badNext = values();
+            badNext.next = 7;
+            try { [...badNext]; } catch (error) { errors += error instanceof TypeError; }
+            errors + ':' + bodies;
+            "#,
+        ),
+        "3:0",
+    );
+}
+
+#[test]
+fn empty_generator_pattern_gets_next_without_calling_it_then_closes() {
+    assert_eq!(
+        eval(
+            r#"
+            let trace = '';
+            function* values() { trace += 'body'; yield 1; }
+            const it = values();
+            Object.defineProperty(it, 'next', {
+                get: function() { trace += 'n'; return 42; }
+            });
+            Object.defineProperty(it, 'return', {
+                get: function() {
+                    trace += 'r';
+                    return function() { trace += this === it ? 'c' : 'wrong-this'; return {}; };
+                }
+            });
+            const [] = it;
+            trace;
+            "#,
+        ),
+        "nrc",
+    );
+}
+
+#[test]
+fn generator_close_gets_current_return_instead_of_intrinsic_cleanup() {
+    assert_eq!(
+        eval(
+            r#"
+            let trace = '';
+            function* values() { try { yield 1; yield 2; } finally { trace += 'f'; } }
+            const it = values();
+            it.return = function() { trace += 'old'; return {}; };
+            for (const value of it) {
+                it.return = function() { trace += this === it ? 'new' : 'wrong-this'; return {}; };
+                break;
+            }
+            trace + ':' + it.next().value;
+            "#,
+        ),
+        "new:2",
+    );
+}
+
+#[test]
+fn generator_protocol_getter_throws_preserve_identity_and_order() {
+    assert_eq!(
+        eval(
+            r#"
+            const token = {};
+            let caught = 0, bodies = 0;
+            function* values() { bodies += 1; yield 1; }
+            for (const key of [Symbol.iterator, 'next', 'return']) {
+                const it = values();
+                Object.defineProperty(it, key, {get: function() { throw token; }});
+                try { for (const value of it) break; }
+                catch (error) { caught += error === token; }
+            }
+            caught + ':' + bodies;
+            "#,
+        ),
+        "3:1",
+    );
+}
+
+#[test]
+fn yield_star_observes_generator_return_and_throw_overrides() {
+    assert_eq!(
+        eval(
+            r#"
+            let trace = '';
+            function* values() { yield 1; yield 2; }
+            const inner = values();
+            function* delegate() { return yield* inner; }
+            const outer = delegate();
+            const first = outer.next();
+            inner.throw = function(value) {
+                trace += this === inner ? 't' : 'wrong-this';
+                return {value: value + 1, done: false};
+            };
+            const thrown = outer.throw(8);
+            inner.return = function(value) {
+                trace += this === inner ? 'r' : 'wrong-this';
+                return {value: value + 2, done: true};
+            };
+            const returned = outer.return(10);
+            first.value + ':' + thrown.value + ':' + thrown.done + ':' +
+                returned.value + ':' + returned.done + ':' + trace;
+            "#,
+        ),
+        "1:9:false:12:true:tr",
+    );
+}
+
+#[test]
+fn native_iterator_own_next_and_return_are_observable() {
+    assert_eq!(
+        eval(
+            r#"
+            const it = [1, 2].values();
+            let trace = '';
+            it.next = function() { trace += this === it ? 'n' : 'wrong-this'; return {value: 9, done: false}; };
+            it.return = function() { trace += this === it ? 'r' : 'wrong-this'; return {}; };
+            const [value] = it;
+            value + ':' + trace;
+            "#,
+        ),
+        "9:nr",
+    );
+}
+
+#[test]
+fn generator_and_function_values_can_carry_iterator_results() {
+    assert_eq!(
+        eval(
+            r#"
+            function* empty() {}
+            const result = empty();
+            result.done = false;
+            result.value = 17;
+            function iterator() {}
+            iterator.next = function() { return result; };
+            iterator.return = function() { return {}; };
+            function iterable() {}
+            iterable[Symbol.iterator] = function() { return iterator; };
+            const [value] = iterable;
+            value;
+            "#,
+        ),
+        "17",
+    );
+}
+
+#[test]
+fn callable_iterables_keep_their_actual_constructor_prototype_chain() {
+    assert_eq!(
+        eval(
+            r#"
+            class Parent {}
+            Parent[Symbol.iterator] = function() {
+                return [this === Child ? 7 : 0].values();
+            };
+            class Child extends Parent {}
+            [...Child].join(',');
+            "#,
+        ),
+        "7",
+    );
+}
+
+#[test]
+fn hook_created_generator_and_cached_methods_survive_collection() {
+    let source = r#"
+        let trace = '';
+        const iterable = {
+            [Symbol.iterator]() {
+                const marker = {value: 42};
+                const iterator = (function* () { throw 'unused generator body'; })();
+                Object.defineProperty(iterator, 'next', {
+                    get() {
+                        trace += this === iterator ? 'get-next|' : 'wrong-this|';
+                        return function () {
+                            trace += this === iterator ? 'next|' : 'wrong-this|';
+                            return {done: false, value: marker};
+                        };
+                    }
+                });
+                Object.defineProperty(iterator, 'return', {
+                    get() {
+                        trace += this === iterator ? 'get-return|' : 'wrong-this|';
+                        return function () {
+                            trace += this === iterator ? 'return' : 'wrong-this';
+                            return {done: true, value: marker};
+                        };
+                    }
+                });
+                return iterator;
+            }
+        };
+        const [value] = iterable;
+        console.log(value.value, trace);
+    "#;
+    let tree = parse_script(source).expect("generator GC regression parses");
+    let module = lower_ir0_to_ir3(
+        &Ir0Module::from_syntax_tree(tree, "generator-protocol-gc.js"),
+        &LoweringContext::new("generator", "protocol-gc", "builtin-only"),
+    )
+    .expect("generator GC regression lowers")
+    .ir3;
+    for mut config in [
+        InterpreterConfig::quickjs_defaults(),
+        InterpreterConfig::v8_defaults(),
+    ] {
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+            RuntimeCapability::Console,
+        ]
+        .into_iter()
+        .collect();
+        for stress in [None, Some(1)] {
+            let mut core = InterpreterCore::new(config.clone(), "generator-protocol-gc");
+            core.set_gc_stress_interval(stress);
+            let result = core
+                .execute(&module)
+                .expect("generator GC regression executes");
+            let lines: Vec<_> = result
+                .console_output
+                .iter()
+                .map(|entry| entry.message.as_str())
+                .collect();
+            assert_eq!(lines, ["42 get-next|next|get-return|return"]);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
 }
 
 #[test]

@@ -512,6 +512,75 @@ pub(in crate::baseline_interpreter) mod active_builtin_regressions {
     }
 
     #[test]
+    fn iterator_protocol_inherited_member_observes_exotic_own_shape() {
+        for scoped in [false, true] {
+            let mut core = test_core();
+            let module = halted_test_module();
+            let array = core.alloc_array_from_values(&[Value::Int(19)]).unwrap();
+            let native = core
+                .array_prototype_iterator_for_receiver(Value::Object(array), "values")
+                .unwrap();
+            let own = core
+                .own_property_holder(Some(&module), &native, true)
+                .unwrap()
+                .unwrap();
+            core.join_direct_object_mutation_label(own, &Label::Secret)
+                .unwrap();
+            core.clear_pending_hostcall_result_label();
+            let saved = scoped.then(|| core.begin_property_observation([]).unwrap());
+            let key = RuntimePropertyKey::String(JsString::from("next"));
+            assert!(!core.heap[own.0 as usize].contains_own_runtime_property(&key));
+
+            let next = core
+                .iterator_protocol_value_property(Some(&module), native, &key)
+                .unwrap();
+            assert!(next.is_callable(), "the inherited next remains visible");
+            assert_eq!(core.pending_hostcall_result_label, Some(Label::Secret));
+            if let Some(saved) = saved {
+                assert_eq!(
+                    core.active_inline_callback_context_label,
+                    Some(Label::Secret)
+                );
+                core.finish_property_read_observation(saved, Ok(()))
+                    .unwrap();
+            }
+            assert_eq!(core.active_inline_callback_context_label, None);
+            assert_eq!(core.pending_hostcall_result_label, Some(Label::Secret));
+        }
+    }
+
+    #[test]
+    fn iterator_protocol_own_data_member_observes_exotic_shape() {
+        let mut core = test_core();
+        let module = halted_test_module();
+        let array = core.alloc_array_from_values(&[]).unwrap();
+        let native = core
+            .array_prototype_iterator_for_receiver(Value::Object(array), "values")
+            .unwrap();
+        let own = core
+            .own_property_holder(Some(&module), &native, true)
+            .unwrap()
+            .unwrap();
+        let key = RuntimePropertyKey::String(JsString::from("next"));
+        core.define_own_property_value(own, key.clone(), Value::Int(29))
+            .unwrap();
+        core.set_own_property_label(own, "next", &Label::Public)
+            .unwrap();
+        core.join_direct_object_mutation_label(own, &Label::Secret)
+            .unwrap();
+        core.clear_pending_hostcall_result_label();
+
+        assert_eq!(
+            core.iterator_protocol_value_property(Some(&module), native, &key)
+                .unwrap(),
+            Value::Int(29),
+            "Get caches next without prematurely requiring a callable"
+        );
+        assert_eq!(core.pending_hostcall_result_label, Some(Label::Secret));
+        assert_eq!(core.active_inline_callback_context_label, None);
+    }
+
+    #[test]
     fn destructuring_iterator_rejects_array_like_objects_before_creating_a_record() {
         let mut core = test_core();
         let module = halted_test_module();

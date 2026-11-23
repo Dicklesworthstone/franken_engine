@@ -1971,8 +1971,10 @@ impl InterpreterCore {
         iterable: &Value,
     ) -> Result<RuntimeForOfInit, InterpreterError> {
         match iterable {
-            Value::Iterator(handle) => return Ok(RuntimeForOfInit::from_existing(*handle)),
-            Value::Generator(_) => {
+            Value::Iterator(handle) if module.is_none() => {
+                return Ok(RuntimeForOfInit::from_existing(*handle));
+            }
+            Value::Generator(_) if module.is_none() => {
                 return Ok(RuntimeForOfInit::from_receiver(
                     iterable.clone(),
                     Value::BuiltinFunction(BuiltinFunction::new_kind(
@@ -2119,13 +2121,12 @@ impl InterpreterCore {
         if !iterable.is_object_like() {
             return Ok(None);
         }
-        let Some(iterable_id) = self.iterator_carrier_backing_id(iterable, "iterable object")?
-        else {
-            return Ok(None);
-        };
         let receiver = iterable.clone();
-        let iterator_method =
-            self.lookup_symbol_iterator_method(Some(module), iterable_id, receiver.clone())?;
+        let iterator_method = self.iterator_protocol_method(
+            module,
+            receiver.clone(),
+            &RuntimePropertyKey::Symbol(WellKnownSymbol::Iterator.id()),
+        )?;
 
         let Some(iterator_method) = iterator_method else {
             return Ok(None);
@@ -2175,33 +2176,21 @@ impl InterpreterCore {
         module: &Ir3Module,
         iterator_value: Value,
     ) -> Result<RuntimeForOfInit, InterpreterError> {
-        let backing = match &iterator_value {
-            Value::Iterator(handle) => return Ok(RuntimeForOfInit::from_existing(*handle)),
-            Value::Generator(_) => {
-                return Ok(RuntimeForOfInit::from_receiver(
-                    iterator_value,
-                    Value::BuiltinFunction(BuiltinFunction::new_kind(
-                        BuiltinFunctionKind::GeneratorNext,
-                    )),
-                ));
-            }
-            // Preserve the exact receiver even when properties live on a
-            // separate backing object (for example a builtin function).
-            value => self.iterator_carrier_backing_id(value, "object returned by @@iterator")?,
-        };
+        if !iterator_value.is_object_like() {
+            return Err(InterpreterError::TypeError {
+                expected: "object returned by @@iterator".to_string(),
+                got: iterator_value.type_name().to_string(),
+            });
+        }
         let iterator_receiver = iterator_value;
         // GetIterator caches Get(iterator, "next"), not GetMethod. A missing
         // or noncallable value fails only if a consumer actually takes a step;
         // an empty pattern must still be able to close the acquired iterator.
-        let next_method = match backing {
-            Some(iterator_object) => self.iterator_protocol_property(
-                Some(module),
-                iterator_object,
-                &RuntimePropertyKey::String(JsString::from("next")),
-                iterator_receiver.clone(),
-            )?,
-            None => Value::Undefined,
-        };
+        let next_method = self.iterator_protocol_value_property(
+            Some(module),
+            iterator_receiver.clone(),
+            &RuntimePropertyKey::String(JsString::from("next")),
+        )?;
 
         Ok(RuntimeForOfInit::from_receiver(
             iterator_receiver,
@@ -2222,6 +2211,97 @@ impl InterpreterCore {
             &RuntimePropertyKey::String(JsString::from(key)),
             receiver,
         )
+    }
+
+    /// Get an iterator protocol member through its actual property storage.
+    /// Generators and native iterators have mutable own properties and
+    /// prototypes just like ordinary objects. Their internal runtime tag is
+    /// not permission to skip a getter, a replacement method, or its label.
+    /// Keep the original receiver when storage lives on a backing object or
+    /// primitive prototype so accessors observe the same `this` as GetV.
+    pub(super) fn iterator_protocol_value_property(
+        &mut self,
+        module: Option<&Ir3Module>,
+        receiver: Value,
+        key: &RuntimePropertyKey,
+    ) -> Result<Value, InterpreterError> {
+        let backing = if Self::has_exotic_backing_object(&receiver) {
+            let own = self.own_property_holder(module, &receiver, false)?;
+            // Even an absent own slot selects whether the inherited member
+            // is visible. Preserve that shape observation before choosing
+            // the exotic's separately stored prototype chain.
+            if let Some(shape) = own.and_then(|own| self.object_mutation_labels.get(&own)) {
+                let label = self.clone_dominant_label_with_temporary_budget(
+                    self.pending_hostcall_result_label
+                        .as_ref()
+                        .unwrap_or(&Label::Public),
+                    shape,
+                    0,
+                )?;
+                self.replace_pending_hostcall_result_label(Some(label))?;
+                self.observe_scoped_callback_result()?;
+            }
+            if let Some(own) = own
+                && self
+                    .heap
+                    .get(own.0 as usize)
+                    .is_some_and(|object| object.contains_own_runtime_property(key))
+            {
+                Some(own)
+            } else if let Some(prototype) = module
+                .map(|module| self.exotic_prototype_override(module, &receiver))
+                .transpose()?
+                .flatten()
+            {
+                Some(prototype)
+            } else {
+                let prototype = self
+                    .exotic_intrinsic_prototype_name(&receiver)
+                    .unwrap_or("Object");
+                Some(self.ensure_builtin_prototype(prototype)?)
+            }
+        } else {
+            match &receiver {
+                Value::Object(id) => Some(*id),
+                Value::Str(_) => Some(self.ensure_builtin_prototype("String")?),
+                Value::Int(_) | Value::Float(_) => Some(self.ensure_builtin_prototype("Number")?),
+                Value::Bool(_) => Some(self.ensure_builtin_prototype("Boolean")?),
+                Value::BigInt(_) => Some(self.ensure_builtin_prototype("BigInt")?),
+                Value::Symbol(_) => Some(self.ensure_builtin_prototype("Symbol")?),
+                callable if callable.is_callable() => {
+                    match self.own_property_holder(module, callable, false)? {
+                        Some(backing) => Some(backing),
+                        None => {
+                            let prototype = self.function_value_prototype(module, callable)?;
+                            self.prototype_link_for_value(module, &prototype)?.flatten()
+                        }
+                    }
+                }
+                _ => None,
+            }
+        };
+        match backing {
+            Some(backing) => self.iterator_protocol_property(module, backing, key, receiver),
+            None => Ok(Value::Undefined),
+        }
+    }
+
+    /// GetMethod for optional iterator hooks. `next` acquisition deliberately
+    /// uses Get instead, so an empty destructuring pattern does not call it.
+    pub(super) fn iterator_protocol_method(
+        &mut self,
+        module: &Ir3Module,
+        receiver: Value,
+        key: &RuntimePropertyKey,
+    ) -> Result<Option<Value>, InterpreterError> {
+        match self.iterator_protocol_value_property(Some(module), receiver, key)? {
+            Value::Undefined | Value::Null => Ok(None),
+            value if value.is_callable() => Ok(Some(value)),
+            other => Err(InterpreterError::TypeError {
+                expected: format!("callable property '{}' or undefined", key.diagnostic()),
+                got: other.type_name().to_string(),
+            }),
+        }
     }
 
     pub(super) fn optional_callable_runtime_property(
@@ -2309,18 +2389,18 @@ impl InterpreterCore {
         result: &Value,
         key: &str,
     ) -> Result<Value, InterpreterError> {
-        // bd-es2ra: every object-like carrier is a valid iterator result;
-        // only primitives reject. A carrier without ordinary-property backing
-        // reads its protocol properties as undefined.
-        let Some(result_id) = self.iterator_carrier_backing_id(result, "iterator result object")?
-        else {
-            return Ok(Value::Undefined);
-        };
-        self.iterator_protocol_property(
+        // Every object-like carrier is a valid iterator result, including a
+        // function or generator with observable done/value properties.
+        if !result.is_object_like() {
+            return Err(InterpreterError::TypeError {
+                expected: "iterator result object".to_string(),
+                got: result.type_name().to_string(),
+            });
+        }
+        self.iterator_protocol_value_property(
             Some(module),
-            result_id,
-            &RuntimePropertyKey::String(JsString::from(key)),
             result.clone(),
+            &RuntimePropertyKey::String(JsString::from(key)),
         )
     }
 
@@ -5544,21 +5624,11 @@ impl InterpreterCore {
             );
             return Ok(());
         };
-        let return_method = match &receiver {
-            Value::Generator(_) => Some(Value::BuiltinFunction(BuiltinFunction::new_kind(
-                BuiltinFunctionKind::GeneratorReturn,
-            ))),
-            Value::Iterator(_) => None,
-            other => match self.iterator_carrier_backing_id(other, "iterator receiver")? {
-                Some(object_id) => self.optional_callable_property(
-                    Some(module),
-                    object_id,
-                    "return",
-                    receiver.clone(),
-                )?,
-                None => None,
-            },
-        };
+        let return_method = self.iterator_protocol_method(
+            module,
+            receiver.clone(),
+            &RuntimePropertyKey::String(JsString::from("return")),
+        )?;
         let Some(return_method) = return_method else {
             self.record_iterator_close_event(
                 trace_index,
@@ -5582,7 +5652,13 @@ impl InterpreterCore {
                 lookup_label,
             );
         let result = match invocation {
-            Ok((result, _label)) => result,
+            Ok((result, label)) => {
+                // Validating the callback result is observable even when it
+                // is rejected. Preserve its provenance on the TypeError path.
+                self.join_into_pending_hostcall_result_label(Some(label))?;
+                self.observe_scoped_callback_result()?;
+                result
+            }
             Err(error) => {
                 if callback_started {
                     self.record_iterator_close_event(

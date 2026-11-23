@@ -13161,6 +13161,56 @@ fn for_of_propagates_iterable_label_to_loop_variable() {
     );
 }
 
+#[test]
+fn for_of_keeps_iterator_method_selection_label_on_public_elements() {
+    let module = test_module_with_functions(
+        vec![
+            Ir3Instruction::ForOfInit { src: 0, dst: 1 },
+            Ir3Instruction::ForOfNext {
+                iterator: 1,
+                value_dst: 2,
+                done_target: 3,
+            },
+            Ir3Instruction::Halt,
+        ],
+        vec![],
+    );
+    let mut core = test_interpreter();
+    let array = core
+        .alloc_array_from_values(&[Value::Int(7)])
+        .expect("public array");
+    let key = RuntimePropertyKey::Symbol(WellKnownSymbol::Iterator.id());
+    core.set_object_runtime_property(
+        array,
+        key.clone(),
+        Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::ArrayValues)),
+    )
+    .expect("iterator method");
+    core.set_own_runtime_property_label(array, &key, &Label::Secret)
+        .expect("method selection label");
+    core.mutate_registers(|registers| registers[0] = Value::Object(array));
+    for register in [0, 1, 2] {
+        core.set_register_label(register, Label::Public)
+            .expect("public register label");
+    }
+
+    core.execute(&module).expect("labeled iterator acquisition");
+
+    assert_eq!(core.read_reg(2).expect("yielded value"), Value::Int(7));
+    assert_eq!(
+        core.get_register_label(1).expect("iterator label"),
+        &Label::Secret
+    );
+    assert_eq!(
+        core.get_register_label(2).expect("element label"),
+        &Label::Secret
+    );
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+}
+
 /// bd-9vouw.70: for-of over an array whose @@iterator is the intrinsic
 /// `ArrayValues` gets the label the isolated call of that method returns,
 /// for every combination of inherited callback context and lookup label

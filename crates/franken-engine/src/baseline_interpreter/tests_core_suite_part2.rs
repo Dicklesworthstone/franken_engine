@@ -11514,3 +11514,93 @@ fn write_reg_burst_does_not_drift_against_full_recompute() {
         "burst writes must not introduce drift"
     );
 }
+
+#[test]
+fn iterator_close_secret_primitive_return_taints_type_error() {
+    use crate::ir_contract::Ir0Module;
+    use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+    use crate::parser_api_stability::parse_script;
+
+    let tree = parse_script(
+        r#"({
+            payload: { result: 17 },
+            next: function() { return {value: 1, done: false}; },
+            return: function() { return this.payload.result; }
+        });"#,
+    )
+    .expect("iterator close fixture parses");
+    let module = lower_ir0_to_ir3(
+        &Ir0Module::from_syntax_tree(tree, "iterator-close-result-label.js"),
+        &LoweringContext::new("iterator-close", "result-label", "builtin-only"),
+    )
+    .expect("iterator close fixture lowers")
+    .ir3;
+
+    for mut config in [
+        InterpreterConfig::quickjs_defaults(),
+        InterpreterConfig::v8_defaults(),
+    ] {
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]
+        .into_iter()
+        .collect();
+        let mut core = InterpreterCore::new(config, "iterator-close-result-label");
+        let receiver = core.execute(&module).expect("iterator is created").value;
+        let Value::Object(receiver_id) = receiver else {
+            panic!("fixture must produce an ordinary iterator object");
+        };
+        let Some(Value::Object(payload_id)) = core.heap[receiver_id.0 as usize]
+            .properties
+            .get("payload")
+            .cloned()
+        else {
+            panic!("fixture must retain its result payload");
+        };
+        let return_key = RuntimePropertyKey::String(JsString::from("return"));
+        let result_key = RuntimePropertyKey::String(JsString::from("result"));
+        core.set_own_runtime_property_label(payload_id, &result_key, &Label::Secret)
+            .expect("result provenance fits");
+        assert_eq!(
+            core.runtime_property_label(receiver_id, &return_key),
+            Label::Public,
+            "the hook selection itself must not supply the secret label"
+        );
+        core.replace_pending_hostcall_result_label(None).unwrap();
+        let receiver = Value::Object(receiver_id);
+        let init = core
+            .prepare_custom_iterator_result(&module, receiver.clone())
+            .expect("public next method is acquired");
+        let iterator = core
+            .init_iterator_from_state(receiver, init, IterationKind::ForOf)
+            .expect("iterator record fits");
+        assert_eq!(
+            core.pending_hostcall_result_label
+                .as_ref()
+                .unwrap_or(&Label::Public),
+            &Label::Public,
+            "acquisition must not already taint the close"
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        let error = core
+            .close_iterator(&module, iterator, IteratorCloseReason::Break)
+            .expect_err("return's primitive result must be rejected");
+        assert!(matches!(error, InterpreterError::TypeError { .. }));
+        assert_eq!(
+            core.pending_hostcall_result_label,
+            Some(Label::Secret),
+            "classifying the callback result must preserve its provenance"
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "propagating the callback result label must remain memory exact"
+        );
+    }
+}

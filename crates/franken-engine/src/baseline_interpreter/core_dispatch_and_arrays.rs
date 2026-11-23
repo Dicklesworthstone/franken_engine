@@ -10466,29 +10466,18 @@ impl InterpreterCore {
             cached_next
         } else {
             match &receiver {
-                Some(Value::Generator(_)) => Some(Value::BuiltinFunction(
-                    BuiltinFunction::new_kind(if kind == GeneratorResumeKind::Return {
-                        BuiltinFunctionKind::GeneratorReturn
-                    } else {
-                        BuiltinFunctionKind::GeneratorThrow
-                    }),
-                )),
-                Some(Value::Iterator(_)) | None => None,
-                Some(receiver) => {
-                    match self.iterator_carrier_backing_id(receiver, "iterator receiver")? {
-                        Some(object_id) => self.optional_callable_property(
-                            Some(module),
-                            object_id,
-                            if kind == GeneratorResumeKind::Return {
-                                "return"
-                            } else {
-                                "throw"
-                            },
-                            receiver.clone(),
-                        )?,
-                        None => None,
-                    }
-                }
+                Some(receiver) => self.iterator_protocol_method(
+                    module,
+                    receiver.clone(),
+                    &RuntimePropertyKey::String(JsString::from(
+                        if kind == GeneratorResumeKind::Return {
+                            "return"
+                        } else {
+                            "throw"
+                        },
+                    )),
+                )?,
+                None => None,
             }
         };
 
@@ -11511,8 +11500,16 @@ impl InterpreterCore {
             Ir3Instruction::ForOfInit { src, dst } => {
                 let result_label = self.unary_operation_label(src)?;
                 let value = self.read_reg(src)?;
+                self.replace_pending_hostcall_result_label(Some(result_label.clone()))?;
                 let iterator = self.init_for_of_iterator(Some(module), value)?;
-                // Carry the iterable's IFC label onto the iterator register.
+                // Iterator acquisition observes @@iterator and caches next.
+                // Their selection/getter labels belong to every later step,
+                // even when the iterable itself is public.
+                let result_label = result_label.join(
+                    &self
+                        .take_pending_hostcall_result_label()
+                        .unwrap_or(Label::Public),
+                );
                 self.write_reg_with_label(dst, iterator, result_label)?;
                 self.ip += 1;
             }

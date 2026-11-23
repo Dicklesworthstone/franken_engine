@@ -1905,6 +1905,73 @@ fn evidence_entry_candidates_cover_all_containment_actions() {
 // -- bd-sxh8o.4: benign completion must not be labelled containment -----------
 
 #[test]
+fn stopping_boundary_preserves_benign_completed_runs() {
+    use frankenengine_engine::baseline_interpreter::LaneChoice;
+    use frankenengine_engine::bayesian_posterior::RiskState;
+    use frankenengine_engine::runtime_config::RuntimeConfig;
+
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let mut config = RuntimeConfig::default();
+        // Capability breadth genuinely crosses this sensitive stopping
+        // policy while the permissive loss policy selects Allow.
+        config.orchestrator.stopping_cusum_threshold_millionths = 100_000;
+        config.orchestrator.stopping_cusum_reference_millionths = 100_000;
+        let mut orchestrator = ExecutionOrchestrator::try_new_lab_with_runtime_config(
+            OrchestratorConfig {
+                force_lane: Some(lane),
+                loss_matrix_preset: LossMatrixPreset::Permissive,
+                ..OrchestratorConfig::default()
+            },
+            config,
+        )
+        .unwrap();
+        let mut package = simple_package(
+            "stopping-boundary-benign",
+            "let total = 0; for (let i = 0; i < 10; i++) { total += i; } total;",
+        );
+        package.capabilities = [
+            "vm_dispatch",
+            "heap_allocate",
+            "gc_invoke",
+            "ir_lowering",
+            "policy_read",
+            "policy_write",
+            "evidence_emit",
+            "decision_invoke",
+            "network_egress",
+            "lease_management",
+            "idempotency_derive",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+
+        for observations in 1..=2 {
+            let result = orchestrator
+                .execute(&package)
+                .expect("finite native computation");
+            assert_eq!(result.execution_value, "45");
+            assert_eq!(result.risk_state, RiskState::Benign);
+            assert_eq!(result.action_decision.action, ContainmentAction::Allow);
+            let certificate = result.optimal_stopping_certificate.as_ref().unwrap();
+            assert_eq!(
+                certificate.algorithm, "cusum",
+                "fixture must actually cross"
+            );
+            assert_eq!(certificate.observations_before_stop, observations);
+            assert_eq!(result.containment_action, ContainmentAction::Allow);
+            assert!(result.containment_receipt.is_none());
+            assert!(result.saga_id.is_none());
+            assert_eq!(
+                result.evidence_entries[0].chosen_action.action_name,
+                "allow"
+            );
+            package.capabilities = vec!["vm_dispatch".to_string(), "heap_allocate".to_string()];
+        }
+    }
+}
+
+#[test]
 fn benign_completed_run_without_signals_reports_allow() {
     // Regression for bd-sxh8o.4: the 2026-08-20 binary reported
     // containment_action=challenge here because expected-loss selection let
@@ -4205,7 +4272,9 @@ fn active_plas_runtime_witness_with_fixture(
         PlasRuntimeSecurityFixture::LowConfidence => ConfidenceInterval::from_trials(10, 5),
         _ => ConfidenceInterval::from_trials(200, 195),
     })
-    .transcript_hash(ContentHash::compute(b"synthetic-runtime-security-test-inputs"))
+    .transcript_hash(ContentHash::compute(
+        b"synthetic-runtime-security-test-inputs",
+    ))
     .meta("fixture_evidence_kind", "synthetic-test-inputs")
     .require(vm_cap.clone())
     .deny(Capability::new("env_read"), "env access forbidden")
@@ -4569,7 +4638,10 @@ fn plas_runtime_applies_full_security_policy_before_persistence_or_console_effec
     }
 
     for (fixture, expected) in [
-        (PlasRuntimeSecurityFixture::ZeroTrials, "zero ablation trials"),
+        (
+            PlasRuntimeSecurityFixture::ZeroTrials,
+            "zero ablation trials",
+        ),
         (PlasRuntimeSecurityFixture::LowConfidence, "lower bound"),
         (
             PlasRuntimeSecurityFixture::MissingDenialRecord,

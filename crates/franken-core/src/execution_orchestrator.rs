@@ -696,6 +696,7 @@ struct EvidenceRecordInput<'a> {
     package: &'a ExtensionPackage,
     decision: &'a ActionDecision,
     effective_action: ContainmentAction,
+    effective_expected_loss_millionths: i64,
     exec: &'a ExecutionResult,
     update: &'a UpdateResult,
     ir3_schedule_cost: Option<TropicalWeight>,
@@ -1373,6 +1374,7 @@ impl ExecutionOrchestrator {
                 &exec_result,
                 evidence_capability_summary,
                 self.config.epoch,
+                instruction_budget,
             );
             let epoch = self.config.epoch;
             let updater = self.posterior_updaters.get_or_create(&package.extension_id);
@@ -1383,25 +1385,28 @@ impl ExecutionOrchestrator {
 
             // Step 8: Decide action.
             let action_decision = self.loss_selector.select(&posterior);
-            let expected_loss_millionths = action_decision.expected_loss_millionths;
             let (stopping_decision, optimal_stopping_certificate) =
                 self.observe_optimal_stopping(&update_result, package, attempt_index);
-            let mut containment_action = action_decision.action;
-            if stopping_decision == StoppingDecision::Stop
-                && containment_action == ContainmentAction::Allow
-            {
-                containment_action = ContainmentAction::Sandbox;
-            }
-            if let Some(requested) = exec_result.requested_hook_action.as_ref() {
-                containment_action = more_severe_containment_action(
-                    containment_action,
-                    containment_action_for_hook(requested),
-                );
-            }
+            let containment_action = containment_action_for_execution(
+                action_decision.action,
+                risk_state,
+                stopping_decision,
+                &exec_result,
+            );
             #[cfg(test)]
-            if let Some(action) = self.containment_action_override.take() {
-                containment_action = action;
-            }
+            let containment_action = self
+                .containment_action_override
+                .take()
+                .unwrap_or(containment_action);
+            // A stopping or hook override changes the effective loss along
+            // with the action. Keep the result and signed chosen record
+            // consistent with the selector's candidate for that action.
+            let expected_loss_millionths = action_decision
+                .explanation
+                .all_expected_losses
+                .get(&containment_action.to_string())
+                .copied()
+                .unwrap_or(action_decision.expected_loss_millionths);
             cell_cancel_reason = if containment_action.severity() >= 4 {
                 CancelReason::Quarantine
             } else {
@@ -1416,6 +1421,7 @@ impl ExecutionOrchestrator {
                     package,
                     decision: &action_decision,
                     effective_action: containment_action,
+                    effective_expected_loss_millionths: expected_loss_millionths,
                     exec: &exec_result,
                     update: &update_result,
                     ir3_schedule_cost,
@@ -2122,6 +2128,7 @@ impl ExecutionOrchestrator {
             package,
             decision,
             effective_action,
+            effective_expected_loss_millionths,
             exec,
             update,
             ir3_schedule_cost,
@@ -2145,16 +2152,24 @@ impl ExecutionOrchestrator {
 
         builder = builder.timestamp_ns(0);
 
-        // Add all containment actions as candidates.
+        // Retain the same candidate losses used to select and explain the
+        // effective action; zero placeholders contradict the chosen record.
         for action in &ContainmentAction::ALL {
-            builder = builder.candidate(CandidateAction::new(format!("{action:?}"), 0));
+            let candidate_loss = decision
+                .explanation
+                .all_expected_losses
+                .get(&action.to_string())
+                .copied()
+                .unwrap_or(0);
+            builder =
+                builder.candidate(CandidateAction::new(format!("{action:?}"), candidate_loss));
         }
 
         // Record chosen action.
         let stopping_override = effective_action != decision.action;
         builder = builder.chosen(ChosenAction {
             action_name: format!("{}", effective_action),
-            expected_loss_millionths: decision.expected_loss_millionths,
+            expected_loss_millionths: effective_expected_loss_millionths,
             rationale: format!(
                 "risk_state={:?}, posterior_benign={}, stopping_override={stopping_override}",
                 update.posterior.map_estimate(),
@@ -3369,6 +3384,7 @@ impl ExecutionOrchestrator {
         exec: &ExecutionResult,
         capability_summary: EvidenceCapabilitySummary,
         epoch: SecurityEpoch,
+        instruction_budget: u64,
     ) -> Evidence {
         let hostcall_count = exec.hostcall_decisions.len() as u64;
         let hostcall_rate_millionths = hostcall_count
@@ -3376,8 +3392,14 @@ impl ExecutionOrchestrator {
             .checked_div(exec.instructions_executed)
             .unwrap_or(0);
 
-        let resource_score_millionths =
-            (exec.instructions_executed.saturating_mul(5)).min(1_000_000);
+        // Resource usage is the fraction of the selected profile's actual
+        // instruction allowance, not elapsed work on an absolute scale.
+        // Widen before multiplication so large valid u64 budgets cannot
+        // turn a fully consumed allowance into a negligible risk signal.
+        let resource_score_millionths = (u128::from(exec.instructions_executed) * 1_000_000)
+            .checked_div(u128::from(instruction_budget))
+            .unwrap_or(1_000_000)
+            .min(1_000_000) as i64;
 
         let denied = exec
             .hostcall_decisions
@@ -3393,7 +3415,7 @@ impl ExecutionOrchestrator {
             extension_id: package.extension_id.clone(),
             hostcall_rate_millionths: i64::try_from(hostcall_rate_millionths).unwrap_or(i64::MAX),
             distinct_capabilities: capability_summary.canonical_distinct,
-            resource_score_millionths: i64::try_from(resource_score_millionths).unwrap_or(i64::MAX),
+            resource_score_millionths,
             timing_anomaly_millionths: 0,
             denial_rate_millionths: i64::try_from(denial_rate_millionths).unwrap_or(i64::MAX),
             epoch,
@@ -3453,6 +3475,37 @@ fn guardplane_operation_witness_value(operation: &GuardplaneOperation) -> String
         }
         GuardplaneOperation::Import { specifier } => format!("import specifier={specifier}"),
     }
+}
+
+fn containment_action_for_execution(
+    selected_action: ContainmentAction,
+    risk_state: RiskState,
+    stopping_decision: StoppingDecision,
+    exec: &ExecutionResult,
+) -> ContainmentAction {
+    let has_denial = exec
+        .hostcall_decisions
+        .iter()
+        .any(|decision| !decision.allowed);
+    let has_hook_request = exec
+        .requested_hook_action
+        .as_ref()
+        .is_some_and(|action| !matches!(action, HookAction::Allow));
+    let mut action = selected_action;
+    // A change-point crossing (including a latched earlier crossing) is not
+    // itself a threat verdict for an otherwise benign, allowed completion.
+    // Preserve every selector escalation, observed denial, non-benign Stop,
+    // and explicit hook request; this is not a benign-posterior downgrade.
+    if stopping_decision == StoppingDecision::Stop
+        && action == ContainmentAction::Allow
+        && (risk_state != RiskState::Benign || has_denial || has_hook_request)
+    {
+        action = ContainmentAction::Sandbox;
+    }
+    if let Some(requested) = exec.requested_hook_action.as_ref() {
+        action = more_severe_containment_action(action, containment_action_for_hook(requested));
+    }
+    action
 }
 
 fn containment_action_for_hook(action: &HookAction) -> ContainmentAction {
@@ -6067,6 +6120,150 @@ mod tests {
         );
     }
 
+    #[test]
+    fn stopping_boundary_preserves_security_signals() {
+        use crate::baseline_interpreter::{ChallengeToken, Value};
+        use crate::ir_contract::{CapabilityTag, HostcallDecisionRecord};
+
+        let mut exec = ExecutionResult {
+            value: Value::Undefined,
+            completion_label: Label::Public,
+            instructions_executed: 1,
+            requested_hook_action: None,
+            witness_events: Vec::new(),
+            hostcall_decisions: Vec::new(),
+            events: Vec::new(),
+            console_output: Vec::new(),
+        };
+        for risk in [
+            RiskState::Anomalous,
+            RiskState::Malicious,
+            RiskState::Unknown,
+        ] {
+            assert_eq!(
+                containment_action_for_execution(
+                    ContainmentAction::Allow,
+                    risk,
+                    StoppingDecision::Stop,
+                    &exec,
+                ),
+                ContainmentAction::Sandbox,
+                "a non-benign stopping verdict must still contain: {risk:?}",
+            );
+        }
+        for selected in ContainmentAction::ALL.into_iter().skip(1) {
+            assert_eq!(
+                containment_action_for_execution(
+                    selected,
+                    RiskState::Benign,
+                    StoppingDecision::Stop,
+                    &exec,
+                ),
+                selected,
+                "a benign MAP estimate must never downgrade the loss selector",
+            );
+        }
+        for (hook, expected) in [
+            (HookAction::Allow, ContainmentAction::Allow),
+            (
+                HookAction::Challenge(ChallengeToken {
+                    token: "review".to_string(),
+                }),
+                ContainmentAction::Sandbox,
+            ),
+            (HookAction::Sandbox, ContainmentAction::Sandbox),
+            (HookAction::Suspend, ContainmentAction::Suspend),
+            (
+                HookAction::Terminate("denied".to_string()),
+                ContainmentAction::Terminate,
+            ),
+            (
+                HookAction::Quarantine("denied".to_string()),
+                ContainmentAction::Quarantine,
+            ),
+        ] {
+            exec.requested_hook_action = Some(hook);
+            assert_eq!(
+                containment_action_for_execution(
+                    ContainmentAction::Allow,
+                    RiskState::Benign,
+                    StoppingDecision::Stop,
+                    &exec,
+                ),
+                expected,
+            );
+        }
+        exec.requested_hook_action = None;
+        exec.hostcall_decisions.push(HostcallDecisionRecord {
+            seq: 0,
+            capability: CapabilityTag("net.write".to_string()),
+            allowed: false,
+            instruction_index: 0,
+        });
+        assert_eq!(
+            containment_action_for_execution(
+                ContainmentAction::Allow,
+                RiskState::Benign,
+                StoppingDecision::Stop,
+                &exec,
+            ),
+            ContainmentAction::Sandbox,
+            "an observed denied effect must preserve stopping containment",
+        );
+    }
+
+    #[test]
+    fn stopping_boundary_guardplane_override_reports_effective_loss() {
+        for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+            let mut runtime = RuntimeConfig::default();
+            runtime.orchestrator.stopping_cusum_threshold_millionths = 100_000;
+            runtime.orchestrator.stopping_cusum_reference_millionths = 100_000;
+            let mut orch = ExecutionOrchestrator::new_with_runtime_config(
+                OrchestratorConfig {
+                    force_lane: Some(lane),
+                    loss_matrix_preset: LossMatrixPreset::Permissive,
+                    ..OrchestratorConfig::default()
+                },
+                runtime,
+            );
+            let mut package = guardplane_package("stopping-hook-control");
+            package.capabilities = broad_risk_package("stopping-hook-control").capabilities;
+            let result = orch
+                .execute(&package)
+                .expect("native guardplane containment");
+            assert_eq!(result.risk_state, RiskState::Benign);
+            assert_eq!(result.action_decision.action, ContainmentAction::Allow);
+            assert_eq!(
+                result
+                    .optimal_stopping_certificate
+                    .as_ref()
+                    .unwrap()
+                    .algorithm,
+                "cusum"
+            );
+            let entry = &result.evidence_entries[0];
+            let hook = entry
+                .metadata
+                .get("hook_requested_action")
+                .expect("actual hook request");
+            assert_ne!(hook, "allow");
+            assert!(result.containment_action.severity() >= ContainmentAction::Sandbox.severity());
+            assert!(result.containment_receipt.is_some());
+            let effective_loss = result.action_decision.explanation.all_expected_losses
+                [&result.containment_action.to_string()];
+            assert_eq!(result.expected_loss_millionths, effective_loss);
+            assert_eq!(entry.chosen_action.expected_loss_millionths, effective_loss);
+            let candidate = entry
+                .candidates
+                .iter()
+                .find(|candidate| {
+                    candidate.action_name == format!("{:?}", result.containment_action)
+                })
+                .expect("effective action candidate");
+            assert_eq!(candidate.expected_loss_millionths, effective_loss);
+        }
+    }
+
     // -- Enrichment: build_evidence edge cases --
 
     #[test]
@@ -6089,6 +6286,7 @@ mod tests {
             &exec,
             capability_summary,
             SecurityEpoch::from_raw(1),
+            1_000_000,
         );
         assert_eq!(ev.extension_id, "test-ext-1");
         assert_eq!(ev.hostcall_rate_millionths, 0);
@@ -6097,9 +6295,9 @@ mod tests {
     }
 
     #[test]
-    fn build_evidence_resource_score_saturates() {
+    fn build_evidence_resource_score_uses_exact_budget_fraction() {
         let pkg = simple_package();
-        let exec = ExecutionResult {
+        let mut exec = ExecutionResult {
             value: crate::baseline_interpreter::Value::Null,
             completion_label: Label::Public,
             hostcall_decisions: Vec::new(),
@@ -6111,13 +6309,28 @@ mod tests {
         };
         let capability_summary =
             ExecutionOrchestrator::capability_multiset_summary(&pkg.capabilities);
-        let ev = ExecutionOrchestrator::build_evidence(
-            &pkg,
-            &exec,
-            capability_summary,
-            SecurityEpoch::from_raw(1),
-        );
-        assert_eq!(ev.resource_score_millionths, 1_000_000);
+        for (executed, budget, expected) in [
+            (0, 0, 1_000_000),
+            (0, u64::MAX, 0),
+            (1, 4, 250_000),
+            (u64::MAX, 1_000_000, 1_000_000),
+            (u64::MAX, u64::MAX, 1_000_000),
+            (u64::MAX / 2, u64::MAX, 499_999),
+            (u64::MAX, u64::MAX / 2, 1_000_000),
+        ] {
+            exec.instructions_executed = executed;
+            let ev = ExecutionOrchestrator::build_evidence(
+                &pkg,
+                &exec,
+                capability_summary,
+                SecurityEpoch::from_raw(1),
+                budget,
+            );
+            assert_eq!(
+                ev.resource_score_millionths, expected,
+                "{executed}/{budget}"
+            );
+        }
     }
 
     #[test]
@@ -6155,6 +6368,7 @@ mod tests {
             &exec,
             capability_summary,
             SecurityEpoch::from_raw(2),
+            1_000_000,
         );
         assert_eq!(ev.distinct_capabilities, 2);
         assert_eq!(ev.epoch, SecurityEpoch::from_raw(2));
@@ -6398,6 +6612,7 @@ mod tests {
             &exec,
             capability_summary,
             SecurityEpoch::from_raw(1),
+            1_000_000,
         );
         // Division by zero for hostcall_rate should be handled (returns 0).
         assert_eq!(ev.hostcall_rate_millionths, 0);
@@ -6619,7 +6834,13 @@ mod tests {
             let epoch = SecurityEpoch::from_raw(raw_epoch);
             let capability_summary =
                 ExecutionOrchestrator::capability_multiset_summary(&pkg.capabilities);
-            let ev = ExecutionOrchestrator::build_evidence(&pkg, &exec, capability_summary, epoch);
+            let ev = ExecutionOrchestrator::build_evidence(
+                &pkg,
+                &exec,
+                capability_summary,
+                epoch,
+                1_000_000,
+            );
             assert_eq!(ev.epoch, epoch);
         }
     }

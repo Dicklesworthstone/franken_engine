@@ -41,6 +41,155 @@ fn assert_closed(error: &OrchestratorError) {
 }
 
 #[test]
+fn stopping_boundary_preserves_benign_completed_runs() {
+    use runtime::bayesian_posterior::RiskState;
+    use runtime::execution_orchestrator::LossMatrixPreset;
+    use runtime::expected_loss_selector::ContainmentAction;
+
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let mut config = RuntimeConfig::default();
+        // This is a legitimate sensitive stopping policy. Capability breadth
+        // supplies a positive LLR even though no host effect is attempted and
+        // the permissive expected-loss policy still selects Allow.
+        config.orchestrator.stopping_cusum_threshold_millionths = 100_000;
+        config.orchestrator.stopping_cusum_reference_millionths = 100_000;
+        let mut orchestrator = ExecutionOrchestrator::try_new_lab_with_runtime_config(
+            OrchestratorConfig {
+                force_lane: Some(lane),
+                loss_matrix_preset: LossMatrixPreset::Permissive,
+                ..OrchestratorConfig::default()
+            },
+            config,
+        )
+        .unwrap();
+        let mut package =
+            package("let total = 0; for (let i = 0; i < 10; i++) { total += i; } total;");
+        package.capabilities = [
+            "vm_dispatch",
+            "heap_allocate",
+            "gc_invoke",
+            "ir_lowering",
+            "policy_read",
+            "policy_write",
+            "evidence_emit",
+            "decision_invoke",
+            "network_egress",
+            "lease_management",
+            "idempotency_derive",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+
+        for observations in 1..=2 {
+            let result = orchestrator
+                .execute(&package)
+                .expect("finite native computation");
+            assert_eq!(result.execution_value, "45");
+            assert_eq!(result.risk_state, RiskState::Benign);
+            assert_eq!(result.action_decision.action, ContainmentAction::Allow);
+            let certificate = result.optimal_stopping_certificate.as_ref().unwrap();
+            assert_eq!(
+                certificate.algorithm, "cusum",
+                "fixture must actually cross"
+            );
+            assert_eq!(certificate.observations_before_stop, observations);
+            assert_eq!(result.containment_action, ContainmentAction::Allow);
+            assert!(result.containment_receipt.is_none());
+            assert!(result.saga_id.is_none());
+            assert_eq!(
+                result.evidence_entries[0].chosen_action.action_name,
+                "allow"
+            );
+            // A latched stopping signal is retained for audit, but must not
+            // independently contain a later benign completion either.
+            package.capabilities = vec!["vm_dispatch".to_string(), "heap_allocate".to_string()];
+        }
+    }
+}
+
+#[test]
+fn stopping_boundary_long_computation_uses_selected_profile_budget() {
+    use runtime::bayesian_posterior::{Posterior, RiskState};
+    use runtime::expected_loss_selector::ContainmentAction;
+
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let mut config = RuntimeConfig::default();
+        config.execution.deterministic_budget = 200_000_000;
+        config.execution.throughput_budget = 200_000_000;
+        let result = orchestrator(lane, config)
+            .execute(&package(
+                "let total = 0; for (let i = 0; i < 50000; i++) { total += i; } total;",
+            ))
+            .expect("finite native computation stays within the configured allowance");
+        assert!(
+            result.instructions_executed > 200_000,
+            "must exceed the old saturation point"
+        );
+        assert_eq!(result.execution_value, "1249975000");
+        assert_eq!(result.risk_state, RiskState::Benign);
+        assert_eq!(result.posterior, Posterior::default_prior());
+        assert_eq!(result.action_decision.action, ContainmentAction::Allow);
+        assert_eq!(result.containment_action, ContainmentAction::Allow);
+        assert!(result.containment_receipt.is_none());
+    }
+}
+
+#[test]
+fn stopping_boundary_preserves_selected_resource_containment() {
+    use runtime::bayesian_posterior::RiskState;
+    use runtime::execution_orchestrator::LossMatrixPreset;
+    use runtime::expected_loss_selector::ContainmentAction;
+
+    let package = package("let total = 0; for (let i = 0; i < 10; i++) { total += i; } total;");
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let baseline = orchestrator(lane, RuntimeConfig::default())
+            .execute(&package)
+            .unwrap();
+        let allowance = baseline.instructions_executed + 1;
+        let mut config = RuntimeConfig::default();
+        config.execution.deterministic_budget = 200_000_000;
+        config.execution.throughput_budget = 200_000_000;
+        match lane {
+            LaneChoice::QuickJs => config.execution.deterministic_budget = allowance,
+            LaneChoice::V8 => config.execution.throughput_budget = allowance,
+        }
+        let mut orchestrator = ExecutionOrchestrator::try_new_lab_with_runtime_config(
+            OrchestratorConfig {
+                force_lane: Some(lane),
+                loss_matrix_preset: LossMatrixPreset::Conservative,
+                ..OrchestratorConfig::default()
+            },
+            config,
+        )
+        .unwrap();
+        let result = orchestrator
+            .execute(&package)
+            .expect("computation completes just within allowance");
+        assert_eq!(result.execution_value, "45");
+        assert_eq!(result.instructions_executed, baseline.instructions_executed);
+        assert_eq!(result.risk_state, RiskState::Benign);
+        assert_eq!(result.action_decision.action, ContainmentAction::Sandbox);
+        assert_eq!(result.containment_action, ContainmentAction::Sandbox);
+        assert!(result.containment_receipt.is_some());
+        let expected = result.action_decision.explanation.all_expected_losses["sandbox"];
+        assert_eq!(result.expected_loss_millionths, expected);
+        assert_eq!(
+            result.evidence_entries[0]
+                .chosen_action
+                .expected_loss_millionths,
+            expected
+        );
+        let candidate = result.evidence_entries[0]
+            .candidates
+            .iter()
+            .find(|candidate| candidate.action_name == "Sandbox")
+            .unwrap();
+        assert_eq!(candidate.expected_loss_millionths, expected);
+    }
+}
+
+#[test]
 fn revocation_after_admission_interrupts_ordinary_native_dispatch() {
     use runtime::execution_orchestrator::ExecutionWorkPool;
     use std::sync::mpsc;

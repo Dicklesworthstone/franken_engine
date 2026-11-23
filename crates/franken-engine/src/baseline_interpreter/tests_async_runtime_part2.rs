@@ -10222,6 +10222,64 @@ fn decode_fs_read_result_encoding_matrix_bd_rul7k() {
     );
 }
 
+#[test]
+fn decode_fs_read_result_preserves_exact_utf16_code_units() {
+    let mut core = test_interpreter();
+    let bytes = [
+        0xff, 0xfe, 0x00, 0xd8, 0x41, 0x00, 0x00, 0xdc, 0x3d, 0xd8, 0x80, 0xde, 0x00, 0x00, 0xab,
+    ];
+    let expected = [0xfeff, 0xd800, 0x0041, 0xdc00, 0xd83d, 0xde80, 0x0000];
+
+    for encoding in [
+        "utf16le", "UTF16LE", "utf-16le", "UTF-16LE", "ucs2", "UCS2", "ucs-2", "UCS-2",
+    ] {
+        let Value::Str(text) = core
+            .decode_fs_read_result(&bytes, Some(encoding))
+            .expect("UTF-16 file contents must decode")
+        else {
+            panic!("an explicit encoding must produce a string");
+        };
+        assert_eq!(text.code_units_vec(), expected, "{encoding}");
+        assert_eq!(text.utf16_len(), expected.len(), "{encoding}");
+        assert!(!text.is_well_formed(), "{encoding}");
+
+        for incomplete in [&[][..], &[0xab][..]] {
+            let Value::Str(empty) = core
+                .decode_fs_read_result(incomplete, Some(encoding))
+                .expect("empty and odd single-byte inputs must decode")
+            else {
+                panic!("an explicit encoding must produce a string");
+            };
+            assert!(empty.is_empty(), "{encoding}");
+        }
+    }
+}
+
+#[test]
+fn decode_fs_read_result_admits_string_memory_before_decoding() {
+    for encoding in [
+        "utf8", "utf-8", "utf16le", "utf-16le", "ucs2", "ucs-2", "latin1", "binary", "ascii", "hex",
+        "base64", "base64url",
+    ] {
+        let mut core = test_interpreter();
+        core.sync_estimated_memory_bytes()
+            .expect("initial memory accounting");
+        let before = core.estimated_memory_bytes();
+        let heap_before = core.heap.len();
+        core.config.max_total_memory_bytes = before;
+
+        assert!(
+            matches!(
+                core.decode_fs_read_result(&[0xff; 128], Some(encoding)),
+                Err(InterpreterError::MemoryBudgetExceeded { .. })
+            ),
+            "{encoding} must admit decoded-string memory before allocation"
+        );
+        assert_eq!(core.estimated_memory_bytes(), before, "{encoding}");
+        assert_eq!(core.heap.len(), heap_before, "{encoding}");
+    }
+}
+
 /// bd-fqlfw.3.5.5 (E3.T5d): an armed state capture at tick 0 observes
 /// pre-set register values and labels at the first instruction boundary.
 #[test]

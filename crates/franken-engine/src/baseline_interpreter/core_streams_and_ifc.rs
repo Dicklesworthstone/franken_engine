@@ -6479,37 +6479,16 @@ impl InterpreterCore {
         bytes: &[u8],
         encoding: Option<&str>,
     ) -> Result<Value, InterpreterError> {
-        use base64::Engine as _;
-        let decoded: Option<String> = match encoding.map(str::to_ascii_lowercase).as_deref() {
-            Some("utf8" | "utf-8") => Some(String::from_utf8_lossy(bytes).into_owned()),
-            Some("utf16le" | "utf-16le" | "ucs2" | "ucs-2") => {
-                // UTF-16LE: little-endian u16 code units. A trailing odd byte is
-                // dropped by chunks_exact (Node would surface a replacement char);
-                // the common even-length case is faithful.
-                let units: Vec<u16> = bytes
-                    .as_chunks::<2>()
-                    .0
-                    .iter()
-                    .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
-                    .collect();
-                Some(String::from_utf16_lossy(&units))
-            }
-            Some("latin1" | "binary") => Some(bytes.iter().map(|&b| char::from(b)).collect()),
-            Some("ascii") => Some(bytes.iter().map(|&b| char::from(b & 0x7f)).collect()),
-            Some("hex") => Some(hex::encode(bytes)),
-            // base64/base64url ENCODE the raw bytes into an ASCII string (like
-            // `hex`); they do not decode. `readFileSync(p, 'base64')` mirrors
-            // `Buffer.from(bytes).toString('base64')`. Node's `base64` uses the
-            // standard alphabet WITH padding; `base64url` uses the URL-safe
-            // alphabet with NO padding.
-            Some("base64") => Some(base64::engine::general_purpose::STANDARD.encode(bytes)),
-            Some("base64url") => {
-                Some(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
-            }
-            _ => None,
-        };
-        if let Some(text) = decoded {
-            return Ok(Value::str(text));
+        if let Some(encoding) = encoding
+            && Self::is_recognized_fs_encoding(encoding)
+        {
+            // File reads and Buffer.toString must preserve the same JavaScript
+            // strings, including lone UTF-16 surrogates, a BOM, and an ignored
+            // odd trailing byte. The shared codec also admits temporary memory
+            // before allocating the decoded string.
+            return self
+                .encode_buffer_bytes(bytes, &encoding.to_ascii_lowercase())
+                .map(Value::Str);
         }
         let view = self.alloc_buffer_from_bytes(bytes)?;
         Ok(Value::Object(view))

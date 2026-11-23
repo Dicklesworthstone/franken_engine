@@ -35,6 +35,14 @@ fn sandbox_root(name: &str) -> PathBuf {
 }
 
 fn run_fixture(name: &str, source: &str) -> (PathBuf, OrchestratorResult) {
+    run_fixture_with_capabilities(name, source, &[])
+}
+
+fn run_fixture_with_capabilities(
+    name: &str,
+    source: &str,
+    additional_capabilities: &[&str],
+) -> (PathBuf, OrchestratorResult) {
     let root = sandbox_root(name);
     let provider = Arc::new(SandboxedHostIo::with_root(&root).expect("sandboxed provider"));
     let recorder = Arc::new(InMemoryHostIoTranscript::recording());
@@ -43,7 +51,7 @@ fn run_fixture(name: &str, source: &str) -> (PathBuf, OrchestratorResult) {
     let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
     orchestrator.set_host_io(provider, Some(recorder_dyn));
 
-    let package = ExtensionPackage {
+    let mut package = ExtensionPackage {
         extension_id: format!("{name}-e2e"),
         source: source.to_string(),
         source_file: None,
@@ -58,6 +66,12 @@ fn run_fixture(name: &str, source: &str) -> (PathBuf, OrchestratorResult) {
         version: "1.0.0".to_string(),
         metadata: BTreeMap::new(),
     };
+
+    package.capabilities.extend(
+        additional_capabilities
+            .iter()
+            .map(|capability| (*capability).to_string()),
+    );
 
     let result = orchestrator
         .execute(&package)
@@ -125,5 +139,42 @@ fn fixture_0038_writefilesync_roundtrips_binary_bytes_bd_zco6t() {
         std::fs::read(root.join("bytes.bin")).expect("fixture file on disk"),
         vec![0u8, 1, 127, 128, 255],
         "writeFileSync(Buffer) must write the raw binary bytes"
+    );
+}
+
+/// UTF-16 file reads must preserve exact JavaScript code units through real
+/// host I/O, including lone surrogates, the BOM, and an ignored odd final byte.
+#[test]
+fn readfilesync_utf16_aliases_preserve_code_units_through_real_io() {
+    let (root, result) = run_fixture_with_capabilities(
+        "fe_fs_utf16_exact",
+        r#"
+const fs = require('fs');
+const raw = Buffer.from([255, 254, 0, 216, 65, 0, 0, 220, 61, 216, 128, 222, 0, 0, 171]);
+fs.writeFileSync('units.bin', raw);
+const encodings = ['utf16le', 'UTF16LE', 'utf-16le', 'UTF-16LE', 'ucs2', 'UCS2', 'ucs-2', 'UCS-2'];
+for (const encoding of encodings) {
+    const text = fs.readFileSync('units.bin', encoding);
+    const fromOptions = fs.readFileSync('units.bin', { encoding: encoding });
+    if (text !== fromOptions) throw new Error('encoding argument forms differ');
+    const units = [];
+    for (let i = 0; i < text.length; i++) units.push(text.charCodeAt(i));
+    console.log(units.join(','));
+    console.log(Buffer.from(text, encoding).toString('hex'));
+}
+"#,
+        &["builtin"],
+    );
+
+    let expected = [
+        "65279,55296,65,56320,55357,56960,0",
+        "fffe00d8410000dc3dd880de0000",
+    ]
+    .repeat(8);
+    assert_eq!(console_messages(&result), expected);
+    assert_eq!(
+        std::fs::read(root.join("units.bin")).expect("original UTF-16 bytes on disk"),
+        vec![255, 254, 0, 216, 65, 0, 0, 220, 61, 216, 128, 222, 0, 0, 171],
+        "decoding must not change the file or consume its odd trailing byte"
     );
 }

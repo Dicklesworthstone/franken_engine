@@ -230,9 +230,16 @@ impl InterpreterCore {
         // GetMethod occurs once, before allocating the destination. Nullish
         // methods permit the array-like branch; a noncallable method or a
         // throwing getter is an error, never a reason to silently fall back.
-        let method = match backing {
-            Some(object) => self.lookup_symbol_iterator_method(module, object, source.clone())?,
-            None => None,
+        let method = match module {
+            Some(module) => self.iterator_protocol_method(
+                module,
+                source.clone(),
+                &RuntimePropertyKey::Symbol(WellKnownSymbol::Iterator.id()),
+            )?,
+            None => match backing {
+                Some(object) => self.lookup_symbol_iterator_method(None, object, source.clone())?,
+                None => None,
+            },
         };
         self.observe_scoped_callback_result()?;
         let (target, count) = if let Some(method) = method {
@@ -257,7 +264,10 @@ impl InterpreterCore {
             let count =
                 self.array_from_iterator(Some(module), iterator, mapper, this_arg, target)?;
             (target, count)
-        } else if matches!(source, Value::Iterator(_) | Value::Generator(_)) {
+        } else if module.is_none() && matches!(source, Value::Iterator(_) | Value::Generator(_)) {
+            // Module-free internal callers cannot invoke guest hooks. Every
+            // JavaScript call has already observed the actual GetMethod;
+            // its nullish result must select the array-like branch below.
             let target = self.array_from_target(module, constructor, None)?;
             let iterator = self.init_for_of_iterator(module, source)?;
             let count = self.array_from_iterator(module, iterator, mapper, this_arg, target)?;
@@ -565,13 +575,32 @@ impl InterpreterCore {
         this_arg: &Value,
         constructor: Option<&Value>,
     ) -> Result<(ArrayFromTarget, u64), InterpreterError> {
-        let Some(backing) = backing else {
-            let target = self.array_from_target(module, constructor, Some(0))?;
-            return Ok((target, 0));
-        };
         // LengthOfArrayLike: Get and ToLength each occur once. Reuse the
         // observable length coercion already used by the JSON native methods.
-        let length = self.json_reviver_array_length(module, backing, receiver.clone())?;
+        let length = if let Some(backing) = backing {
+            self.json_reviver_array_length(module, backing, receiver.clone())?
+        } else {
+            // Functions have an intrinsic own length even before ordinary
+            // property storage is materialized. Preserve that metadata when
+            // their @@iterator is absent, along with any explicit overrides.
+            if receiver.is_callable() {
+                self.own_property_holder(module, &receiver, true)?;
+            }
+            let value = self.iterator_protocol_value_property(
+                module,
+                receiver.clone(),
+                &Self::generic_length_key(),
+            )?;
+            self.observe_scoped_callback_result()?;
+            self.json_observe_reachable_value(&value)?;
+            let number = self.conversion_to_number(module, value, false)?;
+            self.observe_scoped_callback_result()?;
+            if number.is_nan() || number <= 0.0 {
+                0
+            } else {
+                number.min(9_007_199_254_740_991.0).trunc() as u64
+            }
+        };
         // Without a constructor `this` this constructs an ordinary Array,
         // whose length is a uint32. ArrayCreate must fail before the first
         // indexed Get; do not turn an invalid length into a long loop and a
@@ -585,8 +614,7 @@ impl InterpreterCore {
         for index in 0..length {
             self.json_charge_work()?;
             let key = RuntimePropertyKey::String(JsString::from(index.to_string()));
-            let element =
-                self.iterator_protocol_property(module, backing, &key, receiver.clone())?;
+            let element = self.iterator_protocol_value_property(module, receiver.clone(), &key)?;
             self.observe_scoped_callback_result()?;
             // The source receiver and destination are live across the
             // mapper even when no JavaScript register holds the target yet.

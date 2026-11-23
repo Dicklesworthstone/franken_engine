@@ -588,6 +588,176 @@ Array.from(['a', 'b'].values(), function(value, index) {
 );
 
 source_case!(
+    exotic_iterator_getter_precedes_constructor_and_is_captured_once,
+    r####"
+function check(source, value) {
+    let trace = '';
+    Object.defineProperty(source, Symbol.iterator, {
+        configurable: true,
+        get() {
+            trace += 'get:' + (this === source) + ';';
+            return function() {
+                trace += 'call:' + (this === source) + ';';
+                let index = 0;
+                return {
+                    get next() {
+                        trace += 'next;';
+                        return function() {
+                            trace += 'step;';
+                            return index++ === 0 ? {value, done: false} : {done: true};
+                        };
+                    }
+                };
+            };
+        }
+    });
+    function C() {
+        trace += 'new;';
+        Object.defineProperty(source, Symbol.iterator, {
+            value: function() { throw 'the replacement must not be read'; }
+        });
+    }
+    const result = Array.from.call(C, source);
+    return result[0] + ':' + result.length + ':' + trace;
+}
+check((function*() { yield 'wrong'; })(), 'generator') + '|' +
+check(['wrong'].values(), 'native');
+"####,
+    "generator:1:get:true;new;call:true;next;step;step;|native:1:get:true;new;call:true;next;step;step;"
+);
+
+source_case!(
+    callable_iterables_observe_own_and_inherited_hooks,
+    r####"
+function own() { throw 'the source function must not be invoked'; }
+Object.defineProperty(own, Symbol.iterator, {
+    get() {
+        if (this !== own) { throw 'own getter receiver'; }
+        return function() {
+            if (this !== own) { throw 'own method receiver'; }
+            return ['own'].values();
+        };
+    }
+});
+class Parent {}
+Object.defineProperty(Parent, Symbol.iterator, {
+    get() {
+        if (this !== Child) { throw 'inherited getter receiver'; }
+        return function() {
+            if (this !== Child) { throw 'inherited method receiver'; }
+            return ['inherited'].values();
+        };
+    }
+});
+class Child extends Parent {}
+Array.from(own).join() + '|' + Array.from(Child).join();
+"####,
+    "own|inherited"
+);
+
+source_case!(
+    exotic_and_callable_nullish_iterators_use_live_array_like_reads,
+    r####"
+function check(source, hook) {
+    let trace = '';
+    Object.defineProperty(source, Symbol.iterator, {
+        get() { trace += 'I'; return hook; }
+    });
+    Object.defineProperty(source, 'length', {
+        configurable: true,
+        get() {
+            if (this !== source) { throw 'length receiver'; }
+            trace += 'L';
+            return {valueOf() { trace += 'V'; return 2.8; }};
+        }
+    });
+    Object.defineProperty(source, '0', {
+        get() {
+            if (this !== source) { throw 'index receiver'; }
+            trace += 'G0';
+            return 'a';
+        }
+    });
+    source[1] = 'before';
+    function C(length) { trace += 'C' + arguments.length + ':' + length; }
+    const result = Array.from.call(C, source, function(value, index) {
+        trace += 'M' + index;
+        source[1] = 'after';
+        return value;
+    });
+    return result[0] + ',' + result[1] + ':' + result.length + ':' + trace;
+}
+check((function*() { yield 'wrong'; })(), null) + '|' +
+check(['wrong'].values(), undefined) + '|' + check(function() {}, null);
+"####,
+    "a,after:2:ILVC1:2G0M0M1|a,after:2:ILVC1:2G0M0M1|a,after:2:ILVC1:2G0M0M1"
+);
+
+source_case!(
+    exotic_iterator_lookup_failures_precede_construction_and_length,
+    r####"
+function check(source, shouldThrow) {
+    let trace = '';
+    const token = {};
+    Object.defineProperty(source, Symbol.iterator, {
+        get() { trace += 'G'; if (shouldThrow) { throw token; } return 17; }
+    });
+    Object.defineProperty(source, 'length', {
+        configurable: true,
+        get() { trace += 'bad length'; return 1; }
+    });
+    function C() { trace += 'bad constructor'; }
+    let caught = '';
+    try { Array.from.call(C, source); }
+    catch (error) { caught = shouldThrow ? String(error === token) : error.name; }
+    return caught + ':' + trace;
+}
+check((function*() {})(), false) + '|' + check([].values(), true) + '|' +
+check(function() {}, false) + '|' + check(function() {}, true);
+"####,
+    "TypeError:G|true:G|TypeError:G|true:G"
+);
+
+source_case!(
+    callable_without_iterator_uses_intrinsic_array_like_length,
+    r####"
+const result = Array.from(function(first, second) {});
+result.length + ':' + (0 in result) + ':' + (1 in result) + ':' + String(result[1]);
+"####,
+    "2:true:true:undefined"
+);
+
+#[test]
+fn exotic_nullish_iterator_lookup_preserves_observation_label() {
+    let source = r#"
+const secret = 'label-marker';
+const source = ['unused'].values();
+Object.defineProperty(source, Symbol.iterator, {
+    get() { return secret ? null : undefined; }
+});
+source.length = 1;
+source[0] = 'public';
+Array.from(source)[0];
+"#;
+    for config in configurations() {
+        let input_register = config.max_registers - 1;
+        let module = labelled_source(source, input_register);
+        let mut core = InterpreterCore::new(config, "array-from-exotic-label");
+        core.seed_register(input_register, Value::str("secret"))
+            .unwrap();
+        core.set_register_label(input_register, Label::Secret)
+            .unwrap();
+        let execution = core.execute(&module).unwrap();
+        assert_eq!(execution.value, Value::str("public"));
+        assert_eq!(execution.completion_label, Label::Secret);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+}
+
+source_case!(
     array_iterator_observes_length_growth_during_mapping,
     r####"
 const source = ['a', 'b'];

@@ -5858,7 +5858,29 @@ fn split_statement_segments_with_completion_limit_and_memo<'a>(
                     false
                 };
                 if !continues {
-                    push_segment(&mut out, line, segment_start, index, grammar_context);
+                    // A semicolon following an otherwise incomplete control
+                    // statement is its empty body, not a discardable separator.
+                    // Keep it through recursive parsing, including a final
+                    // empty `else` or nested unbraced loop and bare labels.
+                    let prefix = trim_directive_trivia(&line[segment_start..index]).0;
+                    let body = strip_leading_labels(prefix, grammar_context);
+                    let empty_labeled_body = body.is_empty() && !prefix.is_empty();
+                    let empty_control_body = ["if", "for", "while", "with", "do"]
+                        .into_iter()
+                        .any(|keyword| starts_with_keyword(body, keyword))
+                        && !statement_is_complete_before_clause_with_limit(
+                            body,
+                            "",
+                            grammar_context,
+                            completion_recursion_limit,
+                            completion_memo,
+                        );
+                    let end = if empty_labeled_body || empty_control_body {
+                        after
+                    } else {
+                        index
+                    };
+                    push_segment(&mut out, line, segment_start, end, grammar_context);
                     segment_start = after;
                     pending_statement_clauses.clear();
                     previous_significant = None;
@@ -6033,6 +6055,19 @@ fn parse_statement_inner(
     span: SourceSpan,
     context: &mut ParseExecutionContext<'_>,
 ) -> ParseResult<Statement> {
+    // Preserve EmptyStatement when it occupies a required statement slot,
+    // such as an unbraced branch, loop, or label. The AST represents its empty
+    // completion as an empty block, as the engine parser already does.
+    if trim_directive_trivia(statement)
+        .0
+        .strip_prefix(';')
+        .is_some_and(|tail| trim_directive_trivia(tail).0.is_empty())
+    {
+        return Ok(Statement::Block(BlockStatement {
+            body: Vec::new(),
+            span,
+        }));
+    }
     let static_import = clause_keyword_tail(
         statement,
         "import",

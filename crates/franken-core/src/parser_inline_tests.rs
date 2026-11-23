@@ -8554,6 +8554,85 @@ fn if_else_statement() {
 }
 
 #[test]
+fn empty_control_flow_bodies_preserve_following_statements() {
+    for head in [
+        "if (false);",
+        "if (true) ; else ;",
+        "if (false) /* empty */ ;",
+        "while (false);",
+        "for (let i = 0; i < 0; i++);",
+        "for (let key in object);",
+        "for (const value of values);",
+        "do ; while (false);",
+        "label: ;",
+    ] {
+        let source = format!("{head} tail();");
+        let tree = parse_script(&source);
+        assert_eq!(tree.body.len(), 2, "{source}");
+        let body = match &tree.body[0] {
+            Statement::If(statement) => {
+                if head.contains("else") {
+                    assert!(
+                        matches!(statement.alternate.as_deref(), Some(Statement::Block(block)) if block.body.is_empty()),
+                        "empty alternate must remain attached: {source}"
+                    );
+                }
+                statement.consequent.as_ref()
+            }
+            Statement::While(statement) => statement.body.as_ref(),
+            Statement::For(statement) => statement.body.as_ref(),
+            Statement::ForIn(statement) => statement.body.as_ref(),
+            Statement::ForOf(statement) => statement.body.as_ref(),
+            Statement::DoWhile(statement) => statement.body.as_ref(),
+            Statement::Labeled(statement) => statement.body.as_ref(),
+            other => panic!("expected control-flow statement in {source}, got {other:?}"),
+        };
+        assert!(
+            matches!(body, Statement::Block(block) if block.body.is_empty()),
+            "semicolon must remain the empty body: {source}"
+        );
+        assert!(
+            matches!(&tree.body[1], Statement::Expression(statement)
+                if matches!(&statement.expression, Expression::Call { callee, arguments }
+                    if matches!(callee.as_ref(), Expression::Identifier(name) if name == "tail")
+                        && arguments.is_empty())),
+            "following effect must remain outside the body: {source}"
+        );
+    }
+}
+
+#[test]
+fn nested_headers_and_labels_retain_the_innermost_empty_body() {
+    let tree = parse_script("outer: inner: if (false) while (false); tail();");
+    assert_eq!(tree.body.len(), 2);
+    let Statement::Labeled(outer) = &tree.body[0] else {
+        panic!("expected outer label");
+    };
+    let Statement::Labeled(inner) = outer.body.as_ref() else {
+        panic!("expected inner label");
+    };
+    let Statement::If(branch) = inner.body.as_ref() else {
+        panic!("expected if statement");
+    };
+    let Statement::While(loop_statement) = branch.consequent.as_ref() else {
+        panic!("expected while statement");
+    };
+    assert!(
+        matches!(loop_statement.body.as_ref(), Statement::Block(block) if block.body.is_empty())
+    );
+}
+
+#[test]
+fn a_missing_body_is_not_an_empty_statement() {
+    let parser = CanonicalEs2020Parser;
+    for source in ["if (false)", "while (false)", "for (;;)", "label:"] {
+        parser
+            .parse(source, ParseGoal::Script)
+            .expect_err("an absent statement body still requires a syntax error");
+    }
+}
+
+#[test]
 fn for_loop() {
     let tree = parse_script("for (let i = 0; i < 10; i) { x }");
     match &tree.body[0] {

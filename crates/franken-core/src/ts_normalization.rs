@@ -1577,55 +1577,8 @@ fn imported_named_specifier_local_binding(specifier: &str) -> Option<&str> {
     None
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TypeSpaceDeclarationKind {
-    Interface,
-    TypeAlias,
-}
-
 fn strip_type_space_declarations(source: &str) -> String {
-    rewrite_outside_strings_and_comments(source, |source, index, output| {
-        let (kind, keyword_start) = match_type_space_declaration(source, index)?;
-        trim_trailing_inline_whitespace(output);
-        let end = match kind {
-            TypeSpaceDeclarationKind::Interface => {
-                find_interface_declaration_end(source, keyword_start)?
-            }
-            TypeSpaceDeclarationKind::TypeAlias => {
-                find_type_alias_declaration_end(source, keyword_start)?
-            }
-        };
-        Some(end)
-    })
-}
-
-fn match_type_space_declaration(
-    source: &str,
-    index: usize,
-) -> Option<(TypeSpaceDeclarationKind, usize)> {
-    if !is_statement_start(source, index) {
-        return None;
-    }
-
-    if starts_with_keyword(source, index, "export") {
-        let after_export = skip_ascii_whitespace(source, index + "export".len());
-        if starts_with_keyword(source, after_export, "interface") {
-            return Some((TypeSpaceDeclarationKind::Interface, after_export));
-        }
-        if starts_with_keyword(source, after_export, "type") {
-            return Some((TypeSpaceDeclarationKind::TypeAlias, after_export));
-        }
-        return None;
-    }
-
-    if starts_with_keyword(source, index, "interface") {
-        return Some((TypeSpaceDeclarationKind::Interface, index));
-    }
-    if starts_with_keyword(source, index, "type") {
-        return Some((TypeSpaceDeclarationKind::TypeAlias, index));
-    }
-
-    None
+    type_erasure::erase_type_space_declarations(source)
 }
 
 fn is_statement_start(source: &str, index: usize) -> bool {
@@ -1659,25 +1612,6 @@ fn skip_identifier(source: &str, index: usize) -> Option<usize> {
     }
 
     Some(end)
-}
-
-fn find_interface_declaration_end(source: &str, keyword_start: usize) -> Option<usize> {
-    let mut cursor = skip_ascii_whitespace(source, keyword_start + "interface".len());
-    cursor = skip_identifier(source, cursor)?;
-    let body_start = find_top_level_char(source, cursor, '{')?;
-    let body_end = find_matching_delimiter(source, body_start, '{', '}')?;
-    let mut end = body_end + '}'.len_utf8();
-    end = skip_ascii_whitespace(source, end);
-    if source[end..].starts_with(';') {
-        end += 1;
-    }
-    Some(end)
-}
-
-fn find_type_alias_declaration_end(source: &str, keyword_start: usize) -> Option<usize> {
-    let mut cursor = skip_ascii_whitespace(source, keyword_start + "type".len());
-    cursor = skip_identifier(source, cursor)?;
-    find_top_level_statement_terminator(source, cursor)
 }
 
 fn next_code_scan_char(
@@ -1850,42 +1784,6 @@ fn find_matching_delimiter(source: &str, start: usize, open: char, close: char) 
     }
 
     None
-}
-
-fn find_top_level_statement_terminator(source: &str, start: usize) -> Option<usize> {
-    let mut paren_depth = 0usize;
-    let mut bracket_depth = 0usize;
-    let mut brace_depth = 0usize;
-    let mut angle_depth = 0usize;
-    let mut cursor = start;
-    let mut state = LexicalRewriteState::Code;
-
-    while let Some((index, ch)) = next_code_scan_char(source, &mut cursor, &mut state) {
-        match ch {
-            '(' => paren_depth += 1,
-            ')' => paren_depth = paren_depth.saturating_sub(1),
-            '[' => bracket_depth += 1,
-            ']' => bracket_depth = bracket_depth.saturating_sub(1),
-            '{' => brace_depth += 1,
-            '}' => brace_depth = brace_depth.saturating_sub(1),
-            '<' => angle_depth += 1,
-            '>' => angle_depth = angle_depth.saturating_sub(1),
-            ';' if paren_depth == 0
-                && bracket_depth == 0
-                && brace_depth == 0
-                && angle_depth == 0 =>
-            {
-                return Some(index + ch.len_utf8());
-            }
-            _ => {}
-        }
-    }
-
-    if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 && angle_depth == 0 {
-        Some(source.len())
-    } else {
-        None
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2518,6 +2416,83 @@ const value: number = 1;
 
         assert!(!output.normalized_source.contains("interface Shape"));
         assert!(output.normalized_source.contains("const shape = {};"));
+    }
+
+    #[test]
+    fn semicolonless_type_declarations_preserve_following_runtime_effects() {
+        assert_normalized_output(
+            r#"
+let effects = 0;
+type Value = number
+effects += 1;
+type Values = number[]
+[1].forEach(value => { effects += value; });
+type Choice<T> = T extends string
+    ? { value: T }
+    : { value: number }
+effects += 2;
+function run(): number {
+    type Local = number
+    return effects + 4;
+}
+console.log(effects, run());
+"#,
+            &["4 8"],
+        );
+    }
+
+    #[test]
+    fn generic_interfaces_erase_the_body_after_the_complete_header() {
+        assert_normalized_output(
+            r#"
+interface Box<T extends { value: number } = { value: number }>
+    extends Parent<T>, Other<{ tag: string }> {
+    value: T;
+    read(): T;
+}
+const value: Box<{ value: number }> = { value: { value: 42 } };
+console.log(value.value.value);
+"#,
+            &["42"],
+        );
+    }
+
+    #[test]
+    fn namespace_types_do_not_become_module_exports_or_erase_runtime_effects() {
+        assert_normalized_output(
+            r#"
+namespace Store {
+    export type Value = number
+    export interface Box<T extends {value: Value}> { item: T; }
+    export const answer: Value = 42;
+}
+let value = 0;
+const type = 7;
+type
+value = Store.answer;
+console.log(value);
+"#,
+            &["42"],
+        );
+    }
+
+    #[test]
+    fn erased_types_preserve_unbraced_control_flow_and_block_boundaries() {
+        assert_normalized_output(
+            r#"
+let effects = 0;
+if (false) type Hidden = number;
+effects += 1;
+if (true) interface Empty {value: number} else effects += 100;
+while (false) type Repeated = number;
+effects += 2;
+label: { type Local = number; effects += 4; }
+switch (0) {case 0: type Branch = number; effects += 8; break;}
+try { throw 0; } catch { type Caught = number; effects += 16; }
+console.log(effects);
+"#,
+            &["31"],
+        );
     }
 
     #[test]

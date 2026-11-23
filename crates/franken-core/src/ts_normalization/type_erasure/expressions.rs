@@ -4,7 +4,7 @@
 //! operand and its reference identity: `(object.method as Callable)()` still
 //! calls with `object` as receiver, and `target!.field = value` is still a Set.
 
-use super::{Eraser, Kind};
+use super::{Eraser, Kind, MAX_TYPE_DEPTH};
 
 impl Eraser<'_> {
     pub(super) fn erase_template_expressions(&mut self, depth: usize) {
@@ -97,6 +97,9 @@ impl Eraser<'_> {
     }
 
     pub(super) fn erase_expression_types(&mut self, module_scope: bool) {
+        // Return annotations may have obscured a function body's declaration
+        // site during the first pass. Revisit it after signature erasure.
+        self.erase_type_space_declarations(module_scope);
         self.erase_type_only_declarations(module_scope);
         let mut cursor = 0;
         let mut previous = None;
@@ -207,6 +210,193 @@ impl Eraser<'_> {
             previous = Some(cursor);
             asserted = false;
             cursor += 1;
+        }
+    }
+
+    /// Interfaces and aliases have no runtime initializer. Find their exact
+    /// grammar boundary instead of scanning to the next semicolon, which may
+    /// belong to a following executable statement. Namespace exports are local
+    /// to that body; only a top-level erased export needs a module marker.
+    pub(super) fn erase_type_space_declarations(&mut self, module_scope: bool) {
+        let mut namespaces = vec![false; self.tokens.len()];
+        let mut classes = vec![false; self.tokens.len()];
+        let mut groups = Vec::new();
+        let mut index = 0;
+        while index < self.tokens.len() {
+            if self.removed[index] {
+                index += 1;
+                continue;
+            }
+            let enclosing = groups.last().copied();
+            let in_namespace = enclosing.is_some_and(|open| namespaces[open]);
+            let declarations_allowed =
+                enclosing.is_none_or(|open| self.text(open) == "{" && !classes[open]);
+            if declarations_allowed
+                && matches!(self.text(index), "type" | "interface")
+                && let Some((start, end)) = self.type_space_declaration_span(
+                    index,
+                    module_scope && groups.is_empty(),
+                    in_namespace,
+                )
+            {
+                if self.single_statement_type_site(start) {
+                    self.empty_statements.push(self.tokens[start].start);
+                    self.mark(start, end);
+                } else if groups.is_empty() {
+                    self.mark_type_declaration(start, end);
+                } else {
+                    self.mark(start, end);
+                }
+                index = end;
+                continue;
+            }
+            if matches!(self.text(index), "namespace" | "module" | "global")
+                && let Some(body) = self.namespace_type_body(index)
+            {
+                namespaces[body] = true;
+            }
+            if self.text(index) == "class"
+                && let Some(body) = self.class_body(index)
+            {
+                classes[body] = true;
+            }
+            match self.text(index) {
+                "(" | "[" | "{" => groups.push(index),
+                ")" | "]" | "}" => {
+                    groups.pop();
+                }
+                _ => {}
+            }
+            index += 1;
+        }
+    }
+
+    fn namespace_type_body(&self, keyword: usize) -> Option<usize> {
+        if self.property_name(keyword) || self.newline_before(keyword + 1) {
+            return None;
+        }
+        let mut cursor = keyword + 1;
+        if self.text(keyword) == "global" {
+            if keyword == 0 || self.text(keyword - 1) != "declare" {
+                return None;
+            }
+        } else {
+            if !self
+                .tokens
+                .get(cursor)
+                .is_some_and(|token| matches!(token.kind, Kind::Word | Kind::Literal))
+            {
+                return None;
+            }
+            cursor += 1;
+            while self.text(cursor) == "." && self.tokens.get(cursor + 1)?.kind == Kind::Word {
+                cursor += 2;
+            }
+        }
+        (self.text(cursor) == "{").then_some(cursor)
+    }
+
+    fn type_space_declaration_span(
+        &self,
+        keyword: usize,
+        module_scope: bool,
+        namespace_scope: bool,
+    ) -> Option<(usize, usize)> {
+        if self.property_name(keyword)
+            || self.newline_before(keyword + 1)
+            || self.tokens.get(keyword + 1)?.kind != Kind::Word
+        {
+            return None;
+        }
+        let interface = self.text(keyword) == "interface";
+        let mut start = keyword;
+        if start > 0 && self.text(start - 1) == "declare" && !self.newline_before(start) {
+            start -= 1;
+        }
+        if start > 0 && self.text(start - 1) == "default" {
+            if !interface || namespace_scope || start < 2 || self.text(start - 2) != "export" {
+                return None;
+            }
+            start -= 1;
+        }
+        if start > 0 && self.text(start - 1) == "export" {
+            if !module_scope && !namespace_scope {
+                return None;
+            }
+            start -= 1;
+        }
+        let single_statement = self.single_statement_type_site(start);
+        if (self.text(start) == "export" && single_statement)
+            || (!single_statement
+                && !self.type_declaration_site(start)
+                && !(namespace_scope && start > 0 && self.text(start - 1) == "{"))
+        {
+            return None;
+        }
+        let mut cursor = keyword + 2;
+        if self.text(cursor) == "<" {
+            cursor = self.declaration_type_parameters_end(cursor)?;
+        }
+        if interface {
+            if self.text(cursor) == "extends" {
+                loop {
+                    cursor = self.type_end(cursor + 1, 0)?;
+                    if self.text(cursor) != "," {
+                        break;
+                    }
+                }
+            }
+            if self.text(cursor) != "{" {
+                return None;
+            }
+            cursor = self.group_end(cursor)?;
+            cursor += usize::from(self.text(cursor) == ";");
+            return Some((start, cursor));
+        }
+        if self.text(cursor) != "=" {
+            return None;
+        }
+        cursor = self.type_end(cursor + 1, 0)?;
+        if self.text(cursor) == ";" {
+            Some((start, cursor + 1))
+        } else if cursor == self.tokens.len()
+            || self.text(cursor) == "}"
+            || self.newline_before(cursor)
+        {
+            Some((start, cursor))
+        } else {
+            None
+        }
+    }
+
+    fn declaration_type_parameters_end(&self, open: usize) -> Option<usize> {
+        let mut cursor = open + 1;
+        loop {
+            while matches!(self.text(cursor), "in" | "out")
+                && self.tokens.get(cursor + 1)?.kind == Kind::Word
+            {
+                cursor += 1;
+            }
+            if self.tokens.get(cursor)?.kind != Kind::Word {
+                return None;
+            }
+            cursor += 1;
+            if self.text(cursor) == "extends" {
+                cursor = self.type_end(cursor + 1, 0)?;
+            }
+            if self.text(cursor) == "=" {
+                cursor = self.type_end(cursor + 1, 0)?;
+            }
+            match self.text(cursor) {
+                ">" => return Some(cursor + 1),
+                "," => {
+                    cursor += 1;
+                    if self.text(cursor) == ">" {
+                        return Some(cursor + 1);
+                    }
+                }
+                _ => return None,
+            }
         }
     }
 
@@ -439,6 +629,13 @@ impl Eraser<'_> {
     }
 
     fn type_declaration_site(&self, start: usize) -> bool {
+        self.type_declaration_site_at_depth(start, 0)
+    }
+
+    fn type_declaration_site_at_depth(&self, start: usize, depth: usize) -> bool {
+        if depth >= MAX_TYPE_DEPTH {
+            return false;
+        }
         if start == 0 {
             return true;
         }
@@ -455,9 +652,21 @@ impl Eraser<'_> {
                 before == 0
                     || matches!(
                         self.text(before - 1),
-                        ")" | "=>" | ";" | "{" | "}" | "else" | "try" | "finally" | "do" | "static"
+                        ")" | "=>"
+                            | ";"
+                            | "{"
+                            | "}"
+                            | "else"
+                            | "try"
+                            | "catch"
+                            | "finally"
+                            | "do"
+                            | "static"
                     )
+                    || (self.text(before - 1) == ":"
+                        && self.colon_is_statement_site(before - 1, depth + 1))
             }
+            ":" => self.colon_is_statement_site(start - 1, depth + 1),
             _ => {
                 self.newline_before(start)
                     && (self.tokens[start - 1].kind != Kind::Punctuation
@@ -479,6 +688,58 @@ impl Eraser<'_> {
                     )
             }
         }
+    }
+
+    fn single_statement_type_site(&self, start: usize) -> bool {
+        let Some(before) = start.checked_sub(1) else {
+            return false;
+        };
+        match self.text(before) {
+            "else" | "do" => !self.property_name(before),
+            ":" => self.colon_is_statement_site(before, 0),
+            ")" => self.pairs[before].is_some_and(|open| {
+                open > 0
+                    && (matches!(self.text(open - 1), "if" | "for" | "while" | "with")
+                        || (open > 1
+                            && self.text(open - 1) == "await"
+                            && self.text(open - 2) == "for"))
+            }),
+            _ => false,
+        }
+    }
+
+    fn colon_is_statement_site(&self, colon: usize, depth: usize) -> bool {
+        if depth >= MAX_TYPE_DEPTH || colon == 0 {
+            return false;
+        }
+        if self.text(colon - 1) == "default"
+            || (self.tokens[colon - 1].kind == Kind::Word
+                && self.type_declaration_site_at_depth(colon - 1, depth + 1))
+        {
+            return true;
+        }
+        // Walk a case expression backwards, skipping balanced runtime groups
+        // and pairing ternary colons. An unmatched `?` means the queried colon
+        // belongs to a conditional expression, not a switch clause.
+        let mut cursor = colon;
+        let mut conditionals = 0usize;
+        while cursor > 0 {
+            cursor -= 1;
+            match self.text(cursor) {
+                ")" | "]" | "}" => {
+                    let Some(open) = self.pairs[cursor] else {
+                        return false;
+                    };
+                    cursor = open;
+                }
+                ":" => conditionals += 1,
+                "?" if conditionals > 0 => conditionals -= 1,
+                "?" | ";" | "{" | "(" | "[" => return false,
+                "case" => return conditionals == 0,
+                _ => {}
+            }
+        }
+        false
     }
 
     /// Require complete, comma-separated types rather than erasing everything

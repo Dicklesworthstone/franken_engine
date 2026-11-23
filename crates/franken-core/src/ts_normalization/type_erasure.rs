@@ -36,6 +36,29 @@ pub fn erase(source: &str) -> String {
     eraser.finish()
 }
 
+/// Erase interface and type-alias declarations before runtime TS constructs
+/// are lowered. Reuse the annotation parser's exact type spans, so an omitted
+/// semicolon cannot make a declaration consume the next executable statement.
+pub fn erase_type_space_declarations(source: &str) -> String {
+    let Some(tokens) = tokenize(source) else {
+        return source.to_owned();
+    };
+    let Some(pairs) = delimiter_pairs(&tokens) else {
+        return source.to_owned();
+    };
+    let mut eraser = Eraser {
+        source,
+        removed: vec![false; tokens.len()],
+        tokens,
+        pairs,
+        spans: Vec::new(),
+        module_marker: None,
+        empty_statements: Vec::new(),
+    };
+    eraser.erase_type_space_declarations(true);
+    eraser.finish()
+}
+
 /// Erase TypeScript's prefix type assertions (`<T>value`), syntax only a
 /// `.ts` file has: in a `.tsx` file the same text is a JSX element
 /// (bd-9vouw.426). A generic arrow function (`<T>(x: T) => x`) is left to
@@ -54,6 +77,7 @@ pub fn erase_angle_assertions(source: &str) -> String {
         pairs,
         spans: Vec::new(),
         module_marker: None,
+        empty_statements: Vec::new(),
     };
     eraser.erase_prefix_assertions();
     eraser.finish()
@@ -72,7 +96,9 @@ fn analyze(source: &str, depth: usize) -> Option<Eraser<'_>> {
         pairs,
         spans: Vec::new(),
         module_marker: None,
+        empty_statements: Vec::new(),
     };
+    eraser.erase_type_space_declarations(depth == 0);
     // Track runtime conditional operators at each delimiter depth. A colon
     // after a parenthesized/call expression in a conditional can introduce an
     // arrow *branch*, not a return annotation: `yes ? f(x) : value => value`.
@@ -119,6 +145,9 @@ struct Eraser<'a> {
     // An erased exported declaration must still make the output a module.
     // Emit one empty export inside its original span, retaining byte offsets.
     module_marker: Option<usize>,
+    // An erased declaration used as a single control-flow body must remain
+    // an empty statement, so the next runtime statement cannot become its body.
+    empty_statements: Vec<usize>,
 }
 
 impl Eraser<'_> {
@@ -405,9 +434,16 @@ impl Eraser<'_> {
         }
         while matches!(
             self.text(cursor),
-            "keyof" | "readonly" | "unique" | "typeof" | "infer" | "abstract"
+            "keyof" | "readonly" | "unique" | "typeof" | "abstract"
         ) {
             cursor += 1;
+        }
+        let inferred = self.text(cursor) == "infer";
+        if inferred {
+            cursor += 1;
+            if self.tokens.get(cursor)?.kind != Kind::Word {
+                return None;
+            }
         }
         if self.text(cursor) == "asserts" {
             cursor += 1;
@@ -480,7 +516,7 @@ impl Eraser<'_> {
                     cursor += 2;
                     type_arguments = true;
                 }
-                "<" if type_arguments => {
+                "<" if type_arguments && !self.newline_before(cursor) => {
                     // In an expression assertion, an unmatched `<` starts a
                     // runtime comparison, not a type-argument list. Binding
                     // annotations still reject this boundary at their caller.
@@ -490,12 +526,18 @@ impl Eraser<'_> {
                     cursor = end;
                     type_arguments = false;
                 }
-                "[" => {
+                "[" if !self.newline_before(cursor) => {
                     cursor = self.group_end(cursor)?;
                     type_arguments = false;
                 }
                 _ => break,
             }
+        }
+        if inferred && self.text(cursor) == "extends" {
+            // The constraint belongs to the inferred parameter, not a second
+            // conditional. Leave the following `?` to the enclosing type:
+            // `T extends infer U extends number ? U : never`.
+            cursor = self.union_end(cursor + 1, depth + 1)?;
         }
         if self.text(cursor) == "is" || (function_parameters && self.text(cursor) == "=>") {
             cursor = self.type_end(cursor + 1, depth + 1)?;
@@ -628,6 +670,7 @@ impl Eraser<'_> {
             return self.source.to_owned();
         }
         self.spans.sort_unstable();
+        self.empty_statements.sort_unstable();
         let mut output = String::with_capacity(self.source.len());
         let mut copied = 0;
         for (start, end) in self.spans {
@@ -638,6 +681,8 @@ impl Eraser<'_> {
             output.push_str(&self.source[copied..start]);
             let mut marker = if self.module_marker == Some(start) {
                 "export{};"
+            } else if self.empty_statements.binary_search(&start).is_ok() {
+                ";"
             } else {
                 ""
             }

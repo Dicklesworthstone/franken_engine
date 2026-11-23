@@ -5,6 +5,98 @@ mod tests {
     use super::super::tests::check;
 
     #[test]
+    fn type_aliases_end_at_the_type_before_automatic_semicolon_insertion() {
+        check("⟦type Value = number⟧\nobserve();");
+        check("⟦type Value = number⟧\n[1].forEach(observe);");
+        check("⟦type Value = Foo⟧\n<Type>(effect());");
+        check("⟦type Choice<T> = T extends string\n ? {value: T}\n : {value: number}⟧\nobserve();");
+        check("function f() { ⟦type Local = readonly [number, string]⟧\nreturn 3; }");
+        check("⟦type 名称 = 'é' |\n '終';⟧\nobserve();");
+        check("⟦type Factory = <T extends {value: number}>(value: T) => T;⟧ observe();");
+    }
+
+    #[test]
+    fn interfaces_find_the_body_after_generic_constraints_and_heritage() {
+        check(
+            "⟦interface Box<T extends {value: number} = {value: number}> extends Parent<T>, Other<{tag: string}> {value: T; read(): T;}⟧ observe();",
+        );
+        check("⟦interface First {}⟧ ⟦interface Second {}⟧ observe();");
+        check("⟦declare interface Host {read(): string;}⟧ observe();");
+        check(
+            "namespace N { ⟦export type Value = number;⟧ ⟦export interface Shape {value: Value;}⟧ export const value⟦: Value⟧ = 3; }",
+        );
+    }
+
+    #[test]
+    fn declaration_keywords_in_runtime_code_are_preserved() {
+        check("const type = 1; type\nvalue = effect();");
+        check("interface\nBox; declare\n⟦interface Shape {value: number;}⟧ observe();");
+        check("const interface = {value: 1}; interface.value; type(value);");
+        check("const value = {type: 1, interface: 2}; const text = 'type Value = number';");
+        check("const pattern = /type Value = number/; const text = `interface Box {}`;");
+        check("type Broken = effect();");
+        check("function f() { export type Invalid = number; }");
+        check("class C { type Invalid = number; }");
+    }
+
+    #[test]
+    fn erased_exported_types_keep_the_module_marker_and_source_coordinates() {
+        for declaration in [
+            "export type Value = number;",
+            "export interface Shape {value: number;}",
+            "export default interface Shape {value: number;}",
+        ] {
+            let source = format!("{declaration}\nobserve();");
+            let expected = format!(
+                "export{{}};{}\nobserve();",
+                " ".repeat(declaration.len() - 9)
+            );
+            assert_eq!(super::super::erase(&source), expected);
+            assert_eq!(source.len(), expected.len());
+        }
+    }
+
+    #[test]
+    fn type_aliases_preserve_constrained_infer_and_conditional_type_boundaries() {
+        check("⟦type Unbox<T> = T extends infer U extends number ? U : never;⟧ observe();");
+        check(
+            "⟦type Pick<T> = T extends [infer U extends number | string, ...unknown[]] ? U : never⟧\nobserve();",
+        );
+        check("⟦type Maybe<T> = (infer U extends number) | T;⟧ observe();");
+    }
+
+    #[test]
+    fn single_statement_type_bodies_leave_an_empty_statement() {
+        for (prefix, declaration, suffix) in [
+            ("if (false)\n", "type T = number;", "\nobserve();"),
+            ("if (false) ", "type T = number;", " else observe();"),
+            (
+                "while (false) ",
+                "interface T {value: number}",
+                " observe();",
+            ),
+            ("do ", "type T = number;", " while (false); observe();"),
+            ("label: ", "type T = number;", " observe();"),
+            ("switch (0) {case 0: ", "type T = number;", " observe();}"),
+            (
+                "switch (0) {case flag ? 1 : 0: ",
+                "interface T {}",
+                " observe();}",
+            ),
+        ] {
+            let source = format!("{prefix}{declaration}{suffix}");
+            let expected = format!("{prefix};{}{suffix}", " ".repeat(declaration.len() - 1));
+            assert_eq!(super::super::erase(&source), expected, "{source}");
+            assert_eq!(super::super::erase(&expected), expected);
+        }
+        check("label: { ⟦type T = number;⟧ observe(); }");
+        check("try {} catch { ⟦interface T {value: number}⟧ observe(); }");
+        check("const value = yes ? first : type Broken = number;");
+        check("const value = {name: type Broken = number;};");
+        check("if (false) export type Invalid = number;");
+    }
+
+    #[test]
     fn regex_values_and_jsx_closing_tags_are_not_type_arguments() {
         for source in [
             "const result = value < /pattern/ > (other);",

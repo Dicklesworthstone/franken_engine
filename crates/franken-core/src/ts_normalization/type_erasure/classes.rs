@@ -12,6 +12,10 @@ struct ClassHeader {
 }
 
 impl Eraser<'_> {
+    pub(super) fn class_body(&self, index: usize) -> Option<usize> {
+        self.class_header(index, 0).map(|header| header.body)
+    }
+
     fn class_header(&self, index: usize, depth: usize) -> Option<ClassHeader> {
         if depth >= MAX_TYPE_DEPTH || self.property_name(index) {
             return None;

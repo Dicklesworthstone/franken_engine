@@ -69,6 +69,83 @@ fn assert_output(source: &str, expected: &[&str]) {
 }
 
 #[test]
+fn semicolonless_type_declarations_preserve_following_runtime_effects() {
+    assert_output(
+        r#"
+let effects = 0;
+type Value = number
+effects += 1;
+type Values = number[]
+[1].forEach(value => { effects += value; });
+type Choice<T> = T extends string
+    ? { value: T }
+    : { value: number }
+effects += 2;
+function run(): number {
+    type Local = number
+    return effects + 4;
+}
+console.log(effects, run());
+"#,
+        &["4 8"],
+    );
+}
+
+#[test]
+fn generic_interfaces_erase_the_body_after_the_complete_header() {
+    assert_output(
+        r#"
+interface Box<T extends { value: number } = { value: number }>
+    extends Parent<T>, Other<{ tag: string }> {
+    value: T;
+    read(): T;
+}
+const value: Box<{ value: number }> = { value: { value: 42 } };
+console.log(value.value.value);
+"#,
+        &["42"],
+    );
+}
+
+#[test]
+fn namespace_types_do_not_become_module_exports_or_erase_runtime_effects() {
+    assert_output(
+        r#"
+namespace Store {
+    export type Value = number
+    export interface Box<T extends {value: Value}> { item: T; }
+    export const answer: Value = 42;
+}
+let value = 0;
+const type = 7;
+type
+value = Store.answer;
+console.log(value);
+"#,
+        &["42"],
+    );
+}
+
+#[test]
+fn erased_types_preserve_unbraced_control_flow_and_block_boundaries() {
+    assert_output(
+        r#"
+let effects = 0;
+if (false) type Hidden = number;
+effects += 1;
+if (true) interface Empty {value: number} else effects += 100;
+while (false) type Repeated = number;
+effects += 2;
+label: { type Local = number; effects += 4; }
+switch (0) {case 0: type Branch = number; effects += 8; break;}
+try { throw 0; } catch { type Caught = number; effects += 16; }
+console.log(effects);
+"#,
+        &["31"],
+    );
+}
+
+#[test]
 fn typed_objects_and_conditional_expressions_keep_their_runtime_colons() {
     assert_output(
         r#"

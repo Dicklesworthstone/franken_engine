@@ -1861,51 +1861,8 @@ fn imported_named_specifier_local_binding(specifier: &str) -> Option<&str> {
     None
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TypeSpaceDeclarationKind {
-    Interface,
-    TypeAlias,
-}
-
 fn strip_type_space_declarations(source: &str) -> String {
-    rewrite_outside_strings_and_comments(source, |source, index, output| {
-        let (kind, keyword_start) = match_type_space_declaration(source, index)?;
-        trim_trailing_inline_whitespace(output);
-        let end = match kind {
-            TypeSpaceDeclarationKind::Interface => {
-                find_interface_declaration_end(source, keyword_start)?
-            }
-            TypeSpaceDeclarationKind::TypeAlias => {
-                find_type_alias_declaration_end(source, keyword_start)?
-            }
-        };
-        Some(end)
-    })
-}
-
-fn match_type_space_declaration(
-    source: &str,
-    index: usize,
-) -> Option<(TypeSpaceDeclarationKind, usize)> {
-    let declaration = if starts_with_keyword(source, index, "export") {
-        let after_export = skip_ascii_whitespace(source, index + "export".len());
-        if starts_with_keyword(source, after_export, "interface") {
-            Some((TypeSpaceDeclarationKind::Interface, after_export))
-        } else if starts_with_keyword(source, after_export, "type") {
-            Some((TypeSpaceDeclarationKind::TypeAlias, after_export))
-        } else {
-            None
-        }
-    } else if starts_with_keyword(source, index, "interface") {
-        Some((TypeSpaceDeclarationKind::Interface, index))
-    } else if starts_with_keyword(source, index, "type") {
-        Some((TypeSpaceDeclarationKind::TypeAlias, index))
-    } else {
-        None
-    };
-    // Checked last: is_statement_start scans back over whitespace, so asking
-    // it at every position is quadratic in a long blank run.
-    declaration.filter(|_| is_statement_start(source, index))
+    frankenengine_core::ts_normalization::type_erasure::erase_type_space_declarations(source)
 }
 
 fn is_statement_start(source: &str, index: usize) -> bool {
@@ -1939,25 +1896,6 @@ fn skip_identifier(source: &str, index: usize) -> Option<usize> {
     }
 
     Some(end)
-}
-
-fn find_interface_declaration_end(source: &str, keyword_start: usize) -> Option<usize> {
-    let mut cursor = skip_ascii_whitespace(source, keyword_start + "interface".len());
-    cursor = skip_identifier(source, cursor)?;
-    let body_start = find_top_level_char(source, cursor, '{')?;
-    let body_end = find_matching_delimiter(source, body_start, '{', '}')?;
-    let mut end = body_end + '}'.len_utf8();
-    end = skip_ascii_whitespace(source, end);
-    if source[end..].starts_with(';') {
-        end += 1;
-    }
-    Some(end)
-}
-
-fn find_type_alias_declaration_end(source: &str, keyword_start: usize) -> Option<usize> {
-    let mut cursor = skip_ascii_whitespace(source, keyword_start + "type".len());
-    cursor = skip_identifier(source, cursor)?;
-    find_top_level_statement_terminator(source, cursor)
 }
 
 fn next_code_scan_char(
@@ -2139,42 +2077,6 @@ fn find_matching_delimiter(source: &str, start: usize, open: char, close: char) 
     }
 
     None
-}
-
-fn find_top_level_statement_terminator(source: &str, start: usize) -> Option<usize> {
-    let mut paren_depth = 0usize;
-    let mut bracket_depth = 0usize;
-    let mut brace_depth = 0usize;
-    let mut angle_depth = 0usize;
-    let mut cursor = start;
-    let mut state = LexicalRewriteState::Code;
-
-    while let Some((index, ch)) = next_code_scan_char(source, &mut cursor, &mut state) {
-        match ch {
-            '(' => paren_depth += 1,
-            ')' => paren_depth = paren_depth.saturating_sub(1),
-            '[' => bracket_depth += 1,
-            ']' => bracket_depth = bracket_depth.saturating_sub(1),
-            '{' => brace_depth += 1,
-            '}' => brace_depth = brace_depth.saturating_sub(1),
-            '<' => angle_depth += 1,
-            '>' => angle_depth = angle_depth.saturating_sub(1),
-            ';' if paren_depth == 0
-                && bracket_depth == 0
-                && brace_depth == 0
-                && angle_depth == 0 =>
-            {
-                return Some(index + ch.len_utf8());
-            }
-            _ => {}
-        }
-    }
-
-    if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 && angle_depth == 0 {
-        Some(source.len())
-    } else {
-        None
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

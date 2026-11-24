@@ -3323,9 +3323,273 @@ fn emit_destructuring_target_write(
     }
 }
 
+/// One array pattern owns one iterator record and one close obligation.
+/// Suspend that obligation while IteratorStep/IteratorValue run: their abrupt
+/// completions mark the record done, whereas default and target failures close
+/// the still-open iterator. All state is in bindings so await/yield can suspend.
+struct DestructuringIteratorScope {
+    iterator_bid: BindingId,
+    done_bid: BindingId,
+    value_bid: BindingId,
+    throw_label: u32,
+    return_label: u32,
+    end_label: u32,
+}
+
+impl DestructuringIteratorScope {
+    fn begin(
+        source_bid: BindingId,
+        ops: &mut Vec<Ir1Op>,
+        bindings: &mut Vec<ResolvedBinding>,
+        binding_lookup: &mut BTreeMap<String, BindingId>,
+        binding_index: &mut BindingId,
+        scope_id: ScopeId,
+        label_counter: &mut u32,
+    ) -> Result<Self, LoweringPipelineError> {
+        let iterator_bid = alloc_internal_binding(
+            bindings,
+            binding_lookup,
+            binding_index,
+            scope_id,
+            "destructure_iterator",
+        )?;
+        let done_bid = alloc_internal_binding(
+            bindings,
+            binding_lookup,
+            binding_index,
+            scope_id,
+            "destructure_iterator_done",
+        )?;
+        let value_bid = alloc_internal_binding(
+            bindings,
+            binding_lookup,
+            binding_index,
+            scope_id,
+            "destructure_iterator_value",
+        )?;
+        let scope = Self {
+            iterator_bid,
+            done_bid,
+            value_bid,
+            throw_label: alloc_label(label_counter),
+            return_label: alloc_label(label_counter),
+            end_label: alloc_label(label_counter),
+        };
+        // Acquisition is outside this pattern's protected region. An enclosing
+        // pattern still owns its independent close obligation if acquisition fails.
+        ops.extend([
+            Ir1Op::LoadBinding {
+                binding_id: source_bid,
+            },
+            Ir1Op::HostCall {
+                capability: "builtin:DestructureIteratorInit".to_string(),
+                arg_count: 1,
+            },
+            Ir1Op::StoreBinding {
+                binding_id: iterator_bid,
+            },
+            Ir1Op::Pop,
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::Boolean(false),
+            },
+            Ir1Op::StoreBinding {
+                binding_id: done_bid,
+            },
+            Ir1Op::Pop,
+            Ir1Op::BeginTry {
+                catch_label: scope.throw_label,
+                finally_label: Some(scope.return_label),
+            },
+        ]);
+        Ok(scope)
+    }
+
+    /// Leave the next value (or undefined for an elision/exhaustion) on the
+    /// operand stack without re-entering an exhausted iterator.
+    fn step(&self, ops: &mut Vec<Ir1Op>, label_counter: &mut u32, read_value: bool) {
+        let exhausted_label = alloc_label(label_counter);
+        let value_label = alloc_label(label_counter);
+        ops.extend([
+            Ir1Op::LoadBinding {
+                binding_id: self.done_bid,
+            },
+            Ir1Op::JumpIfTruthy {
+                label_id: exhausted_label,
+            },
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::Boolean(true),
+            },
+            Ir1Op::StoreBinding {
+                binding_id: self.done_bid,
+            },
+            Ir1Op::Pop,
+            Ir1Op::LoadBinding {
+                binding_id: self.iterator_bid,
+            },
+            Ir1Op::HostCall {
+                capability: if read_value {
+                    "builtin:DestructureIteratorNext"
+                } else {
+                    "builtin:DestructureIteratorElide"
+                }
+                .to_string(),
+                arg_count: 1,
+            },
+            Ir1Op::StoreBinding {
+                binding_id: self.value_bid,
+            },
+            Ir1Op::Pop,
+            Ir1Op::LoadBinding {
+                binding_id: self.iterator_bid,
+            },
+            Ir1Op::LoadBinding {
+                binding_id: self.value_bid,
+            },
+            Ir1Op::HostCall {
+                capability: "builtin:DestructureIteratorDone".to_string(),
+                arg_count: 2,
+            },
+            Ir1Op::StoreBinding {
+                binding_id: self.done_bid,
+            },
+            Ir1Op::Pop,
+            Ir1Op::Jump {
+                label_id: value_label,
+            },
+            Ir1Op::Label {
+                id: exhausted_label,
+            },
+            Ir1Op::LoadBinding {
+                binding_id: self.done_bid,
+            },
+            // The exhausted record's done provenance controls later defaults.
+            Ir1Op::UnaryOp {
+                operator: UnaryOperator::Void,
+            },
+            Ir1Op::StoreBinding {
+                binding_id: self.value_bid,
+            },
+            Ir1Op::Pop,
+            Ir1Op::Label { id: value_label },
+            Ir1Op::LoadBinding {
+                binding_id: self.value_bid,
+            },
+        ]);
+    }
+
+    /// Rest uses the ordinary budgeted ArrayPush path, then retains the final
+    /// done label even when no values were produced.
+    fn rest(
+        &self,
+        ops: &mut Vec<Ir1Op>,
+        bindings: &mut Vec<ResolvedBinding>,
+        binding_lookup: &mut BTreeMap<String, BindingId>,
+        binding_index: &mut BindingId,
+        scope_id: ScopeId,
+        label_counter: &mut u32,
+    ) -> Result<(), LoweringPipelineError> {
+        let rest_bid = alloc_internal_binding(
+            bindings,
+            binding_lookup,
+            binding_index,
+            scope_id,
+            "destructure_iterator_rest",
+        )?;
+        let loop_label = alloc_label(label_counter);
+        let done_label = alloc_label(label_counter);
+        ops.extend([
+            Ir1Op::NewArray { count: 0 },
+            Ir1Op::StoreBinding {
+                binding_id: rest_bid,
+            },
+            Ir1Op::Pop,
+            Ir1Op::Label { id: loop_label },
+        ]);
+        self.step(ops, label_counter, true);
+        ops.extend([
+            Ir1Op::Pop,
+            Ir1Op::LoadBinding {
+                binding_id: self.done_bid,
+            },
+            Ir1Op::JumpIfTruthy {
+                label_id: done_label,
+            },
+            Ir1Op::LoadBinding {
+                binding_id: rest_bid,
+            },
+            Ir1Op::LoadBinding {
+                binding_id: self.value_bid,
+            },
+            Ir1Op::ArrayPush,
+            Ir1Op::Pop,
+            Ir1Op::Jump {
+                label_id: loop_label,
+            },
+            Ir1Op::Label { id: done_label },
+            Ir1Op::LoadBinding {
+                binding_id: rest_bid,
+            },
+            Ir1Op::LoadBinding {
+                binding_id: self.done_bid,
+            },
+            Ir1Op::HostCall {
+                capability: "builtin:DestructureValue".to_string(),
+                arg_count: 2,
+            },
+        ]);
+        Ok(())
+    }
+
+    fn finish(self, ops: &mut Vec<Ir1Op>, label_counter: &mut u32) {
+        ops.extend([
+            Ir1Op::EndTry,
+            Ir1Op::LoadBinding {
+                binding_id: self.done_bid,
+            },
+            Ir1Op::JumpIfTruthy {
+                label_id: self.end_label,
+            },
+            Ir1Op::LoadBinding {
+                binding_id: self.iterator_bid,
+            },
+            Ir1Op::IteratorClose {
+                reason: IteratorCloseReason::Break,
+            },
+            Ir1Op::Jump {
+                label_id: self.end_label,
+            },
+        ]);
+        for (entry, reason) in [
+            (self.return_label, IteratorCloseReason::Return),
+            (self.throw_label, IteratorCloseReason::Throw),
+        ] {
+            let resume_label = alloc_label(label_counter);
+            ops.extend([
+                Ir1Op::Label { id: entry },
+                // Claim the selected completion before branching, so nested
+                // finally blocks cannot consume an outer pattern's exception.
+                Ir1Op::EnterFinally,
+                Ir1Op::LoadBinding {
+                    binding_id: self.done_bid,
+                },
+                Ir1Op::JumpIfTruthy {
+                    label_id: resume_label,
+                },
+                Ir1Op::LoadBinding {
+                    binding_id: self.iterator_bid,
+                },
+                Ir1Op::IteratorClose { reason },
+                Ir1Op::Label { id: resume_label },
+                Ir1Op::EndFinally,
+            ]);
+        }
+        ops.push(Ir1Op::Label { id: self.end_label });
+    }
+}
+
 /// Emit IR1 ops to destructure a value (already stored in `source_bid`) into
-/// the individual bindings declared by `pattern`. Array patterns use numeric
-/// index strings.
+/// the individual bindings declared by `pattern`. Array patterns consume the
+/// iterator protocol lazily and close any remaining iterator on completion.
 #[allow(clippy::only_used_in_recursion)]
 #[allow(clippy::too_many_arguments)]
 fn lower_destructuring_to_ir1(
@@ -3563,127 +3827,77 @@ fn lower_destructuring_to_ir1_with_parameter_tdz(
             }
         }
         BindingPattern::ArrayPattern(elements) => {
-            for (index, element) in elements.iter().enumerate() {
-                let element = match element {
-                    Some(el) => el,
-                    None => continue, // hole: `[, b]`
-                };
-
-                // Handle rest element: `[a, ...rest]`
-                if let BindingPattern::Rest(inner) = element {
-                    let (rest_bid, target_name) = match inner.as_ref() {
-                        BindingPattern::Identifier(name) => {
-                            let Some(binding_id) = binding_lookup.get(name) else {
-                                continue;
-                            };
-                            (*binding_id, Some(name.as_str()))
-                        }
-                        _ => (
-                            alloc_internal_binding(
-                                bindings,
-                                binding_lookup,
-                                binding_index,
-                                scope_id,
-                                "destructure_rest",
-                            )?,
-                            None,
-                        ),
-                    };
-
-                    // Rest collects remaining elements by slicing the source array
-                    // from the current index to the end.
-                    ops.push(Ir1Op::LoadBinding {
-                        binding_id: source_bid,
-                    });
-                    ops.push(Ir1Op::LoadLiteral {
-                        value: Ir1Literal::Integer(index as i64),
-                    });
-                    ops.push(Ir1Op::ArraySlice);
-                    if target_name.is_some() {
-                        emit_destructuring_target_write(ops, rest_bid, write_mode);
-                    } else {
-                        ops.push(Ir1Op::StoreBinding {
-                            binding_id: rest_bid,
-                        });
-                    }
+            let iterator = DestructuringIteratorScope::begin(
+                source_bid,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                label_counter,
+            )?;
+            for element in elements {
+                let Some(element) = element else {
+                    iterator.step(ops, label_counter, false);
                     ops.push(Ir1Op::Pop);
-
-                    if let Some(target_name) = target_name {
-                        if let Some(state) = parameter_tdz.as_deref_mut() {
-                            state.mark_binding_initialized(target_name, binding_lookup);
-                        }
-                    } else {
-                        lower_destructuring_to_ir1_with_parameter_tdz(
-                            inner,
-                            rest_bid,
-                            ops,
-                            bindings,
-                            binding_lookup,
-                            binding_index,
-                            scope_id,
-                            label_counter,
-                            write_mode,
-                            parameter_tdz.as_deref_mut(),
-                        )?;
-                    }
                     continue;
-                }
-
-                let target_names = element.binding_names();
-                let target_name = match target_names.first() {
-                    Some(n) => *n,
-                    None => continue,
                 };
-                let target_bid = match binding_lookup.get(target_name) {
-                    Some(bid) => *bid,
-                    None => continue,
+                let (target, rest) = match element {
+                    BindingPattern::Rest(inner) => (inner.as_ref(), true),
+                    _ => (element, false),
                 };
-
-                // Load source array, get element by index string.
-                ops.push(Ir1Op::LoadBinding {
-                    binding_id: source_bid,
-                });
-                ops.push(Ir1Op::GetProperty {
-                    key: Ir1PropertyKey::Static(index.to_string().into()),
-                });
-                match element {
-                    BindingPattern::Identifier(_) => {
-                        emit_destructuring_target_write(ops, target_bid, write_mode);
-                        ops.push(Ir1Op::Pop);
-                        if let Some(state) = parameter_tdz.as_deref_mut() {
-                            state.mark_binding_initialized(target_name, binding_lookup);
-                        }
-                    }
-                    _ => {
-                        let temp_binding = alloc_internal_binding(
-                            bindings,
-                            binding_lookup,
-                            binding_index,
-                            scope_id,
-                            "destructure_elem",
-                        )?;
-                        ops.push(Ir1Op::StoreBinding {
-                            binding_id: temp_binding,
-                        });
-                        ops.push(Ir1Op::Pop);
-                        lower_destructuring_to_ir1_with_parameter_tdz(
-                            element,
-                            temp_binding,
-                            ops,
-                            bindings,
-                            binding_lookup,
-                            binding_index,
-                            scope_id,
-                            label_counter,
-                            write_mode,
-                            parameter_tdz.as_deref_mut(),
-                        )?;
-                    }
+                if rest {
+                    iterator.rest(
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        label_counter,
+                    )?;
+                } else {
+                    iterator.step(ops, label_counter, true);
                 }
-
-                // Nested array destructuring uses temp bindings to avoid
-                // source-overwrite bugs.
+                if let BindingPattern::Identifier(name) = target {
+                    let target_bid = *binding_lookup.get(name).ok_or(
+                        LoweringPipelineError::InvariantViolation {
+                            detail: "Array-pattern target binding must be allocated before lowering",
+                        },
+                    )?;
+                    emit_destructuring_target_write(ops, target_bid, write_mode);
+                    ops.push(Ir1Op::Pop);
+                    if let Some(state) = parameter_tdz.as_deref_mut() {
+                        state.mark_binding_initialized(name, binding_lookup);
+                    }
+                } else {
+                    // Empty nested patterns still acquire/close their iterator
+                    // or require object coercibility, even without any names.
+                    let value_bid = alloc_internal_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        "destructure_element",
+                    )?;
+                    ops.push(Ir1Op::StoreBinding {
+                        binding_id: value_bid,
+                    });
+                    ops.push(Ir1Op::Pop);
+                    lower_destructuring_to_ir1_with_parameter_tdz(
+                        target,
+                        value_bid,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        label_counter,
+                        write_mode,
+                        parameter_tdz.as_deref_mut(),
+                    )?;
+                }
             }
+            iterator.finish(ops, label_counter);
         }
         BindingPattern::AssignmentPattern { left, right } => {
             // The outer assignment pattern with default value. The value has
@@ -3753,6 +3967,15 @@ fn lower_destructuring_to_ir1_with_parameter_tdz(
             if let Some(state) = parameter_tdz_before_branch.as_ref() {
                 rewrite_parameter_tdz_accesses(ops, default_expression_start, state);
             }
+            // Selecting the initializer depends on the supplied undefined
+            // value (including iterator exhaustion), even for a public literal.
+            ops.push(Ir1Op::LoadBinding {
+                binding_id: source_bid,
+            });
+            ops.push(Ir1Op::HostCall {
+                capability: "builtin:DestructureValue".to_string(),
+                arg_count: 2,
+            });
             ops.push(Ir1Op::StoreBinding {
                 binding_id: source_bid,
             });
@@ -4415,9 +4638,11 @@ fn lower_statement_to_ir1_with_flow(
             });
             // IteratorStep/IteratorValue failures do not close the iterator.
             // Protect only the loop-head assignment once a value exists.
+            // A default can suspend; an injected Return still has Return
+            // precedence when closing the enclosing loop's iterator.
             ops.push(Ir1Op::BeginTry {
                 catch_label: throw_close_label,
-                finally_label: Some(throw_close_label),
+                finally_label: Some(return_close_label),
             });
 
             let immutable_global_target = if matches!(
@@ -14152,6 +14377,11 @@ fn infer_sink_clearance(
             "builtin:ConstructSuperSpread"
                 | "builtin:CallSpread"
                 | "builtin:ConstructSpread"
+                | "builtin:DestructureIteratorInit"
+                | "builtin:DestructureIteratorNext"
+                | "builtin:DestructureIteratorElide"
+                | "builtin:DestructureIteratorDone"
+                | "builtin:DestructureValue"
                 | "builtin:ObjectLiteralSetPrototype"
                 | "builtin:ObjectDefineProperty"
                 | "builtin:ObjectGetOwnPropertyDescriptor"
@@ -18621,9 +18851,8 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(begin_tries.len(), 2, "head and body guards");
-        assert_eq!(begin_tries[0].1, Some(begin_tries[0].0));
-        assert_eq!(begin_tries[1].0, begin_tries[0].0);
-        assert_ne!(begin_tries[1].1, Some(begin_tries[1].0));
+        assert_eq!(begin_tries[0], begin_tries[1]);
+        assert_ne!(begin_tries[0].1, Some(begin_tries[0].0));
         assert!(ops.windows(2).any(|pair| matches!(
             pair,
             [

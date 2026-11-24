@@ -66,6 +66,7 @@ use crate::runtime_config::ExecutionConfig;
 
 mod array_methods;
 mod async_generator;
+mod destructuring;
 mod function_methods;
 mod property_descriptors;
 mod string_methods;
@@ -187,6 +188,11 @@ const KNOWN_INTERNAL_HOSTCALLS: &[&str] = &[
     "builtin:ConstructSuperSpread",
     "builtin:CallSpread",
     "builtin:ConstructSpread",
+    "builtin:DestructureIteratorInit",
+    "builtin:DestructureIteratorNext",
+    "builtin:DestructureIteratorElide",
+    "builtin:DestructureIteratorDone",
+    "builtin:DestructureValue",
     "builtin:ObjectLiteralSetPrototype",
     "builtin:ArrayPrototypePush",
     "builtin:ArrayPrototypePop",
@@ -338,6 +344,11 @@ fn spread_hostcall_target(tag: &str) -> Option<&str> {
                     | "builtin:CallSpread"
                     | "builtin:ConstructSpread"
                     | "builtin:ConstructSuperSpread"
+                    | "builtin:DestructureIteratorInit"
+                    | "builtin:DestructureIteratorNext"
+                    | "builtin:DestructureIteratorElide"
+                    | "builtin:DestructureIteratorDone"
+                    | "builtin:DestructureValue"
             ))
     {
         Some(target)
@@ -8738,8 +8749,9 @@ impl InterpreterCore {
                     }
                 }
                 Ir3Instruction::IteratorClose { iterator, reason } => {
+                    let label = self.read_reg_label(iterator)?;
                     let iterator = self.read_reg(iterator)?;
-                    match self.close_iterator(module, iterator, reason) {
+                    match self.close_iterator(module, iterator, reason, label) {
                         Ok(()) => self.ip += 1,
                         Err(error) => {
                             match self.route_run_loop_javascript_error(module, error, mode)? {
@@ -9813,6 +9825,30 @@ impl InterpreterCore {
                             allowed: true,
                             instruction_index: self.ip as u32,
                         });
+                    }
+
+                    if matches!(
+                        capability.0.as_str(),
+                        "builtin:DestructureIteratorInit"
+                            | "builtin:DestructureIteratorNext"
+                            | "builtin:DestructureIteratorElide"
+                            | "builtin:DestructureIteratorDone"
+                            | "builtin:DestructureValue"
+                    ) {
+                        match self.dispatch_destructuring(module, args, &capability.0) {
+                            Ok((result, label)) => {
+                                self.write_reg_with_label(dst, result, label)?;
+                                self.ip += 1;
+                            }
+                            Err(error) => {
+                                if let Some(error) =
+                                    self.route_run_loop_javascript_error(module, error, mode)?
+                                {
+                                    return Err(error);
+                                }
+                            }
+                        }
+                        continue;
                     }
 
                     if capability.0 == "builtin:CallSpread"
@@ -12614,12 +12650,9 @@ impl InterpreterCore {
                                 &RuntimePropertyKey::String(JsString::from("next")),
                                 label,
                             )?;
-                            if !Self::is_sync_callable(&next) {
-                                return Err(InterpreterError::TypeError {
-                                    expected: "callable iterator.next".to_string(),
-                                    got: next.type_name().to_string(),
-                                });
-                            }
+                            // GetIterator captures next without calling it.
+                            // In particular an empty binding pattern closes the
+                            // iterator without requiring next to be callable.
                             iterator_object = backing;
                             iterator_receiver = Some(iterator);
                             next_method = Some(next);
@@ -12651,6 +12684,19 @@ impl InterpreterCore {
         module: &Ir3Module,
         iterator: Value,
         label: &mut crate::ifc_artifacts::Label,
+    ) -> Result<Option<Value>, InterpreterError> {
+        self.advance_for_of_iterator_with_value_read(module, iterator, label, true)
+    }
+
+    /// Elisions perform IteratorStep but omit IteratorValue. The native array
+    /// fast path still reads its indexed property because ArrayIterator.next
+    /// itself performs that Get, before an iterator-result value is observed.
+    fn advance_for_of_iterator_with_value_read(
+        &mut self,
+        module: &Ir3Module,
+        iterator: Value,
+        label: &mut crate::ifc_artifacts::Label,
+        read_value: bool,
     ) -> Result<Option<Value>, InterpreterError> {
         let handle = self.expect_iterator_handle(iterator)?;
         *label = label.join(&self.for_of_iterator_label(handle)?);
@@ -12759,12 +12805,16 @@ impl InterpreterCore {
             self.set_for_of_iterator_label(handle, label.clone())?;
             return Ok(None);
         }
-        let value = self.read_iterator_property(
-            module,
-            &result,
-            &RuntimePropertyKey::String(JsString::from("value")),
-            label,
-        )?;
+        let value = if read_value {
+            self.read_iterator_property(
+                module,
+                &result,
+                &RuntimePropertyKey::String(JsString::from("value")),
+                label,
+            )?
+        } else {
+            Value::Undefined
+        };
         self.set_for_of_iterator_label(handle, label.clone())?;
         Ok(Some(value))
     }
@@ -12848,112 +12898,161 @@ impl InterpreterCore {
         module: &Ir3Module,
         iterator: Value,
         reason: IteratorCloseReason,
+        mut label: crate::ifc_artifacts::Label,
+    ) -> Result<(), InterpreterError> {
+        // Cleanup must not replace an incoming throw with a return getter or
+        // method failure. Preserve the shared core's existing precedence,
+        // including its later-edition GetMethod behavior.
+        let original_exception = if reason == IteratorCloseReason::Throw {
+            Some(self.pending_exception.take())
+        } else {
+            None
+        };
+        let result = self.close_iterator_with_label(module, iterator, reason, &mut label);
+        if let Some(original_exception) = original_exception {
+            self.pending_exception = original_exception;
+        }
+        self.finish_native_builtin_call(result.map(|()| Value::Undefined), label)
+            .map(|_| ())
+    }
+
+    fn close_iterator_with_label(
+        &mut self,
+        module: &Ir3Module,
+        iterator: Value,
+        reason: IteratorCloseReason,
+        label: &mut crate::ifc_artifacts::Label,
     ) -> Result<(), InterpreterError> {
         let handle = self.expect_iterator_handle(iterator)?;
-        let iterator_receiver = match self.iterator_state_mut(handle)? {
-            RuntimeIteratorState::ForIn(state) => {
-                state.closed = true;
-                state.done = true;
-                None
-            }
+        let input_label_bytes = Self::estimate_label_bytes(label);
+        let retained_bytes = match self
+            .iterators
+            .get(handle as usize)
+            .ok_or(InterpreterError::IteratorNotFound { handle })?
+        {
+            RuntimeIteratorState::ForIn(_) => input_label_bytes,
             RuntimeIteratorState::ForOf(state) => {
-                state.closed = true;
-                state.done = true;
-                if state.return_called {
-                    return Ok(());
-                }
-                state
+                // Admit both the old and joined label before join can clone a
+                // Custom name, and admit the receiver before cloning it.
+                let joined_label_bytes =
+                    input_label_bytes.max(Self::estimate_label_bytes(&state.label));
+                let receiver_bytes = state
                     .iterator_receiver
-                    .clone()
-                    .or_else(|| state.iterator_object.map(Value::Object))
+                    .as_ref()
+                    .map(Self::estimate_timer_value_bytes)
+                    .or_else(|| {
+                        state.iterator_object.map(|object| {
+                            Self::estimate_timer_value_bytes(&Value::Object(object))
+                        })
+                    })
+                    .unwrap_or(0);
+                input_label_bytes
+                    .saturating_add(joined_label_bytes)
+                    .saturating_add(receiver_bytes)
             }
         };
-
-        let Some(iterator_receiver) = iterator_receiver else {
-            return Ok(());
-        };
-        if let Value::Generator(generator_id) = &iterator_receiver {
-            if let RuntimeIteratorState::ForOf(state) = self.iterator_state_mut(handle)? {
-                state.return_called = true;
-            }
-            let original_exception = if reason == IteratorCloseReason::Throw {
-                self.pending_exception.take()
-            } else {
-                None
+        self.with_array_method_temporary(retained_bytes, |core| {
+            let iterator_receiver = match core.iterator_state_mut(handle)? {
+                RuntimeIteratorState::ForIn(state) => {
+                    state.closed = true;
+                    state.done = true;
+                    None
+                }
+                RuntimeIteratorState::ForOf(state) => {
+                    *label = label.join(&state.label);
+                    state.closed = true;
+                    state.done = true;
+                    if state.return_called {
+                        return Ok(());
+                    }
+                    state
+                        .iterator_receiver
+                        .clone()
+                        .or_else(|| state.iterator_object.map(Value::Object))
+                }
             };
-            let outcome = self.resume_generator(
-                module,
-                *generator_id,
-                Value::Undefined,
-                crate::ifc_artifacts::Label::Public,
-                true,
-            );
-            if reason == IteratorCloseReason::Throw {
-                self.pending_exception = original_exception;
+            let Some(iterator_receiver) = iterator_receiver else {
+                return Ok(());
+            };
+            if let Value::Generator(generator_id) = &iterator_receiver {
+                if let RuntimeIteratorState::ForOf(state) = core.iterator_state_mut(handle)? {
+                    state.return_called = true;
+                }
+                return match core.resume_generator(
+                    module,
+                    *generator_id,
+                    Value::Undefined,
+                    label.clone(),
+                    true,
+                ) {
+                    Ok((_, completion_label)) => {
+                        *label = label.join(&completion_label);
+                        Ok(())
+                    }
+                    Err(error)
+                        if reason == IteratorCloseReason::Throw
+                            && Self::is_js_catchable_error(&error) =>
+                    {
+                        Ok(())
+                    }
+                    Err(error) => Err(error),
+                };
             }
-            return match outcome {
-                Ok(_) => Ok(()),
+            let return_method = match core.read_iterator_property(
+                module,
+                &iterator_receiver,
+                &RuntimePropertyKey::String(JsString::from("return")),
+                label,
+            ) {
+                Ok(value) => value,
                 Err(error)
                     if reason == IteratorCloseReason::Throw
                         && Self::is_js_catchable_error(&error) =>
                 {
-                    Ok(())
+                    return Ok(());
                 }
-                Err(error) => Err(error),
+                Err(error) => return Err(error),
             };
-        }
-        let Some(iterator_object) =
-            self.iterator_carrier_backing_id(&iterator_receiver, "iterator object")?
-        else {
-            return Ok(());
-        };
-        let return_property = self.prototype_chain_lookup_runtime_property(
-            iterator_object,
-            &RuntimePropertyKey::String(JsString::from("return")),
-        )?;
-        let return_method = match self.read_runtime_property_inline(
-            module,
-            iterator_receiver.clone(),
-            return_property,
-        ) {
-            Ok(InlineCallCompletion::Value(value)) => value,
-            Ok(InlineCallCompletion::Throw(thrown)) => {
+            if return_method.is_nullish() {
+                return Ok(());
+            }
+            if !Self::is_sync_callable(&return_method) {
                 if reason == IteratorCloseReason::Throw {
                     return Ok(());
                 }
-                return Err(self.rearm_inline_throw(thrown));
+                return Err(InterpreterError::TypeError {
+                    expected: "callable iterator.return".to_string(),
+                    got: return_method.type_name().to_string(),
+                });
             }
-            Err(error)
-                if reason == IteratorCloseReason::Throw && Self::is_js_catchable_error(&error) =>
-            {
-                return Ok(());
+            if let RuntimeIteratorState::ForOf(state) = core.iterator_state_mut(handle)? {
+                state.return_called = true;
             }
-            Err(error) => return Err(error),
-        };
-        if return_method.is_nullish() {
-            return Ok(());
-        }
-        if !Self::is_sync_callable(&return_method) {
-            if reason == IteratorCloseReason::Throw {
-                return Ok(());
-            }
-            return Err(InterpreterError::TypeError {
-                expected: "callable iterator.return".to_string(),
-                got: return_method.type_name().to_string(),
-            });
-        }
-        if let RuntimeIteratorState::ForOf(state) = self.iterator_state_mut(handle)? {
-            state.return_called = true;
-        }
 
-        let close_value =
-            match self.invoke_inline_method_call(module, return_method, iterator_receiver, &[]) {
-                Ok(InlineCallCompletion::Value(value)) => value,
-                Ok(InlineCallCompletion::Throw(thrown)) => {
-                    if reason == IteratorCloseReason::Throw {
-                        return Ok(());
+            let outcome = core.with_array_method_temporary(
+                Self::estimate_label_bytes(label),
+                |core| {
+                    core.invoke_inline_method_call_with_receiver_label(
+                        module,
+                        return_method,
+                        iterator_receiver,
+                        label.clone(),
+                        &[],
+                    )
+                },
+            );
+            let close_value = match outcome {
+                Ok((completion, completion_label)) => {
+                    *label = label.join(&completion_label);
+                    match completion {
+                        InlineCallCompletion::Value(value) => value,
+                        InlineCallCompletion::Throw(thrown) => {
+                            if reason == IteratorCloseReason::Throw {
+                                return Ok(());
+                            }
+                            return Err(core.rearm_inline_throw(thrown));
+                        }
                     }
-                    return Err(self.rearm_inline_throw(thrown));
                 }
                 Err(error)
                     if reason == IteratorCloseReason::Throw
@@ -12963,16 +13062,17 @@ impl InterpreterCore {
                 }
                 Err(error) => return Err(error),
             };
-        if !close_value.is_object_like() {
-            if reason == IteratorCloseReason::Throw {
-                return Ok(());
+            if !close_value.is_object_like() {
+                if reason == IteratorCloseReason::Throw {
+                    return Ok(());
+                }
+                return Err(InterpreterError::TypeError {
+                    expected: "iterator return method to return an object".to_string(),
+                    got: close_value.type_name().to_string(),
+                });
             }
-            return Err(InterpreterError::TypeError {
-                expected: "iterator return method to return an object".to_string(),
-                got: close_value.type_name().to_string(),
-            });
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     fn is_sync_callable(value: &Value) -> bool {
@@ -15637,7 +15737,12 @@ impl InterpreterCore {
                 let close = if close_on_error {
                     match active_iterator {
                         Some(iterator) => {
-                            self.close_iterator(module, iterator, IteratorCloseReason::Throw)
+                            self.close_iterator(
+                                module,
+                                iterator,
+                                IteratorCloseReason::Throw,
+                                accumulated_label.clone(),
+                            )
                         }
                         None => Ok(()),
                     }

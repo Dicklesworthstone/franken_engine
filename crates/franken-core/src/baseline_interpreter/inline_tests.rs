@@ -1094,6 +1094,39 @@ fn public_exact_property_insertion_roundtrips_heap_bd_b12xs_4() {
 }
 
 #[test]
+fn iterator_close_admits_custom_provenance_before_mutating_the_record() {
+    let mut core = quickjs_test_core();
+    let object = core.alloc_object_with_prototype(None).unwrap();
+    let iterator = custom_for_of_handle_for_close(&mut core, object);
+    let handle = core.expect_iterator_handle(iterator.clone()).unwrap();
+    core.set_for_of_iterator_label(
+        handle,
+        crate::ifc_artifacts::Label::Custom {
+            name: "private-close-context".repeat(64),
+            level: 4,
+        },
+    )
+    .unwrap();
+    let resident_bytes = core.estimated_memory_bytes;
+    core.config.max_total_memory_bytes = resident_bytes;
+    let error = core
+        .close_iterator(
+            &test_module(Vec::new()),
+            iterator,
+            IteratorCloseReason::Break,
+            crate::ifc_artifacts::Label::Public,
+        )
+        .unwrap_err();
+    assert!(matches!(error, InterpreterError::MemoryBudgetExceeded { .. }));
+    let RuntimeIteratorState::ForOf(state) = core.iterator_state_mut(handle).unwrap() else {
+        panic!("expected for-of record");
+    };
+    assert!(!state.closed && !state.done && !state.return_called);
+    assert_eq!(core.estimated_memory_bytes, resident_bytes);
+    assert_eq!(core.array_method_temporary_bytes, 0);
+}
+
+#[test]
 fn iterator_close_calls_object_return_once_and_preserves_heap_effects_bd_t9n3s() {
     let module = test_module_with_pool_and_functions(
         vec![
@@ -1140,10 +1173,20 @@ fn iterator_close_calls_object_return_once_and_preserves_heap_effects_bd_t9n3s()
         .unwrap();
     let iterator = custom_for_of_handle_for_close(&mut core, iterable);
 
-    core.close_iterator(&module, iterator.clone(), IteratorCloseReason::Break)
-        .unwrap();
-    core.close_iterator(&module, iterator, IteratorCloseReason::Return)
-        .unwrap();
+    core.close_iterator(
+        &module,
+        iterator.clone(),
+        IteratorCloseReason::Break,
+        crate::ifc_artifacts::Label::Public,
+    )
+    .unwrap();
+    core.close_iterator(
+        &module,
+        iterator,
+        IteratorCloseReason::Return,
+        crate::ifc_artifacts::Label::Public,
+    )
+    .unwrap();
 
     assert_eq!(
         core.prototype_chain_get(iterable, "closeCount").unwrap(),
@@ -1182,7 +1225,12 @@ fn iterator_close_validates_return_result_except_for_throw_bd_t9n3s() {
             .unwrap();
         let iterator = custom_for_of_handle_for_close(&mut core, iterable);
 
-        let result = core.close_iterator(&module, iterator, reason);
+        let result = core.close_iterator(
+            &module,
+            iterator,
+            reason,
+            crate::ifc_artifacts::Label::Public,
+        );
         if should_fail {
             assert!(matches!(result, Err(InterpreterError::TypeError { .. })));
         } else {
@@ -1222,7 +1270,12 @@ fn iterator_close_throw_precedence_restores_original_completion_bd_t9n3s() {
         .unwrap();
     let break_iterator = custom_for_of_handle_for_close(&mut break_core, break_iterable);
     assert!(matches!(
-        break_core.close_iterator(&module, break_iterator, IteratorCloseReason::Break),
+        break_core.close_iterator(
+            &module,
+            break_iterator,
+            IteratorCloseReason::Break,
+            crate::ifc_artifacts::Label::Public,
+        ),
         Err(InterpreterError::UncaughtException { value }) if value == "close failure"
     ));
 
@@ -1242,7 +1295,12 @@ fn iterator_close_throw_precedence_restores_original_completion_bd_t9n3s() {
     throw_core.pending_exception = Some(original.clone());
 
     throw_core
-        .close_iterator(&module, throw_iterator, IteratorCloseReason::Throw)
+        .close_iterator(
+            &module,
+            throw_iterator,
+            IteratorCloseReason::Throw,
+            crate::ifc_artifacts::Label::Public,
+        )
         .expect("an in-flight throw must outrank a failing close hook");
     assert_eq!(throw_core.pending_exception, Some(original));
 }

@@ -575,26 +575,23 @@ fn negative_error_matches(
     expected_error_type: &str,
 ) -> bool {
     let class = err.class();
-    let summary = err.diagnostic_summary();
-    if let Some(phase) = expected_phase {
-        match phase {
-            "parse" | "early" if class != EvalErrorClass::Parse => {
-                return false;
-            }
-            "resolution"
-                if !matches!(class, EvalErrorClass::Resolution | EvalErrorClass::Parse) =>
-            {
-                return false;
-            }
-            "runtime" if class == EvalErrorClass::Parse => {
-                return false;
-            }
-            _ => {}
-        }
+    let phase_matches = match expected_phase {
+        Some("parse" | "early") => class == EvalErrorClass::Parse,
+        Some("resolution") => class == EvalErrorClass::Resolution,
+        Some("runtime") => class == EvalErrorClass::Runtime,
+        Some(_) => false,
+        None => matches!(
+            class,
+            EvalErrorClass::Parse | EvalErrorClass::Resolution | EvalErrorClass::Runtime
+        ),
+    };
+    if !phase_matches || expected_error_type.is_empty() {
+        return false;
     }
-    if expected_error_type.is_empty() || expected_error_type == "Error" {
+    if expected_error_type == "Error" {
         return true;
     }
+    let summary = &err.message;
     if expected_error_type == "SyntaxError"
         && (class == EvalErrorClass::Parse || summary.contains("SyntaxError"))
     {
@@ -633,15 +630,7 @@ fn execute_case_vector(
     let (outcome, observed_value, error_class, error_code, error_detail) = match eval_result {
         Ok(value) => {
             let trimmed_observed = value.trim().to_string();
-            if expected == "TEST262_PASS" || trimmed_observed == expected {
-                (
-                    frankenengine_engine::test262_release_gate::Test262ObservedOutcome::Pass,
-                    Some(trimmed_observed),
-                    None,
-                    None,
-                    None,
-                )
-            } else if expected == "PARSE_ERROR"
+            if expected == "PARSE_ERROR"
                 || expected.starts_with("NEGATIVE:")
                 || expected.starts_with("THROW:")
             {
@@ -653,6 +642,14 @@ fn execute_case_vector(
                     Some(format!(
                         "{FE_T262_UNEXPECTED_PASS}: expected negative `{expected}`, observed normal completion `{trimmed_observed}`",
                     )),
+                )
+            } else if expected == "TEST262_PASS" || trimmed_observed == expected {
+                (
+                    frankenengine_engine::test262_release_gate::Test262ObservedOutcome::Pass,
+                    Some(trimmed_observed),
+                    None,
+                    None,
+                    None,
                 )
             } else {
                 (
@@ -754,15 +751,8 @@ fn vectors_from_suite(suite: &Path, args: &CliArgs) -> io::Result<Vec<Test262Cas
         cases.truncate(limit);
     }
     let harness_vectors = harness.generate_case_vectors(&cases);
-    let total_generated = harness_vectors.len();
     let vectors: Vec<Test262CaseVector> = harness_vectors
         .into_iter()
-        // A handful of real cases (e.g. hashbang-only tests) reduce to an empty
-        // source once the frontmatter is stripped; they cannot be meaningfully
-        // executed and the strict vector validator rejects an empty source, which
-        // would otherwise abort the whole run. Drop them from the denominator
-        // rather than synthesizing a verdict for them.
-        .filter(|v| !v.source.trim().is_empty())
         .map(|v| Test262CaseVector {
             test_id: v.test_id,
             es2020_clause: v.es2020_clause,
@@ -776,12 +766,6 @@ fn vectors_from_suite(suite: &Path, args: &CliArgs) -> io::Result<Vec<Test262Cas
             origin_url: None,
         })
         .collect();
-    let skipped = total_generated - vectors.len();
-    if skipped > 0 {
-        eprintln!(
-            "[suite] skipped {skipped} case(s) with empty post-frontmatter source (e.g. hashbang-only tests)"
-        );
-    }
     validate_case_vectors(vectors)
 }
 
@@ -1231,6 +1215,78 @@ mod tests {
             Some(FE_T262_EXPECTED_VALUE_MISMATCH)
         );
         assert_eq!(artifact.outcome, "fail");
+    }
+
+    #[test]
+    fn returning_a_negative_marker_is_an_unexpected_completion() {
+        let vector = Test262CaseVector {
+            test_id: "language/negative-marker.js".into(),
+            es2020_clause: "test".into(),
+            source: "'NEGATIVE:runtime:TypeError';".into(),
+            expected_value: "NEGATIVE:runtime:TypeError".into(),
+            runtime_lane: RuntimeLane::Hybrid,
+            deterministic_seed: 1,
+            origin_commit: None,
+            origin_url: None,
+        };
+        let (observed, artifact) = execute_case_vector(&vector, "rerun".into());
+        assert_eq!(observed.outcome, Test262ObservedOutcome::Fail);
+        assert_eq!(
+            artifact.error_code.as_deref(),
+            Some(FE_T262_UNEXPECTED_PASS)
+        );
+    }
+
+    #[test]
+    fn negative_expectations_require_matching_language_phases() {
+        use frankenengine_engine::EvalError;
+
+        let parse = EvalError::parse_failure("SyntaxError");
+        let resolution = EvalError::resolution_failure("SyntaxError");
+        assert!(!negative_error_matches(
+            &parse,
+            Some("resolution"),
+            "SyntaxError"
+        ));
+        assert!(!negative_error_matches(
+            &resolution,
+            Some("runtime"),
+            "SyntaxError"
+        ));
+        assert!(negative_error_matches(
+            &resolution,
+            Some("resolution"),
+            "SyntaxError"
+        ));
+        assert!(!negative_error_matches(
+            &parse,
+            Some("unknown"),
+            "SyntaxError"
+        ));
+        assert!(!negative_error_matches(&parse, Some("parse"), ""));
+        for error in [
+            EvalError::policy_denied("TypeError"),
+            EvalError::capability_denied("TypeError"),
+            EvalError::invariant_violation("TypeError"),
+            EvalError::hostcall_fault("TypeError"),
+        ] {
+            assert!(!negative_error_matches(
+                &error,
+                Some("runtime"),
+                "TypeError"
+            ));
+            assert!(!negative_error_matches(&error, None, "TypeError"));
+        }
+        let runtime = EvalError::runtime_fault("unrelated").with_correlation_ids(
+            "TypeError",
+            "decision",
+            "policy",
+        );
+        assert!(!negative_error_matches(
+            &runtime,
+            Some("runtime"),
+            "TypeError"
+        ));
     }
 
     #[test]

@@ -127,29 +127,10 @@ impl Test262Harness {
 
         let mut test_cases = Vec::new();
 
-        // Walk through test directory structure
-        self.walk_test_directory(&self.test262_path.join("test"), &mut test_cases)?;
-
-        // Filter by profile include/exclude patterns
-        let mut filtered: Vec<Test262TestCase> = test_cases
-            .into_iter()
-            .filter(|test| {
-                // `*_FIXTURE.js` files are helper modules imported by real tests, not
-                // tests themselves (they carry no frontmatter); never run them.
-                if test.file_path.ends_with("_FIXTURE.js") {
-                    return false;
-                }
-                let decision = self.profile.classify(&test.file_path);
-                matches!(decision, ProfileDecision::Included)
-            })
-            .collect();
-
-        // `fs::read_dir` order is platform-dependent, so sort by the (test/-relative)
-        // path to make extraction — and any `truncate`-based sampling on top of it —
-        // deterministic and reproducible across hosts.
-        filtered.sort_by(|a, b| a.file_path.cmp(&b.file_path));
-
-        Ok(filtered)
+        let test_root = self.test262_path.join("test");
+        self.walk_test_directory(&test_root, &test_root, &mut test_cases)?;
+        test_cases.sort_by(|a, b| a.file_path.cmp(&b.file_path));
+        Ok(test_cases)
     }
 
     /// Convert Test262 test cases to case vectors for franken_test262_runner.
@@ -254,6 +235,7 @@ impl Test262Harness {
     /// Recursively walk Test262 test directory and parse .js files.
     fn walk_test_directory(
         &self,
+        test_root: &Path,
         dir: &Path,
         test_cases: &mut Vec<Test262TestCase>,
     ) -> Result<(), Test262HarnessError> {
@@ -265,12 +247,20 @@ impl Test262Harness {
 
             if path.is_dir() {
                 // Recurse into subdirectories
-                self.walk_test_directory(&path, test_cases)?;
+                self.walk_test_directory(test_root, &path, test_cases)?;
             } else if path.extension().and_then(|s| s.to_str()) == Some("js") {
-                // Parse JavaScript test file
-                if let Ok(test_case) = self.parse_test_file(&path) {
-                    test_cases.push(test_case);
+                let relative_path = path
+                    .strip_prefix(test_root)
+                    .ok()
+                    .and_then(Path::to_str)
+                    .ok_or_else(|| Test262HarnessError::PathError(path.display().to_string()))?
+                    .replace(std::path::MAIN_SEPARATOR, "/");
+                if relative_path.ends_with("_FIXTURE.js")
+                    || self.profile.classify(&relative_path) != ProfileDecision::Included
+                {
+                    continue;
                 }
+                test_cases.push(self.parse_test_file(&path, relative_path)?);
             }
         }
 
@@ -278,29 +268,19 @@ impl Test262Harness {
     }
 
     /// Parse a single Test262 .js test file.
-    fn parse_test_file(&self, file_path: &Path) -> Result<Test262TestCase, Test262HarnessError> {
+    fn parse_test_file(
+        &self,
+        file_path: &Path,
+        relative_path: String,
+    ) -> Result<Test262TestCase, Test262HarnessError> {
         let content = fs::read_to_string(file_path)
-            .map_err(|e| Test262HarnessError::IoError(e.to_string()))?;
-
-        // Extract the path relative to the Test262 `test/` directory, so it matches
-        // the profile include/exclude patterns (`language/*`, `built-ins/*`) and the
-        // canonical case-vector `test_id` format (e.g. "language/expressions/arrow.js").
-        // The profile and the `test_id`s are relative to `test/`, not the repo root,
-        // so a bare `strip_prefix(repo_root)` would leave a `test/` segment that
-        // matches no include pattern and silently classifies every real case as
-        // NotSelected (the bug that made the real corpus yield zero vectors).
-        let from_repo_root = file_path.strip_prefix(&self.test262_path).map_err(|_| {
-            Test262HarnessError::PathError("Test file not under Test262 repo".to_string())
-        })?;
-        let relative_path = from_repo_root
-            .strip_prefix("test")
-            .unwrap_or(from_repo_root)
-            .to_string_lossy()
-            .to_string();
-
-        // Parse frontmatter and source
-        let (frontmatter, source) = self.split_frontmatter(&content)?;
-        let metadata = self.parse_frontmatter(&frontmatter)?;
+            .map_err(|e| Test262HarnessError::IoError(format!("{relative_path}: {e}")))?;
+        let (frontmatter, source) = self
+            .split_frontmatter(&content)
+            .map_err(|e| Test262HarnessError::ParseError(format!("{relative_path}: {e}")))?;
+        let metadata = self
+            .parse_frontmatter(&frontmatter)
+            .map_err(|e| Test262HarnessError::ParseError(format!("{relative_path}: {e}")))?;
 
         Ok(Test262TestCase {
             file_path: relative_path,
@@ -729,6 +709,42 @@ mod tests {
             excludes: Vec::new(),
         };
         Test262Harness::new(PathBuf::from("/tmp/test262-placeholder"), pins, profile)
+    }
+
+    #[test]
+    fn discovery_accounts_for_every_selected_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("test");
+        let language = root.join("language");
+        fs::create_dir_all(&language).unwrap();
+        let mut h = harness();
+        h.profile.includes = vec![crate::test262_release_gate::Test262ProfileInclude {
+            pattern: "language/*".to_string(),
+            rationale: "discovery test".to_string(),
+            normative_clause: "test".to_string(),
+        }];
+        fs::write(language.join("valid.js"), "/*---\nesid: example\n---*/\n1;").unwrap();
+        fs::write(language.join("helper_FIXTURE.js"), [0xff]).unwrap();
+        fs::write(root.join("unselected.js"), [0xff]).unwrap();
+
+        let discover = || {
+            let mut cases = Vec::new();
+            h.walk_test_directory(&root, &root, &mut cases)?;
+            Ok::<_, Test262HarnessError>(cases)
+        };
+        let cases = discover().unwrap();
+        assert_eq!(cases.len(), 1);
+        assert_eq!(cases[0].file_path, "language/valid.js");
+
+        let broken = language.join("broken.js");
+        fs::write(&broken, [0xff]).unwrap();
+        assert!(matches!(
+            discover(), Err(Test262HarnessError::IoError(e)) if e.contains("language/broken.js")
+        ));
+        fs::write(&broken, "/*--- unterminated").unwrap();
+        assert!(matches!(
+            discover(), Err(Test262HarnessError::ParseError(e)) if e.contains("language/broken.js")
+        ));
     }
 
     #[test]

@@ -2388,6 +2388,72 @@ fn minified_import_declarations_parse_bd_goh5q() {
 }
 
 #[test]
+fn module_linkage_uses_identifier_string_values() {
+    let parse = |source: &str| {
+        CanonicalEs2020Parser
+            .parse(source, ParseGoal::Module)
+            .unwrap_or_else(|error| panic!("{source}: {error:?}"))
+            .body
+    };
+
+    let body = parse(r#"import \u0061, { \u{62} as \u0063, "" as empty } from 'pkg'"#);
+    let Statement::Import(import) = &body[0] else {
+        panic!("expected import");
+    };
+    let ImportClause::DefaultAndNamed {
+        default,
+        specifiers,
+    } = &import.clause
+    else {
+        panic!("expected default and named imports");
+    };
+    assert_eq!(default, "a");
+    assert_eq!(specifiers[0].import_name, "b");
+    assert_eq!(specifiers[0].local_name, "c");
+    assert_eq!(specifiers[1].import_name, "");
+    assert_eq!(specifiers[1].local_name, "empty");
+
+    let body = parse(r"import * as \u0061 from 'pkg'");
+    assert!(matches!(&body[0], Statement::Import(import)
+        if matches!(&import.clause, ImportClause::Namespace { local } if local == "a")));
+
+    for (source, expected) in [
+        (r"export { \u{61} as \u0062 } from 'pkg'", "{ a as b }"),
+        (r"export * as \u{61} from 'pkg'", "* as a"),
+    ] {
+        let body = parse(source);
+        assert!(matches!(&body[0], Statement::Export(export)
+            if matches!(&export.kind, ExportKind::NamedClause(clause) if clause.canonical_head() == expected)));
+    }
+
+    // A string-valued export whose value contains a literal backslash
+    // remains distinct from an escaped IdentifierName.
+    let body = parse(r#"export { a as "\\u0061", a as \u0061 } from 'pkg'"#);
+    let Statement::Export(export) = &body[0] else {
+        panic!("expected re-export");
+    };
+    assert_eq!(exported_names(&export.kind), [r"\u0061", "a"]);
+}
+
+#[test]
+fn module_early_errors_compare_decoded_bindings_and_exports() {
+    for source in [
+        r"import { a, b as \u0061 } from 'pkg'",
+        r"import { a as \u0061wait } from 'pkg'",
+        r"import \u0065val from 'pkg'",
+        r"import * as \u0061rguments from 'pkg'",
+        r"export { a, b as \u{61} } from 'pkg'",
+        r"export * as a from 'pkg'; export * as \u0061 from 'other'",
+        "import * asname from 'pkg'",
+    ] {
+        let error = CanonicalEs2020Parser
+            .parse(source, ParseGoal::Module)
+            .expect_err(source);
+        assert_eq!(error.code, ParseErrorCode::InvalidSyntax, "{source}");
+    }
+}
+
+#[test]
 fn minified_export_declarations_parse_bd_goh5q() {
     let parse_export = |source: &str| {
         let tree = CanonicalEs2020Parser

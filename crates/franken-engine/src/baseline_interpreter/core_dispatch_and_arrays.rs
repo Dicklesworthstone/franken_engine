@@ -9256,7 +9256,7 @@ impl InterpreterCore {
                 None => result_label,
             };
             let result_label = if matches!(&active_callee, Value::BuiltinFunction(builtin)
-                if builtin.kind.observes_host_effect_selection())
+                if Self::builtin_constructor_observes_callback_labels(builtin))
             {
                 let observed = self
                     .take_pending_hostcall_result_label()
@@ -16272,14 +16272,18 @@ impl InterpreterCore {
                             result_label,
                             &new_target_label,
                         )?;
-                        let result_label = if builtin.kind.observes_host_effect_selection() {
-                            let observed = self
-                                .take_pending_hostcall_result_label()
-                                .unwrap_or(Label::Public);
-                            self.join_owned_label_with_temporary_budget(observed, &result_label)?
-                        } else {
-                            result_label
-                        };
+                        let result_label =
+                            if Self::builtin_constructor_observes_callback_labels(builtin) {
+                                let observed = self
+                                    .take_pending_hostcall_result_label()
+                                    .unwrap_or(Label::Public);
+                                self.join_owned_label_with_temporary_budget(
+                                    observed,
+                                    &result_label,
+                                )?
+                            } else {
+                                result_label
+                            };
                         self.write_reg_with_label(dst, constructed, result_label)?;
                         self.ip += 1;
                         continue;
@@ -16414,7 +16418,7 @@ impl InterpreterCore {
                         if standard_name == Some("Iterator") {
                             return Err(self.abstract_iterator_construction_error());
                         }
-                        if builtin.kind.observes_host_effect_selection() {
+                        if Self::builtin_constructor_observes_callback_labels(builtin) {
                             self.clear_pending_hostcall_result_label();
                         }
                         let mut result = match standard_name {
@@ -16484,22 +16488,24 @@ impl InterpreterCore {
                         {
                             result = Value::Object(self.alloc_primitive_wrapper(result)?);
                         }
-                        // IFC: a `new Builtin(...)` result derives entirely from
-                        // its argument registers, so the dst label is the join
-                        // of the arg labels — same contract as the `Call`
+                        // IFC: a `new Builtin(...)` result derives from its
+                        // argument registers and any observed constructor
+                        // callbacks, including DataView's ToIndex conversions.
+                        // The dst joins these labels, as does the `Call`
                         // builtin arm. Without this, `new Array(secretLen)` /
                         // `new String(secret)` would read as Public and leak via
                         // a later egress hostcall (same under-tainting family as
                         // bd-n2mjy / bd-0zybl / bd-ooaka.1).
                         let args_label = self.join_arg_range_label(args)?;
-                        let result_label = if builtin.kind.observes_host_effect_selection() {
-                            let observed = self
-                                .take_pending_hostcall_result_label()
-                                .unwrap_or(Label::Public);
-                            self.join_owned_label_with_temporary_budget(observed, &args_label)?
-                        } else {
-                            args_label
-                        };
+                        let result_label =
+                            if Self::builtin_constructor_observes_callback_labels(builtin) {
+                                let observed = self
+                                    .take_pending_hostcall_result_label()
+                                    .unwrap_or(Label::Public);
+                                self.join_owned_label_with_temporary_budget(observed, &args_label)?
+                            } else {
+                                args_label
+                            };
                         self.write_reg_with_label(dst, result, result_label.join(&callee_label))?;
                         self.ip += 1;
                         continue;

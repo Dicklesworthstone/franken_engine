@@ -1,5 +1,14 @@
 use super::*;
 
+/// DataView arguments after their observable conversions, before the
+/// constructor's prototype getter and final buffer validity checks.
+pub(super) struct PreparedDataView {
+    buffer: ObjectId,
+    byte_offset: usize,
+    byte_length: usize,
+    bounds: Option<ViewBounds>,
+}
+
 impl InterpreterCore {
     /// Unified Math.random implementation - deterministic with proper [0,1) range.
     pub(super) fn math_random_impl(&mut self) -> Result<Value, InterpreterError> {
@@ -6913,6 +6922,28 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
         args: RegRange,
     ) -> Result<ObjectId, InterpreterError> {
+        let end =
+            args.start
+                .checked_add(args.count)
+                .ok_or(InterpreterError::RegisterOutOfBounds {
+                    register: args.start,
+                    max: self.config.max_registers,
+                })?;
+        let observation = self.begin_property_observation(args.start..end)?;
+        let outcome = (|| {
+            let prepared = self.prepare_data_view_arguments(module, args)?;
+            self.construct_prepared_data_view(prepared)
+        })();
+        self.finish_property_read_observation(observation, outcome)
+    }
+
+    /// ES2024 25.3.2.1 steps 2-9. Retain the converted arguments so a
+    /// newTarget prototype getter cannot cause a second ToIndex call.
+    fn prepare_data_view_arguments(
+        &mut self,
+        module: Option<&Ir3Module>,
+        args: RegRange,
+    ) -> Result<PreparedDataView, InterpreterError> {
         let first_arg = if args.count == 0 {
             Value::Undefined
         } else {
@@ -6942,42 +6973,61 @@ impl InterpreterCore {
             });
         }
 
+        // Guest conversions run while native locals retain the buffer.
+        self.gc_nested_request = None;
         let (byte_offset, byte_length, bounds) =
             self.data_view_buffer_view_shape(module, buffer_id, args)?;
-        let view = self.alloc_data_view_object(buffer_id, byte_offset, byte_length)?;
-        self.register_buffer_view(view, bounds)?;
-        Ok(view)
+        Ok(PreparedDataView {
+            buffer: buffer_id,
+            byte_offset,
+            byte_length,
+            bounds,
+        })
     }
 
-    /// The argument checks of DataView ( buffer, byteOffset, byteLength )
-    /// (ES2024 25.3.2.1 steps 2-9) without constructing the view: the
-    /// TypeError for a buffer that is not an ArrayBuffer and the
-    /// RangeErrors of the offset and length. Callers pass only primitive
-    /// offsets and lengths, whose ToIndex has no observable effect.
-    pub(super) fn validate_data_view_arguments(
+    /// ES2024 25.3.2.1 steps 11-18. A length conversion or prototype getter
+    /// may have detached or resized the buffer since the initial checks.
+    pub(super) fn construct_prepared_data_view(
         &mut self,
-        module: &Ir3Module,
-        args: RegRange,
-    ) -> Result<(), InterpreterError> {
-        let buffer = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-        let buffer_id = match buffer {
-            Value::Object(id)
-                if self
-                    .heap
-                    .get(id.0 as usize)
-                    .is_some_and(|object| object.array_buffer.is_some()) =>
-            {
-                id
+        prepared: PreparedDataView,
+    ) -> Result<ObjectId, InterpreterError> {
+        let PreparedDataView {
+            buffer,
+            byte_offset,
+            byte_length,
+            bounds,
+        } = prepared;
+        let backing = self.buffer_backing(buffer)?;
+        if backing.detached {
+            return Err(InterpreterError::TypeError {
+                expected: "an attached ArrayBuffer for DataView".to_string(),
+                got: "a detached ArrayBuffer".to_string(),
+            });
+        }
+        let buffer_len = backing.bytes.len();
+        let remaining = buffer_len.checked_sub(byte_offset).ok_or_else(|| {
+            InterpreterError::RangeError {
+                message: format!(
+                    "DataView byteOffset {byte_offset} exceeds ArrayBuffer byteLength {buffer_len}"
+                ),
             }
-            other => {
-                return Err(InterpreterError::TypeError {
-                    expected: "ArrayBuffer".to_string(),
-                    got: other.type_name().to_string(),
-                });
-            }
+        })?;
+        let byte_length = if bounds.is_some_and(|bounds| bounds.fixed_length.is_none()) {
+            // An auto-length view reflects the buffer's current size
+            // and remains registered for subsequent resizes.
+            remaining
+        } else if byte_length <= remaining {
+            byte_length
+        } else {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "DataView view range byteOffset {byte_offset} + byteLength {byte_length} exceeds ArrayBuffer byteLength {buffer_len}"
+                ),
+            });
         };
-        self.data_view_buffer_view_shape(Some(module), buffer_id, args)?;
-        Ok(())
+        let view = self.alloc_data_view_object(buffer, byte_offset, byte_length)?;
+        self.register_buffer_view(view, bounds)?;
+        Ok(view)
     }
 
     /// Allocate a new object with an explicit prototype link.
@@ -8142,9 +8192,16 @@ impl InterpreterCore {
         Ok(prototype)
     }
 
-    /// Native effect factories also retain the selected constructor and
-    /// new.target provenance while allocating their host-backed state.
-    /// This includes Reflect.construct and a derived class's super() path.
+    pub(super) fn builtin_constructor_observes_callback_labels(builtin: &BuiltinFunction) -> bool {
+        builtin.kind.observes_host_effect_selection()
+            || (builtin.kind == BuiltinFunctionKind::StandardConstructor
+                && Self::standard_constructor_name(builtin).ok() == Some("DataView"))
+    }
+
+    /// Native effect factories retain constructor/new.target provenance;
+    /// DataView also retains argument conversion observations across its
+    /// prototype read and final dispatch. Both Reflect.construct and a
+    /// derived class's super() path use this boundary.
     pub(super) fn construct_builtin_with_new_target_and_labels(
         &mut self,
         module: &Ir3Module,
@@ -8154,11 +8211,23 @@ impl InterpreterCore {
         callee_label: &Label,
         new_target_label: &Label,
     ) -> Result<Value, InterpreterError> {
-        if !builtin.kind.observes_host_effect_selection() {
+        let is_data_view = builtin.kind == BuiltinFunctionKind::StandardConstructor
+            && Self::standard_constructor_name(builtin).ok() == Some("DataView");
+        if !Self::builtin_constructor_observes_callback_labels(builtin) {
             return self.construct_builtin_with_new_target(module, builtin, args, new_target);
         }
         self.clear_pending_hostcall_result_label();
-        let observation = self.begin_property_observation([])?;
+        let observation = if is_data_view {
+            let end = args.start.checked_add(args.count).ok_or(
+                InterpreterError::RegisterOutOfBounds {
+                    register: args.start,
+                    max: self.config.max_registers,
+                },
+            )?;
+            self.begin_property_observation(args.start..end)?
+        } else {
+            self.begin_property_observation([])?
+        };
         let outcome = (|| {
             let selection =
                 self.clone_dominant_label_with_temporary_budget(callee_label, new_target_label, 0)?;
@@ -8169,10 +8238,10 @@ impl InterpreterCore {
     }
 
     /// [[Construct]] of a builtin constructor with an explicit new.target
-    /// (`Reflect.construct(B, args, F)`, or `B` as a class's parent): the
-    /// builtin's own construction, then new.target's prototype. `Number`,
-    /// `String` and `Boolean` construct their wrapper objects, as `new` does
-    /// (bd-9vouw.48); `Symbol` and `BigInt` are not constructors.
+    /// (`Reflect.construct(B, args, F)`, or `B` as a class's parent). The
+    /// constructor determines when arguments are converted relative to
+    /// reading new.target's prototype. `Number`, `String` and `Boolean`
+    /// construct wrappers (bd-9vouw.48); `Symbol` and `BigInt` cannot construct.
     pub(super) fn construct_builtin_with_new_target(
         &mut self,
         module: &Ir3Module,
@@ -8200,10 +8269,8 @@ impl InterpreterCore {
         // (25.3.2.1 steps 2-9) validate their arguments before
         // GetPrototypeFromConstructor; the read below came first for every
         // builtin, so a throwing `prototype` getter on newTarget hid their
-        // TypeError / RangeError. ToIndex of an object offset or length is
-        // observable, so a DataView is validated up front only when both are
-        // primitives; construction validates again after the read, as the
-        // specification re-checks the buffer then.
+        // TypeError / RangeError. DataView retains its once-converted
+        // arguments across the prototype read, then re-checks the buffer.
         if builtin.kind == BuiltinFunctionKind::PromiseConstructor {
             let executor = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
             if !executor.is_callable() {
@@ -8216,20 +8283,14 @@ impl InterpreterCore {
                 });
             }
         }
-        if standard_name == Some("DataView") {
-            let mut primitive = true;
-            for index in 1..3 {
-                primitive &= !self
-                    .builtin_arg(args, index)?
-                    .is_some_and(|value| value.is_object_like());
-            }
-            if primitive {
-                self.validate_data_view_arguments(module, args)?;
-            }
-        }
+        let prepared_data_view = if standard_name == Some("DataView") {
+            Some(self.prepare_data_view_arguments(Some(module), args)?)
+        } else {
+            None
+        };
         // GetPrototypeFromConstructor(newTarget, default) (ES2024 10.1.14):
         // Get(newTarget, "prototype") observably (a getter or proxy trap runs
-        // and may throw), before the construction reads its arguments; a
+        // and may throw), after any constructor-specific argument preparation.
         // Standard constructors fall back to their own intrinsic prototype
         // (bd-9vouw.273); ordinary process functions use %Object.prototype%.
         self.gc_nested_request = None;
@@ -8270,36 +8331,46 @@ impl InterpreterCore {
                 self.alloc_object_with_prototype(Some(prototype))?,
             ));
         }
-        let mut result = match standard_name {
-            _ if builtin.kind == BuiltinFunctionKind::IntlConstructor => {
-                self.construct_intl_service(module, &builtin.module_specifier, args)?
-            }
-            _ if builtin.kind == BuiltinFunctionKind::DateConstructor => {
-                self.dispatch_builtin_hostcall("builtin:Date", args, Some(module))?
-            }
-            Some("RegExp") => {
-                self.dispatch_builtin_hostcall("builtin:RegExp", args, Some(module))?
-            }
-            Some(name) if Self::buffer_family_constructor(name) => {
-                self.dispatch_builtin_hostcall(&format!("builtin:{name}"), args, Some(module))?
-            }
-            Some(name) if event_target::EVENT_TARGET_FAMILY.contains(&name) => {
-                self.construct_event_target_family(module, name, args)?
-            }
-            Some("Blob") => self.construct_blob(module, args)?,
-            Some("SharedArrayBuffer") => {
-                self.dispatch_builtin_hostcall("builtin:SharedArrayBuffer", args, Some(module))?
-            }
-            // Constructed rather than called (call_standard_constructor
-            // throws for them): Reflect.construct(Map, ...), a value
-            // `new M()` with M = Map, a derived class's super().
-            // WeakRef and FinalizationRegistry too (ES2021 26.1.1.1,
-            // 26.2.1.1): a subclass's super() threw "requires 'new'"
-            // (bd-9vouw.357).
-            Some(
-                name @ ("Map" | "Set" | "WeakMap" | "WeakSet" | "WeakRef" | "FinalizationRegistry"),
-            ) => self.dispatch_builtin_hostcall(&format!("builtin:{name}"), args, Some(module))?,
-            _ => self.dispatch_builtin_function(module, builtin, args, None, None)?,
+        let mut result = match (standard_name, prepared_data_view) {
+            (_, Some(prepared)) => self.dispatch_prepared_data_view_hostcall(args, prepared)?,
+            (standard_name, None) => match standard_name {
+                _ if builtin.kind == BuiltinFunctionKind::IntlConstructor => {
+                    self.construct_intl_service(module, &builtin.module_specifier, args)?
+                }
+                _ if builtin.kind == BuiltinFunctionKind::DateConstructor => {
+                    self.dispatch_builtin_hostcall("builtin:Date", args, Some(module))?
+                }
+                Some("RegExp") => {
+                    self.dispatch_builtin_hostcall("builtin:RegExp", args, Some(module))?
+                }
+                Some(name) if Self::buffer_family_constructor(name) => {
+                    self.dispatch_builtin_hostcall(&format!("builtin:{name}"), args, Some(module))?
+                }
+                Some(name) if event_target::EVENT_TARGET_FAMILY.contains(&name) => {
+                    self.construct_event_target_family(module, name, args)?
+                }
+                Some("Blob") => self.construct_blob(module, args)?,
+                Some("SharedArrayBuffer") => {
+                    self.dispatch_builtin_hostcall("builtin:SharedArrayBuffer", args, Some(module))?
+                }
+                // Constructed rather than called (call_standard_constructor
+                // throws for them): Reflect.construct(Map, ...), a value
+                // `new M()` with M = Map, a derived class's super().
+                // WeakRef and FinalizationRegistry too (ES2021 26.1.1.1,
+                // 26.2.1.1): a subclass's super() threw "requires 'new'"
+                // (bd-9vouw.357).
+                Some(
+                    name @ ("Map"
+                    | "Set"
+                    | "WeakMap"
+                    | "WeakSet"
+                    | "WeakRef"
+                    | "FinalizationRegistry"),
+                ) => {
+                    self.dispatch_builtin_hostcall(&format!("builtin:{name}"), args, Some(module))?
+                }
+                _ => self.dispatch_builtin_function(module, builtin, args, None, None)?,
+            },
         };
         if matches!(standard_name, Some("Number" | "String" | "Boolean"))
             && !result.is_object_like()

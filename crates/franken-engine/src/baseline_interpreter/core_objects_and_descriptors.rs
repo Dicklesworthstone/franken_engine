@@ -1,3 +1,4 @@
+use super::core_math_and_registers::PreparedDataView;
 use super::*;
 
 impl InterpreterCore {
@@ -7673,6 +7674,32 @@ impl InterpreterCore {
         args: RegRange,
         module: Option<&Ir3Module>,
     ) -> Result<Value, InterpreterError> {
+        self.dispatch_builtin_hostcall_with_prepared_data_view(cap, args, module, None)
+    }
+
+    /// DataView's arguments have already been converted before its
+    /// newTarget.prototype read. Keep normal GC, labels and telemetry while
+    /// completing construction without repeating those observable conversions.
+    pub(super) fn dispatch_prepared_data_view_hostcall(
+        &mut self,
+        args: RegRange,
+        prepared: PreparedDataView,
+    ) -> Result<Value, InterpreterError> {
+        self.dispatch_builtin_hostcall_with_prepared_data_view(
+            "builtin:DataView",
+            args,
+            None,
+            Some(prepared),
+        )
+    }
+
+    fn dispatch_builtin_hostcall_with_prepared_data_view(
+        &mut self,
+        cap: &str,
+        args: RegRange,
+        module: Option<&Ir3Module>,
+        prepared_data_view: Option<PreparedDataView>,
+    ) -> Result<Value, InterpreterError> {
         // Each dispatch owns exactly one optional callback-derived label. A
         // previous failed or test-only direct dispatch must never taint the
         // next, unrelated hostcall.
@@ -7696,34 +7723,39 @@ impl InterpreterCore {
             }
         }
         self.gc_enter_builtin();
-        let outcome = match cap {
-            "builtin:ObjectDefineProperty"
-            | "builtin:ObjectDefineProperties"
-            | "builtin:ReflectDefineProperty"
-                if self.has_mapped_arguments_target(args) =>
-            {
-                self.dispatch_mapped_arguments_definition(cap, args, module)
-            }
-            // These already have narrow helpers and can invoke nested guest
-            // callbacks. Avoid reserving the broad handler's stack frame at
-            // every Reflect reentry; keep GC and telemetry in this wrapper.
-            "builtin:ReflectApply" => self.reflect_invocation_builtin(module, args, false),
-            "builtin:ReflectConstruct" => self.reflect_invocation_builtin(module, args, true),
-            "builtin:Date"
-            | "builtin:DatePrototypeGetTime"
-            | "builtin:DatePrototypeToString"
-            | "builtin:DatePrototypeToLocaleString"
-            | "builtin:DatePrototypeToLocaleDateString"
-            | "builtin:DatePrototypeToLocaleTimeString" => {
-                self.dispatch_date_hostcall(cap, args, module)
-            }
-            "builtin:DestructureIteratorInit"
-            | "builtin:DestructureIteratorNext"
-            | "builtin:DestructureIteratorElide"
-            | "builtin:DestructureIteratorDone" => {
-                self.dispatch_destructure_iterator_hostcall(cap, args, module)
-            }
-            _ => self.dispatch_builtin_hostcall_inner(cap, args, module),
+        let outcome = match prepared_data_view {
+            Some(prepared) => self
+                .construct_prepared_data_view(prepared)
+                .map(Value::Object),
+            None => match cap {
+                "builtin:ObjectDefineProperty"
+                | "builtin:ObjectDefineProperties"
+                | "builtin:ReflectDefineProperty"
+                    if self.has_mapped_arguments_target(args) =>
+                {
+                    self.dispatch_mapped_arguments_definition(cap, args, module)
+                }
+                // These already have narrow helpers and can invoke nested guest
+                // callbacks. Avoid reserving the broad handler's stack frame at
+                // every Reflect reentry; keep GC and telemetry in this wrapper.
+                "builtin:ReflectApply" => self.reflect_invocation_builtin(module, args, false),
+                "builtin:ReflectConstruct" => self.reflect_invocation_builtin(module, args, true),
+                "builtin:Date"
+                | "builtin:DatePrototypeGetTime"
+                | "builtin:DatePrototypeToString"
+                | "builtin:DatePrototypeToLocaleString"
+                | "builtin:DatePrototypeToLocaleDateString"
+                | "builtin:DatePrototypeToLocaleTimeString" => {
+                    self.dispatch_date_hostcall(cap, args, module)
+                }
+                "builtin:DestructureIteratorInit"
+                | "builtin:DestructureIteratorNext"
+                | "builtin:DestructureIteratorElide"
+                | "builtin:DestructureIteratorDone" => {
+                    self.dispatch_destructure_iterator_hostcall(cap, args, module)
+                }
+                _ => self.dispatch_builtin_hostcall_inner(cap, args, module),
+            },
         };
         self.gc_exit_builtin();
         // ApplyHostCall and callback-running builtins can complete nested

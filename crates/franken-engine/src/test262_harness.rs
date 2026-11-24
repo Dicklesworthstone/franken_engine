@@ -34,7 +34,7 @@ pub struct Test262TestCase {
     /// Test description from frontmatter
     pub description: String,
 
-    /// JavaScript source code (without frontmatter)
+    /// JavaScript body, or the complete original file for a Test262 raw case.
     pub source: String,
 
     /// Expected test outcome
@@ -282,6 +282,13 @@ impl Test262Harness {
             .parse_frontmatter(&frontmatter)
             .map_err(|e| Test262HarnessError::ParseError(format!("{relative_path}: {e}")))?;
 
+        let flags = self.parse_list_field(&metadata, "flags");
+        let source = if flags.iter().any(|flag| flag == "raw") {
+            content
+        } else {
+            source
+        };
+
         Ok(Test262TestCase {
             file_path: relative_path,
             es_clause: metadata
@@ -294,7 +301,7 @@ impl Test262Harness {
             source,
             expected_outcome: self.determine_expected_outcome(&metadata),
             features: self.parse_list_field(&metadata, "features"),
-            flags: self.parse_list_field(&metadata, "flags"),
+            flags,
             includes: self.parse_list_field(&metadata, "includes"),
             negative: self.parse_negative_field(&metadata),
         })
@@ -600,9 +607,6 @@ assert.throws = function(expectedErrorConstructor, func, message) {
 
     /// Convert a `Test262TestCase` into its sloppy and/or strict `Test262CaseVector`s.
     fn test_case_to_vectors(&self, test: &Test262TestCase) -> Vec<Test262CaseVector> {
-        if test.source.trim().is_empty() {
-            return Vec::new();
-        }
         let expected_value = self.expected_value_for_case(test);
         let prelude = self.build_harness_prelude(test);
         let has_flag = |flag: &str| test.flags.iter().any(|f| f == flag);
@@ -745,6 +749,31 @@ mod tests {
         assert!(matches!(
             discover(), Err(Test262HarnessError::ParseError(e)) if e.contains("language/broken.js")
         ));
+    }
+
+    #[test]
+    fn raw_files_execute_verbatim_and_empty_bodies_still_generate_variants() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("case.js");
+        let h = harness();
+        for source in [
+            "#! /usr/bin/env js\r\n/*---\r\nflags: [raw]\r\n---*/\r\n",
+            "\u{feff}/*---\nflags: [raw]\n---*/\n42;",
+        ] {
+            fs::write(&path, source).unwrap();
+            let case = h.parse_test_file(&path, "case.js".into()).unwrap();
+            let vectors = h.generate_case_vectors(&[case]);
+            assert_eq!(vectors.len(), 1);
+            assert_eq!(vectors[0].source.as_bytes(), source.as_bytes());
+        }
+
+        fs::write(&path, "/*---\nesid: sec-scripts\n---*/\n").unwrap();
+        let case = h.parse_test_file(&path, "empty.js".into()).unwrap();
+        let vectors = h.generate_case_vectors(&[case]);
+        assert_eq!(vectors.len(), 2);
+        assert_eq!(vectors[0].test_id, "empty.js");
+        assert_eq!(vectors[1].test_id, "empty.js#strict");
+        assert!(vectors[1].source.starts_with("\"use strict\";"));
     }
 
     #[test]

@@ -1027,6 +1027,14 @@ impl BuiltinFunction {
         }
     }
 
+    fn generator_return() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::GeneratorPrototypeReturn,
+            module_specifier: String::new(),
+            bound_object: None,
+        }
+    }
+
     /// Bind a resolving callable to its legacy Promise handle or to the
     /// shared resolving-pair identity selected by its builtin kind.
     fn promise_capability(kind: BuiltinFunctionKind, bound_identity: u32) -> Self {
@@ -5521,7 +5529,8 @@ impl InterpreterCore {
                 };
                 Ok(Value::Str(self.symbol_to_string(*symbol)))
             }
-            BuiltinFunctionKind::GeneratorPrototypeNext => {
+            BuiltinFunctionKind::GeneratorPrototypeNext
+            | BuiltinFunctionKind::GeneratorPrototypeReturn => {
                 let Some(Value::Generator(generator_id)) = receiver else {
                     return Err(InterpreterError::TypeError {
                         expected: "Generator receiver".to_string(),
@@ -5538,7 +5547,12 @@ impl InterpreterCore {
                 } else {
                     crate::ifc_artifacts::Label::Public
                 };
-                return self.generator_next(module, *generator_id, argument, argument_label);
+                let label = receiver_label.join(&argument_label);
+                return if builtin.kind == BuiltinFunctionKind::GeneratorPrototypeReturn {
+                    self.resume_generator(module, *generator_id, argument, label, true)
+                } else {
+                    self.generator_next(module, *generator_id, argument, label)
+                };
             }
             BuiltinFunctionKind::AsyncGeneratorPrototypeNext
             | BuiltinFunctionKind::AsyncGeneratorPrototypeReturn
@@ -5690,6 +5704,7 @@ impl InterpreterCore {
                     | BuiltinFunctionKind::SymbolKeyFor
                     | BuiltinFunctionKind::SymbolPrototypeToString
                     | BuiltinFunctionKind::GeneratorPrototypeNext
+                    | BuiltinFunctionKind::GeneratorPrototypeReturn
                     | BuiltinFunctionKind::PromiseCapabilityResolve
                     | BuiltinFunctionKind::PromiseCapabilityReject
                     | BuiltinFunctionKind::PromisePrototypeThen
@@ -8283,6 +8298,29 @@ impl InterpreterCore {
             });
         }
 
+        // A return selected through private data also governs the cleanup it
+        // resumes. Admit the replacement context before cloning a Custom label.
+        let return_context_label = if is_return {
+            let context = &self.generators[gen_id as usize]
+                .execution
+                .as_ref()
+                .expect("validated generator activation")
+                .call_stack
+                .first()
+                .ok_or_else(|| InterpreterError::TypeError {
+                    expected: "generator activation with a root frame".into(),
+                    got: "empty generator call stack".into(),
+                })?
+                .accessor_context_label;
+            self.check_temporary_memory_budget(
+                Self::estimate_label_bytes(context)
+                    .saturating_add(Self::estimate_label_bytes(&argument_label)),
+            )?;
+            Some(context.join(&argument_label))
+        } else {
+            None
+        };
+
         let (resume_dst, activation) = {
             let generator = &mut self.generators[gen_id as usize];
             let activation =
@@ -8308,7 +8346,13 @@ impl InterpreterCore {
             previous_suspended_call_depth.saturating_add(caller_execution.call_stack.len());
         self.install_module_execution(activation);
 
+        let previous_context_label = return_context_label
+            .map(|label| std::mem::replace(&mut self.call_stack[0].accessor_context_label, label));
+
         if let Err(error) = self.sync_estimated_memory_bytes() {
+            if let Some(label) = previous_context_label {
+                self.call_stack[0].accessor_context_label = label;
+            }
             let activation = self.take_module_execution();
             self.temporarily_suspended_execution_bytes = previous_suspended_bytes;
             self.temporarily_suspended_call_depth = previous_suspended_call_depth;
@@ -8319,6 +8363,7 @@ impl InterpreterCore {
             generator.phase = phase;
             return Err(error);
         }
+        drop(previous_context_label);
 
         let mut argument = Some((argument, argument_label));
         if !is_return
@@ -10150,11 +10195,16 @@ impl InterpreterCore {
                                 RuntimePropertyKey::String(key) if key.as_str() == Some("next") => {
                                     Value::BuiltinFunction(BuiltinFunction::generator_next())
                                 }
+                                RuntimePropertyKey::String(key)
+                                    if key.as_str() == Some("return") =>
+                                {
+                                    Value::BuiltinFunction(BuiltinFunction::generator_return())
+                                }
                                 RuntimePropertyKey::String(_) | RuntimePropertyKey::Symbol(_) => {
                                     Value::Undefined
                                 }
                             };
-                            self.write_reg(dst, value)?;
+                            self.write_reg_with_label(dst, value, read_label.clone())?;
                             false
                         }
                         Value::AsyncGeneratorObject(_) => {
@@ -12941,9 +12991,9 @@ impl InterpreterCore {
                     .as_ref()
                     .map(Self::estimate_timer_value_bytes)
                     .or_else(|| {
-                        state.iterator_object.map(|object| {
-                            Self::estimate_timer_value_bytes(&Value::Object(object))
-                        })
+                        state
+                            .iterator_object
+                            .map(|object| Self::estimate_timer_value_bytes(&Value::Object(object)))
                     })
                     .unwrap_or(0);
                 input_label_bytes
@@ -13029,9 +13079,8 @@ impl InterpreterCore {
                 state.return_called = true;
             }
 
-            let outcome = core.with_array_method_temporary(
-                Self::estimate_label_bytes(label),
-                |core| {
+            let outcome =
+                core.with_array_method_temporary(Self::estimate_label_bytes(label), |core| {
                     core.invoke_inline_method_call_with_receiver_label(
                         module,
                         return_method,
@@ -13039,8 +13088,7 @@ impl InterpreterCore {
                         label.clone(),
                         &[],
                     )
-                },
-            );
+                });
             let close_value = match outcome {
                 Ok((completion, completion_label)) => {
                     *label = label.join(&completion_label);
@@ -13098,22 +13146,6 @@ impl InterpreterCore {
         )
     }
 
-    fn read_runtime_property_inline(
-        &mut self,
-        module: &Ir3Module,
-        receiver: Value,
-        property: Option<RuntimeProperty>,
-    ) -> Result<InlineCallCompletion, InterpreterError> {
-        match property {
-            Some(RuntimeProperty::Data(value)) => Ok(InlineCallCompletion::Value(value)),
-            Some(RuntimeProperty::Accessor(accessor)) => match accessor.get {
-                Some(getter) => self.invoke_inline_method_call(module, getter, receiver, &[]),
-                None => Ok(InlineCallCompletion::Value(Value::Undefined)),
-            },
-            None => Ok(InlineCallCompletion::Value(Value::Undefined)),
-        }
-    }
-
     fn complete_inline_call(
         &mut self,
         completion: InlineCallCompletion,
@@ -13142,28 +13174,10 @@ impl InterpreterCore {
         }
     }
 
-    /// Execute a no-argument method without disturbing the caller's active
-    /// abrupt-completion/finally state. A synthetic catch records explicit
-    /// JavaScript throws as data so their exact value can be re-armed after
-    /// restoring the caller snapshot.
-    fn invoke_inline_method_call(
-        &mut self,
-        module: &Ir3Module,
-        callee: Value,
-        receiver: Value,
-        extra_args: &[Value],
-    ) -> Result<InlineCallCompletion, InterpreterError> {
-        let arguments = extra_args
-            .iter()
-            .cloned()
-            .map(|value| (value, crate::ifc_artifacts::Label::Public))
-            .collect::<Vec<_>>();
-        self.invoke_inline_method_call_labeled(module, callee, receiver, &arguments)
-            .map(|(completion, _)| completion)
-    }
-
     /// Run a guest callback without discarding argument or completion
-    /// provenance at the isolated activation boundary.
+    /// provenance or disturbing the caller's abrupt-completion/finally state.
+    /// A synthetic catch preserves exact thrown values for restoration after
+    /// the caller snapshot has been restored.
     fn invoke_inline_method_call_labeled(
         &mut self,
         module: &Ir3Module,
@@ -15736,14 +15750,12 @@ impl InterpreterCore {
                 let thrown = self.pending_exception.take();
                 let close = if close_on_error {
                     match active_iterator {
-                        Some(iterator) => {
-                            self.close_iterator(
-                                module,
-                                iterator,
-                                IteratorCloseReason::Throw,
-                                accumulated_label.clone(),
-                            )
-                        }
+                        Some(iterator) => self.close_iterator(
+                            module,
+                            iterator,
+                            IteratorCloseReason::Throw,
+                            accumulated_label.clone(),
+                        ),
                         None => Ok(()),
                     }
                 } else {
@@ -16142,7 +16154,7 @@ impl InterpreterCore {
         // The same isolated call boundary serves accessors, Promise jobs, and
         // timers. In particular a foreign callback must return to its own
         // trampoline, never to an instruction offset in the importing module.
-        let completion = self.invoke_inline_method_call(
+        let (completion, _) = self.invoke_inline_method_call_labeled(
             module,
             Value::Closure(closure_id),
             Value::Undefined,

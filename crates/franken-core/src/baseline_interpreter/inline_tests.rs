@@ -1117,7 +1117,10 @@ fn iterator_close_admits_custom_provenance_before_mutating_the_record() {
             crate::ifc_artifacts::Label::Public,
         )
         .unwrap_err();
-    assert!(matches!(error, InterpreterError::MemoryBudgetExceeded { .. }));
+    assert!(matches!(
+        error,
+        InterpreterError::MemoryBudgetExceeded { .. }
+    ));
     let RuntimeIteratorState::ForOf(state) = core.iterator_state_mut(handle).unwrap() else {
         panic!("expected for-of record");
     };

@@ -12955,7 +12955,10 @@ fn lower_expression_to_ir1(
                     *computed,
                     binding_lookup,
                 )
-                .is_none() => Some((object.as_ref(), property.as_ref(), *computed, false)),
+                .is_none() =>
+                {
+                    Some((object.as_ref(), property.as_ref(), *computed, false))
+                }
                 Expression::OptionalMember {
                     object,
                     property,

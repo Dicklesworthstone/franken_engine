@@ -54,7 +54,9 @@ impl InterpreterCore {
                             RuntimeIteratorState::ForOf(state) => {
                                 Ok(Value::Bool(state.done || state.closed))
                             }
-                            RuntimeIteratorState::ForIn(_) => unreachable!("validated for-of record"),
+                            RuntimeIteratorState::ForIn(_) => {
+                                unreachable!("validated for-of record")
+                            }
                         }
                     }
                     "builtin:DestructureIteratorNext" | "builtin:DestructureIteratorElide" => {

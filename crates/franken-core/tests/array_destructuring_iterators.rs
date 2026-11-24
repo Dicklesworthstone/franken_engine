@@ -22,7 +22,11 @@ fn lower(source: &str) -> Ir3Module {
         .expect("array-destructuring fixture must parse");
     lower_ir0_to_ir3(
         &Ir0Module::from_syntax_tree(tree, "array-destructuring.js"),
-        &LoweringContext::new("array-destructuring", "array-destructuring", "array-destructuring"),
+        &LoweringContext::new(
+            "array-destructuring",
+            "array-destructuring",
+            "array-destructuring",
+        ),
     )
     .expect("array-destructuring fixture must lower")
     .ir3
@@ -50,8 +54,11 @@ fn assert_output(source: &str, expected: &[&str]) {
         let result = InterpreterCore::new(config, "array-destructuring")
             .execute(&module)
             .expect("array-destructuring fixture must execute");
-        let actual: Vec<_> = result.console_output.iter()
-            .map(|entry| entry.message.as_str()).collect();
+        let actual: Vec<_> = result
+            .console_output
+            .iter()
+            .map(|entry| entry.message.as_str())
+            .collect();
         assert_eq!(actual, expected);
     }
 }
@@ -323,7 +330,10 @@ fn empty_nested_patterns_and_native_array_elisions_remain_observable() {
 fn next_done_and_value_failures_preserve_identity_without_calling_return() {
     for (next_body, expected_trace) in [
         ("throw failure;", "in"),
-        ("return {get done() { trace += 'd'; throw failure; }};", "ind"),
+        (
+            "return {get done() { trace += 'd'; throw failure; }};",
+            "ind",
+        ),
         (
             "return {get done() { trace += 'd'; return false; }, get value() { trace += 'v'; throw failure; }};",
             "indv",
@@ -368,7 +378,11 @@ fn inner_step_and_acquisition_failures_close_only_the_owning_outer_record() {
             console.log(caught === failure, trace);
             "#
         );
-        let expected = if inner.contains("next()") { "true ino" } else { "true io" };
+        let expected = if inner.contains("next()") {
+            "true ino"
+        } else {
+            "true io"
+        };
         assert_output(&source, &[expected]);
     }
     assert_output(
@@ -418,6 +432,110 @@ fn normal_close_errors_propagate_and_shared_throw_precedence_is_preserved() {
             "false object true"
         };
         assert_output(&source, &[expected]);
+    }
+}
+
+#[test]
+fn generator_return_handles_fresh_completed_and_yielding_finally_states() {
+    assert_output(
+        r#"
+        let trace = '';
+        function* fresh() { trace += 'b'; yield 1; }
+        const unopened = fresh();
+        const early = unopened.return(7);
+        const completed = unopened.next();
+        const again = unopened.return(8);
+        console.log(early.value, early.done, completed.value, completed.done,
+                    again.value, again.done, trace);
+        function* cleanup() {
+            try { yield 1; }
+            finally { trace += 'f'; yield 2; trace += 'g'; }
+        }
+        const iterator = cleanup();
+        const first = iterator.next();
+        const paused = iterator.return(42);
+        console.log(first.value, first.done, paused.value, paused.done, trace);
+        const last = iterator.next(99);
+        console.log(last.value, last.done, trace);
+        console.log(iterator.return().value, iterator.return().done);
+        "#,
+        &[
+            "7 true undefined true 8 true ",
+            "1 false 2 false f",
+            "42 true fg",
+            "undefined true",
+        ],
+    );
+    assert_output(
+        r#"
+        function* values() { yield 1; }
+        const iterator = values();
+        const stop = iterator.return;
+        let detached, invalid;
+        try { stop(3); } catch (error) { detached = error.name; }
+        try { stop.call({}, 4); } catch (error) { invalid = error.name; }
+        const first = stop.call(iterator, 5);
+        const second = stop.apply(values(), [6]);
+        console.log(typeof stop, detached, invalid,
+                    first.value, first.done, second.value, second.done);
+        const failure = {};
+        function* failing() { try { yield 1; } finally { throw failure; } }
+        const broken = failing();
+        broken.next();
+        let caught;
+        try { broken.return(7); } catch (error) { caught = error; }
+        console.log(caught === failure, broken.next().done);
+        "#,
+        &["function TypeError TypeError 5 true 6 true", "true true"],
+    );
+}
+
+#[test]
+fn generator_return_preserves_private_results_methods_and_cleanup_effects() {
+    for (source, object_input, expected) in [
+        (
+            "const input = 987654; function* values() { yield 1; } \
+             const iterator = values(); iterator.next(); iterator.return(input).value;",
+            false,
+            Value::Int(42),
+        ),
+        (
+            "const input = 987654; const sink = {}; \
+             function* values() { try { yield 1; } finally { sink.value = 17; } } \
+             const iterator = values(); iterator.next(); iterator.return(input); sink.value;",
+            false,
+            Value::Int(17),
+        ),
+        (
+            "const input = 987654; const sink = {}; \
+             function* values() { try { yield 1; } finally { sink.value = 19; } } \
+             const iterator = values(); iterator.next(); input.iterator = iterator; \
+             const stop = input.iterator.return; stop.call(iterator); sink.value;",
+            true,
+            Value::Int(19),
+        ),
+    ] {
+        let module = input_module(source);
+        for config in configs() {
+            for label in [
+                Label::Secret,
+                Label::Custom {
+                    name: "private-generator-return".repeat(16),
+                    level: 4,
+                },
+            ] {
+                let mut core = InterpreterCore::new(config.clone(), "generator-return-provenance");
+                let input = if object_input {
+                    Value::Object(core.alloc_object_with_prototype(None).unwrap())
+                } else {
+                    Value::Int(42)
+                };
+                seed_input(&mut core, input, &label);
+                let result = core.execute(&module).unwrap();
+                assert_eq!(result.value, expected, "{source}");
+                assert_eq!(result.completion_label, label, "{source}");
+            }
+        }
     }
 }
 
@@ -520,7 +638,10 @@ fn values_defaults_and_empty_rest_keep_input_and_done_provenance() {
         for config in configs() {
             for label in [
                 Label::Secret,
-                Label::Custom { name: "private-pattern".repeat(16), level: 4 },
+                Label::Custom {
+                    name: "private-pattern".repeat(16),
+                    level: 4,
+                },
             ] {
                 let mut core = InterpreterCore::new(config.clone(), "destructure-provenance");
                 let input = match input_kind {
@@ -550,11 +671,7 @@ fn close_getters_callbacks_and_failures_retain_iterator_provenance() {
             "sink.value;",
             Some(Value::Int(19)),
         ),
-        (
-            "return() { return 0; }",
-            "caught;",
-            None,
-        ),
+        ("return() { return 0; }", "caught;", None),
     ] {
         let source = format!(
             r#"
@@ -595,7 +712,8 @@ fn private_adapter_names_and_arities_are_closed_even_in_direct_ir() {
             let module = direct_hostcall(&tag, count);
             for config in configs() {
                 let error = InterpreterCore::new(config, "destructure-private-name")
-                    .execute(&module).unwrap_err();
+                    .execute(&module)
+                    .unwrap_err();
                 assert!(
                     matches!(error, InterpreterError::CapabilityDenied { capability } if capability == tag)
                 );
@@ -605,7 +723,8 @@ fn private_adapter_names_and_arities_are_closed_even_in_direct_ir() {
             let module = direct_hostcall(name, wrong_count);
             for config in configs() {
                 let error = InterpreterCore::new(config, "destructure-private-arity")
-                    .execute(&module).unwrap_err();
+                    .execute(&module)
+                    .unwrap_err();
                 assert!(
                     matches!(error, InterpreterError::TypeError { expected, .. } if expected == format!("{count} destructuring operands"))
                 );
@@ -617,11 +736,21 @@ fn private_adapter_names_and_arities_are_closed_even_in_direct_ir() {
 #[test]
 fn private_adapters_preserve_static_data_clearance() {
     for (name, count) in PRIVATE_ADAPTERS {
-        let mut module = Ir1Module::new(ContentHash::compute(b"destructure-flow"), "destructure-flow");
+        let mut module = Ir1Module::new(
+            ContentHash::compute(b"destructure-flow"),
+            "destructure-flow",
+        );
         module.ops = vec![
-            Ir1Op::LoadLiteral { value: Ir1Literal::Integer(0) },
-            Ir1Op::LoadLiteral { value: Ir1Literal::String("secret_value".into()) },
-            Ir1Op::HostCall { capability: name.into(), arg_count: count },
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::Integer(0),
+            },
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::String("secret_value".into()),
+            },
+            Ir1Op::HostCall {
+                capability: name.into(),
+                arg_count: count,
+            },
         ];
         let lowered = lower_ir1_to_ir2(&module).unwrap().module;
         let flow = lowered.ops[2].flow.as_ref().unwrap();
@@ -650,7 +779,8 @@ fn close_callbacks_cannot_swallow_denied_authority() {
         let module = lower(&source);
         for config in configs() {
             let error = InterpreterCore::new(config, "destructure-close-authority")
-                .execute(&module).unwrap_err();
+                .execute(&module)
+                .unwrap_err();
             assert!(
                 matches!(error, InterpreterError::CapabilityDenied { capability } if capability == "module_load")
             );
@@ -670,8 +800,12 @@ fn rest_collection_obeys_fatal_fuel_and_memory_limits() {
     for mut config in configs() {
         config.instruction_budget = 2000;
         let error = InterpreterCore::new(config, "destructure-rest-fuel")
-            .execute(&module).unwrap_err();
-        assert!(matches!(error, InterpreterError::BudgetExhausted { .. }), "{error:?}");
+            .execute(&module)
+            .unwrap_err();
+        assert!(
+            matches!(error, InterpreterError::BudgetExhausted { .. }),
+            "{error:?}"
+        );
     }
     let module = lower(
         r#"
@@ -689,7 +823,10 @@ fn rest_collection_obeys_fatal_fuel_and_memory_limits() {
         config.instruction_budget = 1_000_000;
         let mut core = InterpreterCore::new(config, "destructure-rest-memory");
         let error = core.execute(&module).unwrap_err();
-        assert!(matches!(error, InterpreterError::MemoryBudgetExceeded { .. }), "{error:?}");
+        assert!(
+            matches!(error, InterpreterError::MemoryBudgetExceeded { .. }),
+            "{error:?}"
+        );
         assert!(core.get_heap().iter().any(|object| {
             object.is_array && matches!(object.properties.get("length"), Some(Value::Int(length)) if *length > 0)
         }));

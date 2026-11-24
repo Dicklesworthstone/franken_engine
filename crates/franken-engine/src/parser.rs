@@ -5733,7 +5733,7 @@ fn parse_import_binding_clause(
 
     if is_module_binding_identifier(binding_clause) {
         return Ok(ImportClause::Default {
-            local: binding_clause.to_string(),
+            local: canonicalize_identifier(binding_clause),
         });
     }
 
@@ -5754,7 +5754,7 @@ fn parse_import_binding_clause(
 
         if !is_module_binding_identifier(default_binding) {
             return Err(ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
+                ParseErrorCode::InvalidSyntax,
                 "default import binding must be a non-keyword identifier",
                 source_label.to_string(),
                 Some(span.clone()),
@@ -5763,7 +5763,7 @@ fn parse_import_binding_clause(
 
         if let Some(namespace_binding) = parse_namespace_import_binding(trailing_clause) {
             return Ok(ImportClause::DefaultAndNamespace {
-                default: default_binding.to_string(),
+                default: canonicalize_identifier(default_binding),
                 namespace: namespace_binding,
             });
         }
@@ -5771,7 +5771,7 @@ fn parse_import_binding_clause(
         if is_named_import_clause(trailing_clause) {
             let specifiers = parse_named_import_specifiers(trailing_clause, source_label, span)?;
             return Ok(ImportClause::DefaultAndNamed {
-                default: default_binding.to_string(),
+                default: canonicalize_identifier(default_binding),
                 specifiers,
             });
         }
@@ -5869,24 +5869,19 @@ fn module_specifier_words(specifier: &str) -> Vec<&str> {
 /// The index of the `}` closing a named import or export list in `text`,
 /// the text after its `{`, outside string literals.
 fn module_specifier_list_close(text: &str) -> Option<usize> {
-    let mut quote = None;
-    let mut escaped = false;
-    for (index, ch) in text.char_indices() {
-        match quote {
-            Some(_) if escaped => escaped = false,
-            Some(_) if ch == '\\' => escaped = true,
-            Some(open) if ch == open => quote = None,
-            Some(_) => {}
-            None if matches!(ch, '"' | '\'') => quote = Some(ch),
-            None if ch == '}' => return Some(index),
-            None => {}
+    let mut rest = text;
+    while let Some(ch) = rest.chars().next() {
+        match ch {
+            '}' => return Some(text.len() - rest.len()),
+            '"' | '\'' => rest = &rest[module_quoted_token_end(rest)?..],
+            '\\' => rest = &rest[identifier_escape_len(rest)?..],
+            _ => rest = &rest[ch.len_utf8()..],
         }
     }
     None
 }
 
-/// `word` as a ModuleExportName (ES2022 16.2.2): an identifier name as it
-/// is written, or a string literal's value, with whether it was a string.
+/// The StringValue of a ModuleExportName, and whether it was quoted.
 /// A string that is not well-formed Unicode (a lone surrogate) is an early
 /// error (IsStringWellFormedUnicode). `Ok(None)` when `word` is neither.
 fn module_export_name(word: &str) -> Result<Option<(String, bool)>, &'static str> {
@@ -5899,7 +5894,7 @@ fn module_export_name(word: &str) -> Result<Option<(String, bool)>, &'static str
             .map(|name| Some((name.to_string(), true)))
             .ok_or("a string module export name must be well-formed Unicode");
     }
-    Ok(is_identifier(word).then(|| (word.to_string(), false)))
+    Ok(is_identifier(word).then(|| (canonicalize_identifier(word), false)))
 }
 
 /// An export name as one word of a canonical export clause head: a name
@@ -5909,7 +5904,7 @@ fn module_export_name(word: &str) -> Result<Option<(String, bool)>, &'static str
 /// `\u{hex}`, so the readers still split the head at commas and white
 /// space. decode_module_export_name reverses it (bd-9vouw.429).
 pub(crate) fn encode_module_export_name(name: &str) -> String {
-    if is_identifier(name) {
+    if is_unescaped_identifier(name) {
         return name.to_string();
     }
     let mut word = String::with_capacity(name.len() + 2);
@@ -5957,9 +5952,10 @@ pub(crate) fn decode_module_export_name(word: &str) -> String {
 
 fn parse_namespace_import_binding(clause: &str) -> Option<String> {
     let rest = clause.strip_prefix('*')?.trim_start();
-    let rest = rest.strip_prefix("as")?.trim_start();
-    if is_module_binding_identifier(rest) {
-        Some(rest.to_string())
+    let after_as = rest.strip_prefix("as")?;
+    let rest = after_as.trim_start();
+    if rest.len() < after_as.len() && is_module_binding_identifier(rest) {
+        Some(canonicalize_identifier(rest))
     } else {
         None
     }
@@ -6076,18 +6072,18 @@ fn parse_named_import_specifiers(
                 ));
             }
             Ok(Some((name, _))) => name,
-            Ok(None) => String::new(),
+            Ok(None) => {
+                return Err(ParseError::new(
+                    ParseErrorCode::InvalidSyntax,
+                    "invalid imported name",
+                    source_label.to_string(),
+                    Some(span.clone()),
+                ));
+            }
         };
-        if import_name.is_empty() || !is_identifier(local_name) {
-            return Err(ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
-                "named import specifier must use identifiers",
-                source_label.to_string(),
-                Some(span.clone()),
-            ));
-        }
+        let local_name = canonicalize_identifier(local_name);
 
-        if !seen_local.insert(local_name.to_string()) {
+        if !seen_local.insert(local_name.clone()) {
             return Err(ParseError::new(
                 ParseErrorCode::InvalidSyntax,
                 "import binding has already been declared",
@@ -6098,7 +6094,7 @@ fn parse_named_import_specifiers(
 
         specifiers.push(ImportSpecifier {
             import_name,
-            local_name: local_name.to_string(),
+            local_name,
         });
     }
 
@@ -6174,12 +6170,9 @@ fn parse_star_export_clause(
             // `export * as "a-b" from` names the namespace with a string
             // (ES2022 16.2.3 ModuleExportName).
             let alias_len = if tail.starts_with(['"', '\'']) {
-                module_specifier_words(tail)
-                    .first()
-                    .map_or(0, |word| word.len())
+                module_quoted_token_end(tail).unwrap_or(0)
             } else {
-                tail.find(|ch: char| !is_identifier_continue(ch))
-                    .unwrap_or(tail.len())
+                tail.len() - skip_identifier_name(tail).len()
             };
             let alias = match module_export_name(&tail[..alias_len]) {
                 Err(message) => return Err(error(message)),
@@ -6260,11 +6253,11 @@ fn parse_named_export_clause(
     } else {
         (None, ImportAttributes::default())
     };
-    let string_name_head =
+    let decoded_head =
         validate_named_export_specifiers(specifiers, source.is_some(), source_label, span)?;
 
     let without_comma = without_trailing_specifier_comma(specifiers);
-    let canonical_head = if let Some(head) = string_name_head {
+    let canonical_head = if let Some(head) = decoded_head {
         head
     } else if without_comma.len() == specifiers.len() {
         canonicalize_whitespace(&clause[..close_index + 2])
@@ -6302,7 +6295,9 @@ fn validate_named_export_specifiers(
     let malformed = "unsupported named export specifier; expected `name` or `name as alias`";
 
     let mut entries = Vec::new();
-    let mut has_string_name = false;
+    // The linker reads the canonical head. Rebuild it when a name's
+    // source spelling differs from its value, including identifier escapes.
+    let mut rebuild_head = specifiers.contains('\\');
     for specifier in split_module_specifier_list(without_trailing_specifier_comma(specifiers)) {
         let specifier = specifier.trim();
         if specifier.is_empty() {
@@ -6333,18 +6328,18 @@ fn validate_named_export_specifiers(
                 "a string names a local binding only in `export { ... } from`",
             ));
         }
-        has_string_name |= local_is_string;
+        rebuild_head |= local_is_string;
         match exported {
             None => entries.push(local),
             Some(exported) => {
                 let (exported, exported_is_string) = head_word(exported)?;
-                has_string_name |= exported_is_string;
+                rebuild_head |= exported_is_string;
                 entries.push(format!("{local} as {exported}"));
             }
         }
     }
 
-    Ok(has_string_name.then(|| format!("{{ {} }}", entries.join(", "))))
+    Ok(rebuild_head.then(|| format!("{{ {} }}", entries.join(", "))))
 }
 
 // ---------------------------------------------------------------------------
@@ -13250,18 +13245,24 @@ fn is_identifier(input: &str) -> bool {
     } else {
         input
     };
-    let mut chars = candidate.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !is_identifier_start(first) {
-        return false;
-    }
-    chars.all(is_identifier_continue)
+    is_unescaped_identifier(candidate)
+}
+
+fn is_unescaped_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars.next().is_some_and(is_identifier_start) && chars.all(is_identifier_continue)
 }
 
 fn is_module_binding_identifier(input: &str) -> bool {
-    is_identifier(input) && !is_disallowed_module_binding_name(input)
+    let valid =
+        |name: &str| is_unescaped_identifier(name) && !is_disallowed_module_binding_name(name);
+    if input.contains('\\') {
+        decode_identifier_escapes(input)
+            .as_deref()
+            .is_some_and(valid)
+    } else {
+        valid(input)
+    }
 }
 
 /// ES2020 unconditional reserved keywords — identifiers that are never legal

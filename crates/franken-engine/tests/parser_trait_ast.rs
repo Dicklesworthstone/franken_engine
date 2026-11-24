@@ -262,7 +262,7 @@ fn canonical_ast_contract_metadata_is_versioned_and_stable() {
     );
     assert_eq!(
         CANONICAL_AST_SCHEMA_VERSION,
-        "franken-engine.parser-ast.schema.v7"
+        "franken-engine.parser-ast.schema.v9"
     );
     assert_eq!(CANONICAL_AST_HASH_ALGORITHM, "sha256");
     assert_eq!(CANONICAL_AST_HASH_PREFIX, "sha256:");
@@ -1850,5 +1850,83 @@ fn parser_control_flow_canonical_hashes_are_deterministic() {
             tree2.canonical_bytes(),
             "canonical bytes should be deterministic for: {source}"
         );
+    }
+}
+
+#[test]
+fn parsed_function_and_class_identity_prevents_ir0_source_substitution() {
+    use frankenengine_engine::ir_contract::{Ir0Module, Ir1Module, verify_ir1_source};
+
+    let parser = CanonicalEs2020Parser;
+    let pairs = [
+        (
+            "const f = function () { return 1; };",
+            "const f = function () { return 2; };",
+        ),
+        (
+            "const f = function (a) { return 0; };",
+            "const f = function (b) { return 0; };",
+        ),
+        (
+            "const f = function (a = 1) { return a; };",
+            "const f = function (a = 2) { return a; };",
+        ),
+        (
+            "const C = class { m() { return 1; } };",
+            "const C = class { m() { return 2; } };",
+        ),
+        (
+            "class C { m() { return 1; } }",
+            "class C { m() { return 2; } }",
+        ),
+        (
+            "class C extends A { m() { return 0; } }",
+            "class C extends B { m() { return 0; } }",
+        ),
+        (
+            "const C = class extends A { m() { return 0; } };",
+            "const C = class extends B { m() { return 0; } };",
+        ),
+        (
+            "class C { get value() { return 1; } }",
+            "class C { get value() { return 2; } }",
+        ),
+        (
+            "class C { m(a) { return 0; } }",
+            "class C { m(b) { return 0; } }",
+        ),
+        (
+            "class C { m() { return function () { return 1; }; } }",
+            "class C { m() { return function () { return 2; }; } }",
+        ),
+    ];
+    for goal in [ParseGoal::Script, ParseGoal::Module] {
+        for (first, second) in pairs {
+            assert_eq!(
+                first.len(),
+                second.len(),
+                "span changes must not disguise collisions"
+            );
+            let original = parser.parse(first, goal).expect("valid identity fixture");
+            let changed = parser.parse(second, goal).expect("valid identity fixture");
+            assert_eq!(original.span, changed.span);
+            assert_ne!(
+                original, changed,
+                "the parser must retain the semantic difference"
+            );
+            assert_ne!(
+                original.canonical_hash(),
+                changed.canonical_hash(),
+                "semantic collision for {first:?} and {second:?}"
+            );
+            let original_ir0 = Ir0Module::from_syntax_tree(original, "identity.js");
+            let changed_ir0 = Ir0Module::from_syntax_tree(changed, "identity.js");
+            assert_ne!(original_ir0.content_hash(), changed_ir0.content_hash());
+            let bound_ir1 = Ir1Module::new(original_ir0.content_hash(), "identity.js");
+            verify_ir1_source(&bound_ir1, &original_ir0.content_hash())
+                .expect("the original source identity is valid");
+            verify_ir1_source(&bound_ir1, &changed_ir0.content_hash())
+                .expect_err("changing executable syntax must invalidate source linkage");
+        }
     }
 }

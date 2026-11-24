@@ -15,7 +15,7 @@ use crate::js_string::{JsString, canonical_js_string_value};
 /// Versioned canonical AST contract binding schema + hash semantics.
 pub const CANONICAL_AST_CONTRACT_VERSION: &str = "franken-engine.parser-ast.contract.v1";
 /// Versioned schema identifier for canonical AST structure and key ordering.
-pub const CANONICAL_AST_SCHEMA_VERSION: &str = "franken-engine.parser-ast.schema.v7";
+pub const CANONICAL_AST_SCHEMA_VERSION: &str = "franken-engine.parser-ast.schema.v9";
 /// Hash algorithm used by `SyntaxTree::canonical_hash`.
 pub const CANONICAL_AST_HASH_ALGORITHM: &str = "sha256";
 /// Prefix used in canonical AST hash strings.
@@ -1793,6 +1793,36 @@ pub struct MethodDefinition {
 }
 
 impl MethodDefinition {
+    pub fn canonical_value(&self) -> CanonicalValue {
+        let kind = match self.kind {
+            MethodKind::Constructor => "constructor",
+            MethodKind::Method => "method",
+            MethodKind::Get => "get",
+            MethodKind::Set => "set",
+            MethodKind::Field => "field",
+            MethodKind::StaticBlock => "static_block",
+        };
+        CanonicalValue::map_from_entries([
+            ("key", self.key.canonical_value()),
+            ("kind", CanonicalValue::str(kind)),
+            (
+                "params",
+                CanonicalValue::Array(
+                    self.params
+                        .iter()
+                        .map(FunctionParam::canonical_value)
+                        .collect(),
+                ),
+            ),
+            ("body", self.body.canonical_value()),
+            ("is_static", CanonicalValue::Bool(self.is_static)),
+            ("computed", CanonicalValue::Bool(self.computed)),
+            ("is_async", CanonicalValue::Bool(self.is_async)),
+            ("is_generator", CanonicalValue::Bool(self.is_generator)),
+            ("span", self.span.canonical_value()),
+        ])
+    }
+
     /// The private name (`#x`) of a private field, method or accessor (see
     /// [`MethodKind::Field`]).
     pub fn private_name(&self) -> Option<&str> {
@@ -1823,6 +1853,22 @@ impl ClassDeclaration {
         if let Some(n) = &self.name {
             entries.push(("name", CanonicalValue::str(n.clone())));
         }
+        entries.push((
+            "super_class",
+            self.super_class
+                .as_ref()
+                .map(|super_class| super_class.canonical_value())
+                .unwrap_or(CanonicalValue::Null),
+        ));
+        entries.push((
+            "body",
+            CanonicalValue::Array(
+                self.body
+                    .iter()
+                    .map(MethodDefinition::canonical_value)
+                    .collect(),
+            ),
+        ));
         entries.push(("span", self.span.canonical_value()));
         CanonicalValue::map_from_entries(entries)
     }
@@ -2499,8 +2545,27 @@ impl Expression {
                     ),
                 ),
             ]),
-            Self::Function { name, .. } => {
-                let mut entries = vec![("kind", CanonicalValue::str("function_expression"))];
+            Self::Function {
+                name,
+                params,
+                body,
+                is_async,
+                is_generator,
+                source_text: _,
+                strict: _,
+            } => {
+                let mut entries = vec![
+                    ("kind", CanonicalValue::str("function_expression")),
+                    (
+                        "params",
+                        CanonicalValue::Array(
+                            params.iter().map(FunctionParam::canonical_value).collect(),
+                        ),
+                    ),
+                    ("body", body.canonical_value()),
+                    ("is_async", CanonicalValue::Bool(*is_async)),
+                    ("is_generator", CanonicalValue::Bool(*is_generator)),
+                ];
                 if let Some(n) = name {
                     entries.push(("name", CanonicalValue::str(n.clone())));
                 }
@@ -2519,8 +2584,28 @@ impl Expression {
                 ("pattern", CanonicalValue::str(pattern.clone())),
                 ("flags", CanonicalValue::str(flags.clone())),
             ]),
-            Self::ClassExpression { name, .. } => {
-                let mut entries = vec![("kind", CanonicalValue::str("class_expression"))];
+            Self::ClassExpression {
+                name,
+                super_class,
+                body,
+                source_text: _,
+            } => {
+                let mut entries = vec![
+                    ("kind", CanonicalValue::str("class_expression")),
+                    (
+                        "super_class",
+                        super_class
+                            .as_ref()
+                            .map(|super_class| super_class.canonical_value())
+                            .unwrap_or(CanonicalValue::Null),
+                    ),
+                    (
+                        "body",
+                        CanonicalValue::Array(
+                            body.iter().map(MethodDefinition::canonical_value).collect(),
+                        ),
+                    ),
+                ];
                 if let Some(n) = name {
                     entries.push(("name", CanonicalValue::str(n.clone())));
                 }
@@ -2801,7 +2886,7 @@ mod tests {
         );
         assert_eq!(
             CANONICAL_AST_SCHEMA_VERSION,
-            "franken-engine.parser-ast.schema.v7"
+            "franken-engine.parser-ast.schema.v9"
         );
         assert_eq!(CANONICAL_AST_HASH_ALGORITHM, "sha256");
         assert_eq!(CANONICAL_AST_HASH_PREFIX, "sha256:");
@@ -6242,6 +6327,254 @@ mod tests {
             assert!(map.contains_key("body"));
         } else {
             panic!("expected map");
+        }
+    }
+}
+
+#[cfg(test)]
+mod canonical_semantic_identity_tests {
+    use super::*;
+
+    fn span() -> SourceSpan {
+        SourceSpan::new(0, 32, 1, 1, 1, 33)
+    }
+
+    fn parameter(name: &str) -> FunctionParam {
+        FunctionParam {
+            pattern: BindingPattern::Identifier(name.into()),
+            span: span(),
+        }
+    }
+
+    fn returns(value: Expression) -> BlockStatement {
+        BlockStatement {
+            body: vec![Statement::Return(ReturnStatement {
+                argument: Some(value),
+                span: span(),
+            })],
+            span: span(),
+        }
+    }
+
+    fn function(
+        params: Vec<FunctionParam>,
+        body: BlockStatement,
+        is_async: bool,
+        is_generator: bool,
+    ) -> Expression {
+        Expression::Function {
+            name: Some("f".into()),
+            params,
+            body,
+            is_async,
+            is_generator,
+            source_text: None,
+            strict: false,
+        }
+    }
+
+    fn expression_tree(expression: Expression) -> SyntaxTree {
+        SyntaxTree {
+            goal: ParseGoal::Script,
+            body: vec![Statement::Expression(ExpressionStatement {
+                expression,
+                span: span(),
+            })],
+            span: span(),
+        }
+    }
+
+    fn assert_distinct_identity(original: &SyntaxTree, changed: &SyntaxTree) {
+        assert_eq!(
+            original.span, changed.span,
+            "source length must not explain the difference"
+        );
+        assert_ne!(original.canonical_bytes(), changed.canonical_bytes());
+        assert_ne!(original.canonical_hash(), changed.canonical_hash());
+        let serialized = serde_json::to_string(changed).unwrap();
+        let restored: SyntaxTree = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(changed.canonical_bytes(), restored.canonical_bytes());
+        assert_eq!(changed.canonical_hash(), restored.canonical_hash());
+    }
+
+    #[test]
+    fn function_expression_identity_binds_body_parameters_and_execution_kind() {
+        let body = returns(Expression::NumericLiteral(1));
+        let original_function = function(vec![parameter("a")], body.clone(), false, false);
+        let original = expression_tree(original_function);
+        let default_parameter = |value| FunctionParam {
+            pattern: BindingPattern::AssignmentPattern {
+                left: Box::new(BindingPattern::Identifier("a".into())),
+                right: Expression::NumericLiteral(value),
+            },
+            span: span(),
+        };
+        let variants = [
+            function(
+                vec![parameter("a")],
+                returns(Expression::NumericLiteral(2)),
+                false,
+                false,
+            ),
+            function(vec![parameter("b")], body.clone(), false, false),
+            function(vec![], body.clone(), false, false),
+            function(vec![default_parameter(1)], body.clone(), false, false),
+            function(vec![parameter("a")], body.clone(), true, false),
+            function(vec![parameter("a")], body.clone(), false, true),
+        ];
+        for variant in variants {
+            assert_distinct_identity(&original, &expression_tree(variant));
+        }
+        assert_distinct_identity(
+            &expression_tree(function(
+                vec![default_parameter(1)],
+                body.clone(),
+                false,
+                false,
+            )),
+            &expression_tree(function(vec![default_parameter(2)], body, false, false)),
+        );
+    }
+
+    fn method() -> MethodDefinition {
+        MethodDefinition {
+            key: Expression::Identifier("m".into()),
+            kind: MethodKind::Method,
+            params: vec![parameter("a")],
+            body: returns(Expression::NumericLiteral(1)),
+            is_static: false,
+            computed: false,
+            span: span(),
+            is_async: false,
+            is_generator: false,
+            source_text: None,
+        }
+    }
+
+    fn class_tree(
+        expression: bool,
+        super_class: Option<Box<Expression>>,
+        body: Vec<MethodDefinition>,
+    ) -> SyntaxTree {
+        if expression {
+            expression_tree(Expression::ClassExpression {
+                name: Some("C".into()),
+                super_class,
+                body,
+                source_text: None,
+            })
+        } else {
+            SyntaxTree {
+                goal: ParseGoal::Script,
+                body: vec![Statement::ClassDeclaration(ClassDeclaration {
+                    name: Some("C".into()),
+                    super_class,
+                    body,
+                    span: span(),
+                    source_text: None,
+                })],
+                span: span(),
+            }
+        }
+    }
+
+    #[test]
+    fn class_identity_binds_inheritance_method_bodies_and_element_order() {
+        for expression in [false, true] {
+            let original = class_tree(
+                expression,
+                Some(Box::new(Expression::Identifier("A".into()))),
+                vec![method()],
+            );
+            assert_distinct_identity(
+                &original,
+                &class_tree(
+                    expression,
+                    Some(Box::new(Expression::Identifier("B".into()))),
+                    vec![method()],
+                ),
+            );
+            assert_distinct_identity(&original, &class_tree(expression, None, vec![method()]));
+            assert_distinct_identity(
+                &class_tree(expression, None, vec![method()]),
+                &class_tree(expression, None, vec![]),
+            );
+            let mut changed_body = method();
+            changed_body.body = returns(Expression::NumericLiteral(2));
+            assert_distinct_identity(
+                &class_tree(expression, None, vec![method()]),
+                &class_tree(expression, None, vec![changed_body]),
+            );
+            let mut second = method();
+            second.key = Expression::Identifier("n".into());
+            assert_distinct_identity(
+                &class_tree(expression, None, vec![method(), second.clone()]),
+                &class_tree(expression, None, vec![second, method()]),
+            );
+        }
+    }
+
+    #[test]
+    fn class_identity_binds_member_keys_parameters_and_descriptor_semantics() {
+        let mut changed_key = method();
+        changed_key.key = Expression::Identifier("n".into());
+        let mut changed_params = method();
+        changed_params.params = vec![parameter("b")];
+        let mut static_method = method();
+        static_method.is_static = true;
+        let mut computed_method = method();
+        computed_method.computed = true;
+        let mut variants = vec![changed_key, changed_params, static_method, computed_method];
+        for kind in [
+            MethodKind::Constructor,
+            MethodKind::Get,
+            MethodKind::Set,
+            MethodKind::Field,
+            MethodKind::StaticBlock,
+        ] {
+            let mut changed_kind = method();
+            changed_kind.kind = kind;
+            variants.push(changed_kind);
+        }
+        let mut async_method = method();
+        async_method.is_async = true;
+        variants.push(async_method);
+        let mut generator_method = method();
+        generator_method.is_generator = true;
+        variants.push(generator_method);
+        for expression in [false, true] {
+            let original = class_tree(expression, None, vec![method()]);
+            for variant in &variants {
+                assert_distinct_identity(
+                    &original,
+                    &class_tree(expression, None, vec![variant.clone()]),
+                );
+            }
+            let mut high_key = method();
+            high_key.key = Expression::StringLiteral(JsString::from_code_units(&[0xD800]));
+            let mut low_key = high_key.clone();
+            low_key.key = Expression::StringLiteral(JsString::from_code_units(&[0xDC00]));
+            assert_distinct_identity(
+                &class_tree(expression, None, vec![high_key]),
+                &class_tree(expression, None, vec![low_key]),
+            );
+        }
+    }
+
+    #[test]
+    fn nested_function_body_changes_propagate_through_class_identity() {
+        for expression in [false, true] {
+            let nested = |value| {
+                let mut member = method();
+                member.body = returns(function(
+                    vec![],
+                    returns(Expression::NumericLiteral(value)),
+                    false,
+                    false,
+                ));
+                class_tree(expression, None, vec![member])
+            };
+            assert_distinct_identity(&nested(1), &nested(2));
         }
     }
 }

@@ -266,6 +266,50 @@ accepts and emits the labelled variant; historical core v1 through v5 values
 remain identifiable by their original schema tags. This AST checkpoint is
 independent of the core IR `0.8.0` IteratorClose checkpoint.
 
+## Complete Function and Class Semantic Identity
+
+The compatibility engine advances from AST schema v7 to
+`franken-engine.parser-ast.schema.v9`; the native core advances from v8 to
+`franken-engine.parser-ast.schema.v10`. Engine v8 is skipped because that
+identifier already belongs to core. Core v9 is skipped because it identifies
+the different engine shape. The contract version, deterministic encoding,
+SHA-256 algorithm, hash prefix, and derived AST JSON representation are
+unchanged.
+
+The previous canonical encoders omitted function-expression parameters,
+bodies, and async/generator modes, and omitted class inheritance and every
+class element. Equal-length edits such as changing `return 1` to `return 2`
+inside a function expression or class method therefore retained the same AST
+and IR0 content hashes. This broke the source-identity boundary used by
+`verify_ir1_source`, parse-event payload validation, and hash-keyed consumers.
+
+Both schemas now include all function-expression parameters and their
+defaults, the body, and async/generator flags. Class declarations and
+expressions include the optional superclass (explicit `Null` when absent)
+and the ordered method/element list. Each method includes its exact key,
+kind, parameters, body, static/computed flags, and span. Engine methods also
+include async/generator flags and its field/static-block kinds; core uses its
+existing `async_method` kind. Nested functions, class field initializers,
+computed keys, and exact UTF-16 string keys are traversed by the same canonical
+encoders. The engine's explicitly noncanonical source-text provenance and
+derived strictness metadata retain their established treatment.
+
+Caches, evidence, and parser event streams containing affected nodes must be
+regenerated from authenticated source under the new schema; old hashes cannot
+authenticate the missing syntax, so they are not promoted through a permissive
+compatibility fallback. Historical AST JSON is still readable, but
+recanonicalizing its function/class nodes produces the corrected identity.
+No IR instruction or serialized IR field changes, so the independent IR wire
+schema is unchanged. IR0 content hashes and linked downstream source hashes
+change naturally where the corrected tree contributes.
+
+`GoldenVersionVector::v7()` remains immutable and historical;
+`GoldenVersionVector::v9()` and `current()` describe the corrected engine
+schema. Existing scalar, import/export, exact-string, and other unaffected
+canonical hash vectors are preserved. New regressions hold source spans fixed
+while changing executable syntax, cover both class declaration and expression
+forms, and prove that IR1 source verification rejects an IR0 substitution.
+
 ## Compatibility Checks
 
 Pinned by tests:

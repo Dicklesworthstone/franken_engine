@@ -54,11 +54,14 @@ enum ContributionState {
     Accepted {
         registered: BTreeSet<ParticipantId>,
         contributors: BTreeSet<ParticipantId>,
+        session_id: String,
+        config: AggregationConfig,
     },
+    Complete,
 }
 
 /// Configuration parameters for secure aggregation
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AggregationConfig {
     /// Minimum number of participants required for aggregation
     pub min_participants: usize,
@@ -198,24 +201,38 @@ impl SecureAggregationSession {
         self.contribution_state = ContributionState::Accepted {
             registered: self.participants.keys().cloned().collect(),
             contributors,
+            session_id: self.session_id.clone(),
+            config: self.config.clone(),
         };
         self.current_round = AggregationRound::Unmasking;
         self.aggregated_result = Some(aggregated.clone());
         Ok(aggregated)
     }
 
-    /// Complete the aggregation by removing the masks
+    /// Complete the legacy aggregation by removing exactly one net mask for
+    /// every accepted contributor. Invalid batches leave the round retryable.
+    /// These identities bind local protocol state; they do not authenticate
+    /// the caller or make disclosure of individual net masks confidential.
     pub fn complete_aggregation(
         &mut self,
         unmasking_shares: Vec<(ParticipantId, Vec<i64>)>,
     ) -> Result<Vec<i64>> {
-        if self.current_round != AggregationRound::Unmasking {
-            return Err(SecureAggregationError::InvalidRound);
-        }
-        if self.config.field_modulus == 0 || self.config.field_modulus > i64::MAX as u64 {
+        let (_, contributors) = self.validate_completion_state()?;
+        if unmasking_shares.len() != contributors.len() {
             return Err(SecureAggregationError::ProtocolViolation(
-                "Field modulus must fit a positive signed representation".into(),
+                "Net masks must cover every accepted contributor exactly once".into(),
             ));
+        }
+        let mut supplied = BTreeSet::new();
+        for (participant_id, mask) in &unmasking_shares {
+            if !contributors.contains(participant_id) || !supplied.insert(participant_id) {
+                return Err(SecureAggregationError::ProtocolViolation(
+                    "Net mask identity is unknown, duplicated, or did not contribute".into(),
+                ));
+            }
+            if mask.len() != self.config.vector_dimension {
+                return Err(SecureAggregationError::InvalidDimension);
+            }
         }
 
         let mut result = self
@@ -224,11 +241,7 @@ impl SecureAggregationSession {
             .ok_or(SecureAggregationError::InvalidState)?;
 
         // Remove the accumulated masks
-        for (_participant_id, mask) in unmasking_shares {
-            if mask.len() != self.config.vector_dimension {
-                return Err(SecureAggregationError::InvalidDimension);
-            }
-
+        for (_, mask) in unmasking_shares {
             for (i, &mask_value) in mask.iter().enumerate() {
                 // Remove the participant's generated-minus-received net mask.
                 result[i] = (i128::from(result[i]) - i128::from(mask_value))
@@ -238,8 +251,64 @@ impl SecureAggregationSession {
         }
 
         self.current_round = AggregationRound::Complete;
+        self.contribution_state = ContributionState::Complete;
         self.aggregated_result = Some(result.clone());
         Ok(result)
+    }
+
+    /// Both completion algorithms consume the same accepted contribution
+    /// state. Public status/config fields cannot change the arithmetic domain,
+    /// replace its roster, or rewind a completed round into another unmasking.
+    fn validate_completion_state(
+        &self,
+    ) -> Result<(&BTreeSet<ParticipantId>, &BTreeSet<ParticipantId>)> {
+        if self.current_round != AggregationRound::Unmasking {
+            return Err(SecureAggregationError::InvalidRound);
+        }
+        self.validate_configuration()?;
+        let ContributionState::Accepted {
+            registered,
+            contributors,
+            session_id,
+            config,
+        } = &self.contribution_state
+        else {
+            return Err(SecureAggregationError::InvalidState);
+        };
+        if session_id != &self.session_id || config != &self.config {
+            return Err(SecureAggregationError::ProtocolViolation(
+                "Completion context differs from the accepted session and configuration".into(),
+            ));
+        }
+        if !self.participants.keys().eq(registered.iter()) || !contributors.is_subset(registered) {
+            return Err(SecureAggregationError::ProtocolViolation(
+                "Completion roster does not match the registered and submitted participants".into(),
+            ));
+        }
+        if contributors.len() < self.config.min_participants {
+            return Err(SecureAggregationError::InsufficientParticipants);
+        }
+        if registered.len() - contributors.len() > self.config.dropout_threshold {
+            return Err(SecureAggregationError::ProtocolViolation(
+                "Dropped participants exceed configured dropout_threshold".into(),
+            ));
+        }
+        let result = self
+            .aggregated_result
+            .as_ref()
+            .ok_or(SecureAggregationError::InvalidState)?;
+        if result.len() != self.config.vector_dimension {
+            return Err(SecureAggregationError::InvalidDimension);
+        }
+        if result
+            .iter()
+            .any(|value| *value < 0 || *value >= self.config.field_modulus as i64)
+        {
+            return Err(SecureAggregationError::ProtocolViolation(
+                "Accepted aggregate values are outside field bounds".into(),
+            ));
+        }
+        Ok((registered, contributors))
     }
 
     fn validate_configuration(&self) -> Result<()> {
@@ -559,17 +628,7 @@ impl SecureAggregationSession {
         survivors: &[ParticipantId],
         dropout_seeds: &[DropoutPairwiseSeed],
     ) -> Result<Vec<i64>> {
-        if self.current_round != AggregationRound::Unmasking {
-            return Err(SecureAggregationError::InvalidRound);
-        }
-        self.validate_configuration()?;
-        let ContributionState::Accepted {
-            registered,
-            contributors,
-        } = &self.contribution_state
-        else {
-            return Err(SecureAggregationError::InvalidState);
-        };
+        let (registered, contributors) = self.validate_completion_state()?;
         let expected_set: BTreeSet<_> = expected_roster.iter().cloned().collect();
         let survivor_set: BTreeSet<_> = survivors.iter().cloned().collect();
         if expected_set.len() != expected_roster.len() || survivor_set.len() != survivors.len() {
@@ -577,25 +636,13 @@ impl SecureAggregationSession {
                 "Roster and survivors must contain distinct participant identities".into(),
             ));
         }
-        if &expected_set != registered
-            || !self.participants.keys().eq(registered.iter())
-            || &survivor_set != contributors
-            || !contributors.is_subset(registered)
-        {
+        if &expected_set != registered || &survivor_set != contributors {
             return Err(SecureAggregationError::ProtocolViolation(
                 "Completion roster does not match the registered and submitted participants".into(),
             ));
         }
-        if survivor_set.len() < self.config.min_participants {
-            return Err(SecureAggregationError::InsufficientParticipants);
-        }
         let dropped: BTreeSet<ParticipantId> =
             expected_set.difference(&survivor_set).cloned().collect();
-        if dropped.len() > self.config.dropout_threshold {
-            return Err(SecureAggregationError::ProtocolViolation(
-                "Dropped participants exceed configured dropout_threshold".into(),
-            ));
-        }
 
         let mut seed_lookup = BTreeMap::new();
         for item in dropout_seeds {
@@ -666,6 +713,7 @@ impl SecureAggregationSession {
         }
 
         self.current_round = AggregationRound::Complete;
+        self.contribution_state = ContributionState::Complete;
         self.aggregated_result = Some(result.clone());
         Ok(result)
     }
@@ -918,13 +966,16 @@ mod tests {
         session
             .aggregate_contributions(vec![
                 MaskedContribution::new(alice.clone(), vec![4, 8], Vec::new()),
-                MaskedContribution::new(bob, vec![6, 12], Vec::new()),
+                MaskedContribution::new(bob.clone(), vec![6, 12], Vec::new()),
             ])
             .unwrap();
         let three_moduli = 3 * modulus as i64;
         assert_eq!(
             session
-                .complete_aggregation(vec![(alice, vec![-three_moduli + 1, three_moduli - 1]),])
+                .complete_aggregation(vec![
+                    (alice, vec![-three_moduli + 1, three_moduli - 1]),
+                    (bob, vec![0, 0]),
+                ])
                 .unwrap(),
             vec![9, 21]
         );

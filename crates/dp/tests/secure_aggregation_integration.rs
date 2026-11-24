@@ -285,6 +285,188 @@ fn session_contributions_require_unique_registered_participants() {
     );
 }
 
+fn pending_legacy_round() -> (SecureAggregationSession, Vec<(ParticipantId, Vec<i64>)>) {
+    let mut session = SecureAggregationSession::new(
+        "legacy-completion-membership".into(),
+        AggregationConfig {
+            min_participants: 2,
+            max_participants: 3,
+            vector_dimension: 2,
+            field_modulus: 101,
+            dropout_threshold: 1,
+        },
+    );
+    let ids: Vec<_> = ["alice", "bob", "carol"]
+        .into_iter()
+        .map(|name| ParticipantId(name.into()))
+        .collect();
+    for id in &ids {
+        session
+            .add_participant(Participant::new(id.clone()))
+            .unwrap();
+    }
+    session.current_round = AggregationRound::ContributionSubmission;
+    session
+        .aggregate_contributions(vec![
+            MaskedContribution::new(ids[0].clone(), vec![10, 20], Vec::new()),
+            MaskedContribution::new(ids[1].clone(), vec![30, 40], Vec::new()),
+        ])
+        .unwrap();
+    (
+        session,
+        vec![(ids[0].clone(), vec![1, 3]), (ids[1].clone(), vec![2, 4])],
+    )
+}
+
+#[test]
+fn legacy_completion_requires_exact_contributor_coverage_without_mutation() {
+    let (mut session, masks) = pending_legacy_round();
+    let before = serde_json::to_value(&session).unwrap();
+    for invalid in [
+        Vec::new(),
+        vec![masks[0].clone()],
+        vec![masks[0].clone(), masks[0].clone()],
+        vec![
+            masks[0].clone(),
+            (ParticipantId("unknown".into()), vec![2, 4]),
+        ],
+        vec![masks[0].clone(), (ParticipantId("carol".into()), vec![2, 4])],
+        vec![masks[0].clone(), masks[1].clone(), masks[1].clone()],
+        vec![masks[0].clone(), (masks[1].0.clone(), vec![2])],
+    ] {
+        assert!(
+            session.complete_aggregation(invalid).is_err(),
+            "every accepted contributor must supply exactly one full net mask"
+        );
+        assert_eq!(serde_json::to_value(&session).unwrap(), before);
+    }
+
+    // Rejection leaves the same round retryable; input ordering is immaterial.
+    assert_eq!(
+        session
+            .complete_aggregation(masks.into_iter().rev().collect())
+            .unwrap(),
+        vec![37, 53]
+    );
+    assert_eq!(session.current_round, AggregationRound::Complete);
+    let completed = serde_json::to_value(&session).unwrap();
+    assert!(matches!(
+        session.complete_aggregation(Vec::new()),
+        Err(SecureAggregationError::InvalidRound)
+    ));
+    assert_eq!(serde_json::to_value(&session).unwrap(), completed);
+}
+
+#[test]
+fn legacy_completion_rejects_missing_or_malformed_accepted_state() {
+    let (session, masks) = pending_legacy_round();
+    for aggregate in [
+        None,
+        Some(Vec::new()),
+        Some(vec![40]),
+        Some(vec![40, 60, 80]),
+        Some(vec![-1, 60]),
+        Some(vec![40, 101]),
+    ] {
+        let mut malformed = session.clone();
+        malformed.aggregated_result = aggregate;
+        let before = serde_json::to_value(&malformed).unwrap();
+        assert!(malformed.complete_aggregation(masks.clone()).is_err());
+        assert_eq!(serde_json::to_value(&malformed).unwrap(), before);
+    }
+
+    let mut unaccepted =
+        SecureAggregationSession::new(session.session_id.clone(), session.config.clone());
+    unaccepted.participants = session.participants.clone();
+    unaccepted.current_round = AggregationRound::Unmasking;
+    unaccepted.aggregated_result = session.aggregated_result.clone();
+    let before = serde_json::to_value(&unaccepted).unwrap();
+    assert!(matches!(
+        unaccepted.complete_aggregation(masks),
+        Err(SecureAggregationError::InvalidState)
+    ));
+    assert_eq!(serde_json::to_value(&unaccepted).unwrap(), before);
+}
+
+#[test]
+fn legacy_completion_keeps_roster_and_dropout_checks_after_serialization() {
+    let (session, masks) = pending_legacy_round();
+    let encoded = serde_json::to_string(&session).unwrap();
+    for change in 0..6 {
+        let mut restored: SecureAggregationSession = serde_json::from_str(&encoded).unwrap();
+        match change {
+            0 => {
+                // A registered non-contributor remains part of the accepted roster.
+                restored
+                    .participants
+                    .remove(&ParticipantId("carol".into()));
+            }
+            1 => restored.config.dropout_threshold = 0,
+            2 => restored.config.min_participants = 3,
+            3 => restored.config.field_modulus = 103,
+            4 => restored.session_id.push_str("-different-round"),
+            _ => restored.config.max_participants = 4,
+        }
+        let before = serde_json::to_value(&restored).unwrap();
+        assert!(restored.complete_aggregation(masks.clone()).is_err());
+        assert_eq!(serde_json::to_value(&restored).unwrap(), before);
+    }
+    let mut restored: SecureAggregationSession = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(restored.complete_aggregation(masks).unwrap(), vec![37, 53]);
+}
+
+#[test]
+fn completed_round_cannot_be_unmasked_again_by_rewinding_public_status() {
+    let (mut session, masks) = pending_legacy_round();
+    session.complete_aggregation(masks.clone()).unwrap();
+    // The terminal contribution state is retained in serialized snapshots too.
+    let mut restored: SecureAggregationSession =
+        serde_json::from_str(&serde_json::to_string(&session).unwrap()).unwrap();
+    restored.current_round = AggregationRound::Unmasking;
+    let before = serde_json::to_value(&restored).unwrap();
+    assert!(matches!(
+        restored.complete_aggregation(masks),
+        Err(SecureAggregationError::InvalidState)
+    ));
+    assert_eq!(serde_json::to_value(&restored).unwrap(), before);
+
+    let (_, mut pairwise, roster) = pending_pairwise_round(&[0, 1, 2]);
+    assert_eq!(
+        pairwise
+            .complete_pairwise_aggregation(&roster, &roster, &[])
+            .unwrap(),
+        vec![600, 1200]
+    );
+    pairwise.current_round = AggregationRound::Unmasking;
+    let before = serde_json::to_value(&pairwise).unwrap();
+    assert!(matches!(
+        pairwise.complete_pairwise_aggregation(&roster, &roster, &[]),
+        Err(SecureAggregationError::InvalidState)
+    ));
+    assert_eq!(serde_json::to_value(&pairwise).unwrap(), before);
+}
+
+#[test]
+fn pairwise_completion_rejects_changed_arithmetic_domain_and_aggregate() {
+    let (_, session, roster) = pending_pairwise_round(&[0, 1, 2]);
+    for change in 0..4 {
+        let mut changed = session.clone();
+        match change {
+            0 => changed.config.field_modulus = 101,
+            1 => changed.session_id.push_str("-different-round"),
+            2 => changed.aggregated_result = Some(vec![600]),
+            _ => changed.aggregated_result = Some(vec![-1, 1200]),
+        }
+        let before = serde_json::to_value(&changed).unwrap();
+        assert!(
+            changed
+                .complete_pairwise_aggregation(&roster, &roster, &[])
+                .is_err()
+        );
+        assert_eq!(serde_json::to_value(&changed).unwrap(), before);
+    }
+}
+
 #[test]
 fn pairwise_completion_binds_registered_roster_and_actual_contributors() {
     let (mut participants, mut session, roster) = pending_pairwise_round(&[0, 1]);

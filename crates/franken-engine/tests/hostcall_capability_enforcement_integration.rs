@@ -123,7 +123,8 @@ fn hostcall_denied_extracts_capability_name() {
     let err = lane.execute(&m, "trace-name").unwrap_err();
     match err {
         InterpreterError::CapabilityDenied { capability } => {
-            assert_eq!(capability, "net:fetch");
+            // Fetch shares the canonical network request authority boundary.
+            assert_eq!(capability, "net:request");
         }
         other => panic!("expected CapabilityDenied, got: {other:?}"),
     }

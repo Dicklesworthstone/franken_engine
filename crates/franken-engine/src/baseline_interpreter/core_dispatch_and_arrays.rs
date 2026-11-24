@@ -4693,6 +4693,12 @@ impl InterpreterCore {
             BuiltinFunctionKind::BlobMethod => {
                 self.blob_method(module, builtin, args, receiver, receiver_register)
             }
+            BuiltinFunctionKind::FetchResponseMethod => {
+                self.dispatch_fetch_response_method(module, builtin, args, receiver, receiver_register)
+            }
+            BuiltinFunctionKind::FetchHeadersMethod => {
+                self.dispatch_fetch_headers_method(module, builtin, args, receiver, receiver_register)
+            }
             // thisSymbolValue (ES2020 19.4.3.4): a wrapper object arrives here
             // already unwrapped (`this_primitive_receiver`).
             BuiltinFunctionKind::SymbolPrototypeValueOf
@@ -11851,6 +11857,8 @@ impl InterpreterCore {
                         self.check_host_io_confidentiality(&capability.0, args)?;
                         if capability.0 == crate::capability::FS_READ_PROMISE_CAPABILITY {
                             self.dispatch_fs_promise_read(args)?
+                        } else if matches!(capability.0.as_str(), "net:fetch" | "net.fetch") {
+                            self.dispatch_fetch_hostcall(Some(module), args)?
                         } else {
                             self.dispatch_host_io_hostcall(&capability.0, args)?
                         }

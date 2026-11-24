@@ -3659,21 +3659,38 @@ impl InterpreterCore {
         headers: Vec<(String, String)>,
         body: Option<Vec<u8>>,
     ) -> Result<Value, InterpreterError> {
-        let Some(provider) = self.host_io.clone() else {
-            return Ok(Value::Undefined);
-        };
-        // Only these methods change response framing. Retain the semantic
-        // context without cloning the already-owned request payload.
         let response_method = match method.as_str() {
             "HEAD" => "HEAD",
             "CONNECT" => "CONNECT",
             _ => "GET",
         };
+        match self.perform_net_request_bytes(url, method, headers, body)? {
+            fetch::NetworkRequestOutcome::Response(bytes) => {
+                self.build_net_response_value(&bytes, response_method)
+            }
+            // Keep the legacy Node HTTP path's completion behavior. Fetch
+            // interprets these outcomes separately, without issuing an effect
+            // a second time or weakening a provider refusal.
+            _ => Ok(Value::Undefined),
+        }
+    }
+
+    /// The one authorized, recorded request mechanism shared by Node HTTP
+    /// and buffered Fetch. API completion is chosen only after this returns;
+    /// the provider, recorder and journal still see exactly one request.
+    pub(super) fn perform_net_request_bytes(
+        &mut self,
+        url: String,
+        method: String,
+        headers: Vec<(String, String)>,
+        body: Option<Vec<u8>>,
+    ) -> Result<fetch::NetworkRequestOutcome, InterpreterError> {
+        use fetch::NetworkRequestOutcome;
+
+        let Some(provider) = self.host_io.clone() else {
+            return Ok(NetworkRequestOutcome::Unavailable);
+        };
         let effect = create_network_effect(url, method, headers, body);
-        // Build a Full handler stack backed by the provider (+ recorder) for this
-        // dispatch. Full grants all capabilities so the stack's gate never
-        // re-denies what the interpreter already authorized; the provider performs
-        // the real, capability-checked effect and the recorder logs it.
         let mut stack = if self.host_effect_journal.is_some() {
             create_handler_stack_from_profile_with_effect_providers(
                 &CapabilityProfile::full(),
@@ -3691,9 +3708,6 @@ impl InterpreterCore {
             )
         };
         let outcome = stack.handle_effect(effect.as_ref());
-        // A supervisor cancellation must not become the ordinary policy-denial
-        // `undefined` value below. The failed effect remains journaled, but no
-        // response callback or following guest instruction may run.
         if self
             .config
             .cancellation_token
@@ -3705,7 +3719,7 @@ impl InterpreterCore {
         let result = match outcome {
             Ok(result) => result,
             Err(EffectError::CapabilityDenied { .. }) => {
-                return Ok(Value::Undefined);
+                return Ok(NetworkRequestOutcome::Denied);
             }
             Err(EffectError::HandlerError {
                 message,
@@ -3716,18 +3730,13 @@ impl InterpreterCore {
                     details: format!("host effect dispatch failed for net:request: {message}"),
                 });
             }
-            // bd-3894s slice (5): an I/O failure inside the network mechanism
-            // (TLS handshake/certificate rejection, connect refused, timeout)
-            // surfaces as the provider's `HostIoError::Io` -> `HandlerError`.
-            // Like an ordinary policy denial, this failed outcome is already
-            // recorded by `route_host_io`. Resource refusals have been handled
-            // above; ordinary failures retain their existing 'error' event /
-            // undefined behavior so the run can surface the recorded failure:
-            // the call evaluates to `undefined`, no response value is fabricated,
-            // and the run completes. This arm is net-only (this fn dispatches
-            // only net effects); fs keeps its fatal-on-error semantics.
+            Err(EffectError::HandlerError { message, code: Some(code), .. })
+                if code == "HOST_EFFECT_JOURNAL" =>
+            {
+                return Ok(NetworkRequestOutcome::JournalFailure(message));
+            }
             Err(EffectError::HandlerError { .. }) => {
-                return Ok(Value::Undefined);
+                return Ok(NetworkRequestOutcome::TransportFailure);
             }
             Err(err) => {
                 return Err(InterpreterError::InternalError {
@@ -3736,8 +3745,8 @@ impl InterpreterCore {
             }
         };
         match result.downcast::<Vec<u8>>() {
-            Ok(bytes) => self.build_net_response_value(&bytes, response_method),
-            Err(_) => Ok(Value::Undefined),
+            Ok(bytes) => Ok(NetworkRequestOutcome::Response(bytes)),
+            Err(_) => Ok(NetworkRequestOutcome::InvalidProviderResult),
         }
     }
 

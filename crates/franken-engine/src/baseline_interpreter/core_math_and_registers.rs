@@ -4406,6 +4406,23 @@ impl InterpreterCore {
                 (std::mem::size_of::<CallableIdentitySlots>() as u64)
                     .saturating_add(Self::estimate_execution_seed_value_bytes(&identity.value))
             }
+            HostObjectSlots::FetchResponse(response) => {
+                (std::mem::size_of::<fetch::FetchResponseSlots>() as u64)
+                    .saturating_add(Self::estimate_string_bytes(&response.status_text))
+                    .saturating_add(Self::estimate_string_bytes(&response.url))
+                    .saturating_add(response.body.as_ref().map_or(0, |bytes| bytes.len() as u64))
+            }
+            HostObjectSlots::FetchHeaders(headers) => {
+                headers.fields.iter().fold(
+                    (std::mem::size_of::<fetch::FetchHeadersSlots>() as u64)
+                        .saturating_add((headers.fields.len() as u64).saturating_mul(
+                            std::mem::size_of::<(String, String)>() as u64,
+                        )),
+                    |bytes, (name, value)| bytes
+                        .saturating_add(Self::estimate_string_bytes(name))
+                        .saturating_add(Self::estimate_string_bytes(value)),
+                )
+            }
         }
     }
 
@@ -10106,7 +10123,8 @@ impl InterpreterCore {
         }
 
         let parent = match canonical {
-            "BigInt" | "Number" | "String" | "Boolean" | "Symbol" | "Function" => {
+            "BigInt" | "Number" | "String" | "Boolean" | "Symbol" | "Function"
+            | "Response" | "Headers" => {
                 Some(self.ensure_builtin_prototype("Object")?)
             }
             // ES2020 25.2.3, 25.7.3; ES2018 25.3.3: their [[Prototype]] is
@@ -10203,6 +10221,8 @@ impl InterpreterCore {
                 | "AbortSignal"
                 | "DOMException"
                 | "Blob"
+                | "Response"
+                | "Headers"
         ) {
             let key = RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id());
             self.set_object_runtime_property(prototype, key.clone(), Value::str(canonical))?;
@@ -10358,6 +10378,7 @@ impl InterpreterCore {
         }
         self.install_iteration_prototype_members(canonical, prototype)?;
         self.install_intl_prototype_members(canonical, prototype)?;
+        self.install_fetch_prototype_members(canonical, prototype)?;
         if canonical == "Array" {
             self.install_array_unscopables(prototype)?;
         }
@@ -12866,6 +12887,9 @@ impl InterpreterCore {
         .to_string();
         let instruction_index = u32::try_from(self.ip).unwrap_or(u32::MAX);
         check_hostcall_capability_gate(self, &tag, instruction_index)?;
+        if matches!(tag.as_str(), "net:fetch" | "net.fetch") {
+            return self.dispatch_fetch_hostcall(Some(module), args);
+        }
         if let Some(value) = self.object_receiver_static_value_call(module, &tag, args)? {
             return Ok(value);
         }

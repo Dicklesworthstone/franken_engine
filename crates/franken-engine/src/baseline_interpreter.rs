@@ -90,6 +90,7 @@ mod collation;
 mod collector;
 mod date_locale;
 mod event_target;
+mod fetch;
 mod inspect;
 mod intl;
 mod intl_segmenter;
@@ -1507,6 +1508,8 @@ fn canonical_builtin_prototype_name(name: &str) -> Option<&'static str> {
         "AbortSignal" => Some("AbortSignal"),
         "DOMException" => Some("DOMException"),
         "Blob" => Some("Blob"),
+        "Response" => Some("Response"),
+        "Headers" => Some("Headers"),
         "NumberFormat" => Some("NumberFormat"),
         "DateTimeFormat" => Some("DateTimeFormat"),
         "Collator" => Some("Collator"),
@@ -1646,6 +1649,7 @@ pub(crate) fn capability_gate_key(tag: &str) -> &str {
         | "builtin:CryptoRandomFillSync" => "random_read",
         "env:read" | "env:has" => "env_read",
         crate::capability::FS_READ_PROMISE_CAPABILITY => "fs:read",
+        "net:fetch" | "net.fetch" => "net:request",
         _ => tag,
     }
 }
@@ -2490,6 +2494,7 @@ fn check_hostcall_capability_gate(
     // Its distinct IR tag remains available for dispatch and result contracts.
     let operation_tag = match capability_tag {
         crate::capability::FS_READ_PROMISE_CAPABILITY => "fs:read",
+        "net:fetch" | "net.fetch" => "net:request",
         other => other,
     };
     let capability_tag = capability_gate_key(operation_tag);
@@ -4365,6 +4370,9 @@ pub enum BuiltinFunctionKind {
     /// builtin ordinals participate in deterministic register hashing.
     CryptoSignFinal,
     CryptoVerifyFinal,
+    // Append only: these ordinals participate in deterministic state hashes.
+    FetchResponseMethod,
+    FetchHeadersMethod,
 }
 
 /// Annex B B.2.2.2-14: each String HTML method's tag and attribute name.
@@ -5959,6 +5967,16 @@ impl BuiltinFunction {
                 .copied()
                 .find(|name| self.module_specifier.0.as_deref() == Some(*name))
                 .unwrap_or(""),
+            BuiltinFunctionKind::FetchResponseMethod => fetch::RESPONSE_METHODS
+                .iter()
+                .copied()
+                .find(|name| self.module_specifier.0.as_deref() == Some(*name))
+                .unwrap_or(""),
+            BuiltinFunctionKind::FetchHeadersMethod => fetch::HEADERS_METHODS
+                .iter()
+                .copied()
+                .find(|name| self.module_specifier.0.as_deref() == Some(*name))
+                .unwrap_or(""),
             BuiltinFunctionKind::StringIterator | BuiltinFunctionKind::GeneratorIteratorSelf => {
                 "@@iterator"
             }
@@ -6611,6 +6629,8 @@ impl BuiltinFunction {
             | K::SymbolPrototypeValueOf
             | K::SymbolPrototypeToPrimitive => "Symbol.prototype",
             K::BlobMethod => "Blob.prototype",
+            K::FetchResponseMethod => "Response.prototype",
+            K::FetchHeadersMethod => "Headers.prototype",
             K::SharedArrayBufferMethod => "SharedArrayBuffer.prototype",
             K::ArrayBufferMethod => "ArrayBuffer.prototype",
             K::AtomicsMethod => "Atomics",
@@ -7050,7 +7070,7 @@ const GLOBAL_OBJECT_MEMBERS: [&str; 17] = [
 
 /// bd-9vouw.17: bare global functions bound as first-class values (the same
 /// list the lowering declares factory hostcalls for).
-const GLOBAL_FUNCTION_VALUES: [&str; 13] = crate::lowering_pipeline::GLOBAL_FUNCTION_VALUE_NAMES;
+const GLOBAL_FUNCTION_VALUES: [&str; 14] = crate::lowering_pipeline::GLOBAL_FUNCTION_VALUE_NAMES;
 
 /// The RegExp flags in the order the `flags` getter lists them (ES2025
 /// 22.2.6.4): hasIndices, global, ignoreCase, multiline, dotAll, unicode,
@@ -9678,6 +9698,8 @@ enum HostObjectSlots {
     /// Immutable identity of the callable represented by this property
     /// backing. It is not a guest property or a new invocation authority.
     CallableIdentity(CallableIdentitySlots),
+    FetchResponse(fetch::FetchResponseSlots),
+    FetchHeaders(fetch::FetchHeadersSlots),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -10698,7 +10720,9 @@ fn validate_heap_symbol_references(
             | HostObjectSlots::FsEntryKind(_)
             | HostObjectSlots::TimerHandle(_)
             | HostObjectSlots::EventTarget(_)
-            | HostObjectSlots::AbortController(_) => {}
+            | HostObjectSlots::AbortController(_)
+            | HostObjectSlots::FetchResponse(_)
+            | HostObjectSlots::FetchHeaders(_) => {}
         }
     }
     for value in object.properties.all_data_values() {

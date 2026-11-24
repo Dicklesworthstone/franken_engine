@@ -2574,7 +2574,7 @@ fn rc_c1_ambient_authority_rejects_globalthis_aliases_destructuring_and_folded_k
         "const { ...rest } = globalThis;",
         r#"globalThis["process"];"#,
         r#"globalThis["ev" + "al"]("1");"#,
-        r#"globalThis.fetch("https://example.com");"#,
+        r#"globalThis.WebSocket("https://example.com");"#,
     ];
     for snippet in denied_snippets {
         let tree = parser.parse(snippet, ParseGoal::Script).expect("parse");

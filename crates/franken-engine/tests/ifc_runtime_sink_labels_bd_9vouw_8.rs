@@ -1006,7 +1006,7 @@ fn network_host_budget_refusals_abort_before_guest_catch_or_continuation() {
 
 #[test]
 #[cfg(unix)]
-fn ordinary_network_policy_and_transport_failures_preserve_guest_continuation() {
+fn fetch_policy_denial_is_fatal_and_transport_failure_rejects() {
     use frankenengine_extension_host::host_io::SandboxedHostIo;
     use std::net::TcpListener;
     use std::time::Duration;
@@ -1038,6 +1038,7 @@ fn ordinary_network_policy_and_transport_failures_preserve_guest_continuation() 
         config.granted_capabilities = [
             RuntimeCapability::VmDispatch,
             RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
             RuntimeCapability::Console,
             RuntimeCapability::NetworkEgress,
         ]
@@ -1046,16 +1047,20 @@ fn ordinary_network_policy_and_transport_failures_preserve_guest_continuation() 
         let mut core = InterpreterCore::new(config, "ordinary-network-failure");
         core.set_host_io(Arc::new(provider), Some(transcript.clone()));
         let outcome = core.execute(&lower(&format!(
-            "const response = fetch('{url}'); console.log(typeof response); \
-             console.log('continued');"
+            "const response = fetch('{url}'); \
+             response.catch(error => console.log(error.name)); \
+             console.log(typeof response); console.log('continued');"
         )));
-        outcome.expect("ordinary network refusal must not abort guest execution");
-        let messages: Vec<_> = core
-            .console_output()
-            .iter()
-            .map(|entry| entry.message.as_str())
-            .collect();
-        assert_eq!(messages, ["undefined", "continued"]);
+        if policy_denial {
+            assert!(matches!(&outcome, Err(InterpreterError::CapabilityDenied { capability })
+                if capability == "net:request"), "{outcome:?}");
+            assert!(core.console_output().is_empty());
+        } else {
+            let result = outcome.expect("ordinary transport failure is a rejected Fetch Promise");
+            let messages: Vec<_> = result.console_output
+                .iter().map(|entry| entry.message.as_str()).collect();
+            assert_eq!(messages, ["object", "continued", "TypeError"]);
+        }
         let entries = transcript.recorded_entries();
         assert_eq!(
             entries.len(),

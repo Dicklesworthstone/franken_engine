@@ -8120,6 +8120,8 @@ impl InterpreterCore {
                 .and_then(|()| {
                     if cap == crate::capability::FS_READ_PROMISE_CAPABILITY {
                         self.dispatch_fs_promise_read(delegated_args)
+                    } else if matches!(cap, "net:fetch" | "net.fetch") {
+                        self.dispatch_fetch_hostcall(module, delegated_args)
                     } else {
                         self.dispatch_host_io_hostcall(cap, delegated_args)
                     }

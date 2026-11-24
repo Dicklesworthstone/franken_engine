@@ -16399,11 +16399,10 @@ fn required_effect_for_ambient_authority(
         "Deno" | "Bun" => Some(EffectKind::Global),
         "WebSocket" | "XMLHttpRequest" | "EventSource" => Some(EffectKind::NetConnect),
         "localStorage" | "sessionStorage" | "indexedDB" => Some(EffectKind::FsRead),
-        // bd-9vouw.17 + bd-7fhp3: the global object the runtime binds to
-        // `globalThis` (and Node's `global`) holds only the standard intrinsics,
-        // never a host-authority member, so reading it needs no authority. A
-        // static or folded read of any Node/Web/Deno/Bun host-authority member
-        // stays gated identically to the bare identifier.
+        // The realm's finite intrinsic registry includes a native fetch
+        // function value. Retrieving that value is pure; every invocation
+        // still checks net:request authority, live hooks and concrete IFC.
+        // Unrelated ambient names and dynamic global access remain denied.
         "globalThis" | "global" => match member_property {
             Some("eval" | "SharedWorker" | "importScripts") => Some(EffectKind::Eval),
             Some("Deno" | "Bun") => Some(EffectKind::Global),
@@ -16411,14 +16410,16 @@ fn required_effect_for_ambient_authority(
             Some("require" | "localStorage" | "sessionStorage" | "indexedDB") => {
                 Some(EffectKind::FsRead)
             }
-            Some("fetch" | "WebSocket" | "XMLHttpRequest" | "EventSource") => {
+            Some("WebSocket" | "XMLHttpRequest" | "EventSource") => {
                 Some(EffectKind::NetConnect)
             }
             Some("crypto") => Some(EffectKind::RandomRead), // crypto uses CSPRNG
             _ => None,
         },
         "require" => Some(EffectKind::FsRead), // Node.js require
-        "fetch" => Some(EffectKind::NetConnect), // Fetch API
+        // This identifier resolves only to the registered native factory
+        // (or a lexical guest binding). It grants no network authority.
+        "fetch" => None,
         "process" => match member_property {
             // Environment VARIABLE VALUE reads (`process.env`, then `.SECRET`).
             // These stay `EnvRead` so they are denied even under the trusted
@@ -20928,21 +20929,19 @@ fn lower_expression_to_ir1_inner(
                 }
             }
             if let Some(capability) = fetch_builtin_call_capability(callee, binding_lookup) {
-                // bd-3894s (http leg, fetch global): `fetch(url[, init])` — the bare
-                // unshadowed WHATWG/Node global — lowers to the same `net:request`
-                // HostCall as `http.get`, forwarding ONLY the URL operand (arg[0]).
-                // Unlike the http member-call forms, `fetch` returns a Promise, so
-                // the egress result is wrapped in `promise:resolve` (mirroring the
-                // fs/promises named-import lowering) — `fetch(url)` evaluates to a
-                // Promise. The request-`init` object (`fetch(url, { method,
-                // headers, body })`) is forwarded as arg[1] below so the interpreter
-                // frames the real method/headers/body from it (bd-3894s slice 2).
-                // The endpoint (arg[0]) the
-                // SSRF gate authorizes is correct for both arities. A 0-arg call is
-                // malformed: fall through so it is not silently mis-shaped.
-                if let Some(url_arg) = arguments.first() {
+                // Fetch owns its Promise completion; the native adapter shares
+                // the authorized network effect and builds a buffered Response.
+                // Evaluate every supplied argument, including ignored extras.
+                let arg_count = arguments.len();
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
+                for arg in arguments {
                     lower_expression_to_ir1(
-                        url_arg,
+                        arg,
                         ops,
                         bindings,
                         binding_lookup,
@@ -20951,33 +20950,12 @@ fn lower_expression_to_ir1_inner(
                         label_counter,
                         span_table,
                     )?;
-                    // bd-3894s slice (2): forward the request-`init` object (arg[1])
-                    // so the interpreter frames the real method/headers/body from
-                    // `fetch(url, { method, headers, body })` instead of a GET.
-                    let mut arg_count = 1u32;
-                    if let Some(init_arg) = arguments.get(1) {
-                        lower_expression_to_ir1(
-                            init_arg,
-                            ops,
-                            bindings,
-                            binding_lookup,
-                            binding_index,
-                            root_scope_id,
-                            label_counter,
-                            span_table,
-                        )?;
-                        arg_count = 2;
-                    }
-                    ops.push(Ir1Op::HostCall {
-                        capability: capability.to_string(),
-                        arg_count,
-                    });
-                    ops.push(Ir1Op::HostCall {
-                        capability: "promise:resolve".to_string(),
-                        arg_count: 1,
-                    });
-                    return Ok(());
                 }
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
+                    arg_count: arg_count as u32,
+                });
+                return Ok(());
             }
             if let Some(capability) = console_builtin_call_capability(callee, binding_lookup) {
                 let arg_count = arguments.len();

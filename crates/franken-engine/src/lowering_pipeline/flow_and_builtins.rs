@@ -6860,7 +6860,7 @@ pub(super) fn fetch_builtin_call_capability(
         return None;
     }
     match name.as_str() {
-        "fetch" => Some("net:request"),
+        "fetch" => Some("net:fetch"),
         _ => None,
     }
 }
@@ -7919,7 +7919,7 @@ pub(super) fn is_mutable_static_builtin_receiver(
 }
 
 /// Bare global functions that read as first-class values.
-pub(crate) const GLOBAL_FUNCTION_VALUE_NAMES: [&str; 13] = [
+pub(crate) const GLOBAL_FUNCTION_VALUE_NAMES: [&str; 14] = [
     "parseInt",
     "parseFloat",
     "isNaN",
@@ -7933,6 +7933,7 @@ pub(crate) const GLOBAL_FUNCTION_VALUE_NAMES: [&str; 13] = [
     "encodeURI",
     "decodeURI",
     "structuredClone",
+    "fetch",
 ];
 
 pub(super) fn static_member_value_capability(
@@ -7972,6 +7973,7 @@ pub(super) fn global_function_value_capability(name: &str) -> Option<String> {
 /// function values (bd-9vouw.17).
 pub(crate) fn global_function_capability(name: &str) -> Option<&'static str> {
     match name {
+        "fetch" => Some("net:fetch"),
         "parseInt" => Some("builtin:parseInt"),
         "parseFloat" => Some("builtin:parseFloat"),
         "isNaN" => Some("builtin:isNaN"),

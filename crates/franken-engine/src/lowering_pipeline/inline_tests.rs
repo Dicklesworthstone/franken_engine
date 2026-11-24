@@ -4445,10 +4445,9 @@ fn first_hostcall_arg_count(ops: &[Ir1Op], cap: &str) -> Option<u32> {
     })
 }
 
-/// bd-3894s slice (2): the `arg_count` of the first `net:request` HostCall —
-/// the immediate `http.get`/`fetch` egress form.
-fn net_request_arg_count(ops: &[Ir1Op]) -> Option<u32> {
-    first_hostcall_arg_count(ops, "net:request")
+/// The `arg_count` of the native Fetch HostCall, including its init object.
+fn fetch_arg_count(ops: &[Ir1Op]) -> Option<u32> {
+    first_hostcall_arg_count(ops, "net:fetch")
 }
 
 fn ops_have_fs_import_module(ops: &[Ir1Op]) -> bool {
@@ -8860,22 +8859,25 @@ fn esm_named_get_from_non_http_module_does_not_lower_bd_3894s() {
     );
 }
 
-/// bd-3894s (http leg, fetch global): the bare `fetch(url)` global lowers to
-/// a `net:request` HostCall — the egress proof for the dominant modern HTTP
-/// idiom. It remains external while plain `http` uses hermetic builtins.
+/// The bare `fetch(url)` global selects the native Fetch response and Promise
+/// completion path. Node HTTP keeps its separate request adapters.
 #[test]
-fn fetch_global_lowers_to_net_request_bd_3894s() {
+fn fetch_global_lowers_to_native_fetch_bd_3894s() {
     let ops = lower_script_source_ops("fetch('http://127.0.0.1:9/');\n", "fetch_global.js");
     assert!(
-        ops_have_hostcall(&ops, "net:request"),
-        "fetch(url) must lower to a net:request hostcall"
+        ops_have_hostcall(&ops, "net:fetch"),
+        "fetch(url) must lower to the native net:fetch hostcall"
+    );
+    assert!(
+        !ops_have_hostcall(&ops, "net:request"),
+        "fetch(url) must not select the legacy request response shape"
     );
 }
 
 /// bd-3894s slice (2): `fetch(url, init)` forwards the request-`init` object
 /// as arg[1] (arg_count == 2) so the interpreter frames the real
 /// method/headers/body from it. A bare `fetch(url)` forwards only the URL
-/// (arg_count == 1), leaving the unchanged slice-1 GET egress.
+/// (arg_count == 1), so the native Fetch path applies its GET default.
 #[test]
 fn fetch_global_with_init_forwards_options_arg_bd_3894s() {
     let ops = lower_script_source_ops(
@@ -8883,18 +8885,18 @@ fn fetch_global_with_init_forwards_options_arg_bd_3894s() {
         "fetch_global_init.js",
     );
     assert!(
-        ops_have_hostcall(&ops, "net:request"),
-        "fetch(url, init) must lower to a net:request hostcall"
+        ops_have_hostcall(&ops, "net:fetch"),
+        "fetch(url, init) must lower to the native net:fetch hostcall"
     );
     assert_eq!(
-        net_request_arg_count(&ops),
+        fetch_arg_count(&ops),
         Some(2),
         "fetch(url, init) must forward the init object as arg[1] (arg_count == 2)"
     );
 
     let bare = lower_script_source_ops("fetch('http://127.0.0.1:9/');\n", "fetch_bare.js");
     assert_eq!(
-        net_request_arg_count(&bare),
+        fetch_arg_count(&bare),
         Some(1),
         "a bare fetch(url) forwards only the URL (arg_count == 1)"
     );
@@ -8996,43 +8998,34 @@ fn http_request_with_callback_forwards_to_net_client_request_bd_3894s() {
     );
 }
 
-/// bd-3894s: `fetch` returns a Promise, so the lowering wraps the egress
-/// result in `promise:resolve` — `fetch(url)` evaluates to a Promise (mirror
-/// of the fs/promises named-import lowering). The resolved value is undefined
-/// until response modeling lands.
+/// The native Fetch hostcall settles its own Promise with a Response or an
+/// ordinary rejection. Lowering must not synthesize a promise:resolve wrapper
+/// around the legacy request result.
 #[test]
-fn fetch_global_returns_promise_bd_3894s() {
+fn fetch_global_returns_native_promise_bd_3894s() {
     let ops = lower_script_source_ops("fetch('http://127.0.0.1:9/');\n", "fetch_global_promise.js");
     assert!(
-        ops_have_hostcall(&ops, "net:request"),
-        "fetch must emit the net:request egress"
+        ops_have_hostcall(&ops, "net:fetch"),
+        "fetch must select the native Promise-producing hostcall"
     );
     assert!(
-        ops_have_hostcall(&ops, "promise:resolve"),
-        "fetch must wrap its result in promise:resolve so fetch(url) is a Promise"
+        !ops_have_hostcall(&ops, "promise:resolve"),
+        "fetch must not synthesize a promise:resolve wrapper"
     );
 }
 
-/// bd-3894s fail-closed: a user-shadowed `fetch` (`const fetch = ...`) is a
-/// local function, NOT the host global, so the recognizer must NOT report it
-/// as the host egress (the shadowing gate shared with the timer/global-
-/// function builtins). This is checked directly on the recognizer rather
-/// than end-to-end because `fetch` is ALSO ambient-authority-gated at the
-/// identifier level (a bare `fetch` reference trips a NetConnect ambient
-/// violation, line ~7257), so a shadowed `fetch(url)` fail-closes at the
-/// ambient gate before emitting ops — it can never be observed as a stray
-/// net:request. The recognizer gate is what defends against the engine
-/// mis-lowering the user's own `fetch` to a FALSE egress proof.
+/// A user-shadowed `fetch` (`const fetch = ...`) stays a local function. The
+/// direct-call recognizer must not turn that binding into a network egress.
 #[test]
 fn shadowed_fetch_does_not_lower_bd_3894s() {
     let callee = Expression::Identifier("fetch".to_string());
 
-    // Unshadowed: the bare global is recognized as the net:request egress.
+    // Unshadowed: the bare global selects the native Fetch hostcall.
     let unshadowed: BTreeMap<String, BindingId> = BTreeMap::new();
     assert_eq!(
         fetch_builtin_call_capability(&callee, &unshadowed),
-        Some("net:request"),
-        "an unshadowed bare `fetch` must be recognized as a net:request egress"
+        Some("net:fetch"),
+        "an unshadowed bare `fetch` must select the native net:fetch hostcall"
     );
 
     // Shadowed by a user binding in scope: NOT recognized — this is the gate

@@ -19,7 +19,7 @@ use super::*;
 /// are real own properties of the prototype, installed when it is created.
 /// The [`SPECIES_GETTER_KEY`] rows are the constructors' own
 /// `get [Symbol.species]` (bd-9vouw.278), installed on the constructor.
-pub(super) const PROTOTYPE_GETTERS: [(&str, &str, &str); 62] = [
+pub(super) const PROTOTYPE_GETTERS: [(&str, &str, &str); 70] = [
     // Annex B.2.2.1 (bd-9vouw.284): the one accessor here with a setter
     // ([`InterpreterCore::prototype_accessor_setter`]). Ordinary `o.__proto__`
     // reads and writes keep their direct path while they reach it.
@@ -85,6 +85,14 @@ pub(super) const PROTOTYPE_GETTERS: [(&str, &str, &str); 62] = [
     // WHATWG File API (bd-9vouw.226).
     ("Blob", "size", "get size"),
     ("Blob", "type", "get type"),
+    ("Response", "status", "get status"),
+    ("Response", "statusText", "get statusText"),
+    ("Response", "url", "get url"),
+    ("Response", "ok", "get ok"),
+    ("Response", "headers", "get headers"),
+    ("Response", "bodyUsed", "get bodyUsed"),
+    ("Response", "redirected", "get redirected"),
+    ("Response", "type", "get type"),
     // WHATWG Encoding (bd-3l74k, bd-9vouw.150).
     ("TextEncoder", "encoding", "get encoding"),
     ("TextDecoder", "encoding", "get encoding"),
@@ -388,6 +396,9 @@ impl InterpreterCore {
         {
             return Ok(value);
         }
+        if owner == "Response" {
+            return self.fetch_response_getter(id, key);
+        }
         if owner == "TextEncoder" && key == "encoding" {
             return Ok(Value::str("utf-8"));
         }
@@ -518,6 +529,7 @@ impl InterpreterCore {
                 self.has_event_family_brand(id, owner)
             }
             "Blob" => object.blob.is_some(),
+            "Response" => object.fetch_response_slots().is_some(),
             "TextEncoder" => object.brand() == Some(text_codec::TEXT_ENCODER_TYPE),
             "TextDecoder" => {
                 object.brand() == Some(text_codec::TEXT_DECODER_TYPE)

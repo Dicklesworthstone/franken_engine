@@ -1800,6 +1800,9 @@ impl InterpreterCore {
                     HostObjectSlots::IntlResolved(resolved) => {
                         marker.object(*resolved);
                     }
+                    HostObjectSlots::FetchResponse(response) => {
+                        marker.object(response.headers);
+                    }
                     HostObjectSlots::TimersPromisesInterval(interval) => {
                         marker.value(&interval.value);
                     }
@@ -1851,6 +1854,7 @@ impl InterpreterCore {
                         }
                     }
                     HostObjectSlots::TextDecoder(_)
+                    | HostObjectSlots::FetchHeaders(_)
                     | HostObjectSlots::FsEntryKind(_)
                     | HostObjectSlots::TimerHandle(_) => {}
                 }

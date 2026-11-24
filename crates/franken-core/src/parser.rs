@@ -4516,7 +4516,20 @@ fn merge_logical_lines_with_completion_limit(
                 pending_clause_continuation,
             )
         };
-        if may_flush && !declaration_needs_binding && clause_continues.is_none() {
+        let namespace_export_continues = may_flush
+            && current_text.contains("export")
+            && trailing_statement_source(
+                &current_text,
+                grammar_context,
+                completion_recursion_limit,
+                &mut completion_memo,
+            )
+            .is_some_and(namespace_export_needs_continuation);
+        if may_flush
+            && !declaration_needs_binding
+            && clause_continues.is_none()
+            && !namespace_export_continues
+        {
             let trimmed = current_text.trim();
             if !trimmed.is_empty() {
                 result.push(LogicalLine {
@@ -6520,6 +6533,12 @@ fn parse_export(
 
     let kind = if let Some(default_expr) = clause_keyword_tail(body, "default", grammar_context) {
         ExportKind::Default(parse_expression(default_expr.trim(), &span, context, 1)?)
+    } else if let Some(star) = body.strip_prefix('*') {
+        ExportKind::NamedClause(parse_namespace_export_clause(
+            star,
+            context.source_label,
+            &span,
+        )?)
     } else {
         ExportKind::NamedClause(parse_named_export_clause(
             body,
@@ -6528,6 +6547,84 @@ fn parse_export(
         )?)
     };
     Ok(ExportDeclaration { kind, span })
+}
+
+/// Namespace re-export tokens may be separated by physical line breaks.
+fn namespace_export_needs_continuation(source: &str) -> bool {
+    let Some(rest) = trim_binding_pattern_leading_trivia(source)
+        .and_then(|source| strip_contextual_keyword(source, "export"))
+        .and_then(trim_binding_pattern_leading_trivia)
+    else {
+        return false;
+    };
+    if rest.is_empty() {
+        return true;
+    }
+    let Some(rest) = rest
+        .strip_prefix('*')
+        .and_then(trim_binding_pattern_leading_trivia)
+    else {
+        return false;
+    };
+    if rest.is_empty() {
+        return true;
+    }
+    let Some(rest) =
+        strip_contextual_keyword(rest, "as").and_then(trim_binding_pattern_leading_trivia)
+    else {
+        return false;
+    };
+    if rest.is_empty() {
+        return true;
+    }
+    let Some((_, alias_end)) = canonical_leading_source_identifier(rest) else {
+        return false;
+    };
+    let Some(rest) = trim_binding_pattern_leading_trivia(&rest[alias_end..]) else {
+        return false;
+    };
+    rest.is_empty()
+        || strip_contextual_keyword(rest, "from")
+            .and_then(trim_binding_pattern_leading_trivia)
+            .is_some_and(str::is_empty)
+}
+
+/// ES2020 namespace re-exports preserve the imported namespace object itself.
+/// The canonical head matches the engine lane, without inventing a source
+/// binding for the exported name. Unqualified star exports still need the
+/// export-resolution/linking substrate and remain an explicit refusal here.
+fn parse_namespace_export_clause(
+    rest: &str,
+    source_label: &str,
+    span: &SourceSpan,
+) -> ParseResult<NamedExportClause> {
+    let error = |message: &str| {
+        ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            message,
+            source_label.to_string(),
+            Some(span.clone()),
+        )
+    };
+    let rest = trim_binding_pattern_leading_trivia(rest)
+        .ok_or_else(|| error("namespace export has unterminated lexical trivia"))?;
+    let alias_source = strip_contextual_keyword(rest, "as")
+        .and_then(trim_binding_pattern_leading_trivia)
+        .ok_or_else(|| error("star export requires `as <name> from <quoted-source>`"))?;
+    // The alias is an IdentifierName, not a local binding: keywords such as
+    // `default` and escaped or Unicode names are valid exported names.
+    let (alias, alias_end) = canonical_leading_source_identifier(alias_source)
+        .ok_or_else(|| error("namespace export requires an identifier name"))?;
+    let trailing = trim_binding_pattern_leading_trivia(&alias_source[alias_end..])
+        .ok_or_else(|| error("namespace export has unterminated lexical trivia"))?;
+    let source = strip_contextual_keyword(trailing, "from")
+        .and_then(trim_binding_pattern_trivia)
+        .and_then(parse_quoted_string)
+        .ok_or_else(|| error("namespace export requires `from <quoted-source>`"))?;
+    Ok(NamedExportClause::new(
+        format!("* as {alias}"),
+        Some(source),
+    ))
 }
 
 fn parse_named_export_clause(
@@ -12957,10 +13054,12 @@ pub enum SemanticErrorCode {
     AwaitOutsideAsync,
     /// `yield` used outside of a generator.
     YieldOutsideGenerator,
+    /// More than one declaration publishes the same non-default export name.
+    DuplicateNamedExport,
 }
 
 impl SemanticErrorCode {
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 23] = [
         Self::DuplicateLetConstDeclaration,
         Self::VarConflictsWithLexical,
         Self::LexicalConflictsWithVar,
@@ -12983,6 +13082,7 @@ impl SemanticErrorCode {
         Self::IllegalContinue,
         Self::AwaitOutsideAsync,
         Self::YieldOutsideGenerator,
+        Self::DuplicateNamedExport,
     ];
 
     pub const fn as_str(&self) -> &'static str {
@@ -12995,6 +13095,7 @@ impl SemanticErrorCode {
             Self::TemporalDeadZone => "temporal_dead_zone",
             Self::DuplicateImportBinding => "duplicate_import_binding",
             Self::DuplicateDefaultExport => "duplicate_default_export",
+            Self::DuplicateNamedExport => "duplicate_named_export",
             Self::UndeclaredExportBinding => "undeclared_export_binding",
             Self::ModuleTopLevelReturn => "module_top_level_return",
             Self::ModuleDeclarationInScript => "module_declaration_in_script",
@@ -13022,6 +13123,7 @@ impl SemanticErrorCode {
             Self::TemporalDeadZone => "FE-SEM-TDZ-0001",
             Self::DuplicateImportBinding => "FE-SEM-DUPLICATE-IMPORT-0001",
             Self::DuplicateDefaultExport => "FE-SEM-DUPLICATE-DEFAULT-EXPORT-0001",
+            Self::DuplicateNamedExport => "FE-SEM-DUPLICATE-NAMED-EXPORT-0001",
             Self::UndeclaredExportBinding => "FE-SEM-UNDECLARED-EXPORT-0001",
             Self::ModuleTopLevelReturn => "FE-SEM-MODULE-RETURN-0001",
             Self::ModuleDeclarationInScript => "FE-SEM-MODULE-IN-SCRIPT-0001",
@@ -13049,6 +13151,7 @@ impl SemanticErrorCode {
                 SemanticDiagnosticCategory::Binding
             }
             Self::DuplicateDefaultExport
+            | Self::DuplicateNamedExport
             | Self::UndeclaredExportBinding
             | Self::ModuleTopLevelReturn
             | Self::ModuleDeclarationInScript => SemanticDiagnosticCategory::Module,
@@ -13081,6 +13184,7 @@ impl SemanticErrorCode {
             Self::TemporalDeadZone => "cannot access lexical binding before initialization",
             Self::DuplicateImportBinding => "import binding has already been declared",
             Self::DuplicateDefaultExport => "module may not have more than one default export",
+            Self::DuplicateNamedExport => "module may not export the same name more than once",
             Self::UndeclaredExportBinding => "exported name is not declared in module scope",
             Self::ModuleTopLevelReturn => "return statement is not allowed at module top-level",
             Self::ModuleDeclarationInScript => {

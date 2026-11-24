@@ -473,9 +473,7 @@ fn raw_expression_statement_span(statements: &[Statement]) -> Option<SourceSpan>
                     }
                     Statement::ForIn(iteration) => {
                         pending.push(Node::Pattern(&iteration.binding));
-                        pending.extend(
-                            iteration.pre_loop_initializer.iter().map(Node::Expression),
-                        );
+                        pending.extend(iteration.pre_loop_initializer.iter().map(Node::Expression));
                         pending.push(Node::Expression(&iteration.object));
                         pending.push(Node::Statement(&iteration.body));
                     }
@@ -519,7 +517,10 @@ fn raw_expression_statement_span(statements: &[Statement]) -> Option<SourceSpan>
                     }
                     Statement::FunctionDeclaration(function) => {
                         pending.extend(
-                            function.params.iter().map(|param| Node::Pattern(&param.pattern)),
+                            function
+                                .params
+                                .iter()
+                                .map(|param| Node::Pattern(&param.pattern)),
                         );
                         pending.extend(function.body.body.iter().map(Node::Statement));
                     }
@@ -570,8 +571,12 @@ fn raw_expression_statement_span(statements: &[Statement]) -> Option<SourceSpan>
                         pending.push(Node::Expression(callee));
                         pending.extend(arguments.iter().map(Node::Expression));
                     }
-                    Expression::Member { object, property, .. }
-                    | Expression::OptionalMember { object, property, .. } => {
+                    Expression::Member {
+                        object, property, ..
+                    }
+                    | Expression::OptionalMember {
+                        object, property, ..
+                    } => {
                         pending.push(Node::Expression(object));
                         pending.push(Node::Expression(property));
                     }
@@ -599,7 +604,9 @@ fn raw_expression_statement_span(statements: &[Statement]) -> Option<SourceSpan>
                         pending.extend(params.iter().map(|param| Node::Pattern(&param.pattern)));
                         pending.extend(body.body.iter().map(Node::Statement));
                     }
-                    Expression::ClassExpression { super_class, body, .. } => {
+                    Expression::ClassExpression {
+                        super_class, body, ..
+                    } => {
                         pending.extend(super_class.as_deref().map(Node::Expression));
                         pending.extend(body.iter().map(Node::Method));
                     }
@@ -627,7 +634,10 @@ fn raw_expression_statement_span(statements: &[Statement]) -> Option<SourceSpan>
                 Node::Method(method) => {
                     pending.push(Node::Expression(&method.key));
                     pending.extend(
-                        method.params.iter().map(|param| Node::Pattern(&param.pattern)),
+                        method
+                            .params
+                            .iter()
+                            .map(|param| Node::Pattern(&param.pattern)),
                     );
                     pending.extend(method.body.body.iter().map(Node::Statement));
                 }
@@ -718,6 +728,37 @@ pub fn lower_ir0_to_ir3(
     })
 }
 
+fn duplicate_export_errors(
+    export: &crate::ast::ExportDeclaration,
+    seen_exports: &mut BTreeSet<String>,
+) -> Vec<SemanticError> {
+    let names = match &export.kind {
+        ExportKind::Default(_) => vec!["default".to_string()],
+        ExportKind::NamedClause(clause) => {
+            if let Some(name) = clause.canonical_head().strip_prefix("* as ") {
+                vec![name.to_string()]
+            } else {
+                parse_named_export_clause_bindings(clause.canonical_head())
+                    .into_iter()
+                    .map(|(_, exported)| exported)
+                    .collect()
+            }
+        }
+    };
+    let mut errors = Vec::new();
+    for name in names {
+        if !seen_exports.insert(name.clone()) {
+            let (code, name) = if name == "default" {
+                (SemanticErrorCode::DuplicateDefaultExport, None)
+            } else {
+                (SemanticErrorCode::DuplicateNamedExport, Some(name))
+            };
+            errors.push(SemanticError::new(code, name, Some(export.span.clone())));
+        }
+    }
+    errors
+}
+
 /// Validate static semantics of an IR0 module without performing full lowering.
 ///
 /// This catches early errors specified by ES2020:
@@ -731,7 +772,7 @@ pub fn validate_ir0_static_semantics(ir0: &Ir0Module) -> SemanticValidationResul
     let mut result = SemanticValidationResult::new();
 
     let mut seen_bindings = BTreeMap::<String, BindingKind>::new();
-    let mut default_export_count = 0u32;
+    let mut seen_exports = BTreeSet::<String>::new();
 
     for statement in &ir0.tree.body {
         match statement {
@@ -751,15 +792,8 @@ pub fn validate_ir0_static_semantics(ir0: &Ir0Module) -> SemanticValidationResul
                 }
             }
             Statement::Export(export) => {
-                if matches!(export.kind, ExportKind::Default(_)) {
-                    default_export_count += 1;
-                    if default_export_count > 1 {
-                        result.add_error(SemanticError::new(
-                            SemanticErrorCode::DuplicateDefaultExport,
-                            None,
-                            Some(export.span.clone()),
-                        ));
-                    }
+                for error in duplicate_export_errors(export, &mut seen_exports) {
+                    result.add_error(error);
                 }
             }
             Statement::VariableDeclaration(variable_declaration) => {
@@ -1933,6 +1967,16 @@ pub fn lower_ir0_to_ir1(
     if let Some(span) = raw_expression_statement_span(&ir0.tree.body) {
         return Err(raw_expression_lowering_error(Some(span)));
     }
+    let mut seen_exports = BTreeSet::new();
+    for statement in &ir0.tree.body {
+        if let Statement::Export(export) = statement
+            && let Some(error) = duplicate_export_errors(export, &mut seen_exports)
+                .into_iter()
+                .next()
+        {
+            return Err(LoweringPipelineError::SemanticViolation(error));
+        }
+    }
 
     let ir0_hash = ir0.content_hash();
     let mut ir1 = Ir1Module::new(ir0_hash, ir0.header.source_label.clone());
@@ -2230,6 +2274,33 @@ pub fn lower_ir0_to_ir1(
                     ir1.ops.push(Ir1Op::StoreBinding { binding_id });
                     ir1.ops.push(Ir1Op::ExportBinding {
                         name: "default".to_string(),
+                        binding_id,
+                    });
+                    ir1.ops.push(Ir1Op::Pop);
+                }
+                ExportKind::NamedClause(clause)
+                    if clause.canonical_head().starts_with("* as ")
+                        && clause.source().is_some() =>
+                {
+                    let exported_name = &clause.canonical_head()["* as ".len()..];
+                    let binding_name =
+                        make_internal_binding_name("reexport_namespace", synthetic_export_index);
+                    synthetic_export_index = synthetic_export_index.saturating_add(1);
+                    let binding_id = alloc_binding(
+                        &mut bindings,
+                        &mut binding_lookup,
+                        &mut binding_index,
+                        root_scope_id,
+                        &binding_name,
+                        BindingKind::Const,
+                    )
+                    .map_err(LoweringPipelineError::SemanticViolation)?;
+                    ir1.ops.push(Ir1Op::ImportModule {
+                        specifier: clause.source().cloned().expect("guarded above"),
+                    });
+                    ir1.ops.push(Ir1Op::StoreBinding { binding_id });
+                    ir1.ops.push(Ir1Op::ExportBinding {
+                        name: exported_name.to_string(),
                         binding_id,
                     });
                     ir1.ops.push(Ir1Op::Pop);
@@ -17276,7 +17347,10 @@ mod tests {
                 panic!("{source}: expected unsupported syntax, got {error:?}");
             };
             assert_eq!(diagnostic.diagnostic_code, "FE-LOWER-RAW-EXPRESSION-0001");
-            assert!(diagnostic.span.is_some(), "{source}: missing statement span");
+            assert!(
+                diagnostic.span.is_some(),
+                "{source}: missing statement span"
+            );
             assert_eq!(
                 lower_ir0_to_ir3(&ir0, &context).expect_err(source),
                 error,

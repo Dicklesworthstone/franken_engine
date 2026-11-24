@@ -12208,7 +12208,7 @@ fn lower_expression_to_ir1(
                     .iter()
                     .any(|argument| matches!(argument, Expression::SpreadElement(_)))
                 {
-                    let arg_count = lower_super_argument_array_to_ir1(
+                    let arg_count = lower_spread_argument_array_to_ir1(
                         arguments,
                         ops,
                         bindings,
@@ -12238,6 +12238,22 @@ fn lower_expression_to_ir1(
                     arg_count: arguments.len() as u32,
                 });
                 return Ok(());
+            }
+            if arguments
+                .iter()
+                .any(|argument| matches!(argument, Expression::SpreadElement(_)))
+            {
+                return lower_spread_call_to_ir1(
+                    callee,
+                    arguments,
+                    false,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                );
             }
             if let Expression::Member {
                 object,
@@ -12667,6 +12683,22 @@ fn lower_expression_to_ir1(
             });
         }
         Expression::OptionalCall { callee, arguments } => {
+            if arguments
+                .iter()
+                .any(|argument| matches!(argument, Expression::SpreadElement(_)))
+            {
+                return lower_spread_call_to_ir1(
+                    callee,
+                    arguments,
+                    true,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                );
+            }
             // Desugar `fn?.()` / `obj.m?.()` into:
             //   temp_callee = <callee>
             //   if (temp_callee == null || temp_callee == undefined) goto skip
@@ -13308,6 +13340,46 @@ fn lower_expression_to_ir1(
             });
         }
         Expression::New { callee, arguments } => {
+            if arguments
+                .iter()
+                .any(|argument| matches!(argument, Expression::SpreadElement(_)))
+            {
+                let promise_constructor = matches!(callee.as_ref(), Expression::Identifier(name)
+                    if name == "Promise" && !binding_lookup.contains_key(name));
+                if !promise_constructor {
+                    // Evaluate the constructor before expanding the argument
+                    // list. IsConstructor is checked after iteration, just as
+                    // it is for the ordinary Construct instruction.
+                    lower_expression_to_ir1(
+                        callee,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                }
+                let arg_count = lower_spread_argument_array_to_ir1(
+                    arguments,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                )?;
+                ops.push(Ir1Op::HostCall {
+                    capability: if promise_constructor {
+                        "spread:promise:constructor"
+                    } else {
+                        "builtin:ConstructSpread"
+                    }
+                    .to_string(),
+                    arg_count: arg_count + u32::from(!promise_constructor),
+                });
+                return Ok(());
+            }
             if matches!(callee.as_ref(), Expression::Identifier(name)
                 if name == "Promise" && !binding_lookup.contains_key(name))
             {
@@ -13405,13 +13477,233 @@ fn lower_expression_to_ir1(
     Ok(())
 }
 
-/// Expand a super-call argument list using the actual iterator protocol.
+/// Static-only intrinsics keep their original effect identity when their
+/// arguments are dynamic. The interpreter unwraps `spread:` only for its
+/// closed set of executable hostcalls and runs that same checked hostcall.
+fn spread_call_hostcall_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    if matches!(callee, Expression::Identifier(name)
+        if name == "require" && !binding_lookup.contains_key(name))
+    {
+        return Some("module:require");
+    }
+    path_builtin_call_capability(callee, binding_lookup)
+        .or_else(|| querystring_builtin_call_capability(callee, binding_lookup))
+        .or_else(|| os_builtin_call_capability(callee, binding_lookup))
+        .or_else(|| console_builtin_call_capability(callee, binding_lookup))
+        .or_else(|| timer_builtin_call_capability(callee, binding_lookup))
+        .or_else(|| static_builtin_call_capability(callee, binding_lookup))
+}
+
+/// Keep the reference (callee and receiver) separate from its argument list.
+/// A member getter runs once before any iterator, optional calls skip argument
+/// evaluation, and guest `.apply`/`.call` replacements cannot intercept spread.
+#[allow(clippy::too_many_arguments)]
+fn lower_spread_call_to_ir1(
+    callee: &Expression,
+    arguments: &[Expression],
+    optional_call: bool,
+    ops: &mut Vec<Ir1Op>,
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    root_scope_id: ScopeId,
+    label_counter: &mut u32,
+) -> Result<(), LoweringPipelineError> {
+    if let Some(capability) = spread_call_hostcall_capability(callee, binding_lookup) {
+        let arg_count = lower_spread_argument_array_to_ir1(
+            arguments,
+            ops,
+            bindings,
+            binding_lookup,
+            binding_index,
+            root_scope_id,
+            label_counter,
+        )?;
+        ops.push(Ir1Op::HostCall {
+            capability: format!("spread:{capability}"),
+            arg_count,
+        });
+        return Ok(());
+    }
+
+    let member = match callee {
+        Expression::Member {
+            object,
+            property,
+            computed,
+        } => Some((object.as_ref(), property.as_ref(), *computed, false)),
+        Expression::OptionalMember {
+            object,
+            property,
+            computed,
+        } => Some((object.as_ref(), property.as_ref(), *computed, true)),
+        _ => None,
+    };
+    let has_optional_member = member.is_some_and(|(_, _, _, optional)| optional);
+    let guarded = optional_call || has_optional_member;
+    let skip_label = guarded.then(|| alloc_label(label_counter));
+    let end_label = guarded.then(|| alloc_label(label_counter));
+    let result_binding = if guarded {
+        Some(alloc_internal_binding(
+            bindings,
+            binding_lookup,
+            binding_index,
+            root_scope_id,
+            "spread_call_result",
+        )?)
+    } else {
+        None
+    };
+
+    let receiver_binding = if let Some((object, property, computed, optional)) = member {
+        if matches!(object, Expression::Super) {
+            ops.push(Ir1Op::LoadSuper);
+            let key = lower_member_property_key_to_ir1(
+                property,
+                computed,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                label_counter,
+            )?;
+            push_member_get(ops, object, key);
+            None
+        } else {
+            let receiver = alloc_internal_binding(
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                "spread_call_receiver",
+            )?;
+            lower_expression_to_ir1(
+                object,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                label_counter,
+            )?;
+            ops.push(Ir1Op::StoreBinding {
+                binding_id: receiver,
+            });
+            if optional {
+                // The nullish check consumes the stored receiver. Reload it
+                // only on the path that will actually evaluate the key/getter.
+                ops.push(Ir1Op::StoreBinding {
+                    binding_id: result_binding.expect("optional member has a result binding"),
+                });
+                ops.push(Ir1Op::JumpIfNullish {
+                    label_id: skip_label.expect("optional member has a skip label"),
+                });
+                ops.push(Ir1Op::LoadBinding {
+                    binding_id: receiver,
+                });
+            }
+            let key = lower_member_property_key_to_ir1(
+                property,
+                computed,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                label_counter,
+            )?;
+            push_member_get(ops, object, key);
+            Some(receiver)
+        }
+    } else {
+        lower_expression_to_ir1(
+            callee,
+            ops,
+            bindings,
+            binding_lookup,
+            binding_index,
+            root_scope_id,
+            label_counter,
+        )?;
+        None
+    };
+    if optional_call {
+        let callee_binding = alloc_internal_binding(
+            bindings,
+            binding_lookup,
+            binding_index,
+            root_scope_id,
+            "spread_call_callee",
+        )?;
+        ops.push(Ir1Op::StoreBinding {
+            binding_id: callee_binding,
+        });
+        ops.push(Ir1Op::StoreBinding {
+            binding_id: result_binding.expect("optional call has a result binding"),
+        });
+        ops.push(Ir1Op::JumpIfNullish {
+            label_id: skip_label.expect("optional call has a skip label"),
+        });
+        ops.push(Ir1Op::LoadBinding {
+            binding_id: callee_binding,
+        });
+    }
+    if let Some(binding_id) = receiver_binding {
+        ops.push(Ir1Op::LoadBinding { binding_id });
+    } else if member.is_some_and(|(object, _, _, _)| matches!(object, Expression::Super)) {
+        ops.push(Ir1Op::LoadThis);
+    } else {
+        ops.push(Ir1Op::LoadLiteral {
+            value: Ir1Literal::Undefined,
+        });
+    }
+    let arg_count = lower_spread_argument_array_to_ir1(
+        arguments,
+        ops,
+        bindings,
+        binding_lookup,
+        binding_index,
+        root_scope_id,
+        label_counter,
+    )?;
+    ops.push(Ir1Op::HostCall {
+        capability: "builtin:CallSpread".to_string(),
+        arg_count: arg_count + 2,
+    });
+    if let (Some(result), Some(skip_label), Some(end_label)) =
+        (result_binding, skip_label, end_label)
+    {
+        ops.push(Ir1Op::StoreBinding { binding_id: result });
+        ops.push(Ir1Op::Pop);
+        ops.push(Ir1Op::Jump {
+            label_id: end_label,
+        });
+        ops.push(Ir1Op::Label { id: skip_label });
+        // Preserve the selected nullish guard's provenance even though no
+        // argument list (and therefore no spread adapter) is evaluated.
+        ops.push(Ir1Op::LoadBinding { binding_id: result });
+        ops.push(Ir1Op::UnaryOp {
+            operator: UnaryOperator::Void,
+        });
+        ops.push(Ir1Op::StoreBinding { binding_id: result });
+        ops.push(Ir1Op::Pop);
+        ops.push(Ir1Op::Label { id: end_label });
+        ops.push(Ir1Op::LoadBinding { binding_id: result });
+    }
+    Ok(())
+}
+
+/// Expand a call argument list using the actual iterator protocol.
 /// Keep the fresh array in an inaccessible binding so each loop has a fixed
 /// register footprint, regardless of the number of values it produces. The
 /// ordinary ForOf instructions retain getter/iterator throws and labels and
 /// charge every iteration against the execution budget.
 #[allow(clippy::too_many_arguments)]
-fn lower_super_argument_array_to_ir1(
+fn lower_spread_argument_array_to_ir1(
     arguments: &[Expression],
     ops: &mut Vec<Ir1Op>,
     bindings: &mut Vec<ResolvedBinding>,
@@ -13761,9 +14053,17 @@ fn infer_sink_clearance(
     data_label: &Label,
 ) -> Label {
     if let Some(capability) = required_capability {
+        // A spread adapter invokes the same static hostcall with a dynamic
+        // argument list; it must inherit that hostcall's original clearance.
+        let capability = capability
+            .0
+            .strip_prefix("spread:")
+            .unwrap_or(&capability.0);
         if matches!(
-            capability.0.as_str(),
+            capability,
             "builtin:ConstructSuperSpread"
+                | "builtin:CallSpread"
+                | "builtin:ConstructSpread"
                 | "builtin:ObjectLiteralSetPrototype"
                 | "builtin:ObjectDefineProperty"
                 | "builtin:ObjectGetOwnPropertyDescriptor"
@@ -13775,7 +14075,7 @@ fn infer_sink_clearance(
             // clearance check; similarly named capabilities are not exempt.
             return data_label.clone();
         }
-        return sink_clearance_from_capability(&capability.0);
+        return sink_clearance_from_capability(capability);
     }
 
     match effect {

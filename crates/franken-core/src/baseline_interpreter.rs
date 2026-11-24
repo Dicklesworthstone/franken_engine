@@ -185,6 +185,8 @@ const KNOWN_INTERNAL_HOSTCALLS: &[&str] = &[
     "builtin:ReferenceError",
     "builtin:TypeError",
     "builtin:ConstructSuperSpread",
+    "builtin:CallSpread",
+    "builtin:ConstructSpread",
     "builtin:ObjectLiteralSetPrototype",
     "builtin:ArrayPrototypePush",
     "builtin:ArrayPrototypePop",
@@ -315,9 +317,32 @@ fn recordable_capability_tag(tag: &str) -> std::borrow::Cow<'_, str> {
 /// Canonical evidence and gate identity for the module-loading aliases still
 /// accepted at IR and package boundaries.
 fn capability_gate_key(tag: &str) -> &str {
+    let tag = spread_hostcall_target(tag).unwrap_or(tag);
     match tag {
         "module:require" | "module:import" | "module.import" | "module_load" => "module_load",
         _ => tag,
+    }
+}
+
+/// Dynamic argument lists do not introduce an authority class. Only an exact
+/// existing executable hostcall can be wrapped, and its own tag remains the
+/// gate and evidence identity. Language-private spread adapters cannot wrap
+/// each other, including when IR is supplied directly by an untrusted caller.
+fn spread_hostcall_target(tag: &str) -> Option<&str> {
+    let target = tag.strip_prefix("spread:")?;
+    if target == "module:require"
+        || (KNOWN_INTERNAL_HOSTCALLS.contains(&target)
+            && !matches!(
+                target,
+                "ifc.check_flow"
+                    | "builtin:CallSpread"
+                    | "builtin:ConstructSpread"
+                    | "builtin:ConstructSuperSpread"
+            ))
+    {
+        Some(target)
+    } else {
+        None
     }
 }
 
@@ -2234,6 +2259,12 @@ struct RuntimeForOfState {
 enum InlineCallCompletion {
     Value(Value),
     Throw(LabeledException),
+}
+
+enum InlineInvocation {
+    Call,
+    Construct,
+    HostCall(crate::ir_contract::CapabilityTag),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -7881,44 +7912,8 @@ impl InterpreterCore {
         args: RegRange,
         dst: u32,
     ) -> Result<(), InterpreterError> {
-        if args.count == 0 {
-            return Err(InterpreterError::TypeError {
-                expected: "internal superclass argument array and iterator provenance".into(),
-                got: format!("{} operands", args.count),
-            });
-        }
-        let value = self.read_reg(args.start)?;
-        let object = self.expect_object(value, "internal superclass argument array")?;
-        if !self.heap[object.0 as usize].is_array {
-            return Err(InterpreterError::TypeError {
-                expected: "internal superclass argument array".into(),
-                got: "non-array object".into(),
-            });
-        }
-        let count = self.array_like_length(object)?;
-        let mut label =
-            self.read_reg_label(args.start)?
-                .join(&self.own_stored_runtime_property_label(
-                    object,
-                    &RuntimePropertyKey::String(JsString::from("length")),
-                ));
-        for offset in 1..args.count {
-            self.charge_array_method_step()?;
-            let (iterator, iterator_label) = self.promise_hostcall_argument(args, offset)?;
-            let handle = self.expect_iterator_handle(iterator)?;
-            label = label
-                .join(&iterator_label)
-                .join(&self.for_of_iterator_label(handle)?);
-        }
-        self.enter_super_constructor_call(
-            module,
-            ConstructorArguments::Array {
-                object,
-                count,
-                label,
-            },
-            dst,
-        )
+        let arguments = self.read_spread_argument_array(args)?;
+        self.enter_super_constructor_call(module, arguments, dst)
     }
 
     fn run_pre_allocation_hook(
@@ -9820,6 +9815,36 @@ impl InterpreterCore {
                         });
                     }
 
+                    if capability.0 == "builtin:CallSpread"
+                        || spread_hostcall_target(&capability.0).is_some()
+                    {
+                        let target = spread_hostcall_target(&capability.0);
+                        match self.dispatch_spread_call(module, args, target) {
+                            Ok((result, label)) => {
+                                self.write_reg_with_label(dst, result, label)?;
+                                self.ip += 1;
+                            }
+                            Err(error) => {
+                                if let Some(error) =
+                                    self.route_run_loop_javascript_error(module, error, mode)?
+                                {
+                                    return Err(error);
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    if capability.0 == "builtin:ConstructSpread" {
+                        if let Err(error) = self.enter_spread_constructor_call(module, args, dst) {
+                            if let Some(error) =
+                                self.route_run_loop_javascript_error(module, error, mode)?
+                            {
+                                return Err(error);
+                            }
+                        }
+                        continue;
+                    }
+
                     if capability.0 == "builtin:ObjectLiteralSetPrototype" {
                         match self.initialize_object_literal_prototype(args) {
                             Ok((result, label)) => {
@@ -10662,7 +10687,8 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::Void { dst, src } => {
                     let _ = self.read_reg(src)?;
-                    self.write_reg(dst, Value::Undefined)?;
+                    let label = self.read_reg_label(src)?;
+                    self.write_reg_with_label(dst, Value::Undefined, label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Lt { dst, lhs, rhs } => {
@@ -13096,6 +13122,34 @@ impl InterpreterCore {
         extra_args: &[(Value, crate::ifc_artifacts::Label)],
         construct: bool,
     ) -> Result<(InlineCallCompletion, crate::ifc_artifacts::Label), InterpreterError> {
+        let callee_label = if construct {
+            receiver_label.clone()
+        } else {
+            crate::ifc_artifacts::Label::Public
+        };
+        self.invoke_inline_labeled_call(
+            module,
+            (callee, callee_label),
+            (receiver, receiver_label),
+            extra_args,
+            if construct {
+                InlineInvocation::Construct
+            } else {
+                InlineInvocation::Call
+            },
+        )
+    }
+
+    fn invoke_inline_labeled_call(
+        &mut self,
+        module: &Ir3Module,
+        callee: (Value, crate::ifc_artifacts::Label),
+        receiver: (Value, crate::ifc_artifacts::Label),
+        extra_args: &[(Value, crate::ifc_artifacts::Label)],
+        invocation: InlineInvocation,
+    ) -> Result<(InlineCallCompletion, crate::ifc_artifacts::Label), InterpreterError> {
+        let (callee, callee_label) = callee;
+        let (receiver, receiver_label) = receiver;
         self.ensure_call_depth_available()?;
         let owner_program = self.callable_module(&callee)?;
         let module = owner_program.as_deref().unwrap_or(module);
@@ -13134,19 +13188,23 @@ impl InterpreterCore {
             start: 3,
             count: arg_count,
         };
-        wrapper.instructions.push(if construct {
-            Ir3Instruction::Construct {
+        wrapper.instructions.push(match invocation {
+            InlineInvocation::Construct => Ir3Instruction::Construct {
                 callee: 1,
                 args,
                 dst: 0,
-            }
-        } else {
-            Ir3Instruction::CallMethod {
+            },
+            InlineInvocation::Call => Ir3Instruction::CallMethod {
                 receiver: 0,
                 callee: 1,
                 args,
                 dst: 0,
-            }
+            },
+            InlineInvocation::HostCall(capability) => Ir3Instruction::HostCall {
+                capability,
+                args,
+                dst: 0,
+            },
         });
         wrapper.instructions.push(Ir3Instruction::EndTry);
         wrapper.instructions.push(Ir3Instruction::LoadBool {
@@ -13193,12 +13251,8 @@ impl InterpreterCore {
             self.scope_chain = snapshot.scope_chain.clone();
             self.current_module_specifier = Some(module.header.source_label.clone());
             self.sync_estimated_memory_bytes()?;
-            self.write_reg_with_label(0, receiver, receiver_label.clone())?;
-            self.write_reg_with_label(1, callee, if construct {
-                receiver_label
-            } else {
-                crate::ifc_artifacts::Label::Public
-            })?;
+            self.write_reg_with_label(0, receiver, receiver_label)?;
+            self.write_reg_with_label(1, callee, callee_label)?;
             for (offset, (arg, label)) in extra_args.iter().enumerate() {
                 let reg = 3u32
                     .checked_add(u32::try_from(offset).unwrap_or(u32::MAX))

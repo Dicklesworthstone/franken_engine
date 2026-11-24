@@ -330,7 +330,10 @@ fn legacy_completion_requires_exact_contributor_coverage_without_mutation() {
             masks[0].clone(),
             (ParticipantId("unknown".into()), vec![2, 4]),
         ],
-        vec![masks[0].clone(), (ParticipantId("carol".into()), vec![2, 4])],
+        vec![
+            masks[0].clone(),
+            (ParticipantId("carol".into()), vec![2, 4]),
+        ],
         vec![masks[0].clone(), masks[1].clone(), masks[1].clone()],
         vec![masks[0].clone(), (masks[1].0.clone(), vec![2])],
     ] {
@@ -397,9 +400,7 @@ fn legacy_completion_keeps_roster_and_dropout_checks_after_serialization() {
         match change {
             0 => {
                 // A registered non-contributor remains part of the accepted roster.
-                restored
-                    .participants
-                    .remove(&ParticipantId("carol".into()));
+                restored.participants.remove(&ParticipantId("carol".into()));
             }
             1 => restored.config.dropout_threshold = 0,
             2 => restored.config.min_participants = 3,

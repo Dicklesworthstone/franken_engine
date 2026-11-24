@@ -198,6 +198,7 @@ pub(super) const BUILTIN_FUNCTION_LENGTHS: &[(&str, &str, u8)] = &[
     ("Intl.ListFormat.prototype", "formatToParts", 1),
     ("Intl.ListFormat.prototype", "resolvedOptions", 0),
     ("Intl.NumberFormat.prototype", "format", 1),
+    ("Intl.NumberFormat.prototype", "formatToParts", 1),
     ("Intl.NumberFormat.prototype", "resolvedOptions", 0),
     ("Intl.PluralRules.prototype", "resolvedOptions", 0),
     ("Intl.PluralRules.prototype", "select", 1),

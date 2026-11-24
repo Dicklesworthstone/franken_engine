@@ -326,6 +326,78 @@ pub(super) fn format_number_locale(
     locale: Option<&str>,
     options: &NumberLocaleOptions,
 ) -> Result<String, NumberLocaleError> {
+    let formatted = format_number(value, locale, options)?;
+    Ok(format!(
+        "{}{}{}{}",
+        formatted.sign, formatted.prefix, formatted.body, formatted.suffix
+    ))
+}
+
+/// The same rounded number as `format_number_locale`, with ECMA-402
+/// PartitionNumberPattern types. Keep signs, currency and percent outside
+/// the numeric body so neither currency text nor special values can be
+/// mistaken for digits or separators.
+pub(super) fn format_number_locale_parts(
+    value: f64,
+    locale: Option<&str>,
+    options: &NumberLocaleOptions,
+) -> Result<Vec<(&'static str, String)>, NumberLocaleError> {
+    let formatted = format_number(value, locale, options)?;
+    let mut parts = Vec::new();
+    if !formatted.sign.is_empty() {
+        let kind = if formatted.sign == "-" {
+            "minusSign"
+        } else {
+            "plusSign"
+        };
+        parts.push((kind, formatted.sign.to_string()));
+    }
+    if !formatted.prefix.is_empty() {
+        parts.push(("currency", formatted.prefix.to_string()));
+    }
+    if let Some(kind) = formatted.special {
+        parts.push((kind, formatted.body));
+    } else {
+        let (integer, fraction) = formatted
+            .body
+            .split_once(formatted.decimal)
+            .map_or((formatted.body.as_str(), None), |(integer, fraction)| {
+                (integer, Some(fraction))
+            });
+        for (index, digits) in integer.split(formatted.group).enumerate() {
+            if index != 0 {
+                parts.push(("group", formatted.group.to_string()));
+            }
+            parts.push(("integer", digits.to_string()));
+        }
+        if let Some(fraction) = fraction {
+            parts.push(("decimal", formatted.decimal.to_string()));
+            parts.push(("fraction", fraction.to_string()));
+        }
+    }
+    if !formatted.suffix.is_empty() {
+        parts.push(("percentSign", formatted.suffix.to_string()));
+    }
+    Ok(parts)
+}
+
+/// Preserve a direct string assembly path for `format` while sharing every
+/// rounding, grouping and sign decision with `formatToParts`.
+struct FormattedNumber {
+    sign: &'static str,
+    prefix: &'static str,
+    body: String,
+    suffix: &'static str,
+    group: char,
+    decimal: char,
+    special: Option<&'static str>,
+}
+
+fn format_number(
+    value: f64,
+    locale: Option<&str>,
+    options: &NumberLocaleOptions,
+) -> Result<FormattedNumber, NumberLocaleError> {
     let NumberLayout {
         symbols,
         prefix,
@@ -376,7 +448,21 @@ pub(super) fn format_number_locale(
         SignDisplay::Negative if negative && !rounded_zero => "-",
         SignDisplay::Negative => "",
     };
-    Ok(format!("{sign}{prefix}{body}{suffix}"))
+    Ok(FormattedNumber {
+        sign,
+        prefix,
+        body,
+        suffix,
+        group: symbols.group,
+        decimal: symbols.decimal,
+        special: if value.is_nan() {
+            Some("nan")
+        } else if value.is_infinite() {
+            Some("infinity")
+        } else {
+            None
+        },
+    })
 }
 
 /// The integer and fraction digits of `magnitude` times 10^`shift`, rounded
@@ -602,6 +688,148 @@ mod tests {
         assert_eq!(with(1234.5, "en-US", currency("USD")), "$1,234.50");
         assert_eq!(with(-3.0, "en-US", currency("EUR")), "-€3.00");
         assert_eq!(with(1234.5, "en-US", currency("JPY")), "¥1,235");
+    }
+
+    #[test]
+    fn number_parts_distinguish_groups_signs_affixes_and_special_values() {
+        // Exact part sequences independently executed on Node v24.22.3.
+        let render = |value, locale, options| {
+            format_number_locale_parts(value, Some(locale), &options)
+                .expect("supported number parts")
+                .into_iter()
+                .map(|(kind, text)| format!("{kind}={text}"))
+                .collect::<Vec<_>>()
+                .join("|")
+        };
+        assert_eq!(
+            render(-1234567.891, "en-US", NumberLocaleOptions::default()),
+            "minusSign=-|integer=1|group=,|integer=234|group=,|integer=567|decimal=.|fraction=891"
+        );
+        assert_eq!(
+            render(1234567.891, "de-DE", NumberLocaleOptions::default()),
+            "integer=1|group=.|integer=234|group=.|integer=567|decimal=,|fraction=891"
+        );
+        assert_eq!(
+            render(1234567.891, "en-IN", NumberLocaleOptions::default()),
+            "integer=12|group=,|integer=34|group=,|integer=567|decimal=.|fraction=891"
+        );
+        let currency = |code: &str| NumberLocaleOptions {
+            style: NumberLocaleStyle::Currency(code.to_string()),
+            ..NumberLocaleOptions::default()
+        };
+        assert_eq!(
+            render(-1234.5, "en-GB", currency("USD")),
+            "minusSign=-|currency=US$|integer=1|group=,|integer=234|decimal=.|fraction=50"
+        );
+        assert_eq!(
+            render(1234.5, "ja-JP", currency("JPY")),
+            "currency=￥|integer=1|group=,|integer=235"
+        );
+        assert_eq!(
+            render(
+                0.256,
+                "en-US",
+                NumberLocaleOptions {
+                    style: NumberLocaleStyle::Percent,
+                    sign_display: SignDisplay::Always,
+                    ..NumberLocaleOptions::default()
+                }
+            ),
+            "plusSign=+|integer=26|percentSign=%"
+        );
+        for (value, expected) in [
+            (-0.0, "minusSign=-|integer=0"),
+            (-0.0001, "minusSign=-|integer=0"),
+            (f64::NAN, "nan=NaN"),
+            (f64::INFINITY, "infinity=∞"),
+            (f64::NEG_INFINITY, "minusSign=-|infinity=∞"),
+        ] {
+            assert_eq!(
+                render(value, "en-US", NumberLocaleOptions::default()),
+                expected
+            );
+        }
+        assert_eq!(
+            render(f64::NAN, "en-US", currency("USD")),
+            "currency=$|nan=NaN"
+        );
+        assert_eq!(
+            render(
+                f64::NAN,
+                "en-US",
+                NumberLocaleOptions {
+                    sign_display: SignDisplay::Always,
+                    ..NumberLocaleOptions::default()
+                }
+            ),
+            "plusSign=+|nan=NaN"
+        );
+    }
+
+    #[test]
+    fn number_parts_join_to_the_existing_formatter_for_every_supported_layout() {
+        for locale in [
+            "en-US", "en-GB", "en-IN", "de-DE", "ja-JP", "zh-TW", "ko-KR",
+        ] {
+            for style in [
+                NumberLocaleStyle::Decimal,
+                NumberLocaleStyle::Percent,
+                NumberLocaleStyle::Currency("USD".into()),
+                NumberLocaleStyle::Currency("JPY".into()),
+            ] {
+                for sign_display in [
+                    SignDisplay::Auto,
+                    SignDisplay::Always,
+                    SignDisplay::Never,
+                    SignDisplay::ExceptZero,
+                    SignDisplay::Negative,
+                ] {
+                    for use_grouping in [true, false] {
+                        for significant_digits in [None, Some((2, 4))] {
+                            let options = NumberLocaleOptions {
+                                style: style.clone(),
+                                sign_display,
+                                use_grouping,
+                                significant_digits,
+                                ..NumberLocaleOptions::default()
+                            };
+                            for value in [
+                                0.0,
+                                -0.0,
+                                -0.0004,
+                                0.256,
+                                999.95,
+                                -1234567.891,
+                                f64::MIN_POSITIVE,
+                                f64::MAX,
+                                f64::NAN,
+                                f64::INFINITY,
+                                f64::NEG_INFINITY,
+                            ] {
+                                let parts =
+                                    format_number_locale_parts(value, Some(locale), &options);
+                                let text = format_number_locale(value, Some(locale), &options);
+                                match (parts, text) {
+                                    (Ok(parts), Ok(text)) => {
+                                        assert!(parts.iter().all(|(_, value)| !value.is_empty()));
+                                        assert_eq!(
+                                            parts
+                                                .into_iter()
+                                                .map(|(_, value)| value)
+                                                .collect::<String>(),
+                                            text,
+                                            "{locale} {value} {options:?}"
+                                        );
+                                    }
+                                    (Err(parts), Err(text)) => assert_eq!(parts, text),
+                                    result => panic!("format/parts disagree: {result:?}"),
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]

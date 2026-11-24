@@ -18,8 +18,8 @@
 //!
 //! No-claim: no ICU and no locale negotiation (an unsupported locale throws
 //! instead of falling back, except a five-to-eight-letter language such as
-//! `generic`, which falls back to en-US as in Node); DateTimeFormat has
-//! formatToParts (the pieces `format` joins), NumberFormat does not; no
+//! `generic`, which falls back to en-US as in Node); NumberFormat and
+//! DateTimeFormat have formatToParts over their shared formatters; no
 //! formatRange, BigInt formatting, DisplayNames or Locale, and no
 //! supportedLocalesOf. Segmenter is UAX #29 (see `intl_segmenter`). The
 //! optional legacy constructor mode that initializes an existing receiver
@@ -145,8 +145,7 @@ impl InterpreterCore {
         }
         self.install_prototype_constructor(prototype, service_constructor(service))?;
         let methods: &[&str] = match service {
-            "NumberFormat" => &["format", "resolvedOptions"],
-            "DateTimeFormat" => &["format", "formatToParts", "resolvedOptions"],
+            "NumberFormat" | "DateTimeFormat" => &["format", "formatToParts", "resolvedOptions"],
             "Collator" => &["compare", "resolvedOptions"],
             "RelativeTimeFormat" | "ListFormat" => &["format", "formatToParts", "resolvedOptions"],
             "Segmenter" => &["segment", "resolvedOptions"],
@@ -368,7 +367,7 @@ impl InterpreterCore {
                 let input = self.intl_to_string(module, input)?;
                 self.intl_segment(resolved, input)
             }
-            "format" if service == "NumberFormat" => {
+            "format" | "formatToParts" if service == "NumberFormat" => {
                 let value = arg(self, 0)?;
                 if matches!(value, Value::BigInt(_)) {
                     return Err(InterpreterError::TypeError {
@@ -378,9 +377,18 @@ impl InterpreterCore {
                 }
                 let number = self.intl_to_number(module, value)?;
                 let (locale, options) = self.intl_number_options_from(resolved)?;
-                number_locale::format_number_locale(number, Some(&locale), &options)
-                    .map(Value::str)
-                    .map_err(Self::intl_number_error)
+                if method == "format" {
+                    return number_locale::format_number_locale(number, Some(&locale), &options)
+                        .map(Value::str)
+                        .map_err(Self::intl_number_error);
+                }
+                let parts =
+                    number_locale::format_number_locale_parts(number, Some(&locale), &options)
+                        .map_err(Self::intl_number_error)?
+                        .into_iter()
+                        .map(|(kind, text)| (kind, text, None))
+                        .collect();
+                self.intl_parts_result(method, parts)
             }
             // ECMA-402 17.3.3-4: ToNumber(value), ToString(unit), then the
             // pattern for the unit, sign and plural category.

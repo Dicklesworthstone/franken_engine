@@ -339,3 +339,119 @@ fn intl_constructor_callability_matches_each_service() {
         "NumberFormat true\nDateTimeFormat true\nCollator true\nPluralRules TypeError\nRelativeTimeFormat TypeError\nListFormat TypeError\nSegmenter TypeError"
     );
 }
+
+#[test]
+fn number_format_parts_match_node_for_supported_locales_and_styles() {
+    // These exact source programs and outputs were checked on Node v24.22.3.
+    let source = r#"
+        function show(locale, options, value) {
+            const formatter = new Intl.NumberFormat(locale, options);
+            const parts = formatter.formatToParts(value);
+            console.log(parts.map(p => p.type + '=' + p.value).join('|'),
+                parts.map(p => p.value).join('') === formatter.format(value));
+        }
+        show('en-US', {}, -1234567.891);
+        show('de-DE', {}, 1234567.891);
+        show('en-IN', {}, 1234567.891);
+        show('en-GB', { style: 'currency', currency: 'USD' }, -1234.5);
+        show('ja-JP', { style: 'currency', currency: 'JPY' }, 1234.5);
+        show('en-US', { style: 'percent', signDisplay: 'always' }, 0.256);
+        show('de-DE', { useGrouping: false, minimumFractionDigits: 2 }, 1234.5);
+        show('en-US', { maximumSignificantDigits: 3 }, 999.95);
+    "#;
+    let expected = [
+        "minusSign=-|integer=1|group=,|integer=234|group=,|integer=567|decimal=.|fraction=891 true",
+        "integer=1|group=.|integer=234|group=.|integer=567|decimal=,|fraction=891 true",
+        "integer=12|group=,|integer=34|group=,|integer=567|decimal=.|fraction=891 true",
+        "minusSign=-|currency=US$|integer=1|group=,|integer=234|decimal=.|fraction=50 true",
+        "currency=￥|integer=1|group=,|integer=235 true",
+        "plusSign=+|integer=26|percentSign=% true",
+        "integer=1234|decimal=,|fraction=50 true",
+        "integer=1|group=,|integer=000 true",
+    ]
+    .join("\n");
+    assert_eq!(console_output(source).unwrap(), expected);
+}
+
+#[test]
+fn number_format_parts_preserve_signed_zero_and_nonfinite_types() {
+    let source = r#"
+        const formatter = new Intl.NumberFormat('en-US');
+        const show = parts => parts.map(p => p.type + '=' + p.value).join('|');
+        for (const value of [-0, -0.0001, NaN, Infinity, -Infinity, undefined]) {
+            console.log(show(formatter.formatToParts(value)));
+        }
+        console.log(show(new Intl.NumberFormat('en-US', { signDisplay: 'always' }).formatToParts(NaN)));
+        console.log(show(new Intl.NumberFormat('en-US', { signDisplay: 'exceptZero' }).formatToParts(-0.0001)));
+        console.log(show(new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).formatToParts(NaN)));
+        console.log(show(new Intl.NumberFormat('en-US', { style: 'percent' }).formatToParts(Infinity)));
+    "#;
+    assert_eq!(
+        console_output(source).unwrap(),
+        "minusSign=-|integer=0\nminusSign=-|integer=0\nnan=NaN\ninfinity=∞\nminusSign=-|infinity=∞\nnan=NaN\nplusSign=+|nan=NaN\ninteger=0\ncurrency=$|nan=NaN\ninfinity=∞|percentSign=%"
+    );
+}
+
+#[test]
+fn number_format_parts_are_unbound_and_validate_brand_before_conversion() {
+    let source = r#"
+        const formatter = new Intl.NumberFormat('en-US');
+        const other = new Intl.NumberFormat('de-DE');
+        const method = Intl.NumberFormat.prototype.formatToParts;
+        const descriptor = Object.getOwnPropertyDescriptor(Intl.NumberFormat.prototype, 'formatToParts');
+        console.log(method === formatter.formatToParts, method.name, method.length,
+            descriptor.writable, descriptor.enumerable, descriptor.configurable,
+            method.hasOwnProperty('prototype'));
+        console.log(method.call(other, 1234.5).map(p => p.value).join(''));
+        let conversions = 0;
+        const input = { valueOf() { conversions++; return 0; } };
+        for (const receiver of [undefined, null, {}, Intl.NumberFormat.prototype,
+            Object.create(Intl.NumberFormat.prototype), new Proxy(formatter, {}),
+            new Intl.DateTimeFormat('en'), { [Symbol.toStringTag]: 'Intl.NumberFormat' }]) {
+            try { method.call(receiver, input); console.log('missed'); }
+            catch (error) { console.log(error.name, conversions); }
+        }
+        const before = formatter.formatToParts(1), after = formatter.formatToParts(1);
+        before[0].value = 'changed';
+        console.log(before !== after, before[0] !== after[0], after[0].value,
+            Object.keys(after[0]).join(','), Object.getPrototypeOf(after[0]) === Object.prototype);
+    "#;
+    let expected = [
+        "true formatToParts 1 true false true false",
+        "1.234,5",
+        "TypeError 0",
+        "TypeError 0",
+        "TypeError 0",
+        "TypeError 0",
+        "TypeError 0",
+        "TypeError 0",
+        "TypeError 0",
+        "TypeError 0",
+        "true true 1 type,value true",
+    ]
+    .join("\n");
+    assert_eq!(console_output(source).unwrap(), expected);
+}
+
+#[test]
+fn number_format_parts_observe_numeric_conversion_and_preserve_abrupt_completion() {
+    let source = r#"
+        const formatter = new Intl.NumberFormat('en-US');
+        const log = [];
+        const value = {
+            [Symbol.toPrimitive](hint) { log.push(hint); return -0; },
+            valueOf() { log.push('unreachable'); return 1; }
+        };
+        console.log(formatter.formatToParts(value).map(p => p.type + '=' + p.value).join('|'), log.join(','));
+        const marker = {};
+        const throwing = { valueOf() { log.push('throw'); throw marker; }, toString() { log.push('unreachable'); return '3'; } };
+        try { formatter.formatToParts(throwing); } catch (error) { console.log(error === marker, log.join(',')); }
+        try { formatter.formatToParts(Symbol('number')); } catch (error) { console.log(error.name); }
+        console.log(formatter.formatToParts({ valueOf() { return {}; }, toString() { return '1234.5'; } }).map(p => p.value).join(''));
+        console.log(formatter.formatToParts(2).map(p => p.value).join(''));
+    "#;
+    assert_eq!(
+        console_output(source).unwrap(),
+        "minusSign=-|integer=0 number\ntrue number,throw\nTypeError\n1,234.5\n2"
+    );
+}

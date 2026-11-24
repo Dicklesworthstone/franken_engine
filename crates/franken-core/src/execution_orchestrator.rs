@@ -1695,28 +1695,17 @@ impl ExecutionOrchestrator {
         TraceId::from_bytes(bytes)
     }
 
-    fn internal_runtime_capabilities_for_module(ir3: &Ir3Module) -> BTreeSet<RuntimeCapability> {
-        ir3.required_capabilities
-            .iter()
-            .filter_map(|capability| RuntimeCapability::from_tag_str(&capability.0))
-            // `module_load` is executable package authority, not an internal
-            // implementation capability. Inferred demand must never turn
-            // itself into a grant; the package must declare it explicitly.
-            .filter(|capability| *capability != RuntimeCapability::ModuleLoad)
-            .collect()
-    }
-
     fn lane_router_for_execution(
         &self,
         package: &ExtensionPackage,
-        ir3: &Ir3Module,
     ) -> Result<LaneRouter, OrchestratorError> {
         let mut granted_capabilities = Self::package_runtime_capabilities(package)?;
         // Interpreter dispatch and module-record allocation are internal runtime authority,
-        // not externally requested extension capabilities.
+        // not externally requested extension capabilities. Compiled capability
+        // requirements describe demand; they must never grant that demand.
+        // Every other authority comes exclusively from the package declaration.
         granted_capabilities.insert(RuntimeCapability::VmDispatch);
         granted_capabilities.insert(RuntimeCapability::HeapAllocate);
-        granted_capabilities.extend(Self::internal_runtime_capabilities_for_module(ir3));
 
         let mut quickjs_config =
             InterpreterConfig::deterministic_from_config(&self.runtime_config.execution);
@@ -1815,9 +1804,9 @@ impl ExecutionOrchestrator {
             hook
         });
         // Package capabilities remain user-scoped; the orchestrator adds only
-        // the internal enforcement capabilities required by the lowered module.
+        // the fixed internal VM dispatch and allocation permissions.
         let routed = self
-            .lane_router_for_execution(package, ir3)?
+            .lane_router_for_execution(package)?
             .execute_with_hook(
                 ir3,
                 trace_id,
@@ -3536,6 +3525,108 @@ mod tests {
     use crate::ifc_artifacts::{DeclassificationDecision, IfcSchemaVersion};
     use crate::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
 
+    fn authority_probe_module(tag: &str) -> Ir3Module {
+        use crate::ir_contract::{CapabilityTag, Ir3Instruction, RegRange};
+
+        let capability = CapabilityTag(tag.to_string());
+        let mut module = Ir3Module::new(ContentHash::compute(tag.as_bytes()), "authority-probe");
+        module.required_capabilities.push(capability.clone());
+        module.instructions = vec![
+            Ir3Instruction::HostCall {
+                capability,
+                args: RegRange { start: 0, count: 0 },
+                dst: 0,
+            },
+            Ir3Instruction::Return { value: 0 },
+        ];
+        module
+    }
+
+    #[test]
+    fn ir3_requirements_do_not_grant_package_authority() {
+        // Exercise the real lane configuration and interpreter gate. These
+        // probes test authorization; they do not claim to perform external I/O.
+        let orchestrator = ExecutionOrchestrator::new_lab(OrchestratorConfig::default());
+        let package = simple_package();
+        for capability in [
+            RuntimeCapability::GcInvoke,
+            RuntimeCapability::IrLowering,
+            RuntimeCapability::PolicyRead,
+            RuntimeCapability::PolicyWrite,
+            RuntimeCapability::EvidenceEmit,
+            RuntimeCapability::DecisionInvoke,
+            RuntimeCapability::NetworkEgress,
+            RuntimeCapability::LeaseManagement,
+            RuntimeCapability::IdempotencyDerive,
+            RuntimeCapability::ExtensionLifecycle,
+            RuntimeCapability::EnvRead,
+            RuntimeCapability::ProcessSpawn,
+            RuntimeCapability::FsRead,
+            RuntimeCapability::FsWrite,
+            RuntimeCapability::ModuleLoad,
+        ] {
+            let tag = capability.to_string();
+            let module = authority_probe_module(&tag);
+            for lane in [None, Some(LaneChoice::QuickJs), Some(LaneChoice::V8)] {
+                let error = orchestrator
+                    .lane_router_for_execution(&package)
+                    .unwrap()
+                    .execute(&module, "undeclared-authority", lane)
+                    .expect_err("compiled demand must not authorize its own hostcall");
+                assert!(
+                    matches!(error, InterpreterError::CapabilityDenied { capability } if capability == tag),
+                    "{lane:?}: undeclared {tag} must be refused",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_package_grants_preserve_aliases_and_internal_execution() {
+        let orchestrator = ExecutionOrchestrator::new_lab(OrchestratorConfig::default());
+        for (tag, grant) in [
+            ("net.write", Some("network_egress")),
+            ("network_egress", Some("net:connect")),
+            ("fs.read", Some("fs_read")),
+            ("fs_write", Some("fs:write")),
+            ("policy_write", Some("policy_write")),
+            ("module_load", Some("module:import")),
+            ("vm_dispatch", None),
+            ("heap_allocate", None),
+        ] {
+            let module = authority_probe_module(tag);
+            let mut package = simple_package();
+            package.capabilities = grant.into_iter().map(str::to_string).collect();
+            for lane in [None, Some(LaneChoice::QuickJs), Some(LaneChoice::V8)] {
+                let result = orchestrator
+                    .lane_router_for_execution(&package)
+                    .unwrap()
+                    .execute(&module, "declared-authority", lane)
+                    .expect("explicit grants and internal VM authority must remain usable");
+                assert!(
+                    result
+                        .result
+                        .hostcall_decisions
+                        .iter()
+                        .any(|decision| { decision.allowed && decision.capability.0 == tag })
+                );
+            }
+        }
+
+        let mut package = simple_package();
+        package.capabilities.push("policy_read".to_string());
+        let module = authority_probe_module("policy_write");
+        let error = orchestrator
+            .lane_router_for_execution(&package)
+            .unwrap()
+            .execute(&module, "unrelated-authority", None)
+            .expect_err("an unrelated package grant must not authorize a demanded effect");
+        assert!(matches!(
+            error,
+            InterpreterError::CapabilityDenied { capability } if capability == "policy_write"
+        ));
+    }
+
     #[test]
     fn ordinary_lane_router_observes_revocation_from_native_allocation() {
         use crate::baseline_interpreter::{
@@ -3598,9 +3689,7 @@ mod tests {
             .unwrap()
             .ir3;
             let _admission = tenant.reserve(100_000).unwrap();
-            let mut router = orchestrator
-                .lane_router_for_execution(&package, &ir3)
-                .unwrap();
+            let mut router = orchestrator.lane_router_for_execution(&package).unwrap();
             let hook = Arc::new(RevokeOnAllocation {
                 root,
                 calls: AtomicUsize::new(0),

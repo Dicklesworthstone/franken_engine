@@ -775,17 +775,45 @@ fn resolve_local_source(referrer: &Path, specifier: &str, root: &Path) -> BuildR
     if candidate.is_file() {
         return confined_file(&candidate, root);
     }
-    if candidate.extension().is_some() {
-        return confined_file(&candidate, root);
-    }
     let mut matches = BTreeSet::new();
-    for extension in EXTENSIONS {
-        for path in [
-            candidate.with_extension(extension),
-            candidate.join(format!("index.{extension}")),
-        ] {
+    if let Some(extension) = candidate.extension() {
+        // TypeScript ESM sources commonly name the extension that will be
+        // emitted. An existing explicit path always wins, including an
+        // unusable directory or dangling symlink. Never replace an I/O error.
+        match candidate.symlink_metadata() {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            _ => return confined_file(&candidate, root),
+        }
+        let alternatives: &[&str] = match (
+            referrer.extension().and_then(|value| value.to_str()),
+            extension.to_str(),
+        ) {
+            (Some("ts" | "tsx" | "mts"), Some("js" | "jsx")) => &["ts", "tsx"],
+            (Some("ts" | "tsx" | "mts"), Some("mjs")) => &["mts"],
+            _ => &[],
+        };
+        for extension in alternatives {
+            let path = candidate.with_extension(extension);
             if path.is_file() {
-                matches.insert(confined_file(&path, root)?);
+                let canonical = confined_file(&path, root)?;
+                // Declaration modules contain types without runtime values.
+                if !canonical
+                    .to_str()
+                    .is_some_and(|name| name.ends_with(".d.ts") || name.ends_with(".d.mts"))
+                {
+                    matches.insert(canonical);
+                }
+            }
+        }
+    } else {
+        for extension in EXTENSIONS {
+            for path in [
+                candidate.with_extension(extension),
+                candidate.join(format!("index.{extension}")),
+            ] {
+                if path.is_file() {
+                    matches.insert(confined_file(&path, root)?);
+                }
             }
         }
     }
@@ -1567,6 +1595,52 @@ export const describe = async () => `loaded:${(await import('./lazy.js')).value}
         .unwrap();
         assert_eq!(
             build_react_client(&confined).unwrap_err().code,
+            "FE-REACT-BUILD-ROOT"
+        );
+    }
+
+    #[test]
+    fn emitted_typescript_extensions_keep_exact_files_and_root_bounds() {
+        let (directory, _) = fixture(&[
+            ("app.ts", ""),
+            ("app.js", ""),
+            ("exact.js", ""),
+            ("exact.ts", ""),
+            ("card.ts", ""),
+            ("card.tsx", ""),
+            ("schema.d.ts", ""),
+            ("nested/entry.mts", ""),
+            ("logic.mts", ""),
+        ]);
+        let root = directory.path().canonicalize().unwrap();
+        let resolve = |entry: &str, specifier: &str| {
+            resolve_local_source(&root.join(entry), specifier, &root)
+        };
+        assert_eq!(
+            resolve("app.ts", "./exact.js").unwrap(),
+            root.join("exact.js")
+        );
+        assert_eq!(
+            resolve("app.ts", "./card.js").unwrap_err().code,
+            "FE-REACT-BUILD-AMBIGUOUS"
+        );
+        assert_eq!(
+            resolve("app.js", "./logic.mjs").unwrap_err().code,
+            "FE-REACT-BUILD-MISSING"
+        );
+        assert_eq!(
+            resolve("app.ts", "./schema.d.js").unwrap_err().code,
+            "FE-REACT-BUILD-MISSING"
+        );
+        assert_eq!(
+            resolve("nested/entry.mts", "../logic.mjs").unwrap(),
+            root.join("logic.mts")
+        );
+        let nested = root.join("nested");
+        assert_eq!(
+            resolve_local_source(&nested.join("entry.mts"), "../logic.mjs", &nested)
+                .unwrap_err()
+                .code,
             "FE-REACT-BUILD-ROOT"
         );
     }

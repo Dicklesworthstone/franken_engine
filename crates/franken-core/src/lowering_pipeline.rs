@@ -12699,13 +12699,9 @@ fn lower_expression_to_ir1(
                     label_counter,
                 );
             }
-            // Desugar `fn?.()` / `obj.m?.()` into:
-            //   temp_callee = <callee>
-            //   if (temp_callee == null || temp_callee == undefined) goto skip
-            //   result = temp_callee(<args...>)
-            //   goto end
-            //   skip: result = undefined
-            //   end: push result
+            // Retain a member reference's receiver while checking its callable
+            // value. Property lookup precedes arguments, and neither the base
+            // nor the key/getter may be evaluated again when invoking it.
             let temp_callee = alloc_internal_binding(
                 bindings,
                 binding_lookup,
@@ -12723,33 +12719,118 @@ fn lower_expression_to_ir1(
             let skip_label = alloc_label(label_counter);
             let end_label = alloc_label(label_counter);
 
-            // Evaluate the callee and store into temp.
-            lower_expression_to_ir1(
-                callee,
-                ops,
-                bindings,
-                binding_lookup,
-                binding_index,
-                root_scope_id,
-                label_counter,
-            )?;
+            let member = match callee.as_ref() {
+                Expression::Member {
+                    object,
+                    property,
+                    computed,
+                } if static_builtin_member_factory_capability(
+                    object,
+                    property,
+                    *computed,
+                    binding_lookup,
+                )
+                .is_none() => Some((object.as_ref(), property.as_ref(), *computed, false)),
+                Expression::OptionalMember {
+                    object,
+                    property,
+                    computed,
+                } => Some((object.as_ref(), property.as_ref(), *computed, true)),
+                _ => None,
+            };
+            let receiver_binding = if let Some((object, property, computed, optional)) = member {
+                if matches!(object, Expression::Super) {
+                    ops.push(Ir1Op::LoadSuper);
+                    let key = lower_member_property_key_to_ir1(
+                        property,
+                        computed,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                    push_member_get(ops, object, key);
+                    None
+                } else {
+                    let receiver = alloc_internal_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        "opt_call_receiver",
+                    )?;
+                    lower_expression_to_ir1(
+                        object,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                    ops.push(Ir1Op::StoreBinding {
+                        binding_id: receiver,
+                    });
+                    if optional {
+                        // Keep the selected guard's provenance for the
+                        // undefined result; skip keys and arguments together.
+                        ops.push(Ir1Op::StoreBinding {
+                            binding_id: result_binding,
+                        });
+                        ops.push(Ir1Op::JumpIfNullish {
+                            label_id: skip_label,
+                        });
+                        ops.push(Ir1Op::LoadBinding {
+                            binding_id: receiver,
+                        });
+                    }
+                    let key = lower_member_property_key_to_ir1(
+                        property,
+                        computed,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                    push_member_get(ops, object, key);
+                    Some(receiver)
+                }
+            } else {
+                // Preserve first-class intrinsic member factories, such as
+                // Array.isArray, in the core's existing global representation.
+                lower_expression_to_ir1(
+                    callee,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                )?;
+                None
+            };
             ops.push(Ir1Op::StoreBinding {
                 binding_id: temp_callee,
             });
-            ops.push(Ir1Op::Pop);
-
-            // Nullish check: if callee is null/undefined, short-circuit.
-            ops.push(Ir1Op::LoadBinding {
-                binding_id: temp_callee,
+            ops.push(Ir1Op::StoreBinding {
+                binding_id: result_binding,
             });
             ops.push(Ir1Op::JumpIfNullish {
                 label_id: skip_label,
             });
 
-            // Not-nullish path: perform the call.
             ops.push(Ir1Op::LoadBinding {
                 binding_id: temp_callee,
             });
+            if let Some(binding_id) = receiver_binding {
+                ops.push(Ir1Op::LoadBinding { binding_id });
+            } else if member.is_some_and(|(object, _, _, _)| matches!(object, Expression::Super)) {
+                ops.push(Ir1Op::LoadThis);
+            }
             for arg in arguments {
                 lower_expression_to_ir1(
                     arg,
@@ -12761,9 +12842,15 @@ fn lower_expression_to_ir1(
                     label_counter,
                 )?;
             }
-            ops.push(Ir1Op::Call {
-                arg_count: arguments.len() as u32,
-            });
+            if member.is_some() {
+                ops.push(Ir1Op::CallMethod {
+                    arg_count: arguments.len() as u32,
+                });
+            } else {
+                ops.push(Ir1Op::Call {
+                    arg_count: arguments.len() as u32,
+                });
+            }
             ops.push(Ir1Op::StoreBinding {
                 binding_id: result_binding,
             });
@@ -12772,17 +12859,18 @@ fn lower_expression_to_ir1(
                 label_id: end_label,
             });
 
-            // Nullish path: produce undefined.
             ops.push(Ir1Op::Label { id: skip_label });
-            ops.push(Ir1Op::LoadLiteral {
-                value: Ir1Literal::Undefined,
+            ops.push(Ir1Op::LoadBinding {
+                binding_id: result_binding,
+            });
+            ops.push(Ir1Op::UnaryOp {
+                operator: UnaryOperator::Void,
             });
             ops.push(Ir1Op::StoreBinding {
                 binding_id: result_binding,
             });
             ops.push(Ir1Op::Pop);
 
-            // End: load the result.
             ops.push(Ir1Op::Label { id: end_label });
             ops.push(Ir1Op::LoadBinding {
                 binding_id: result_binding,

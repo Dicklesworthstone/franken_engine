@@ -901,14 +901,18 @@ fn frankenctl_react_build_fails_closed_with_contract_guidance() {
 fn frankenctl_react_client_build_publishes_complete_modules_and_detects_tampering() {
     let root = temp_path("frankenctl_react_client_graph", "dir");
     fs::create_dir(&root).expect("create project");
-    let entry = root.join("entry.jsx");
+    let entry = root.join("entry.tsx");
     write_source(
         &entry,
         "import { label } from './label.js';\nexport default <main>{label}</main>;\n",
     );
     write_source(
-        &root.join("label.js"),
-        "export const label = 'Hello from the dependency';\n",
+        &root.join("label.ts"),
+        "export { label } from './message.mjs';\n",
+    );
+    write_source(
+        &root.join("message.mts"),
+        "export const label: string = 'Hello from the dependency';\n",
     );
     let out_dir = root.join("dist");
     let report = root.join("build.json");
@@ -946,7 +950,12 @@ fn frankenctl_react_client_build_publishes_complete_modules_and_detects_tamperin
     let modules = output["build"]["modules"]
         .as_array()
         .expect("module assets");
-    assert_eq!(modules.len(), 2);
+    assert_eq!(modules.len(), 3);
+    assert!(
+        modules
+            .iter()
+            .any(|module| module["source_path"] == "message.mts")
+    );
     let directory = PathBuf::from(output["build_directory"].as_str().expect("published path"));
     assert!(directory.join("index.html").is_file());
     assert!(directory.join("import-map.json").is_file());

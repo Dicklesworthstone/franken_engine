@@ -10869,6 +10869,68 @@ fn generator_rejects_mismatched_value_and_label_snapshot_bd_ur3tk_5() {
 }
 
 #[test]
+fn generator_delegated_protocol_errors_retain_private_iterator_provenance() {
+    let module = test_module(vec![
+        Ir3Instruction::GeneratorBodyStart,
+        Ir3Instruction::Yield {
+            value: 0,
+            delegate: true,
+            resume_dst: 1,
+        },
+        Ir3Instruction::Return { value: 1 },
+    ]);
+    let mut core = InterpreterCore::new(test_quickjs_config(), "generator-delegate-label");
+    let array = core.alloc_array_from_values(&[Value::Int(7)]).unwrap();
+    let generator = core
+        .prepare_generator_activation(
+            &module,
+            GeneratorCallSetup {
+                function_index: 0,
+                function_entry: 0,
+                captured_env: core.scope_chain.snapshot(),
+                arguments: vec![(Value::Object(array), crate::ifc_artifacts::Label::Secret)],
+                this_value: Value::Undefined,
+                this_label: crate::ifc_artifacts::Label::Public,
+                super_value: Value::Undefined,
+                super_label: crate::ifc_artifacts::Label::Public,
+            },
+        )
+        .unwrap();
+    core.generators.push(generator);
+    core.sync_estimated_memory_bytes().unwrap();
+
+    let (_, yield_label) = core
+        .generator_next(
+            &module,
+            0,
+            Value::Undefined,
+            crate::ifc_artifacts::Label::Public,
+        )
+        .unwrap();
+    assert_eq!(yield_label, crate::ifc_artifacts::Label::Secret);
+    let error = core
+        .resume_generator(
+            &module,
+            0,
+            Value::Int(99),
+            crate::ifc_artifacts::Label::Public,
+            GeneratorResumeKind::Throw,
+        )
+        .expect_err("an array delegate has no throw method");
+    assert!(matches!(error, InterpreterError::UncaughtException { .. }));
+    assert_eq!(
+        core.pending_exception.as_ref().unwrap().label,
+        crate::ifc_artifacts::Label::Secret,
+        "the generated TypeError must retain the iterator's private provenance",
+    );
+    assert_eq!(core.generators[0].phase, GeneratorPhase::Completed);
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes(),
+    );
+}
+
+#[test]
 fn generator_return_completion_survives_finally_yield_bd_ur3tk_5() {
     let module = test_module(vec![
         Ir3Instruction::GeneratorBodyStart,

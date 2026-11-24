@@ -2230,6 +2230,8 @@ pub enum BuiltinFunctionKind {
     ObjectGetOwnPropertyDescriptor,
     ReflectDefineProperty,
     GeneratorPrototypeReturn,
+    GeneratorPrototypeThrow,
+    IteratorPrototypeIterator,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -2263,6 +2265,8 @@ impl BuiltinFunction {
             BuiltinFunctionKind::SymbolPrototypeToString => "toString",
             BuiltinFunctionKind::GeneratorPrototypeNext => "next",
             BuiltinFunctionKind::GeneratorPrototypeReturn => "return",
+            BuiltinFunctionKind::GeneratorPrototypeThrow => "throw",
+            BuiltinFunctionKind::IteratorPrototypeIterator => "[Symbol.iterator]",
             BuiltinFunctionKind::PromiseCapabilityResolve => "resolve",
             BuiltinFunctionKind::PromiseCapabilityReject => "reject",
             BuiltinFunctionKind::PromisePrototypeThen => "then",

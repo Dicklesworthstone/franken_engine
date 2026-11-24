@@ -11641,7 +11641,7 @@ fn parse_object_literal(
 ///
 /// The function payload remains an anonymous ordinary-function-shaped body, but
 /// the enclosing property kind preserves its descriptor and [[HomeObject]]
-/// semantics. Generator methods remain outside this bounded subset.
+/// semantics, and the function flags retain async and generator execution.
 fn try_parse_object_method(
     part: &str,
     span: &SourceSpan,
@@ -11680,14 +11680,13 @@ fn try_parse_object_method(
     } else {
         (false, part)
     };
-    if is_async && part.starts_with('*') {
-        return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
-            "async generator object methods are not yet supported",
-            context.source_label.to_string(),
-            Some(span.clone()),
-        ));
-    }
+    let (is_generator, part) = if kind == ObjectPropertyKind::Method
+        && let Some(after_star) = part.strip_prefix('*')
+    {
+        (true, trim_directive_trivia(after_star).0)
+    } else {
+        (false, part)
+    };
 
     if part.starts_with('[') {
         let Some((key_inner, after_key)) =
@@ -11716,10 +11715,10 @@ fn try_parse_object_method(
         if matches!(&key, Expression::Raw(_) | Expression::SpreadElement(_)) {
             return Err(invalid_computed_key());
         }
-        validate_object_method_source_consumed(function_source, is_async, span, context)?;
-        let value = parse_function_expression(
+        let value = parse_object_method_function(
             function_source,
             is_async,
+            is_generator,
             span,
             context,
             recursion_depth + 1,
@@ -11755,10 +11754,10 @@ fn try_parse_object_method(
         return Ok(None);
     };
     let function_source = &part[parameter_list_index..];
-    validate_object_method_source_consumed(function_source, is_async, span, context)?;
-    let value = parse_function_expression(
+    let value = parse_object_method_function(
         function_source,
         is_async,
+        is_generator,
         span,
         context,
         recursion_depth + 1,
@@ -11766,6 +11765,27 @@ fn try_parse_object_method(
     validate_object_method_parameter_names(&value, span, context)?;
     validate_object_accessor_parameters(kind, &value, span, context)?;
     Ok(Some((key, value, false, kind)))
+}
+
+fn parse_object_method_function(
+    function_source: &str,
+    is_async: bool,
+    is_generator: bool,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+    recursion_depth: u64,
+) -> ParseResult<Expression> {
+    validate_object_method_source_consumed(function_source, is_async, is_generator, span, context)?;
+    // Feed the ordinary function parser its native generator prefix so the
+    // parameter/body grammar contexts and early errors share one implementation.
+    let generator_source;
+    let source = if is_generator {
+        generator_source = format!("*{function_source}");
+        generator_source.as_str()
+    } else {
+        function_source
+    };
+    parse_function_expression(source, is_async, span, context, recursion_depth)
 }
 
 fn validate_object_accessor_parameters(
@@ -11798,6 +11818,7 @@ fn validate_object_accessor_parameters(
 fn validate_object_method_source_consumed(
     function_source: &str,
     is_async: bool,
+    is_generator: bool,
     span: &SourceSpan,
     context: &ParseExecutionContext<'_>,
 ) -> ParseResult<()> {
@@ -11805,7 +11826,7 @@ fn validate_object_method_source_consumed(
         function_source,
         '(',
         ')',
-        ScanGrammarContext::function_parameters(is_async, false, context.strict_mode),
+        ScanGrammarContext::function_parameters(is_async, is_generator, context.strict_mode),
     )
     .ok_or_else(|| {
         ParseError::new(
@@ -11819,7 +11840,7 @@ fn validate_object_method_source_consumed(
         trim_directive_trivia(after_params).0,
         '{',
         '}',
-        ScanGrammarContext::function_body(is_async, false, context.strict_mode),
+        ScanGrammarContext::function_body(is_async, is_generator, context.strict_mode),
     )
     .ok_or_else(|| {
         ParseError::new(
@@ -15086,16 +15107,20 @@ fn parse_class_body(
         } else {
             (false, rest)
         };
-        if is_async && rest.starts_with('*') {
-            return Err(ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
-                "async generator class methods are not yet supported",
-                context.source_label.to_string(),
-                Some(span.clone()),
-            ));
-        }
+        let (is_generator, rest) = if let Some(after_star) = rest.strip_prefix('*') {
+            (true, trim_directive_trivia(after_star).0)
+        } else {
+            (false, rest)
+        };
         let kind;
-        let rest = if is_async {
+        let rest = if is_generator {
+            kind = if is_async {
+                MethodKind::AsyncGeneratorMethod
+            } else {
+                MethodKind::GeneratorMethod
+            };
+            rest
+        } else if is_async {
             kind = MethodKind::AsyncMethod;
             rest
         } else if let Some(after) = strip_contextual_keyword(rest, "get")
@@ -15183,10 +15208,10 @@ fn parse_class_body(
                 Expression::StringLiteral(name) => name.as_str() == Some("constructor"),
                 _ => false,
             };
-        if is_async && is_constructor {
+        if (is_async || is_generator) && is_constructor {
             return Err(ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
-                "class constructors cannot be async",
+                "class constructors cannot be async or generators",
                 context.source_label.to_string(),
                 Some(span.clone()),
             ));
@@ -15203,7 +15228,7 @@ fn parse_class_body(
             rest,
             '(',
             ')',
-            ScanGrammarContext::function_parameters(is_async, false, true),
+            ScanGrammarContext::function_parameters(is_async, is_generator, true),
         )
         .ok_or_else(|| {
             ParseError::new(
@@ -15219,7 +15244,7 @@ fn parse_class_body(
             rest,
             '{',
             '}',
-            ScanGrammarContext::function_body(is_async, false, true),
+            ScanGrammarContext::function_body(is_async, is_generator, true),
         )
         .ok_or_else(|| {
             ParseError::new(
@@ -15231,16 +15256,34 @@ fn parse_class_body(
         })?;
         let goal = ParseGoal::Script;
         let has_own_use_strict_directive = has_use_strict_directive(body_src);
-        let params =
-            with_grammar_context(context, true, is_async, false, false, false, |context| {
-                parse_arrow_params(params_src, span, context)
-            })?;
-        validate_parameter_binding_names(&params, true, is_async, false, false, span, context)?;
+        let params = with_grammar_context(
+            context,
+            true,
+            is_async,
+            is_generator,
+            false,
+            false,
+            |context| parse_arrow_params(params_src, span, context),
+        )?;
+        validate_parameter_binding_names(
+            &params,
+            true,
+            is_async,
+            is_generator,
+            false,
+            span,
+            context,
+        )?;
         validate_use_strict_parameter_list(&params, has_own_use_strict_directive, span, context)?;
-        let body_stmts =
-            with_grammar_context(context, true, is_async, false, is_async, false, |context| {
-                parse_body_statements(body_src, goal, span, context)
-            })?;
+        let body_stmts = with_grammar_context(
+            context,
+            true,
+            is_async,
+            is_generator,
+            is_async,
+            is_generator,
+            |context| parse_body_statements(body_src, goal, span, context),
+        )?;
 
         methods.push(MethodDefinition {
             key,

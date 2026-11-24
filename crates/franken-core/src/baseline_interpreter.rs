@@ -68,12 +68,14 @@ mod array_methods;
 mod async_generator;
 mod destructuring;
 mod function_methods;
+mod generator;
 mod property_descriptors;
 mod string_methods;
 use async_generator::{
     AsyncGeneratorAwaitKind, AsyncGeneratorContinuation, AsyncGeneratorObject,
     AsyncGeneratorResumeKind,
 };
+use generator::{GeneratorDelegation, GeneratorResumeKind};
 use property_descriptors::{PropertyAttributes, PropertyAttributesWire};
 
 // ---------------------------------------------------------------------------
@@ -2366,6 +2368,12 @@ struct GeneratorObject {
     resume_dst: Option<u32>,
     /// Current phase of the generator.
     phase: GeneratorPhase,
+    /// A delegated iterator remains live across next/throw/return requests.
+    delegation: Option<GeneratorDelegation>,
+    /// Function indices and saved instruction pointers belong to this program.
+    owner_module: Option<Rc<Ir3Module>>,
+    /// Only raw IR needs its own copy; registered modules own their shared copy.
+    retained_program_bytes: u64,
 }
 
 /// Execution phases for async function objects.
@@ -3930,6 +3938,11 @@ enum RunLoopExit {
     GeneratorBodyStart,
     GeneratorYield {
         result: Value,
+        label: crate::ifc_artifacts::Label,
+        resume_dst: u32,
+    },
+    GeneratorDelegate {
+        value: Value,
         label: crate::ifc_artifacts::Label,
         resume_dst: u32,
     },
@@ -5530,7 +5543,8 @@ impl InterpreterCore {
                 Ok(Value::Str(self.symbol_to_string(*symbol)))
             }
             BuiltinFunctionKind::GeneratorPrototypeNext
-            | BuiltinFunctionKind::GeneratorPrototypeReturn => {
+            | BuiltinFunctionKind::GeneratorPrototypeReturn
+            | BuiltinFunctionKind::GeneratorPrototypeThrow => {
                 let Some(Value::Generator(generator_id)) = receiver else {
                     return Err(InterpreterError::TypeError {
                         expected: "Generator receiver".to_string(),
@@ -5548,10 +5562,15 @@ impl InterpreterCore {
                     crate::ifc_artifacts::Label::Public
                 };
                 let label = receiver_label.join(&argument_label);
-                return if builtin.kind == BuiltinFunctionKind::GeneratorPrototypeReturn {
-                    self.resume_generator(module, *generator_id, argument, label, true)
-                } else {
+                let kind = match builtin.kind {
+                    BuiltinFunctionKind::GeneratorPrototypeReturn => GeneratorResumeKind::Return,
+                    BuiltinFunctionKind::GeneratorPrototypeThrow => GeneratorResumeKind::Throw,
+                    _ => GeneratorResumeKind::Next,
+                };
+                return if kind == GeneratorResumeKind::Next {
                     self.generator_next(module, *generator_id, argument, label)
+                } else {
+                    self.resume_generator(module, *generator_id, argument, label, kind)
                 };
             }
             BuiltinFunctionKind::AsyncGeneratorPrototypeNext
@@ -5591,7 +5610,8 @@ impl InterpreterCore {
                 };
                 return Ok((value, label));
             }
-            BuiltinFunctionKind::AsyncIteratorPrototypeAsyncIterator => {
+            BuiltinFunctionKind::AsyncIteratorPrototypeAsyncIterator
+            | BuiltinFunctionKind::IteratorPrototypeIterator => {
                 return Ok((
                     receiver.cloned().unwrap_or(Value::Undefined),
                     receiver_label,
@@ -5705,6 +5725,8 @@ impl InterpreterCore {
                     | BuiltinFunctionKind::SymbolPrototypeToString
                     | BuiltinFunctionKind::GeneratorPrototypeNext
                     | BuiltinFunctionKind::GeneratorPrototypeReturn
+                    | BuiltinFunctionKind::GeneratorPrototypeThrow
+                    | BuiltinFunctionKind::IteratorPrototypeIterator
                     | BuiltinFunctionKind::PromiseCapabilityResolve
                     | BuiltinFunctionKind::PromiseCapabilityReject
                     | BuiltinFunctionKind::PromisePrototypeThen
@@ -8128,6 +8150,9 @@ impl InterpreterCore {
                 execution: Some(activation),
                 resume_dst: None,
                 phase: GeneratorPhase::SuspendedStart,
+                delegation: None,
+                owner_module: None,
+                retained_program_bytes: 0,
             }),
             Ok(RunLoopExit::GeneratorThrow {
                 exception,
@@ -8147,6 +8172,7 @@ impl InterpreterCore {
             Ok(
                 RunLoopExit::GeneratorReturn { .. }
                 | RunLoopExit::GeneratorYield { .. }
+                | RunLoopExit::GeneratorDelegate { .. }
                 | RunLoopExit::AsyncAwait
                 | RunLoopExit::AsyncGeneratorAwait { .. }
                 | RunLoopExit::AsyncThrow { .. }
@@ -8161,14 +8187,30 @@ impl InterpreterCore {
 
     fn publish_generator(
         &mut self,
+        module: &Ir3Module,
         dst: u32,
-        generator: GeneratorObject,
+        mut generator: GeneratorObject,
     ) -> Result<u32, InterpreterError> {
         let generator_id =
             u32::try_from(self.generators.len()).map_err(|_| InterpreterError::TypeError {
                 expected: "generator table capacity".into(),
                 got: format!("exceeded u32::MAX ({})", self.generators.len()),
             })?;
+        let retained_owner = self
+            .module_state
+            .modules
+            .get(&module.header.source_label)
+            .and_then(|record| record.compiled_module.clone());
+        let retained_bytes = if retained_owner.is_some() {
+            0
+        } else {
+            Self::retained_module_program_bytes(module)
+        };
+        self.check_temporary_memory_budget(
+            Self::estimate_generator_bytes(&generator).saturating_add(retained_bytes),
+        )?;
+        generator.owner_module = Some(retained_owner.unwrap_or_else(|| Rc::new(module.clone())));
+        generator.retained_program_bytes = retained_bytes;
         self.generators.push(generator);
         if let Err(error) = self.sync_estimated_memory_bytes() {
             self.generators.pop();
@@ -8217,7 +8259,13 @@ impl InterpreterCore {
         argument: Value,
         argument_label: crate::ifc_artifacts::Label,
     ) -> Result<(Value, crate::ifc_artifacts::Label), InterpreterError> {
-        self.resume_generator(module, gen_id, argument, argument_label, false)
+        self.resume_generator(
+            module,
+            gen_id,
+            argument,
+            argument_label,
+            GeneratorResumeKind::Next,
+        )
     }
 
     fn resume_generator(
@@ -8226,7 +8274,7 @@ impl InterpreterCore {
         gen_id: u32,
         argument: Value,
         argument_label: crate::ifc_artifacts::Label,
-        is_return: bool,
+        kind: GeneratorResumeKind,
     ) -> Result<(Value, crate::ifc_artifacts::Label), InterpreterError> {
         let phase = {
             let generator = self.generators.get(gen_id as usize).ok_or_else(|| {
@@ -8237,16 +8285,22 @@ impl InterpreterCore {
             })?;
             match generator.phase {
                 GeneratorPhase::Completed => {
+                    if kind == GeneratorResumeKind::Throw {
+                        return Err(self.rearm_inline_throw(LabeledException {
+                            value: argument,
+                            label: argument_label,
+                        }));
+                    }
                     return Ok((
                         self.generator_result_object(
-                            if is_return {
+                            if kind == GeneratorResumeKind::Return {
                                 argument
                             } else {
                                 Value::Undefined
                             },
                             true,
                         )?,
-                        if is_return {
+                        if kind == GeneratorResumeKind::Return {
                             argument_label
                         } else {
                             crate::ifc_artifacts::Label::Public
@@ -8264,12 +8318,14 @@ impl InterpreterCore {
             generator.phase
         };
 
-        if is_return && phase == GeneratorPhase::SuspendedStart {
-            let generator = &mut self.generators[gen_id as usize];
-            generator.execution = None;
-            generator.resume_dst = None;
-            generator.phase = GeneratorPhase::Completed;
-            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+        if kind != GeneratorResumeKind::Next && phase == GeneratorPhase::SuspendedStart {
+            self.complete_sync_generator(gen_id);
+            if kind == GeneratorResumeKind::Throw {
+                return Err(self.rearm_inline_throw(LabeledException {
+                    value: argument,
+                    label: argument_label,
+                }));
+            }
             return Ok((
                 self.generator_result_object(argument, true)?,
                 argument_label,
@@ -8298,9 +8354,9 @@ impl InterpreterCore {
             });
         }
 
-        // A return selected through private data also governs the cleanup it
+        // An abrupt resume selected through private data governs the cleanup it
         // resumes. Admit the replacement context before cloning a Custom label.
-        let return_context_label = if is_return {
+        let return_context_label = if kind != GeneratorResumeKind::Next {
             let context = &self.generators[gen_id as usize]
                 .execution
                 .as_ref()
@@ -8321,7 +8377,7 @@ impl InterpreterCore {
             None
         };
 
-        let (resume_dst, activation) = {
+        let (resume_dst, activation, owner_module) = {
             let generator = &mut self.generators[gen_id as usize];
             let activation =
                 generator
@@ -8333,8 +8389,9 @@ impl InterpreterCore {
                     })?;
             let resume_dst = generator.resume_dst.take();
             generator.phase = GeneratorPhase::Executing;
-            (resume_dst, activation)
+            (resume_dst, activation, generator.owner_module.clone())
         };
+        let module = owner_module.as_deref().unwrap_or(module);
 
         let caller_execution = self.take_module_execution();
         let caller_bytes = Self::estimate_module_execution_bytes(&caller_execution);
@@ -8366,8 +8423,9 @@ impl InterpreterCore {
         drop(previous_context_label);
 
         let mut argument = Some((argument, argument_label));
-        if !is_return
+        if kind == GeneratorResumeKind::Next
             && phase == GeneratorPhase::SuspendedYield
+            && self.generators[gen_id as usize].delegation.is_none()
             && let Some(resume_dst) = resume_dst
             && let Err(error) = {
                 let (value, label) = argument.take().expect("unconsumed generator argument");
@@ -8386,34 +8444,17 @@ impl InterpreterCore {
             return Err(error);
         }
 
-        let outcome = if is_return {
-            // IteratorClose injects Return at the suspension point. Run the
-            // saved finally frames instead of discarding guest cleanup.
-            let (value, label) = argument.take().expect("generator return argument");
-            self.suspend_current_abrupt_completion();
-            self.pending_exception = None;
-            self.pending_return = Some(LabeledReturn {
-                value: value.clone(),
-                label: label.clone(),
-            });
-            if let Some(target) = self.pop_current_finally_target() {
-                self.pending_finally_entry = Some(PendingFinallyEntry {
-                    target,
-                    mode: FinallyMode::Return,
-                });
-                self.ip = target;
-                self.run_loop_with_mode(module, RunLoopMode::Generator)
-            } else {
-                Ok(RunLoopExit::GeneratorReturn { value, label })
-            }
-        } else {
-            self.run_loop_with_mode(module, RunLoopMode::Generator)
-        };
+        let saved_cjs_context = self.active_cjs_context.take();
+        let (value, label) =
+            argument.unwrap_or((Value::Undefined, crate::ifc_artifacts::Label::Public));
+        let outcome = self.run_generator_resume(module, gen_id, kind, value, label, None);
         let activation = self.take_module_execution();
         let escaped_exception = activation.pending_exception.clone();
+        self.active_cjs_context = saved_cjs_context;
         self.temporarily_suspended_execution_bytes = previous_suspended_bytes;
         self.temporarily_suspended_call_depth = previous_suspended_call_depth;
         self.restore_module_execution(caller_execution);
+        drop(owner_module);
 
         match outcome {
             Ok(RunLoopExit::GeneratorYield {
@@ -8426,29 +8467,17 @@ impl InterpreterCore {
                 generator.resume_dst = Some(resume_dst);
                 generator.phase = GeneratorPhase::SuspendedYield;
                 if let Err(error) = self.sync_estimated_memory_bytes() {
-                    let generator = &mut self.generators[gen_id as usize];
-                    generator.execution = None;
-                    generator.resume_dst = None;
-                    generator.phase = GeneratorPhase::Completed;
-                    self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                    self.complete_sync_generator(gen_id);
                     return Err(error);
                 }
                 Ok((result, label))
             }
             Ok(RunLoopExit::GeneratorReturn { value, label }) => {
-                let generator = &mut self.generators[gen_id as usize];
-                generator.execution = None;
-                generator.resume_dst = None;
-                generator.phase = GeneratorPhase::Completed;
-                self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                self.complete_sync_generator(gen_id);
                 Ok((self.generator_result_object(value, true)?, label))
             }
             Ok(RunLoopExit::Value(completion)) => {
-                let generator = &mut self.generators[gen_id as usize];
-                generator.execution = None;
-                generator.resume_dst = None;
-                generator.phase = GeneratorPhase::Completed;
-                self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                self.complete_sync_generator(gen_id);
                 Ok((
                     self.generator_result_object(completion.value, true)?,
                     completion.label,
@@ -8458,46 +8487,33 @@ impl InterpreterCore {
                 exception,
                 description,
             }) => {
-                let generator = &mut self.generators[gen_id as usize];
-                generator.execution = None;
-                generator.resume_dst = None;
-                generator.phase = GeneratorPhase::Completed;
+                self.complete_sync_generator(gen_id);
                 self.pending_exception = Some(exception);
                 self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
                 Err(InterpreterError::UncaughtException { value: description })
             }
             Ok(
                 RunLoopExit::GeneratorBodyStart
+                | RunLoopExit::GeneratorDelegate { .. }
                 | RunLoopExit::AsyncAwait
                 | RunLoopExit::AsyncGeneratorAwait { .. }
                 | RunLoopExit::AsyncThrow { .. },
             ) => {
-                let generator = &mut self.generators[gen_id as usize];
-                generator.execution = None;
-                generator.resume_dst = None;
-                generator.phase = GeneratorPhase::Completed;
-                self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                self.complete_sync_generator(gen_id);
                 Err(InterpreterError::TypeError {
                     expected: "generator body without a second initialization boundary".into(),
                     got: "generator_body_start reached while resuming generator".into(),
                 })
             }
             Err(InterpreterError::Halted) => {
-                let generator = &mut self.generators[gen_id as usize];
-                generator.execution = None;
-                generator.resume_dst = None;
-                generator.phase = GeneratorPhase::Completed;
-                self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                self.complete_sync_generator(gen_id);
                 Ok((
                     self.generator_result_object(Value::Undefined, true)?,
                     crate::ifc_artifacts::Label::Public,
                 ))
             }
             Err(error) => {
-                let generator = &mut self.generators[gen_id as usize];
-                generator.execution = None;
-                generator.resume_dst = None;
-                generator.phase = GeneratorPhase::Completed;
+                self.complete_sync_generator(gen_id);
                 if matches!(error, InterpreterError::UncaughtException { .. })
                     && let Some(exception) = escaped_exception
                 {
@@ -8524,6 +8540,7 @@ impl InterpreterCore {
                 Err(InterpreterError::UncaughtException { value: description })
             }
             RunLoopExit::GeneratorBodyStart
+            | RunLoopExit::GeneratorDelegate { .. }
             | RunLoopExit::AsyncAwait
             | RunLoopExit::AsyncGeneratorAwait { .. } => Err(InterpreterError::TypeError {
                 expected: "generator activation".to_string(),
@@ -9037,8 +9054,19 @@ impl InterpreterCore {
                             self.restore_call_setup(setup_snapshot);
                             return Err(error);
                         }
-                        let super_value =
-                            self.function_super_value(&callee_val, IR_SUPER_PROTOTYPE_PROPERTY)?;
+                        let (super_value, super_label) = if let Some(binding) =
+                            self.concise_method_super_binding(&callee_val)?
+                        {
+                            binding
+                        } else {
+                            (
+                                self.function_super_value(
+                                    &callee_val,
+                                    IR_SUPER_PROTOTYPE_PROPERTY,
+                                )?,
+                                callee_label.clone(),
+                            )
+                        };
                         let generator = match self.prepare_generator_activation_inner(
                             module,
                             GeneratorCallSetup {
@@ -9052,7 +9080,7 @@ impl InterpreterCore {
                                 this_value: Value::Undefined,
                                 this_label: crate::ifc_artifacts::Label::Public,
                                 super_value,
-                                super_label: callee_label.clone(),
+                                super_label,
                             },
                             Some(setup_snapshot),
                         ) {
@@ -9064,7 +9092,7 @@ impl InterpreterCore {
                                 }
                             }
                         };
-                        if let Err(error) = self.publish_generator(dst, generator) {
+                        if let Err(error) = self.publish_generator(module, dst, generator) {
                             match self.route_run_loop_javascript_error(module, error, mode)? {
                                 None => continue,
                                 Some(error) => return Err(error),
@@ -9489,7 +9517,16 @@ impl InterpreterCore {
                             self.restore_call_setup(setup_snapshot);
                             return Err(error);
                         }
-                        let super_value = self.method_super_value(&callee_val, &receiver_val)?;
+                        let (super_value, super_label) = if let Some(binding) =
+                            self.concise_method_super_binding(&callee_val)?
+                        {
+                            binding
+                        } else {
+                            (
+                                self.method_super_value(&callee_val, &receiver_val)?,
+                                callee_label.clone(),
+                            )
+                        };
                         let generator = match self.prepare_generator_activation_inner(
                             module,
                             GeneratorCallSetup {
@@ -9503,7 +9540,7 @@ impl InterpreterCore {
                                 this_value: receiver_val.clone(),
                                 this_label: receiver_label.clone(),
                                 super_value,
-                                super_label: callee_label.clone(),
+                                super_label,
                             },
                             Some(setup_snapshot),
                         ) {
@@ -9515,7 +9552,7 @@ impl InterpreterCore {
                                 }
                             }
                         };
-                        if let Err(error) = self.publish_generator(dst, generator) {
+                        if let Err(error) = self.publish_generator(module, dst, generator) {
                             match self.route_run_loop_javascript_error(module, error, mode)? {
                                 None => continue,
                                 Some(error) => return Err(error),
@@ -10190,19 +10227,8 @@ impl InterpreterCore {
                         }
                         Value::Generator(_) => {
                             self.preflight_legacy_property_key_for_hook(&property_key)?;
-                            let value = match &property_key {
-                                RuntimePropertyKey::String(key) if key.as_str() == Some("next") => {
-                                    Value::BuiltinFunction(BuiltinFunction::generator_next())
-                                }
-                                RuntimePropertyKey::String(key)
-                                    if key.as_str() == Some("return") =>
-                                {
-                                    Value::BuiltinFunction(BuiltinFunction::generator_return())
-                                }
-                                RuntimePropertyKey::String(_) | RuntimePropertyKey::Symbol(_) => {
-                                    Value::Undefined
-                                }
-                            };
+                            let value =
+                                Self::generator_property(&property_key).unwrap_or(Value::Undefined);
                             self.write_reg_with_label(dst, value, read_label.clone())?;
                             false
                         }
@@ -11750,6 +11776,14 @@ impl InterpreterCore {
                             kind: AsyncGeneratorAwaitKind::Yield { resume_dst },
                         });
                     }
+                    if delegate && mode == RunLoopMode::Generator {
+                        self.ip += 1;
+                        return Ok(RunLoopExit::GeneratorDelegate {
+                            value: yielded,
+                            label: yielded_label,
+                            resume_dst,
+                        });
+                    }
                     let result_id = self.alloc_object_with_prototype(None)?;
                     {
                         self.set_object_property(result_id, "value".to_string(), yielded)?;
@@ -12423,6 +12457,7 @@ impl InterpreterCore {
             }
             function_like if Self::function_object_key(&function_like).is_some() => {
                 if let Value::Closure(closure_id)
+                | Value::GeneratorFunction(closure_id)
                 | Value::AsyncFunction(closure_id)
                 | Value::AsyncGeneratorFunction(closure_id) = &function_like
                     && self.closure_method_metadata.contains_key(closure_id)
@@ -12875,6 +12910,9 @@ impl InterpreterCore {
         key: &RuntimePropertyKey,
         label: &mut crate::ifc_artifacts::Label,
     ) -> Result<Value, InterpreterError> {
+        if matches!(receiver, Value::Generator(_)) {
+            return Ok(Self::generator_property(key).unwrap_or(Value::Undefined));
+        }
         let Some(backing) =
             self.iterator_carrier_backing_id(receiver, "iterator protocol object")?
         else {
@@ -13032,7 +13070,7 @@ impl InterpreterCore {
                     *generator_id,
                     Value::Undefined,
                     label.clone(),
-                    true,
+                    GeneratorResumeKind::Return,
                 ) {
                     Ok((_, completion_label)) => {
                         *label = label.join(&completion_label);
@@ -14123,6 +14161,7 @@ impl InterpreterCore {
 
         let method_name = if matches!(key, RuntimePropertyKey::String(key) if key.as_str() == Some("name"))
             && let Value::Closure(closure_id)
+            | Value::GeneratorFunction(closure_id)
             | Value::AsyncFunction(closure_id)
             | Value::AsyncGeneratorFunction(closure_id) = &receiver
         {
@@ -17196,6 +17235,7 @@ impl InterpreterCore {
             "builtin:ObjectGetOwnPropertyNames" => {
                 let this = self.required_arg(args, 0, "object")?;
                 if let Value::Closure(closure_id)
+                | Value::GeneratorFunction(closure_id)
                 | Value::AsyncFunction(closure_id)
                 | Value::AsyncGeneratorFunction(closure_id) = &this
                     && self.closure_method_metadata.contains_key(closure_id)
@@ -17247,6 +17287,7 @@ impl InterpreterCore {
             "builtin:ReflectOwnKeys" => {
                 let this = self.required_arg(args, 0, "object")?;
                 let has_virtual_name = if let Value::Closure(closure_id)
+                | Value::GeneratorFunction(closure_id)
                 | Value::AsyncFunction(closure_id)
                 | Value::AsyncGeneratorFunction(closure_id) = &this
                     && self.closure_method_metadata.contains_key(closure_id)
@@ -19429,13 +19470,18 @@ impl InterpreterCore {
     }
 
     fn estimate_generator_bytes(generator: &GeneratorObject) -> u64 {
-        MEMORY_ESTIMATE_GENERATOR_BASE_BYTES.saturating_add(
-            generator
-                .execution
-                .as_ref()
-                .map(Self::estimate_module_execution_bytes)
-                .unwrap_or(0),
-        )
+        MEMORY_ESTIMATE_GENERATOR_BASE_BYTES
+            .saturating_add(std::mem::size_of::<Option<GeneratorDelegation>>() as u64)
+            .saturating_add(std::mem::size_of::<Option<Rc<Ir3Module>>>() as u64)
+            .saturating_add(std::mem::size_of::<u64>() as u64)
+            .saturating_add(generator.retained_program_bytes)
+            .saturating_add(
+                generator
+                    .execution
+                    .as_ref()
+                    .map(Self::estimate_module_execution_bytes)
+                    .unwrap_or(0),
+            )
     }
 
     fn heap_object_count_u32(&self) -> u32 {
@@ -20086,9 +20132,10 @@ impl InterpreterCore {
     ) -> Result<(), InterpreterError> {
         self.validate_executable_property_key(&key)?;
         let closure_id = match &function {
-            Value::Closure(id) | Value::AsyncFunction(id) | Value::AsyncGeneratorFunction(id) => {
-                *id
-            }
+            Value::Closure(id)
+            | Value::GeneratorFunction(id)
+            | Value::AsyncFunction(id)
+            | Value::AsyncGeneratorFunction(id) => *id,
             _ => {
                 return Err(InterpreterError::TypeError {
                     expected: "fresh closure for concise method definition".to_string(),
@@ -20780,6 +20827,7 @@ impl InterpreterCore {
         callee: &Value,
     ) -> Result<Option<(Value, crate::ifc_artifacts::Label)>, InterpreterError> {
         let (Value::Closure(closure_id)
+        | Value::GeneratorFunction(closure_id)
         | Value::AsyncFunction(closure_id)
         | Value::AsyncGeneratorFunction(closure_id)) = callee
         else {

@@ -1,0 +1,83 @@
+name: Native Core Generator Semantics
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/franken-core/**'
+      - 'crates/franken-extension-host/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/native-core-generator-semantics.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-core-generator-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  generator-semantics:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      RUSTUP_TOOLCHAIN: nightly-2026-09-21
+      CARGO_BUILD_JOBS: '1'
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_TERM_COLOR: never
+    # Repository policy permits only owner-maintained Actions. Keep this
+    # source-to-runtime gate independently runnable with runner-native tools;
+    # unrelated jobs using external Actions must not block these regressions.
+    steps:
+      - name: Check out the exact source
+        run: |
+          set -euo pipefail
+          git init --initial-branch=main .
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          GIT_TERMINAL_PROMPT=0 git -c http.userAgent='franken_engine-agent (+https://github.com/Dicklesworthstone/franken_engine)' fetch --no-tags --depth=1 origin "$GITHUB_SHA"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Reserve compiler memory
+        run: |
+          set -euo pipefail
+          sudo fallocate -l 8G /mnt/franken-core-generator-swapfile
+          sudo chmod 600 /mnt/franken-core-generator-swapfile
+          sudo mkswap /mnt/franken-core-generator-swapfile
+          sudo swapon /mnt/franken-core-generator-swapfile
+      - name: Install pinned Rust
+        run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component clippy --component rustfmt
+      - name: Check core targets
+        run: cargo check --locked -p frankenengine-core --all-targets
+      - name: Execute generator and adjacent runtime regressions
+        run: |
+          cargo test --locked --no-fail-fast -p frankenengine-core \
+            --test generators --test generator_methods \
+            --test async_generators --test async_generators_boundary \
+            --test array_destructuring_iterators --test array_spread \
+            --test for_of_object_like_carriers_bd_es2ra --test for_await_protocol \
+            --test function_methods --test module_callable_ownership \
+            --test object_literal_accessors --test class_member_boundaries \
+            -- --nocapture --test-threads=1
+      - name: Execute core unit regressions
+        run: cargo test --locked -p frankenengine-core --lib -- --test-threads=1
+      - name: Lint core targets
+        run: cargo clippy --locked -p frankenengine-core --all-targets -- -D warnings
+      - name: Check changed runtime formatting
+        run: |
+          rustfmt --edition 2024 --config skip_children=true --check \
+            crates/franken-core/src/ast.rs \
+            crates/franken-core/src/parser.rs \
+            crates/franken-core/src/parser_inline_tests.rs \
+            crates/franken-core/src/lowering_pipeline.rs \
+            crates/franken-core/src/object_model.rs \
+            crates/franken-core/src/baseline_interpreter.rs \
+            crates/franken-core/src/baseline_interpreter/generator.rs \
+            crates/franken-core/src/baseline_interpreter/inline_tests.rs \
+            crates/franken-core/tests/generators.rs \
+            crates/franken-core/tests/generator_methods.rs
+

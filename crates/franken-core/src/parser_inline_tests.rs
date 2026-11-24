@@ -4362,7 +4362,7 @@ fn object_literal_method_names_use_property_name_grammar_bd_vjmy7() {
 }
 
 #[test]
-fn object_literal_async_and_generator_methods_remain_explicitly_unsupported_bd_vjmy7() {
+fn object_literal_method_modifiers_preserve_function_kinds_bd_vjmy7() {
     let named_like_modifiers = parse_script("({ get() {}, set() {}, async() {} })");
     let Expression::ObjectLiteral(properties) = first_expr(&named_like_modifiers) else {
         panic!("expected object literal");
@@ -4388,16 +4388,24 @@ fn object_literal_async_and_generator_methods_remain_explicitly_unsupported_bd_v
                 panic!("supported object method/accessor failed: {supported}: {err:?}")
             });
     }
-    for source in [
-        "({ *next() {} })",
-        "({ *[key]() {} })",
-        "({ async *next() {} })",
-        "({ async *[key]() {} })",
+    for (source, expected_async) in [
+        ("({ *next() {} })", false),
+        ("({ *[key]() {} })", false),
+        ("({ async *next() {} })", true),
+        ("({ async *[key]() {} })", true),
     ] {
-        let error = parser
+        let tree = parser
             .parse(source, ParseGoal::Script)
-            .expect_err("unsupported generator method form must not be approximated as ordinary");
-        assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source}");
+            .expect("generator methods retain their execution kind");
+        let Expression::ObjectLiteral(properties) = first_expr(&tree) else {
+            panic!("expected object literal");
+        };
+        assert_eq!(properties[0].kind, ObjectPropertyKind::Method);
+        assert!(matches!(
+            &properties[0].value,
+            Expression::Function { is_async, is_generator: true, .. }
+                if *is_async == expected_async
+        ));
     }
 }
 

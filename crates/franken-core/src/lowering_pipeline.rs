@@ -6137,7 +6137,7 @@ fn lower_statement_to_ir1_with_flow(
                 let method_name = property_key_function_display_name(&method_property_key);
 
                 // Lower method body with its own scope.
-                let mut m_body_ops = if method.kind == MethodKind::AsyncMethod {
+                let mut m_body_ops = if method.kind.is_async() {
                     vec![Ir1Op::AsyncFunctionStart]
                 } else {
                     Vec::new()
@@ -6280,7 +6280,7 @@ fn lower_statement_to_ir1_with_flow(
                     free_var_ids: method_free_var_ids,
                     free_var_outer_ids: method_free_var_outer_ids,
                     local_lexical_bindings: method_local_lexical_bindings,
-                    is_generator: false,
+                    is_generator: method.kind.is_generator(),
                     is_arrow: false,
                     rest_param_index: m_rest_param_index,
                 });
@@ -11239,7 +11239,7 @@ fn lower_class_expression_to_ir1(
         // Function names remain a display/debug carrier. Property identity
         // is kept separately in exact UTF-16 below.
         let method_name = property_key_function_display_name(&method_property_key);
-        let mut method_body_ops = if method.kind == MethodKind::AsyncMethod {
+        let mut method_body_ops = if method.kind.is_async() {
             vec![Ir1Op::AsyncFunctionStart]
         } else {
             Vec::new()
@@ -11399,7 +11399,7 @@ fn lower_class_expression_to_ir1(
             free_var_ids: method_free_var_ids,
             free_var_outer_ids: method_free_var_outer_ids,
             local_lexical_bindings: method_local_lexical_bindings,
-            is_generator: false,
+            is_generator: method.kind.is_generator(),
             is_arrow: false,
             rest_param_index: method_rest_param_index,
         });

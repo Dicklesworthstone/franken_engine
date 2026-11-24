@@ -1526,6 +1526,18 @@ pub enum MethodKind {
     /// An ordinary class method with async execution semantics. Appended to
     /// preserve existing serialized variant ordinals and method struct fields.
     AsyncMethod,
+    GeneratorMethod,
+    AsyncGeneratorMethod,
+}
+
+impl MethodKind {
+    pub const fn is_async(self) -> bool {
+        matches!(self, Self::AsyncMethod | Self::AsyncGeneratorMethod)
+    }
+
+    pub const fn is_generator(self) -> bool {
+        matches!(self, Self::GeneratorMethod | Self::AsyncGeneratorMethod)
+    }
 }
 
 /// A single method definition inside a class body.
@@ -1549,6 +1561,8 @@ impl MethodDefinition {
             MethodKind::Get => "get",
             MethodKind::Set => "set",
             MethodKind::AsyncMethod => "async_method",
+            MethodKind::GeneratorMethod => "generator_method",
+            MethodKind::AsyncGeneratorMethod => "async_generator_method",
         };
         map.insert("key".to_string(), self.key.canonical_value());
         map.insert("kind".to_string(), CanonicalValue::String(kind.to_string()));
@@ -6194,6 +6208,8 @@ mod canonical_semantic_identity_tests {
             MethodKind::Get,
             MethodKind::Set,
             MethodKind::AsyncMethod,
+            MethodKind::GeneratorMethod,
+            MethodKind::AsyncGeneratorMethod,
         ] {
             let mut changed_kind = method();
             changed_kind.kind = kind;

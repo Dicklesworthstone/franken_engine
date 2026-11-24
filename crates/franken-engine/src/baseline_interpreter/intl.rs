@@ -741,7 +741,7 @@ impl InterpreterCore {
         self.observe_scoped_callback_result()?;
         // Structural validation retains subtag slices and the set of
         // variants as well as the canonical string.
-        let scratch = (text.len() as u64).saturating_mul(16).saturating_add(256);
+        let scratch = (text.len() as u64).saturating_mul(32).saturating_add(256);
         self.json_reserve_temporary(scratch)?;
         let tag = text.to_string();
         let result = canonicalize_locale_tag(&tag).ok_or_else(|| InterpreterError::RangeError {
@@ -2210,6 +2210,69 @@ fn intl_locale_tag_is_valid(tag: &str) -> bool {
     true
 }
 
+/// Normalize Unicode extension syntax without CLDR alias data. Keep the
+/// first occurrence of each keyword, sort attributes and keys, and spell
+/// a boolean true type as the key alone (ECMA-402 2020 6.2.3).
+fn intl_canonical_unicode_extension(tag: String) -> String {
+    let subtags: Vec<&str> = tag.split('-').collect();
+    let Some(start) = subtags
+        .iter()
+        .take_while(|subtag| **subtag != "x")
+        .position(|subtag| *subtag == "u")
+    else {
+        return tag;
+    };
+    let end = subtags[start + 1..]
+        .iter()
+        .position(|subtag| subtag.len() == 1)
+        .map_or(subtags.len(), |offset| start + 1 + offset);
+    let unicode = &subtags[start + 1..end];
+    let mut attributes = BTreeSet::new();
+    let mut keywords = BTreeMap::new();
+    let mut position = 0;
+    while unicode
+        .get(position)
+        .is_some_and(|subtag| subtag.len() >= 3)
+    {
+        attributes.insert(unicode[position]);
+        position += 1;
+    }
+    while let Some(&key) = unicode.get(position) {
+        position += 1;
+        let value_start = position;
+        while unicode
+            .get(position)
+            .is_some_and(|subtag| subtag.len() >= 3)
+        {
+            position += 1;
+        }
+        keywords
+            .entry(key)
+            .or_insert(&unicode[value_start..position]);
+    }
+    let mut canonical = subtags[..start].join("-");
+    canonical.push_str("-u");
+    for attribute in attributes {
+        canonical.push('-');
+        canonical.push_str(attribute);
+    }
+    for (key, value) in keywords {
+        canonical.push('-');
+        canonical.push_str(key);
+        if value != ["true"] {
+            for subtag in value {
+                canonical.push('-');
+                canonical.push_str(subtag);
+            }
+        }
+    }
+    for subtag in &subtags[end..] {
+        canonical.push('-');
+        canonical.push_str(subtag);
+    }
+    canonical
+}
+
 fn canonicalize_locale_tag(tag: &str) -> Option<String> {
     if !intl_locale_tag_is_valid(tag) {
         return None;
@@ -2250,7 +2313,7 @@ fn canonicalize_locale_tag(tag: &str) -> Option<String> {
             out.push_str(&subtag.to_ascii_lowercase());
         }
     }
-    Some(out)
+    Some(intl_canonical_unicode_extension(out))
 }
 
 #[cfg(test)]
@@ -2298,6 +2361,30 @@ mod locale_identifier_tests {
             canonicalize_locale_tag("EN-latn-us-1901-u-CA-gregory-x-U-HC"),
             Some("en-Latn-US-1901-u-ca-gregory-x-u-hc".to_string())
         );
+    }
+
+    #[test]
+    fn unicode_extension_canonicalization_merges_equivalent_locale_requests() {
+        for (requested, expected) in [
+            ("en-u-nu-latn-nu-arab", "en-u-nu-latn"),
+            (
+                "en-u-foo-bar-foo-nu-latn-ca-gregory",
+                "en-u-bar-foo-ca-gregory-nu-latn",
+            ),
+            ("en-u-kn-true", "en-u-kn"),
+            ("en-u-kn-true-co-phonebk", "en-u-co-phonebk-kn"),
+            (
+                "en-t-en-u-nu-latn-ca-gregory-x-u-ca-buddhist",
+                "en-t-en-u-ca-gregory-nu-latn-x-u-ca-buddhist",
+            ),
+            ("en-x-u-kn-true", "en-x-u-kn-true"),
+        ] {
+            assert_eq!(
+                canonicalize_locale_tag(requested).as_deref(),
+                Some(expected),
+                "{requested}"
+            );
+        }
     }
 
     #[test]

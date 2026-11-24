@@ -621,3 +621,30 @@ fn supported_locale_extensions_do_not_silently_change_service_behavior() {
          Collator true 1 false"
     );
 }
+
+#[test]
+fn unicode_locale_keywords_canonicalize_before_deduplication_and_matching() {
+    let source = r#"
+        const requests = [
+            'EN-us-u-NU-latn-nu-arab', 'en-US-u-nu-latn', 'en-US-u-nu-arab-nu-latn',
+            'en-US-u-NU-latn-CA-gregory', 'en-US-u-ca-gregory-nu-latn',
+            'en-US-u-FOO-bar-foo-KN-true', 'en-US-u-BAR-foo-kn',
+            'en-US-u-kn-TRUE', 'en-US-u-kn', 'en-US-u-kn-true-extra',
+            'en-US-u-kn-true-x-NU-latn-nu-arab', 'en-US-u-kn-x-nu-latn-nu-arab',
+            'en-US-x-u-NU-latn-nu-arab', 'en-US-x-u-nu-latn'
+        ];
+        console.log(Intl.getCanonicalLocales(requests).join('|'));
+        for (const Service of [
+            Intl.NumberFormat, Intl.DateTimeFormat, Intl.Collator, Intl.PluralRules,
+            Intl.RelativeTimeFormat, Intl.ListFormat, Intl.Segmenter
+        ]) {
+            console.log(Service.supportedLocalesOf(requests, { localeMatcher: 'lookup' }).join('|'));
+        }
+    "#;
+    // First keyword values win before sorting. A sole "true" type is omitted;
+    // longer values and the entire private-use tail remain distinct.
+    let expected = "en-US-u-nu-latn|en-US-u-nu-arab|en-US-u-ca-gregory-nu-latn|\
+                    en-US-u-bar-foo-kn|en-US-u-kn|en-US-u-kn-true-extra|\
+                    en-US-u-kn-x-nu-latn-nu-arab|en-US-x-u-nu-latn-nu-arab|en-US-x-u-nu-latn";
+    assert_eq!(output(source), [expected; 8].join("\n"));
+}

@@ -2173,9 +2173,7 @@ impl InterpreterCore {
             };
             // The separators alone must fit: a huge length fails here, not
             // after a long walk. The buffer admits every subsequent growth.
-            core.check_string_limit(
-                usize::try_from(len.saturating_sub(1)).unwrap_or(usize::MAX),
-            )?;
+            core.check_string_limit(usize::try_from(len.saturating_sub(1)).unwrap_or(usize::MAX))?;
             let separator = JsString::from(",");
             let to_locale_string = RuntimePropertyKey::String(JsString::from("toLocaleString"));
             let mut out = StringOutputBuffer::default();

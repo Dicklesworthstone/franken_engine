@@ -9187,6 +9187,13 @@ impl InterpreterCore {
                                 &mut queued,
                             );
                         }
+                        HostObjectSlots::FetchResponse(response) => {
+                            Self::queue_object_id_from_value(
+                                &Value::Object(response.headers),
+                                &mut frontier,
+                                &mut queued,
+                            );
+                        }
                         HostObjectSlots::TimersPromisesInterval(interval) => {
                             Self::queue_object_id_from_value(
                                 &interval.value,
@@ -9270,6 +9277,7 @@ impl InterpreterCore {
                             );
                         }
                         HostObjectSlots::TextDecoder(_)
+                        | HostObjectSlots::FetchHeaders(_)
                         | HostObjectSlots::FsEntryKind(_)
                         | HostObjectSlots::TimerHandle(_)
                         // This projection follows ordinary object values;

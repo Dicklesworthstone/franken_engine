@@ -525,7 +525,10 @@ fn typed_array_join_refuses_growth_before_materializing_an_oversized_result() {
         .into_iter()
         .collect();
         let mut core = InterpreterCore::new(config, "typed-array-join-memory");
-        match core.execute(&module).expect_err("large join exceeds the budget") {
+        match core
+            .execute(&module)
+            .expect_err("large join exceeds the budget")
+        {
             InterpreterError::MemoryBudgetExceeded {
                 requested_bytes,
                 max_bytes,

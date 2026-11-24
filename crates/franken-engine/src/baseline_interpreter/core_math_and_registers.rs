@@ -4412,17 +4412,17 @@ impl InterpreterCore {
                     .saturating_add(Self::estimate_string_bytes(&response.url))
                     .saturating_add(response.body.as_ref().map_or(0, |bytes| bytes.len() as u64))
             }
-            HostObjectSlots::FetchHeaders(headers) => {
-                headers.fields.iter().fold(
-                    (std::mem::size_of::<fetch::FetchHeadersSlots>() as u64)
-                        .saturating_add((headers.fields.len() as u64).saturating_mul(
-                            std::mem::size_of::<(String, String)>() as u64,
-                        )),
-                    |bytes, (name, value)| bytes
+            HostObjectSlots::FetchHeaders(headers) => headers.fields.iter().fold(
+                (std::mem::size_of::<fetch::FetchHeadersSlots>() as u64).saturating_add(
+                    (headers.fields.len() as u64)
+                        .saturating_mul(std::mem::size_of::<(String, String)>() as u64),
+                ),
+                |bytes, (name, value)| {
+                    bytes
                         .saturating_add(Self::estimate_string_bytes(name))
-                        .saturating_add(Self::estimate_string_bytes(value)),
-                )
-            }
+                        .saturating_add(Self::estimate_string_bytes(value))
+                },
+            ),
         }
     }
 
@@ -10123,10 +10123,8 @@ impl InterpreterCore {
         }
 
         let parent = match canonical {
-            "BigInt" | "Number" | "String" | "Boolean" | "Symbol" | "Function"
-            | "Response" | "Headers" => {
-                Some(self.ensure_builtin_prototype("Object")?)
-            }
+            "BigInt" | "Number" | "String" | "Boolean" | "Symbol" | "Function" | "Response"
+            | "Headers" => Some(self.ensure_builtin_prototype("Object")?),
             // ES2020 25.2.3, 25.7.3; ES2018 25.3.3: their [[Prototype]] is
             // %Function.prototype%.
             "GeneratorFunction" | "AsyncFunction" | "AsyncGeneratorFunction" => {

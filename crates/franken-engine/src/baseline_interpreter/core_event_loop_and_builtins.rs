@@ -13342,6 +13342,9 @@ impl InterpreterCore {
                         HostObjectSlots::IntlResolved(resolved_id) => {
                             visit_child(*resolved_id);
                         }
+                        HostObjectSlots::FetchResponse(response) => {
+                            visit_child(response.headers);
+                        }
                         HostObjectSlots::TimersPromisesInterval(interval) => {
                             if let Value::Object(value_id) = interval.value {
                                 visit_child(value_id);
@@ -13404,6 +13407,7 @@ impl InterpreterCore {
                             }
                         }
                         HostObjectSlots::TextDecoder(_)
+                        | HostObjectSlots::FetchHeaders(_)
                         | HostObjectSlots::FsEntryKind(_)
                         | HostObjectSlots::TimerHandle(_)
                         // Recovering identity does not inspect captured

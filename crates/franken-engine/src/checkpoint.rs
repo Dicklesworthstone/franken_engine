@@ -278,7 +278,10 @@ impl CancellationToken {
 
     fn authority_revoked(&self) -> bool {
         self.work_scopes.iter().any(|scope| scope.is_revoked())
-            || self.revocations.iter().any(RevocationSignal::is_invalidated)
+            || self
+                .revocations
+                .iter()
+                .any(RevocationSignal::is_invalidated)
     }
 
     /// Signal cancellation.
@@ -666,8 +669,14 @@ mod tests {
         caller.reset();
         token.reset();
         assert!(token.is_cancelled());
-        assert!(!caller.is_cancelled(), "security must not cancel its caller");
-        assert!(!pool.is_revoked(), "security must not revoke a sibling scope");
+        assert!(
+            !caller.is_cancelled(),
+            "security must not cancel its caller"
+        );
+        assert!(
+            !pool.is_revoked(),
+            "security must not revoke a sibling scope"
+        );
         assert!(!second.signal().is_invalidated());
         existing.tick();
         assert_eq!(existing.check(), CheckpointAction::Drain);

@@ -1052,13 +1052,19 @@ fn fetch_policy_denial_is_fatal_and_transport_failure_rejects() {
              console.log(typeof response); console.log('continued');"
         )));
         if policy_denial {
-            assert!(matches!(&outcome, Err(InterpreterError::CapabilityDenied { capability })
-                if capability == "net:request"), "{outcome:?}");
+            assert!(
+                matches!(&outcome, Err(InterpreterError::CapabilityDenied { capability })
+                if capability == "net:request"),
+                "{outcome:?}"
+            );
             assert!(core.console_output().is_empty());
         } else {
             let result = outcome.expect("ordinary transport failure is a rejected Fetch Promise");
-            let messages: Vec<_> = result.console_output
-                .iter().map(|entry| entry.message.as_str()).collect();
+            let messages: Vec<_> = result
+                .console_output
+                .iter()
+                .map(|entry| entry.message.as_str())
+                .collect();
             assert_eq!(messages, ["object", "continued", "TypeError"]);
         }
         let entries = transcript.recorded_entries();

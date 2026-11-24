@@ -9916,12 +9916,11 @@ impl InterpreterCore {
                         continue;
                     }
                     if capability.0 == "builtin:ConstructSpread" {
-                        if let Err(error) = self.enter_spread_constructor_call(module, args, dst) {
-                            if let Some(error) =
+                        if let Err(error) = self.enter_spread_constructor_call(module, args, dst)
+                            && let Some(error) =
                                 self.route_run_loop_javascript_error(module, error, mode)?
-                            {
-                                return Err(error);
-                            }
+                        {
+                            return Err(error);
                         }
                         continue;
                     }

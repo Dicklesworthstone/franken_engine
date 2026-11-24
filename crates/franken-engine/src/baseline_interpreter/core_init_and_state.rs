@@ -3730,9 +3730,11 @@ impl InterpreterCore {
                     details: format!("host effect dispatch failed for net:request: {message}"),
                 });
             }
-            Err(EffectError::HandlerError { message, code: Some(code), .. })
-                if code == "HOST_EFFECT_JOURNAL" =>
-            {
+            Err(EffectError::HandlerError {
+                message,
+                code: Some(code),
+                ..
+            }) if code == "HOST_EFFECT_JOURNAL" => {
                 return Ok(NetworkRequestOutcome::JournalFailure(message));
             }
             Err(EffectError::HandlerError { .. }) => {

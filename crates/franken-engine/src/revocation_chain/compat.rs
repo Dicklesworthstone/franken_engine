@@ -663,7 +663,8 @@ impl RevocationChain {
     ) -> Result<RevocationWatch, ChainError> {
         if self.authorized_revocation_keys.is_empty() || self.authorized_head_keys.is_empty() {
             return Err(ChainError::SignatureInvalid {
-                detail: "live revocation watches require authorized issuer and head keys".to_string(),
+                detail: "live revocation watches require authorized issuer and head keys"
+                    .to_string(),
             });
         }
         self.verify_chain("revocation-watch")?;

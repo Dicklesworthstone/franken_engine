@@ -791,7 +791,11 @@ impl InterpreterCore {
             slots.sources = Some(root_list);
         })?;
         for root in roots {
-            self.event_array_push(root, EventArraySlot::SignalDependents, Value::Object(result))?;
+            self.event_array_push(
+                root,
+                EventArraySlot::SignalDependents,
+                Value::Object(result),
+            )?;
         }
         Ok(Value::Object(result))
     }
@@ -865,8 +869,11 @@ impl InterpreterCore {
         let previous_list = self.event_array_slot_id(target, EventArraySlot::Listeners);
         self.event_array_push(target, EventArraySlot::Listeners, Value::Object(record))?;
         if let Some(signal) = signal
-            && let Err(error) =
-                self.event_array_push(signal, EventArraySlot::SignalAlgorithms, Value::Object(record))
+            && let Err(error) = self.event_array_push(
+                signal,
+                EventArraySlot::SignalAlgorithms,
+                Value::Object(record),
+            )
         {
             // A refusal while adding cancellation must not leave an active,
             // uncancellable listener on the target. Restoring the old list
@@ -1198,7 +1205,10 @@ impl InterpreterCore {
             })
     }
 
-    fn abort_signal_slots_cloned(&self, id: ObjectId) -> Result<AbortSignalSlots, InterpreterError> {
+    fn abort_signal_slots_cloned(
+        &self,
+        id: ObjectId,
+    ) -> Result<AbortSignalSlots, InterpreterError> {
         self.heap
             .get(id.0 as usize)
             .and_then(HeapObject::abort_signal_slots)

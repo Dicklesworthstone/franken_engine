@@ -16410,9 +16410,7 @@ fn required_effect_for_ambient_authority(
             Some("require" | "localStorage" | "sessionStorage" | "indexedDB") => {
                 Some(EffectKind::FsRead)
             }
-            Some("WebSocket" | "XMLHttpRequest" | "EventSource") => {
-                Some(EffectKind::NetConnect)
-            }
+            Some("WebSocket" | "XMLHttpRequest" | "EventSource") => Some(EffectKind::NetConnect),
             Some("crypto") => Some(EffectKind::RandomRead), // crypto uses CSPRNG
             _ => None,
         },

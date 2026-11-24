@@ -1096,7 +1096,9 @@ const behavior = [
         .collect();
         let mut core = InterpreterCore::new(config, "et-slot");
         core.set_gc_stress_interval(Some(1));
-        let result = core.execute(&module).expect("event target slot checks execute");
+        let result = core
+            .execute(&module)
+            .expect("event target slot checks execute");
         assert_eq!(
             result.value,
             Value::str(

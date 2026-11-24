@@ -185,7 +185,10 @@ fn callable_proxy_construct_preserves_own_new_target_and_prototype_trap() {
         [observed === P, Object.getPrototypeOf(instance) === prototype,
          instance.marker, instance.x, log.join(',')].join(' ');
     "#;
-    assert_eq!(eval(source), "true true selected 42 prototype:true:true,body");
+    assert_eq!(
+        eval(source),
+        "true true selected 42 prototype:true:true,body"
+    );
 }
 
 #[test]

@@ -23,7 +23,10 @@ fn check(source: &str, expected: &str) {
         Ok(outcome) => outcome.value,
         Err(err) => format!("ERROR: {err:?}"),
     };
-    assert_eq!(value, expected, "`{source}` must preserve observable behavior");
+    assert_eq!(
+        value, expected,
+        "`{source}` must preserve observable behavior"
+    );
 }
 
 /// A regex literal that starts with `=` in an argument or element list

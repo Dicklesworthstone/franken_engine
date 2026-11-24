@@ -507,15 +507,26 @@ fn active_live_witness(source: &str) -> (CapabilityWitness, CapabilityWitnessTru
         key.clone(),
     )
     .confidence(ConfidenceInterval::from_trials(200, 195))
-    .transcript_hash(ContentHash::compute(b"synthetic-live-revocation-test-evidence"))
+    .transcript_hash(ContentHash::compute(
+        b"synthetic-live-revocation-test-evidence",
+    ))
     .meta("fixture_evidence_kind", "synthetic-test-inputs")
     .meta(
         "trusted_synthesizer_verification_key",
         key.verification_key().to_hex(),
     )
-    .meta("source_sha256", ContentHash::compute(source.as_bytes()).to_hex())
+    .meta(
+        "source_sha256",
+        ContentHash::compute(source.as_bytes()).to_hex(),
+    )
     .meta("parse_goal", "script");
-    for tag in ["vm_dispatch", "heap_allocate", "fs_read", "fs_write", "builtin"] {
+    for tag in [
+        "vm_dispatch",
+        "heap_allocate",
+        "fs_read",
+        "fs_write",
+        "builtin",
+    ] {
         let capability = Capability::new(tag);
         let proof_artifact_id = derive_id(
             ObjectDomain::EvidenceRecord,
@@ -697,8 +708,14 @@ fn signed_witness_revocation_during_host_effect_stops_execution_and_reinstallati
                 b"committed"
             );
             assert!(!directory.path().join("second.txt").exists());
-            assert!(!pool.is_revoked(), "witness authority does not revoke a tenant pool");
-            assert!(!caller.is_cancelled(), "witness authority does not cancel its caller");
+            assert!(
+                !pool.is_revoked(),
+                "witness authority does not revoke a tenant pool"
+            );
+            assert!(
+                !caller.is_cancelled(),
+                "witness authority does not cancel its caller"
+            );
             assert_eq!(runtime.execution_count(), 0);
             let history = recorder.entries();
             assert_eq!(history.len(), 1);
@@ -769,7 +786,10 @@ fn forged_or_unrelated_revocations_preserve_real_authorized_execution() {
                 Some(recorder_dyn),
             );
             let result = runtime.execute(&witness_filesystem_package(source));
-            assert!(result.is_ok(), "valid authority must remain usable: {result:?}");
+            assert!(
+                result.is_ok(),
+                "valid authority must remain usable: {result:?}"
+            );
             assert_eq!(accepted.load(Ordering::Relaxed), usize::from(!forged));
             assert_eq!(rejected.load(Ordering::Relaxed), usize::from(forged));
             assert_eq!(writes.load(Ordering::Relaxed), 2);
@@ -796,14 +816,18 @@ fn assert_witness_admission_refusal(
     use frankenengine_engine::storage_adapter::{EventContext, StoreKind, StoreQuery};
 
     let error = runtime.execute(work).unwrap_err();
-    assert!(matches!(
-        error.primary_error(),
-        OrchestratorError::CapabilityWitnessRejected { detail } if detail.contains(expected)
-    ), "expected {expected:?}, got {error:?}");
+    assert!(
+        matches!(
+            error.primary_error(),
+            OrchestratorError::CapabilityWitnessRejected { detail } if detail.contains(expected)
+        ),
+        "expected {expected:?}, got {error:?}"
+    );
     assert_eq!(runtime.execution_count(), 0);
     assert!(runtime.last_failed_console_output().is_empty());
     assert!(runtime.last_failed_host_effect_journal().is_empty());
-    let context = EventContext::new("revocation-read", "revocation-read", "revocation-read").unwrap();
+    let context =
+        EventContext::new("revocation-read", "revocation-read", "revocation-read").unwrap();
     assert!(
         runtime
             .storage_adapter_mut()
@@ -893,10 +917,14 @@ fn failed_revocation_binding_is_not_silently_optional() {
         let mut chain = if epoch_mismatch {
             RevocationChain::new(LIVE_WITNESS_ZONE)
                 .with_authorized_revocation_key(
-                    SigningKey::from_bytes([0x72; 32]).unwrap().verification_key(),
+                    SigningKey::from_bytes([0x72; 32])
+                        .unwrap()
+                        .verification_key(),
                 )
                 .with_authorized_head_key(
-                    SigningKey::from_bytes([0x73; 32]).unwrap().verification_key(),
+                    SigningKey::from_bytes([0x73; 32])
+                        .unwrap()
+                        .verification_key(),
                 )
         } else {
             RevocationChain::new(LIVE_WITNESS_ZONE)
@@ -904,7 +932,11 @@ fn failed_revocation_binding_is_not_silently_optional() {
         chain
             .set_current_epoch(SecurityEpoch::from_raw(if epoch_mismatch { 2 } else { 1 }))
             .unwrap();
-        assert!(runtime.bind_capability_witness_revocation(&mut chain).is_err());
+        assert!(
+            runtime
+                .bind_capability_witness_revocation(&mut chain)
+                .is_err()
+        );
         runtime.set_capability_witness(witness.clone());
         assert_witness_admission_refusal(
             &mut runtime,

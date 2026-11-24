@@ -8025,7 +8025,7 @@ impl InterpreterCore {
     /// grouped by `callbackfn(value, index)`, in first-seen order of the
     /// keys. Object.groupBy keys by ToPropertyKey into a null-prototype
     /// object of arrays; Map.groupBy keys by SameValueZero into a Map of
-    /// arrays. Every item is read before the first callback runs.
+    /// arrays. Each callback and key conversion runs before the next step.
     pub(super) fn group_by_builtin(
         &mut self,
         module: Option<&Ir3Module>,
@@ -8046,61 +8046,156 @@ impl InterpreterCore {
                 got: callback.type_name().to_string(),
             });
         }
-        let list = self.iterable_to_array(
-            module,
-            RegRange {
-                start: args.start,
-                count: args.count.min(1),
-            },
-        )?;
-        let Value::Object(list_id) = list else {
-            return Err(InterpreterError::InternalError {
-                details: "groupBy item list is not an array".to_string(),
-            });
-        };
-        let values = self.array_like_values(list_id)?;
-        let mut groups: Vec<(String, Value, Vec<Value>)> = Vec::new();
-        for (index, value) in values.into_iter().enumerate() {
-            let (key, _) = self.invoke_inline_method_call_with_argument_label(
-                module,
-                callback.clone(),
-                Value::Undefined,
-                vec![
-                    value.clone(),
-                    Value::Int(i64::try_from(index).unwrap_or(i64::MAX)),
-                ],
-                None,
-            )?;
-            let key = if into_map {
-                Self::collection_canonical_member(key)
-            } else {
-                self.coerce_runtime_property_key(module, key)?
-            };
-            let identity = Self::collection_key_repr(&key);
-            match groups
-                .iter_mut()
-                .find(|(existing, ..)| *existing == identity)
+        self.scoped_conversion(|core| {
+            let context = core.join_arg_range_label(args)?;
+            core.json_observe_label(context)?;
+            let outcome = core.group_by_iterable(module, items, callback, into_map);
+            core.observe_scoped_callback_result()?;
+            match outcome {
+                Err(error) if Self::js_catchable_error_name(&error).is_some() => {
+                    Err(core.scoped_native_error(&error)?)
+                }
+                Err(error @ InterpreterError::UncaughtException { .. }) => {
+                    let label = core.json_parse_context_label()?;
+                    core.join_pending_exception_label(&label)?;
+                    Err(error)
+                }
+                other => other,
+            }
+        })
+    }
+
+    fn group_by_iterable(
+        &mut self,
+        module: Option<&Ir3Module>,
+        items: Value,
+        callback: Value,
+        into_map: bool,
+    ) -> Result<Value, InterpreterError> {
+        let iterator = if let Some(module) = module {
+            let symbol = RuntimePropertyKey::Symbol(WellKnownSymbol::Iterator.id());
+            let mut method = self.iterator_protocol_method(module, items.clone(), &symbol)?;
+            self.observe_scoped_callback_result()?;
+            // String iteration is virtual until its prototype method is
+            // materialized. Preserve a replacement or explicit nullish value.
+            if method.is_none() && matches!(items, Value::Str(_)) {
+                let prototype = self.ensure_builtin_prototype("String")?;
+                if !self.array_from_has_explicit_iterator(prototype)?
+                    && !self.canonical_virtual_property_deleted("String", &symbol)
+                {
+                    method = Some(Value::BuiltinFunction(BuiltinFunction::string_iterator()));
+                }
+            }
+            if let Some(method) = method {
+                let context = self.json_parse_context_label()?;
+                let (receiver, label) = self.invoke_inline_method_call_with_argument_label(
+                    Some(module),
+                    method,
+                    items.clone(),
+                    Vec::new(),
+                    Some(context),
+                )?;
+                self.json_observe_label(label)?;
+                let init = self.prepare_custom_iterator_result(module, receiver)?;
+                self.init_iterator_from_state(items, init, IterationKind::ForOf)?
+            } else if let Value::Object(object) = &items
+                && ["Set", "Map"].iter().any(|kind| {
+                    self.collection_storage_id(*object, kind).is_some()
+                        && self.collection_iterates_intrinsically(*object, kind)
+                })
             {
-                Some((_, _, members)) => members.push(value),
-                None => groups.push((identity, key, vec![value])),
+                // Native collections can have an implicit iterator. Its live
+                // cursor observes insertions and deletions by the callback.
+                self.init_for_of_iterator(Some(module), items)?
+            } else {
+                return Err(InterpreterError::TypeError {
+                    expected: "iterable groupBy items".to_string(),
+                    got: "missing Symbol.iterator method".to_string(),
+                });
             }
-        }
-        if into_map {
-            let (map_id, _) = self.alloc_empty_map()?;
-            for (_, key, members) in groups {
-                let array = self.alloc_array_from_values(&members)?;
-                self.map_collection_set(map_id, key, Value::Object(array))?;
+        } else {
+            self.init_for_of_iterator(None, items)?
+        };
+        self.observe_scoped_callback_result()?;
+        let (result, storage) = if into_map {
+            self.alloc_empty_map()?
+        } else {
+            let object = self.alloc_object_with_prototype(None)?;
+            self.store_prototype_link(object, None);
+            (object, object)
+        };
+        let mut index = 0_i64;
+        loop {
+            self.json_charge_work()?;
+            if index == 9_007_199_254_740_991 {
+                let error = InterpreterError::TypeError {
+                    expected: "groupBy index below the safe-integer limit".to_string(),
+                    got: index.to_string(),
+                };
+                return self.array_from_close_after_error(module, iterator, error);
             }
-            return Ok(Value::Object(map_id));
+            let element = self
+                .with_gc_nested_request(vec![Value::Object(result), iterator.clone()], |core| {
+                    core.advance_for_of_iterator(module, iterator.clone())
+                })?;
+            self.observe_scoped_callback_result()?;
+            let Some(element) = element else {
+                return Ok(Value::Object(result));
+            };
+            let grouped = self.with_gc_nested_request(
+                vec![Value::Object(result), iterator.clone(), element.clone()],
+                |core| {
+                    core.json_observe_reachable_value(&element)?;
+                    let context = core.json_parse_context_label()?;
+                    let (key, label) = core.invoke_inline_method_call_with_argument_label(
+                        module,
+                        callback.clone(),
+                        Value::Undefined,
+                        vec![element.clone(), Value::Int(index)],
+                        Some(context),
+                    )?;
+                    core.json_observe_label(label)?;
+                    let key = if into_map {
+                        RuntimePropertyKey::String(JsString::from(Self::collection_key_repr(&key)))
+                    } else {
+                        let key = core.coerce_runtime_property_key(module, key)?;
+                        core.observe_scoped_callback_result()?;
+                        core.executable_property_key_from_value(&key)
+                    };
+                    core.append_group_member(storage, key, element)
+                },
+            );
+            if let Err(error) = grouped {
+                return self.array_from_close_after_error(module, iterator, error);
+            }
+            index += 1;
         }
-        let object = self.alloc_object_with_prototype(None)?;
-        self.store_prototype_link(object, None);
-        for (_, key, members) in groups {
-            let array = self.alloc_array_from_values(&members)?;
-            let key = self.executable_property_key_from_value(&key);
-            self.set_object_runtime_property(object, key, Value::Object(array))?;
-        }
-        Ok(Value::Object(object))
+    }
+
+    /// Both result kinds already own indexed, insertion-ordered storage.
+    /// The group arrays remain private while callbacks run. Lookups require
+    /// no scan of previous groups and never consult a guest prototype.
+    fn append_group_member(
+        &mut self,
+        storage: ObjectId,
+        key: RuntimePropertyKey,
+        element: Value,
+    ) -> Result<(), InterpreterError> {
+        let array = match self.heap[storage.0 as usize].own_runtime_property_value(&key) {
+            Some(Value::Object(array)) => array,
+            _ => {
+                let array = self.alloc_array_with_length(0)?;
+                self.set_object_runtime_property(storage, key, Value::Object(array))?;
+                array
+            }
+        };
+        let index = self.array_like_length(array)?;
+        let length =
+            u32::try_from(index.saturating_add(1)).map_err(|_| InterpreterError::RangeError {
+                message: "Invalid array length".to_string(),
+            })?;
+        self.json_store_parsed_property(array, JsString::from(index.to_string()), element)?;
+        self.json_finalize_array_len(array, length)
     }
 
     pub(super) fn set_collection_add(

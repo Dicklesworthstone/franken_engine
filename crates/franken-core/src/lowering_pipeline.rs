@@ -412,6 +412,231 @@ fn unsupported_frontier_expression_error(
     }))
 }
 
+fn raw_expression_lowering_error(span: Option<SourceSpan>) -> LoweringPipelineError {
+    unsupported_frontier_expression_error(
+        "raw_expression",
+        "FE-LOWER-RAW-EXPRESSION-0001",
+        "lowering.expression.raw",
+        "unrecognized expression must be parsed before lowering",
+        span,
+    )
+}
+
+/// IR0 is public and deserializable. Inspect the entire tree before lowering
+/// can discard unreachable syntax or defer a function body. A borrowed
+/// worklist avoids cloning, serializing, or recursing on untrusted AST depth.
+/// Exhaustive matches make new expression-bearing variants an explicit part
+/// of this admission boundary.
+fn raw_expression_statement_span(statements: &[Statement]) -> Option<SourceSpan> {
+    enum Node<'a> {
+        Statement(&'a Statement),
+        Expression(&'a Expression),
+        Pattern(&'a BindingPattern),
+        Method(&'a MethodDefinition),
+    }
+
+    let mut pending = Vec::new();
+    for statement in statements {
+        pending.push(Node::Statement(statement));
+        while let Some(node) = pending.pop() {
+            match node {
+                Node::Statement(statement_node) => match statement_node {
+                    Statement::Import(_) | Statement::Break(_) | Statement::Continue(_) => {}
+                    Statement::Export(export) => match &export.kind {
+                        ExportKind::Default(expression) => {
+                            pending.push(Node::Expression(expression));
+                        }
+                        ExportKind::NamedClause(_) => {}
+                    },
+                    Statement::VariableDeclaration(declaration) => {
+                        for declarator in &declaration.declarations {
+                            pending.push(Node::Pattern(&declarator.pattern));
+                            pending.extend(declarator.initializer.iter().map(Node::Expression));
+                        }
+                    }
+                    Statement::Expression(expression) => {
+                        pending.push(Node::Expression(&expression.expression));
+                    }
+                    Statement::Block(block) => {
+                        pending.extend(block.body.iter().map(Node::Statement));
+                    }
+                    Statement::If(conditional) => {
+                        pending.push(Node::Expression(&conditional.condition));
+                        pending.push(Node::Statement(&conditional.consequent));
+                        pending.extend(conditional.alternate.as_deref().map(Node::Statement));
+                    }
+                    Statement::For(iteration) => {
+                        pending.extend(iteration.init.as_deref().map(Node::Statement));
+                        pending.extend(iteration.condition.iter().map(Node::Expression));
+                        pending.extend(iteration.update.iter().map(Node::Expression));
+                        pending.push(Node::Statement(&iteration.body));
+                    }
+                    Statement::ForIn(iteration) => {
+                        pending.push(Node::Pattern(&iteration.binding));
+                        pending.extend(
+                            iteration.pre_loop_initializer.iter().map(Node::Expression),
+                        );
+                        pending.push(Node::Expression(&iteration.object));
+                        pending.push(Node::Statement(&iteration.body));
+                    }
+                    Statement::ForOf(iteration) => {
+                        pending.push(Node::Pattern(&iteration.binding));
+                        pending.push(Node::Expression(&iteration.iterable));
+                        pending.push(Node::Statement(&iteration.body));
+                    }
+                    Statement::While(iteration) => {
+                        pending.push(Node::Expression(&iteration.condition));
+                        pending.push(Node::Statement(&iteration.body));
+                    }
+                    Statement::DoWhile(iteration) => {
+                        pending.push(Node::Expression(&iteration.condition));
+                        pending.push(Node::Statement(&iteration.body));
+                    }
+                    Statement::Labeled(labeled) => {
+                        pending.push(Node::Statement(&labeled.body));
+                    }
+                    Statement::Return(completion) => {
+                        pending.extend(completion.argument.iter().map(Node::Expression));
+                    }
+                    Statement::Throw(completion) => {
+                        pending.push(Node::Expression(&completion.argument));
+                    }
+                    Statement::TryCatch(guarded) => {
+                        pending.extend(guarded.block.body.iter().map(Node::Statement));
+                        if let Some(handler) = &guarded.handler {
+                            pending.extend(handler.body.body.iter().map(Node::Statement));
+                        }
+                        if let Some(finalizer) = &guarded.finalizer {
+                            pending.extend(finalizer.body.iter().map(Node::Statement));
+                        }
+                    }
+                    Statement::Switch(selection) => {
+                        pending.push(Node::Expression(&selection.discriminant));
+                        for case in &selection.cases {
+                            pending.extend(case.test.iter().map(Node::Expression));
+                            pending.extend(case.consequent.iter().map(Node::Statement));
+                        }
+                    }
+                    Statement::FunctionDeclaration(function) => {
+                        pending.extend(
+                            function.params.iter().map(|param| Node::Pattern(&param.pattern)),
+                        );
+                        pending.extend(function.body.body.iter().map(Node::Statement));
+                    }
+                    Statement::ClassDeclaration(class) => {
+                        pending.extend(class.super_class.as_deref().map(Node::Expression));
+                        pending.extend(class.body.iter().map(Node::Method));
+                    }
+                },
+                Node::Expression(expression) => match expression {
+                    Expression::Raw(_) => return Some(statement.span().clone()),
+                    Expression::Identifier(_)
+                    | Expression::StringLiteral(_)
+                    | Expression::NumericLiteral(_)
+                    | Expression::FloatLiteral(_)
+                    | Expression::BooleanLiteral(_)
+                    | Expression::NullLiteral
+                    | Expression::UndefinedLiteral
+                    | Expression::This
+                    | Expression::NewTarget
+                    | Expression::RegExpLiteral { .. }
+                    | Expression::Super => {}
+                    Expression::Await(argument)
+                    | Expression::SpreadElement(argument)
+                    | Expression::Unary { argument, .. }
+                    | Expression::Update { argument, .. } => {
+                        pending.push(Node::Expression(argument));
+                    }
+                    Expression::Yield { argument, .. } => {
+                        pending.extend(argument.as_deref().map(Node::Expression));
+                    }
+                    Expression::Binary { left, right, .. }
+                    | Expression::Assignment { left, right, .. } => {
+                        pending.push(Node::Expression(left));
+                        pending.push(Node::Expression(right));
+                    }
+                    Expression::Conditional {
+                        test,
+                        consequent,
+                        alternate,
+                    } => {
+                        pending.push(Node::Expression(test));
+                        pending.push(Node::Expression(consequent));
+                        pending.push(Node::Expression(alternate));
+                    }
+                    Expression::Call { callee, arguments }
+                    | Expression::OptionalCall { callee, arguments }
+                    | Expression::New { callee, arguments } => {
+                        pending.push(Node::Expression(callee));
+                        pending.extend(arguments.iter().map(Node::Expression));
+                    }
+                    Expression::Member { object, property, .. }
+                    | Expression::OptionalMember { object, property, .. } => {
+                        pending.push(Node::Expression(object));
+                        pending.push(Node::Expression(property));
+                    }
+                    Expression::ArrayLiteral(elements) => {
+                        pending.extend(elements.iter().flatten().map(Node::Expression));
+                    }
+                    Expression::ObjectLiteral(properties) => {
+                        for property in properties {
+                            pending.push(Node::Expression(&property.key));
+                            pending.push(Node::Expression(&property.value));
+                        }
+                    }
+                    Expression::ArrowFunction { params, body, .. } => {
+                        pending.extend(params.iter().map(|param| Node::Pattern(&param.pattern)));
+                        match body {
+                            ArrowBody::Expression(expression) => {
+                                pending.push(Node::Expression(expression));
+                            }
+                            ArrowBody::Block(block) => {
+                                pending.extend(block.body.iter().map(Node::Statement));
+                            }
+                        }
+                    }
+                    Expression::Function { params, body, .. } => {
+                        pending.extend(params.iter().map(|param| Node::Pattern(&param.pattern)));
+                        pending.extend(body.body.iter().map(Node::Statement));
+                    }
+                    Expression::ClassExpression { super_class, body, .. } => {
+                        pending.extend(super_class.as_deref().map(Node::Expression));
+                        pending.extend(body.iter().map(Node::Method));
+                    }
+                    Expression::TemplateLiteral { expressions, .. } => {
+                        pending.extend(expressions.iter().map(Node::Expression));
+                    }
+                },
+                Node::Pattern(pattern) => match pattern {
+                    BindingPattern::Identifier(_) => {}
+                    BindingPattern::ObjectPattern(properties) => {
+                        for property in properties {
+                            pending.push(Node::Expression(&property.key));
+                            pending.push(Node::Pattern(&property.value));
+                        }
+                    }
+                    BindingPattern::ArrayPattern(elements) => {
+                        pending.extend(elements.iter().flatten().map(Node::Pattern));
+                    }
+                    BindingPattern::Rest(pattern) => pending.push(Node::Pattern(pattern)),
+                    BindingPattern::AssignmentPattern { left, right } => {
+                        pending.push(Node::Pattern(left));
+                        pending.push(Node::Expression(right));
+                    }
+                },
+                Node::Method(method) => {
+                    pending.push(Node::Expression(&method.key));
+                    pending.extend(
+                        method.params.iter().map(|param| Node::Pattern(&param.pattern)),
+                    );
+                    pending.extend(method.body.body.iter().map(Node::Statement));
+                }
+            }
+        }
+    }
+    None
+}
+
 pub fn lower_ir0_to_ir3(
     ir0: &Ir0Module,
     context: &LoweringContext,
@@ -1704,6 +1929,9 @@ pub fn lower_ir0_to_ir1(
     verify_schema_version(&ir0.header).map_err(lowering_error_from_ir_error)?;
     if ir0.tree.body.is_empty() {
         return Err(LoweringPipelineError::EmptyIr0Body);
+    }
+    if let Some(span) = raw_expression_statement_span(&ir0.tree.body) {
+        return Err(raw_expression_lowering_error(Some(span)));
     }
 
     let ir0_hash = ir0.content_hash();
@@ -11359,14 +11587,7 @@ fn lower_expression_to_ir1(
                 delegate: *delegate,
             });
         }
-        Expression::Raw(raw) => {
-            ops.push(Ir1Op::LoadLiteral {
-                value: Ir1Literal::String(raw.clone().into()),
-            });
-            if raw.contains('(') {
-                ops.push(Ir1Op::Call { arg_count: 0 });
-            }
-        }
+        Expression::Raw(_) => return Err(raw_expression_lowering_error(None)),
         Expression::SpreadElement(inner) => {
             // Spread in expression position: lower the inner expression.
             // The actual spreading (iteration into array/object/call) is
@@ -16948,14 +17169,13 @@ mod tests {
             span: span(),
         };
         let ir0 = Ir0Module::from_syntax_tree(tree, "raw_call.js");
-        let result = lower_ir0_to_ir1(&ir0).expect("should succeed");
-
-        let has_call = result
-            .module
-            .ops
-            .iter()
-            .any(|op| matches!(op, Ir1Op::Call { .. }));
-        assert!(has_call);
+        let error = lower_ir0_to_ir1(&ir0)
+            .expect_err("opaque source cannot become a string and fabricated call");
+        let LoweringPipelineError::UnsupportedSyntax(diagnostic) = error else {
+            panic!("expected unsupported syntax, got {error:?}");
+        };
+        assert_eq!(diagnostic.diagnostic_code, "FE-LOWER-RAW-EXPRESSION-0001");
+        assert_eq!(diagnostic.span, Some(span()));
     }
 
     #[test]
@@ -16970,14 +17190,145 @@ mod tests {
             span: span(),
         };
         let ir0 = Ir0Module::from_syntax_tree(tree, "raw_no_call.js");
-        let result = lower_ir0_to_ir1(&ir0).expect("should succeed");
+        let error = lower_ir0_to_ir1(&ir0)
+            .expect_err("an opaque identifier must also be parsed before lowering");
+        let LoweringPipelineError::UnsupportedSyntax(diagnostic) = error else {
+            panic!("expected unsupported syntax, got {error:?}");
+        };
+        assert_eq!(diagnostic.diagnostic_code, "FE-LOWER-RAW-EXPRESSION-0001");
+        assert_eq!(diagnostic.span, Some(span()));
+    }
 
-        let has_call = result
-            .module
-            .ops
-            .iter()
-            .any(|op| matches!(op, Ir1Op::Call { .. }));
-        assert!(!has_call);
+    #[test]
+    fn raw_nodes_in_deserialized_deferred_and_discarded_syntax_are_rejected() {
+        use crate::parser::{CanonicalEs2020Parser, Es2020Parser};
+
+        fn replace_marker(
+            value: &mut serde_json::Value,
+            marker: &serde_json::Value,
+            raw: &serde_json::Value,
+        ) -> usize {
+            if value == marker {
+                *value = raw.clone();
+                return 1;
+            }
+            match value {
+                serde_json::Value::Array(values) => values
+                    .iter_mut()
+                    .map(|value| replace_marker(value, marker, raw))
+                    .sum(),
+                serde_json::Value::Object(fields) => fields
+                    .values_mut()
+                    .map(|value| replace_marker(value, marker, raw))
+                    .sum(),
+                _ => 0,
+            }
+        }
+
+        let marker = serde_json::to_value(Expression::StringLiteral("opaque-marker".into()))
+            .expect("serialize marker");
+        let raw = serde_json::to_value(Expression::Raw("a::b".into()))
+            .expect("opaque AST nodes remain deserializable");
+        let context = LoweringContext::new("raw-trace", "raw-decision", "raw-policy");
+        for source in [
+            "if (false) { 'opaque-marker'; }",
+            "if (true) {} else { 'opaque-marker'; }",
+            "function never() { return 'opaque-marker'; }",
+            "function never(value = 'opaque-marker') { return value; }",
+            "const never = function(value = 'opaque-marker') { return value; };",
+            "const never = () => 'opaque-marker';",
+            "const never = () => { return 'opaque-marker'; };",
+            "const object = { get value() { return 'opaque-marker'; } };",
+            "const object = { ['opaque-marker']: 1 };",
+            "class Never { ['opaque-marker']() {} }",
+            "class Never { method(value = 'opaque-marker') {} }",
+            "class Never extends 'opaque-marker' {}",
+            "const Never = class { method() { return 'opaque-marker'; } };",
+            "const { ['opaque-marker']: value } = {};",
+            "const [value = 'opaque-marker'] = [];",
+            "try { 'opaque-marker'; } catch (error) {}",
+            "try { 1; } catch (error) { 'opaque-marker'; }",
+            "try { 1; } finally { 'opaque-marker'; }",
+            "false && 'opaque-marker';",
+            "true ? 1 : 'opaque-marker';",
+            "while (false) { 'opaque-marker'; }",
+            "do { 'opaque-marker'; } while (false);",
+            "for (let index = 0; false; index++) { 'opaque-marker'; }",
+            "for (let value of []) { 'opaque-marker'; }",
+            "for (let value in {}) { 'opaque-marker'; }",
+            "label: { break label; 'opaque-marker'; }",
+            "switch (1) { case 2: 'opaque-marker'; }",
+            "function* never() { yield 'opaque-marker'; }",
+            "async function never() { await 'opaque-marker'; }",
+            "null?.['opaque-marker'];",
+            "null?.('opaque-marker');",
+            "['opaque-marker'];",
+        ] {
+            let tree = CanonicalEs2020Parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("{source}: {error}"));
+            let mut wire = serde_json::to_value(tree).expect("serialize source tree");
+            assert_eq!(replace_marker(&mut wire, &marker, &raw), 1, "{source}");
+            let tree = serde_json::from_value(wire).expect("deserialize opaque source tree");
+            let ir0 = Ir0Module::from_syntax_tree(tree, "opaque-input.js");
+            let error = lower_ir0_to_ir1(&ir0).expect_err(source);
+            let LoweringPipelineError::UnsupportedSyntax(diagnostic) = &error else {
+                panic!("{source}: expected unsupported syntax, got {error:?}");
+            };
+            assert_eq!(diagnostic.diagnostic_code, "FE-LOWER-RAW-EXPRESSION-0001");
+            assert!(diagnostic.span.is_some(), "{source}: missing statement span");
+            assert_eq!(
+                lower_ir0_to_ir3(&ir0, &context).expect_err(source),
+                error,
+                "{source}: the complete pipeline must preserve admission refusal",
+            );
+        }
+    }
+
+    #[test]
+    fn parsed_unsupported_source_is_rejected_before_executable_ir() {
+        use crate::parser::{CanonicalEs2020Parser, Es2020Parser};
+
+        for goal in [ParseGoal::Script, ParseGoal::Module] {
+            for source in ["a::b;", "const value = a::b;", "function never() { a::b; }"] {
+                // The legacy parser may retain an opaque node or reject the
+                // source itself. Neither route may produce executable IR.
+                match CanonicalEs2020Parser.parse(source, goal) {
+                    Ok(tree) => {
+                        let ir0 = Ir0Module::from_syntax_tree(tree, "unsupported-source.js");
+                        let error = lower_ir0_to_ir1(&ir0).expect_err(source);
+                        assert!(
+                            matches!(error, LoweringPipelineError::UnsupportedSyntax(_)),
+                            "{source}: {error:?}",
+                        );
+                    }
+                    Err(error) => assert_eq!(
+                        error.code,
+                        ParseErrorCode::UnsupportedSyntax,
+                        "{source}: rejection must identify unsupported syntax",
+                    ),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn raw_default_exports_are_rejected_at_module_admission() {
+        let tree = SyntaxTree {
+            goal: ParseGoal::Module,
+            body: vec![Statement::Export(ExportDeclaration {
+                kind: ExportKind::Default(Expression::Raw("a::b".into())),
+                span: span(),
+            })],
+            span: span(),
+        };
+        let ir0 = Ir0Module::from_syntax_tree(tree, "opaque-export.mjs");
+        let error = lower_ir0_to_ir1(&ir0).expect_err("opaque export cannot be executable");
+        let LoweringPipelineError::UnsupportedSyntax(diagnostic) = error else {
+            panic!("expected unsupported syntax, got {error:?}");
+        };
+        assert_eq!(diagnostic.diagnostic_code, "FE-LOWER-RAW-EXPRESSION-0001");
+        assert_eq!(diagnostic.span, Some(span()));
     }
 
     // -- Full pipeline with imports/exports --

@@ -6322,6 +6322,7 @@ impl BuiltinFunction {
                 "resolvedOptions",
                 "segment",
                 "containing",
+                "supportedLocalesOf",
             ]
             .iter()
             .copied()
@@ -6649,15 +6650,21 @@ impl BuiltinFunction {
                 .0
                 .as_deref()
                 .and_then(|specifier| specifier.split_once('.'))
-                .map(|(service, _)| service)
             {
-                Some("NumberFormat") => "Intl.NumberFormat.prototype",
-                Some("DateTimeFormat") => "Intl.DateTimeFormat.prototype",
-                Some("Collator") => "Intl.Collator.prototype",
-                Some("RelativeTimeFormat") => "Intl.RelativeTimeFormat.prototype",
-                Some("ListFormat") => "Intl.ListFormat.prototype",
-                Some("Segmenter") => "Intl.Segmenter.prototype",
-                Some("Segments") => "Intl.Segments",
+                Some(("NumberFormat", "supportedLocalesOf")) => "Intl.NumberFormat",
+                Some(("DateTimeFormat", "supportedLocalesOf")) => "Intl.DateTimeFormat",
+                Some(("Collator", "supportedLocalesOf")) => "Intl.Collator",
+                Some(("PluralRules", "supportedLocalesOf")) => "Intl.PluralRules",
+                Some(("RelativeTimeFormat", "supportedLocalesOf")) => "Intl.RelativeTimeFormat",
+                Some(("ListFormat", "supportedLocalesOf")) => "Intl.ListFormat",
+                Some(("Segmenter", "supportedLocalesOf")) => "Intl.Segmenter",
+                Some(("NumberFormat", _)) => "Intl.NumberFormat.prototype",
+                Some(("DateTimeFormat", _)) => "Intl.DateTimeFormat.prototype",
+                Some(("Collator", _)) => "Intl.Collator.prototype",
+                Some(("RelativeTimeFormat", _)) => "Intl.RelativeTimeFormat.prototype",
+                Some(("ListFormat", _)) => "Intl.ListFormat.prototype",
+                Some(("Segmenter", _)) => "Intl.Segmenter.prototype",
+                Some(("Segments", _)) => "Intl.Segments",
                 _ => "Intl.PluralRules.prototype",
             },
             K::ConsoleLog

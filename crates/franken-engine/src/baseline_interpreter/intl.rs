@@ -13,15 +13,19 @@
 //! `format` and Collator `compare` accessors return stable bound functions,
 //! so `values.map(nf.format)` works; other methods use their actual receiver.
 //!
-//! A locale, option or combination the formatters do not cover is a typed
-//! refusal at construction, never output that differs from Node's.
+//! Each constructor and its `supportedLocalesOf` method use the same
+//! provider inventory and deterministic locale lookup. Constructors choose
+//! the first matching provider, falling back to en-US, and report the
+//! selected locale in `resolvedOptions`. This is provider selection, not
+//! full ResolveLocale: relevant Unicode extension modes that do not match
+//! the applied options remain typed refusals, as do unsupported options
+//! and formatter combinations.
 //!
-//! No-claim: no ICU and no locale negotiation (an unsupported locale throws
-//! instead of falling back, except a five-to-eight-letter language such as
-//! `generic`, which falls back to en-US as in Node); NumberFormat and
-//! DateTimeFormat have formatToParts over their shared formatters; no
-//! formatRange, BigInt formatting, DisplayNames or Locale, and no
-//! supportedLocalesOf. Segmenter is UAX #29 (see `intl_segmenter`). The
+//! No-claim: no ICU, CLDR aliases or locale-specific best-fit matcher;
+//! best fit uses lookup. NumberFormat and DateTimeFormat have formatToParts
+//! over their shared formatters; no formatRange, BigInt formatting,
+//! DisplayNames or Locale. Segmenter exposes the en/en-US root provider
+//! over UAX #29, without new locale tailoring (see `intl_segmenter`). The
 //! optional legacy constructor mode that initializes an existing receiver
 //! is not implemented.
 
@@ -78,6 +82,10 @@ fn service_method(service: &str, method: &str, bound: Option<ObjectId>) -> Value
     })
 }
 
+pub(super) fn supported_locales_method(service: &str) -> Value {
+    service_method(service, "supportedLocalesOf", None)
+}
+
 fn bound_service_method(service: &str, method: &str) -> bool {
     matches!(
         (service, method),
@@ -88,6 +96,32 @@ fn bound_service_method(service: &str, method: &str) -> bool {
 /// The languages RelativeTimeFormat and ListFormat have patterns for (and
 /// whose numbers number_locale formats).
 const PATTERN_LANGUAGES: [&str; 5] = ["en", "de", "ja", "zh", "ko"];
+
+/// Languages whose collation uses the root order implemented by collation.
+const COLLATION_LANGUAGES: [&str; 6] = ["en", "de", "fr", "it", "nl", "pt"];
+
+/// Only provider locales belong to AvailableLocales; the default fallback
+/// does not make an arbitrary requested locale supported. Root-only tables
+/// register their language and the explicit en-US default, rather than
+/// echoing regions or extensions for which they have no separate data.
+fn intl_has_locale(service: &str, locale: &str) -> bool {
+    match service {
+        "NumberFormat" => number_locale::AVAILABLE_LOCALES.contains(&locale),
+        "DateTimeFormat" => date_locale::AVAILABLE_LOCALES.contains(&locale),
+        "Collator" => locale == "en-US" || COLLATION_LANGUAGES.contains(&locale),
+        "PluralRules" => {
+            locale == "en-US"
+                || (!locale.contains('-') && intl_plural_categories(locale, false).is_some())
+        }
+        "RelativeTimeFormat" => {
+            intl_pattern_language(locale).is_some()
+                && number_locale::AVAILABLE_LOCALES.contains(&locale)
+        }
+        "ListFormat" => locale == "en-US" || PATTERN_LANGUAGES.contains(&locale),
+        "Segmenter" => matches!(locale, "en" | "en-US"),
+        _ => false,
+    }
+}
 
 /// RelativeTimeFormat units, singular (ECMA-402 SingularRelativeTimeUnit).
 const RELATIVE_TIME_UNITS: [&str; 8] = [
@@ -266,7 +300,8 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let locales = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
         let options = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
-        let requested = self.intl_requested_locale(module, &locales)?;
+        let selected = self.intl_resolved_locale(module, service, &locales)?;
+        let requested = selected.as_ref().map(|selected| selected.locale.clone());
         if matches!(options, Value::Null) {
             return Err(InterpreterError::TypeError {
                 expected: format!("an options object for Intl.{service}"),
@@ -295,6 +330,9 @@ impl InterpreterCore {
                 });
             }
         };
+        if let Some(selected) = selected {
+            intl_check_locale_extensions(service, &selected, &resolved)?;
+        }
         let resolved_id = self.alloc_object_with_properties(&resolved)?;
         let prototype = self.ensure_builtin_prototype(service)?;
         let object = self.alloc_object_with_prototype(Some(prototype))?;
@@ -321,6 +359,9 @@ impl InterpreterCore {
         let (service, method) = name.split_once('.').unwrap_or(("", ""));
         if service == "Segments" {
             return self.intl_segments_method(module, builtin, method, args);
+        }
+        if method == "supportedLocalesOf" && service_name(service).is_some() {
+            return self.intl_supported_locales(module, service, args);
         }
         let receiver = if bound_service_method(service, method) {
             builtin
@@ -491,6 +532,123 @@ impl InterpreterCore {
         Ok(Value::Object(self.alloc_array_from_values(&list)?))
     }
 
+    /// SupportedLocales (ECMA-402 9.2.8-10). This static method uses its
+    /// intrinsic service's inventory, independently of the call receiver.
+    fn intl_supported_locales(
+        &mut self,
+        module: &Ir3Module,
+        service: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let locales = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let options = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+        let saved = self.begin_property_observation([])?;
+        let mut retained_bytes = 0u64;
+        let outcome = (|| {
+            // Canonicalize the entire list before touching options, even
+            // when no requested locale can match this service.
+            let requested = self.intl_locale_list(module, &locales)?;
+            let bytes = requested.iter().fold(0u64, |bytes, locale| {
+                bytes.saturating_add((locale.len() as u64).saturating_mul(3).saturating_add(256))
+            });
+            self.json_reserve_temporary(bytes)?;
+            retained_bytes = bytes;
+            if !matches!(options, Value::Undefined) {
+                if matches!(options, Value::Null) {
+                    return Err(InterpreterError::TypeError {
+                        expected: format!(
+                            "an options object for Intl.{service}.supportedLocalesOf"
+                        ),
+                        got: "null".to_string(),
+                    });
+                }
+                // ToObject must box primitives before Get, so an inherited
+                // getter receives the wrapper. Callable objects retain
+                // their own properties and their original receiver.
+                let options = if options.is_object_like() {
+                    options
+                } else {
+                    Value::Object(self.alloc_primitive_wrapper(options)?)
+                };
+                let matcher = self.get_v(
+                    module,
+                    &options,
+                    &RuntimePropertyKey::String(JsString::from("localeMatcher")),
+                )?;
+                self.observe_scoped_callback_result()?;
+                if !matches!(matcher, Value::Undefined) {
+                    let matcher = self.intl_to_string(module, matcher)?;
+                    self.observe_scoped_callback_result()?;
+                    if !matches!(matcher.as_str(), "lookup" | "best fit") {
+                        return Err(InterpreterError::RangeError {
+                            message: format!(
+                                "Value {matcher} out of range for Intl.{service} options property localeMatcher"
+                            ),
+                        });
+                    }
+                }
+            }
+            // The implementation-defined best-fit matcher uses the same
+            // deterministic lookup as the explicit lookup matcher.
+            let mut supported = Vec::new();
+            for locale in requested {
+                if self.intl_lookup_locale(service, &locale)?.is_some() {
+                    // Keep the canonical request, including extensions;
+                    // only constructor resolution returns the provider tag.
+                    supported.push(Value::str(locale));
+                }
+            }
+            Ok(Value::Object(self.alloc_array_from_values(&supported)?))
+        })();
+        self.json_release_temporary(retained_bytes);
+        self.finish_property_read_observation(saved, outcome)
+    }
+
+    /// BestAvailableLocale. No provider tag contains an extension, so
+    /// right-to-left truncation also removes Unicode locale extensions
+    /// before any provider can match, as LookupSupportedLocales requires.
+    fn intl_lookup_locale<'a>(
+        &mut self,
+        service: &str,
+        locale: &'a str,
+    ) -> Result<Option<&'a str>, InterpreterError> {
+        let mut candidate = locale;
+        loop {
+            self.json_charge_work()?;
+            if intl_has_locale(service, candidate) {
+                return Ok(Some(candidate));
+            }
+            let Some(mut position) = candidate.rfind('-') else {
+                return Ok(None);
+            };
+            // Remove a singleton together with its last remaining subtag.
+            if position >= 2 && candidate.as_bytes()[position - 2] == b'-' {
+                position -= 2;
+            }
+            candidate = &candidate[..position];
+        }
+    }
+
+    fn intl_resolved_locale(
+        &mut self,
+        module: &Ir3Module,
+        service: &str,
+        locales: &Value,
+    ) -> Result<Option<IntlLocaleSelection>, InterpreterError> {
+        let requested = self.intl_locale_list(module, locales)?;
+        for locale in requested {
+            if let Some(provider) = self.intl_lookup_locale(service, &locale)? {
+                return Ok(Some(IntlLocaleSelection {
+                    locale: provider.to_string(),
+                    keywords: intl_locale_extension_requests(service, &locale),
+                }));
+            }
+        }
+        // Each service explicitly registers the en-US default. Fallback
+        // is for construction only; it never adds supportedLocalesOf tags.
+        Ok(None)
+    }
+
     /// CanonicalizeLocaleList (ECMA-402 9.2.1). Capture length once, then
     /// interleave HasProperty, Get and ToString. Copying element storage first
     /// loses holes, inherited indices, getters, Proxy traps and their order.
@@ -581,7 +739,9 @@ impl InterpreterCore {
         }
         let text = self.conversion_to_string(Some(module), value)?;
         self.observe_scoped_callback_result()?;
-        let scratch = (text.len() as u64).saturating_mul(4).saturating_add(128);
+        // Structural validation retains subtag slices and the set of
+        // variants as well as the canonical string.
+        let scratch = (text.len() as u64).saturating_mul(16).saturating_add(256);
         self.json_reserve_temporary(scratch)?;
         let tag = text.to_string();
         let result = canonicalize_locale_tag(&tag).ok_or_else(|| InterpreterError::RangeError {
@@ -875,10 +1035,9 @@ impl InterpreterCore {
 
     /// The service locale a `locales` argument requests: its first tag. A
     /// well-formed tag whose language subtag has five to eight letters
-    /// (`new Intl.Collator('generic')`, fast-levenshtein; temporal-polyfill's
-    /// `toLocaleString('fullwide')`) names no locale ICU has data for: Node
-    /// falls back to its default locale, en-US, as the services do here
-    /// (`None`). A real language the formatters do not cover still refuses.
+    /// (`toLocaleString('fullwide')`) falls back to en-US (`None`). This
+    /// legacy selection is retained for direct locale convenience methods;
+    /// Intl constructors use the service-specific provider lookup above.
     pub(super) fn intl_requested_locale(
         &mut self,
         module: &Ir3Module,
@@ -892,8 +1051,8 @@ impl InterpreterCore {
     }
 
     /// ECMA-402 15.4.1 Number.prototype.toLocaleString(locales, options):
-    /// format as `new Intl.NumberFormat(locales, options).format(x)` would,
-    /// with the same option reading and refusals (no service object).
+    /// reuse NumberFormat option reading and formatting without a service
+    /// object. Direct locale selection retains its existing typed refusals.
     pub(super) fn intl_format_number(
         &mut self,
         module: &Ir3Module,
@@ -1320,7 +1479,7 @@ impl InterpreterCore {
         let locale = requested.unwrap_or_else(|| "en-US".to_string());
         let language = locale.split('-').next().unwrap_or_default();
         // Languages whose collation is the root order the engine implements.
-        if !["en", "de", "fr", "it", "nl", "pt"].contains(&language) {
+        if !COLLATION_LANGUAGES.contains(&language) {
             return Err(Self::intl_refusal(
                 SERVICE,
                 format!("locale {locale:?} (root-order locales: en, de, fr, it, nl, pt)"),
@@ -1757,6 +1916,111 @@ struct IntlDateRequest {
     components: DateComponents,
 }
 
+/// Keep only bounded, static keyword modes across guest option getters,
+/// rather than retaining a potentially large requested locale string.
+struct IntlLocaleSelection {
+    locale: String,
+    keywords: Vec<(&'static str, Option<&'static str>)>,
+}
+
+/// The first value for `key` in the Unicode extension. A bare boolean key
+/// has an empty value; private-use content is never a Unicode extension.
+fn intl_unicode_extension_type<'a>(locale: &'a str, key: &str) -> Option<&'a str> {
+    let mut subtags = locale.split('-');
+    let mut offset = 0usize;
+    let mut in_unicode = false;
+    while let Some(subtag) = subtags.next() {
+        offset = offset.saturating_add(subtag.len() + 1).min(locale.len());
+        if subtag.len() == 1 {
+            if subtag == "x" {
+                return None;
+            }
+            in_unicode = subtag == "u";
+        } else if in_unicode && subtag == key {
+            let start = offset;
+            let mut end = start;
+            for part in subtags {
+                if part.len() < 3 {
+                    break;
+                }
+                if end != start {
+                    end += 1;
+                }
+                end += part.len();
+            }
+            return Some(&locale[start..end]);
+        }
+    }
+    None
+}
+
+fn intl_locale_extension_requests(
+    service: &str,
+    locale: &str,
+) -> Vec<(&'static str, Option<&'static str>)> {
+    let keys: &[&'static str] = match service {
+        "NumberFormat" | "RelativeTimeFormat" => &["nu"],
+        "DateTimeFormat" => &["ca", "hc", "nu"],
+        "Collator" => &["co", "kf", "kn"],
+        _ => &[],
+    };
+    let mut requests = Vec::new();
+    for &key in keys {
+        if let Some(value) = intl_unicode_extension_type(locale, key) {
+            let value = if key == "kn" && value.is_empty() {
+                "true"
+            } else {
+                value
+            };
+            let known = [
+                "latn", "gregory", "h11", "h12", "h23", "h24", "true", "false", "default",
+            ]
+            .into_iter()
+            .find(|known| *known == value);
+            requests.push((key, known));
+        }
+    }
+    requests
+}
+
+/// Until ResolveLocale applies these keyword modes, accept one only when
+/// the resolved options prove it is actually in effect. This conservative
+/// check runs after option reads and also rejects conflicting overrides.
+fn intl_check_locale_extensions(
+    service: &str,
+    selected: &IntlLocaleSelection,
+    resolved: &[(&'static str, Value)],
+) -> Result<(), InterpreterError> {
+    for &(key, requested) in &selected.keywords {
+        let property = match key {
+            "ca" => "calendar",
+            "hc" => "hourCycle",
+            "nu" => "numberingSystem",
+            "co" => "collation",
+            "kf" => "caseFirst",
+            "kn" => "numeric",
+            _ => unreachable!("only relevant Intl Unicode keys are retained"),
+        };
+        let applied = requested.is_some_and(|requested| {
+            resolved
+                .iter()
+                .find(|(name, _)| *name == property)
+                .is_some_and(|(_, value)| match value {
+                    Value::Str(value) => value.to_string() == requested,
+                    Value::Bool(value) => requested == if *value { "true" } else { "false" },
+                    _ => false,
+                })
+        });
+        if !applied {
+            return Err(InterpreterCore::intl_refusal(
+                service,
+                format!("Unicode locale extension {key} is not applied by the selected options"),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// A BCP 47 tag in canonical case (language lower, script title, region
 /// upper), or `None` when it is not well formed.
 /// The locale and formatter options of resolved NumberFormat options read
@@ -1793,7 +2057,163 @@ fn intl_number_options_from_lookup(
     )
 }
 
+/// Unicode language identifier without extensions. Callers supply lower
+/// case ASCII subtags, so repeated variants compare case-insensitively.
+fn intl_language_id_is_valid(subtags: &[&str]) -> bool {
+    let Some(language) = subtags.first() else {
+        return false;
+    };
+    if !matches!(language.len(), 2..=3 | 5..=8)
+        || !language.bytes().all(|byte| byte.is_ascii_alphabetic())
+    {
+        return false;
+    }
+    let mut position = 1;
+    if subtags.get(position).is_some_and(|subtag| {
+        subtag.len() == 4 && subtag.bytes().all(|byte| byte.is_ascii_alphabetic())
+    }) {
+        position += 1;
+    }
+    if subtags.get(position).is_some_and(|subtag| {
+        (subtag.len() == 2 && subtag.bytes().all(|byte| byte.is_ascii_alphabetic()))
+            || (subtag.len() == 3 && subtag.bytes().all(|byte| byte.is_ascii_digit()))
+    }) {
+        position += 1;
+    }
+    let mut variants = BTreeSet::new();
+    for subtag in &subtags[position..] {
+        if !((5..=8).contains(&subtag.len())
+            || (subtag.len() == 4 && subtag.as_bytes()[0].is_ascii_digit()))
+            || !variants.insert(*subtag)
+        {
+            return false;
+        }
+    }
+    true
+}
+
+/// Validate the extension productions in the Unicode locale identifier
+/// grammar used by ECMA-402. In particular, `u` keys and `t` field keys
+/// have different shapes, and a transformed field must have a value.
+fn intl_locale_extension_is_valid(singleton: &str, subtags: &[&str]) -> bool {
+    if subtags.is_empty() {
+        return false;
+    }
+    match singleton {
+        "u" => {
+            let mut position = 0;
+            // Attributes precede keyword pairs. Repeated attributes and
+            // keys are structurally valid under ECMA-402 2020.
+            while subtags
+                .get(position)
+                .is_some_and(|subtag| subtag.len() >= 3)
+            {
+                position += 1;
+            }
+            while let Some(key) = subtags.get(position) {
+                if key.len() != 2 || !key.as_bytes()[1].is_ascii_alphabetic() {
+                    return false;
+                }
+                position += 1;
+                while subtags
+                    .get(position)
+                    .is_some_and(|subtag| subtag.len() >= 3)
+                {
+                    position += 1;
+                }
+            }
+            true
+        }
+        "t" => {
+            let field_key = |subtag: &str| {
+                subtag.len() == 2
+                    && subtag.as_bytes()[0].is_ascii_alphabetic()
+                    && subtag.as_bytes()[1].is_ascii_digit()
+            };
+            let mut position = subtags
+                .iter()
+                .position(|subtag| field_key(subtag))
+                .unwrap_or(subtags.len());
+            if position != 0 && !intl_language_id_is_valid(&subtags[..position]) {
+                return false;
+            }
+            while let Some(key) = subtags.get(position) {
+                if !field_key(key) {
+                    return false;
+                }
+                position += 1;
+                let start = position;
+                while subtags
+                    .get(position)
+                    .is_some_and(|subtag| subtag.len() >= 3)
+                {
+                    position += 1;
+                }
+                if position == start {
+                    return false;
+                }
+            }
+            true
+        }
+        "x" => true,
+        _ => subtags.iter().all(|subtag| subtag.len() >= 2),
+    }
+}
+
+fn intl_locale_tag_is_valid(tag: &str) -> bool {
+    let lower = tag.to_ascii_lowercase();
+    let subtags: Vec<&str> = lower.split('-').collect();
+    if subtags.iter().any(|subtag| {
+        subtag.is_empty()
+            || subtag.len() > 8
+            || !subtag.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    }) {
+        return false;
+    }
+    let mut position = subtags
+        .iter()
+        .position(|subtag| subtag.len() == 1)
+        .unwrap_or(subtags.len());
+    if !intl_language_id_is_valid(&subtags[..position]) {
+        return false;
+    }
+    let mut seen = 0u64;
+    while position < subtags.len() {
+        let singleton = subtags[position];
+        let byte = singleton.as_bytes()[0];
+        let index = if byte.is_ascii_digit() {
+            byte - b'0'
+        } else {
+            byte - b'a' + 10
+        };
+        let bit = 1u64 << index;
+        if seen & bit != 0 {
+            return false;
+        }
+        seen |= bit;
+        let start = position + 1;
+        // A private-use tail may contain one-character subtags; they are
+        // payload, not additional singleton extensions.
+        let end = if singleton == "x" {
+            subtags.len()
+        } else {
+            subtags[start..]
+                .iter()
+                .position(|subtag| subtag.len() == 1)
+                .map_or(subtags.len(), |offset| start + offset)
+        };
+        if !intl_locale_extension_is_valid(singleton, &subtags[start..end]) {
+            return false;
+        }
+        position = end;
+    }
+    true
+}
+
 fn canonicalize_locale_tag(tag: &str) -> Option<String> {
+    if !intl_locale_tag_is_valid(tag) {
+        return None;
+    }
     let mut subtags = tag.split('-');
     let language = subtags.next()?;
     let language_ok = matches!(language.len(), 2..=3 | 5..=8)
@@ -1831,6 +2251,80 @@ fn canonicalize_locale_tag(tag: &str) -> Option<String> {
         }
     }
     Some(out)
+}
+
+#[cfg(test)]
+mod locale_identifier_tests {
+    use super::*;
+
+    #[test]
+    fn malformed_locale_structure_is_rejected_before_lookup() {
+        for locale in [
+            "en-u",
+            "en-a",
+            "en-x",
+            "en-u-12",
+            "en-u-ca-12",
+            "en-t-h0",
+            "en-t-en-h0",
+            "en-t-12",
+            "en-a-foo-a-bar",
+            "en-u-ca-gregory-u-nu-latn",
+            "sl-rozaj-ROZAJ",
+            "de-1901-1901",
+            "en-US-GB",
+            "en-US-Latn",
+            "en--US",
+        ] {
+            assert!(canonicalize_locale_tag(locale).is_none(), "{locale}");
+        }
+    }
+
+    #[test]
+    fn valid_unicode_transformed_and_private_use_extensions_survive() {
+        for locale in [
+            "en-u-ca",
+            "en-u-abc",
+            "en-u-foo-foo-ca-gregory-ca-buddhist",
+            "en-t-en",
+            "en-t-h0-hybrid",
+            "en-t-en-us-h0-hybrid",
+            "en-a-foo-b-bar",
+            "en-x-a-u",
+        ] {
+            assert!(canonicalize_locale_tag(locale).is_some(), "{locale}");
+        }
+        assert_eq!(
+            canonicalize_locale_tag("EN-latn-us-1901-u-CA-gregory-x-U-HC"),
+            Some("en-Latn-US-1901-u-ca-gregory-x-u-hc".to_string())
+        );
+    }
+
+    #[test]
+    fn only_relevant_unicode_keyword_modes_are_retained() {
+        assert_eq!(
+            intl_locale_extension_requests("DateTimeFormat", "en-u-ca-gregory-hc-h23-nu-latn"),
+            vec![
+                ("ca", Some("gregory")),
+                ("hc", Some("h23")),
+                ("nu", Some("latn")),
+            ]
+        );
+        assert_eq!(
+            intl_locale_extension_requests("Collator", "en-u-kn"),
+            vec![("kn", Some("true"))]
+        );
+        assert_eq!(
+            intl_locale_extension_requests("NumberFormat", "en-u-nu-arab"),
+            vec![("nu", None)]
+        );
+        assert_eq!(
+            intl_locale_extension_requests("NumberFormat", "en-u-nu-latn-nu-arab"),
+            vec![("nu", Some("latn"))]
+        );
+        assert!(intl_locale_extension_requests("DateTimeFormat", "en-x-u-hc-h23").is_empty());
+        assert!(intl_locale_extension_requests("ListFormat", "en-u-nu-arab").is_empty());
+    }
 }
 
 /// The pattern-table language of `locale`, if the tables cover it.

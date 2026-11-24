@@ -11882,6 +11882,19 @@ impl InterpreterCore {
             )?;
         }
         if let Value::BuiltinFunction(builtin) = function
+            && builtin.kind == BuiltinFunctionKind::IntlConstructor
+        {
+            // Seed the static method once. Once backing storage exists, its
+            // ordinary descriptors own later replacement, deletion and freeze.
+            let key = RuntimePropertyKey::String(JsString::from("supportedLocalesOf"));
+            self.set_object_runtime_property(
+                backing,
+                key.clone(),
+                intl::supported_locales_method(&builtin.module_specifier),
+            )?;
+            self.set_own_property_attributes(backing, &key, NON_ENUMERABLE_DATA_ATTRIBUTES)?;
+        }
+        if let Value::BuiltinFunction(builtin) = function
             && builtin.kind == BuiltinFunctionKind::GeneratedFunction
         {
             let prototype = self.ensure_generated_function_prototype(builtin)?;
@@ -12352,6 +12365,9 @@ impl InterpreterCore {
         }
         Ok(Some(match (key.as_str(), function) {
             (Some("name"), _) => true,
+            (Some("supportedLocalesOf"), Value::BuiltinFunction(builtin)) => {
+                builtin.kind == BuiltinFunctionKind::IntlConstructor
+            }
             (Some("length"), Value::BuiltinFunction(builtin)) => {
                 matches!(
                     builtin.kind,

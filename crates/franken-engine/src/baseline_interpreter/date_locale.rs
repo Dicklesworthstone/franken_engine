@@ -46,6 +46,11 @@ enum Layout {
 /// French's layout, so they are refused rather than formatted as fr
 /// (bd-9vouw.462). Every German region Node v22.2.0 was checked with shares
 /// one layout.
+pub(super) const AVAILABLE_LOCALES: &[&str] = &[
+    "de", "de-AT", "de-BE", "de-CH", "de-DE", "de-LI", "de-LU", "en", "en-GB", "en-PH", "en-US",
+    "fr", "fr-BE", "fr-FR", "fr-LU", "fr-MA", "fr-SN", "ja", "ja-JP",
+];
+
 fn layout(locale: Option<&str>) -> Result<Layout, String> {
     let tag = locale.unwrap_or("en-US");
     let lower = tag.to_ascii_lowercase().replace('_', "-");
@@ -656,6 +661,23 @@ mod tests {
             DateLocaleKind::Time,
         ]
         .map(|kind| format_date_locale(fields, locale, kind).expect("format"))
+    }
+
+    #[test]
+    fn available_locales_have_real_default_date_data() {
+        for locale in AVAILABLE_LOCALES {
+            assert!(
+                format_date_locale(EARLY, Some(locale), DateLocaleKind::Date).is_ok(),
+                "advertised locale {locale} must have formatter data"
+            );
+        }
+        for locale in ["fr-CA", "en-AU", "ja-US", "en-US-u-hc-h23"] {
+            assert!(!AVAILABLE_LOCALES.contains(&locale));
+            assert!(
+                format_date_locale(EARLY, Some(locale), DateLocaleKind::Date).is_err(),
+                "raw provider refusal for {locale} must remain intact"
+            );
+        }
     }
 
     #[test]

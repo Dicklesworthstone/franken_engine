@@ -11140,6 +11140,12 @@ impl InterpreterCore {
                 self.require_resolve_paths_property(module, builtin)?
             }
             Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::IntlConstructor
+                    && name == "supportedLocalesOf" =>
+            {
+                intl::supported_locales_method(&builtin.module_specifier)
+            }
+            Value::BuiltinFunction(builtin)
                 if Self::builtin_function_property_object(builtin).is_some() =>
             {
                 let property_object =

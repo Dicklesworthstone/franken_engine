@@ -169,6 +169,49 @@ fn locale_subtags(tag: &str) -> (String, Option<String>, Option<String>, bool) {
 /// `1’234’567.891`, en-DE and de-AT, de-CH) is refused rather than
 /// formatted as the language's default (bd-9vouw.462). Values are Node
 /// v22.2.0's (ICU).
+pub(super) const AVAILABLE_LOCALES: &[&str] = &[
+    "de",
+    "de-BE",
+    "de-DE",
+    "de-IT",
+    "de-LU",
+    "en",
+    "en-001",
+    "en-150",
+    "en-AU",
+    "en-CA",
+    "en-GB",
+    "en-HK",
+    "en-IE",
+    "en-IN",
+    "en-JM",
+    "en-KE",
+    "en-MY",
+    "en-NG",
+    "en-NZ",
+    "en-PH",
+    "en-PK",
+    "en-SG",
+    "en-US",
+    "en-ZA",
+    "ja",
+    "ja-JP",
+    "ko",
+    "ko-KP",
+    "ko-KR",
+    "zh",
+    "zh-CN",
+    "zh-HK",
+    "zh-Hans",
+    "zh-Hans-CN",
+    "zh-Hans-SG",
+    "zh-Hant",
+    "zh-Hant-HK",
+    "zh-Hant-TW",
+    "zh-SG",
+    "zh-TW",
+];
+
 fn locale_symbols(locale: Option<&str>) -> Result<LocaleSymbols, NumberLocaleError> {
     let tag = locale.unwrap_or("en-US");
     let (language, script, region, numbering) = locale_subtags(tag);
@@ -629,6 +672,24 @@ fn group_digits_indian(integer: &str, separator: char) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn available_locales_have_real_default_number_data() {
+        for locale in AVAILABLE_LOCALES {
+            assert!(
+                format_number_locale(1234.5, Some(locale), &NumberLocaleOptions::default()).is_ok(),
+                "advertised locale {locale} must have formatter data"
+            );
+        }
+        for locale in ["en-CH", "de-CH", "fr", "en-u-nu-arab"] {
+            assert!(!AVAILABLE_LOCALES.contains(&locale));
+            assert!(
+                format_number_locale(1234.5, Some(locale), &NumberLocaleOptions::default())
+                    .is_err(),
+                "raw provider refusal for {locale} must remain intact"
+            );
+        }
+    }
 
     fn en(value: f64) -> String {
         format_number_locale(value, None, &NumberLocaleOptions::default()).expect("en format")

@@ -154,18 +154,14 @@ fn intl_services_match_node() {
     );
 }
 
-/// A locale or option the formatters do not cover is a TypeError at
-/// construction (Node would format `es-ES` in Spanish; the engine must not
-/// print an English string instead).
+/// Locale negotiation does not make unsupported formatting options usable.
+/// The bounded providers must still refuse patterns and time zones they lack.
 #[test]
-fn unsupported_locales_and_options_are_refused() {
+fn unsupported_formatting_options_are_refused() {
     for source in [
-        "new Intl.NumberFormat('es-ES').format(1);",
         "new Intl.NumberFormat('en', { notation: 'compact' });",
         "new Intl.DateTimeFormat('de', { month: 'long' });",
         "new Intl.DateTimeFormat('en', { timeZone: 'America/New_York' });",
-        "new Intl.Collator('sv');",
-        "new Intl.PluralRules('ru');",
     ] {
         let program = format!(
             "try {{ {source} console.log('none'); }} catch (e) {{ console.log(e.constructor.name); }}"
@@ -176,6 +172,27 @@ fn unsupported_locales_and_options_are_refused() {
             "`{source}` must be refused"
         );
     }
+}
+
+/// ECMA-402 constructor fallback selects the default provider while the
+/// discovery API continues to report the requested locale as unsupported.
+#[test]
+fn unsupported_requested_locales_use_reported_default_locale() {
+    let source = r#"
+        const number = new Intl.NumberFormat('es-ES');
+        console.log(Intl.NumberFormat.supportedLocalesOf('es-ES').length,
+            number.resolvedOptions().locale, number.format(1234.5));
+        const collator = new Intl.Collator('sv');
+        console.log(Intl.Collator.supportedLocalesOf('sv').length,
+            collator.resolvedOptions().locale, collator.compare('a', 'b'));
+        const plural = new Intl.PluralRules('ru');
+        console.log(Intl.PluralRules.supportedLocalesOf('ru').length,
+            plural.resolvedOptions().locale, plural.select(2));
+    "#;
+    assert_eq!(
+        console_output(source).unwrap(),
+        "0 en-US 1,234.5\n0 en-US -1\n0 en-US other"
+    );
 }
 
 #[test]

@@ -4,10 +4,6 @@
 //! undefined"). Expected strings are Node v22.2.0's completion values for the
 //! same programs (`vm.runInNewContext`).
 //!
-//! No-claim: every item is read before the first callback runs (the spec
-//! interleaves iteration and callback calls; only a callback that mutates
-//! the iterable it is grouping can tell).
-//!
 //! No mocks: real source through the public `HybridRouter::eval` path.
 
 use frankenengine_engine::HybridRouter;
@@ -79,5 +75,47 @@ fn group_by_errors_and_function_values() {
         "[typeof Object.groupBy, Object.groupBy.length, Object.groupBy.name, typeof Map.groupBy, \
          Map.groupBy.length].join(' ')",
         "function 2 groupBy function 2",
+    );
+}
+
+#[test]
+fn group_by_callbacks_see_a_live_iterable() {
+    check(
+        "const a = [1, 2]; const g = Object.groupBy(a, (v, i) => { \
+         if (i === 0) { a[1] = 3; a.push(4); } return '__proto__'; }); \
+         g.__proto__.join()",
+        "1,3,4",
+    );
+    check(
+        "const s = new Set([1, 2]); const m = Map.groupBy(s, (v, i) => { \
+         if (i === 0) { s.delete(2); s.add(3); } return v % 2; }); \
+         m.get(1).join()",
+        "1,3",
+    );
+}
+
+#[test]
+fn group_by_closes_after_a_callback_or_key_conversion_throw() {
+    check(
+        "const log = []; const original = {}; \
+         function* items() { try { log.push('first'); yield 1; log.push('second'); yield 2; } \
+         finally { log.push('closed'); throw 'cleanup'; } } \
+         try { Object.groupBy(items(), () => ({ toString() { log.push('convert'); throw original; } })); } \
+         catch (e) { log.push(e === original); } \
+         try { Map.groupBy(items(), () => { log.push('callback'); throw original; }); } \
+         catch (e) { log.push(e === original); } log.join()",
+        "first,convert,closed,true,first,callback,closed,true",
+    );
+}
+
+#[test]
+fn group_by_propagates_a_step_failure_without_closing() {
+    check(
+        "const log = []; const items = { [Symbol.iterator]() { return { \
+         next() { log.push('next'); return { get value() { throw 'value'; } }; }, \
+         return() { log.push('closed'); return {}; } }; } }; \
+         try { Map.groupBy(items, () => log.push('callback')); } catch (e) { log.push(e); } \
+         log.join()",
+        "next,value",
     );
 }

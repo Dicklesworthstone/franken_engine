@@ -5812,7 +5812,7 @@ fn parse_single_script_statement(source: &str) -> ParseResult<Statement> {
         statement_depth: 0,
         pattern_depth: 0,
         strict_mode: false,
-        script_this: true,
+        this_environment: ThisEnvironment::Script,
         module_goal: false,
         super_property_allowed: false,
         await_context: false,

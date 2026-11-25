@@ -2149,6 +2149,15 @@ impl Es2020Parser for CanonicalEs2020Parser {
     }
 }
 
+/// The lexical environment supplying `this` and `new.target`. Arrow
+/// functions inherit this context instead of introducing a new environment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ThisEnvironment {
+    Script,
+    Module,
+    Function,
+}
+
 #[derive(Debug)]
 struct ParseExecutionContext<'a> {
     source_label: &'a str,
@@ -2166,12 +2175,10 @@ struct ParseExecutionContext<'a> {
     pattern_depth: u64,
     /// Whether the current parsing context is in strict mode.
     strict_mode: bool,
-    /// Code whose `this` is the script's: a Script's top-level code and the
-    /// arrow functions in it (bd-9vouw.417). That `this` is the global
-    /// object, in strict code too (ES2020 15.1.10 ScriptEvaluation), so its
-    /// reads convert as sloppy ones do. A module's top-level `this` is
-    /// undefined and a function's is its call's.
-    script_this: bool,
+    /// Script-level `this` is global even in strict code (bd-9vouw.417).
+    /// Modules and functions both have non-global strict `this`, but only
+    /// functions bind `new.target` (ES2020 15.1.1 and 15.2.1.1).
+    this_environment: ThisEnvironment,
     /// The source is a Module, whose code (function bodies included) may
     /// use `import.meta`; in a Script it is an early SyntaxError (ES2020
     /// 15.1.1, bd-9vouw.455).
@@ -4338,7 +4345,10 @@ fn parse_source_with_native_sources(
         statement_depth: 0,
         pattern_depth: 0,
         strict_mode: goal == ParseGoal::Module,
-        script_this: goal == ParseGoal::Script,
+        this_environment: match goal {
+            ParseGoal::Script => ThisEnvironment::Script,
+            ParseGoal::Module => ThisEnvironment::Module,
+        },
         module_goal: goal == ParseGoal::Module,
         super_property_allowed: false,
         await_context: goal == ParseGoal::Module,
@@ -7233,7 +7243,7 @@ fn parse_primary_expression(
         return Ok(Expression::NullLiteral);
     }
     if expression == "this" {
-        return Ok(if context.strict_mode && !context.script_this {
+        return Ok(if context.strict_mode && context.this_environment != ThisEnvironment::Script {
             Expression::This
         } else {
             Expression::SloppyThis
@@ -10571,12 +10581,18 @@ fn try_parse_postfix(
                 context,
             )));
         }
-        if object_src == "new" && property_src == "target" {
-            // A script's own code and its arrows are in no function, where
-            // `new.target` is an early SyntaxError (ES2020 15.1.1); it
-            // parsed and ran (bd-9vouw.448). Function bodies, parameters,
-            // methods and class field initializers clear `script_this`.
-            if context.script_this {
+        if object_src == "new" {
+            if optional || property_src != "target" {
+                return Some(Err(invalid_syntax_error(
+                    "a `new` meta property must be exactly `new.target`",
+                    span,
+                    context,
+                )));
+            }
+            // Neither Script nor Module code creates a function environment.
+            // Arrows inherit the enclosing environment; ordinary functions,
+            // methods, field initializers and static blocks establish one.
+            if context.this_environment != ThisEnvironment::Function {
                 return Some(Err(invalid_syntax_error(
                     "`new.target` is only valid in a function",
                     span,
@@ -10585,7 +10601,14 @@ fn try_parse_postfix(
             }
             return Some(Ok(Expression::NewTarget));
         }
-        if object_src == "import" && property_src == "meta" {
+        if object_src == "import" {
+            if optional || property_src != "meta" {
+                return Some(Err(invalid_syntax_error(
+                    "an `import` meta property must be exactly `import.meta`",
+                    span,
+                    context,
+                )));
+            }
             if !context.module_goal {
                 return Some(Err(invalid_syntax_error(
                     "`import.meta` is only valid in a module",
@@ -16591,7 +16614,8 @@ fn parse_function_expression_with_super(
     let saved_super_property_allowed = context.super_property_allowed;
     context.super_property_allowed = super_property_allowed;
     let saved_super_call = std::mem::replace(&mut context.super_call, SuperCallContext::Forbidden);
-    let saved_script_this = std::mem::replace(&mut context.script_this, false);
+    let saved_this_environment =
+        std::mem::replace(&mut context.this_environment, ThisEnvironment::Function);
     let parsed = with_function_context(is_async, is_generator, context, |context| {
         with_function_strict_mode(body_src, false, context, |context| {
             let params = parse_arrow_params(params_src, span, context)?;
@@ -16607,7 +16631,7 @@ fn parse_function_expression_with_super(
     });
     context.super_property_allowed = saved_super_property_allowed;
     context.super_call = saved_super_call;
-    context.script_this = saved_script_this;
+    context.this_environment = saved_this_environment;
     let (params, body_stmts, strict) = parsed?;
 
     Ok(Expression::Function {
@@ -16997,7 +17021,8 @@ fn parse_class_static_block(
     context.super_property_allowed = true;
     let saved_super_call =
         std::mem::replace(&mut context.super_call, SuperCallContext::ClassElement);
-    let saved_script_this = std::mem::replace(&mut context.script_this, false);
+    let saved_this_environment =
+        std::mem::replace(&mut context.this_environment, ThisEnvironment::Function);
     let parsed = with_function_context(false, false, context, |context| {
         let saved_static_block_await = std::mem::replace(&mut context.static_block_await, true);
         let parsed = with_function_strict_mode(body_src, true, context, |context| {
@@ -17008,7 +17033,7 @@ fn parse_class_static_block(
     });
     context.super_property_allowed = saved_super_property_allowed;
     context.super_call = saved_super_call;
-    context.script_this = saved_script_this;
+    context.this_environment = saved_this_environment;
     let body = parsed?;
     // ES2022 15.7.1 ClassStaticBlockBody early errors: no `return`, no
     // `break`/`continue` that leaves the block, and (as for a field
@@ -17385,7 +17410,8 @@ fn parse_class_body_members(
             SuperCallContext::Forbidden
         };
         let saved_super_call = std::mem::replace(&mut context.super_call, super_call);
-        let saved_script_this = std::mem::replace(&mut context.script_this, false);
+        let saved_this_environment =
+            std::mem::replace(&mut context.this_environment, ThisEnvironment::Function);
         let parsed = with_function_context(is_async, is_generator, context, |context| {
             with_function_strict_mode(body_src, true, context, |context| {
                 let params = parse_arrow_params(params_src, span, context)?;
@@ -17401,7 +17427,7 @@ fn parse_class_body_members(
         });
         context.super_property_allowed = saved_super_property_allowed;
         context.super_call = saved_super_call;
-        context.script_this = saved_script_this;
+        context.this_environment = saved_this_environment;
         let (params, body_stmts) = parsed?;
 
         methods.push(MethodDefinition {
@@ -17802,10 +17828,11 @@ fn parse_class_field(
             Some(source) if !source.is_empty() => {
                 let saved_super_call =
                     std::mem::replace(&mut context.super_call, SuperCallContext::ClassElement);
-                let saved_script_this = std::mem::replace(&mut context.script_this, false);
+                let saved_this_environment =
+                    std::mem::replace(&mut context.this_environment, ThisEnvironment::Function);
                 let value = parse_expression(source, span, context, 1);
                 context.super_call = saved_super_call;
-                context.script_this = saved_script_this;
+                context.this_environment = saved_this_environment;
                 Some(value?)
             }
             Some(_) => return Err(malformed(context)),
@@ -18124,7 +18151,8 @@ fn parse_function_declaration(
         .transpose()?;
     let goal = ParseGoal::Script; // Function bodies use script goal.
     let saved_super_call = std::mem::replace(&mut context.super_call, SuperCallContext::Forbidden);
-    let saved_script_this = std::mem::replace(&mut context.script_this, false);
+    let saved_this_environment =
+        std::mem::replace(&mut context.this_environment, ThisEnvironment::Function);
     let parsed = with_function_context(is_async, is_generator, context, |context| {
         with_function_strict_mode(body_src, false, context, |context| {
             let params = parse_arrow_params(params_src, &span, context)?;
@@ -18139,7 +18167,7 @@ fn parse_function_declaration(
         })
     });
     context.super_call = saved_super_call;
-    context.script_this = saved_script_this;
+    context.this_environment = saved_this_environment;
     let (params, body_stmts, strict) = parsed?;
 
     Ok(Statement::FunctionDeclaration(FunctionDeclaration {

@@ -7391,6 +7391,72 @@ impl InterpreterCore {
         Ok(())
     }
 
+    fn builtin_collection_mutation_brand(builtin: &BuiltinFunction) -> Option<&'static str> {
+        use BuiltinFunctionKind as Kind;
+
+        match builtin.kind {
+            Kind::MapSet | Kind::MapDelete | Kind::MapClear => Some("Map"),
+            Kind::SetAdd | Kind::SetDelete | Kind::SetClear => Some("Set"),
+            Kind::WeakMapMethod
+                if matches!(builtin.module_specifier.0.as_deref(), Some("set" | "delete")) =>
+            {
+                Some("WeakMap")
+            }
+            _ => None,
+        }
+    }
+
+    /// Admit retained collection provenance before changing private entries.
+    /// Both receiver-aware calls and legacy static hostcalls use the existing
+    /// mutation propagation hook; a resource refusal cannot leave a new entry
+    /// reachable through an older, public alias without its label.
+    pub(super) fn prepare_builtin_collection_mutation(
+        &mut self,
+        builtin: &BuiltinFunction,
+        receiver: &Value,
+        args: RegRange,
+        callee_register: Option<u32>,
+        receiver_register: Option<u32>,
+    ) -> Result<(), InterpreterError> {
+        let Some(brand) = Self::builtin_collection_mutation_brand(builtin) else {
+            return Ok(());
+        };
+        let Value::Object(object_id) = receiver else {
+            return Ok(());
+        };
+        if self
+            .heap
+            .get(object_id.0 as usize)
+            .and_then(|object| object.brand())
+            != Some(brand)
+        {
+            return Ok(());
+        }
+        let mut label = self.join_arg_range_label(args)?;
+        for register in callee_register.into_iter().chain(receiver_register) {
+            label = self.join_owned_label_with_temporary_budget(
+                label,
+                self.get_register_label(register)?,
+            )?;
+        }
+        let temporary_bytes = Self::estimate_label_bytes(&label);
+        self.json_reserve_temporary(temporary_bytes)?;
+        let outcome = (|| {
+            // The propagation helper retains a separate winner clone. Admit
+            // its peak while the input label is still owned by this frame.
+            let retained_label = self
+                .object_mutation_labels
+                .get(object_id)
+                .filter(|current| *current > &label)
+                .unwrap_or(&label);
+            self.check_temporary_memory_budget(Self::estimate_label_bytes(retained_label))?;
+            self.propagate_builtin_binary_mutation_label(builtin, receiver, args, &label)
+        })();
+        drop(label);
+        self.json_release_temporary(temporary_bytes);
+        outcome
+    }
+
     pub(super) fn propagate_builtin_binary_mutation_label(
         &mut self,
         builtin: &BuiltinFunction,
@@ -7456,7 +7522,10 @@ impl InterpreterCore {
         {
             self.join_url_search_params_lifecycle_label(*object_id, label)?;
         }
-        if matches!(
+        // Collection entries live in private storage, so labeling only the
+        // returned receiver register leaves older aliases unclassified. The
+        // ordinary and call/apply invocation paths both finish through here.
+        let mutates_ordinary_or_collection = matches!(
             builtin.kind,
             Kind::ArrayPush
                 | Kind::ArrayPop
@@ -7467,8 +7536,8 @@ impl InterpreterCore {
                 | Kind::ArraySplice
                 | Kind::ArrayFill
                 | Kind::ArrayCopyWithin
-        ) && let Value::Object(object_id) = receiver
-        {
+        ) || Self::builtin_collection_mutation_brand(builtin).is_some();
+        if mutates_ordinary_or_collection && let Value::Object(object_id) = receiver {
             self.join_object_mutation_label(*object_id, label)?;
         }
         Ok(())

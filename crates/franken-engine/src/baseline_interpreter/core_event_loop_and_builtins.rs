@@ -8239,33 +8239,36 @@ impl InterpreterCore {
                 ),
             });
         }
-        let (key_value, value) = match (module, &entry) {
-            (Some(module), _) => {
-                let key = self.get_v(
-                    module,
-                    &entry,
-                    &RuntimePropertyKey::String(JsString::from("0")),
-                )?;
-                let value = self.get_v(
-                    module,
-                    &entry,
-                    &RuntimePropertyKey::String(JsString::from("1")),
-                )?;
-                (self.property_key_primitive(module, key)?, value)
-            }
-            (None, Value::Object(entry_id)) => (
-                self.array_index_value(*entry_id, 0)?
-                    .unwrap_or(Value::Undefined),
-                self.array_index_value(*entry_id, 1)?
-                    .unwrap_or(Value::Undefined),
-            ),
-            (None, _) => (Value::Undefined, Value::Undefined),
+        // Preserve descriptor, shape and callback provenance before the next
+        // Get or key conversion can replace the pending result carrier.
+        let key_value = self.iterator_protocol_value_property(
+            module,
+            entry.clone(),
+            &RuntimePropertyKey::String(JsString::from("0")),
+        )?;
+        let value = self.iterator_protocol_value_property(
+            module,
+            entry,
+            &RuntimePropertyKey::String(JsString::from("1")),
+        )?;
+        let key_value = match module {
+            Some(module) => self.property_key_primitive(module, key_value)?,
+            None => key_value,
         };
+        self.observe_scoped_callback_result()?;
         let key = self.executable_property_key_from_value(&key_value);
         self.set_object_runtime_property(target_id, key, value)
     }
 
     pub(super) fn object_from_entries_value(
+        &mut self,
+        module: Option<&Ir3Module>,
+        source: Value,
+    ) -> Result<Value, InterpreterError> {
+        self.observe_collection_seed(|core| core.object_from_entries_observed(module, source))
+    }
+
+    fn object_from_entries_observed(
         &mut self,
         module: Option<&Ir3Module>,
         source: Value,
@@ -8285,8 +8288,17 @@ impl InterpreterCore {
             }
             other => self.init_for_of_iterator(module, other)?,
         };
+        self.observe_scoped_callback_result()?;
         let target_id = self.alloc_object_with_prototype(None)?;
-        while let Some(entry) = self.advance_for_of_iterator(module, iterator.clone())? {
+        loop {
+            // A preallocated iterable with repeated keys can do arbitrarily
+            // much native work without growing the output or executing guest
+            // instructions. Meter each step, including cancellation checks.
+            self.json_charge_work()?;
+            let Some(entry) = self.advance_for_of_iterator(module, iterator.clone())? else {
+                break;
+            };
+            self.observe_scoped_callback_result()?;
             // IfAbruptCloseIterator: a bad entry, a throwing getter or key
             // conversion closes the iterator (its error wins over return's).
             if let Err(error) = self.set_object_from_entry_pair(module, target_id, entry) {
@@ -12221,6 +12233,7 @@ impl InterpreterCore {
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         let weakmap_id = self.validate_weakmap_receiver(receiver.clone())?;
+        self.observe_collection_state_label(weakmap_id)?;
         let key = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
         // Any object is a valid key: immer and memoizers key WeakMaps by
         // function, delay by promise (bd-9vouw.220). Its identity is its

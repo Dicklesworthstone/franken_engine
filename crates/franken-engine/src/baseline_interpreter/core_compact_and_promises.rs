@@ -2688,6 +2688,10 @@ impl InterpreterCore {
                 return Ok(Some(value));
             }
             ForOfStep::Collection { iterator, index } => {
+                // Exhaustion is a membership observation too. An empty private
+                // collection reached through a public alias retains its owner
+                // label even though no entry value is produced.
+                self.observe_collection_state_label(iterator.collection)?;
                 // The entry at `index` of the live insertion order; past its
                 // end the iterator is done for good, even if entries are
                 // added later (ES2020 23.1.5.2.1 step 12).
@@ -2700,18 +2704,6 @@ impl InterpreterCore {
                 };
                 if let RuntimeIteratorState::ForOf(state) = self.iterator_state_mut(handle)? {
                     state.next_index = index.saturating_add(1);
-                }
-                if let Some(collection_label) = self
-                    .object_mutation_labels
-                    .get(&iterator.collection)
-                    .cloned()
-                {
-                    let label = self
-                        .pending_hostcall_result_label
-                        .as_ref()
-                        .unwrap_or(&Label::Public)
-                        .join(&collection_label);
-                    self.replace_pending_hostcall_result_label(Some(label))?;
                 }
                 let value = if iterator.is_map {
                     let key = Self::collection_key_from_repr(&repr);
@@ -8219,6 +8211,27 @@ impl InterpreterCore {
             return v.clone();
         }
         Value::Undefined
+    }
+
+    /// A public reference or cached method cannot erase the provenance of a
+    /// collection's private entries. Observe the owner before reading either a
+    /// value or membership, including absent keys and exhausted iterators.
+    pub(super) fn observe_collection_state_label(
+        &mut self,
+        collection_id: ObjectId,
+    ) -> Result<(), InterpreterError> {
+        let Some(label) = self.object_mutation_labels.get(&collection_id) else {
+            return Ok(());
+        };
+        let label = self.clone_dominant_label_with_temporary_budget(
+            self.pending_hostcall_result_label
+                .as_ref()
+                .unwrap_or(&Label::Public),
+            label,
+            0,
+        )?;
+        self.replace_pending_hostcall_result_label(Some(label))?;
+        self.observe_scoped_callback_result()
     }
 
     pub(super) fn collection_has(&self, obj_id: ObjectId, type_tag: &str, key: &Value) -> bool {

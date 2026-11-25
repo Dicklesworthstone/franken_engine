@@ -115,21 +115,12 @@ impl InterpreterCore {
         iterable: Value,
     ) -> Result<CollectionSeedSource, InterpreterError> {
         if matches!(iterable, Value::Undefined | Value::Null) {
-            return Ok(CollectionSeedSource::Values(Vec::new().into_iter()));
+            return Ok(CollectionSeedSource::Empty);
         }
-        // An array iterated by the builtin %Array.prototype.values% yields
-        // its elements (holes as undefined) with no observable step, so read
-        // them without allocating an iterator.
-        if let Value::Object(array_id) = iterable
-            && self
-                .heap
-                .get(array_id.0 as usize)
-                .is_some_and(|object| object.is_array)
-            && !self.array_from_has_explicit_iterator(array_id)?
-        {
-            let values = self.array_like_values(array_id)?;
-            return Ok(CollectionSeedSource::Values(values.into_iter()));
-        }
+        // Array iteration is live: an entry getter or the collection's adder
+        // can replace a later index, append an entry, or shorten the source.
+        // Snapshotting also reads later accessors before an earlier entry is
+        // validated and allocates an unmetered copy of the entire iterable.
         Ok(CollectionSeedSource::Iterator(
             self.init_for_of_iterator(module, iterable)?,
         ))
@@ -142,12 +133,19 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
         source: &mut CollectionSeedSource,
     ) -> Result<Option<Value>, InterpreterError> {
-        match source {
-            CollectionSeedSource::Values(values) => Ok(values.next()),
+        // Native array/collection iterators need no guest instructions, and
+        // duplicate values need no additional collection storage. Charge
+        // each step so neither can bypass the execution budget.
+        self.json_charge_work()?;
+        self.observe_scoped_callback_result()?;
+        let value = match source {
+            CollectionSeedSource::Empty => None,
             CollectionSeedSource::Iterator(iterator) => {
-                self.advance_for_of_iterator(module, iterator.clone())
+                self.advance_for_of_iterator(module, iterator.clone())?
             }
-        }
+        };
+        self.observe_scoped_callback_result()?;
+        Ok(value)
     }
 
     /// An entry the constructor rejects ends the seeding with IteratorClose
@@ -159,11 +157,79 @@ impl InterpreterCore {
         error: InterpreterError,
     ) -> Result<T, InterpreterError> {
         match source {
-            CollectionSeedSource::Values(_) => Err(error),
+            CollectionSeedSource::Empty => Err(error),
             CollectionSeedSource::Iterator(iterator) => {
                 self.array_from_close_after_error(module, iterator, error)
             }
         }
+    }
+
+    /// Keep iterator, entry and adder observations alive across all later
+    /// callbacks in the same constructor. A public callback result must not
+    /// erase an earlier secret key or membership decision. The shared native
+    /// observation boundary restores its context on every exit and publishes
+    /// both successful-result and abrupt-completion provenance.
+    pub(super) fn observe_collection_seed<T>(
+        &mut self,
+        seed: impl FnOnce(&mut Self) -> Result<T, InterpreterError>,
+    ) -> Result<T, InterpreterError> {
+        let context = self.json_parse_context_label()?;
+        let temporary_bytes = Self::estimate_label_bytes(&context);
+        self.json_reserve_temporary(temporary_bytes)?;
+        let saved = match self.begin_property_observation(std::iter::empty()) {
+            Ok(saved) => saved,
+            Err(error) => {
+                self.json_release_temporary(temporary_bytes);
+                return Err(error);
+            }
+        };
+        let observed = self.json_observe_label(context);
+        self.json_release_temporary(temporary_bytes);
+        let outcome = observed.and_then(|()| seed(self));
+        self.finish_property_read_observation(saved, outcome)
+    }
+
+    fn observe_collection_seed_target(
+        &mut self,
+        target: ObjectId,
+        seed: impl FnOnce(&mut Self) -> Result<(), InterpreterError>,
+    ) -> Result<(), InterpreterError> {
+        self.observe_collection_seed(|core| {
+            let outcome = seed(core);
+            // A getter for the adder can expose the new collection before
+            // seeding starts. Preserve the final membership observation on
+            // that owner, including an empty iterable or a catchable failure.
+            // Containment refusals do not do allocating cleanup work.
+            if outcome.is_ok()
+                || matches!(outcome, Err(InterpreterError::UncaughtException { .. }))
+                || outcome
+                    .as_ref()
+                    .err()
+                    .is_some_and(|error| Self::js_catchable_error_name(error).is_some())
+            {
+                core.persist_collection_seed_label(target)?;
+            }
+            outcome
+        })
+    }
+
+    fn persist_collection_seed_label(&mut self, target: ObjectId) -> Result<(), InterpreterError> {
+        self.observe_scoped_callback_result()?;
+        let label = self.json_parse_context_label()?;
+        let temporary_bytes = Self::estimate_label_bytes(&label);
+        self.json_reserve_temporary(temporary_bytes)?;
+        let outcome = (|| {
+            let winner = self
+                .object_mutation_labels
+                .get(&target)
+                .filter(|current| *current > &label)
+                .unwrap_or(&label);
+            self.check_temporary_memory_budget(Self::estimate_label_bytes(winner))?;
+            self.join_direct_object_mutation_label(target, &label)
+        })();
+        drop(label);
+        self.json_release_temporary(temporary_bytes);
+        outcome
     }
 
     /// Fold the pending hostcall label (a yielded value's, or an entry
@@ -201,12 +267,19 @@ impl InterpreterCore {
                 got: entry.type_name().to_string(),
             });
         }
-        // A function entry has no "0" or "1" unless a program set them.
-        let Value::Object(entry_id) = entry else {
-            return Ok((Value::Undefined, Value::Undefined));
-        };
-        let key = self.proxy_aware_get_property(module, *entry_id, "0", entry.clone(), 0)?;
-        let value = self.proxy_aware_get_property(module, *entry_id, "1", entry.clone(), 0)?;
+        // Callable and exotic objects carry ordinary own properties too.
+        // Use their real storage while retaining the original accessor receiver
+        // and each Get's provenance before the following callback executes.
+        let key = self.iterator_protocol_value_property(
+            module,
+            entry.clone(),
+            &RuntimePropertyKey::String(JsString::from("0")),
+        )?;
+        let value = self.iterator_protocol_value_property(
+            module,
+            entry.clone(),
+            &RuntimePropertyKey::String(JsString::from("1")),
+        )?;
         Ok((key, value))
     }
 
@@ -264,6 +337,19 @@ impl InterpreterCore {
         pairs: bool,
         iterable: Value,
     ) -> Result<(), InterpreterError> {
+        self.observe_collection_seed_target(collection_id, |core| {
+            core.seed_collection_with_adder_observed(module, collection_id, adder, pairs, iterable)
+        })
+    }
+
+    fn seed_collection_with_adder_observed(
+        &mut self,
+        module: Option<&Ir3Module>,
+        collection_id: ObjectId,
+        adder: Value,
+        pairs: bool,
+        iterable: Value,
+    ) -> Result<(), InterpreterError> {
         let receiver = Value::Object(collection_id);
         let mut label = Label::Public;
         let mut source = self.collection_seed_source(module, iterable)?;
@@ -277,6 +363,7 @@ impl InterpreterCore {
             } else {
                 vec![element]
             };
+            self.persist_collection_seed_label(collection_id)?;
             if let Err(error) =
                 self.invoke_inline_method_call(module, adder.clone(), receiver.clone(), arguments)
             {
@@ -289,6 +376,19 @@ impl InterpreterCore {
     pub(super) fn seed_map_entries_from_iterable(
         &mut self,
         module: Option<&Ir3Module>,
+        map_id: ObjectId,
+        entries_id: ObjectId,
+        iterable: Value,
+    ) -> Result<(), InterpreterError> {
+        self.observe_collection_seed_target(map_id, |core| {
+            core.seed_map_entries_from_iterable_observed(module, map_id, entries_id, iterable)
+        })
+    }
+
+    fn seed_map_entries_from_iterable_observed(
+        &mut self,
+        module: Option<&Ir3Module>,
+        map_id: ObjectId,
         entries_id: ObjectId,
         iterable: Value,
     ) -> Result<(), InterpreterError> {
@@ -302,6 +402,7 @@ impl InterpreterCore {
             };
             self.observe_collection_seed_label(&mut label);
             let key_str = Self::collection_key_repr(&key);
+            self.persist_collection_seed_label(map_id)?;
 
             // Charged like `map_collection_set`: a raw insert here left the
             // entries (and a duplicate key's replacement growth) out of the
@@ -316,6 +417,19 @@ impl InterpreterCore {
     pub(super) fn seed_set_values_from_iterable(
         &mut self,
         module: Option<&Ir3Module>,
+        set_id: ObjectId,
+        values_id: ObjectId,
+        iterable: Value,
+    ) -> Result<(), InterpreterError> {
+        self.observe_collection_seed_target(set_id, |core| {
+            core.seed_set_values_from_iterable_observed(module, set_id, values_id, iterable)
+        })
+    }
+
+    fn seed_set_values_from_iterable_observed(
+        &mut self,
+        module: Option<&Ir3Module>,
+        set_id: ObjectId,
         values_id: ObjectId,
         iterable: Value,
     ) -> Result<(), InterpreterError> {
@@ -327,6 +441,7 @@ impl InterpreterCore {
             // private weak seed path and must never use this strong storage.
             let stored = Self::collection_canonical_member(value);
             let value_str = Self::collection_key_repr(&stored);
+            self.persist_collection_seed_label(set_id)?;
 
             let values_index = values_id.0 as usize;
 
@@ -412,6 +527,17 @@ impl InterpreterCore {
         set_id: ObjectId,
         iterable: Value,
     ) -> Result<(), InterpreterError> {
+        self.observe_collection_seed_target(set_id, |core| {
+            core.seed_weakset_from_iterable_observed(module, set_id, iterable)
+        })
+    }
+
+    fn seed_weakset_from_iterable_observed(
+        &mut self,
+        module: Option<&Ir3Module>,
+        set_id: ObjectId,
+        iterable: Value,
+    ) -> Result<(), InterpreterError> {
         let mut label = self.clone_active_execution_context_label()?;
         let mut source = self.collection_seed_source(module, iterable)?;
         while let Some(value) = self.next_collection_seed(module, &mut source)? {
@@ -461,25 +587,31 @@ impl InterpreterCore {
         weakmap_id: ObjectId,
         iterable: Value,
     ) -> Result<(), InterpreterError> {
-        let mut updates = BTreeMap::new();
+        self.observe_collection_seed_target(weakmap_id, |core| {
+            core.seed_weakmap_from_iterable_observed(module, weakmap_id, iterable)
+        })
+    }
+
+    fn seed_weakmap_from_iterable_observed(
+        &mut self,
+        module: Option<&Ir3Module>,
+        weakmap_id: ObjectId,
+        iterable: Value,
+    ) -> Result<(), InterpreterError> {
         let mut label = Label::Public;
         let mut source = self.collection_seed_source(module, iterable)?;
         while let Some(entry) = self.next_collection_seed(module, &mut source)? {
             self.observe_collection_seed_label(&mut label);
-            match self.weakmap_seed_entry(module, &entry) {
-                Ok((key_id, value)) => {
-                    updates.insert(key_id, value);
-                }
+            let (key, value) = match self.weakmap_seed_entry(module, &entry) {
+                Ok(pair) => pair,
                 Err(error) => return self.close_collection_seed(module, source, error),
-            }
+            };
             self.observe_collection_seed_label(&mut label);
-        }
-
-        let Some(storage) = self.weakmap_storage.get(&weakmap_id) else {
-            return Ok(());
-        };
-        let previous_bytes = Self::saturating_sum(updates.keys().filter_map(|key| {
-            match *key {
+            self.persist_collection_seed_label(weakmap_id)?;
+            let Some(storage) = self.weakmap_storage.get(&weakmap_id) else {
+                return Ok(());
+            };
+            let previous_bytes = match key {
                 WeakMapKey::Object(id) => storage.get(id),
                 WeakMapKey::Symbol(symbol) => storage.get_symbol(symbol),
             }
@@ -488,19 +620,23 @@ impl InterpreterCore {
                     .saturating_mul(2)
                     .saturating_add(Self::estimate_value_bytes(previous))
             })
-        }));
-        let next_bytes = Self::saturating_sum(updates.values().map(|value| {
-            MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .unwrap_or(0);
+            let next_bytes = MEMORY_ESTIMATE_MAP_ENTRY_BYTES
                 .saturating_mul(2)
-                .saturating_add(Self::estimate_value_bytes(value))
-        }));
-        self.apply_memory_component_delta(previous_bytes, next_bytes)?;
-        self.before_seed_surface_write();
-        let storage = self
-            .weakmap_storage
-            .get_mut(&weakmap_id)
-            .expect("WeakMap storage was validated before aggregate preflight");
-        for (key, value) in updates {
+                .saturating_add(Self::estimate_value_bytes(&value));
+            if let Err(error) = self.apply_memory_component_delta(previous_bytes, next_bytes) {
+                return self.close_collection_seed(module, source, error);
+            }
+            // AddEntriesFromIterable applies each adder before requesting the
+            // next entry. An adder getter can expose the collection, so later
+            // callbacks must observe previous inserts even if seeding throws.
+            // Charge each insert before allocating its retained storage instead
+            // of accumulating an unmetered temporary map until completion.
+            self.before_seed_surface_write();
+            let storage = self
+                .weakmap_storage
+                .get_mut(&weakmap_id)
+                .expect("WeakMap storage was validated before entry preflight");
             match key {
                 WeakMapKey::Object(id) => storage.set(id, value),
                 WeakMapKey::Symbol(symbol) => storage.set_symbol(symbol, value),
@@ -10687,9 +10823,9 @@ impl InterpreterCore {
                 let iterable = self.arg_or_undefined(args, 0)?;
                 if !matches!(iterable, Value::Undefined | Value::Null) {
                     match self.collection_seed_adder(module, object_id, "Map")? {
-                        None => {
-                            self.seed_map_entries_from_iterable(module, entries_id, iterable)?
-                        }
+                        None => self.seed_map_entries_from_iterable(
+                            module, object_id, entries_id, iterable,
+                        )?,
                         Some(adder) => self
                             .seed_collection_with_adder(module, object_id, adder, true, iterable)?,
                     }
@@ -10702,7 +10838,9 @@ impl InterpreterCore {
                 let iterable = self.arg_or_undefined(args, 0)?;
                 if !matches!(iterable, Value::Undefined | Value::Null) {
                     match self.collection_seed_adder(module, object_id, "Set")? {
-                        None => self.seed_set_values_from_iterable(module, values_id, iterable)?,
+                        None => self.seed_set_values_from_iterable(
+                            module, object_id, values_id, iterable,
+                        )?,
                         Some(adder) => self.seed_collection_with_adder(
                             module, object_id, adder, false, iterable,
                         )?,

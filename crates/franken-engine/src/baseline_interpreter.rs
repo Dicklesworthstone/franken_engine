@@ -7796,10 +7796,9 @@ fn canonical_static_hostcall_tag(tag: &str) -> Option<&'static str> {
 
 /// Where a collection constructor reads its seed values from.
 enum CollectionSeedSource {
-    /// Values read without an observable iterator (an ordinary array, or
-    /// no iterable at all).
-    Values(std::vec::IntoIter<Value>),
-    /// A for-of iterator over any other iterable.
+    /// A nullish constructor argument contributes no entries.
+    Empty,
+    /// A live for-of iterator, including ordinary arrays.
     Iterator(Value),
 }
 

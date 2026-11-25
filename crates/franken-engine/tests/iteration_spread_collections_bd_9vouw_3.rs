@@ -8,6 +8,16 @@
 //! No mocks: real source through the public `HybridRouter::eval` path.
 
 use frankenengine_engine::HybridRouter;
+use frankenengine_engine::baseline_interpreter::{
+    InterpreterConfig, InterpreterCore, InterpreterError, Value,
+};
+use frankenengine_engine::capability::RuntimeCapability;
+use frankenengine_engine::flow_lattice::Label;
+use frankenengine_engine::ir_contract::{
+    CapabilityTag, Ir0Module, Ir3Instruction, Ir3Module, RegRange,
+};
+use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+use frankenengine_engine::parser_api_stability::parse_script;
 
 fn eval_to_string(source: &str) -> String {
     match HybridRouter::default().eval(source) {
@@ -154,6 +164,539 @@ fn collections_seed_from_any_iterable() {
          [attempt(() => new WeakMap(leaky)), saved.kept, JSON.stringify(saved)].join(' ');",
         r#"TypeError true {"kept":true}"#,
     );
+}
+
+#[test]
+fn collection_constructors_read_array_seeds_live_and_in_order() {
+    check(
+        r#"
+const order = [];
+const entries = [{
+    get 0() {
+        order.push('key');
+        entries[1] = ['changed', 2];
+        entries.push(['appended', 3]);
+        return 'first';
+    },
+    get 1() { order.push('value'); return 1; }
+}, ['old', 0]];
+const map = new Map(entries);
+const ordered = [{ get 0() { order.push('entry'); return 'k'; }, 1: 7 }];
+Object.defineProperty(ordered, '1', {
+    get() { order.push('index'); return ['later', 8]; }, configurable: true
+});
+new Map(ordered);
+[map.get('first'), map.get('changed'), map.get('appended'), map.has('old'),
+ order.join(':')].join('|');
+"#,
+        "1|2|3|false|key:value:entry:index",
+    );
+    check(
+        r#"
+const source = [1, 2];
+class LiveSet extends Set {
+    add(value) {
+        if (value === 1) { source[1] = 3; source.push(4); }
+        return super.add(value);
+    }
+}
+const set = new LiveSet(source);
+const keys = [{}, {}, {}];
+const pairs = [{
+    get 0() { pairs[1] = [keys[2], 9]; return keys[0]; }, 1: 7
+}, [keys[1], 8]];
+const weak = new WeakMap(pairs);
+[[...set].join(), weak.get(keys[0]), weak.has(keys[1]), weak.get(keys[2])].join('|');
+"#,
+        "1,3,4|7|false|9",
+    );
+}
+
+#[test]
+fn invalid_array_entry_stops_before_later_index_getters() {
+    check(
+        r#"
+const entries = [1];
+let later = 0;
+Object.defineProperty(entries, '1', { get() { later++; return ['k', 2]; } });
+let error = '';
+try { new Map(entries); } catch (caught) { error = caught.name; }
+[error, later].join('|');
+"#,
+        "TypeError|0",
+    );
+}
+
+#[test]
+fn map_entries_can_be_callable_or_exotic_objects() {
+    check(
+        r#"
+const key = {};
+function entry() {}
+entry[0] = 'callable';
+entry[1] = 7;
+const exotic = Promise.resolve();
+exotic[0] = 'promise';
+exotic[1] = 8;
+const map = new Map([entry, exotic]);
+entry[0] = key;
+exotic[0] = key;
+const weak = new WeakMap([entry, exotic]);
+[map.get('callable'), map.get('promise'), map.has(undefined), weak.get(key)].join('|');
+"#,
+        "7|8|false|8",
+    );
+}
+
+#[test]
+fn weakmap_seed_insertions_are_visible_before_later_entries_and_survive_a_throw() {
+    check(
+        r#"
+const intrinsic = WeakMap.prototype.set;
+const key = {};
+let exposed;
+let observed;
+let closed = 0;
+Object.defineProperty(WeakMap.prototype, 'set', {
+    get() { exposed = this; return intrinsic; }, configurable: true
+});
+function* entries() {
+    try {
+        yield [key, 7];
+        yield { get 0() { observed = exposed.get(key); return key; }, 1: 9 };
+        yield null;
+    } finally { closed++; }
+}
+let error = '';
+try { new WeakMap(entries()); } catch (caught) { error = caught.name; }
+[observed, exposed.get(key), error, closed].join('|');
+"#,
+        "7|9|TypeError|1",
+    );
+}
+
+fn constructor_configurations() -> [InterpreterConfig; 2] {
+    [
+        InterpreterConfig::quickjs_defaults(),
+        InterpreterConfig::v8_defaults(),
+    ]
+    .map(|mut config| {
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+            RuntimeCapability::Console,
+        ]
+        .into_iter()
+        .collect();
+        config
+    })
+}
+
+fn lower_constructor_source(source: &str) -> Ir3Module {
+    lower_ir0_to_ir3(
+        &Ir0Module::from_syntax_tree(
+            parse_script(source).expect("constructor source parses"),
+            "collection-constructor.js",
+        ),
+        &LoweringContext::new("collections", "constructors", "builtin-only"),
+    )
+    .expect("constructor source lowers")
+    .ir3
+}
+
+#[test]
+fn native_collection_seeds_cannot_bypass_the_instruction_budget() {
+    for constructor in ["Map", "Set", "WeakMap", "WeakSet"] {
+        let mut module = lower_constructor_source("undefined;");
+        module.instructions = vec![
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag(format!("builtin:{constructor}")),
+                args: RegRange { start: 0, count: 1 },
+                dst: 1,
+            },
+            Ir3Instruction::Return { value: 1 },
+        ];
+        for mut config in constructor_configurations() {
+            config.instruction_budget = 128;
+            for count in [1, 1024] {
+                let mut core = InterpreterCore::new(config.clone(), "collection-native-budget");
+                let key = core.alloc_object_with_prototype(None).unwrap();
+                let entry = if matches!(constructor, "Map" | "WeakMap") {
+                    let pair = core.alloc_array_with_prototype(None).unwrap();
+                    core.set_object_property(pair, "0".into(), Value::Object(key))
+                        .unwrap();
+                    core.set_object_property(pair, "1".into(), Value::Int(7))
+                        .unwrap();
+                    Value::Object(pair)
+                } else {
+                    Value::Object(key)
+                };
+                // Preallocated repeated entries keep collection size constant;
+                // only the constructor's native work should exhaust the budget.
+                let source = core.alloc_array_with_prototype(None).unwrap();
+                for index in 0..count {
+                    core.set_object_property(source, index.to_string(), entry.clone())
+                        .unwrap();
+                }
+                core.set_object_property(source, "length".into(), Value::Int(count))
+                    .unwrap();
+                core.seed_register(0, Value::Object(source)).unwrap();
+                let result = core.execute(&module);
+                if count == 1 {
+                    assert!(result.is_ok(), "{constructor}: {result:?}");
+                } else {
+                    assert!(
+                        matches!(result, Err(InterpreterError::BudgetExhausted { .. })),
+                        "{constructor}: {result:?}"
+                    );
+                }
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes(),
+                    "{constructor}, count={count}"
+                );
+            }
+        }
+    }
+}
+
+fn labelled_constructor_module(source: &str, input_register: u32) -> Ir3Module {
+    let mut module = lower_constructor_source(source);
+    replace_constructor_marker(&mut module, "label-marker", input_register);
+    module
+}
+
+fn replace_constructor_marker(module: &mut Ir3Module, marker: &str, input_register: u32) {
+    let marker = module
+        .constant_pool
+        .iter()
+        .position(|text| text == marker)
+        .expect("labelled source marker") as u32;
+    let mut replaced = 0;
+    for instruction in &mut module.instructions {
+        if let Ir3Instruction::LoadStr { dst, pool_index } = instruction
+            && *pool_index == marker
+        {
+            *instruction = Ir3Instruction::Move {
+                dst: *dst,
+                src: input_register,
+            };
+            replaced += 1;
+        }
+    }
+    assert_eq!(replaced, 1);
+}
+
+#[test]
+fn collection_callbacks_preserve_earlier_entry_provenance() {
+    for subclass in [false, true] {
+        let source = format!(
+            r#"
+const sensitive = 'label-marker';
+class CustomMap extends Map {{ set(key, value) {{ return super.set(key, value); }} }}
+const first = {{ get 0() {{ return sensitive; }}, get 1() {{ return Math.abs(-7); }} }};
+const second = {{ get 0() {{ return String('public'); }}, get 1() {{ return Math.abs(-9); }} }};
+new {}([first, second]);
+"#,
+            if subclass { "CustomMap" } else { "Map" }
+        );
+        for config in constructor_configurations() {
+            let input_register = config.max_registers - 1;
+            let module = labelled_constructor_module(&source, input_register);
+            for stress in [None, Some(1), Some(7)] {
+                let mut core = InterpreterCore::new(config.clone(), "collection-provenance");
+                core.set_gc_stress_interval(stress);
+                core.seed_register(input_register, Value::str("private-key"))
+                    .unwrap();
+                core.set_register_label(input_register, Label::Secret)
+                    .unwrap();
+                let result = core.execute(&module).expect("collection seed executes");
+                assert_eq!(result.completion_label, Label::Secret);
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn later_collection_callbacks_cannot_exfiltrate_observed_secrets() {
+    for source in [
+        r#"
+const sensitive = 'label-marker';
+const log = console.log;
+new Map([{ get 0() { return sensitive; }, get 1() { log('observed'); return 7; } }]);
+"#,
+        r#"
+const sensitive = 'label-marker';
+const log = console.log;
+const source = [0, 1];
+Object.defineProperty(source, '0', { get() { return sensitive; } });
+Object.defineProperty(source, '1', { get() { log('observed'); return 7; } });
+new Set(source);
+"#,
+    ] {
+        for config in constructor_configurations() {
+            let input_register = config.max_registers - 1;
+            let module = labelled_constructor_module(source, input_register);
+            let mut core = InterpreterCore::new(config, "collection-observation");
+            core.seed_register(input_register, Value::str("private-key"))
+                .unwrap();
+            core.set_register_label(input_register, Label::Secret)
+                .unwrap();
+            assert!(matches!(
+                core.execute(&module),
+                Err(InterpreterError::CapabilityDenied { .. })
+            ));
+            assert!(core.console_output().is_empty());
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+}
+
+#[test]
+fn exposed_collection_prefixes_retain_labels_after_failed_construction() {
+    for (constructor, method, pairs) in [
+        ("Map", "get", true),
+        ("Map", "has", true),
+        ("WeakMap", "get", true),
+        ("WeakMap", "has", true),
+        ("Set", "has", false),
+        ("WeakSet", "has", false),
+    ] {
+        let adder = if pairs { "set" } else { "add" };
+        let yielded = if pairs {
+            "{ 0: key, get 1() { return sensitive; } }"
+        } else {
+            "(sensitive === 'private-value' ? key : key)"
+        };
+        let completion = "console.log('public-control'); read.call(exposed, key);";
+        let source = format!(
+            r#"
+const sensitive = 'label-marker';
+const key = 'key-marker';
+const original = {constructor}.prototype.{adder};
+const read = {constructor}.prototype.{method};
+let exposed;
+Object.defineProperty({constructor}.prototype, '{adder}', {{
+    get() {{ exposed = this; return original; }}, configurable: true
+}});
+function* entries() {{ yield {yielded}; throw new Error('stop'); }}
+try {{ new {constructor}(entries()); }} catch (error) {{}}
+{completion}
+"#
+        );
+        for config in constructor_configurations() {
+            let alias_register = config.max_registers - 1;
+            let key_register = alias_register - 1;
+            let mut construct = labelled_constructor_module(&source, alias_register);
+            replace_constructor_marker(&mut construct, "key-marker", key_register);
+            for label in [Label::Public, Label::Secret] {
+                let mut core = InterpreterCore::new(config.clone(), "collection-retained-prefix");
+                let key = core.alloc_object_with_prototype(None).unwrap();
+                core.seed_register(key_register, Value::Object(key))
+                    .unwrap();
+                core.seed_register(alias_register, Value::str("private-value"))
+                    .unwrap();
+                core.set_register_label(alias_register, label.clone())
+                    .unwrap();
+                let result = core
+                    .execute(&construct)
+                    .expect("construction failure is caught");
+                // This public sink proves the catch PC and the seed's
+                // callback scope have rejoined before the cached read
+                // observes the collection through its preexisting alias.
+                assert_eq!(core.console_output().len(), 1);
+                assert_eq!(core.console_output()[0].message, "public-control");
+                let expected = if method == "get" {
+                    Value::str("private-value")
+                } else {
+                    Value::Bool(true)
+                };
+                assert_eq!(result.value, expected, "{constructor}.{method}");
+                assert_eq!(result.completion_label, label, "{constructor}.{method}");
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes(),
+                    "{constructor}.{method}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn empty_collection_iteration_retains_the_constructor_done_observation() {
+    for constructor in ["Map", "Set"] {
+        let adder = if constructor == "Map" { "set" } else { "add" };
+        let source = format!(
+            r#"
+const done = 'label-marker';
+const original = {constructor}.prototype.{adder};
+const values = {constructor}.prototype.values;
+let exposed;
+Object.defineProperty({constructor}.prototype, '{adder}', {{
+    get() {{ exposed = this; return original; }}, configurable: true
+}});
+const source = {{ [Symbol.iterator]() {{ return {{ next() {{ return {{ done }}; }} }}; }} }};
+new {constructor}(source);
+console.log('public-control');
+values.call(exposed).next().done;
+"#
+        );
+        for config in constructor_configurations() {
+            let alias_register = config.max_registers - 1;
+            let construct = labelled_constructor_module(&source, alias_register);
+            for label in [Label::Public, Label::Secret] {
+                let mut core = InterpreterCore::new(config.clone(), "empty-collection-observation");
+                core.seed_register(alias_register, Value::Bool(true))
+                    .unwrap();
+                core.set_register_label(alias_register, label.clone())
+                    .unwrap();
+                let result = core.execute(&construct).expect("empty iteration succeeds");
+                assert_eq!(core.console_output().len(), 1);
+                assert_eq!(core.console_output()[0].message, "public-control");
+                assert_eq!(result.value, Value::Bool(true), "{constructor}");
+                assert_eq!(result.completion_label, label, "{constructor}");
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn direct_and_borrowed_collection_writes_label_preexisting_aliases() {
+    for constructor in ["Map", "Set", "WeakMap"] {
+        let pairs = constructor != "Set";
+        let adder = if pairs { "set" } else { "add" };
+        let method = if pairs { "get" } else { "has" };
+        let arguments = if pairs { "key, sensitive" } else { "sensitive" };
+        for borrowed in [false, true] {
+            let write = if borrowed {
+                format!(
+                    "const write = {constructor}.prototype.{adder}; \
+                     write.call(collection, {arguments});"
+                )
+            } else {
+                format!("collection.{adder}({arguments});")
+            };
+            let completion = "console.log('public-control'); read.call(alias, key);";
+            let source = format!(
+                "const sensitive = 'label-marker'; const key = 'key-marker'; \
+                 const collection = new {constructor}(); const alias = collection; \
+                 const read = {constructor}.prototype.{method}; {write} {completion}"
+            );
+            for config in constructor_configurations() {
+                let alias_register = config.max_registers - 1;
+                let key_register = alias_register - 1;
+                let mut write = labelled_constructor_module(&source, alias_register);
+                replace_constructor_marker(&mut write, "key-marker", key_register);
+                for label in [Label::Public, Label::Secret] {
+                    let mut core = InterpreterCore::new(config.clone(), "collection-alias-write");
+                    let key = core.alloc_object_with_prototype(None).unwrap();
+                    core.seed_register(key_register, Value::Object(key))
+                        .unwrap();
+                    let value = if pairs {
+                        Value::str("private-value")
+                    } else {
+                        Value::Object(key)
+                    };
+                    core.seed_register(alias_register, value).unwrap();
+                    core.set_register_label(alias_register, label.clone())
+                        .unwrap();
+                    let result = core.execute(&write).expect("collection write succeeds");
+                    assert_eq!(core.console_output().len(), 1);
+                    assert_eq!(core.console_output()[0].message, "public-control");
+                    assert_eq!(
+                        result.value,
+                        if pairs {
+                            Value::str("private-value")
+                        } else {
+                            Value::Bool(true)
+                        },
+                        "{constructor}, borrowed={borrowed}"
+                    );
+                    assert_eq!(
+                        result.completion_label, label,
+                        "{constructor}, borrowed={borrowed}"
+                    );
+                    assert_eq!(
+                        core.estimated_memory_bytes(),
+                        core.recompute_estimated_memory_bytes()
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn classified_iterable_selection_constrains_native_constructor_callbacks() {
+    for (capability, operation) in [
+        ("builtin:Map", "new Map(selected)"),
+        ("builtin:Set", "new Set(selected)"),
+        ("builtin:WeakMap", "new WeakMap(selected)"),
+        ("builtin:WeakSet", "new WeakSet(selected)"),
+        ("builtin:ObjectFromEntries", "Object.fromEntries(selected)"),
+    ] {
+        let source = format!(
+            r#"
+const choice = 'label-marker';
+const log = console.log;
+const source = {{
+    [Symbol.iterator]() {{
+        log('iterator-callback');
+        return {{ next() {{ return {{ done: true }}; }} }};
+    }}
+}};
+const selected = choice ? source : source;
+console.log('public-control');
+{operation};
+"#
+        );
+        for config in constructor_configurations() {
+            let input_register = config.max_registers - 1;
+            let module = labelled_constructor_module(&source, input_register);
+            assert!(module.instructions.iter().any(|instruction| matches!(
+                instruction,
+                Ir3Instruction::HostCall { capability: actual, .. } if actual.0 == capability
+            )));
+            for label in [Label::Public, Label::Secret] {
+                let mut core = InterpreterCore::new(config.clone(), "classified-iterable-input");
+                core.seed_register(input_register, Value::Bool(true)).unwrap();
+                core.set_register_label(input_register, label.clone()).unwrap();
+                let outcome = core.execute(&module);
+                if label == Label::Public {
+                    outcome.expect("public iterator selection permits its callback");
+                    assert_eq!(core.console_output().len(), 2, "{capability}");
+                    assert_eq!(core.console_output()[1].message, "iterator-callback");
+                } else {
+                    assert!(
+                        matches!(outcome, Err(InterpreterError::CapabilityDenied { .. })),
+                        "{capability}: {outcome:?}"
+                    );
+                    assert_eq!(core.console_output().len(), 1, "{capability}");
+                }
+                // Reaching this public sink proves the conditional PC ended;
+                // only the selected iterable's register carries the input label.
+                assert_eq!(core.console_output()[0].message, "public-control");
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes(),
+                    "{capability}"
+                );
+            }
+        }
+    }
 }
 
 /// A spread element owns its whole operand (`...AssignmentExpression`):

@@ -7740,6 +7740,24 @@ impl InterpreterCore {
                 // every Reflect reentry; keep GC and telemetry in this wrapper.
                 "builtin:ReflectApply" => self.reflect_invocation_builtin(module, args, false),
                 "builtin:ReflectConstruct" => self.reflect_invocation_builtin(module, args, true),
+                // Input provenance must be active before an adder or iterator
+                // getter can call guest code, including on an abrupt exit.
+                "builtin:Map"
+                | "builtin:Set"
+                | "builtin:WeakMap"
+                | "builtin:WeakSet"
+                | "builtin:ObjectFromEntries" => self.observe_collection_seed(|core| {
+                    let end =
+                        args.start
+                            .checked_add(args.count)
+                            .ok_or(InterpreterError::RegisterOutOfBounds {
+                                register: args.start,
+                                max: core.config.max_registers,
+                            })?;
+                    let observation = core.begin_property_observation(args.start..end)?;
+                    let outcome = core.dispatch_builtin_hostcall_inner(cap, args, module);
+                    core.finish_property_read_observation(observation, outcome)
+                }),
                 "builtin:Date"
                 | "builtin:DatePrototypeGetTime"
                 | "builtin:DatePrototypeToString"
@@ -13207,7 +13225,9 @@ impl InterpreterCore {
                 if !matches!(iterable, Value::Undefined | Value::Null) {
                     match self.collection_seed_adder(module, map_id, "Map")? {
                         None => {
-                            self.seed_map_entries_from_iterable(module, entries_id, iterable)?
+                            self.seed_map_entries_from_iterable(
+                                module, map_id, entries_id, iterable,
+                            )?
                         }
                         Some(adder) => {
                             self.seed_collection_with_adder(module, map_id, adder, true, iterable)?
@@ -13227,7 +13247,9 @@ impl InterpreterCore {
                 let iterable = self.arg_or_undefined(args, 0)?;
                 if !matches!(iterable, Value::Undefined | Value::Null) {
                     match self.collection_seed_adder(module, set_id, "Set")? {
-                        None => self.seed_set_values_from_iterable(module, values_id, iterable)?,
+                        None => {
+                            self.seed_set_values_from_iterable(module, set_id, values_id, iterable)?
+                        }
                         Some(adder) => {
                             self.seed_collection_with_adder(module, set_id, adder, false, iterable)?
                         }
@@ -13241,7 +13263,7 @@ impl InterpreterCore {
                 // Seeding runs after that rollback boundary: it can run guest
                 // code (a user iterator, an entry getter) whose allocations
                 // the program may keep, so a seeding error must not roll the
-                // heap back. The seed's own application is atomic.
+                // heap back. Each entry is applied before reading the next.
                 let iterable = self.arg_or_undefined(args, 0)?;
                 if !matches!(iterable, Value::Undefined | Value::Null) {
                     match self.collection_seed_adder(module, weakmap_id, "WeakMap")? {
@@ -13298,6 +13320,13 @@ impl InterpreterCore {
 
                 let key = self.read_reg(args.start + 1)?;
                 let value = self.read_reg(args.start + 2)?;
+                self.prepare_builtin_collection_mutation(
+                    &BuiltinFunction::new_kind(BuiltinFunctionKind::MapSet),
+                    &Value::Object(map_id),
+                    args,
+                    None,
+                    None,
+                )?;
                 self.map_collection_set(map_id, key, value)
             }
             "builtin:MapPrototypeGet" => {
@@ -13321,6 +13350,7 @@ impl InterpreterCore {
 
                 let key = self.read_reg(args.start + 1)?;
 
+                self.observe_collection_state_label(map_id)?;
                 Ok(self.collection_get(map_id, "Map", &key))
             }
             "builtin:SetPrototypeAdd" => {
@@ -13343,6 +13373,13 @@ impl InterpreterCore {
                 }
 
                 let value = self.read_reg(args.start + 1)?;
+                self.prepare_builtin_collection_mutation(
+                    &BuiltinFunction::new_kind(BuiltinFunctionKind::SetAdd),
+                    &Value::Object(set_id),
+                    args,
+                    None,
+                    None,
+                )?;
                 self.set_collection_add(set_id, value)
             }
             "builtin:SetPrototypeHas" => {
@@ -13366,6 +13403,7 @@ impl InterpreterCore {
 
                 let value = self.read_reg(args.start + 1)?;
 
+                self.observe_collection_state_label(set_id)?;
                 Ok(Value::Bool(self.collection_has(set_id, "Set", &value)))
             }
 
@@ -13390,6 +13428,7 @@ impl InterpreterCore {
 
                 let key = self.read_reg(args.start + 1)?;
 
+                self.observe_collection_state_label(map_id)?;
                 Ok(Value::Bool(self.collection_has(map_id, "Map", &key)))
             }
 
@@ -13415,6 +13454,14 @@ impl InterpreterCore {
                 }
 
                 let key = self.read_reg(args.start + 1)?;
+                self.observe_collection_state_label(map_id)?;
+                self.prepare_builtin_collection_mutation(
+                    &BuiltinFunction::new_kind(BuiltinFunctionKind::MapDelete),
+                    &Value::Object(map_id),
+                    args,
+                    None,
+                    None,
+                )?;
                 Ok(Value::Bool(self.collection_delete(map_id, "Map", &key)?))
             }
 
@@ -13440,6 +13487,14 @@ impl InterpreterCore {
                 }
 
                 let value = self.read_reg(args.start + 1)?;
+                self.observe_collection_state_label(set_id)?;
+                self.prepare_builtin_collection_mutation(
+                    &BuiltinFunction::new_kind(BuiltinFunctionKind::SetDelete),
+                    &Value::Object(set_id),
+                    args,
+                    None,
+                    None,
+                )?;
                 Ok(Value::Bool(self.collection_delete(set_id, "Set", &value)?))
             }
 
@@ -13460,6 +13515,13 @@ impl InterpreterCore {
                     return Ok(Value::Undefined);
                 }
 
+                self.prepare_builtin_collection_mutation(
+                    &BuiltinFunction::new_kind(BuiltinFunctionKind::SetClear),
+                    &Value::Object(set_id),
+                    args,
+                    None,
+                    None,
+                )?;
                 self.collection_clear(set_id, "Set")
             }
 
@@ -16110,6 +16172,7 @@ impl InterpreterCore {
                     Value::Undefined
                 };
                 let weakmap_id = self.validate_weakmap_receiver(this_val)?;
+                self.observe_collection_state_label(weakmap_id)?;
                 let key = if args.count > 1 {
                     self.read_reg(args.start + 1)?
                 } else {
@@ -16179,6 +16242,7 @@ impl InterpreterCore {
                     Value::Undefined
                 };
                 let weakmap_id = self.validate_weakmap_receiver(this_val)?;
+                self.observe_collection_state_label(weakmap_id)?;
                 let key = if args.count > 1 {
                     self.read_reg(args.start + 1)?
                 } else {

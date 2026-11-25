@@ -11925,6 +11925,7 @@ fn weakmap_and_module_export_duplicates_are_atomic_and_exact_bd_zpn45() {
 
     let (mut weakmap_probe, weakmap_id, _key_id, iterable_id) = weakmap_fixture();
     let weakmap_baseline = weakmap_probe.estimated_memory_bytes();
+    let weakmap_storage_baseline = weakmap_probe.weakmap_storage_memory_bytes();
     weakmap_probe
         .seed_weakmap_from_iterable(None, weakmap_id, Value::Object(iterable_id))
         .expect("unbounded WeakMap seed probe");
@@ -11932,6 +11933,21 @@ fn weakmap_and_module_export_duplicates_are_atomic_and_exact_bd_zpn45() {
         .estimated_memory_bytes()
         .saturating_sub(weakmap_baseline);
     assert!(weakmap_delta > 0);
+    // Constructor seeding now owns a canonical iterator instead of an
+    // unmetered array snapshot. Its state remains admitted even when an
+    // individual entry cannot fit; the entry insertion itself stays atomic.
+    let weakmap_iterator_bytes = InterpreterCore::saturating_sum(
+        weakmap_probe
+            .iterators
+            .iter()
+            .map(InterpreterCore::estimate_iterator_bytes),
+    );
+    assert!(weakmap_iterator_bytes > 0);
+    assert_eq!(
+        weakmap_delta,
+        weakmap_iterator_bytes + weakmap_probe.weakmap_storage_memory_bytes()
+            - weakmap_storage_baseline
+    );
     assert_eq!(
         weakmap_probe.estimated_memory_bytes(),
         weakmap_probe.recompute_estimated_memory_bytes()
@@ -11952,7 +11968,11 @@ fn weakmap_and_module_export_duplicates_are_atomic_and_exact_bd_zpn45() {
     );
     assert_eq!(
         weakmap_one_short.estimated_memory_bytes(),
-        weakmap_one_short_baseline
+        weakmap_one_short_baseline + weakmap_iterator_bytes
+    );
+    assert_eq!(
+        weakmap_one_short.estimated_memory_bytes(),
+        weakmap_one_short.recompute_estimated_memory_bytes()
     );
 
     let (mut weakmap_exact, weakmap_id, key_id, iterable_id) = weakmap_fixture();

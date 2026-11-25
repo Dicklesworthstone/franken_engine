@@ -2782,12 +2782,14 @@ impl InterpreterCore {
             BuiltinFunctionKind::MapGet => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let map_id = self.collection_receiver(&receiver, "Map", "get")?;
+                self.observe_collection_state_label(map_id)?;
                 let key = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 Ok(self.collection_get(map_id, "Map", &key))
             }
             BuiltinFunctionKind::MapHas => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let map_id = self.collection_receiver(&receiver, "Map", "has")?;
+                self.observe_collection_state_label(map_id)?;
                 let key = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 Ok(Value::Bool(self.collection_has(
                     map_id,
@@ -2798,6 +2800,7 @@ impl InterpreterCore {
             BuiltinFunctionKind::MapDelete => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let map_id = self.collection_receiver(&receiver, "Map", "delete")?;
+                self.observe_collection_state_label(map_id)?;
                 let key = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 Ok(Value::Bool(self.collection_delete(
                     map_id,
@@ -2814,6 +2817,7 @@ impl InterpreterCore {
             BuiltinFunctionKind::SetHas => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let set_id = self.collection_receiver(&receiver, "Set", "has")?;
+                self.observe_collection_state_label(set_id)?;
                 let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 Ok(Value::Bool(
                     self.collection_has(set_id, "Set", &value),
@@ -2822,6 +2826,7 @@ impl InterpreterCore {
             BuiltinFunctionKind::SetDelete => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let set_id = self.collection_receiver(&receiver, "Set", "delete")?;
+                self.observe_collection_state_label(set_id)?;
                 let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 Ok(Value::Bool(self.collection_delete(
                     set_id, "Set", &value,
@@ -11276,6 +11281,13 @@ impl InterpreterCore {
             // must be catchable by an enclosing try/catch in this
             // frame (bd-8enww.4.7).
             self.clear_pending_hostcall_result_label();
+            self.prepare_builtin_collection_mutation(
+                &builtin,
+                &receiver_val,
+                args,
+                Some(callee),
+                Some(receiver),
+            )?;
             self.mark_inline_callback_started();
             let receiver_state_label = |core: &Self| -> Label {
                 match &receiver_val {

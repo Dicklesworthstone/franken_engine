@@ -843,8 +843,9 @@ impl InterpreterCore {
 
     /// `Get(descriptor, name)` when `HasProperty(descriptor, name)`, so
     /// inherited fields and getter-backed fields count (ES2020 6.2.5.5).
-    /// A function descriptor is an object too (bd-9vouw.235): its own and
-    /// inherited properties are read as `in` and member reads see them.
+    /// Functions and native exotic carriers are objects too: their own and
+    /// inherited properties are read as `in` and member reads see them, with
+    /// the original descriptor identity preserved as the getter receiver.
     pub(super) fn descriptor_field(
         &mut self,
         module: Option<&Ir3Module>,
@@ -856,7 +857,12 @@ impl InterpreterCore {
             let Some(module) = module else {
                 return Ok(None);
             };
-            if !self.function_has_property(module, descriptor, &key)? {
+            let present = if descriptor.is_callable() {
+                self.function_has_property(module, descriptor, &key)?
+            } else {
+                self.exotic_has_property(module, descriptor, &key)?
+            };
+            if !present {
                 return Ok(None);
             }
             return self.get_v(module, descriptor, &key).map(Some);
@@ -874,7 +880,7 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
         descriptor_val: &Value,
     ) -> Result<PropertyDescriptorFields, InterpreterError> {
-        if !matches!(descriptor_val, Value::Object(_)) && !descriptor_val.is_callable() {
+        if !descriptor_val.is_object_like() {
             return Err(InterpreterError::TypeError {
                 expected: "object property descriptor".to_string(),
                 got: descriptor_val.type_name().to_string(),
@@ -13069,7 +13075,7 @@ impl InterpreterCore {
                         got: obj_val.type_name().to_string(),
                     });
                 };
-                let mut descriptor = self.read_property_descriptor(module, &descriptor_val)?;
+                let descriptor = self.read_property_descriptor(module, &descriptor_val)?;
                 // A mapped arguments index writes a parameter cell as well
                 // as this property. Admit descriptor provenance before that
                 // write, including when writable:false disconnects the map.
@@ -13078,21 +13084,9 @@ impl InterpreterCore {
                     let mutation_label = self.join_arg_range_with_object_mutation_label(args)?;
                     self.join_object_mutation_label(obj_id, &mutation_label)?;
                 }
-                // ES2020 9.4.2.4 steps 3-5 for an array's `length`:
-                // ToUint32(value), then ToNumber(value), each observable (an
-                // object's valueOf runs twice); a RangeError when they differ
-                // (bd-9vouw.279).
-                if prop_name.as_str() == Some("length")
-                    && self
-                        .heap
-                        .get(obj_id.0 as usize)
-                        .is_some_and(|object| object.is_array)
-                    && let Some(value) = descriptor.value.take()
-                {
-                    descriptor.value = Some(self.array_length_definition_value(module, value)?);
-                }
                 // A Proxy defines through its defineProperty trap or its
-                // target (bd-9vouw.147).
+                // target (bd-9vouw.147). ArraySetLength coercion belongs to
+                // the actual array leaf, after any intervening traps.
                 if !self
                     .proxy_aware_define_own_property(module, obj_id, prop_name, descriptor, 0)?
                 {
@@ -14402,11 +14396,7 @@ impl InterpreterCore {
             // Removed duplicate StringPrototypeAt - implementation at line ~13959 is more complete
             "builtin:ObjectGetOwnPropertyDescriptor" => {
                 // Object.getOwnPropertyDescriptor(obj, prop) implementation
-                if args.count < 2 {
-                    return Ok(Value::Undefined);
-                }
-
-                let obj_val = self.read_reg(args.start)?;
+                let obj_val = self.arg_or_undefined(args, 0)?;
                 // ES2020 19.1.2.8: ToObject(O), a TypeError for undefined and
                 // null, then ToPropertyKey(P), whose object hooks run
                 // (bd-9vouw.279).
@@ -14416,7 +14406,7 @@ impl InterpreterCore {
                         got: obj_val.type_name().to_string(),
                     });
                 }
-                let prop_val = self.read_reg(args.start + 1)?;
+                let prop_val = self.arg_or_undefined(args, 1)?;
                 let prop_val = self.coerce_to_property_key(module, prop_val)?;
                 let prop_name = self.executable_property_key_from_value(&prop_val);
                 // bd-9vouw.17: a function's own properties (its `length` and
@@ -14472,14 +14462,15 @@ impl InterpreterCore {
             // only the rejected definition itself answers false.
             "builtin:ReflectDefineProperty" => {
                 let target = self.arg_or_undefined(args, 0)?;
-                let attributes = self.arg_or_undefined(args, 2)?;
-                if !target.is_object_like() || !attributes.is_object_like() {
+                if !target.is_object_like() {
                     return Err(InterpreterError::TypeError {
-                        expected: "object target and attributes for Reflect.defineProperty"
-                            .to_string(),
-                        got: format!("{}, {}", target.type_name(), attributes.type_name()),
+                        expected: "object target for Reflect.defineProperty".to_string(),
+                        got: target.type_name().to_string(),
                     });
                 }
+                // ToPropertyKey precedes ToPropertyDescriptor even when
+                // Attributes is primitive. The shared Object path preserves
+                // that order and rejects invalid descriptors before mutation.
                 match self.dispatch_builtin_hostcall_inner(
                     "builtin:ObjectDefineProperty",
                     args,

@@ -1268,7 +1268,7 @@ impl InterpreterCore {
                 what,
             )
         };
-        if !matches!(result, Value::Undefined | Value::Object(_)) && !result.is_callable() {
+        if !matches!(result, Value::Undefined) && !result.is_object_like() {
             return Err(invariant(&format!("{} result", result.type_name())));
         }
         let target_fields = self.proxy_target_descriptor_fields(module, target, key, depth + 1)?;
@@ -1331,7 +1331,7 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
         object_id: ObjectId,
         key: RuntimePropertyKey,
-        fields: PropertyDescriptorFields,
+        mut fields: PropertyDescriptorFields,
         depth: u32,
     ) -> Result<bool, InterpreterError> {
         self.integrity_step(object_id, depth)?;
@@ -1340,6 +1340,27 @@ impl InterpreterCore {
                 self.typed_array_define_own_property(module, object_id, &key, &fields)?
             {
                 return Ok(defined);
+            }
+            // ArraySetLength (ES2020 9.4.2.4) starts only when the actual
+            // array receives [[DefineOwnProperty]]. A forwarding Proxy must
+            // preserve the original descriptor until then, and an intercepting
+            // trap must never trigger its value's conversion hooks. Running
+            // both conversions here also lets the ordinary descriptor logic
+            // re-read length/attributes changed by a reentrant valueOf.
+            if key.as_str() == Some("length")
+                && self
+                    .heap
+                    .get(object_id.0 as usize)
+                    .is_some_and(|object| object.is_array)
+                && let Some(value) = fields.value.take()
+            {
+                fields.value = Some(self.array_length_definition_value(module, value)?);
+                // Coercion can select secret data or throw through a getter.
+                // Admit its accumulated observation before any truncation,
+                // including a partial shrink refused by a locked element.
+                if self.active_inline_callback_context_label.is_some() {
+                    self.reflect_admit_mutation_label(object_id)?;
+                }
             }
             return self.define_own_property_from_descriptor(object_id, key, fields);
         };

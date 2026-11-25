@@ -705,3 +705,223 @@ fn proxy_define_properties_create_and_get_own_property_descriptors() {
     .join("\n");
     assert_eq!(eval(source), expected);
 }
+
+/// ArraySetLength belongs to the actual array's [[DefineOwnProperty]], so
+/// transparent proxies and every caller of [[Set]] observe the same two
+/// numeric conversions. A public Object.defineProperty-only conversion misses
+/// both proxy forwarding and Reflect/Object.assign writes.
+#[test]
+fn array_length_coercion_reaches_the_array_through_every_property_entry() {
+    let source = r#"
+        const out = [];
+        const calls = [];
+        function run(name, write) {
+            const target = [0, 1, 2, 3];
+            const proxy = new Proxy(new Proxy(target, {}), {});
+            const length = { [Symbol.toPrimitive](hint) { calls.push(name + ':' + hint); return 2; } };
+            write(proxy, length);
+            out.push(target.length + ':' + target.join());
+        }
+        run('define', (p, n) => Object.defineProperty(p, 'length', { value: n }));
+        run('reflectDefine', (p, n) => Reflect.defineProperty(p, 'length', { value: n }));
+        run('defineMany', (p, n) => Object.defineProperties(p, { length: { value: n } }));
+        run('assign', (p, n) => { p.length = n; });
+        run('reflectSet', (p, n) => Reflect.set(p, 'length', n));
+        run('objectAssign', (p, n) => Object.assign(p, { length: n }));
+        const bare = [0, 1, 2];
+        Reflect.set(bare, 'length', { valueOf() { calls.push('bare'); return 1; } });
+        out.push(bare.length + ':' + bare.join());
+        out.join('|') + ';' + calls.join(',');
+    "#;
+    assert_eq!(
+        eval(source),
+        "2:0,1|2:0,1|2:0,1|2:0,1|2:0,1|2:0,1|1:0;\
+         define:number,define:number,reflectDefine:number,reflectDefine:number,\
+         defineMany:number,defineMany:number,assign:number,assign:number,\
+         reflectSet:number,reflectSet:number,objectAssign:number,objectAssign:number,bare,bare"
+    );
+}
+
+#[test]
+fn array_length_traps_receive_the_original_value_before_any_coercion() {
+    let source = r#"
+        const log = [];
+        const target = [0, 1, 2];
+        const value = { valueOf() { log.push('number'); return 1; } };
+        const intercepted = new Proxy(target, {
+            defineProperty(t, k, d) { log.push('trap:' + (d.value === value)); return true; }
+        });
+        Object.defineProperty(intercepted, 'length', { value });
+        log.push('length:' + target.length);
+        const forwarded = new Proxy(target, {
+            defineProperty(t, k, d) {
+                log.push('forward:' + (d.value === value));
+                return Reflect.defineProperty(t, k, d);
+            }
+        });
+        Object.defineProperties(forwarded, { length: { value } });
+        log.push('length:' + target.length);
+        const receiver = {};
+        Reflect.set(target, 'length', value, receiver);
+        log.push('receiver:' + (receiver.length === value));
+        const setter = { set length(v) { log.push('setter:' + (v === value)); } };
+        Reflect.set(setter, 'length', value);
+        log.join(',');
+    "#;
+    assert_eq!(
+        eval(source),
+        "trap:true,length:3,forward:true,number,number,length:1,receiver:true,setter:true"
+    );
+}
+
+#[test]
+fn array_length_definition_rechecks_attributes_after_reentrant_coercion() {
+    let source = r#"
+        const out = [];
+        function run(proxy) {
+            const target = [0, 1, 2];
+            const receiver = proxy ? new Proxy(target, {}) : target;
+            let calls = 0;
+            const value = { valueOf() {
+                calls++;
+                if (calls === 1) Object.defineProperty(target, 'length', { writable: false });
+                return 1;
+            } };
+            out.push(Reflect.set(receiver, 'length', value), calls, target.length);
+        }
+        run(false);
+        run(true);
+        const receiver = [0, 1, 2];
+        let calls = 0;
+        out.push(Reflect.set({ length: 0 }, 'length', {
+            valueOf() { calls++; return 1; }
+        }, receiver), calls, receiver.length);
+        out.join('|');
+    "#;
+    assert_eq!(eval(source), "false|2|3|false|2|3|true|2|1");
+}
+
+#[test]
+fn array_length_forwarding_keeps_abrupt_completions_and_integrity_rules() {
+    let source = r#"
+        function attempt(f) { try { return String(f()); } catch (error) { return error.name || error; } }
+        const out = [];
+        const frozen = Object.freeze([0, 1, 2]);
+        const frozenProxy = new Proxy(frozen, {});
+        let calls = 0;
+        const length = { valueOf() { calls++; return 1; } };
+        out.push(Reflect.set(frozenProxy, 'length', length), calls);
+        out.push(Reflect.defineProperty(frozenProxy, 'length', { value: length }), calls);
+        out.push(attempt(() => Object.defineProperty(frozenProxy, 'length', { value: length })), calls);
+        const target = [0, 1, 2];
+        const proxy = new Proxy(target, {});
+        let flip = 0;
+        out.push(attempt(() => Reflect.defineProperty(proxy, 'length', {
+            value: { valueOf() { return ++flip; } }
+        })), flip, target.length);
+        out.push(attempt(() => Reflect.set(proxy, 'length', {
+            valueOf() { throw 'original'; }
+        })), target.length);
+        out.push(attempt(() => Reflect.defineProperty(proxy, 'length', { value: Symbol() })),
+                 attempt(() => Reflect.defineProperty(proxy, 'length', { value: 1n })));
+        Object.defineProperty(target, '1', { configurable: false });
+        out.push(Reflect.defineProperty(proxy, 'length', {
+            value: { valueOf() { return 0; } }, writable: false
+        }), target.length, 2 in target, Object.getOwnPropertyDescriptor(target, 'length').writable);
+        out.join('|');
+    "#;
+    assert_eq!(
+        eval(source),
+        "false|0|false|2|TypeError|4|RangeError|2|3|original|3|TypeError|TypeError|false|2|false|false"
+    );
+}
+
+/// ToPropertyDescriptor accepts every ECMAScript object, including carriers
+/// with native internal slots; a getOwnPropertyDescriptor trap has that same
+/// object-type boundary before descriptor completion and invariant checks.
+#[test]
+fn exotic_objects_are_valid_descriptors_and_proxy_descriptor_results() {
+    let source = r#"
+        function* generate() { yield 1; }
+        async function* generateAsync() { yield 1; }
+        const descriptors = [Promise.resolve(0), generate(), [1].values(), generateAsync(), function () {}];
+        const out = [];
+        let index = 0;
+        for (const descriptor of descriptors) {
+            descriptor.value = ++index;
+            descriptor.enumerable = true;
+            descriptor.configurable = true;
+            const direct = {};
+            Object.defineProperty(direct, 'x', descriptor);
+            const reflected = {};
+            const accepted = Reflect.defineProperty(reflected, 'x', descriptor);
+            const many = Object.defineProperties({}, { x: descriptor });
+            const created = Object.create(null, { x: descriptor });
+            const proxy = new Proxy({}, { getOwnPropertyDescriptor() { return descriptor; } });
+            const reported = Object.getOwnPropertyDescriptor(proxy, 'x');
+            out.push([direct.x, reflected.x, many.x, created.x, reported.value,
+                      reported.writable, reported.enumerable, accepted].join(':'));
+        }
+        out.join('|');
+    "#;
+    assert_eq!(
+        eval(source),
+        "1:1:1:1:1:false:true:true|2:2:2:2:2:false:true:true|3:3:3:3:3:false:true:true|\
+         4:4:4:4:4:false:true:true|5:5:5:5:5:false:true:true"
+    );
+}
+
+#[test]
+fn exotic_descriptor_fields_use_has_then_get_with_the_original_receiver() {
+    let source = r#"
+        const log = [];
+        const descriptor = Promise.resolve(0);
+        const fields = {
+            get enumerable() { log.push('enumerable:' + (this === descriptor)); return true; },
+            get configurable() { log.push('configurable:' + (this === descriptor)); return true; },
+            get value() { log.push('value:' + (this === descriptor)); return 9; },
+            get writable() { log.push('writable:' + (this === descriptor)); return false; }
+        };
+        Object.setPrototypeOf(descriptor, new Proxy(fields, {
+            has(t, k) { log.push('has:' + k); return Reflect.has(t, k); }
+        }));
+        const target = Object.create(null, { x: descriptor });
+        const trace = log.join(',');
+        const mixed = [1].values();
+        mixed.value = 1;
+        mixed.get = function () { return 2; };
+        let invalid = '';
+        try { Object.defineProperty({}, 'x', mixed); } catch (error) { invalid = error.name; }
+        const locked = Object.freeze({ x: 1 });
+        const fake = Promise.resolve(0);
+        fake.value = 2;
+        let invariant = '';
+        try { Object.getOwnPropertyDescriptor(new Proxy(locked, {
+            getOwnPropertyDescriptor() { return fake; }
+        }), 'x'); } catch (error) { invariant = error.name; }
+        target.x + ';' + trace + ';' + invalid + ';' + invariant;
+    "#;
+    assert_eq!(
+        eval(source),
+        "9;has:enumerable,enumerable:true,has:configurable,configurable:true,\
+         has:value,value:true,has:writable,writable:true,has:get,has:set;TypeError;TypeError"
+    );
+}
+
+#[test]
+fn descriptor_entry_points_preserve_omitted_keys_and_conversion_order() {
+    let source = r#"
+        function attempt(f) { try { return String(f()); } catch (error) { return error.name; } }
+        const target = { undefined: 7 };
+        const log = [];
+        const key = { toString() { log.push('key'); return 'x'; } };
+        const invalidDescriptor = attempt(() => Reflect.defineProperty({}, key, 1));
+        const invalidTarget = attempt(() => Reflect.defineProperty(null, key, {}));
+        [Object.getOwnPropertyDescriptor(target).value,
+         Reflect.getOwnPropertyDescriptor(target).value,
+         attempt(() => Object.getOwnPropertyDescriptor()),
+         attempt(() => Object.getOwnPropertyDescriptor(null)),
+         invalidDescriptor, invalidTarget, log.join(',')].join('|');
+    "#;
+    assert_eq!(eval(source), "7|7|TypeError|TypeError|TypeError|TypeError|key");
+}

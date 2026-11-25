@@ -8428,18 +8428,7 @@ impl InterpreterCore {
                 definitions.push((prop_name, descriptor));
             }
         }
-        for (prop_name, mut descriptor) in definitions {
-            // ArraySetLength converts a `length` value as defineProperty
-            // does (bd-9vouw.338).
-            if prop_name.as_str() == Some("length")
-                && self
-                    .heap
-                    .get(target_id.0 as usize)
-                    .is_some_and(|object| object.is_array)
-                && let Some(value) = descriptor.value.take()
-            {
-                descriptor.value = Some(self.array_length_definition_value(module, value)?);
-            }
+        for (prop_name, descriptor) in definitions {
             if !self.proxy_aware_define_own_property(module, target_id, prop_name, descriptor, 0)? {
                 return Err(InterpreterError::TypeError {
                     expected: format!("definable property for {caller}"),
@@ -9470,15 +9459,22 @@ impl InterpreterCore {
             if Self::array_index_past_fixed_length(receiver_object, key) {
                 return Ok(false);
             }
-            if let Some(kept_length) =
-                self.array_length_kept_by_nonconfigurable(receiver_id, key, &value)?
-            {
-                self.set_object_runtime_property(
+            if receiver_object.is_array && key.as_str() == Some("length") {
+                // OrdinarySet has accepted the receiver's writable data
+                // property. Its [[DefineOwnProperty]] now owns ArraySetLength,
+                // including observable coercion and attributes changed by it.
+                // This covers Reflect.set, Object.assign and borrowed array
+                // writes as well as direct assignment and Proxy forwarding.
+                return self.proxy_aware_define_own_property(
+                    module,
                     receiver_id,
                     key.clone(),
-                    Value::Int(kept_length),
-                )?;
-                return Ok(false);
+                    PropertyDescriptorFields {
+                        value: Some(value),
+                        ..PropertyDescriptorFields::default()
+                    },
+                    depth + 1,
+                );
             }
             if let Some(context_label) = self.active_inline_callback_context_label.clone() {
                 let existing = self.own_stored_runtime_property_label(receiver_id, key);

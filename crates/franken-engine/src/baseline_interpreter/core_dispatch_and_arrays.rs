@@ -15086,27 +15086,6 @@ impl InterpreterCore {
                             _ => None,
                         };
                         let set_val = self.read_reg(val)?;
-                        // An Array's writable `length` set to an object runs
-                        // ArraySetLength's ToUint32 / ToNumber (its valueOf
-                        // twice) before the write (bd-9vouw.338); a read-only
-                        // `length` rejects the write without converting.
-                        let set_val = match &obj_val {
-                            Value::Object(oid)
-                                if set_val.is_object_like()
-                                    && property_key.as_str() == Some("length")
-                                    && self.heap.get(oid.0 as usize).is_some_and(|object| {
-                                        object.is_array
-                                            && !object.is_frozen
-                                            && object
-                                                .own_property_attributes(&property_key)
-                                                .writable
-                                    }) =>
-                            {
-                                self.array_length_definition_value(Some(module), set_val)?
-                            }
-                            _ => set_val,
-                        };
-
                         match obj_val {
                             Value::Object(oid) => {
                                 self.run_pre_runtime_property_access_hook(

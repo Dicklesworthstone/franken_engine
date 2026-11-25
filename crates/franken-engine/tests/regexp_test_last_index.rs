@@ -2,9 +2,332 @@
 //! a global or sticky regex reads and advances `lastIndex` exactly like
 //! `exec`. FrankenEngine's test ignored `lastIndex` and the flags: a /g regex
 //! answered true forever (`while (re.test(s)) n++` never ended) and a sticky
-//! regex matched anywhere. Expected string is Node v22.2.0's output.
+//! regex matched anywhere. The original state cases use Node v22.2.0 output.
 
 use frankenengine_engine::HybridRouter;
+
+fn check_both_profiles(source: &str, expected: &str) {
+    use frankenengine_engine::{JsEngine, QuickJsInspiredNativeEngine, V8InspiredNativeEngine};
+
+    for engine in [
+        &mut QuickJsInspiredNativeEngine as &mut dyn JsEngine,
+        &mut V8InspiredNativeEngine as &mut dyn JsEngine,
+    ] {
+        let outcome = engine
+            .eval(source)
+            .unwrap_or_else(|error| panic!("{:?}: {error}\n{source}", engine.kind()));
+        assert_eq!(outcome.value, expected, "{:?}: {source}", engine.kind());
+    }
+}
+
+/// RegExpBuiltinExec performs ToLength(lastIndex) even for non-global
+/// expressions. Primitive Symbol/BigInt must not silently become zero.
+#[test]
+fn last_index_rejects_symbol_and_bigint_before_matching() {
+    check_both_profiles(
+        r#"
+        const out = [];
+        for (const value of [Symbol('index'), 1n]) {
+            for (const flags of ['', 'g', 'y', 'gy']) {
+                for (const method of ['exec', 'test']) {
+                    const re = new RegExp('a', flags);
+                    re.lastIndex = value;
+                    try { re[method]('a'); out.push('missed'); }
+                    catch (error) { out.push(error.name + ':' + (re.lastIndex === value)); }
+                }
+            }
+        }
+        out.join(',');
+        "#,
+        &["TypeError:true"; 16].join(","),
+    );
+}
+
+/// Receiver validation precedes both subject conversion and reading or
+/// converting lastIndex. An invalid receiver must never run its hooks.
+#[test]
+fn exec_rejects_incompatible_receivers_without_conversion_hooks() {
+    check_both_profiles(
+        r#"
+        const log = [];
+        const index = { valueOf() { log.push('index'); throw 'wrong'; } };
+        const input = { toString() { log.push('input'); throw 'wrong'; } };
+        const receiver = { lastIndex: index };
+        const proxy = new Proxy(/a/, {
+            get(target, key) { log.push(String(key)); return Reflect.get(target, key); }
+        });
+        const out = [];
+        for (const value of [receiver, proxy, {}, 1, null]) {
+            try { RegExp.prototype.exec.call(value, input); out.push('missed'); }
+            catch (error) { out.push(error.name); }
+        }
+        out.push(log.length);
+        out.join(',');
+        "#,
+        "TypeError,TypeError,TypeError,TypeError,TypeError,0",
+    );
+}
+
+/// Subject conversion comes first, lastIndex converts once with number
+/// hint, and non-global expressions retain the original property value.
+#[test]
+fn exec_coercion_order_and_non_global_state_are_observable() {
+    check_both_profiles(
+        r#"
+        const out = [];
+        for (const flags of ['', 'g', 'y']) {
+            const log = [];
+            const re = new RegExp('a', flags);
+            const index = { [Symbol.toPrimitive](hint) { log.push(hint); return '1'; } };
+            re.lastIndex = Symbol('replaced by input conversion');
+            const input = { toString() { log.push('input'); re.lastIndex = index; return 'ba'; } };
+            const match = re.exec(input);
+            out.push(match.index + ':' + log.join('/') + ':' + (flags ? re.lastIndex : re.lastIndex === index));
+        }
+        out.join(',');
+        "#,
+        "1:input/number:true,1:input/number:2,1:input/number:2",
+    );
+}
+
+/// Non-global symbol methods reach RegExpBuiltinExec too. Search resets
+/// lastIndex before executing and restores it; global match resets it.
+#[test]
+fn regexp_symbol_methods_share_last_index_conversion_and_reset_order() {
+    check_both_profiles(
+        r#"
+        const out = [];
+        for (const method of [Symbol.match, Symbol.replace]) {
+            const re = /a/;
+            re.lastIndex = 1n;
+            try { re[method]('a', 'x'); out.push('missed'); }
+            catch (error) { out.push(error.name + ':' + (re.lastIndex === 1n)); }
+        }
+        const searched = /a/;
+        const original = Symbol('saved');
+        searched.lastIndex = original;
+        out.push('a'.search(searched), searched.lastIndex === original);
+        const global = /a/g;
+        global.lastIndex = 1n;
+        out.push('a'.match(global)[0], global.lastIndex);
+        out.join(',');
+        "#,
+        "TypeError:true,TypeError:true,0,true,a,0",
+    );
+}
+
+/// RegExpExec calls a supplied exec method without applying the builtin's
+/// lastIndex conversion to that receiver.
+#[test]
+fn custom_exec_keeps_control_of_its_last_index() {
+    check_both_profiles(
+        r#"
+        const calls = [];
+        const receiver = {
+            lastIndex: Symbol('opaque'),
+            exec(input) { calls.push(input); return { 0: 'a', index: 0, length: 1 }; }
+        };
+        const matched = RegExp.prototype.test.call(receiver, 'a');
+        const re = /a/;
+        re.lastIndex = 1n;
+        re.exec = receiver.exec;
+        [matched, re.test('b'), re.lastIndex === 1n, calls.join('/')].join(',');
+        "#,
+        "true,true,true,a/b",
+    );
+}
+
+/// Subject conversion can invalidate a pristine RegExp before exec is read.
+/// Both direct symbol calls and String methods must observe that mutation.
+#[test]
+fn match_observes_regexp_mutation_during_subject_conversion() {
+    check_both_profiles(
+        r#"
+        const out = [];
+        for (const viaString of [false, true]) {
+            for (const index of [Symbol('index'), 1n]) {
+                const re = /a/;
+                let calls = 0;
+                const input = { toString() { calls++; re.lastIndex = index; return 'a'; } };
+                try {
+                    if (viaString) String.prototype.match.call(input, re);
+                    else re[Symbol.match](input);
+                    out.push('missed');
+                } catch (error) {
+                    out.push(error.name + ':' + calls + ':' + (re.lastIndex === index));
+                }
+            }
+            const re = /a/;
+            const log = [];
+            const input = {
+                toString() {
+                    log.push('subject');
+                    re.exec = function (text) {
+                        log.push('exec:' + (this === re) + ':' + text);
+                        return ['custom'];
+                    };
+                    return 'a';
+                }
+            };
+            const result = viaString ? String.prototype.match.call(input, re) : re[Symbol.match](input);
+            out.push(result[0] + ':' + log.join('/'));
+        }
+        out.join(',');
+        "#,
+        "TypeError:1:true,TypeError:1:true,custom:subject/exec:true:a,TypeError:1:true,TypeError:1:true,custom:subject/exec:true:a",
+    );
+}
+
+/// ToString(replaceValue) runs once before selecting exec. Its mutation can
+/// require native lastIndex rejection or install a custom exec instead.
+#[test]
+fn replace_observes_replacement_conversion_before_selecting_exec() {
+    check_both_profiles(
+        r#"
+        const out = [];
+        for (const viaString of [false, true]) {
+            for (const index of [Symbol('index'), 1n]) {
+                const re = /a/;
+                let calls = 0;
+                const replacement = { toString() { calls++; re.lastIndex = index; return 'x'; } };
+                try {
+                    if (viaString) 'a'.replace(re, replacement);
+                    else re[Symbol.replace]('a', replacement);
+                    out.push('missed');
+                } catch (error) {
+                    out.push(error.name + ':' + calls + ':' + (re.lastIndex === index));
+                }
+            }
+            const re = /a/;
+            const log = [];
+            const replacement = {
+                toString() {
+                    log.push('replacement');
+                    re.lastIndex = 1n;
+                    re.exec = function (text) {
+                        log.push('exec:' + (this === re) + ':' + text);
+                        return ['a'];
+                    };
+                    return 'x';
+                }
+            };
+            const result = viaString ? 'a'.replace(re, replacement) : re[Symbol.replace]('a', replacement);
+            out.push(result + ':' + (re.lastIndex === 1n) + ':' + log.join('/'));
+        }
+        out.join(',');
+        "#,
+        "TypeError:1:true,TypeError:1:true,x:true:replacement/exec:true:a,TypeError:1:true,TypeError:1:true,x:true:replacement/exec:true:a",
+    );
+}
+
+/// Both split entry routes apply ToUint32 to their limit, observing hooks
+/// and abrupt completions instead of approximating object/Symbol/BigInt as zero.
+#[test]
+fn regexp_split_limits_use_observable_numeric_conversion() {
+    check_both_profiles(
+        r#"
+        const out = [];
+        for (const viaString of [false, true]) {
+            let calls = 0;
+            const limit = { valueOf() { calls++; return 2; } };
+            const result = viaString ? 'a,b,c'.split(/,/, limit) : /,/[Symbol.split]('a,b,c', limit);
+            out.push(result.join(':') + ':' + calls);
+            calls = 0;
+            const throwing = { valueOf() { calls++; throw 'limit-stop'; } };
+            try {
+                if (viaString) 'a,b,c'.split(/,/, throwing);
+                else /,/[Symbol.split]('a,b,c', throwing);
+                out.push('missed');
+            } catch (error) {
+                out.push(String(error) + ':' + calls);
+            }
+            for (const invalid of [Symbol('limit'), 1n]) {
+                try {
+                    if (viaString) 'a,b,c'.split(/,/, invalid);
+                    else /,/[Symbol.split]('a,b,c', invalid);
+                    out.push('missed');
+                } catch (error) {
+                    out.push(error.name);
+                }
+            }
+        }
+        out.join(',');
+        "#,
+        "a:b:1,limit-stop:1,TypeError,TypeError,a:b:1,limit-stop:1,TypeError,TypeError",
+    );
+}
+
+/// A lastIndex hook runs after exec selection, so replacing exec from that
+/// hook affects later calls only. Subject conversion occurs before test selects exec.
+#[test]
+fn last_index_conversion_preserves_the_selected_exec() {
+    check_both_profiles(
+        r#"
+        const out = [];
+        for (const method of ['exec', 'test', 'match']) {
+            const re = /a/y;
+            const log = [];
+            re.lastIndex = {
+                valueOf() {
+                    log.push('index');
+                    re.exec = function () { log.push('override'); return null; };
+                    return 0;
+                }
+            };
+            const result = method === 'match' ? re[Symbol.match]('a') : RegExp.prototype[method].call(re, 'a');
+            out.push((method === 'test' ? result : result[0]) + ':' + re.lastIndex + ':' + log.join('/'));
+        }
+        for (const method of ['exec', 'test']) {
+            const re = /a/g;
+            const log = [];
+            const input = {
+                toString() {
+                    log.push('input');
+                    re.exec = function () { log.push('override'); return null; };
+                    return 'a';
+                }
+            };
+            const result = RegExp.prototype[method].call(re, input);
+            out.push((method === 'test' ? result : result[0]) + ':' + re.lastIndex + ':' + log.join('/'));
+        }
+        out.join(',');
+        "#,
+        "a:1:index,true:1:index,a:1:index,a:1:input,false:0:input/override",
+    );
+}
+
+/// The search matcher may skip reset/restore only for writable lastIndex.
+/// Read-only originals still work in operations that do not write to them.
+#[test]
+fn search_preserves_required_writes_to_read_only_last_index() {
+    check_both_profiles(
+        r#"
+        const out = [];
+        for (const viaString of [false, true]) {
+            for (const flags of ['', 'g', 'y', 'gy']) {
+                for (const start of [0, -0, 1]) {
+                    const re = new RegExp('a', flags);
+                    Object.defineProperty(re, 'lastIndex', { value: start, writable: false });
+                    try {
+                        const result = viaString ? 'a'.search(re) : re[Symbol.search]('a');
+                        out.push(result + ':' + Object.is(re.lastIndex, start));
+                    } catch (error) {
+                        out.push(error.name + ':' + Object.is(re.lastIndex, start));
+                    }
+                }
+            }
+        }
+        const plain = /a/;
+        Object.defineProperty(plain, 'lastIndex', { value: 0, writable: false });
+        out.push('a'.match(plain)[0], 'a'.replace(plain, 'x'), 'a'.search(plain));
+        const copied = /,/g;
+        Object.defineProperty(copied, 'lastIndex', { value: 1, writable: false });
+        out.push('a,b'.split(copied).join(':'), Array.from('a,b'.matchAll(copied))[0].index, copied.lastIndex);
+        out.join(',');
+        "#,
+        "0:true,TypeError:true,TypeError:true,TypeError:true,TypeError:true,TypeError:true,TypeError:true,TypeError:true,TypeError:true,TypeError:true,TypeError:true,TypeError:true,0:true,TypeError:true,TypeError:true,TypeError:true,TypeError:true,TypeError:true,TypeError:true,TypeError:true,TypeError:true,TypeError:true,TypeError:true,TypeError:true,a,x,0,a:b,1,1",
+    );
+}
 
 #[test]
 fn global_and_sticky_test_advance_last_index() {

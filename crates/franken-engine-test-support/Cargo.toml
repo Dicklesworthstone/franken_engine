@@ -49,6 +49,11 @@ path = "../franken-engine/tests/arrow_new_target_bd_9vouw_317.rs"
 required-features = ["engine-defaults"]
 
 [[test]]
+name = "regexp_test_last_index"
+path = "../franken-engine/tests/regexp_test_last_index.rs"
+required-features = ["engine-defaults"]
+
+[[test]]
 name = "script_global_declarations"
 path = "../franken-engine/tests/script_global_declarations.rs"
 required-features = ["engine-defaults"]

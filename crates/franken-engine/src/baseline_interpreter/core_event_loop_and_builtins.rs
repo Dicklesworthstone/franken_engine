@@ -11083,6 +11083,30 @@ impl InterpreterCore {
         Ok(Some((Value::Object(result), utf16_offset(whole_end))))
     }
 
+    /// The matcher assumes argument conversion cannot change the receiver's
+    /// exec, flags, or lastIndex. Object subjects and non-callable object
+    /// replacements can run guest code before matching; split limits need
+    /// observable ToUint32, including Symbol/BigInt rejection. Callable
+    /// replacements run after matching and can keep the matcher path.
+    fn regexp_symbol_method_can_use_matcher(
+        &self,
+        method: &str,
+        receiver: &Value,
+        string: &Value,
+        extra: &Value,
+    ) -> bool {
+        self.regexp_is_pristine(receiver)
+            && !string.is_object_like()
+            && match method {
+                "@@replace" => !extra.is_object_like() || extra.is_callable(),
+                "@@split" => {
+                    !extra.is_object_like()
+                        && !matches!(extra, Value::Symbol(_) | Value::BigInt(_))
+                }
+                _ => true,
+            }
+    }
+
     /// RegExp.prototype[@@match], [@@matchAll], [@@replace], [@@search] and
     /// [@@split] (ES2020 21.2.5.6-11) on a RegExp receiver: the algorithms
     /// String.prototype.match and its siblings run for a RegExp argument, so
@@ -11095,6 +11119,8 @@ impl InterpreterCore {
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         let method = builtin.display_name();
+        let string = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let extra = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
         // bd-9vouw.257: a receiver whose reads are observable (a user exec,
         // an overridden flags getter, a subclass, a plain object) runs the
         // ES2024 22.2.6 algorithms instead of the matcher.
@@ -11105,9 +11131,9 @@ impl InterpreterCore {
             && self
                 .regexp_source_flags_from_value(&receiver)
                 .is_some_and(|(_, flags)| !flags.contains('g'));
-        if non_global_match_all || !self.regexp_is_pristine(&receiver) {
-            let string = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-            let extra = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+        if non_global_match_all
+            || !self.regexp_symbol_method_can_use_matcher(method, &receiver, &string, &extra)
+        {
             let label = self.join_arg_range_label(args)?;
             if let Some(result) =
                 self.regexp_symbol_method_generic(module, method, &receiver, string, extra, &label)?
@@ -11462,8 +11488,9 @@ impl InterpreterCore {
 
     /// A String method's pattern whose `symbol` method is this realm's
     /// RegExp.prototype builtin: `None` (the caller's matcher algorithm)
-    /// for a pristine RegExp, otherwise the builtin's specification
-    /// algorithm with `this` the pattern (bd-9vouw.257).
+    /// for a pristine RegExp with no observable argument conversion,
+    /// otherwise the builtin's specification algorithm with `this` the
+    /// pattern (bd-9vouw.257).
     pub(super) fn string_pattern_builtin_symbol_call(
         &mut self,
         module: &Ir3Module,
@@ -11475,10 +11502,10 @@ impl InterpreterCore {
         let Some(method) = regexp_symbol_method_key(symbol.id()) else {
             return Ok(None);
         };
-        if self.regexp_is_pristine(pattern) {
+        let extra = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+        if self.regexp_symbol_method_can_use_matcher(method, pattern, receiver, &extra) {
             return Ok(None);
         }
-        let extra = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
         let label = self.join_arg_range_label(args)?;
         self.regexp_symbol_method_generic(module, method, pattern, receiver.clone(), extra, &label)
     }
@@ -11613,10 +11640,12 @@ impl InterpreterCore {
     }
 
     /// ES2020 21.2.5.2.2 step 4: ToLength(? Get(R, "lastIndex")) runs for
-    /// every RegExpBuiltinExec, global or not, so an object lastIndex's
-    /// valueOf is called (and may throw) exactly once; the property keeps
-    /// the object. `Some` is the coerced number for an object lastIndex,
-    /// `None` when the stored value needs no guest code (bd-9vouw.257).
+    /// every RegExpBuiltinExec, global or not. Symbol and BigInt are errors
+    /// even when the matcher would otherwise ignore the index. An object's
+    /// valueOf runs exactly once and leaves the property unchanged. `None`
+    /// keeps primitives needing neither conversion hooks nor rejection on
+    /// the matcher path. Incompatible receivers must not run conversion
+    /// hooks before the caller reports their TypeError.
     pub(super) fn regexp_coerced_last_index(
         &mut self,
         module: &Ir3Module,
@@ -11628,8 +11657,11 @@ impl InterpreterCore {
         let stored = self
             .heap
             .get(regexp_id.0 as usize)
+            .filter(|object| object.brand() == Some("RegExp"))
             .and_then(|object| object.properties.get("lastIndex").cloned());
-        let Some(value) = stored.filter(Value::is_object_like) else {
+        let Some(value) = stored.filter(|value| {
+            value.is_object_like() || matches!(value, Value::Symbol(_) | Value::BigInt(_))
+        }) else {
             return Ok(None);
         };
         let number = self.object_to_number_primitive(Some(module), value)?;

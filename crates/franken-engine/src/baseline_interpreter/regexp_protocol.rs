@@ -44,8 +44,8 @@ const PROTOCOL_PROTOTYPE_NAMES: [&str; 12] = [
 
 impl InterpreterCore {
     /// Whether the matcher may answer for `receiver`: a RegExp whose only
-    /// own property is `lastIndex` (a number), whose prototype is the
-    /// intrinsic %RegExp.prototype% with no stored override of a name the
+    /// own property is a writable numeric `lastIndex`, whose prototype is
+    /// the intrinsic %RegExp.prototype% with no stored override of a name the
     /// algorithms read.
     pub(super) fn regexp_is_pristine(&self, receiver: &Value) -> bool {
         let Value::Object(id) = receiver else {
@@ -57,13 +57,21 @@ impl InterpreterCore {
         if object.brand() != Some("RegExp") || object.regexp.is_none() {
             return false;
         }
-        if !matches!(
-            object.properties.get("lastIndex"),
-            None | Some(Value::Int(_) | Value::Float(_))
-        ) || object
-            .properties
-            .keys()
-            .any(|key| key.as_str() != "lastIndex")
+        // The search matcher skips the reset/restore writes. They are only
+        // unobservable when lastIndex is writable; the generic algorithm
+        // preserves the required TypeErrors for read-only properties.
+        let last_index_writable = object
+            .own_property_attributes(&RuntimePropertyKey::String(JsString::from("lastIndex")))
+            .writable;
+        if !last_index_writable
+            || !matches!(
+                object.properties.get("lastIndex"),
+                None | Some(Value::Int(_) | Value::Float(_))
+            )
+            || object
+                .properties
+                .keys()
+                .any(|key| key.as_str() != "lastIndex")
         {
             return false;
         }

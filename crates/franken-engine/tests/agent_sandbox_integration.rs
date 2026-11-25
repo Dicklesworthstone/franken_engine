@@ -6,6 +6,11 @@
 #![forbid(unsafe_code)]
 
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg(unix)]
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 
 #[cfg(unix)]
 use frankenengine_engine::agent_sandbox::AgentHostIoBudget;
@@ -13,6 +18,8 @@ use frankenengine_engine::agent_sandbox::{
     AGENT_SANDBOX_MANIFEST_SCHEMA_VERSION, AgentSandboxError, AgentSandboxManifest,
     AgentSandboxReport, AgentToolGrant, DEFAULT_AGENT_TRUST_LEVEL,
 };
+#[cfg(unix)]
+use frankenengine_engine::baseline_interpreter::LaneChoice;
 use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::data_contract::{
     DATA_CONTRACT_SCHEMA_VERSION, DEFAULT_DATA_CONTRACT_PURPOSE, DataBinding, DataBindingRole,
@@ -30,8 +37,14 @@ use frankenengine_engine::non_use_certificate::{
     NonUseCertificate, emit_certificate_bundle_lab,
 };
 #[cfg(unix)]
+use frankenengine_extension_host::host_effect_journal::{
+    HostEffectJournalAttemptRecord, HostEffectJournalEntry, HostEffectJournalLimits,
+    InMemoryHostEffectJournal,
+};
+#[cfg(unix)]
 use frankenengine_extension_host::host_io::{
-    FsOperation, HostIoCapability, HostIoError, HostIoRequest, HostIoResponse,
+    FsOperation, HostIoCapability, HostIoControl, HostIoError, HostIoExceptionProvenance,
+    HostIoOutcome, HostIoProvider, HostIoRequest, HostIoResponse, InMemoryHostIoTranscript,
 };
 
 const GENERATED_SOURCE: &str = "const parts = ['4', '2']; const result = parts.join('');";
@@ -546,4 +559,299 @@ fn manifest_host_budget_zero_limits_and_missing_root_deny_host_dispatch() {
         max_in_flight: 1,
     });
     assert!(unrooted.build_host_io_provider().unwrap().is_none());
+}
+
+/// Observe dispatch to the real manifest-built provider without changing its
+/// authority, cancellation, native results, or exception provenance.
+#[cfg(unix)]
+#[derive(Debug)]
+struct ObservedHostIo {
+    provider: Arc<dyn HostIoProvider>,
+    calls: AtomicUsize,
+}
+
+#[cfg(unix)]
+impl HostIoProvider for ObservedHostIo {
+    fn name(&self) -> &str {
+        self.provider.name()
+    }
+
+    fn filesystem_exception_provenance(&self) -> HostIoExceptionProvenance {
+        self.provider.filesystem_exception_provenance()
+    }
+
+    fn perform(&self, request: &HostIoRequest, granted: &[HostIoCapability]) -> HostIoOutcome {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        self.provider.perform(request, granted)
+    }
+
+    fn perform_controlled(
+        &self,
+        request: &HostIoRequest,
+        granted: &[HostIoCapability],
+        control: Arc<dyn HostIoControl>,
+    ) -> HostIoOutcome {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        self.provider.perform_controlled(request, granted, control)
+    }
+}
+
+#[cfg(unix)]
+fn journal_manifest() -> (
+    AgentSandboxManifest,
+    std::path::PathBuf,
+    Arc<ObservedHostIo>,
+) {
+    let (mut manifest, root) = host_budget_manifest(AgentHostIoBudget {
+        requests: 32,
+        request_bytes: 1024 * 1024,
+        max_in_flight: 1,
+    });
+    manifest.denied_capability_tags = vec!["process_spawn".to_string()];
+    manifest.network_allowlist = Some(vec!["127.0.0.1:9".parse().unwrap()]);
+    manifest.tool_grants.extend(
+        [
+            RuntimeCapability::Builtin,
+            RuntimeCapability::RandomRead,
+            RuntimeCapability::NetworkEgress,
+        ]
+        .map(|capability| AgentToolGrant {
+            tool_name: capability.as_str().to_string(),
+            capability_tag: capability.as_str().to_string(),
+            description: None,
+        }),
+    );
+    let provider = Arc::new(ObservedHostIo {
+        provider: manifest.build_host_io_provider().unwrap().unwrap(),
+        calls: AtomicUsize::new(0),
+    });
+    (manifest, root, provider)
+}
+
+#[test]
+#[cfg(unix)]
+fn agent_host_effect_journal_preflights_every_host_family_in_both_lanes() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for source in [
+            "require('fs').readFileSync('input.txt', 'utf8');",
+            "require('fs').writeFileSync('blocked.txt', 'must not be written');",
+            "require('crypto').randomBytes(8);",
+            "fetch('http://127.0.0.1:9/');",
+        ] {
+            for (limits, expected) in [
+                (
+                    HostEffectJournalLimits {
+                        max_entries: 0,
+                        max_encoded_bytes: 4096,
+                    },
+                    "journal entry capacity exceeded",
+                ),
+                (
+                    HostEffectJournalLimits {
+                        max_entries: 8,
+                        max_encoded_bytes: 0,
+                    },
+                    "journal byte capacity exceeded",
+                ),
+            ] {
+                let (manifest, root, provider) = journal_manifest();
+                std::fs::write(root.join("input.txt"), b"host input").unwrap();
+                let package = manifest
+                    .to_extension_package(source.into(), Some(INPUT_PATH.into()), "test", false)
+                    .unwrap();
+                let journal = Arc::new(InMemoryHostEffectJournal::recording_with_limits(limits));
+                let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig {
+                    force_lane: Some(lane),
+                    ..OrchestratorConfig::default()
+                });
+                orchestrator.set_host_io_with_journal(provider.clone(), journal.clone());
+                let error = orchestrator
+                    .execute(&package)
+                    .expect_err("journal admission must stop execution before a live crossing");
+                assert!(
+                    error.to_string().contains(expected),
+                    "lane={lane:?}, source={source}, expected={expected}: {error}"
+                );
+                assert_eq!(provider.calls.load(Ordering::Relaxed), 0, "{source}");
+                assert!(!root.join("blocked.txt").exists());
+                assert!(journal.entries().is_empty());
+                assert_eq!(journal.retained_encoded_bytes(), 0);
+            }
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn agent_host_effect_journal_retains_prefix_and_denies_next_write_before_dispatch() {
+    let (manifest, root, provider) = journal_manifest();
+    let package = manifest
+        .to_extension_package(
+            "const fs = require('fs'); fs.writeFileSync('output.txt', 'first'); \
+             try { fs.writeFileSync('output.txt', 'must not overwrite'); } \
+             catch (error) { console.log('must not catch'); }"
+                .into(),
+            Some(INPUT_PATH.into()),
+            "test",
+            false,
+        )
+        .unwrap();
+    let limits = HostEffectJournalLimits {
+        max_entries: 1,
+        max_encoded_bytes: 4096,
+    };
+    let journal = Arc::new(InMemoryHostEffectJournal::recording_with_limits(limits));
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator.set_host_io_with_journal(provider.clone(), journal.clone());
+    let error = orchestrator
+        .execute(&package)
+        .expect_err("second crossing refused");
+    assert!(
+        error
+            .to_string()
+            .contains("journal entry capacity exceeded")
+    );
+    assert_eq!(provider.calls.load(Ordering::Relaxed), 1);
+    assert_eq!(std::fs::read(root.join("output.txt")).unwrap(), b"first");
+    assert!(orchestrator.last_failed_console_output().is_empty());
+    let expected = HostEffectJournalEntry::HostIo {
+        request: HostIoRequest::FsWrite {
+            path: "output.txt".into(),
+            data: b"first".to_vec(),
+        },
+        outcome: Ok(HostIoResponse::FsWrite { bytes_written: 5 }),
+    };
+    assert_eq!(
+        orchestrator.last_failed_host_effect_journal(),
+        std::slice::from_ref(&expected)
+    );
+    assert_eq!(
+        orchestrator.last_failed_host_effect_journal_records(),
+        &[HostEffectJournalAttemptRecord::Completed {
+            sequence: 0,
+            entry: expected
+        }]
+    );
+    assert!(journal.retained_encoded_bytes() <= limits.max_encoded_bytes);
+}
+
+#[test]
+#[cfg(unix)]
+fn agent_host_effect_journal_retains_uncompleted_read_when_response_exceeds_capacity() {
+    let (manifest, root, provider) = journal_manifest();
+    std::fs::write(root.join("input.txt"), vec![b'x'; 8192]).unwrap();
+    let package = manifest
+        .to_extension_package(
+            "require('fs').readFileSync('input.txt', 'utf8');".into(),
+            Some(INPUT_PATH.into()),
+            "test",
+            false,
+        )
+        .unwrap();
+    let limits = HostEffectJournalLimits {
+        max_entries: 8,
+        max_encoded_bytes: 1024,
+    };
+    let journal = Arc::new(InMemoryHostEffectJournal::recording_with_limits(limits));
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator.set_host_io_with_journal(provider.clone(), journal.clone());
+    let error = orchestrator
+        .execute(&package)
+        .expect_err("oversized response refused");
+    assert!(error.to_string().contains("journal byte capacity exceeded"));
+    assert_eq!(provider.calls.load(Ordering::Relaxed), 1);
+    assert!(orchestrator.last_failed_host_effect_journal().is_empty());
+    assert!(matches!(
+        orchestrator.last_failed_host_effect_journal_records(),
+        [HostEffectJournalAttemptRecord::Uncompleted { sequence: 0, family, request_kind, .. }]
+            if family == "host_io" && request_kind == "fs_read"
+    ));
+    assert!(
+        orchestrator
+            .last_failed_execution_replay_context()
+            .is_none()
+    );
+    assert!(journal.retained_encoded_bytes() <= limits.max_encoded_bytes);
+    orchestrator
+        .execute(&package)
+        .expect_err("poisoned journal cannot resume");
+    assert_eq!(provider.calls.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+#[cfg(unix)]
+fn agent_host_effect_journal_projects_exact_legacy_transcript_and_replays_offline() {
+    let (manifest, root, provider) = journal_manifest();
+    std::fs::write(root.join("input.txt"), b"original input").unwrap();
+    let package = manifest
+        .to_extension_package(
+            "const fs = require('fs'); fs.writeFileSync('output.txt', 'recorded'); \
+             fs.readFileSync('input.txt', 'utf8'); require('crypto').randomBytes(8);"
+                .into(),
+            Some(INPUT_PATH.into()),
+            "test",
+            false,
+        )
+        .unwrap();
+    let journal = Arc::new(InMemoryHostEffectJournal::recording());
+    let mut original = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    original.set_host_io_with_journal(provider.clone(), journal);
+    let recorded = original
+        .execute(&package)
+        .expect("record real file and entropy effects");
+    assert_eq!(provider.calls.load(Ordering::Relaxed), 3);
+    assert_eq!(recorded.host_effect_transcript.len(), 3);
+    assert_eq!(
+        recorded.host_effect_journal,
+        recorded
+            .host_effect_transcript
+            .iter()
+            .map(|(request, outcome)| {
+                HostEffectJournalEntry::HostIo {
+                    request: request.clone(),
+                    outcome: outcome.clone(),
+                }
+            })
+            .collect::<Vec<_>>()
+    );
+    assert!(matches!(
+        &recorded.host_effect_transcript[2],
+        (HostIoRequest::RandomRead { byte_len: 8 }, Ok(HostIoResponse::RandomRead { bytes }))
+            if bytes.len() == 8
+    ));
+    std::fs::write(root.join("input.txt"), b"changed after recording").unwrap();
+    std::fs::write(root.join("output.txt"), b"must survive replay").unwrap();
+    for use_journal in [true, false] {
+        let mut replayed = ExecutionOrchestrator::new(OrchestratorConfig::default());
+        replayed.set_host_io_with_journal(
+            provider.clone(),
+            Arc::new(InMemoryHostEffectJournal::replaying(
+                recorded.host_effect_journal.clone(),
+            )),
+        );
+        if !use_journal {
+            // Switching to the historical transcript API must replace the
+            // installed journal, as the CLI's existing report replay does.
+            replayed.set_host_io(
+                provider.clone(),
+                Some(Arc::new(InMemoryHostIoTranscript::replaying(
+                    recorded.host_effect_transcript.clone(),
+                ))),
+            );
+        }
+        let replayed = replayed
+            .execute(&package)
+            .expect("offline host-effect replay");
+        assert_eq!(replayed.execution_value, recorded.execution_value);
+        assert_eq!(
+            replayed.host_effect_transcript,
+            recorded.host_effect_transcript
+        );
+        assert_eq!(replayed.nondeterminism_trace, recorded.nondeterminism_trace);
+        assert_eq!(provider.calls.load(Ordering::Relaxed), 3);
+        assert_eq!(
+            std::fs::read(root.join("output.txt")).unwrap(),
+            b"must survive replay"
+        );
+    }
 }

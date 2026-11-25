@@ -1143,6 +1143,23 @@ impl InterpreterCore {
     ) {
         self.host_io = Some(provider);
         self.host_io_recorder = recorder;
+        if self.process_spawn.is_none() {
+            self.host_effect_journal = None;
+        }
+    }
+
+    /// Install bounded host-effect recording/replay for ordinary host I/O.
+    /// This changes the evidence source without granting process authority.
+    pub fn set_host_io_with_journal(
+        &mut self,
+        provider: Arc<dyn HostIoProvider>,
+        journal: Arc<InMemoryHostEffectJournal>,
+    ) {
+        self.host_io = Some(provider);
+        self.host_io_recorder = None;
+        if self.process_spawn.is_none() {
+            self.host_effect_journal = Some(journal);
+        }
     }
 
     /// Bind compilation and execution to the same live/replay exception

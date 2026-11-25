@@ -1264,9 +1264,9 @@ pub struct OrchestratorResult {
     // emitted no host effects. This is the source bd-5r99w.12 renders as a
     // signed effect ledger in `franken-node run`.
     pub host_effect_transcript: Vec<(HostIoRequest, HostIoOutcome)>,
-    /// Globally ordered filesystem/network/process effects. This is the
-    /// receipt-bearing source for executions that install process authority;
-    /// unlike independent family transcripts it preserves interleaving.
+    /// Globally ordered effects from the installed bounded journal. Ordinary
+    /// host-I/O runs may install it without process authority; process-authorized
+    /// runs share the same journal to preserve interleaving across families.
     pub host_effect_journal: Vec<HostEffectJournalEntry>,
 
     /// Hashes of the exact filesystem source and package-manifest bytes read
@@ -2149,6 +2149,9 @@ pub struct ExecutionOrchestrator {
     /// (bd-f5b04.2.7). `None` keeps the fail-closed baseline (no host effects).
     host_io: Option<Arc<dyn HostIoProvider>>,
     host_io_recorder: Option<Arc<dyn HostIoRecorder>>,
+    /// Bounded journal for ordinary host I/O, independent of process authority.
+    /// An admitted process attempt supplies its own execution-wide journal.
+    host_io_journal: Option<Arc<InMemoryHostEffectJournal>>,
     process_spawn_attempt: Option<InstalledProcessSpawnAttempt>,
     last_failed_host_effect_journal: Vec<HostEffectJournalEntry>,
     last_failed_host_effect_journal_records: Vec<HostEffectJournalAttemptRecord>,
@@ -2515,6 +2518,7 @@ impl ExecutionOrchestrator {
             profiling_session: None,
             host_io: None,
             host_io_recorder: None,
+            host_io_journal: None,
             process_spawn_attempt: None,
             last_failed_host_effect_journal: Vec::new(),
             last_failed_host_effect_journal_records: Vec::new(),
@@ -2874,6 +2878,25 @@ impl ExecutionOrchestrator {
     ) {
         self.host_io = Some(provider);
         self.host_io_recorder = recorder;
+        self.host_io_journal = None;
+    }
+
+    /// Install host I/O with a bounded, globally ordered effect journal without
+    /// granting process authority. Each live crossing reserves journal capacity
+    /// before calling its provider; exhausted capacity therefore fails closed.
+    /// The host-I/O projection remains available in the compatibility transcript.
+    /// A separately admitted process attempt takes precedence with its own shared
+    /// journal, so ordinary and process effects retain one total order.
+    /// Recording journals keep their retained-evidence budget across executions;
+    /// replaying journals are consumed by one execution and cannot be reset.
+    pub fn set_host_io_with_journal(
+        &mut self,
+        provider: Arc<dyn HostIoProvider>,
+        journal: Arc<InMemoryHostEffectJournal>,
+    ) {
+        self.host_io = Some(provider);
+        self.host_io_recorder = None;
+        self.host_io_journal = Some(journal);
     }
 
     /// Install a signed product-authorized process provider together with the
@@ -3345,7 +3368,8 @@ impl ExecutionOrchestrator {
             .map(|attempt| Arc::clone(&attempt.provider));
         let host_effect_journal = process_spawn_attempt
             .as_ref()
-            .map(|attempt| Arc::clone(&attempt.journal));
+            .map(|attempt| Arc::clone(&attempt.journal))
+            .or_else(|| self.host_io_journal.clone());
         let process_spawn_authority = process_spawn_attempt
             .as_ref()
             .map(|attempt| attempt.authority.clone());
@@ -3622,13 +3646,9 @@ impl ExecutionOrchestrator {
             // succeeds. Any later cancellation, evidence, or containment failure
             // must not erase already-performed effects from product receipts.
             //
-            // Only process-authority runs own a journal; the ordinary run installs
-            // a recorder alone, and for it `host_effect_journal_entries` is empty
-            // by construction. Retaining that empty vec silently discarded every
-            // ordinary filesystem/network effect an aborted attempt had already
-            // performed or been denied, which is exactly the evidence a failure
-            // receipt needs. Retain whichever source actually finalized this
-            // attempt, preserving its global order.
+            // Legacy recorder installations have no journal entries. Preserve
+            // their transcript too, so failure receipts retain every completed
+            // or denied crossing regardless of which effect source was installed.
             self.last_failed_host_effect_journal = if host_effect_journal.is_some() {
                 host_effect_journal_entries.clone()
             } else {
@@ -4460,7 +4480,8 @@ impl ExecutionOrchestrator {
             decision_id,
             self.process_spawn_attempt
                 .as_ref()
-                .map(|attempt| attempt.journal.as_ref()),
+                .map(|attempt| attempt.journal.as_ref())
+                .or(self.host_io_journal.as_deref()),
         )
     }
 
@@ -4542,6 +4563,7 @@ impl ExecutionOrchestrator {
         // Unknown.
         let no_host_effect_source = self.host_io.is_none()
             && self.host_io_recorder.is_none()
+            && self.host_io_journal.is_none()
             && self.process_spawn_attempt.is_none();
         let host_io_exception_provenance = self.host_io.as_ref().map_or(
             if no_host_effect_source {
@@ -4886,7 +4908,11 @@ impl ExecutionOrchestrator {
         // into whichever lane runs, so authorized `fs:` hostcalls perform and record
         // real host effects through the algebraic-effects stack.
         if let Some(provider) = host_io {
-            lane_router.set_host_io(provider, self.host_io_recorder.clone());
+            if let Some(journal) = &host_effect_journal {
+                lane_router.set_host_io_with_journal(provider, Arc::clone(journal));
+            } else {
+                lane_router.set_host_io(provider, self.host_io_recorder.clone());
+            }
         }
         if let (Some(provider), Some(journal)) = (process_spawn, host_effect_journal) {
             lane_router.set_process_spawn(provider, journal);

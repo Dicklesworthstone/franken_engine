@@ -1840,6 +1840,22 @@ impl QuickJsLane {
     ) {
         self.host_io = Some(provider);
         self.host_io_recorder = recorder;
+        if self.process_spawn.is_none() {
+            self.host_effect_journal = None;
+        }
+    }
+
+    /// Install bounded host-I/O recording/replay without process authority.
+    pub fn set_host_io_with_journal(
+        &mut self,
+        provider: Arc<dyn HostIoProvider>,
+        journal: Arc<InMemoryHostEffectJournal>,
+    ) {
+        self.host_io = Some(provider);
+        self.host_io_recorder = None;
+        if self.process_spawn.is_none() {
+            self.host_effect_journal = Some(journal);
+        }
     }
 
     /// Install the separately admitted process provider and the execution-wide
@@ -2111,7 +2127,11 @@ pub(super) fn execute_lane_with_provisioned_stack(
             core.set_hook(hook);
         }
         if let Some(provider) = host_io {
-            core.set_host_io(provider, host_io_recorder);
+            if let Some(journal) = &host_effect_journal {
+                core.set_host_io_with_journal(provider, Arc::clone(journal));
+            } else {
+                core.set_host_io(provider, host_io_recorder);
+            }
         }
         if let (Some(provider), Some(journal)) = (process_spawn, host_effect_journal) {
             core.set_process_spawn(provider, journal);
@@ -2236,6 +2256,22 @@ impl V8Lane {
     ) {
         self.host_io = Some(provider);
         self.host_io_recorder = recorder;
+        if self.process_spawn.is_none() {
+            self.host_effect_journal = None;
+        }
+    }
+
+    /// Install bounded host-I/O recording/replay without process authority.
+    pub fn set_host_io_with_journal(
+        &mut self,
+        provider: Arc<dyn HostIoProvider>,
+        journal: Arc<InMemoryHostEffectJournal>,
+    ) {
+        self.host_io = Some(provider);
+        self.host_io_recorder = None;
+        if self.process_spawn.is_none() {
+            self.host_effect_journal = Some(journal);
+        }
     }
 
     /// Install the separately admitted process provider and the execution-wide
@@ -2801,6 +2837,18 @@ impl LaneRouter {
     ) {
         self.quickjs.set_host_io(provider.clone(), recorder.clone());
         self.v8.set_host_io(provider, recorder);
+    }
+
+    /// Install the same bounded journal on both lanes so routing preserves
+    /// host-effect admission limits and replay order.
+    pub fn set_host_io_with_journal(
+        &mut self,
+        provider: Arc<dyn HostIoProvider>,
+        journal: Arc<InMemoryHostEffectJournal>,
+    ) {
+        self.quickjs
+            .set_host_io_with_journal(provider.clone(), journal.clone());
+        self.v8.set_host_io_with_journal(provider, journal);
     }
 
     /// Install the separately admitted process provider and shared journal on

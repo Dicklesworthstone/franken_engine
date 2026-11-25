@@ -156,6 +156,7 @@ use frankenengine_engine::time_travel_debugger::{
 use frankenengine_engine::ts_normalization::{
     SourceIngestionSummary, prepare_source_entry_for_public_entrypoints,
 };
+use frankenengine_extension_host::host_effect_journal::InMemoryHostEffectJournal;
 use frankenengine_extension_host::host_io::{
     DenyAllHostIo, HostIoCapability, HostIoError, HostIoExceptionProvenance, HostIoOutcome,
     HostIoProvider, HostIoRecorder, HostIoRequest, InMemoryHostIoTranscript,
@@ -7736,21 +7737,20 @@ fn execute_agent_sandbox(args: AgentSandboxArgs) -> Result<i32, String> {
         orchestrator.set_data_contract_ingress(ingress.clone());
     }
     // Host I/O stays deny-all unless the manifest declares a sandbox root
-    // (fail-closed default); the transcript recorder feeds the certificate's
-    // capability trace.
+    // (fail-closed default). The bounded journal reserves evidence capacity
+    // before each live crossing and projects the certificate's capability trace.
     if let Some(provider) = manifest
         .build_host_io_provider()
         .map_err(|error| format!("failed to configure agent-sandbox host I/O: {error}"))?
     {
-        orchestrator.set_host_io(
-            provider,
-            Some(Arc::new(InMemoryHostIoTranscript::recording())),
-        );
+        orchestrator
+            .set_host_io_with_journal(provider, Arc::new(InMemoryHostEffectJournal::recording()));
     } else {
         // Capture the engine-owned constant denial without changing the
         // no-provider filesystem exception label used by source lowering.
         let denied = Arc::new(ReportHostIo::recording_denials());
-        orchestrator.set_host_io(denied.clone(), Some(denied));
+        orchestrator
+            .set_host_io_with_journal(denied, Arc::new(InMemoryHostEffectJournal::recording()));
     }
 
     let result = match orchestrator.execute(&package) {

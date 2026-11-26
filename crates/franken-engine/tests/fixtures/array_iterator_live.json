@@ -71,7 +71,7 @@
   },
   {
     "name": "borrowed_string_values_iterate_utf16_units",
-    "source": "let it=Array.prototype.values.call('A\ud83d\ude00\\ud800');let out=[];for(let x of it)out.push(x.charCodeAt(0));out.join(',')",
+    "source": "let it=Array.prototype.values.call('A😀\\ud800');let out=[];for(let x of it)out.push(x.charCodeAt(0));out.join(',')",
     "expected": "65,55357,56832,55296"
   },
   {
@@ -168,5 +168,35 @@
     "name": "revoked_callable_proxy_creation_defers_failure",
     "source": "let r=Proxy.revocable(function(a){},{});r.revoke();let out=[];for(let name of ['keys','values','entries']){let it;try{it=Array.prototype[name].call(r.proxy);out.push('created')}catch(e){out.push('create:'+e.name)}if(it){try{it.next()}catch(e){out.push(e.name)}}}out.join('|')",
     "expected": "created|TypeError|created|TypeError|created|TypeError"
+  },
+  {
+    "name": "callable_length_symbol_hooks_preserve_own_inherited_and_proxy_receivers",
+    "source": "let out=[];for(let mode of ['own','inherited','proxy']){let log=[];function n(){}let holder=n;if(mode!=='own'){holder=Object.create(Function.prototype);Object.setPrototypeOf(n,holder);}let receiver=n;if(mode==='proxy')receiver=new Proxy(n,{get(t,k,r){if(k===Symbol.toPrimitive)log.push('trap');return Reflect.get(t,k,r);}});Object.defineProperty(holder,Symbol.toPrimitive,{get(){log.push('get:'+(this===receiver));return function(hint){log.push(hint+':'+(this===receiver));return 1;};}});let it=Array.prototype.values.call({0:7,length:receiver});out.push(it.next().value+':'+log.join(','));}out.join('|')",
+    "expected": "7:get:true,number:true|7:get:true,number:true|7:trap,get:true,number:true"
+  },
+  {
+    "name": "callable_length_uses_own_and_inherited_ordinary_accessors",
+    "source": "let log=[];function n(){}Object.defineProperty(n,'valueOf',{get(){log.push('getV:'+(this===n));return function(){log.push('callV:'+(this===n));return this;};}});let proto=Object.create(Function.prototype);Object.defineProperty(proto,'toString',{get(){log.push('getS:'+(this===n));return function(){log.push('callS:'+(this===n));return '1';};}});Object.setPrototypeOf(n,proto);let it=Array.prototype.values.call({0:7,length:n});[it.next().value,log.join(',')].join('|')",
+    "expected": "7|getV:true,callV:true,getS:true,callS:true"
+  },
+  {
+    "name": "callable_and_exotic_lengths_reject_invalid_conversion_hooks",
+    "source": "let out=[];for(let n of [function(){},Promise.resolve(),(function*(){})(),[].values()]){n[Symbol.toPrimitive]=1;n.valueOf=function(){return 1;};try{Array.prototype.values.call({0:7,length:n}).next();out.push('accepted');}catch(e){out.push(e.name);}}function n(){}n.valueOf=function(){return n;};n.toString=0;try{Array.prototype.values.call({0:7,length:n}).next();out.push('accepted');}catch(e){out.push(e.name);}out.join('|')",
+    "expected": "TypeError|TypeError|TypeError|TypeError|TypeError"
+  },
+  {
+    "name": "callable_conversion_preserves_default_and_nullish_fallbacks",
+    "source": "function plain(){}let out=[String(plain)===Function.prototype.toString.call(plain),String(Array.prototype.values)===Function.prototype.toString.call(Array.prototype.values),Number.isNaN(Number(plain))];for(let hook of [undefined,null]){function n(){}n[Symbol.toPrimitive]=hook;n.valueOf=function(){return 1;};out.push(Array.prototype.values.call({0:7,length:n}).next().value);}out.join('|')",
+    "expected": "true|true|true|7|7"
+  },
+  {
+    "name": "borrowed_date_conversion_does_not_read_symbol_hook",
+    "source": "let log=[];function n(){}Object.defineProperty(n,Symbol.toPrimitive,{get(){throw 'must not read';}});Object.defineProperty(n,'valueOf',{get(){log.push('valueOf');return function(){return 1;};}});Object.defineProperty(n,'toString',{get(){log.push('toString');return function(){return '2';};}});let primitive=Date.prototype[Symbol.toPrimitive];[primitive.call(n,'number'),primitive.call(n,'default'),primitive.call(n,'string'),log.join(',')].join('|')",
+    "expected": "1|2|2|valueOf,toString,toString"
+  },
+  {
+    "name": "bound_date_conversion_uses_ordinary_hooks_without_recursion",
+    "source": "let log=[];function n(){}n.valueOf=function(){log.push('v');return 1;};n.toString=function(){log.push('s');return '2';};let primitive=Date.prototype[Symbol.toPrimitive];n[Symbol.toPrimitive]=primitive.bind(n);let first=Array.prototype.values.call({0:7,length:n}).next().value;[first,primitive.call(n,'default'),String(n),log.join(',')].join('|')",
+    "expected": "7|2|2|v,s,s"
   }
 ]

@@ -10795,60 +10795,14 @@ impl InterpreterCore {
                     }
                     None => self.ordinary_to_primitive(module, object_id, &value, prefer_string)?,
                 }
-            } else if value.is_callable() {
-                // Functions have no @@toPrimitive, so OrdinaryToPrimitive
-                // reaches Function.prototype.toString unless the function
-                // has its own `toString`/`valueOf` (Object.prototype.valueOf
-                // returns the function itself and is skipped).
-                let names = if prefer_string {
-                    ["toString", "valueOf"]
-                } else {
-                    ["valueOf", "toString"]
-                };
-                let backing = match module {
-                    Some(module) => self.function_own_property_object(module, &value)?,
-                    None => None,
-                };
-                let mut primitive = None;
-                for name in names {
-                    let own = backing.and_then(|backing| {
-                        self.heap
-                            .get(backing.0 as usize)
-                            .and_then(|object| object.properties.get(name).cloned())
-                    });
-                    let Some(method) = own.filter(Value::is_callable) else {
-                        if name == "toString" {
-                            primitive =
-                                Some(Value::str(self.function_native_source_text(module, &value)));
-                            break;
-                        }
-                        continue;
-                    };
-                    let (result, label) = self.invoke_inline_method_call_with_argument_label(
-                        module,
-                        method,
-                        value.clone(),
-                        Vec::new(),
-                        None,
-                    )?;
-                    let label = self
-                        .pending_hostcall_result_label
-                        .as_ref()
-                        .unwrap_or(&Label::Public)
-                        .join(&label);
-                    self.replace_pending_hostcall_result_label(Some(label))?;
-                    self.observe_scoped_callback_result()?;
-                    if !result.is_object_like() {
-                        primitive = Some(result);
-                        break;
-                    }
-                }
-                primitive.ok_or_else(|| InterpreterError::TypeError {
-                    expected: "primitive conversion result".to_string(),
-                    got: "object from both conversion methods".to_string(),
-                })?
             } else if let Some(module) = module {
+                // Callable and exotic carriers share observable GetMethod
+                // and OrdinaryToPrimitive, including inherited accessors.
                 self.exotic_to_primitive(module, value, hint)?
+            } else if value.is_callable() {
+                // Internal callers without a program cannot run guest hooks.
+                // Preserve their existing native-function text fallback.
+                Value::str(self.function_native_source_text(None, &value))
             } else {
                 // No program to run a conversion method in: the builtinTag
                 // Object.prototype.toString would answer.
@@ -10859,12 +10813,9 @@ impl InterpreterCore {
         })
     }
 
-    /// ES2020 7.1.1 ToPrimitive of a promise, generator, async generator or
-    /// iterator value (no property storage of its own): @@toPrimitive, else
-    /// OrdinaryToPrimitive over `toString`/`valueOf`, each read like [[Get]]
-    /// (own properties, then Promise.prototype or Object.prototype), so
-    /// `String(promise)` is "[object Promise]" through
-    /// Object.prototype.toString. These values threw a TypeError.
+    /// ES2020 7.1.1 ToPrimitive for callable and exotic carriers. Both
+    /// GetMethod(@@toPrimitive) and the ordinary fallback preserve the
+    /// original receiver through own/inherited properties and accessors.
     pub(super) fn exotic_to_primitive(
         &mut self,
         module: &Ir3Module,
@@ -10873,6 +10824,13 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let to_primitive = RuntimePropertyKey::Symbol(WellKnownSymbol::ToPrimitive.id());
         let exotic = self.exotic_conversion_method(module, &value, &to_primitive)?;
+        self.observe_scoped_callback_result()?;
+        if !matches!(exotic, Value::Undefined | Value::Null) && !exotic.is_callable() {
+            return Err(InterpreterError::TypeError {
+                expected: "callable Symbol.toPrimitive or nullish".to_string(),
+                got: exotic.type_name().to_string(),
+            });
+        }
         if exotic.is_callable() {
             let result =
                 self.call_conversion_method(module, exotic, &value, vec![Value::str(hint)])?;
@@ -10884,7 +10842,19 @@ impl InterpreterCore {
             }
             return Ok(result);
         }
-        let names = if hint == "string" {
+        self.ordinary_value_to_primitive(module, &value, hint == "string")
+    }
+
+    /// OrdinaryToPrimitive for carriers without an ObjectId. This deliberately
+    /// does not read @@toPrimitive: Date's borrowed intrinsic must bypass it,
+    /// including when that intrinsic is reached through a bound function.
+    pub(super) fn ordinary_value_to_primitive(
+        &mut self,
+        module: &Ir3Module,
+        value: &Value,
+        prefer_string: bool,
+    ) -> Result<Value, InterpreterError> {
+        let names = if prefer_string {
             ["toString", "valueOf"]
         } else {
             ["valueOf", "toString"]
@@ -10892,13 +10862,14 @@ impl InterpreterCore {
         for name in names {
             let method = self.exotic_conversion_method(
                 module,
-                &value,
+                value,
                 &RuntimePropertyKey::String(JsString::from(name)),
             )?;
+            self.observe_scoped_callback_result()?;
             if !method.is_callable() {
                 continue;
             }
-            let result = self.call_conversion_method(module, method, &value, Vec::new())?;
+            let result = self.call_conversion_method(module, method, value, Vec::new())?;
             if !result.is_object_like() {
                 return Ok(result);
             }
@@ -14221,6 +14192,73 @@ mod array_iterator_receiver_tests {
                 core.estimated_memory_bytes(),
                 core.recompute_estimated_memory_bytes()
             );
+        }
+    }
+
+    #[test]
+    fn callable_conversion_preserves_getter_result_and_skipped_method_labels() {
+        for (source, classified_key) in [
+            (
+                "function n() {} n.count = 1; n[Symbol.toPrimitive] = function () { return this.count; }; n",
+                "count",
+            ),
+            (
+                "function n() {} n.hook = function () { return 1; }; Object.defineProperty(n, 'valueOf', { get: function () { return this.hook; } }); n",
+                "hook",
+            ),
+            (
+                "function n() {} n.valueOf = 7; n.toString = function () { return 1; }; n",
+                "valueOf",
+            ),
+        ] {
+            let module = lower(source);
+            for mut core in cores() {
+                let receiver = core.execute(&module).expect("source initializes").value;
+                let backing = core
+                    .own_property_holder(Some(&module), &receiver, false)
+                    .expect("callable property holder")
+                    .expect("callable owns conversion properties");
+                core.set_own_property_label(backing, classified_key, &Label::Secret)
+                    .expect("conversion property label fits");
+                core.clear_pending_hostcall_result_label();
+                assert_eq!(
+                    core.coerce_runtime_primitive(Some(&module), receiver, false)
+                        .expect("callable conversion"),
+                    Value::Int(1),
+                    "{source}"
+                );
+                assert_eq!(
+                    core.take_pending_hostcall_result_label(),
+                    Some(Label::Secret),
+                    "{source}"
+                );
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn callable_conversion_without_module_keeps_native_text_fallback() {
+        let module = lower(
+            "function n() {} n[Symbol.toPrimitive] = function () { throw 'must not run'; }; n",
+        );
+        for mut core in cores() {
+            let receiver = core.execute(&module).expect("source initializes").value;
+            for hint in ["number", "string", "default"] {
+                core.clear_pending_hostcall_result_label();
+                let result = core
+                    .coerce_runtime_primitive_with_hint(None, receiver.clone(), hint)
+                    .expect("module-free conversion retains its fallback");
+                assert!(matches!(result, Value::Str(_)), "{result:?}");
+                assert_eq!(core.take_pending_hostcall_result_label(), None);
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes()
+                );
+            }
         }
     }
 }

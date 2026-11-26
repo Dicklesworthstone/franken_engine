@@ -4745,11 +4745,7 @@ impl InterpreterCore {
                     Value::Object(object_id) => {
                         self.ordinary_to_primitive(Some(module), *object_id, &receiver, prefer_string)
                     }
-                    _ => self.coerce_runtime_primitive_with_hint(
-                        Some(module),
-                        receiver,
-                        if prefer_string { "string" } else { "number" },
-                    ),
+                    _ => self.ordinary_value_to_primitive(module, &receiver, prefer_string),
                 }
             }
             // String.prototype[@@iterator] (ES2020 21.1.3.29) iterates

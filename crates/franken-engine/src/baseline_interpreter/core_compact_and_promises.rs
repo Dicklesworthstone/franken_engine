@@ -14091,3 +14091,136 @@ mod require_search_expansion_budget_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod array_iterator_receiver_tests {
+    use super::*;
+    use crate::ast::ParseGoal;
+    use crate::ir_contract::Ir0Module;
+    use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+    use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
+
+    fn lower(source: &str) -> Ir3Module {
+        let tree = CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource {
+                    label: "array-iterator-labels.js".into(),
+                    text: source.into(),
+                },
+                ParseGoal::Script,
+                &ParserOptions::default(),
+            )
+            .expect("iterator label source parses");
+        lower_ir0_to_ir3(
+            &Ir0Module::from_syntax_tree(tree, "array-iterator-labels.js"),
+            &LoweringContext::new(
+                "array-iterator-trace",
+                "array-iterator-decision",
+                "array-iterator-policy",
+            ),
+        )
+        .expect("iterator label source lowers")
+        .ir3
+    }
+
+    fn cores() -> impl Iterator<Item = InterpreterCore> {
+        [
+            InterpreterConfig::quickjs_defaults(),
+            InterpreterConfig::v8_defaults(),
+        ]
+        .into_iter()
+        .map(|mut config| {
+            config.granted_capabilities = [
+                RuntimeCapability::VmDispatch,
+                RuntimeCapability::HeapAllocate,
+                RuntimeCapability::Builtin,
+            ]
+            .into_iter()
+            .collect();
+            InterpreterCore::new(config, "array-iterator-labels")
+        })
+    }
+
+    #[test]
+    fn callable_and_exotic_array_like_property_reads_preserve_labels() {
+        for source in [
+            "function source(a) {} source[0] = 7; source",
+            "const source = Promise.resolve(null); source.length = 1; source[0] = 7; source",
+        ] {
+            let module = lower(source);
+            for key in ["length", "0"] {
+                for mut core in cores() {
+                    let receiver = core.execute(&module).expect("source initializes").value;
+                    let backing = core
+                        .own_property_holder(Some(&module), &receiver, false)
+                        .expect("source property holder")
+                        .expect("source has backing properties");
+                    core.set_own_property_label(backing, key, &Label::Secret)
+                        .expect("property label fits");
+                    let iterator = core
+                        .array_prototype_iterator_for_receiver(receiver, "values")
+                        .expect("iterator creation");
+                    core.clear_pending_hostcall_result_label();
+                    assert_eq!(
+                        core.advance_for_of_iterator(Some(&module), iterator)
+                            .expect("iterator step"),
+                        Some(Value::Int(7)),
+                        "source: {source}, classified property: {key}"
+                    );
+                    assert_eq!(
+                        core.take_pending_hostcall_result_label(),
+                        Some(Label::Secret),
+                        "source: {source}, classified property: {key}"
+                    );
+                    assert_eq!(
+                        core.estimated_memory_bytes(),
+                        core.recompute_estimated_memory_bytes()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn array_like_length_conversion_preserves_callback_result_labels() {
+        let module = lower(
+            r#"({
+                length: { n: 1, valueOf: function () { return this.n; } },
+                0: 7
+            })"#,
+        );
+        for mut core in cores() {
+            let receiver = core.execute(&module).expect("source initializes").value;
+            let length = core
+                .iterator_protocol_value_property(
+                    Some(&module),
+                    receiver.clone(),
+                    &RuntimePropertyKey::String(JsString::from("length")),
+                )
+                .expect("length object");
+            let Value::Object(length) = length else {
+                panic!("length fixture must be an object");
+            };
+            core.set_own_property_label(length, "n", &Label::Secret)
+                .expect("conversion input label fits");
+            let iterator = core
+                .array_prototype_iterator_for_receiver(receiver, "values")
+                .expect("iterator creation");
+            core.clear_pending_hostcall_result_label();
+            assert_eq!(
+                core.advance_for_of_iterator(Some(&module), iterator)
+                    .expect("iterator step"),
+                Some(Value::Int(7))
+            );
+            assert_eq!(
+                core.take_pending_hostcall_result_label(),
+                Some(Label::Secret),
+                "length conversion's returned secret must taint the iterator step"
+            );
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+}

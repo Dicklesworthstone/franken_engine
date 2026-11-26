@@ -729,7 +729,13 @@ impl GcMarker {
                     trace_index: _,
                 } = state;
                 values.iter().for_each(|value| self.value(value));
-                if let Some(array) = array {
+                // Exhausted and closed native iterators never read their
+                // source again. Keeping the iterator alive must not retain the
+                // source graph after the iterator has reached that state.
+                if let Some(array) = array
+                    && !state.done
+                    && !state.closed
+                {
                     self.value(&array.receiver);
                 }
                 if let Some(collection) = collection {
@@ -2665,6 +2671,56 @@ mod tests {
         .into_iter()
         .collect();
         InterpreterCore::new(config, "gc-carriers")
+    }
+
+
+    #[test]
+    fn native_array_iterator_releases_source_only_after_exhaustion() {
+        for kind in ["values", "keys", "entries"] {
+            let mut core = carrier_core();
+            let payload = core.alloc_object_with_prototype(None).expect("payload");
+            let source = core
+                .alloc_array_from_values(&[Value::Object(payload)])
+                .expect("source array");
+            let iterator = core
+                .array_prototype_iterator_for_receiver(Value::Object(source), kind)
+                .expect("array iterator");
+            core.set_reg(0, iterator.clone());
+
+            core.collect_garbage();
+            assert!(core.heap.get(source.0 as usize).is_some(), "{kind}");
+            assert!(core.heap.get(payload.0 as usize).is_some(), "{kind}");
+            assert!(
+                core.advance_for_of_iterator(None, iterator.clone())
+                    .expect("first value")
+                    .is_some(),
+                "{kind}"
+            );
+
+            // Yielding the last element has not yet observed exhaustion.
+            core.collect_garbage();
+            assert!(core.heap.get(source.0 as usize).is_some(), "{kind}");
+            assert!(core.heap.get(payload.0 as usize).is_some(), "{kind}");
+            assert_eq!(
+                core.advance_for_of_iterator(None, iterator.clone()),
+                Ok(None),
+                "{kind}"
+            );
+
+            core.collect_garbage();
+            assert!(core.heap.is_reclaimed(source.0 as usize), "{kind}");
+            assert!(core.heap.is_reclaimed(payload.0 as usize), "{kind}");
+            assert_eq!(
+                core.advance_for_of_iterator(None, iterator),
+                Ok(None),
+                "exhausted {kind} must not revisit reclaimed storage"
+            );
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes(),
+                "{kind}"
+            );
+        }
     }
 
     #[test]

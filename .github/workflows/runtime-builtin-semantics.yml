@@ -133,6 +133,7 @@ jobs:
             crates/franken-engine/src/lowering_pipeline.rs \
             crates/franken-engine/tests/builtin_prototype_own_methods.rs \
             crates/franken-engine/tests/arguments_object_bd_9vouw_25.rs \
+            crates/franken-engine/tests/array_iterator_live.rs \
             crates/franken-engine/tests/builtin_brands_bd_9vouw_150.rs \
             crates/franken-engine/tests/script_global_declarations.rs \
             crates/franken-engine/tests/ir_contract_integration.rs \
@@ -180,6 +181,14 @@ jobs:
             --test array_callback_accessors_bd_9vouw_182 \
             --test array_iterator_live \
             -- --nocapture --test-threads=1
+
+      - name: Verify array iterator source reclamation and provenance
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --no-default-features -p frankenengine-engine --lib \
+            array_iterator_ -- --nocapture --test-threads=1
 
       - name: Verify array join work and allocation admission
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}

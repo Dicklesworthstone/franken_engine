@@ -2725,13 +2725,13 @@ enum PendingTimerTaskKind {
         /// registration. Delivery reuses this exact label on every interval tick.
         label: Label,
     },
-    /// A `require('timers/promises')` timer: fulfills `promise` with `value`
-    /// when it fires (no JS callback; the macrotask's `ClosureHandle` is an
-    /// unused sentinel, dispatched before the closure path exactly like
-    /// `pending_stream_emissions`).
+    /// A timer resolves its Promise with the exact guest value when it fires.
+    /// Resolution observes thenables at delivery, under the registration's
+    /// IFC context. The macrotask's ClosureHandle is an unused sentinel.
     PromiseResolve {
         promise: crate::promise_model::PromiseHandle,
-        value: crate::object_model::JsValue,
+        value: Value,
+        label: Label,
     },
 }
 
@@ -17805,9 +17805,9 @@ pub struct InterpreterCore {
     /// Deferred import() host jobs, keyed by the scheduler registration.
     /// Entries remain present during evaluation to root their owned handles.
     pending_dynamic_imports: BTreeMap<u64, Arc<PendingDynamicImportTask>>,
-    /// Arguments transferred out of the deferred I/O callback queue remain
-    /// owned by the invocation while guest code runs. Keep their charge in
-    /// the memory oracle while nested collections are enabled.
+    /// Arguments transferred out of deferred I/O callbacks and Promise timers
+    /// remain owned by their invocation while guest code runs. Keep their
+    /// charge in the memory oracle while nested collections are enabled.
     deferred_callback_in_flight_bytes: u64,
     /// Lifecycle process waits scheduled after the guest receives its
     /// `ChildProcess` facade. The provider `Spawn` crossing happens on the

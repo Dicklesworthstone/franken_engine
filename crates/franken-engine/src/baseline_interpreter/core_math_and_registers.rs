@@ -3574,8 +3574,11 @@ impl InterpreterCore {
                 .saturating_add(Self::estimate_value_bytes(callback))
                 .saturating_add(Self::estimate_value_vec_bytes(args))
                 .saturating_add(Self::estimate_label_bytes(label)),
-            PendingTimerTaskKind::PromiseResolve { value, .. } => MEMORY_ESTIMATE_MAP_ENTRY_BYTES
-                .saturating_add(crate::promise_model::estimate_js_value_memory_bytes(value)),
+            PendingTimerTaskKind::PromiseResolve { value, label, .. } => {
+                MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                    .saturating_add(Self::estimate_value_bytes(value))
+                    .saturating_add(Self::estimate_label_bytes(label))
+            }
         }
     }
 
@@ -3605,7 +3608,7 @@ impl InterpreterCore {
                 };
                 (handler_id, label.clone())
             }
-            PendingTimerTaskKind::PromiseResolve { .. } => (u32::MAX, Label::Public),
+            PendingTimerTaskKind::PromiseResolve { label, .. } => (u32::MAX, label.clone()),
         };
         let previous_promise_bytes = self.promise_runtime_memory_bytes();
         let closure_handle = crate::closure_model::ClosureHandle(handler_id);

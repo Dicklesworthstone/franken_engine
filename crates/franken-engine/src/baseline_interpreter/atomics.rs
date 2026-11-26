@@ -535,7 +535,8 @@ impl InterpreterCore {
                 timer_id,
                 kind: PendingTimerTaskKind::PromiseResolve {
                     promise,
-                    value: crate::object_model::JsValue::Str("timed-out".to_string()),
+                    value: Value::str("timed-out"),
+                    label: Label::Public,
                 },
             };
             self.active_timers.insert(

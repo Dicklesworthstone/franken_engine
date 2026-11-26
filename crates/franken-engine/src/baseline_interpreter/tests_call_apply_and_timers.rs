@@ -7519,6 +7519,246 @@ mod numeric_error_message_tests {
 
 #[cfg(test)]
 mod event_loop_timer_microtask_tests {
+
+    #[test]
+    fn timer_promises_dispatch_preserves_exact_values_and_input_labels() {
+        use crate::promise_model::{MacrotaskSource, PromiseHandle, PromiseState};
+
+        let values = [
+            Value::BigInt(std::sync::Arc::from(
+                "123456789012345678901234567890123456789",
+            )),
+            Value::Str(JsString::from_code_units(&[0xd800, 0x0061, 0xdc00])),
+        ];
+        for immediate in [false, true] {
+            for from_context in [false, true] {
+                for expected in &values {
+                    let mut core = test_core("timer-promise-exact-labels");
+                    core.config
+                        .granted_capabilities
+                        .extend([RuntimeCapability::Builtin, RuntimeCapability::Timer]);
+                    let (cap, args, value_register) = if immediate {
+                        (
+                            "builtin:TimersPromisesSetImmediate",
+                            RegRange { start: 0, count: 1 },
+                            0,
+                        )
+                    } else {
+                        core.write_reg(0, Value::Int(1)).unwrap();
+                        (
+                            "builtin:TimersPromisesSetTimeout",
+                            RegRange { start: 0, count: 2 },
+                            1,
+                        )
+                    };
+                    core.write_reg_with_label(
+                        value_register,
+                        expected.clone(),
+                        if from_context {
+                            Label::Public
+                        } else {
+                            Label::Secret
+                        },
+                    )
+                    .unwrap();
+                    if from_context {
+                        core.active_inline_callback_context_label = Some(Label::Secret);
+                    }
+                    let result = core.dispatch_builtin_hostcall(cap, args, None);
+                    // Delivery must use the saved registration label after the
+                    // scheduling callback's ambient context has disappeared.
+                    core.active_inline_callback_context_label = None;
+                    let Value::Promise(handle) = result.expect("schedule through real dispatch")
+                    else {
+                        panic!("timer promises dispatch must return a Promise");
+                    };
+                    let handle = PromiseHandle(handle);
+                    let (sequence, task) = core.pending_timer_tasks.iter().next().unwrap();
+                    let PendingTimerTaskKind::PromiseResolve {
+                        promise,
+                        value,
+                        label,
+                    } = &task.kind
+                    else {
+                        panic!("timer promises dispatch must retain a resolution task");
+                    };
+                    assert_eq!(*promise, handle);
+                    assert_eq!(value, expected);
+                    assert_eq!(label, &Label::Secret);
+                    let scheduled = core.event_loop.macrotasks.iter_pending().next().unwrap();
+                    assert_eq!(scheduled.registration_seq, *sequence);
+                    assert_eq!(scheduled.label, Label::Secret);
+                    assert_eq!(
+                        scheduled.source,
+                        if immediate {
+                            MacrotaskSource::Immediate
+                        } else {
+                            MacrotaskSource::Timer
+                        }
+                    );
+                    assert!(core.promise_value_carriers.is_empty());
+                    assert_eq!(
+                        core.estimated_memory_bytes(),
+                        core.recompute_estimated_memory_bytes()
+                    );
+
+                    // These primitive payloads need no guest module to resolve.
+                    core.run_event_loop_until_idle_with_module(None).unwrap();
+                    let record = core.promise_store.get(handle).unwrap();
+                    assert_eq!(record.label, Label::Secret);
+                    let PromiseState::Fulfilled(value) = &record.state else {
+                        panic!("timer must fulfill with the original primitive");
+                    };
+                    assert_eq!(core.js_value_to_value(value), expected.clone());
+                    assert_eq!(core.promise_value_carriers.len(), 1);
+                    assert!(core.pending_timer_tasks.is_empty());
+                    assert!(core.active_timers.is_empty());
+                    assert!(core.unref_timer_ids.is_empty());
+                    assert!(!core.event_loop.has_pending_work());
+                    assert_eq!(core.deferred_callback_in_flight_bytes, 0);
+                    assert_eq!(core.promise_in_flight_task_bytes, 0);
+                    assert_eq!(
+                        core.estimated_memory_bytes(),
+                        core.recompute_estimated_memory_bytes()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn timer_promises_memory_refusal_rolls_back_registration_and_can_retry() {
+        let value = Value::BigInt(std::sync::Arc::from(
+            "123456789012345678901234567890123456789",
+        ));
+        let label = Label::Custom {
+            name: "timer-registration-label".repeat(8),
+            level: 4,
+        };
+        for immediate in [false, true] {
+            let mut probe = test_core("timer-promise-registration-budget");
+            let probe_baseline = probe.estimated_memory_bytes();
+            let event_loop_baseline = probe.event_loop.estimated_memory_bytes();
+            let expected_promise = probe
+                .timers_promises_schedule_from_values(
+                    Some(Value::Int(1)),
+                    value.clone(),
+                    immediate,
+                    label.clone(),
+                )
+                .unwrap();
+            let registration_bytes = probe.estimated_memory_bytes() - probe_baseline;
+            let queued_bytes = probe.event_loop.estimated_memory_bytes() - event_loop_baseline;
+            assert!(queued_bytes > 0);
+            assert!(registration_bytes > queued_bytes);
+            assert_eq!(
+                probe.estimated_memory_bytes(),
+                probe.recompute_estimated_memory_bytes()
+            );
+            let expected_sequence = *probe.pending_timer_tasks.keys().next().unwrap();
+
+            // Refuse the retained payload first, then refuse the macrotask
+            // queue entry after the payload charge has already succeeded.
+            for available in [
+                registration_bytes - queued_bytes - 1,
+                registration_bytes - 1,
+            ] {
+                let mut core = test_core("timer-promise-registration-budget");
+                let baseline = core.estimated_memory_bytes();
+                let next_timer = core.next_timer_id;
+                let promise_slots = core.promise_store.slot_count();
+                core.config.max_total_memory_bytes = baseline + available;
+                assert!(matches!(
+                    core.timers_promises_schedule_from_values(
+                        Some(Value::Int(1)),
+                        value.clone(),
+                        immediate,
+                        label.clone(),
+                    ),
+                    Err(InterpreterError::MemoryBudgetExceeded { .. })
+                ));
+                assert_eq!(core.next_timer_id, next_timer);
+                assert_eq!(core.promise_store.slot_count(), promise_slots);
+                assert!(core.pending_timer_tasks.is_empty());
+                assert!(core.active_timers.is_empty());
+                assert!(core.unref_timer_ids.is_empty());
+                assert!(core.promise_value_carriers.is_empty());
+                assert!(!core.event_loop.has_pending_work());
+                assert_eq!(core.deferred_callback_in_flight_bytes, 0);
+                assert_eq!(core.estimated_memory_bytes(), baseline);
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes()
+                );
+
+                core.config.max_total_memory_bytes = baseline + registration_bytes;
+                assert_eq!(
+                    core.timers_promises_schedule_from_values(
+                        Some(Value::Int(1)),
+                        value.clone(),
+                        immediate,
+                        label.clone(),
+                    )
+                    .expect("retry at the exact scheduling budget"),
+                    expected_promise
+                );
+                let (sequence, task) = core.pending_timer_tasks.iter().next().unwrap();
+                assert_eq!(*sequence, expected_sequence);
+                assert_eq!(task.timer_id, next_timer);
+                assert_eq!(core.estimated_memory_bytes(), baseline + registration_bytes);
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn timer_promises_resolution_memory_error_releases_in_flight_state() {
+        use crate::promise_model::{PromiseHandle, PromiseState};
+
+        for immediate in [false, true] {
+            let mut core = test_core("timer-promise-resolution-budget");
+            let Value::Promise(handle) = core
+                .timers_promises_schedule_from_values(
+                    Some(Value::Int(1)),
+                    Value::BigInt(std::sync::Arc::from(
+                        "123456789012345678901234567890123456789",
+                    )),
+                    immediate,
+                    Label::Secret,
+                )
+                .unwrap()
+            else {
+                panic!("timer promises scheduling must return a Promise");
+            };
+            let carrier_id = core.next_promise_value_carrier;
+            // Delivery still owns the task charge when the lossless carrier
+            // is allocated, so a zero-headroom limit must refuse that carrier.
+            core.config.max_total_memory_bytes = core.estimated_memory_bytes();
+            assert!(matches!(
+                core.run_event_loop_until_idle_with_module(None),
+                Err(InterpreterError::MemoryBudgetExceeded { .. })
+            ));
+            assert!(matches!(
+                core.promise_store.get(PromiseHandle(handle)).unwrap().state,
+                PromiseState::Pending
+            ));
+            assert_eq!(core.next_promise_value_carrier, carrier_id);
+            assert!(core.promise_value_carriers.is_empty());
+            assert!(core.pending_timer_tasks.is_empty());
+            assert!(core.active_timers.is_empty());
+            assert!(core.unref_timer_ids.is_empty());
+            assert!(!core.event_loop.has_pending_work());
+            assert_eq!(core.deferred_callback_in_flight_bytes, 0);
+            assert_eq!(core.promise_in_flight_task_bytes, 0);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
     // Real coverage for two behaviors previously stubbed inside the
     // feature-gated (broken) `tests` module below: timer firing order is
     // controlled by virtual-clock delay (not registration order), and the

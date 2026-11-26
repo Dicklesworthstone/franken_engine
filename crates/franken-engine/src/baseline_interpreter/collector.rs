@@ -2488,7 +2488,7 @@ impl InterpreterCore {
                 }
                 PendingTimerTaskKind::PromiseResolve { promise, value, .. } => {
                     m.promise(promise.0);
-                    m.js_value(value);
+                    m.value(value);
                 }
             }
         }

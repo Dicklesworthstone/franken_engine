@@ -16786,7 +16786,8 @@ impl InterpreterCore {
                 } else {
                     Value::Undefined
                 };
-                self.timers_promises_schedule_from_values(delay_val, &value, false)
+                let label = self.join_arg_range_label(args)?;
+                self.timers_promises_schedule_from_values(delay_val, value, false, label)
             }
 
             "builtin:TimersPromisesSetImmediate" => {
@@ -16796,7 +16797,8 @@ impl InterpreterCore {
                 } else {
                     Value::Undefined
                 };
-                self.timers_promises_schedule_from_values(None, &value, true)
+                let label = self.join_arg_range_label(args)?;
+                self.timers_promises_schedule_from_values(None, value, true, label)
             }
 
             "builtin:TimersPromisesSetInterval" => {

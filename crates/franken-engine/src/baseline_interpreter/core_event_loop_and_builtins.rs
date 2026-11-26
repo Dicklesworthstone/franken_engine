@@ -2124,11 +2124,30 @@ impl InterpreterCore {
                 }
                 result
             }
-            PendingTimerTaskKind::PromiseResolve { promise, value } => {
+            PendingTimerTaskKind::PromiseResolve {
+                promise,
+                value,
+                label,
+            } => {
                 self.active_timers.remove(&task.timer_id);
                 self.unref_timer_ids.remove(&task.timer_id);
-                let result =
-                    self.fulfill_promise(promise, value, crate::ifc_artifacts::Label::Public);
+                // The task has left its queue. Keep its memory charge and both
+                // handles alive across observable then/constructor/species
+                // getters, including collections in more than one getter.
+                self.deferred_callback_in_flight_bytes = self
+                    .deferred_callback_in_flight_bytes
+                    .saturating_add(retained_bytes);
+                let target = Value::Promise(promise.0);
+                let gc_arm = if self.gc_in_event_loop_phase() {
+                    self.gc_arm_nested(&[GcPin::Value(&target), GcPin::Value(&value)])
+                } else {
+                    None
+                };
+                let result = self.resolve_promise_with_value(module, promise, value, label);
+                self.gc_disarm_nested(gc_arm);
+                self.deferred_callback_in_flight_bytes = self
+                    .deferred_callback_in_flight_bytes
+                    .saturating_sub(retained_bytes);
                 self.estimated_memory_bytes =
                     self.estimated_memory_bytes.saturating_sub(retained_bytes);
                 result
@@ -2539,8 +2558,9 @@ impl InterpreterCore {
     pub(super) fn timers_promises_schedule_from_values(
         &mut self,
         delay: Option<Value>,
-        value: &Value,
+        value: Value,
         immediate: bool,
+        label: Label,
     ) -> Result<Value, InterpreterError> {
         let delay_ms = if immediate {
             0
@@ -2556,7 +2576,8 @@ impl InterpreterCore {
             timer_id,
             kind: PendingTimerTaskKind::PromiseResolve {
                 promise,
-                value: Self::value_to_js_value(value),
+                value,
+                label,
             },
         };
         self.active_timers.insert(

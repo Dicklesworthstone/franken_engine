@@ -8,6 +8,16 @@ use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3}
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 
 fn execute(source: &str, goal: ParseGoal, allow_timer: bool) -> Result<String, String> {
+    execute_with_options(source, goal, allow_timer, false, false)
+}
+
+fn execute_with_options(
+    source: &str,
+    goal: ParseGoal,
+    allow_timer: bool,
+    throughput: bool,
+    stress_gc: bool,
+) -> Result<String, String> {
     let tree = CanonicalEs2020Parser
         .parse_with_options(
             ParserSource {
@@ -24,7 +34,11 @@ fn execute(source: &str, goal: ParseGoal, allow_timer: bool) -> Result<String, S
     )
     .map_err(|error| format!("lower: {error:?}"))?
     .ir3;
-    let mut config = InterpreterConfig::quickjs_defaults();
+    let mut config = if throughput {
+        InterpreterConfig::v8_defaults()
+    } else {
+        InterpreterConfig::quickjs_defaults()
+    };
     config.granted_capabilities = [
         RuntimeCapability::VmDispatch,
         RuntimeCapability::HeapAllocate,
@@ -37,6 +51,7 @@ fn execute(source: &str, goal: ParseGoal, allow_timer: bool) -> Result<String, S
         config.granted_capabilities.insert(RuntimeCapability::Timer);
     }
     let mut core = InterpreterCore::new(config, "timers-module");
+    core.set_gc_stress_interval(stress_gc.then_some(1));
     let result = core.execute(&module);
     assert_eq!(
         core.estimated_memory_bytes(),
@@ -321,4 +336,194 @@ console.log(typeof timers.promises.scheduler.wait,
             "{source}: {error}"
         );
     }
+}
+
+fn check_promise_resolution(source: &str, expected: &str) {
+    for throughput in [false, true] {
+        for stress_gc in [false, true] {
+            assert_eq!(
+                execute_with_options(source, ParseGoal::Script, true, throughput, stress_gc)
+                    .as_deref(),
+                Ok(expected),
+                "throughput={throughput}, stress_gc={stress_gc}"
+            );
+        }
+    }
+}
+
+#[test]
+fn promise_timers_preserve_exact_primitive_and_callable_values() {
+    check_promise_resolution(
+        r#"
+(async () => {
+  const { setTimeout: sleep, setImmediate: immediate } = require('timers/promises');
+  const closure = function marker() { return 17; };
+  const payload = { answer: 42 };
+  const values = [
+    123456789012345678901234567890n, '\ud800x\udfff',
+    closure, closure.bind(payload), Math.abs,
+    (function* () { yield payload; })(),
+    (async function* () { yield payload; })(),
+    [payload].values(), 'x'[Symbol.iterator](),
+    payload, Symbol('timer'), undefined, null, NaN, -0
+  ];
+  for (const schedule of [value => sleep(1, value), value => immediate(value)]) {
+    let exact = 0;
+    for (const value of values) {
+      if (Object.is(await schedule(value), value)) exact++;
+    }
+    console.log(exact, values.length);
+  }
+})()
+"#,
+        "15 15\n15 15",
+    );
+}
+
+#[test]
+fn promise_timers_observe_then_at_delivery_and_settle_once() {
+    check_promise_resolution(
+        r#"
+(async () => {
+  const { setTimeout: sleep, setImmediate: immediate } = require('timers/promises');
+  for (const schedule of [value => sleep(1, value), value => immediate(value)]) {
+    const trace = [];
+    const payload = function () { return 'ready'; };
+    let reads = 0;
+    const value = Object.defineProperty({}, 'then', {
+      get() {
+        reads++;
+        trace.push('get');
+        return function (resolve, reject) {
+          trace.push(this === value ? 'receiver' : 'wrong-receiver');
+          resolve(payload);
+          reject('ignored rejection');
+          resolve('ignored resolution');
+          throw 'ignored throw';
+        };
+      }
+    });
+    const pending = schedule(value);
+    trace.push('scheduled');
+    Promise.resolve().then(() => trace.push('micro'));
+    console.log(reads);
+    const result = await pending;
+    console.log(trace.join(','), reads, result === payload, result());
+  }
+})()
+"#,
+        "0\nscheduled,micro,get,receiver 1 true ready\n0\nscheduled,micro,get,receiver 1 true ready",
+    );
+}
+
+#[test]
+fn promise_timers_adopt_promises_and_preserve_abrupt_resolution() {
+    check_promise_resolution(
+        r#"
+(async () => {
+  const { setTimeout: sleep, setImmediate: immediate } = require('timers/promises');
+  for (const schedule of [value => sleep(1, value), value => immediate(value)]) {
+    const payload = function () { return 42; };
+    console.log('fulfilled', (await schedule(Promise.resolve(payload))) === payload);
+    let settle;
+    const input = new Promise(resolve => { settle = resolve; });
+    const output = schedule(input);
+    setTimeout(() => settle(payload), 2);
+    console.log('pending', (await output) === payload);
+
+    const reason = function rejected() {};
+    const rejected = Promise.reject(reason);
+    rejected.catch(() => {});
+    try { await schedule(rejected); } catch (error) {
+      console.log('rejected', error === reason);
+    }
+    const getterFailure = Object.defineProperty({}, 'then', {
+      get() { throw reason; }
+    });
+    try { await schedule(getterFailure); } catch (error) {
+      console.log('getter', error === reason);
+    }
+    try { await schedule({ then() { throw reason; } }); } catch (error) {
+      console.log('method', error === reason);
+    }
+    const plain = { then: 7 };
+    console.log('noncallable', (await schedule(plain)) === plain);
+    const overridden = Promise.resolve('original');
+    overridden.then = function (resolve) {
+      console.log('override receiver', this === overridden);
+      resolve(payload);
+    };
+    console.log('override', (await schedule(overridden)) === payload);
+    let cyclic;
+    cyclic = schedule({ then(resolve) { resolve(cyclic); } });
+    try { await cyclic; } catch (error) {
+      console.log('cycle', error instanceof TypeError);
+    }
+  }
+})()
+"#,
+        "fulfilled true\npending true\nrejected true\ngetter true\nmethod true\nnoncallable true\noverride receiver true\noverride true\ncycle true\nfulfilled true\npending true\nrejected true\ngetter true\nmethod true\nnoncallable true\noverride receiver true\noverride true\ncycle true",
+    );
+}
+
+#[test]
+fn promise_timers_keep_queued_values_alive_through_observable_getters() {
+    check_promise_resolution(
+        r#"
+(async () => {
+  const { setTimeout: sleep, setImmediate: immediate } = require('timers/promises');
+  for (const schedule of [value => sleep(1, value), value => immediate(value)]) {
+    const trace = [];
+    function churn() {
+      const garbage = [];
+      for (let i = 0; i < 24; i++) garbage.push({ index: i, nested: [i] });
+      return garbage.length;
+    }
+    function enqueueCallable() {
+      const callable = function () { return 'live callable'; };
+      callable.payload = { answer: 42 };
+      Object.defineProperty(callable, 'then', {
+        get() {
+          churn();
+          trace.push('callable ' + this.payload.answer);
+          return undefined;
+        }
+      });
+      return schedule(callable);
+    }
+    const callable = await enqueueCallable();
+    console.log(callable(), callable.payload.answer, trace.join(','));
+    trace.length = 0;
+    function enqueuePromise() {
+      const payload = function () { return 'live promise'; };
+      const input = Promise.resolve(payload);
+      Object.defineProperty(input, 'then', {
+        get() {
+          churn();
+          trace.push('then');
+          return Promise.prototype.then;
+        }
+      });
+      Object.defineProperty(input, 'constructor', {
+        get() {
+          churn();
+          trace.push('constructor');
+          return {
+            get [Symbol.species]() {
+              churn();
+              trace.push('species');
+              return Promise;
+            }
+          };
+        }
+      });
+      return schedule(input);
+    }
+    const payload = await enqueuePromise();
+    console.log(payload(), trace.join(','));
+  }
+})()
+"#,
+        "live callable 42 callable 42\nlive promise then,constructor,species\nlive callable 42 callable 42\nlive promise then,constructor,species",
+    );
 }

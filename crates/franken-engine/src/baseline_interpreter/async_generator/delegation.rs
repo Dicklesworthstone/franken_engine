@@ -660,7 +660,10 @@ mod tests {
                 };
                 assert_eq!(core.js_value_to_value(reason), marker);
                 assert_eq!(record.label, Label::Secret);
-                assert_eq!(core.async_generators[0].phase, AsyncGeneratorPhase::Completed);
+                assert_eq!(
+                    core.async_generators[0].phase,
+                    AsyncGeneratorPhase::Completed
+                );
                 assert!(core.async_generators[0].requests.is_empty());
                 assert!(core.async_generator_runtime.continuations.is_empty());
                 assert_accounting(&core);

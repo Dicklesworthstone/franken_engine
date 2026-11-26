@@ -14474,9 +14474,12 @@ fn native_combinator_input_rejection_preserves_carrier_label_and_memory() {
         core.replace_pending_abrupt_slots(Some((marker.clone(), Label::Secret)), None)
             .expect("original iterator exception");
         let value = core
-            .reject_promise_combinator_input(InterpreterError::UncaughtException {
-                value: "diagnostic text is not the thrown value".to_string(),
-            })
+            .reject_promise_combinator_input(
+                InterpreterError::UncaughtException {
+                    value: "diagnostic text is not the thrown value".to_string(),
+                },
+                Label::Public,
+            )
             .expect("reject with the original value");
         let Value::Promise(handle) = value else {
             panic!("native combinator must return a Promise");
@@ -14515,14 +14518,14 @@ fn native_combinator_rejection_budget_failure_leaves_no_pending_promise() {
     let mut probe = fixture();
     let before = probe.estimated_memory_bytes();
     probe
-        .reject_promise_combinator_input(error.clone())
+        .reject_promise_combinator_input(error.clone(), Label::Public)
         .expect("unlimited rejection");
     assert!(probe.estimated_memory_bytes() > before);
 
     let mut limited = fixture();
     limited.config.max_total_memory_bytes = probe.estimated_memory_bytes() - 1;
     assert!(matches!(
-        limited.reject_promise_combinator_input(error),
+        limited.reject_promise_combinator_input(error, Label::Public),
         Err(InterpreterError::MemoryBudgetExceeded { .. })
     ));
     assert_eq!(limited.promise_store.len(), 0);
@@ -14535,11 +14538,228 @@ fn native_combinator_rejection_budget_failure_leaves_no_pending_promise() {
     let mut fatal = fixture();
     let before = fatal.estimated_memory_bytes();
     assert_eq!(
-        fatal.reject_promise_combinator_input(InterpreterError::Cancelled),
+        fatal.reject_promise_combinator_input(InterpreterError::Cancelled, Label::Public),
         Err(InterpreterError::Cancelled)
     );
     assert_eq!(fatal.promise_store.len(), 0);
     assert!(fatal.promise_value_carriers.is_empty());
     assert!(fatal.pending_exception.is_some());
     assert_eq!(fatal.estimated_memory_bytes(), before);
+}
+
+#[test]
+fn native_combinator_type_errors_preserve_iterator_observation_and_input_labels() {
+    let module = test_module_with_functions(Vec::new(), Vec::new());
+    let args = RegRange { start: 0, count: 1 };
+    for capability in [
+        "promise:all",
+        "promise:allSettled",
+        "promise:race",
+        "promise:any",
+    ] {
+        for provenance in ["property", "argument", "context"] {
+            for throughput in [false, true] {
+                let mut config = if throughput {
+                    InterpreterConfig::v8_defaults()
+                } else {
+                    InterpreterConfig::quickjs_defaults()
+                };
+                config.granted_capabilities.extend([
+                    RuntimeCapability::VmDispatch,
+                    RuntimeCapability::HeapAllocate,
+                    RuntimeCapability::Builtin,
+                ]);
+                let mut core = InterpreterCore::new(config, "native-combinator-provenance");
+                let iterable = core.alloc_object_with_prototype(None).unwrap();
+                let key = RuntimePropertyKey::Symbol(WellKnownSymbol::Iterator.id());
+                core.set_object_runtime_property(iterable, key.clone(), Value::Int(0))
+                    .unwrap();
+                if provenance == "property" {
+                    core.set_own_runtime_property_label(iterable, &key, &Label::Secret)
+                        .unwrap();
+                }
+                core.write_reg_with_label(
+                    0,
+                    Value::Object(iterable),
+                    if provenance == "argument" {
+                        Label::Secret
+                    } else {
+                        Label::Public
+                    },
+                )
+                .unwrap();
+                if provenance == "context" {
+                    core.active_inline_callback_context_label = Some(Label::Secret);
+                }
+                // A stored property label is absent from the input graph's
+                // mutation-label floor. That case must be discovered by Get.
+                assert_eq!(
+                    core.join_arg_range_with_object_mutation_label(args)
+                        .unwrap(),
+                    if provenance == "property" {
+                        Label::Public
+                    } else {
+                        Label::Secret
+                    }
+                );
+                let Value::Promise(handle) = core
+                    .dispatch_promise_hostcall(capability, args, Some(&module))
+                    .expect("noncallable iterator rejects through native dispatch")
+                else {
+                    panic!("native combinator must return a Promise");
+                };
+                let record = core
+                    .promise_store
+                    .get(crate::promise_model::PromiseHandle(handle))
+                    .unwrap();
+                let crate::promise_model::PromiseState::Rejected(reason) = &record.state else {
+                    panic!("noncallable Symbol.iterator must reject");
+                };
+                let Value::Object(error) = core.js_value_to_value(reason) else {
+                    panic!("native TypeError must materialize as an object");
+                };
+                assert_eq!(
+                    core.chain_data_property(error, "name"),
+                    Some(&Value::str("TypeError"))
+                );
+                assert_eq!(
+                    record.label,
+                    Label::Secret,
+                    "{capability}, {provenance}, throughput={throughput}"
+                );
+                assert_eq!(
+                    core.get_register_label(0).unwrap(),
+                    if provenance == "argument" {
+                        &Label::Secret
+                    } else {
+                        &Label::Public
+                    }
+                );
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn native_combinator_rejection_joins_input_context_observation_and_throw() {
+    for guest_throw in [false, true] {
+        for winner in 0..if guest_throw { 4 } else { 3 } {
+            let labels: [Label; 4] = std::array::from_fn(|index| Label::Custom {
+                name: format!("combinator provenance {index}"),
+                level: if index == winner { 8 } else { 2 },
+            });
+            let mut core = test_interpreter();
+            core.active_inline_callback_context_label = Some(labels[1].clone());
+            core.pending_hostcall_result_label = Some(labels[2].clone());
+            core.sync_estimated_memory_bytes().unwrap();
+            let marker = Value::BigInt(Arc::from("12345678901234567890"));
+            let error = if guest_throw {
+                core.replace_pending_abrupt_slots(Some((marker.clone(), labels[3].clone())), None)
+                    .unwrap();
+                InterpreterError::UncaughtException {
+                    value: "iterator throw".to_string(),
+                }
+            } else {
+                InterpreterError::TypeError {
+                    expected: "callable iterator method".to_string(),
+                    got: "number".to_string(),
+                }
+            };
+            let Value::Promise(handle) = core
+                .reject_promise_combinator_input(error, labels[0].clone())
+                .unwrap()
+            else {
+                panic!("input failure must return a Promise");
+            };
+            let record = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(handle))
+                .unwrap();
+            assert_eq!(
+                record.label, labels[winner],
+                "guest_throw={guest_throw}, winner={winner}"
+            );
+            if guest_throw {
+                let crate::promise_model::PromiseState::Rejected(reason) = &record.state else {
+                    panic!("guest throw must reject");
+                };
+                assert_eq!(core.js_value_to_value(reason), marker);
+            }
+            assert_eq!(
+                core.active_inline_callback_context_label,
+                Some(labels[1].clone())
+            );
+            assert_eq!(core.pending_hostcall_result_label, Some(labels[2].clone()));
+            assert!(core.pending_exception.is_none());
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+}
+
+#[test]
+fn native_combinator_error_allocation_refusal_preserves_provenance() {
+    let mut core = test_interpreter();
+    core.active_inline_callback_context_label = Some(Label::Internal);
+    core.pending_hostcall_result_label = Some(Label::Secret);
+    core.config.max_total_memory_bytes = core.sync_estimated_memory_bytes().unwrap();
+    assert!(matches!(
+        core.reject_promise_combinator_input(
+            InterpreterError::TypeError {
+                expected: "callable iterator method".to_string(),
+                got: "number".to_string(),
+            },
+            Label::Public,
+        ),
+        Err(InterpreterError::MemoryBudgetExceeded { .. })
+    ));
+    assert_eq!(
+        core.active_inline_callback_context_label,
+        Some(Label::Internal)
+    );
+    assert_eq!(core.pending_hostcall_result_label, Some(Label::Secret));
+    assert!(core.pending_exception.is_none());
+    assert!(core.promise_store.is_empty());
+    assert!(core.event_loop.microtasks.is_empty());
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
+
+    // Classification precedes even label-clone admission: neither a fatal
+    // refusal nor an unbacked diagnostic throw becomes a guest rejection.
+    for error in [
+        InterpreterError::Cancelled,
+        InterpreterError::UncaughtException {
+            value: "missing exception slot".to_string(),
+        },
+    ] {
+        let mut core = test_interpreter();
+        let observed = Label::Custom {
+            name: "retained observation".repeat(16),
+            level: 8,
+        };
+        core.pending_hostcall_result_label = Some(observed.clone());
+        let before = core.sync_estimated_memory_bytes().unwrap();
+        core.config.max_total_memory_bytes = before;
+        assert_eq!(
+            core.reject_promise_combinator_input(error.clone(), Label::Public),
+            Err(error)
+        );
+        assert_eq!(core.pending_hostcall_result_label, Some(observed));
+        assert!(core.pending_exception.is_none());
+        assert!(core.promise_store.is_empty());
+        assert!(core.promise_value_carriers.is_empty());
+        assert_eq!(core.estimated_memory_bytes(), before);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
 }

@@ -11330,16 +11330,34 @@ impl InterpreterCore {
     pub(super) fn reject_promise_combinator_input(
         &mut self,
         error: InterpreterError,
+        mut label: Label,
     ) -> Result<Value, InterpreterError> {
-        let (thrown, label) = if matches!(error, InterpreterError::UncaughtException { .. }) {
+        let guest_throw = matches!(error, InterpreterError::UncaughtException { .. });
+        if (!guest_throw && Self::js_catchable_error_name(&error).is_none())
+            || (guest_throw && self.pending_exception.is_none())
+        {
+            return Err(error);
+        }
+        // Preserve the dispatcher's input floor and every observation made
+        // while acquiring/advancing the iterator. Native TypeErrors carry no
+        // pending throw slot, but their rejection still depends on those reads.
+        // Join borrowed provenance before consuming a guest throw or allocating
+        // its Error object, so an admission refusal leaves the source slots live.
+        if let Some(context) = self.active_execution_context_label() {
+            label = self.join_owned_label_with_temporary_budget(label, context)?;
+        }
+        if let Some(observed) = self.pending_hostcall_result_label.as_ref() {
+            label = self.join_owned_label_with_temporary_budget(label, observed)?;
+        }
+        let thrown = if guest_throw {
+            label =
+                self.join_owned_label_with_temporary_budget(label, &self.pending_exception_label)?;
             match self.take_pending_exception_slot() {
-                Some(slot) => slot,
+                Some((thrown, _)) => thrown,
                 None => return Err(error),
             }
-        } else if Self::js_catchable_error_name(&error).is_some() {
-            (self.native_error_to_thrown_value(&error)?, Label::Public)
         } else {
-            return Err(error);
+            self.native_error_to_thrown_value(&error)?
         };
         let reason = self.promise_value(&thrown)?;
         let promise = self.create_rejected_promise(reason, label)?;
@@ -12243,7 +12261,7 @@ impl InterpreterCore {
         );
         let mut inputs = match self.collect_promise_combinator_inputs(module, args) {
             Ok(inputs) => inputs,
-            Err(error) => return self.reject_promise_combinator_input(error),
+            Err(error) => return self.reject_promise_combinator_input(error, label),
         };
         // Each element goes through PromiseResolve (ES2020 25.6.4.1.1 step
         // 8.i, Promise.resolve): a thenable becomes a promise that adopts it

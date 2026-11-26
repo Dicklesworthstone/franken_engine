@@ -897,10 +897,7 @@ fn error_to_string_observes_name_conversion_before_message_for_all_carriers() {
             console.log(Error.prototype.toString.call(receiver) + "|" + trace.join(","));
         }
         "#,
-        &[
-            "Custom: changed|get:name:true,name:true:string,get:message:true,message:true";
-            9
-        ],
+        &["Custom: changed|get:name:true,name:true:string,get:message:true,message:true"; 9],
     );
 }
 
@@ -1076,7 +1073,9 @@ fn error_to_string_retains_property_labels_through_public_receiver_aliases() {
                         },
                         Ir3Instruction::Return { value: 7 },
                     ];
-                    let result = core.execute(&module).expect("labeled error string executes");
+                    let result = core
+                        .execute(&module)
+                        .expect("labeled error string executes");
                     let expected = if property == "name" {
                         "Classified: text"
                     } else {

@@ -877,7 +877,11 @@ fn sync_delegate_next_rejections_preserve_runtime_value_identity() {
 #[test]
 fn sync_delegate_protocol_abrupt_completions_preserve_thrown_identity() {
     for (setup, resume, first) in [
-        ("source.next = function () { throw marker; };", "next", false),
+        (
+            "source.next = function () { throw marker; };",
+            "next",
+            false,
+        ),
         (
             "source.next = function () { return { get done() { throw marker; } }; };",
             "next",
@@ -893,8 +897,16 @@ fn sync_delegate_protocol_abrupt_completions_preserve_thrown_identity() {
             "next",
             false,
         ),
-        ("source.throw = function () { throw marker; };", "throw", true),
-        ("source.return = function () { throw marker; };", "return", true),
+        (
+            "source.throw = function () { throw marker; };",
+            "throw",
+            true,
+        ),
+        (
+            "source.return = function () { throw marker; };",
+            "return",
+            true,
+        ),
         (
             "Object.defineProperty(source, 'throw', { get() { throw marker; } });",
             "throw",

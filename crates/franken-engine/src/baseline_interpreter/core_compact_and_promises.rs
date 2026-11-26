@@ -8383,9 +8383,9 @@ impl InterpreterCore {
         }
     }
 
-    /// ProxyCreate's target (ES2020 9.5.14 step 1): an object, or a function
-    /// (bd-9vouw.132), whose own-property storage the proxy record's target
-    /// slot then holds, returned with the function itself.
+    /// ProxyCreate's target (ES2020 9.5.14 step 1): any supported object.
+    /// Runtime carriers use their authoritative property backing for internal
+    /// methods while retaining the original value for trap arguments and GC.
     pub(super) fn read_proxy_target_argument(
         &mut self,
         module: Option<&Ir3Module>,
@@ -8400,7 +8400,7 @@ impl InterpreterCore {
         if let Value::Object(object_id) = target {
             return Ok((object_id, None));
         }
-        if target.is_callable()
+        if target.is_object_like()
             && let Some(storage) = self.own_property_holder(module, &target, true)?
         {
             return Ok((storage, Some(target)));
@@ -8411,18 +8411,28 @@ impl InterpreterCore {
         })
     }
 
-    /// The value guest code holds for a new proxy: the record itself over an
-    /// object target, a callable proxy over a function target.
+    /// Retain the target's original identity independently of its property
+    /// backing. Only a callable target gives the Proxy a [[Call]] method.
     pub(super) fn proxy_value(
         &mut self,
         proxy_id: ObjectId,
-        call_target: Option<Value>,
+        original_target: Option<Value>,
     ) -> Result<Value, InterpreterError> {
-        let Some(call_target) = call_target else {
+        let Some(original_target) = original_target else {
             return Ok(Value::Object(proxy_id));
         };
-        self.set_object_property(proxy_id, PROXY_CALL_TARGET_SLOT.to_string(), call_target)?;
-        Ok(Self::callable_proxy_value(proxy_id))
+        let callable = original_target.is_callable();
+        // Keep the existing private slot name for record compatibility.
+        self.set_object_property(
+            proxy_id,
+            PROXY_CALL_TARGET_SLOT.to_string(),
+            original_target,
+        )?;
+        Ok(if callable {
+            Self::callable_proxy_value(proxy_id)
+        } else {
+            Value::Object(proxy_id)
+        })
     }
 
     /// The callable proxy value of a proxy record over a function.
@@ -8456,8 +8466,8 @@ impl InterpreterCore {
             })
     }
 
-    /// The callable target of a proxy record over a function.
-    pub(super) fn proxy_call_target(&self, proxy_id: ObjectId) -> Option<Value> {
+    /// The original runtime carrier behind a Proxy's property backing.
+    pub(super) fn proxy_original_target(&self, proxy_id: ObjectId) -> Option<Value> {
         self.heap
             .get(proxy_id.0 as usize)?
             .properties
@@ -8465,10 +8475,16 @@ impl InterpreterCore {
             .cloned()
     }
 
-    /// The target a trap receives: the function for a callable proxy (whose
-    /// target slot holds the function's property storage), else the object.
+    /// Callable-only operations must not classify a Promise, generator or
+    /// iterator as a function merely because it has a retained target value.
+    pub(super) fn proxy_call_target(&self, proxy_id: ObjectId) -> Option<Value> {
+        self.proxy_original_target(proxy_id)
+            .filter(Value::is_callable)
+    }
+
+    /// Every trap receives the original target, never its property backing.
     pub(super) fn proxy_trap_target(&self, proxy_id: ObjectId, target: ObjectId) -> Value {
-        self.proxy_call_target(proxy_id)
+        self.proxy_original_target(proxy_id)
             .unwrap_or(Value::Object(target))
     }
 

@@ -893,3 +893,54 @@ fn native_error_ifc_labels_survive_nested_callbacks_iterators_events_buffers_and
         }
     }
 }
+
+#[test]
+fn inspect_exotic_proxy_targets_preserves_native_format_and_single_hook_lookup() {
+    let source = r#"
+const util = require('node:util');
+console.log([
+  util.inspect(new Proxy(Promise.resolve(7), {})),
+  util.inspect(new Proxy((function* () {})(), {})),
+  util.inspect(new Proxy([1].values(), {})),
+  util.inspect(new Proxy((async function* () {})(), {}))
+].join('|'));
+const target = Promise.resolve(8);
+let reads = 0;
+let calls = 0;
+let traps = 0;
+let getterReceiver;
+let mode = 0;
+const handler = {get(target, key, receiver) {
+  traps++;
+  return Reflect.get(target, key, receiver);
+}};
+const proxy = new Proxy(target, handler);
+Object.defineProperty(target, util.inspect.custom, {get() {
+  reads++;
+  getterReceiver = this;
+  if (mode === 0) return undefined;
+  return function(depth, options, inspect) {
+    calls++;
+    if (mode === 2) return this;
+    return [this === proxy, getterReceiver === target, depth, inspect === util.inspect].join(':');
+  };
+}});
+console.log(util.inspect(proxy), reads, calls, getterReceiver === target, traps);
+mode = 1; reads = 0; calls = 0;
+console.log(util.inspect(proxy, {depth: 1}), reads, calls, traps);
+mode = 2; reads = 0; calls = 0;
+console.log(util.inspect(proxy), reads, calls, getterReceiver === target, traps);
+reads = 0; calls = 0;
+console.log(util.inspect(proxy, {customInspect: false}), reads, calls, traps);
+"#;
+    assert_eq!(
+        console_output(source).as_deref(),
+        Ok(concat!(
+            "Promise { 7 }|Object [Generator] {}|Object [Array Iterator] {}|Object [AsyncGenerator] {}\n",
+            "Promise { 8 } 1 0 true 0\n",
+            "true:true:1:true 1 1 0\n",
+            "Promise { 8 } 1 1 true 0\n",
+            "Promise { 8 } 0 0 0"
+        ))
+    );
+}

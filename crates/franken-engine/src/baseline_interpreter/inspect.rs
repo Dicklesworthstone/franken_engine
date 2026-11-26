@@ -798,7 +798,7 @@ impl InterpreterCore {
                 Some((_, _, true)) => return Ok(None),
                 Some((object, _, false)) => {
                     target = self
-                        .proxy_call_target(proxy)
+                        .proxy_original_target(proxy)
                         .unwrap_or(Value::Object(object));
                 }
                 None => break,
@@ -1798,7 +1798,12 @@ impl InterpreterCore {
         for _ in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
             match self.proxy_record(id) {
                 Ok(Some((_, _, true))) => return Ok("<Revoked Proxy>".to_string()),
-                Ok(Some((target, _, false))) => id = target,
+                Ok(Some((target, _, false))) => {
+                    if let Some(original) = self.proxy_original_target(id) {
+                        return self.inspect_ordinary_value(state, &original, recurse_times);
+                    }
+                    id = target;
+                }
                 _ => break,
             }
         }

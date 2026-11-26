@@ -10163,14 +10163,13 @@ impl InterpreterCore {
             self.set_own_runtime_property_label(target_id, &key, &label)?;
         }
         if use_target_set {
-            if !self.proxy_aware_set_runtime_property(
-                module,
-                target_id,
-                &key,
-                value,
-                Value::Object(target_id),
-                0,
-            )? {
+            // A backing stores properties for its original callable/native
+            // value. Set must expose that value to setters and Proxy traps;
+            // recovering its identity here does not invoke guest code.
+            let receiver = self.prototype_value_for_link(module, Some(target_id));
+            if !self
+                .proxy_aware_set_runtime_property(module, target_id, &key, value, receiver, 0)?
+            {
                 return Err(InterpreterError::TypeError {
                     expected: "successful Object.assign property write".to_string(),
                     got: key.diagnostic(),

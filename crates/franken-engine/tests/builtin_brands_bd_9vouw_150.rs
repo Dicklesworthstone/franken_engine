@@ -1746,3 +1746,416 @@ const behavior = [
         );
     }
 }
+
+#[test]
+fn exotic_proxy_targets_preserve_identity_and_forward_properties() {
+    assert_profile_value(
+        r#"(function () {
+  const failures = [];
+  function check(ok, detail) { if (!ok) failures.push(detail); }
+  const factories = [
+    ['promise', () => Promise.resolve(1)],
+    ['generator', () => (function* () { yield 2; })()],
+    ['async-generator', () => (async function* () { yield 3; })()],
+    ['array-iterator', () => [4, 5].values()],
+    ['map-iterator', () => new Map([['a', 6]]).values()],
+    ['set-iterator', () => new Set([7]).values()],
+    ['string-iterator', () => 'ab'[Symbol.iterator]()],
+    ['typed-array-iterator', () => new Uint8Array([8, 9]).values()]
+  ];
+  for (const [kind, create] of factories) {
+    const target = create();
+    const originalPrototype = Object.getPrototypeOf(target);
+    const parent = Object.create(originalPrototype);
+    const symbol = Symbol(kind);
+    let getterCalls = 0;
+    Object.defineProperty(target, 'value', {
+      value: 11, writable: true, enumerable: true, configurable: true
+    });
+    Object.defineProperty(target, 'self', {
+      get() { getterCalls++; return this; }, enumerable: true, configurable: true
+    });
+    Object.defineProperty(parent, 'inheritedSelf', {
+      get() { return this; }, configurable: true
+    });
+    Object.defineProperty(parent, 'assigned', {
+      set(value) { this.saved = value; }, configurable: true
+    });
+    Object.setPrototypeOf(target, parent);
+    const calls = [];
+    const lookups = [];
+    let handler;
+    function entered(name, actual, receiver) {
+      calls.push(name);
+      check(actual === target, kind + ':' + name + ':target');
+      check(receiver === handler, kind + ':' + name + ':handler');
+    }
+    const traps = {
+      get(actual, key, receiver) {
+        entered('get', actual, this);
+        return Reflect.get(actual, key, receiver);
+      },
+      set(actual, key, value, receiver) {
+        entered('set', actual, this);
+        return Reflect.set(actual, key, value, receiver);
+      },
+      has(actual, key) {
+        entered('has', actual, this);
+        return Reflect.has(actual, key);
+      },
+      deleteProperty(actual, key) {
+        entered('deleteProperty', actual, this);
+        return Reflect.deleteProperty(actual, key);
+      },
+      ownKeys(actual) {
+        entered('ownKeys', actual, this);
+        return Reflect.ownKeys(actual);
+      },
+      getOwnPropertyDescriptor(actual, key) {
+        entered('getOwnPropertyDescriptor', actual, this);
+        return Reflect.getOwnPropertyDescriptor(actual, key);
+      },
+      defineProperty(actual, key, descriptor) {
+        entered('defineProperty', actual, this);
+        return Reflect.defineProperty(actual, key, descriptor);
+      },
+      getPrototypeOf(actual) {
+        entered('getPrototypeOf', actual, this);
+        return Reflect.getPrototypeOf(actual);
+      },
+      setPrototypeOf(actual, prototype) {
+        entered('setPrototypeOf', actual, this);
+        return Reflect.setPrototypeOf(actual, prototype);
+      },
+      isExtensible(actual) {
+        entered('isExtensible', actual, this);
+        return Reflect.isExtensible(actual);
+      },
+      preventExtensions(actual) {
+        entered('preventExtensions', actual, this);
+        return Reflect.preventExtensions(actual);
+      }
+    };
+    handler = new Proxy(traps, {
+      get(actual, key, receiver) {
+        lookups.push(key);
+        return Reflect.get(actual, key, receiver);
+      }
+    });
+    const proxy = new Proxy(target, handler);
+    check(calls.length === 0 && lookups.length === 0 && getterCalls === 0,
+      kind + ':construction-does-not-read');
+    check(typeof proxy === 'object', kind + ':non-callable');
+    check(proxy.value === 11 && proxy.self === proxy && proxy.inheritedSelf === proxy,
+      kind + ':get-receiver');
+    const alternate = {};
+    check(Reflect.get(proxy, 'self', alternate) === alternate && getterCalls === 2,
+      kind + ':explicit-get-receiver');
+    check(Reflect.set(proxy, 'assigned', 12, alternate)
+      && alternate.saved === 12 && target.saved === undefined, kind + ':explicit-set-receiver');
+    check(Reflect.set(proxy, 'written', 13) && target.written === 13, kind + ':set');
+    check(Reflect.defineProperty(proxy, symbol, {
+      value: 14, writable: true, enumerable: true, configurable: true
+    }) && target[symbol] === 14, kind + ':define-symbol');
+    check('value' in proxy && 'inheritedSelf' in proxy && symbol in proxy, kind + ':has');
+    check(Object.getOwnPropertyDescriptor(proxy, symbol).value === 14, kind + ':descriptor');
+    const transparent = new Proxy(target, {});
+    check(transparent.value === 11 && transparent.inheritedSelf === transparent
+      && Reflect.get(transparent, 'self', alternate) === alternate,
+      kind + ':transparent-get-receiver');
+    check(Reflect.set(transparent, 'transparent', 17) && target.transparent === 17
+      && Reflect.deleteProperty(transparent, 'transparent')
+      && !('transparent' in target), kind + ':transparent-storage');
+    check(Object.getPrototypeOf(transparent) === parent
+      && Object.getOwnPropertyDescriptor(transparent, symbol).value === 14,
+      kind + ':transparent-reflection');
+    const keys = Reflect.ownKeys(proxy);
+    check(keys.includes('value') && keys.includes('self') && keys.includes(symbol)
+      && keys.length === Reflect.ownKeys(target).length, kind + ':own-keys');
+    check(Reflect.deleteProperty(proxy, 'written') && !('written' in target), kind + ':delete');
+    check(Object.getPrototypeOf(proxy) === parent, kind + ':prototype');
+    const replacement = Object.create(originalPrototype);
+    check(Reflect.setPrototypeOf(proxy, replacement)
+      && Object.getPrototypeOf(target) === replacement, kind + ':set-prototype');
+    check(Reflect.isExtensible(proxy), kind + ':extensible');
+    check(Reflect.preventExtensions(proxy) && !Object.isExtensible(target)
+      && !Reflect.isExtensible(proxy), kind + ':prevent-extensions');
+    check(!Reflect.set(proxy, 'missing', 15) && Reflect.set(proxy, 'value', 16)
+      && target.value === 16, kind + ':non-extensible-storage');
+    for (const name of Object.keys(traps)) {
+      check(calls.includes(name), kind + ':unvisited-' + name);
+    }
+  }
+  return failures.join('|') || 'ok';
+})()"#,
+        "ok",
+    );
+}
+
+#[test]
+fn exotic_proxy_targets_preserve_revocation_and_short_circuits() {
+    assert_profile_value(
+        r#"(function () {
+  const failures = [];
+  function check(ok, detail) { if (!ok) failures.push(detail); }
+  function typeError(step) {
+    try { step(); return false; } catch (error) { return error instanceof TypeError; }
+  }
+  const factories = [
+    ['promise', () => Promise.resolve(1)],
+    ['generator', () => (function* () { yield 2; })()],
+    ['iterator', () => [3].values()],
+    ['async-generator', () => (async function* () { yield 4; })()]
+  ];
+  const operations = [
+    ['get', proxy => proxy.value],
+    ['set', proxy => Reflect.set(proxy, 'value', 8)],
+    ['has', proxy => 'value' in proxy],
+    ['deleteProperty', proxy => Reflect.deleteProperty(proxy, 'value')],
+    ['ownKeys', proxy => Reflect.ownKeys(proxy)],
+    ['getOwnPropertyDescriptor', proxy => Reflect.getOwnPropertyDescriptor(proxy, 'value')],
+    ['defineProperty', proxy => Reflect.defineProperty(proxy, 'other', { value: 8 })],
+    ['getPrototypeOf', proxy => Reflect.getPrototypeOf(proxy)],
+    ['setPrototypeOf', proxy => Reflect.setPrototypeOf(proxy, null)],
+    ['isExtensible', proxy => Reflect.isExtensible(proxy)],
+    ['preventExtensions', proxy => Reflect.preventExtensions(proxy)]
+  ];
+  const shortcuts = [
+    ['set', false, proxy => Reflect.set(proxy, 'value', 8)],
+    ['has', true, proxy => 'value' in proxy],
+    ['deleteProperty', false, proxy => Reflect.deleteProperty(proxy, 'value')],
+    ['defineProperty', false, proxy => Reflect.defineProperty(proxy, 'value', { value: 8 })],
+    ['setPrototypeOf', false, proxy => Reflect.setPrototypeOf(proxy, null)],
+    ['preventExtensions', false, proxy => Reflect.preventExtensions(proxy)]
+  ];
+  for (const [kind, create] of factories) {
+    const target = create();
+    target.value = 7;
+    let lookups = 0;
+    const handler = new Proxy({}, {
+      get() { lookups++; return undefined; }
+    });
+    const pair = Proxy.revocable(target, handler);
+    check(lookups === 0, kind + ':construction');
+    check(pair.revoke() === undefined && pair.revoke() === undefined, kind + ':idempotent-revoke');
+    check(typeof pair.proxy === 'object', kind + ':revoked-typeof');
+    for (const [name, operate] of operations) {
+      check(typeError(() => operate(pair.proxy)), kind + ':revoked-' + name);
+    }
+    check(lookups === 0 && target.value === 7, kind + ':revoke-before-handler');
+
+    for (const [trapName, answer, operate] of shortcuts) {
+      let calls = 0;
+      const outerHandler = {};
+      outerHandler[trapName] = function (actual) {
+        calls++;
+        check(actual === pair.proxy && this === outerHandler,
+          kind + ':outer-' + trapName + ':identity');
+        return answer;
+      };
+      const outer = new Proxy(pair.proxy, outerHandler);
+      check(calls === 0, kind + ':outer-' + trapName + ':construction');
+      check(operate(outer) === answer && calls === 1,
+        kind + ':outer-' + trapName + ':short-circuit');
+    }
+
+    let calls = 0;
+    const outer = new Proxy(pair.proxy, {
+      get(actual) { calls++; check(actual === pair.proxy, kind + ':outer-get-target'); return 9; }
+    });
+    check(typeError(() => outer.value) && calls === 1, kind + ':get-then-target-invariant');
+    check(typeError(() => new Proxy(pair.proxy, {}).value), kind + ':transparent-revoked-target');
+
+    const marker = {};
+    let trapReads = 0;
+    const abrupt = new Proxy(pair.proxy, {
+      get get() { trapReads++; throw marker; }
+    });
+    let caught;
+    try { abrupt.value; } catch (error) { caught = error; }
+    check(caught === marker && trapReads === 1, kind + ':getmethod-before-target-invariant');
+
+    const liveTarget = create();
+    liveTarget.value = 10;
+    let live;
+    let trapCalls = 0;
+    const revokingHandler = {
+      get get() {
+        live.revoke();
+        return function (actual) {
+          trapCalls++;
+          check(actual === liveTarget && this === revokingHandler,
+            kind + ':in-flight-identity');
+          return actual.value;
+        };
+      }
+    };
+    live = Proxy.revocable(liveTarget, revokingHandler);
+    check(live.proxy.value === 10 && trapCalls === 1, kind + ':in-flight-get');
+    check(typeError(() => live.proxy.value) && trapCalls === 1, kind + ':subsequent-get');
+  }
+  return failures.join('|') || 'ok';
+})()"#,
+        "ok",
+    );
+}
+
+#[test]
+fn exotic_proxy_targets_enforce_internal_method_invariants() {
+    assert_profile_value(
+        r#"(function () {
+  const failures = [];
+  function check(ok, detail) { if (!ok) failures.push(detail); }
+  const factories = [
+    ['promise', () => Promise.resolve(1)],
+    ['generator', () => (function* () { yield 1; })()],
+    ['iterator', () => [1].values()],
+    ['async-generator', () => (async function* () { yield 1; })()]
+  ];
+  const rows = [
+    ['get', false, () => 8, proxy => proxy.fixed],
+    ['set', false, () => true, proxy => Reflect.set(proxy, 'fixed', 8)],
+    ['has', false, () => false, proxy => 'fixed' in proxy],
+    ['deleteProperty', false, () => true, proxy => Reflect.deleteProperty(proxy, 'fixed')],
+    ['ownKeys', false, () => [], proxy => Reflect.ownKeys(proxy)],
+    ['getOwnPropertyDescriptor', false, () => undefined,
+      proxy => Object.getOwnPropertyDescriptor(proxy, 'fixed')],
+    ['defineProperty', false, () => true,
+      proxy => Reflect.defineProperty(proxy, 'fixed', { value: 8 })],
+    ['isExtensible', false, () => false, proxy => Reflect.isExtensible(proxy)],
+    ['preventExtensions', false, () => true, proxy => Reflect.preventExtensions(proxy)],
+    ['getPrototypeOf', true, () => null, proxy => Reflect.getPrototypeOf(proxy)],
+    ['setPrototypeOf', true, () => true, proxy => Reflect.setPrototypeOf(proxy, null)],
+    ['ownKeys', true, () => ['fixed', 'invented'], proxy => Reflect.ownKeys(proxy)],
+    ['defineProperty', true, () => true,
+      proxy => Reflect.defineProperty(proxy, 'invented', { value: 9 })],
+    ['getOwnPropertyDescriptor', false,
+      () => ({ value: 9, writable: true, enumerable: true, configurable: false }),
+      proxy => Object.getOwnPropertyDescriptor(proxy, 'invented')]
+  ];
+  for (const [kind, create] of factories) {
+    for (let index = 0; index < rows.length; index++) {
+      const [trapName, preventExtensions, result, operate] = rows[index];
+      const target = create();
+      Object.defineProperty(target, 'fixed', {
+        value: 7, writable: false, enumerable: true, configurable: false
+      });
+      if (preventExtensions) Object.preventExtensions(target);
+      const label = kind + ':' + index + ':' + trapName;
+      let calls = 0;
+      const handler = {};
+      handler[trapName] = function (actualTarget) {
+        calls++;
+        check(actualTarget === target, label + ':target');
+        check(this === handler, label + ':handler');
+        return result();
+      };
+      const proxy = new Proxy(target, handler);
+      let error;
+      try { operate(proxy); } catch (caught) { error = caught; }
+      check(error instanceof TypeError, label + ':invariant');
+      check(calls === 1, label + ':calls');
+      check(target.fixed === 7, label + ':protected-value');
+    }
+    const target = create();
+    let reads = 0;
+    const handler = {
+      get apply() { reads++; return function () {}; },
+      get construct() { reads++; return function () {}; }
+    };
+    const proxy = new Proxy(target, handler);
+    let callError;
+    let constructError;
+    try { Reflect.apply(proxy, null, []); } catch (caught) { callError = caught; }
+    try { Reflect.construct(proxy, []); } catch (caught) { constructError = caught; }
+    check(callError instanceof TypeError && constructError instanceof TypeError,
+      kind + ':non-callable');
+    check(reads === 0 && typeof proxy === 'object', kind + ':callable-traps');
+  }
+  return failures.join('|') || 'ok';
+})()"#,
+        "ok",
+    );
+}
+
+#[test]
+fn exotic_proxy_targets_preserve_native_receiver_brands() {
+    assert_profile_value(
+        r#"(function () {
+  const failures = [];
+  function check(ok, detail) { if (!ok) failures.push(detail); }
+  function typeError(step) {
+    try { step(); return false; } catch (error) { return error instanceof TypeError; }
+  }
+  const promise = Promise.resolve(1);
+  const promiseProxy = new Proxy(promise, {});
+  check(promiseProxy.then === promise.then, 'promise:method-identity');
+  check(typeError(() => promiseProxy.then()), 'promise:receiver-brand');
+  check(promiseProxy.then.call(promise) instanceof Promise, 'promise:borrowed-method');
+
+  let entered = 0;
+  const generator = (function* () { entered++; yield 2; })();
+  const generatorProxy = new Proxy(generator, {});
+  check(generatorProxy.next === generator.next, 'generator:method-identity');
+  check(generatorProxy[Symbol.iterator]() === generatorProxy, 'generator:iterator-self');
+  check(typeError(() => generatorProxy.next()) && typeError(() => Array.from(generatorProxy))
+    && entered === 0, 'generator:receiver-brand');
+  const otherGenerator = (function* () { yield 3; })();
+  check(generatorProxy.next.call(otherGenerator).value === 3 && entered === 0,
+    'generator:unbound-method');
+  check(generatorProxy.next.call(generator).value === 2 && entered === 1,
+    'generator:borrowed-method');
+
+  const factories = [
+    ['array', () => [4, 5].values(), 4],
+    ['map', () => new Map([['a', 6], ['b', 7]]).values(), 6],
+    ['set', () => new Set([8, 9]).values(), 8],
+    ['string', () => 'cd'[Symbol.iterator](), 'c'],
+    ['typed-array', () => new Uint8Array([10, 11]).values(), 10]
+  ];
+  for (const [kind, create, expected] of factories) {
+    const target = create();
+    const other = create();
+    const proxy = new Proxy(target, {});
+    check(proxy.next === target.next && proxy.next === other.next, kind + ':method-identity');
+    check(proxy[Symbol.iterator]() === proxy, kind + ':iterator-self');
+    check(typeError(() => proxy.next()) && typeError(() => Array.from(proxy)),
+      kind + ':receiver-brand');
+    check(proxy.next.call(other).value === expected, kind + ':unbound-method');
+    check(proxy.next.call(target).value === expected, kind + ':unadvanced-original');
+  }
+
+  const entries = [0, 0];
+  const asynchronous = (async function* () { entries[0]++; yield 12; })();
+  const otherAsynchronous = (async function* () { entries[1]++; yield 13; })();
+  const asyncProxy = new Proxy(asynchronous, {});
+  check(asyncProxy.next === asynchronous.next
+    && asyncProxy.return === asynchronous.return
+    && asyncProxy.throw === asynchronous.throw, 'async-generator:method-identity');
+  check(asyncProxy[Symbol.asyncIterator]() === asyncProxy, 'async-generator:iterator-self');
+  let nextResult;
+  let returnResult;
+  let throwResult;
+  let synchronousError;
+  try {
+    nextResult = asyncProxy.next();
+    returnResult = asyncProxy.return(14);
+    throwResult = asyncProxy.throw(15);
+  } catch (error) { synchronousError = error; }
+  check(synchronousError === undefined && nextResult instanceof Promise
+    && returnResult instanceof Promise && throwResult instanceof Promise
+    && entries[0] === 0, 'async-generator:rejection-boundary');
+  if (nextResult instanceof Promise) nextResult.catch(function () {});
+  if (returnResult instanceof Promise) returnResult.catch(function () {});
+  if (throwResult instanceof Promise) throwResult.catch(function () {});
+  const otherResult = asyncProxy.next.call(otherAsynchronous);
+  check(otherResult instanceof Promise && entries[0] === 0 && entries[1] === 1,
+    'async-generator:unbound-method');
+  const originalResult = asyncProxy.next.call(asynchronous);
+  check(originalResult instanceof Promise && entries[0] === 1 && entries[1] === 1,
+    'async-generator:borrowed-method');
+  return failures.join('|') || 'ok';
+})()"#,
+        "ok",
+    );
+}

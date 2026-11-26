@@ -7746,13 +7746,14 @@ impl InterpreterCore {
                 // every Reflect reentry; keep GC and telemetry in this wrapper.
                 "builtin:ReflectApply" => self.reflect_invocation_builtin(module, args, false),
                 "builtin:ReflectConstruct" => self.reflect_invocation_builtin(module, args, true),
-                // Input provenance must be active before an adder or iterator
-                // getter can call guest code, including on an abrupt exit.
+                // Input provenance must be active before getters, setters,
+                // Proxy traps or iterator/adder callbacks, including on an abrupt exit.
                 "builtin:Map"
                 | "builtin:Set"
                 | "builtin:WeakMap"
                 | "builtin:WeakSet"
-                | "builtin:ObjectFromEntries" => self.observe_collection_seed(|core| {
+                | "builtin:ObjectFromEntries"
+                | "builtin:ObjectAssign" => self.observe_collection_seed(|core| {
                     let end =
                         args.start
                             .checked_add(args.count)
@@ -10806,21 +10807,14 @@ impl InterpreterCore {
                             got: target_val.type_name().to_string(),
                         });
                     }
-                    // A function's own properties live on its backing object,
-                    // where `f.x = 1` stores them: `Object.assign(fn, {...})`
-                    // (chroma's statics) copied nothing.
-                    // Promises and generator objects keep theirs on a
-                    // backing object too (`Object.assign(promise, { a: 1 })`).
+                    // Resolve the shared holder so callable Proxies retain
+                    // their records and [[Set]] traps, while functions and
+                    // native object carriers reuse their own-property backing.
                     function
                         if function.is_callable() || Self::has_exotic_backing_object(function) =>
                     {
-                        let backing = match module {
-                            Some(module) => {
-                                self.ensure_function_own_property_object(module, function)?
-                            }
-                            None => None,
-                        };
-                        let Some(backing) = backing else {
+                        let Some(backing) = self.own_property_holder(module, function, true)?
+                        else {
                             return Ok(target_val);
                         };
                         backing
@@ -10852,57 +10846,22 @@ impl InterpreterCore {
                     other => other,
                 };
 
-                // Copy properties from each source object to target
+                // Use one ordered copy path for objects and UTF-16 string
+                // indices, including per-write provenance and abrupt completion.
                 for i in 1..args.count {
                     let source_val = self.read_reg(args.start + i)?;
-                    // ToObject of a string source has its code units as own
-                    // enumerable index properties (ES2020 9.4.3), copied with
-                    // Set(to, key, value, true); they were skipped
-                    // (`Object.assign({}, 'ab')` gave {}).
-                    if let Value::Str(text) = &source_val {
-                        for (key, value) in self.string_index_entries(text)? {
-                            // [[Set]] grows an array target's length
-                            // (`Object.assign([], 'hi')`).
-                            let committed = self.proxy_aware_set_runtime_property(
-                                module,
-                                target_obj_id,
-                                &RuntimePropertyKey::String(key.clone()),
-                                value,
-                                Value::Object(target_obj_id),
-                                0,
-                            )?;
-                            if !committed {
-                                return Err(InterpreterError::TypeError {
-                                    expected: "writable target property for Object.assign"
-                                        .to_string(),
-                                    got: format!("Cannot assign to read only property '{key}'"),
-                                });
-                            }
-                        }
-                        continue;
-                    }
-                    let source_obj_id = match &source_val {
-                        Value::Object(source_obj_id) => Some(*source_obj_id),
-                        // A function source's own enumerable properties, and
-                        // a promise's, generator's or iterator's.
-                        holder
-                            if holder.is_callable() || Self::has_exotic_backing_object(holder) =>
-                        {
-                            self.own_property_holder(module, holder, false)?
-                        }
-                        // Skip non-object sources (null, undefined, primitives)
-                        _ => None,
-                    };
-                    if let Some(source_obj_id) = source_obj_id {
+                    if let Some(source_obj_id) =
+                        self.own_property_holder(module, &source_val, false)?
+                    {
                         self.join_pending_hostcall_stream_label(source_obj_id)?;
-                        self.copy_data_properties(
-                            module,
-                            target_obj_id,
-                            source_val,
-                            &BTreeSet::new(),
-                            true,
-                        )?;
                     }
+                    self.copy_data_properties(
+                        module,
+                        target_obj_id,
+                        source_val,
+                        &BTreeSet::new(),
+                        true,
+                    )?;
                 }
                 let mutation_label = self.join_arg_range_with_object_mutation_label(args)?;
                 self.join_object_mutation_label(target_obj_id, &mutation_label)?;

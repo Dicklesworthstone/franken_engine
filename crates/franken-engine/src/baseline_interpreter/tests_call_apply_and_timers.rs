@@ -7521,6 +7521,107 @@ mod numeric_error_message_tests {
 mod event_loop_timer_microtask_tests {
 
     #[test]
+    fn timer_promise_getter_keeps_unrelated_caller_snapshot_roots() {
+        use crate::ir_contract::Ir0Module;
+        use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+        use crate::parser_api_stability::parse_script;
+
+        let source = r#"({
+                get then() {
+                    for (let index = 0; index < 24; index++) {
+                        const discarded = { index, nested: [index] };
+                    }
+                    return undefined;
+                }
+            })"#;
+        let tree = parse_script(source).expect("timer getter source parses");
+        let module = lower_ir0_to_ir3(
+            &Ir0Module::from_syntax_tree(tree, "timer-getter-snapshot.js"),
+            &LoweringContext::new("timer-getter", "snapshot-roots", "builtin-only"),
+        )
+        .expect("timer getter source lowers")
+        .ir3;
+
+        for immediate in [false, true] {
+            for (profile, mut config) in [
+                ("quickjs", InterpreterConfig::quickjs_defaults()),
+                ("v8", InterpreterConfig::v8_defaults()),
+            ] {
+                config.granted_capabilities.extend([
+                    RuntimeCapability::VmDispatch,
+                    RuntimeCapability::HeapAllocate,
+                    RuntimeCapability::Builtin,
+                    RuntimeCapability::Timer,
+                ]);
+                let mut core = InterpreterCore::new(config, "timer-getter-snapshot");
+                let value = core.execute(&module).expect("create timer thenable").value;
+                core.write_reg(62, value.clone()).unwrap();
+                core.set_gc_stress_interval(Some(1));
+
+                // Measure the driver's collections without a guest callback.
+                // Keep the thenable live while this independent timer runs.
+                core.timers_promises_schedule_from_values(
+                    Some(Value::Int(1)),
+                    Value::Int(0),
+                    immediate,
+                    Label::Public,
+                )
+                .unwrap();
+                let before = core.gc_stats().collections;
+                core.gc_arm_event_loop(None);
+                let baseline = core.run_event_loop_until_idle_with_module(Some(&module));
+                core.gc_disarm_event_loop();
+                baseline.expect("primitive timer baseline drains");
+                let driver_collections = core.gc_stats().collections - before;
+
+                // This value exists only in the caller's register file.
+                // It is created after the getter's closure, so the getter
+                // cannot accidentally keep it alive through a captured binding.
+                let sentinel = core.alloc_object_with_prototype(None).unwrap();
+                core.set_object_property(sentinel, "caller-only".into(), Value::Int(73))
+                    .unwrap();
+                core.write_reg(63, Value::Object(sentinel)).unwrap();
+                let promise = core
+                    .timers_promises_schedule_from_values(
+                        Some(Value::Int(1)),
+                        value,
+                        immediate,
+                        Label::Public,
+                    )
+                    .unwrap();
+                core.write_reg(61, promise).unwrap();
+
+                let before = core.gc_stats().collections;
+                core.gc_arm_event_loop(None);
+                let outcome = core.run_event_loop_until_idle_with_module(Some(&module));
+                core.gc_disarm_event_loop();
+                outcome.expect("allocating timer then getter drains");
+                assert!(
+                    core.gc_stats().collections - before > driver_collections,
+                    "the getter must run with nested collection: {profile}, immediate={immediate}"
+                );
+                assert_eq!(core.read_reg(63).unwrap(), Value::Object(sentinel));
+                assert_eq!(
+                    core.heap
+                        .get(sentinel.0 as usize)
+                        .and_then(|object| object.properties.get("caller-only")),
+                    Some(&Value::Int(73)),
+                    "caller snapshot root was collected: {profile}, immediate={immediate}"
+                );
+                assert!(core.pending_timer_tasks.is_empty());
+                assert!(core.active_timers.is_empty());
+                assert_eq!(core.deferred_callback_in_flight_bytes, 0);
+                assert_eq!(core.promise_in_flight_task_bytes, 0);
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes(),
+                    "{profile}, immediate={immediate}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn timer_promises_dispatch_preserves_exact_values_and_input_labels() {
         use crate::promise_model::{MacrotaskSource, PromiseHandle, PromiseState};
 

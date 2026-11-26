@@ -2131,20 +2131,17 @@ impl InterpreterCore {
             } => {
                 self.active_timers.remove(&task.timer_id);
                 self.unref_timer_ids.remove(&task.timer_id);
-                // The task has left its queue. Keep its memory charge and both
-                // handles alive across observable then/constructor/species
-                // getters, including collections in more than one getter.
+                // The task has left its queue. Keep its memory charge while
+                // resolution runs guest getters. Ask the callback boundary
+                // to pin its displaced caller snapshot together with the
+                // target and payload before enabling nested collection.
                 self.deferred_callback_in_flight_bytes = self
                     .deferred_callback_in_flight_bytes
                     .saturating_add(retained_bytes);
-                let target = Value::Promise(promise.0);
-                let gc_arm = if self.gc_in_event_loop_phase() {
-                    self.gc_arm_nested(&[GcPin::Value(&target), GcPin::Value(&value)])
-                } else {
-                    None
-                };
-                let result = self.resolve_promise_with_value(module, promise, value, label);
-                self.gc_disarm_nested(gc_arm);
+                let result = self.with_event_job_gc_request(
+                    vec![Value::Promise(promise.0), value.clone()],
+                    |core| core.resolve_promise_with_value(module, promise, value, label),
+                );
                 self.deferred_callback_in_flight_bytes = self
                     .deferred_callback_in_flight_bytes
                     .saturating_sub(retained_bytes);

@@ -38,6 +38,258 @@ fn assert_profile_value(source: &str, expected: &str) {
     }
 }
 
+#[test]
+fn proxy_handlers_preserve_all_object_kind_identities() {
+    assert_profile_value(
+        r#"var handlers = [
+  function () {}, () => {}, function* () {}, async function () {},
+  async function* () {}, Math.abs, Promise.resolve(1),
+  (function* () { yield 1; })(), (async function* () { yield 1; })(),
+  [1].values()
+];
+var out = [];
+for (var handler of handlers) {
+  var events = [];
+  var target = { x: 7 };
+  var proxy;
+  Object.defineProperty(handler, 'get', {
+    configurable: true,
+    get() {
+      events.push(this === handler);
+      return function (t, k, r) {
+        events.push(this === handler, t === target, r === proxy);
+        return Reflect.get(t, k, r);
+      };
+    }
+  });
+  proxy = new Proxy(target, handler);
+  var before = events.length;
+  var value = proxy.x;
+  out.push(before + ':' + value + ':' + events.join(','));
+  delete handler.get;
+}
+out.join('|');"#,
+        "0:7:true,true,true,true|0:7:true,true,true,true|0:7:true,true,true,true|0:7:true,true,true,true|0:7:true,true,true,true|0:7:true,true,true,true|0:7:true,true,true,true|0:7:true,true,true,true|0:7:true,true,true,true|0:7:true,true,true,true",
+    );
+}
+
+#[test]
+fn proxy_handler_inherited_traps_keep_original_receivers() {
+    assert_profile_value(
+        r#"var handlers = [
+  function () {}, Promise.resolve(1), (function* () { yield 1; })(),
+  (async function* () { yield 1; })(), [1].values()
+];
+var out = [];
+for (var handler of handlers) {
+  var events = [];
+  var target = { x: 9 };
+  var prototype = {
+    get get() {
+      events.push(this === handler);
+      return function (t, k) {
+        events.push(this === handler, t === target);
+        return t[k];
+      };
+    }
+  };
+  Object.setPrototypeOf(handler, prototype);
+  var pair = Proxy.revocable(target, handler);
+  out.push(pair.proxy.x, events.join(','));
+  pair.revoke();
+  try { pair.proxy.x; out.push('accepted'); }
+  catch (e) { out.push(e.name); }
+}
+out.join('|');"#,
+        "9|true,true,true|TypeError|9|true,true,true|TypeError|9|true,true,true|TypeError|9|true,true,true|TypeError|9|true,true,true|TypeError",
+    );
+}
+
+#[test]
+fn proxy_handler_getmethod_preserves_abrupt_completion_and_revocation() {
+    assert_profile_value(
+        r#"function attempt(f) {
+  try { return String(f()); } catch (e) { return e.name; }
+}
+var out = [];
+for (var invalid of [undefined, null, true, 0, 'x', Symbol('x'), 1n]) {
+  out.push(attempt(() => new Proxy({}, invalid)));
+  out.push(attempt(() => Proxy.revocable({}, invalid)));
+}
+function handler() {}
+var marker = {};
+Object.defineProperty(handler, 'get', {
+  configurable: true, get() { throw marker; }
+});
+var pair = Proxy.revocable({ x: 3 }, handler);
+try { pair.proxy.x; out.push('accepted'); } catch (e) { out.push(e === marker); }
+Object.defineProperty(handler, 'get', { value: 1, configurable: true });
+out.push(attempt(() => pair.proxy.x));
+Object.defineProperty(handler, 'get', { value: null, configurable: true });
+out.push(pair.proxy.x);
+Object.defineProperty(handler, 'get', { value: undefined, configurable: true });
+out.push(pair.proxy.x);
+pair.revoke();
+out.push(attempt(() => pair.proxy.x));
+var revoked = Proxy.revocable(function () {}, {});
+revoked.revoke();
+var outer = new Proxy({}, revoked.proxy);
+out.push(typeof outer, attempt(() => outer.x));
+out.join('|');"#,
+        "TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|true|TypeError|3|3|TypeError|object|TypeError",
+    );
+}
+
+#[test]
+fn proxy_callable_handler_proxies_preserve_getter_and_trap_receivers() {
+    assert_profile_value(
+        r#"var events = [];
+function carrier() {}
+var handler = new Proxy(carrier, {
+  get(t, key, receiver) {
+    events.push(key + ':' + (t === carrier) + ':' + (receiver === handler));
+    if (key === 'get') return function (target, name, proxy) {
+      events.push('trap:' + (this === handler) + ':' + (target === subject) + ':' + (proxy === outer));
+      return target[name];
+    };
+    return Reflect.get(t, key, receiver);
+  }
+});
+var subject = { x: 11 };
+var outer = new Proxy(subject, handler);
+var value = outer.x;
+[value, events.join('|')].join(':');"#,
+        "11:get:true:true|trap:true:true:true",
+    );
+}
+
+#[test]
+fn proxy_traps_accept_generator_and_async_callable_values() {
+    assert_profile_value(
+        r#"var out = [];
+var generator = new Proxy({}, {
+  get: function* (target, key) { yield key; }
+}).answer;
+out.push(generator.next().value, generator.next().done);
+var promise = new Proxy({}, {
+  get: async function (target, key) { return key; }
+}).answer;
+out.push(promise instanceof Promise);
+var asyncGenerator = new Proxy({}, {
+  get: async function* (target, key) { yield key; }
+}).answer;
+out.push(asyncGenerator.next() instanceof Promise);
+out.join('|');"#,
+        "answer|true|true|true",
+    );
+}
+
+#[test]
+fn proxy_handler_apply_construct_and_descriptors_keep_identity() {
+    assert_profile_value(
+        r#"var log = [];
+function handler() {}
+Object.defineProperty(handler, 'apply', {
+  get() {
+    log.push('get-apply:' + (this === handler));
+    return function (target, receiver, args) {
+      log.push('apply:' + (this === handler));
+      return Reflect.apply(target, receiver, args);
+    };
+  }
+});
+handler.construct = function (target, args, newTarget) {
+  log.push('construct:' + (this === handler) + ':' + (newTarget === callable));
+  return Reflect.construct(target, args, newTarget);
+};
+handler.getOwnPropertyDescriptor = function (target, key) {
+  log.push('descriptor:' + (this === handler));
+  return Reflect.getOwnPropertyDescriptor(target, key);
+};
+handler.defineProperty = function (target, key, descriptor) {
+  log.push('define:' + (this === handler));
+  return Reflect.defineProperty(target, key, descriptor);
+};
+function C(x) { this.x = x; return x + 1; }
+var callable = new Proxy(C, handler);
+var receiver = {};
+var result = callable.call(receiver, 2);
+var instance = new callable(4);
+Object.defineProperty(callable, 'n', { value: 6, configurable: true });
+var descriptor = Object.getOwnPropertyDescriptor(callable, 'n');
+[result, receiver.x, instance.x, instance instanceof C, descriptor.value, log.join('|')].join(':');"#,
+        "3:2:4:true:6:get-apply:true|apply:true|construct:true:true|define:true|descriptor:true",
+    );
+}
+
+/// A Proxy's handler slot retains the original exotic value across GC, not
+/// only its property backing. Promise.prototype.then checks the live identity.
+#[test]
+fn proxy_handler_values_survive_gc_with_exact_memory_accounting() {
+    use frankenengine_engine::ast::ParseGoal;
+    use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore, Value};
+    use frankenengine_engine::capability::RuntimeCapability;
+    use frankenengine_engine::ir_contract::Ir0Module;
+    use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+    use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
+
+    let source = r#"function make() {
+  var handler = Promise.resolve(5);
+  handler.marker = 23;
+  handler.get = function (target, key) {
+    this.then(function () {});
+    return this.marker + target[key];
+  };
+  return new Proxy({ x: 7 }, handler);
+}
+var proxy = make();
+for (var i = 0; i < 30; i++) { var garbage = { i: i }; }
+proxy.x;"#;
+    let tree = CanonicalEs2020Parser
+        .parse_with_options(
+            ParserSource {
+                label: "proxy-handler-gc.js".into(),
+                text: source.into(),
+            },
+            ParseGoal::Script,
+            &ParserOptions::default(),
+        )
+        .expect("proxy handler GC program parses");
+    let module = lower_ir0_to_ir3(
+        &Ir0Module::from_syntax_tree(tree, "proxy-handler-gc.js"),
+        &LoweringContext::new("proxy-handler-gc", "proxy-decision", "proxy-policy"),
+    )
+    .expect("proxy handler GC program lowers")
+    .ir3;
+    for base_config in [
+        InterpreterConfig::quickjs_defaults(),
+        InterpreterConfig::v8_defaults(),
+    ] {
+        for interval in [None, Some(1), Some(7)] {
+            let mut config = base_config.clone();
+            config.granted_capabilities = [
+                RuntimeCapability::VmDispatch,
+                RuntimeCapability::HeapAllocate,
+                RuntimeCapability::Builtin,
+            ]
+            .into_iter()
+            .collect();
+            let mut core = InterpreterCore::new(config, "proxy-handler-gc");
+            core.set_gc_stress_interval(interval);
+            let result = core.execute(&module).expect("proxy handler survives GC");
+            assert_eq!(result.value, Value::Int(30), "interval={interval:?}");
+            if interval.is_some() {
+                assert!(core.gc_stats().collections > 0);
+            }
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes(),
+                "proxy handler accounting: interval={interval:?}"
+            );
+        }
+    }
+}
+
 /// The former backing keys are ordinary guest property names. Neither data
 /// properties nor accessors with those names may replace [[MapData]] or
 /// [[SetData]]. Expected outputs are checked against Node v24.22.1.

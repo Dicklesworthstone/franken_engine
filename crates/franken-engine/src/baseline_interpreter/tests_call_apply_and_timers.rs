@@ -5023,7 +5023,9 @@ mod function_prototype_call_apply_tests_current {
         );
 
         let handler = seed_object(&mut core, &[]);
-        let proxy = core.create_proxy_object(replacement, handler).unwrap();
+        let proxy = core
+            .create_proxy_object(replacement, Value::Object(handler))
+            .unwrap();
         core.set_constructor_prototype_override(
             &caller,
             &constructor,
@@ -5360,7 +5362,9 @@ mod function_prototype_call_apply_tests_current {
             Ok(namespace)
         );
         let handler = seed_object(&mut core, &[]);
-        let proxy = core.create_proxy_object(namespace, handler).unwrap();
+        let proxy = core
+            .create_proxy_object(namespace, Value::Object(handler))
+            .unwrap();
         assert_eq!(
             core.object_get_prototype(Some(&module), proxy, 0),
             Ok(Value::Null)
@@ -5405,7 +5409,9 @@ mod function_prototype_call_apply_tests_current {
         let receiver = core.alloc_object_with_prototype(None).unwrap();
         let inherited = core.alloc_object_with_prototype(Some(namespace)).unwrap();
         let handler = seed_object(&mut core, &[]);
-        let proxy = core.create_proxy_object(namespace, handler).unwrap();
+        let proxy = core
+            .create_proxy_object(namespace, Value::Object(handler))
+            .unwrap();
         let export = RuntimePropertyKey::String(JsString::from("join"));
         let missing = RuntimePropertyKey::String(JsString::from("missing"));
 
@@ -5580,7 +5586,8 @@ mod function_prototype_call_apply_tests_current {
                     seed_object(&mut core, &[])
                 } else if operation.starts_with("proxy") {
                     let handler = seed_object(&mut core, &[]);
-                    core.create_proxy_object(namespace, handler).unwrap()
+                    core.create_proxy_object(namespace, Value::Object(handler))
+                        .unwrap()
                 } else {
                     namespace
                 };
@@ -5618,7 +5625,9 @@ mod function_prototype_call_apply_tests_current {
                     // DefineOwnProperty. Its SameValue result depends on the
                     // classified export, unlike a namespace target's Set.
                     let handler = seed_object(&mut core, &[]);
-                    let receiver = core.create_proxy_object(namespace, handler).unwrap();
+                    let receiver = core
+                        .create_proxy_object(namespace, Value::Object(handler))
+                        .unwrap();
                     core.write_reg_with_label(3, Value::Object(receiver), Label::Public)
                         .unwrap();
                     Ir3Instruction::HostCall {

@@ -862,7 +862,7 @@ impl InterpreterCore {
         if let Some((target, handler)) = self.active_proxy_record(object)? {
             // CreateDataProperty is [[DefineOwnProperty]], not [[Set]]. Never
             // invoke an inherited setter when replacing a revived value.
-            let trap = self.proxy_trap_value(module, handler, "defineProperty")?;
+            let trap = self.proxy_trap_value(module, &handler, "defineProperty")?;
             let observed = self.json_parse_context_label()?;
             self.json_observe_label(observed)?;
             if let Some(trap) = trap {
@@ -876,7 +876,7 @@ impl InterpreterCore {
                 let (_, label) = self.invoke_inline_method_call_with_argument_label(
                     module,
                     trap,
-                    Value::Object(handler),
+                    handler,
                     vec![
                         self.proxy_trap_target(object, target),
                         key.value(),

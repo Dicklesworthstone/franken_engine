@@ -8946,7 +8946,9 @@ fn proxy_symbol_own_keys_get_and_copy_stay_typed_bd_n8eta_4_2() {
         .unwrap();
     core.set_object_property(handler, "get".to_string(), Value::Function(1))
         .unwrap();
-    let proxy = core.create_proxy_object(proxy_target, handler).unwrap();
+    let proxy = core
+        .create_proxy_object(proxy_target, Value::Object(handler))
+        .unwrap();
 
     let spread_target = core.alloc_object_with_prototype(None).unwrap();
     core.set_reg(1, Value::Object(spread_target));
@@ -9164,7 +9166,7 @@ fn reflect_symbol_get_set_preserve_receiver_bd_n8eta_4_2() {
 
     let transparent_handler = core.alloc_object_with_prototype(None).unwrap();
     let proxy = core
-        .create_proxy_object(target, transparent_handler)
+        .create_proxy_object(target, Value::Object(transparent_handler))
         .unwrap();
     core.set_reg(0, Value::Object(proxy));
     core.set_reg(1, Value::Symbol(getter_symbol));

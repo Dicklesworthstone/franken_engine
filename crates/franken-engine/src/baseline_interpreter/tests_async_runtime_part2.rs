@@ -722,7 +722,7 @@ fn writable_terminal_tombstone_is_accounted_atomic_and_reset_safe_bd_fw7zd_2() {
         .alloc_object_with_prototype(None)
         .expect("transparent Proxy handler");
     let transparent_proxy = core
-        .create_proxy_object(writable, proxy_handler)
+        .create_proxy_object(writable, Value::Object(proxy_handler))
         .expect("transparent Proxy over terminal Writable");
     assert_eq!(
         core.stream_state_label(transparent_proxy),

@@ -13131,15 +13131,14 @@ impl InterpreterCore {
             "builtin:Proxy" => {
                 let (target, call_target) =
                     self.read_proxy_target_argument(module, args, "Proxy target object")?;
-                let handler = self.read_object_argument(args, 1, "Proxy handler object")?;
+                let handler = self.arg_or_undefined(args, 1)?;
                 let proxy_id = self.create_proxy_object(target, handler)?;
                 self.proxy_value(proxy_id, call_target)
             }
             "builtin:ProxyRevocable" => {
                 let (target, call_target) =
                     self.read_proxy_target_argument(module, args, "Proxy.revocable target object")?;
-                let handler =
-                    self.read_object_argument(args, 1, "Proxy.revocable handler object")?;
+                let handler = self.arg_or_undefined(args, 1)?;
                 let proxy_id = self.create_proxy_object(target, handler)?;
                 let proxy = self.proxy_value(proxy_id, call_target)?;
                 let result_id = self.alloc_object_with_properties(&[

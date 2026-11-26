@@ -8552,7 +8552,7 @@ impl InterpreterCore {
     pub(super) fn proxy_record(
         &self,
         object_id: ObjectId,
-    ) -> Result<Option<(ObjectId, ObjectId, bool)>, InterpreterError> {
+    ) -> Result<Option<(ObjectId, Value, bool)>, InterpreterError> {
         // Every property access asks; build the error only when it fails.
         let Some(object) = self.heap.get(object_id.0 as usize) else {
             return Err(InterpreterError::ObjectNotFound { id: object_id.0 });
@@ -8571,7 +8571,7 @@ impl InterpreterCore {
             }
         };
         let handler = match object.properties.get(PROXY_HANDLER_SLOT) {
-            Some(Value::Object(handler)) => *handler,
+            Some(handler) if handler.is_object_like() => handler.clone(),
             other => {
                 return Err(InterpreterError::TypeError {
                     expected: "well-formed Proxy handler slot".to_string(),
@@ -8616,7 +8616,7 @@ impl InterpreterCore {
     pub(super) fn active_proxy_record(
         &self,
         object_id: ObjectId,
-    ) -> Result<Option<(ObjectId, ObjectId)>, InterpreterError> {
+    ) -> Result<Option<(ObjectId, Value)>, InterpreterError> {
         match self.proxy_record(object_id)? {
             Some((_target, _handler, true)) => Err(InterpreterError::TypeError {
                 expected: "active Proxy object".to_string(),
@@ -8630,8 +8630,17 @@ impl InterpreterCore {
     pub(super) fn create_proxy_object(
         &mut self,
         target: ObjectId,
-        handler: ObjectId,
+        handler: Value,
     ) -> Result<ObjectId, InterpreterError> {
+        // ProxyCreate accepts every ECMAScript object as its handler. Keep
+        // the original value, not its property backing: getters and traps
+        // observe this identity, and creation must not read a revoked handler.
+        if !handler.is_object_like() {
+            return Err(InterpreterError::TypeError {
+                expected: "Proxy handler object".to_string(),
+                got: handler.type_name().to_string(),
+            });
+        }
         let proxy_id = self.alloc_object_with_prototype(None)?;
         self.set_object_brand(proxy_id, PROXY_TYPE_TAG)?;
         self.set_object_property(
@@ -8639,11 +8648,7 @@ impl InterpreterCore {
             PROXY_TARGET_SLOT.to_string(),
             Value::Object(target),
         )?;
-        self.set_object_property(
-            proxy_id,
-            PROXY_HANDLER_SLOT.to_string(),
-            Value::Object(handler),
-        )?;
+        self.set_object_property(proxy_id, PROXY_HANDLER_SLOT.to_string(), handler)?;
         self.set_object_property(proxy_id, PROXY_REVOKED_SLOT.to_string(), Value::Bool(false))?;
         Ok(proxy_id)
     }
@@ -8664,7 +8669,7 @@ impl InterpreterCore {
     pub(super) fn proxy_trap_value(
         &mut self,
         module: Option<&Ir3Module>,
-        handler_id: ObjectId,
+        handler: &Value,
         trap_name: &str,
     ) -> Result<Option<Value>, InterpreterError> {
         self.json_charge_work()?;
@@ -8676,7 +8681,7 @@ impl InterpreterCore {
             });
         }
         self.proxy_trap_lookup_depth = depth + 1;
-        let result = self.proxy_trap_value_inner(module, handler_id, trap_name);
+        let result = self.proxy_trap_value_inner(module, handler, trap_name);
         self.proxy_trap_lookup_depth = depth;
         result
     }
@@ -8684,25 +8689,17 @@ impl InterpreterCore {
     pub(super) fn proxy_trap_value_inner(
         &mut self,
         module: Option<&Ir3Module>,
-        handler_id: ObjectId,
+        handler: &Value,
         trap_name: &str,
     ) -> Result<Option<Value>, InterpreterError> {
         let key = RuntimePropertyKey::String(JsString::from(trap_name));
-        if self.active_inline_callback_context_label.is_some() {
-            self.reflect_observe_selected_property(handler_id, &key)?;
-        }
-        let result = self.prototype_chain_get_with_receiver(
-            module,
-            handler_id,
-            trap_name,
-            Value::Object(handler_id),
-        );
+        // The shared value-aware Get preserves callable/exotic receivers,
+        // their separately stored prototype links, and selection provenance.
+        let result = self.iterator_protocol_value_property(module, handler.clone(), &key);
         self.observe_scoped_callback_result()?;
         match result? {
             Value::Undefined | Value::Null => Ok(None),
-            trap @ (Value::Function(_) | Value::Closure(_) | Value::BuiltinFunction(_)) => {
-                Ok(Some(trap))
-            }
+            trap if trap.is_callable() => Ok(Some(trap)),
             other => Err(InterpreterError::TypeError {
                 expected: format!("callable Proxy.{trap_name} trap or undefined"),
                 got: other.type_name().to_string(),
@@ -8713,14 +8710,14 @@ impl InterpreterCore {
     pub(super) fn invoke_proxy_trap(
         &mut self,
         module: Option<&Ir3Module>,
-        handler_id: ObjectId,
+        handler: Value,
         trap_name: &str,
         arguments: Vec<Value>,
     ) -> Result<Option<Value>, InterpreterError> {
-        let Some(trap) = self.proxy_trap_value(module, handler_id, trap_name)? else {
+        let Some(trap) = self.proxy_trap_value(module, &handler, trap_name)? else {
             return Ok(None);
         };
-        self.call_proxy_trap(module, handler_id, trap_name, trap, arguments)
+        self.call_proxy_trap(module, handler, trap_name, trap, arguments)
             .map(Some)
     }
 
@@ -8729,20 +8726,18 @@ impl InterpreterCore {
     pub(super) fn call_proxy_trap(
         &mut self,
         module: Option<&Ir3Module>,
-        handler_id: ObjectId,
+        handler: Value,
         trap_name: &str,
         trap: Value,
         arguments: Vec<Value>,
     ) -> Result<Value, InterpreterError> {
-        self.call_proxy_trap_with_argument_label(
-            module, handler_id, trap_name, trap, arguments, None,
-        )
+        self.call_proxy_trap_with_argument_label(module, handler, trap_name, trap, arguments, None)
     }
 
     fn call_proxy_trap_with_argument_label(
         &mut self,
         module: Option<&Ir3Module>,
-        handler_id: ObjectId,
+        handler: Value,
         trap_name: &str,
         trap: Value,
         arguments: Vec<Value>,
@@ -8755,7 +8750,7 @@ impl InterpreterCore {
         let (value, label) = self.invoke_inline_method_call_with_argument_label(
             Some(module),
             trap,
-            Value::Object(handler_id),
+            handler,
             arguments,
             argument_label,
         )?;
@@ -8773,7 +8768,7 @@ impl InterpreterCore {
     pub(super) fn callable_proxy_parts(
         &self,
         builtin: &BuiltinFunction,
-    ) -> Result<(ObjectId, ObjectId, Value), InterpreterError> {
+    ) -> Result<(ObjectId, Value, Value), InterpreterError> {
         let proxy = Self::callable_proxy_record_id(builtin)?;
         let (_target, handler) =
             self.active_proxy_record(proxy)?
@@ -8808,7 +8803,7 @@ impl InterpreterCore {
             arguments.push(self.builtin_arg(args, index)?.unwrap_or(Value::Undefined));
         }
         let label = self.join_arg_range_label(args)?;
-        if let Some(trap) = self.proxy_trap_value(Some(module), handler, "apply")? {
+        if let Some(trap) = self.proxy_trap_value(Some(module), &handler, "apply")? {
             let list = self.alloc_array_from_values(&arguments)?;
             return self.call_proxy_trap(
                 Some(module),
@@ -8863,7 +8858,7 @@ impl InterpreterCore {
             arguments.push(self.builtin_arg(args, index)?.unwrap_or(Value::Undefined));
         }
         let label = self.join_arg_range_label(args)?;
-        if let Some(trap) = self.proxy_trap_value(Some(module), handler, "construct")? {
+        if let Some(trap) = self.proxy_trap_value(Some(module), &handler, "construct")? {
             let list = self.alloc_array_from_values(&arguments)?;
             self.join_object_mutation_label(list, &label)?;
             let context_label = self.join_owned_label_with_temporary_budget(label, callee_label)?;

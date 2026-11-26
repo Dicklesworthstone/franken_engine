@@ -81,6 +81,68 @@ fn assert_output(files: &[(&str, &str)], expected: &[&str]) {
     }
 }
 
+#[test]
+fn file_backed_create_require_keeps_nested_origin_and_require_conditions() {
+    assert_output(
+        &[
+            (
+                "nested dir/loader.mjs",
+                r#"
+                import { createRequire } from 'node:module';
+                export const loadHere = createRequire(import.meta.url);
+                export const metadata = import.meta;
+                "#,
+            ),
+            (
+                "nested dir/node_modules/dual/package.json",
+                r#"{"exports":{"import":"./unused.mjs","require":"./loaded.json"}}"#,
+            ),
+            (
+                "nested dir/node_modules/dual/loaded.json",
+                r#"{"answer":42}"#,
+            ),
+            (
+                "node_modules/dual/index.js",
+                "throw new Error('wrong referrer');",
+            ),
+            (
+                "nested dir/consumer.cjs",
+                r#"
+                const { createRequire } = require('module');
+                module.exports = createRequire(__filename)('dual').answer;
+                "#,
+            ),
+            (
+                "app.mjs",
+                r#"
+                import { createRequire } from 'node:module';
+                import { loadHere, metadata } from './nested dir/loader.mjs';
+                console.log(metadata.url.endsWith('/nested%20dir/loader.mjs'));
+                console.log(metadata.dirname.endsWith('/nested dir'));
+                console.log(loadHere('dual').answer);
+                console.log(loadHere.resolve('dual').endsWith('/dual/loaded.json'));
+                console.log(loadHere('./consumer.cjs'));
+                try { createRequire(metadata.url); console.log('unexpected'); }
+                catch (error) { console.log(error instanceof TypeError); }
+                "#,
+            ),
+        ],
+        &["true", "true", "42", "true", "42", "true"],
+    );
+}
+
+#[test]
+fn file_backed_metadata_without_module_load_keeps_the_synthetic_origin() {
+    let root = persistent_module_root();
+    std::fs::write(root.join("app.mjs"), "console.log(import.meta.url);").unwrap();
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        assert_eq!(
+            run_with_capabilities(&root, lane, &["builtin"]).unwrap(),
+            ["frankenengine://module/import-meta"],
+        );
+    }
+}
+
 /// An exports map with import and require conditions: an ES module gets the import target.
 #[test]
 fn exports_map_prefers_the_import_condition() {

@@ -7883,6 +7883,49 @@ impl InterpreterCore {
         ))
     }
 
+    /// A captured graph owns its source metadata even if an opaque id happens
+    /// to name a file. A filesystem execution may expose only a regular file
+    /// inside its module root, with the execution's module-load authority.
+    pub(super) fn module_source_location(
+        &self,
+        id: &str,
+    ) -> Option<Cow<'_, crate::module_resolver::ModuleSourceLocation>> {
+        if let Some(installed) = &self.module_resolver {
+            return installed.resolver.source_location(id).map(Cow::Borrowed);
+        }
+        if id.is_empty()
+            || !self
+                .config
+                .granted_capabilities
+                .contains(&RuntimeCapability::ModuleLoad)
+        {
+            return None;
+        }
+        let root = self.canonical_module_root_path()?;
+        let label = Path::new(id);
+        let filename = if label.is_absolute() {
+            self.canonicalize_module_candidate(id, label).ok()?
+        } else {
+            // The CLI supplies invocation-relative entry labels. Embedders
+            // may supply a module-root-relative label. If both identify real
+            // but distinct files, neither is a trusted base for this module.
+            let rooted = self
+                .canonicalize_module_candidate(id, &root.join(label))
+                .ok();
+            let invoked = self.canonicalize_module_candidate(id, label).ok();
+            match (rooted, invoked) {
+                (Some(a), Some(b)) if a != b => return None,
+                (Some(path), _) | (_, Some(path)) => path,
+                _ => return None,
+            }
+        };
+        let url = Url::from_file_path(&filename).ok()?.to_string();
+        Some(Cow::Owned(crate::module_resolver::ModuleSourceLocation {
+            filename,
+            url,
+        }))
+    }
+
     pub(super) fn alloc_import_meta_object(&mut self) -> Result<Value, InterpreterError> {
         let origin = self
             .current_module_specifier
@@ -7904,10 +7947,8 @@ impl InterpreterCore {
         }
         self.check_temporary_memory_budget(Self::estimate_string_bytes(origin).saturating_mul(2))?;
         let origin = origin.to_string();
-        let location = self
-            .module_resolver
-            .as_ref()
-            .and_then(|installed| installed.resolver.source_location(&origin));
+        let location = self.module_source_location(&origin);
+        let location = location.as_deref();
         let url = location.map_or(IMPORT_META_URL_VALUE, |location| location.url.as_str());
         let dirname = location
             .and_then(|location| location.filename.parent())
@@ -7970,13 +8011,6 @@ impl InterpreterCore {
         match key {
             "url" | "dirname" => {
                 self.record_import_meta_contract_access(key, true);
-                if self.module_resolver.is_none() {
-                    return Ok(Value::str(if key == "url" {
-                        IMPORT_META_URL_VALUE
-                    } else {
-                        IMPORT_META_DIRNAME_VALUE
-                    }));
-                }
                 self.heap
                     .get(object_id.0 as usize)
                     .and_then(|object| object.properties.get(key))

@@ -12961,11 +12961,8 @@ impl InterpreterCore {
         outcome
     }
 
-    /// Create a require value for the executing captured module only. Node's
-    /// arbitrary virtual bases and URL objects need an explicitly captured
-    /// route contract; accepting them here would confer another referrer's
-    /// authority or fall back to the host filesystem. Exact string metadata
-    /// covers `import.meta.url` (including query/fragment) and `__filename`.
+    /// Bind a require value to its executing module. Guest strings only
+    /// match trusted origin metadata and never choose a different referrer.
     pub(super) fn create_require(
         &mut self,
         module: &Ir3Module,
@@ -12974,7 +12971,7 @@ impl InterpreterCore {
         let origin = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
         let Value::Str(origin) = origin else {
             return Err(InterpreterError::TypeError {
-                expected: "createRequire origin string for the current captured module".to_string(),
+                expected: "createRequire origin string for the current module".to_string(),
                 got: origin.type_name().to_string(),
             });
         };
@@ -12982,28 +12979,32 @@ impl InterpreterCore {
             expected: "well-formed createRequire origin string".to_string(),
             got: "unpaired UTF-16 surrogate".to_string(),
         })?;
-        let referrer = self
+        let invalid_origin = || InterpreterError::TypeError {
+            expected: "createRequire origin equal to the current module URL or absolute filename"
+                .to_string(),
+            got: "unregistered or different module origin".to_string(),
+        };
+        let id = self
             .current_module_specifier
             .as_deref()
-            .filter(|id| {
-                self.module_resolver
-                    .as_ref()
-                    .and_then(|installed| installed.resolver.source_location(id))
-                    .is_some_and(|location| location.matches_create_require_origin(origin))
-            })
-            .ok_or_else(|| InterpreterError::TypeError {
-                expected:
-                    "createRequire origin equal to the current captured URL or absolute filename"
-                        .to_string(),
-                got: "unregistered or different module origin".to_string(),
-            })?;
+            .ok_or_else(invalid_origin)?;
+        let location = self
+            .module_source_location(id)
+            .filter(|location| location.matches_create_require_origin(origin))
+            .ok_or_else(invalid_origin)?;
+        let referrer = if self.module_resolver.is_some() {
+            id
+        } else {
+            location.filename.to_str().ok_or_else(invalid_origin)?
+        };
         // Each factory call is a distinct function, including its .resolve
         // and user-defined properties. The existing builtin identity and GC
         // traversal already include bound_object; dispatch still uses only
         // the captured module_specifier. Ordinary CJS require keeps None.
         let holder_bytes = Self::estimate_heap_object_bytes(&HeapObject::new());
+        let referrer_len = referrer.len();
         let mut require = self.construct_require_builtin(referrer, holder_bytes)?;
-        self.run_pre_allocation_hook(module, AllocKind::Function, referrer.len())?;
+        self.run_pre_allocation_hook(module, AllocKind::Function, referrer_len)?;
         require.bound_object = Some(self.alloc_object_with_prototype(None)?.0);
         Ok(Value::BuiltinFunction(require))
     }

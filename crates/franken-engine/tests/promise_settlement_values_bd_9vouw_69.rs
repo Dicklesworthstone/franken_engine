@@ -17,11 +17,20 @@
 use frankenengine_engine::ast::ParseGoal;
 use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore};
 use frankenengine_engine::capability::RuntimeCapability;
-use frankenengine_engine::ir_contract::Ir0Module;
+use frankenengine_engine::ir_contract::{CapabilityTag, Ir0Module, Ir3Instruction, RegRange};
 use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 
 fn console_lines(source: &str, stress_interval: Option<u64>) -> Vec<String> {
+    combinator_console_lines(source, stress_interval, None, false)
+}
+
+fn combinator_console_lines(
+    source: &str,
+    stress_interval: Option<u64>,
+    native_combinator: Option<&str>,
+    throughput: bool,
+) -> Vec<String> {
     let tree = CanonicalEs2020Parser
         .parse_with_options(
             ParserSource {
@@ -32,13 +41,43 @@ fn console_lines(source: &str, stress_interval: Option<u64>) -> Vec<String> {
             &ParserOptions::default(),
         )
         .expect("parse");
-    let module = lower_ir0_to_ir3(
+    let mut module = lower_ir0_to_ir3(
         &Ir0Module::from_syntax_tree(tree, "settle.js"),
         &LoweringContext::new("settle-trace", "settle-decision", "settle-policy"),
     )
     .expect("lower")
     .ir3;
-    let mut config = InterpreterConfig::quickjs_defaults();
+    if let Some(capability) = native_combinator {
+        // Custom JS iterables use the generic capability algorithm. Exercise
+        // the public IR HostCall boundary too, replacing only this wrapper's
+        // first two instructions without moving any function or jump target.
+        let wrapper = module
+            .function_table
+            .iter()
+            .find(|function| function.name.as_deref() == Some("nativeCombinator"))
+            .expect("source declares the native combinator wrapper");
+        assert_eq!(wrapper.arity, 1);
+        let entry = wrapper.entry as usize;
+        let capability = CapabilityTag(capability.to_string());
+        if !module.required_capabilities.contains(&capability) {
+            module.required_capabilities.push(capability.clone());
+        }
+        let body = module
+            .instructions
+            .get_mut(entry..entry + 2)
+            .expect("wrapper has a call and a return");
+        body[0] = Ir3Instruction::HostCall {
+            capability,
+            args: RegRange { start: 0, count: 1 },
+            dst: 0,
+        };
+        body[1] = Ir3Instruction::Return { value: 0 };
+    }
+    let mut config = if throughput {
+        InterpreterConfig::v8_defaults()
+    } else {
+        InterpreterConfig::quickjs_defaults()
+    };
     config.instruction_budget = 1_000_000_000;
     config.granted_capabilities = [
         RuntimeCapability::VmDispatch,
@@ -180,5 +219,93 @@ fn combinators_take_any_iterable() {
     ];
     for (source, node) in cases {
         assert_eq!(console_lines(source, None).join("\n"), node, "`{source}`");
+    }
+}
+
+fn assert_combinator_iterator_rejection(
+    method: &str,
+    marker: &str,
+    setup: &str,
+    expected_type: &str,
+) {
+    let source = format!(
+        r#"
+var marker = {marker};
+var iterable = {{
+    [Symbol.iterator]() {{ return this; }},
+    next() {{ return {{ done: true }}; }}
+}};
+{setup}
+function nativeCombinator(input) {{ return Promise.{method}(input); }}
+var result = nativeCombinator(iterable);
+console.log('returned', result instanceof Promise);
+var observed = result.then(
+    function () {{ console.log('unexpected fulfillment'); }},
+    function (reason) {{ console.log('rejected', reason === marker, typeof reason); }}
+);
+"#
+    );
+    let expected = vec![
+        "returned true".to_string(),
+        format!("rejected true {expected_type}"),
+    ];
+    let capability = format!("promise:{method}");
+    for native in [None, Some(capability.as_str())] {
+        for throughput in [false, true] {
+            for stress in [None, Some(1), Some(7)] {
+                assert_eq!(
+                    combinator_console_lines(&source, stress, native, throughput),
+                    expected,
+                    "method={method} native={native:?} throughput={throughput} stress={stress:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn combinator_iterator_rejections_preserve_exact_completion_values() {
+    for method in ["all", "allSettled", "race", "any"] {
+        for (marker, kind) in [
+            ("123456789012345678901234567890n", "bigint"),
+            ("'\\ud800x\\udfff'", "string"),
+            ("function () { return 17; }", "function"),
+            ("(function () { return 17; }).bind(null)", "function"),
+            ("Math.max", "function"),
+            ("Promise.resolve(17)", "object"),
+            ("(function* () { yield 17; })()", "object"),
+            ("(async function* () { yield 17; })()", "object"),
+            ("[17].values()", "object"),
+            ("({ value: 17 })", "object"),
+            ("Symbol('marker')", "symbol"),
+        ] {
+            assert_combinator_iterator_rejection(
+                method,
+                marker,
+                "iterable.next = function () { throw marker; };",
+                kind,
+            );
+        }
+    }
+}
+
+#[test]
+fn combinator_protocol_abrupt_completions_keep_original_rejections() {
+    for method in ["all", "allSettled", "race", "any"] {
+        for setup in [
+            "Object.defineProperty(iterable, Symbol.iterator, { get() { throw marker; } });",
+            "iterable[Symbol.iterator] = function () { throw marker; };",
+            "Object.defineProperty(iterable, 'next', { get() { throw marker; } });",
+            "iterable.next = function () { return { get done() { throw marker; } }; };",
+            "iterable.next = function () { return { done: false, get value() { throw marker; } }; };",
+            "var calls = 0; iterable.next = function () { if (calls++ === 0) return { value: 17, done: false }; throw marker; };",
+        ] {
+            assert_combinator_iterator_rejection(
+                method,
+                "(function () { return 17; }).bind(null)",
+                setup,
+                "function",
+            );
+        }
     }
 }

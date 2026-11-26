@@ -11370,8 +11370,8 @@ impl InterpreterCore {
         } else {
             return Err(error);
         };
-        let promise = self.create_promise()?;
-        self.reject_promise(promise, Self::value_to_js_value(&thrown), label)?;
+        let reason = self.promise_value(&thrown)?;
+        let promise = self.create_rejected_promise(reason, label)?;
         Ok(Value::Promise(promise.0))
     }
 

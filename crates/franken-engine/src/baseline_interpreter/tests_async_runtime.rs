@@ -14462,3 +14462,84 @@ fn native_module_error_allocation_refusal_stops_without_rejecting_its_promise() 
         core.recompute_estimated_memory_bytes()
     );
 }
+
+#[test]
+fn native_combinator_input_rejection_preserves_carrier_label_and_memory() {
+    for marker in [
+        Value::BigInt(Arc::from("123456789012345678901234567890")),
+        Value::Str(JsString::from_code_units(&[0xd800, 0x78, 0xdfff])),
+        Value::BuiltinFunction(BuiltinFunction::standard_constructor("Promise")),
+    ] {
+        let mut core = test_interpreter();
+        core.replace_pending_abrupt_slots(Some((marker.clone(), Label::Secret)), None)
+            .expect("original iterator exception");
+        let value = core
+            .reject_promise_combinator_input(InterpreterError::UncaughtException {
+                value: "diagnostic text is not the thrown value".to_string(),
+            })
+            .expect("reject with the original value");
+        let Value::Promise(handle) = value else {
+            panic!("native combinator must return a Promise");
+        };
+        let record = core
+            .promise_store
+            .get(crate::promise_model::PromiseHandle(handle))
+            .expect("rejected result Promise");
+        let crate::promise_model::PromiseState::Rejected(reason) = &record.state else {
+            panic!("iterator failure must reject");
+        };
+        assert_eq!(core.js_value_to_value(reason), marker);
+        assert_eq!(record.label, Label::Secret);
+        assert!(core.pending_exception.is_none());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+}
+
+#[test]
+fn native_combinator_rejection_budget_failure_leaves_no_pending_promise() {
+    let fixture = || {
+        let mut core = test_interpreter();
+        core.replace_pending_abrupt_slots(
+            Some((Value::BigInt(Arc::from("9".repeat(257))), Label::Secret)),
+            None,
+        )
+        .expect("original iterator exception");
+        core
+    };
+    let error = InterpreterError::UncaughtException {
+        value: "iterator failed".to_string(),
+    };
+    let mut probe = fixture();
+    let before = probe.estimated_memory_bytes();
+    probe
+        .reject_promise_combinator_input(error.clone())
+        .expect("unlimited rejection");
+    assert!(probe.estimated_memory_bytes() > before);
+
+    let mut limited = fixture();
+    limited.config.max_total_memory_bytes = probe.estimated_memory_bytes() - 1;
+    assert!(matches!(
+        limited.reject_promise_combinator_input(error),
+        Err(InterpreterError::MemoryBudgetExceeded { .. })
+    ));
+    assert_eq!(limited.promise_store.len(), 0);
+    assert!(limited.event_loop.microtasks.is_empty());
+    assert_eq!(
+        limited.estimated_memory_bytes(),
+        limited.recompute_estimated_memory_bytes()
+    );
+
+    let mut fatal = fixture();
+    let before = fatal.estimated_memory_bytes();
+    assert_eq!(
+        fatal.reject_promise_combinator_input(InterpreterError::Cancelled),
+        Err(InterpreterError::Cancelled)
+    );
+    assert_eq!(fatal.promise_store.len(), 0);
+    assert!(fatal.promise_value_carriers.is_empty());
+    assert!(fatal.pending_exception.is_some());
+    assert_eq!(fatal.estimated_memory_bytes(), before);
+}

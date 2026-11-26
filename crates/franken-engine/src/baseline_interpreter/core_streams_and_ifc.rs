@@ -9350,8 +9350,9 @@ impl InterpreterCore {
                         | HostObjectSlots::FsEntryKind(_)
                         | HostObjectSlots::TimerHandle(_)
                         // This projection follows ordinary object values;
-                        // callable internals retain their existing IFC rules.
-                        | HostObjectSlots::CallableIdentity(_) => {}
+                        // callable and exotic internals keep their IFC rules.
+                        | HostObjectSlots::CallableIdentity(_)
+                        | HostObjectSlots::ExoticIdentity(_) => {}
                     }
                 }
                 if let Some(prototype) = object.prototype {
@@ -14498,7 +14499,8 @@ impl InterpreterCore {
                 .properties
                 .exact_len()
                 .saturating_add(object.properties.baseline_symbol_key_order().len())
-                .saturating_add(usize::from(object.callable_identity().is_some()));
+                .saturating_add(usize::from(object.callable_identity().is_some()))
+                .saturating_add(usize::from(object.exotic_identity().is_some()));
             let work = u64::try_from(edges).unwrap_or(u64::MAX).saturating_mul(3);
             if work
                 > self
@@ -14586,6 +14588,16 @@ impl InterpreterCore {
                         &mut pending,
                     )?;
                 }
+            }
+            if let Some(identity) = object.exotic_identity() {
+                // Retaining an exotic through a prototype has the same
+                // opaque state policy as retaining the original value.
+                opaque |= self.queue_native_builtin_value(
+                    module,
+                    identity,
+                    !snapshot_lookup,
+                    &mut pending,
+                )?;
             }
             for value in object.properties.values_unordered() {
                 opaque |=

@@ -161,15 +161,20 @@ impl InterpreterCore {
             // The internal operation retains its required validation order.
             self.json_observe_reachable_value(&target)?;
             self.json_observe_reachable_value(&proposed)?;
-            // Ordinary callable values share the internal methods of their
-            // backing objects. Callable proxies retain their exotic methods.
-            if target.is_callable()
-                && !matches!(&target, Value::BuiltinFunction(builtin)
-                    if builtin.kind == BuiltinFunctionKind::CallableProxy)
+            // Callable and exotic carriers share the internal methods of
+            // their authoritative property backing. Callable proxies retain
+            // their own internal methods and revocation checks.
+            if (target.is_callable() || Self::has_exotic_backing_object(&target))
+                && !Self::is_callable_proxy(&target)
             {
                 return match operation {
                     ObjectIntegrityOperation::GetPrototype => {
-                        self.function_value_prototype(module, &target)
+                        if Self::has_exotic_backing_object(&target) {
+                            let link = self.exotic_prototype_link(module, &target)?;
+                            Ok(self.prototype_value_for_link(module, link))
+                        } else {
+                            self.function_value_prototype(module, &target)
+                        }
                     }
                     ObjectIntegrityOperation::SetPrototype => {
                         let accepted =
@@ -193,36 +198,6 @@ impl InterpreterCore {
                         self.prevent_backing_extensions(module, &target, reflect)
                     }
                 };
-            }
-            // A promise, generator, async generator or iterator value has no
-            // ordinary property storage; it inherits from its intrinsic
-            // prototype (%Promise.prototype%, bd-9vouw.34; %GeneratorPrototype%,
-            // %AsyncGeneratorPrototype%, %ArrayIteratorPrototype%), which
-            // core-js and regenerator-runtime read at load
-            // (`getProto(getProto([].keys()))`). Its [[Extensible]] is its
-            // backing object's, true until one exists (bd-9vouw.149).
-            if let Some(name) = self.exotic_intrinsic_prototype_name(&target) {
-                match operation {
-                    ObjectIntegrityOperation::GetPrototype => {
-                        // bd-9vouw.137: a Promise subclass instance reports
-                        // the prototype its backing object records; a
-                        // generator its function's `prototype` (bd-9vouw.120).
-                        if let Some(module) = module
-                            && let Some(prototype) =
-                                self.exotic_prototype_override(module, &target)?
-                        {
-                            return Ok(Value::Object(prototype));
-                        }
-                        return Ok(Value::Object(self.ensure_builtin_prototype(name)?));
-                    }
-                    ObjectIntegrityOperation::IsExtensible => {
-                        return Ok(Value::Bool(self.backing_is_extensible(module, &target)?));
-                    }
-                    ObjectIntegrityOperation::PreventExtensions => {
-                        return self.prevent_backing_extensions(module, &target, reflect);
-                    }
-                    ObjectIntegrityOperation::SetPrototype => {}
-                }
             }
             let target_id = match &target {
                 value if value.is_object_like() => Some(self.reflection_target_object(value)?),
@@ -509,6 +484,22 @@ impl InterpreterCore {
         self.initial_function_value_prototype(module, function)
     }
 
+    /// Actual prototype of an exotic carrier. Before property storage
+    /// exists it uses the creation snapshot; afterwards the ordinary link
+    /// is authoritative, including an explicit null prototype.
+    pub(super) fn exotic_prototype_link(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: &Value,
+    ) -> Result<Option<ObjectId>, InterpreterError> {
+        if let Some(backing) = self.own_property_holder(module, value, false)? {
+            self.integrity_step(backing, 0)?;
+            self.observe_exotic_backing_shape(backing)?;
+            return self.ordinary_get_prototype_of(backing);
+        }
+        self.initial_exotic_prototype_link(value).map(Some)
+    }
+
     /// Intrinsic or class-definition parent, used only until a callable has
     /// property storage. Once materialized, its ordinary link is authoritative,
     /// including an explicit null link or a later change to a derived class.
@@ -578,37 +569,49 @@ impl InterpreterCore {
         )
     }
 
-    /// Initialize lazy callable storage with its actual intrinsic parent.
-    /// This does not invoke guest code or overwrite an explicit stored link.
+    /// Initialize lazy property storage with the carrier's actual parent.
+    /// No guest code runs and an existing explicit or null link is retained.
     pub(super) fn initialize_function_backing_prototype(
         &mut self,
         module: Option<&Ir3Module>,
         function: &Value,
         backing: ObjectId,
     ) -> Result<(), InterpreterError> {
-        if !function.is_callable()
-            || matches!(function, Value::BuiltinFunction(builtin)
-                if builtin.kind == BuiltinFunctionKind::CallableProxy)
-        {
+        let exotic = Self::has_exotic_backing_object(function);
+        if (!function.is_callable() && !exotic) || Self::is_callable_proxy(function) {
             return Ok(());
         }
-        self.initialize_callable_backing_identity(module, backing, function)?;
+        if exotic {
+            self.initialize_exotic_backing_identity(backing, function)?;
+        } else {
+            self.initialize_callable_backing_identity(module, backing, function)?;
+        }
         if self
             .heap
             .get(backing.0 as usize)
             .is_some_and(|object| object.prototype.is_some() || object.is_null_prototype)
         {
+            if exotic {
+                self.release_exotic_initial_prototype(function);
+            }
             return Ok(());
         }
-        let parent = self.initial_function_value_prototype(module, function)?;
+        let parent = if exotic {
+            Value::Object(self.initial_exotic_prototype_link(function)?)
+        } else {
+            self.initial_function_value_prototype(module, function)?
+        };
         if let Some(link) = self.prototype_link_for_value(module, &parent)? {
             self.store_prototype_link(backing, link);
             self.gc_write_barrier(backing);
+            if exotic {
+                self.release_exotic_initial_prototype(function);
+            }
         }
         Ok(())
     }
 
-    /// A callable's [[SetPrototypeOf]] uses the same extensibility, cycle,
+    /// A carrier's [[SetPrototypeOf]] uses the same extensibility, cycle,
     /// proxy-boundary and mutation-label checks as an ordinary object.
     pub(super) fn set_function_value_prototype(
         &mut self,
@@ -625,8 +628,8 @@ impl InterpreterCore {
 
     /// The [[Prototype]] link a proposed prototype value stands for
     /// (bd-9vouw.98): `null`, an object, a callable proxy's record, or a
-    /// function's own-property backing object, so an ordinary object can
-    /// inherit from a function (`Object.create(Parent)` in bundlers'
+    /// function's or exotic carrier's own-property backing object, so an
+    /// ordinary object can inherit from the original value (`Object.create(Parent)` in bundlers'
     /// `__toESM`, `Object.setPrototypeOf(o, F)`, `{ __proto__: F }`); its
     /// statics and intrinsic members are inherited through the backing.
     /// `None` for any other value.
@@ -638,8 +641,8 @@ impl InterpreterCore {
         Ok(match value {
             Value::Null => Some(None),
             Value::Object(id) => Some(Some(*id)),
-            callable if callable.is_callable() => {
-                self.own_property_holder(module, callable, true)?.map(Some)
+            object if object.is_callable() || Self::has_exotic_backing_object(object) => {
+                self.own_property_holder(module, object, true)?.map(Some)
             }
             _ => None,
         })
@@ -647,8 +650,8 @@ impl InterpreterCore {
 
     /// The value [[GetPrototypeOf]] reports for a stored link: a function's
     /// own-property backing object stands for the function itself
-    /// (bd-9vouw.98). Deleting configurable function properties does not
-    /// change that identity.
+    /// (bd-9vouw.98), and exotic storage reports its original carrier.
+    /// Deleting configurable properties does not change that identity.
     pub(super) fn prototype_value_for_link(
         &self,
         module: Option<&Ir3Module>,
@@ -675,6 +678,13 @@ impl InterpreterCore {
         }
         if let Some(function) = self.callable_identity_for_backing(module, id) {
             return function;
+        }
+        if let Some(value) = self
+            .heap
+            .get(id.0 as usize)
+            .and_then(HeapObject::exotic_identity)
+        {
+            return value.clone();
         }
         Value::Object(id)
     }

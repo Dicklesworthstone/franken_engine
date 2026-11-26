@@ -5780,13 +5780,15 @@ fn iterator_method_via_property(core: &mut InterpreterCore, iterator: Value, key
     // same receiver/callee dispatch over an isolated register frame while
     // leaving the runtime iterator table (`self.iterators`) untouched, so the
     // iterator's in-progress cursor is preserved across calls.
-    let handle = match &iterator {
-        Value::Iterator(handle) => *handle,
-        other => panic!("expected iterator value, got {other:?}"),
-    };
+    assert!(
+        matches!(&iterator, Value::Iterator(_)),
+        "expected iterator value, got {iterator:?}"
+    );
     let key = core.executable_property_key_from_value(&key);
-    let method = core.iterator_runtime_property_value(handle, &key);
     let module = test_module(Vec::new());
+    let method = core
+        .iterator_protocol_value_property(Some(&module), iterator.clone(), &key)
+        .expect("iterator property should resolve through its prototype");
     core.invoke_inline_method_call(Some(&module), method, iterator, Vec::new())
         .expect("iterator property method call should execute")
 }
@@ -8176,11 +8178,14 @@ fn array_iterator_symbol_iterator_method_returns_same_iterator() {
     let Value::Iterator(iterator_handle) = iterator else {
         panic!("array values must return an iterator")
     };
+    let module = test_module(Vec::new());
     assert_eq!(
-        core.iterator_runtime_property_value(
-            iterator_handle,
+        core.iterator_protocol_value_property(
+            Some(&module),
+            Value::Iterator(iterator_handle),
             &RuntimePropertyKey::String(JsString::from("@@iterator")),
-        ),
+        )
+        .expect("plain string iterator alias lookup should succeed"),
         Value::Undefined
     );
 

@@ -4542,6 +4542,8 @@ impl InterpreterCore {
                 (std::mem::size_of::<CallableIdentitySlots>() as u64)
                     .saturating_add(Self::estimate_execution_seed_value_bytes(&identity.value))
             }
+            HostObjectSlots::ExoticIdentity(value) => (std::mem::size_of::<Value>() as u64)
+                .saturating_add(Self::estimate_execution_seed_value_bytes(value)),
             HostObjectSlots::FetchResponse(response) => {
                 (std::mem::size_of::<fetch::FetchResponseSlots>() as u64)
                     .saturating_add(Self::estimate_string_bytes(&response.status_text))
@@ -8569,11 +8571,8 @@ impl InterpreterCore {
                         expected: "promise with property storage".to_string(),
                         got: "promise without property storage".to_string(),
                     })?;
-                self.mutate_heap(|heap| {
-                    if let Some(object) = heap.get_mut(backing.0 as usize) {
-                        object.prototype = Some(prototype);
-                    }
-                });
+                self.store_prototype_link(backing, Some(prototype));
+                self.gc_write_barrier(backing);
             }
             return Ok(result);
         }
@@ -8613,45 +8612,46 @@ impl InterpreterCore {
         Ok(Value::Object(object_id))
     }
 
-    /// bd-9vouw.137: the [[Prototype]] a promise built through a Promise
-    /// subclass records on its backing object; `None` for any other value
-    /// and for a promise that reports %Promise.prototype%.
-    pub(super) fn promise_prototype_override(
-        &self,
-        module: &Ir3Module,
+    /// Initial prototype before an exotic value has property storage.
+    /// Generator instances retain the prototype captured when they were
+    /// created, even if their function's prototype changes before this read.
+    pub(super) fn initial_exotic_prototype_link(
+        &mut self,
         value: &Value,
-    ) -> Result<Option<ObjectId>, InterpreterError> {
-        if !matches!(value, Value::Promise(_)) {
-            return Ok(None);
+    ) -> Result<ObjectId, InterpreterError> {
+        if let Some(generator_id) = self.exotic_generator_id(value)
+            && let Some(prototype) = self
+                .generators
+                .get(generator_id as usize)
+                .and_then(|generator| generator.prototype)
+        {
+            return Ok(prototype);
         }
-        Ok(self
-            .function_own_property_object(module, value)?
-            .and_then(|backing| self.heap.get(backing.0 as usize))
-            .and_then(|object| object.prototype))
+        let name = self
+            .exotic_intrinsic_prototype_name(value)
+            .unwrap_or("Object");
+        self.ensure_builtin_prototype(name)
     }
 
-    /// The object a promise, generator or async generator inherits from in
-    /// place of its intrinsic prototype: a Promise subclass instance's
-    /// (bd-9vouw.137), the `prototype` a generator's function held at the
-    /// call (bd-9vouw.120).
-    pub(super) fn exotic_prototype_override(
-        &self,
-        module: &Ir3Module,
-        value: &Value,
-    ) -> Result<Option<ObjectId>, InterpreterError> {
-        let generator_id = match value {
-            Value::Promise(_) => return self.promise_prototype_override(module, value),
-            Value::Generator(id) => *id,
-            Value::AsyncGeneratorObject(id) => match self.async_generators.get(*id as usize) {
-                Some(generator) => generator.generator_id,
-                None => return Ok(None),
-            },
-            _ => return Ok(None),
-        };
-        Ok(self
-            .generators
-            .get(generator_id as usize)
-            .and_then(|generator| generator.prototype))
+    fn exotic_generator_id(&self, value: &Value) -> Option<u32> {
+        match value {
+            Value::Generator(id) => Some(*id),
+            Value::AsyncGeneratorObject(id) => self
+                .async_generators
+                .get(*id as usize)
+                .map(|generator| generator.generator_id),
+            _ => None,
+        }
+    }
+
+    /// Once ordinary backing storage owns the prototype link, the creation
+    /// snapshot must not retain a prototype that later becomes unreachable.
+    pub(super) fn release_exotic_initial_prototype(&mut self, value: &Value) {
+        if let Some(generator_id) = self.exotic_generator_id(value)
+            && let Some(generator) = self.generators.get_mut(generator_id as usize)
+        {
+            generator.prototype = None;
+        }
     }
 
     /// The `prototype` property of a generator or async generator function
@@ -8695,10 +8695,12 @@ impl InterpreterCore {
         module: &Ir3Module,
         function: &Value,
     ) -> Result<Option<ObjectId>, InterpreterError> {
-        Ok(match self.generator_function_prototype(module, function)? {
-            Some(Value::Object(prototype)) => Some(prototype),
-            _ => None,
-        })
+        match self.generator_function_prototype(module, function)? {
+            Some(prototype) if prototype.is_object_like() => Ok(self
+                .prototype_link_for_value(Some(module), &prototype)?
+                .flatten()),
+            _ => Ok(None),
+        }
     }
 
     pub(super) fn constructor_function_index(
@@ -9089,8 +9091,8 @@ impl InterpreterCore {
     ) -> Result<ObjectId, InterpreterError> {
         match prototype {
             Value::Object(prototype) => Ok(prototype),
-            function if function.is_callable() => {
-                match self.prototype_link_for_value(Some(module), &function)? {
+            value if value.is_callable() || Self::has_exotic_backing_object(&value) => {
+                match self.prototype_link_for_value(Some(module), &value)? {
                     Some(Some(link)) => Ok(link),
                     _ => self.ensure_builtin_prototype("Object"),
                 }
@@ -10583,9 +10585,15 @@ impl InterpreterCore {
         prototype: ObjectId,
     ) -> Result<(), InterpreterError> {
         let method = |name: &str, kind| {
+            let mut builtin = BuiltinFunction::new_kind(kind);
+            if kind == BuiltinFunctionKind::IteratorNext {
+                // The shared method retains its iterator brand without
+                // retaining whichever instance first exposed the method.
+                builtin.module_specifier = BuiltinModuleSpecifier::from_nonempty(canonical);
+            }
             (
                 RuntimePropertyKey::String(JsString::from(name)),
-                Value::BuiltinFunction(BuiltinFunction::new_kind(kind)),
+                Value::BuiltinFunction(builtin),
             )
         };
         let (tag, members, function_kind) = match canonical {
@@ -11714,20 +11722,24 @@ impl InterpreterCore {
             // too. Their ids are the runtime's (never reused), not a
             // module's, so the owner is a constant (computed once: every
             // `p.then` read asks).
-            Value::Promise(id)
-            | Value::Generator(id)
-            | Value::AsyncGeneratorObject(id)
-            | Value::Iterator(id) => {
-                let slot = match function {
-                    Value::Promise(_) => 0,
-                    Value::Generator(_) => 1,
-                    Value::AsyncGeneratorObject(_) => 2,
-                    _ => 3,
-                };
-                Ok(Some((Self::exotic_object_own_property_owners()[slot], *id)))
+            exotic if Self::has_exotic_backing_object(exotic) => {
+                Ok(Self::exotic_own_property_key(exotic))
             }
             _ => Ok(None),
         }
+    }
+
+    /// Exotic carrier ids and their backing registry are realm-wide, so
+    /// prototype reflection does not require an IR module to recover storage.
+    pub(super) fn exotic_own_property_key(value: &Value) -> Option<(ContentHash, u32)> {
+        let (slot, id) = match value {
+            Value::Promise(id) => (0, *id),
+            Value::Generator(id) => (1, *id),
+            Value::AsyncGeneratorObject(id) => (2, *id),
+            Value::Iterator(id) => (3, *id),
+            _ => return None,
+        };
+        Some((Self::exotic_object_own_property_owners()[slot], id))
     }
 
     /// Stable registry namespaces for promise, generator, async-generator
@@ -11949,6 +11961,38 @@ impl InterpreterCore {
         Ok(())
     }
 
+    /// Preserve the runtime carrier when an ordinary prototype link keeps
+    /// only its backing alive. Callable identity remains a separate contract.
+    pub(super) fn initialize_exotic_backing_identity(
+        &mut self,
+        backing: ObjectId,
+        value: &Value,
+    ) -> Result<(), InterpreterError> {
+        let object = self
+            .heap
+            .get(backing.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: backing.0 })?;
+        if let Some(identity) = object.exotic_identity() {
+            return if identity == value {
+                Ok(())
+            } else {
+                Err(InterpreterError::InternalError {
+                    details: "exotic backing identity cannot change".into(),
+                })
+            };
+        }
+        if object.host_slots.is_some() || !Self::has_exotic_backing_object(value) {
+            return Err(InterpreterError::InternalError {
+                details: "exotic identity requires its own property backing".into(),
+            });
+        }
+        let slots = HostObjectSlots::ExoticIdentity(value.clone());
+        self.apply_memory_component_delta(0, Self::estimate_host_object_slots_bytes(&slots))?;
+        self.mutate_heap(|heap| heap[backing.0 as usize].host_slots = Some(Box::new(slots)));
+        self.gc_write_barrier(backing);
+        Ok(())
+    }
+
     /// Existing own-property backing object for a user function, if any.
     pub(super) fn function_own_property_object(
         &self,
@@ -11972,8 +12016,11 @@ impl InterpreterCore {
         let Some(key) = self.function_own_property_key(module, function)? else {
             return Ok(None);
         };
-        if let Some(existing) = self.function_prototypes.get(&key) {
-            return Ok(Some(*existing));
+        if let Some(existing) = self.function_prototypes.get(&key).copied() {
+            if Self::has_exotic_backing_object(function) {
+                self.initialize_function_backing_prototype(Some(module), function, existing)?;
+            }
+            return Ok(Some(existing));
         }
         let backing = self.alloc_object_with_prototype(None)?;
         self.mutate_function_prototypes(|entries| entries.insert(key, backing));
@@ -12296,41 +12343,6 @@ impl InterpreterCore {
         )
     }
 
-    /// Whether a promise, generator or async generator object has the own
-    /// property `key` (on its backing object). Runs no guest code.
-    pub(super) fn exotic_has_own_property(
-        &self,
-        module: &Ir3Module,
-        value: &Value,
-        key: &RuntimePropertyKey,
-    ) -> Result<bool, InterpreterError> {
-        Ok(self
-            .function_own_property_object(module, value)?
-            .and_then(|backing| self.heap.get(backing.0 as usize))
-            .is_some_and(|object| object.contains_own_runtime_property(key)))
-    }
-
-    /// The own property `key` of a promise, generator or async generator
-    /// object, read from its backing object with `value` as the receiver
-    /// (an accessor sees it as `this`), with that backing object (the owner
-    /// whose stored label the read joins), or `None` when it has none.
-    pub(super) fn exotic_own_property_get(
-        &mut self,
-        module: &Ir3Module,
-        value: &Value,
-        key: &RuntimePropertyKey,
-    ) -> Result<Option<(Value, ObjectId)>, InterpreterError> {
-        if !self.exotic_has_own_property(module, value, key)? {
-            return Ok(None);
-        }
-        let backing = self
-            .function_own_property_object(module, value)?
-            .expect("checked by exotic_has_own_property");
-        let own =
-            self.proxy_aware_get_runtime_property(Some(module), backing, key, value.clone(), 0)?;
-        Ok(Some((own, backing)))
-    }
-
     /// [[OwnPropertyKeys]] of a promise, generator, async generator or
     /// iterator object (bd-9vouw.149): its backing object's keys, or none
     /// when nothing was ever stored on it. Creates no backing object.
@@ -12410,7 +12422,17 @@ impl InterpreterCore {
         if let Value::Object(id) = value {
             return Ok(Some(*id));
         }
-        let holder = if let Value::BuiltinFunction(builtin) = value
+        let holder = if let Some(key) = Self::exotic_own_property_key(value) {
+            if let Some(backing) = self.function_prototypes.get(&key).copied() {
+                Some(backing)
+            } else if create {
+                let backing = self.alloc_object_with_prototype(None)?;
+                self.mutate_function_prototypes(|entries| entries.insert(key, backing));
+                Some(backing)
+            } else {
+                None
+            }
+        } else if let Value::BuiltinFunction(builtin) = value
             && let Some(object) = Self::builtin_function_property_object(builtin)
         {
             Some(object)

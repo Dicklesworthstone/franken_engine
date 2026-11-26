@@ -290,6 +290,387 @@ proxy.x;"#;
     }
 }
 
+#[test]
+fn exotic_prototype_mutations_preserve_identity_and_observable_properties() {
+    assert_profile_value(
+        r#"(function () {
+  const failures = [];
+  function check(name, value) { if (!value) failures.push(name); }
+  const factories = [
+    ['promise', function () { return Promise.resolve(1); }],
+    ['generator', function () { return (function* () { yield 2; })(); }],
+    ['iterator', function () { return [3].values(); }],
+    ['async-generator', function () { return (async function* () { yield 4; })(); }]
+  ];
+  for (const pair of factories) {
+    for (const warm of [false, true]) {
+      const name = pair[0] + ':' + warm;
+      const value = pair[1]();
+      const original = Object.getPrototypeOf(value);
+      const methodName = pair[0] === 'promise' ? 'then' : 'next';
+      const method = value[methodName];
+      if (warm) Object.defineProperty(value, 'retained', {value: 17, configurable: true});
+      const parent = Object.create(original);
+      const symbol = Symbol('self');
+      Object.defineProperty(parent, 'self', {get() { return this; }});
+      Object.defineProperty(parent, symbol, {get() { return this; }});
+      Object.defineProperty(parent, 'assigned', {set(value) { this.seen = value; }});
+      parent.echo = function () { return this; };
+      function Match() {}
+      Match.prototype = parent;
+      check(name + ':set-result', Object.setPrototypeOf(value, parent) === value);
+      check(name + ':prototype', Object.getPrototypeOf(value) === parent && Reflect.getPrototypeOf(value) === parent);
+      check(name + ':get-receiver', value.self === value && value[symbol] === value && value.echo() === value);
+      check(name + ':inherited-method', value[methodName] === method);
+      check(name + ':has', 'self' in value && symbol in value && !Object.prototype.hasOwnProperty.call(value, 'self'));
+      const alternate = {};
+      check(name + ':reflect-get', Reflect.get(value, 'self', alternate) === alternate && Reflect.get(value, symbol, alternate) === alternate);
+      check(name + ':reflect-set', Reflect.set(value, 'assigned', 23, alternate) && alternate.seen === 23 && value.seen === undefined);
+      value.assigned = 29;
+      check(name + ':setter', value.seen === 29 && parent.seen === undefined);
+      check(name + ':instanceof', value instanceof Match);
+      Object.defineProperty(value, 'ownSelf', {get() { return this; }, configurable: true});
+      const child = Object.create(value);
+      check(name + ':create-identity', Object.getPrototypeOf(child) === value && Reflect.getPrototypeOf(child) === value);
+      function Constructor() {}
+      Constructor.prototype = value;
+      const constructed = new Constructor();
+      check(name + ':constructor-identity', Object.getPrototypeOf(constructed) === value && constructed instanceof Constructor && child instanceof Constructor);
+      function* makeGenerator() {}
+      async function* makeAsyncGenerator() {}
+      makeGenerator.prototype = value;
+      makeAsyncGenerator.prototype = value;
+      const generated = makeGenerator();
+      const generatedAsync = makeAsyncGenerator();
+      check(name + ':generator-prototype-identity', Object.getPrototypeOf(generated) === value && generated instanceof makeGenerator);
+      check(name + ':async-generator-prototype-identity', Object.getPrototypeOf(generatedAsync) === value && generatedAsync instanceof makeAsyncGenerator);
+      check(name + ':child-get', child.self === child && child[symbol] === child && child.ownSelf === child);
+      check(name + ':own-reflect-get', Reflect.get(value, 'ownSelf', alternate) === alternate);
+      const adopted = {};
+      check(name + ':adopt-result', Reflect.setPrototypeOf(adopted, value));
+      check(name + ':adopt-identity', Object.getPrototypeOf(adopted) === value && adopted.self === adopted);
+      check(name + ':cycle', Reflect.setPrototypeOf(value, child) === false && Object.getPrototypeOf(value) === parent);
+      if (warm) check(name + ':own-descriptor', Object.getOwnPropertyDescriptor(value, 'retained').value === 17);
+      check(name + ':restore', Object.setPrototypeOf(value, original) === value && Object.getPrototypeOf(value) === original);
+      check(name + ':restored-lookup', value.self === undefined && child.self === undefined && value[methodName] === method && !(value instanceof Match));
+    }
+  }
+  return failures.length ? failures.join('|') : 'ok';
+})()"#,
+        "ok",
+    );
+}
+
+#[test]
+fn exotic_null_prototypes_and_non_extensibility_are_authoritative() {
+    assert_profile_value(
+        r#"(function () {
+  const failures = [];
+  function check(name, value) { if (!value) failures.push(name); }
+  function typeError(step) { try { step(); return false; } catch (error) { return error.name === 'TypeError'; } }
+  const factories = [
+    ['promise', function () { return Promise.resolve(1); }],
+    ['generator', function () { return (function* () { yield 2; })(); }],
+    ['iterator', function () { return [3].values(); }],
+    ['async-generator', function () { return (async function* () { yield 4; })(); }]
+  ];
+  for (const pair of factories) {
+    for (const warm of [false, true]) {
+      const name = pair[0] + ':' + warm;
+      const value = pair[1]();
+      const original = Object.getPrototypeOf(value);
+      if (warm) value.before = 11;
+      check(name + ':null-set', Reflect.setPrototypeOf(value, null));
+      check(name + ':null-get', Object.getPrototypeOf(value) === null && Reflect.getPrototypeOf(value) === null);
+      check(name + ':removed-lookups', value.then === undefined && value.next === undefined && value[Symbol.iterator] === undefined && value[Symbol.asyncIterator] === undefined);
+      check(name + ':removed-has', !('toString' in value) && !('next' in value) && !(value instanceof Object));
+      check(name + ':null-tag', Object.prototype.toString.call(value) === '[object Object]');
+      Object.defineProperty(value, 'own', {value: 42, enumerable: true, writable: true, configurable: true});
+      value.after = 43;
+      check(name + ':null-survives-own', Object.getPrototypeOf(value) === null && value.own === 42 && value.after === 43);
+      check(name + ':own-descriptor', Object.getOwnPropertyDescriptor(value, 'own').value === 42 && Object.keys(value).includes('own'));
+      if (warm) check(name + ':old-own', value.before === 11);
+      check(name + ':prevent-result', Object.preventExtensions(value) === value && !Reflect.isExtensible(value));
+      check(name + ':same-null', Reflect.setPrototypeOf(value, null) && Object.setPrototypeOf(value, null) === value);
+      check(name + ':different-refused', Reflect.setPrototypeOf(value, original) === false);
+      check(name + ':different-throws', typeError(function () { Object.setPrototypeOf(value, original); }));
+      check(name + ':still-null', Object.getPrototypeOf(value) === null);
+      check(name + ':new-own-refused', Reflect.defineProperty(value, 'newOwn', {value: 1}) === false);
+    }
+    const fresh = pair[1]();
+    const original = Object.getPrototypeOf(fresh);
+    check(pair[0] + ':fresh-prevent', Reflect.preventExtensions(fresh) && !Object.isExtensible(fresh));
+    check(pair[0] + ':fresh-prototype', Object.getPrototypeOf(fresh) === original);
+    check(pair[0] + ':fresh-same', Reflect.setPrototypeOf(fresh, original));
+    check(pair[0] + ':fresh-change', Reflect.setPrototypeOf(fresh, null) === false && Object.getPrototypeOf(fresh) === original);
+  }
+  return failures.length ? failures.join('|') : 'ok';
+})()"#,
+        "ok",
+    );
+}
+
+#[test]
+fn exotic_prototype_changes_preserve_native_receiver_brands() {
+    assert_profile_value(
+        r#"(function () {
+  const failures = [];
+  function check(name, value) { if (!value) failures.push(name); }
+  function typeError(step) { try { step(); return false; } catch (error) { return error.name === 'TypeError'; } }
+  const promise = Promise.resolve(1);
+  const then = promise.then;
+  Object.setPrototypeOf(promise, Object.create(Object.getPrototypeOf(promise)));
+  check('promise-inherited', promise.then === then);
+  Object.setPrototypeOf(promise, null);
+  check('promise-borrowed', then.call(promise) instanceof Promise);
+  check('promise-brand', typeError(function () { then.call({}); }));
+
+  const generator = (function* () { yield 7; })();
+  const otherGenerator = (function* () { yield 8; })();
+  const nextGenerator = generator.next;
+  Object.setPrototypeOf(generator, Object.create(Object.getPrototypeOf(generator)));
+  check('generator-inherited', generator.next === nextGenerator);
+  Object.setPrototypeOf(otherGenerator, null);
+  check('generator-borrowed', nextGenerator.call(otherGenerator).value === 8 && nextGenerator.call(generator).value === 7);
+  check('generator-brand', typeError(function () { nextGenerator.call({}); }));
+
+  const iterator = [9].values();
+  const otherIterator = [10].values();
+  const nextIterator = iterator.next;
+  Object.setPrototypeOf(iterator, Object.create(Object.getPrototypeOf(iterator)));
+  check('iterator-inherited', iterator.next === nextIterator && otherIterator.next === nextIterator);
+  Object.setPrototypeOf(otherIterator, null);
+  check('iterator-borrowed', nextIterator.call(otherIterator).value === 10 && nextIterator.call(iterator).value === 9);
+  check('iterator-brand', typeError(function () { nextIterator.call({}); }));
+  const map = new Map([['a', 13]]).values();
+  const set = new Set([14]).values();
+  const mapNext = map.next;
+  const setNext = set.next;
+  check('iterator-method-identities', nextIterator !== mapNext && mapNext !== setNext && mapNext === new Map().values().next);
+  check('array-map-brand', typeError(function () { nextIterator.call(map); }));
+  check('array-set-brand', typeError(function () { nextIterator.call(set); }));
+  check('map-set-brand', typeError(function () { mapNext.call(set); }));
+  check('set-map-brand', typeError(function () { setNext.call(map); }));
+  check('map-array-brand', typeError(function () { mapNext.call([].values()); }));
+  check('set-array-brand', typeError(function () { setNext.call([].values()); }));
+  check('map-borrowed', mapNext.call(new Map([['b', 15]]).values()).value === 15 && mapNext.call(map).value === 13);
+  check('set-borrowed', setNext.call(new Set([16]).values()).value === 16 && setNext.call(set).value === 14);
+
+  const entered = [0, 0];
+  const asynchronous = (async function* () { entered[0]++; yield 11; })();
+  const otherAsynchronous = (async function* () { entered[1]++; yield 12; })();
+  const nextAsynchronous = asynchronous.next;
+  Object.setPrototypeOf(asynchronous, Object.create(Object.getPrototypeOf(asynchronous)));
+  check('async-generator-inherited', asynchronous.next === nextAsynchronous);
+  Object.setPrototypeOf(otherAsynchronous, null);
+  const otherResult = nextAsynchronous.call(otherAsynchronous);
+  check('async-generator-borrowed', otherResult instanceof Promise && entered[0] === 0 && entered[1] === 1);
+  const result = nextAsynchronous.call(asynchronous);
+  check('async-generator-original', result instanceof Promise && entered[0] === 1 && entered[1] === 1);
+  return failures.length ? failures.join('|') : 'ok';
+})()"#,
+        "ok",
+    );
+}
+
+#[test]
+fn generator_instance_prototypes_survive_late_backing_materialization() {
+    assert_profile_value(
+        r#"(function () {
+  const failures = [];
+  function check(name, value) { if (!value) failures.push(name); }
+  function* generate() { yield 1; }
+  async function* generateAsync() { yield 2; }
+  for (const pair of [['generator', generate], ['async-generator', generateAsync]]) {
+    const name = pair[0];
+    const make = pair[1];
+    const original = make.prototype;
+    const cold = make();
+    const warm = make();
+    Object.defineProperty(warm, 'retained', {value: 17, configurable: true});
+    const replacement = {marker: 'new'};
+    make.prototype = replacement;
+    check(name + ':cold-snapshot', Object.getPrototypeOf(cold) === original && Reflect.getPrototypeOf(cold) === original);
+    check(name + ':warm-snapshot', Object.getPrototypeOf(warm) === original);
+    check(name + ':old-lookup', cold.marker === undefined && warm.marker === undefined && typeof cold.next === 'function');
+    cold.materialized = 19;
+    check(name + ':materialize-snapshot', Object.getPrototypeOf(cold) === original && cold.materialized === 19);
+    check(name + ':retained', warm.retained === 17);
+    const later = make();
+    check(name + ':later-prototype', Object.getPrototypeOf(later) === replacement);
+    check(name + ':later-lookup', later.marker === 'new' && later.next === undefined);
+  }
+  return failures.length ? failures.join('|') : 'ok';
+})()"#,
+        "ok",
+    );
+}
+
+#[test]
+fn exotic_prototype_observations_preserve_mutation_labels() {
+    use frankenengine_engine::ast::ParseGoal;
+    use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore, Value};
+    use frankenengine_engine::capability::RuntimeCapability;
+    use frankenengine_engine::ifc_artifacts::Label;
+    use frankenengine_engine::ir_contract::{Ir0Module, Ir3Instruction};
+    use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+    use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
+
+    let cases = [
+        ("value instanceof Promise;", false),
+        ("'then' in value;", false),
+        ("Object.getPrototypeOf(value) === null;", true),
+        ("value.then === undefined;", true),
+    ];
+    for mut config in [
+        InterpreterConfig::quickjs_defaults(),
+        InterpreterConfig::v8_defaults(),
+    ] {
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]
+        .into_iter()
+        .collect();
+        for (observation, expected) in cases {
+            let source = format!(
+                "var value = Promise.resolve(1); \
+                 Object.setPrototypeOf(value, 'prototype-label-marker'); {observation}"
+            );
+            let tree = CanonicalEs2020Parser
+                .parse_with_options(
+                    ParserSource {
+                        label: "exotic-prototype-label.js".into(),
+                        text: source.clone(),
+                    },
+                    ParseGoal::Script,
+                    &ParserOptions::default(),
+                )
+                .expect("exotic prototype label program parses");
+            let mut module = lower_ir0_to_ir3(
+                &Ir0Module::from_syntax_tree(tree, "exotic-prototype-label.js"),
+                &LoweringContext::new(
+                    "exotic-prototype-label",
+                    "prototype-decision",
+                    "prototype-policy",
+                ),
+            )
+            .expect("exotic prototype label program lowers")
+            .ir3;
+            let input_register = config.max_registers - 1;
+            let pool_index = module
+                .constant_pool
+                .iter()
+                .position(|text| text == "prototype-label-marker")
+                .expect("unique labelled prototype input") as u32;
+            let mut replacements = 0;
+            for instruction in &mut module.instructions {
+                if let Ir3Instruction::LoadStr {
+                    dst,
+                    pool_index: index,
+                } = instruction
+                    && *index == pool_index
+                {
+                    *instruction = Ir3Instruction::Move {
+                        dst: *dst,
+                        src: input_register,
+                    };
+                    replacements += 1;
+                }
+            }
+            assert_eq!(replacements, 1, "only the prototype input is labelled");
+            for interval in [None, Some(1), Some(7)] {
+                let mut core = InterpreterCore::new(config.clone(), "exotic-prototype-label");
+                core.seed_register(input_register, Value::Null).unwrap();
+                core.set_register_label(input_register, Label::Secret)
+                    .unwrap();
+                core.set_gc_stress_interval(interval);
+                let result = core
+                    .execute(&module)
+                    .expect("exotic prototype label program executes");
+                assert_eq!(result.value, Value::Bool(expected), "{source}");
+                assert_eq!(
+                    result.completion_label.join(&Label::Secret),
+                    result.completion_label,
+                    "prototype mutation label must reach the observation: {source}"
+                );
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes(),
+                    "interval={interval:?}: {source}"
+                );
+            }
+        }
+    }
+}
+
+/// An ordinary object's prototype can be the only root retaining a
+/// generator, its suspended invocation and its captured heap values.
+#[test]
+fn exotic_prototype_identity_retains_captures_across_gc() {
+    use frankenengine_engine::ast::ParseGoal;
+    use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore, Value};
+    use frankenengine_engine::capability::RuntimeCapability;
+    use frankenengine_engine::ir_contract::Ir0Module;
+    use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+    use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
+
+    let source = r#"function make() {
+  const payload = { value: 3 };
+  const generator = (function* () { yield payload.value; })();
+  return Object.create(generator);
+}
+var holder = make();
+for (var i = 0; i < 30; i++) { var garbage = { i: i }; }
+Object.getPrototypeOf(holder).next().value;"#;
+    let tree = CanonicalEs2020Parser
+        .parse_with_options(
+            ParserSource {
+                label: "exotic-prototype-gc.js".into(),
+                text: source.into(),
+            },
+            ParseGoal::Script,
+            &ParserOptions::default(),
+        )
+        .expect("exotic prototype GC program parses");
+    let module = lower_ir0_to_ir3(
+        &Ir0Module::from_syntax_tree(tree, "exotic-prototype-gc.js"),
+        &LoweringContext::new("exotic-prototype-gc", "proxy-decision", "proxy-policy"),
+    )
+    .expect("exotic prototype GC program lowers")
+    .ir3;
+    for base_config in [
+        InterpreterConfig::quickjs_defaults(),
+        InterpreterConfig::v8_defaults(),
+    ] {
+        for interval in [None, Some(1), Some(7)] {
+            let mut config = base_config.clone();
+            config.granted_capabilities = [
+                RuntimeCapability::VmDispatch,
+                RuntimeCapability::HeapAllocate,
+                RuntimeCapability::Builtin,
+            ]
+            .into_iter()
+            .collect();
+            let mut core = InterpreterCore::new(config, "exotic-prototype-gc");
+            core.set_gc_stress_interval(interval);
+            let result = core
+                .execute(&module)
+                .expect("prototype carrier survives GC");
+            assert_eq!(result.value, Value::Int(3), "interval={interval:?}");
+            if interval.is_some() {
+                assert!(core.gc_stats().collections > 0);
+            }
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes(),
+                "exotic prototype accounting: interval={interval:?}"
+            );
+        }
+    }
+}
+
 /// The former backing keys are ordinary guest property names. Neither data
 /// properties nor accessors with those names may replace [[MapData]] or
 /// [[SetData]]. Expected outputs are checked against Node v24.22.1.

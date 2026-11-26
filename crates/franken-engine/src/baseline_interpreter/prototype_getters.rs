@@ -562,11 +562,9 @@ impl InterpreterCore {
         {
             return self.function_value_prototype(Some(module), &receiver);
         }
-        if let Some(name) = self.exotic_intrinsic_prototype_name(&receiver) {
-            if let Some(prototype) = self.exotic_prototype_override(module, &receiver)? {
-                return Ok(Value::Object(prototype));
-            }
-            return Ok(Value::Object(self.ensure_builtin_prototype(name)?));
+        if Self::has_exotic_backing_object(&receiver) {
+            let link = self.exotic_prototype_link(Some(module), &receiver)?;
+            return Ok(self.prototype_value_for_link(Some(module), link));
         }
         if receiver.is_object_like() {
             let id = self.reflection_target_object(&receiver)?;
@@ -615,10 +613,11 @@ impl InterpreterCore {
         if !receiver.is_object_like() {
             return Ok(Value::Undefined);
         }
-        let accepted = if receiver.is_callable()
-            && self
-                .iterator_carrier_backing_id(&receiver, "object target")?
-                .is_none()
+        let accepted = if Self::has_exotic_backing_object(&receiver)
+            || (receiver.is_callable()
+                && self
+                    .iterator_carrier_backing_id(&receiver, "object target")?
+                    .is_none())
         {
             self.set_function_value_prototype(module, &receiver, &proto)?
         } else {

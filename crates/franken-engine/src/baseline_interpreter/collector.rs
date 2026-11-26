@@ -1822,6 +1822,11 @@ impl InterpreterCore {
                         // of a closure, bound function, or native callable.
                         marker.value(&identity.value);
                     }
+                    HostObjectSlots::ExoticIdentity(value) => {
+                        // An ordinary prototype link can be the only root
+                        // retaining the runtime state behind this backing.
+                        marker.value(value);
+                    }
                     HostObjectSlots::EventTarget(target) => {
                         if let Some(listeners) = target.listeners {
                             marker.object(listeners);
@@ -3226,6 +3231,100 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn exotic_prototype_identity_survives_collection_serialization_and_seeds() {
+        for force_scanning in [false, true] {
+            let module = carrier_module(
+                "(() => { const payload = { answer: 42 }; \
+                 function* make() { yield payload.answer; } \
+                 make.prototype = { obsolete: true }; \
+                 const target = make(); make.prototype = Object.prototype; \
+                 return [target, payload]; })()",
+            );
+            let mut core = carrier_core();
+            let Value::Object(result) = core
+                .execute(&module)
+                .expect("exotic identity fixture")
+                .value
+            else {
+                panic!("fixture returns witnesses");
+            };
+            let values = core.read_array_like_values(result);
+            let target = values[0].clone();
+            let Value::Generator(generator_id) = target else {
+                panic!("generator target");
+            };
+            let Value::Object(payload) = values[1] else {
+                panic!("captured payload");
+            };
+            let obsolete = core.generators[generator_id as usize]
+                .prototype
+                .expect("captured initial prototype");
+            let backing = core
+                .own_property_holder(Some(&module), &target, true)
+                .expect("materialize exotic backing")
+                .expect("generator backing");
+            assert!(
+                core.object_set_prototype(Some(&module), backing, None, 0)
+                    .unwrap()
+            );
+            let holder = core.alloc_object_with_prototype(Some(backing)).unwrap();
+            let encoded = serde_json::to_value(&core.heap[backing.0 as usize]).unwrap();
+            let decoded: HeapObject = serde_json::from_value(encoded.clone()).unwrap();
+            assert_eq!(decoded.exotic_identity(), Some(&target));
+            assert!(decoded.callable_identity().is_none());
+            for invalid_value in [Value::Int(1), Value::Object(holder), Value::Function(0)] {
+                let mut invalid = encoded.clone();
+                invalid["host_slots"]["ExoticIdentity"] =
+                    serde_json::to_value(invalid_value).unwrap();
+                assert!(serde_json::from_value::<HeapObject>(invalid).is_err());
+            }
+            core.clear_current_register_frame();
+            core.set_reg(0, Value::Object(holder));
+            let seed = core
+                .capture_execution_seed()
+                .expect("capture exotic identity");
+            let memory_limit = core.config.max_total_memory_bytes;
+            if force_scanning {
+                core.config.max_total_memory_bytes = core.estimated_memory_bytes();
+            }
+            core.collect_garbage();
+            core.config.max_total_memory_bytes = memory_limit;
+            assert!(core.generators.get(generator_id as usize).is_some());
+            assert!(core.heap.get(payload.0 as usize).is_some());
+            assert!(core.heap.is_reclaimed(obsolete.0 as usize));
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+            core.reset_execution_state_from_seed(&seed)
+                .expect("restore exotic identity");
+            let recovered = core.prototype_value_for_link(Some(&module), Some(backing));
+            assert_eq!(recovered, target);
+            let Value::Object(step) = core
+                .invoke_inline_method_call(
+                    Some(&module),
+                    Value::BuiltinFunction(BuiltinFunction::new_kind(
+                        BuiltinFunctionKind::GeneratorNext,
+                    )),
+                    recovered,
+                    Vec::new(),
+                )
+                .expect("resume prototype-retained generator")
+            else {
+                panic!("generator step");
+            };
+            assert_eq!(
+                core.heap[step.0 as usize].properties.get("value"),
+                Some(&Value::Int(42))
+            );
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
         }
     }
 

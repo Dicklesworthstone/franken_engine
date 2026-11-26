@@ -1271,7 +1271,9 @@ impl InterpreterCore {
                 Value::Object(prototype) => prototype,
                 // A function is an object: `F.prototype = fn` (Test262
                 // S13.2.2_A1) is searched for as that function.
-                function if function.is_callable() => {
+                function
+                    if function.is_callable() || Self::has_exotic_backing_object(&function) =>
+                {
                     return Ok(Value::Bool(self.value_prototype_chain_contains(
                         Some(module),
                         &candidate,
@@ -1290,7 +1292,9 @@ impl InterpreterCore {
         {
             match value {
                 Value::Object(prototype) => prototype,
-                function if function.is_callable() => {
+                function
+                    if function.is_callable() || Self::has_exotic_backing_object(&function) =>
+                {
                     return Ok(Value::Bool(self.value_prototype_chain_contains(
                         Some(module),
                         &candidate,
@@ -1412,62 +1416,16 @@ impl InterpreterCore {
         }
     }
 
-    /// [[HasProperty]] of a promise, generator, async generator, iterator or
-    /// async function object: its own properties (on its backing object),
-    /// the members its [[Get]] supplies, then its prototype's chain.
+    /// [[HasProperty]] follows the same authoritative backing and prototype
+    /// chain as [[Get]], including null links and deleted intrinsic methods.
     pub(super) fn exotic_has_property(
         &mut self,
         module: &Ir3Module,
         object_like: &Value,
         key: &RuntimePropertyKey,
     ) -> Result<bool, InterpreterError> {
-        if self.exotic_has_own_property(module, object_like, key)? {
-            return Ok(true);
-        }
-        let supplied = match object_like {
-            Value::Promise(_) => key.as_str().is_some_and(|name| {
-                !matches!(Self::promise_property_value(name), Value::Undefined)
-            }),
-            Value::Generator(_) | Value::AsyncGeneratorObject(_) => match key {
-                RuntimePropertyKey::String(_) => key
-                    .as_str()
-                    .is_some_and(|name| matches!(name, "next" | "return" | "throw")),
-                RuntimePropertyKey::Symbol(symbol) => {
-                    let iterator = if matches!(object_like, Value::Generator(_)) {
-                        WellKnownSymbol::Iterator
-                    } else {
-                        WellKnownSymbol::AsyncIterator
-                    };
-                    *symbol == iterator.id()
-                }
-            },
-            Value::Iterator(handle) => !matches!(
-                self.iterator_runtime_property_value(*handle, key),
-                Value::Undefined
-            ),
-            _ => false,
-        };
-        if supplied {
-            return Ok(true);
-        }
-        // A promise built by a Promise subclass inherits from that class's
-        // prototype (bd-9vouw.137), a generator from its function's
-        // `prototype` (bd-9vouw.120).
-        if let Some(prototype) = self.exotic_prototype_override(module, object_like)? {
-            return self.proxy_aware_has_runtime_property(Some(module), prototype, key, 0);
-        }
-        if let Some(&intrinsic_prototype) = self
-            .exotic_intrinsic_prototype_name(object_like)
-            .and_then(|name| self.builtin_prototypes.get(name))
-        {
-            return self.proxy_aware_has_runtime_property(
-                Some(module),
-                intrinsic_prototype,
-                key,
-                0,
-            );
-        }
-        self.object_prototype_has_property(module, key)
+        let backing = self.exotic_property_base(Some(module), object_like)?;
+        self.proxy_aware_has_runtime_property(Some(module), backing, key, 0)
     }
 
     /// Whether Object.prototype (allocated, or the builtins it supplies
@@ -1856,13 +1814,6 @@ impl InterpreterCore {
             // and for a generator its function's `prototype` (bd-9vouw.120).
             ref exotic if Self::has_exotic_backing_object(exotic) && module.is_some() => {
                 let module = module.expect("checked above");
-                continue_at = match self.exotic_prototype_override(module, exotic)? {
-                    Some(prototype) => Some(prototype),
-                    None => match self.exotic_intrinsic_prototype_name(exotic) {
-                        Some(name) => Some(self.ensure_builtin_prototype(name)?),
-                        None => None,
-                    },
-                };
                 self.ensure_function_own_property_object(module, exotic)?
                     .ok_or_else(|| InterpreterError::TypeError {
                         expected: "object with an own-property object".to_string(),
@@ -2211,40 +2162,7 @@ impl InterpreterCore {
         key: &RuntimePropertyKey,
     ) -> Result<Value, InterpreterError> {
         let backing = if Self::has_exotic_backing_object(&receiver) {
-            let own = self.own_property_holder(module, &receiver, false)?;
-            // Even an absent own slot selects whether the inherited member
-            // is visible. Preserve that shape observation before choosing
-            // the exotic's separately stored prototype chain.
-            if let Some(shape) = own.and_then(|own| self.object_mutation_labels.get(&own)) {
-                let label = self.clone_dominant_label_with_temporary_budget(
-                    self.pending_hostcall_result_label
-                        .as_ref()
-                        .unwrap_or(&Label::Public),
-                    shape,
-                    0,
-                )?;
-                self.replace_pending_hostcall_result_label(Some(label))?;
-                self.observe_scoped_callback_result()?;
-            }
-            if let Some(own) = own
-                && self
-                    .heap
-                    .get(own.0 as usize)
-                    .is_some_and(|object| object.contains_own_runtime_property(key))
-            {
-                Some(own)
-            } else if let Some(prototype) = module
-                .map(|module| self.exotic_prototype_override(module, &receiver))
-                .transpose()?
-                .flatten()
-            {
-                Some(prototype)
-            } else {
-                let prototype = self
-                    .exotic_intrinsic_prototype_name(&receiver)
-                    .unwrap_or("Object");
-                Some(self.ensure_builtin_prototype(prototype)?)
-            }
+            Some(self.exotic_property_base(module, &receiver)?)
         } else {
             match &receiver {
                 Value::Object(id) => Some(*id),
@@ -2269,6 +2187,43 @@ impl InterpreterCore {
             Some(backing) => self.iterator_protocol_property(module, backing, key, receiver),
             None => Ok(Value::Undefined),
         }
+    }
+
+    /// Property lookup begins at existing backing storage, whose ordinary
+    /// chain owns both presence and absence. Before storage is allocated,
+    /// the creation prototype supplies inherited properties directly.
+    pub(super) fn exotic_property_base(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: &Value,
+    ) -> Result<ObjectId, InterpreterError> {
+        match self.own_property_holder(module, value, false)? {
+            Some(backing) => {
+                self.observe_exotic_backing_shape(backing)?;
+                Ok(backing)
+            }
+            None => self.initial_exotic_prototype_link(value),
+        }
+    }
+
+    /// Prototype selection is observable even without an inline callback
+    /// scope, as for direct `in` and `instanceof` bytecodes.
+    pub(super) fn observe_exotic_backing_shape(
+        &mut self,
+        backing: ObjectId,
+    ) -> Result<(), InterpreterError> {
+        if let Some(shape) = self.object_mutation_labels.get(&backing) {
+            let label = self.clone_dominant_label_with_temporary_budget(
+                self.pending_hostcall_result_label
+                    .as_ref()
+                    .unwrap_or(&Label::Public),
+                shape,
+                0,
+            )?;
+            self.replace_pending_hostcall_result_label(Some(label))?;
+            self.observe_scoped_callback_result()?;
+        }
+        Ok(())
     }
 
     /// GetMethod for optional iterator hooks. `next` acquisition deliberately
@@ -2341,6 +2296,17 @@ impl InterpreterCore {
         key: &RuntimePropertyKey,
         receiver: Value,
     ) -> Result<Value, InterpreterError> {
+        self.iterator_protocol_property_at_depth(module, object_id, key, receiver, 0)
+    }
+
+    fn iterator_protocol_property_at_depth(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+        receiver: Value,
+        depth: u32,
+    ) -> Result<Value, InterpreterError> {
         if let Some(module) = module {
             self.run_pre_runtime_property_access_hook(module, object_id, key)?;
         }
@@ -2357,7 +2323,7 @@ impl InterpreterCore {
             .join(&stored_label);
         self.replace_pending_hostcall_result_label(Some(label))?;
         self.observe_scoped_callback_result()?;
-        let value = self.proxy_aware_get_runtime_property(module, object_id, key, receiver, 0);
+        let value = self.proxy_aware_get_runtime_property(module, object_id, key, receiver, depth);
         let label = self
             .pending_hostcall_result_label
             .as_ref()
@@ -3058,20 +3024,8 @@ impl InterpreterCore {
                 // Observe that selection before HasProperty, including a Proxy
                 // prototype whose has trap returns false or throws.
                 let inherited = if let Some(module) = module {
-                    if Self::has_exotic_backing_object(&options)
-                        && backing.is_none_or(|backing| {
-                            !core
-                                .heap
-                                .get(backing.0 as usize)
-                                .is_some_and(|object| object.contains_own_runtime_property(&key))
-                        })
-                    {
-                        core.exotic_prototype_override(module, &options)?
-                            .or_else(|| {
-                                core.exotic_intrinsic_prototype_name(&options)
-                                    .and_then(|name| core.builtin_prototypes.get(name).copied())
-                            })
-                            .or_else(|| core.builtin_prototypes.get("Object").copied())
+                    if Self::has_exotic_backing_object(&options) && backing.is_none() {
+                        core.exotic_prototype_link(Some(module), &options)?
                     } else if options.is_callable() && backing.is_none() {
                         let prototype = core.function_value_prototype(Some(module), &options)?;
                         core.prototype_link_for_value(Some(module), &prototype)?
@@ -3208,29 +3162,6 @@ impl InterpreterCore {
         self.set_object_property(result_id, "value".to_string(), value)?;
         self.set_object_property(result_id, "done".to_string(), Value::Bool(done))?;
         Ok(Value::Object(result_id))
-    }
-
-    pub(super) fn iterator_property_value(&self, iterator_handle: u32, key: &str) -> Value {
-        match key {
-            "next" => Value::BuiltinFunction(BuiltinFunction::iterator_next(iterator_handle)),
-            _ => Value::Undefined,
-        }
-    }
-
-    pub(super) fn iterator_runtime_property_value(
-        &self,
-        iterator_handle: u32,
-        key: &RuntimePropertyKey,
-    ) -> Value {
-        match key {
-            RuntimePropertyKey::String(key) => key.as_str().map_or(Value::Undefined, |key| {
-                self.iterator_property_value(iterator_handle, key)
-            }),
-            RuntimePropertyKey::Symbol(symbol) if *symbol == WellKnownSymbol::Iterator.id() => {
-                Value::BuiltinFunction(BuiltinFunction::iterator_self(iterator_handle))
-            }
-            RuntimePropertyKey::Symbol(_) => Value::Undefined,
-        }
     }
 
     // =====================================================================
@@ -5951,18 +5882,10 @@ impl InterpreterCore {
                 exotic @ (Value::Promise(_)
                 | Value::Generator(_)
                 | Value::AsyncGeneratorObject(_)
-                | Value::Iterator(_)) => match match module {
-                    Some(module) => self.exotic_prototype_override(module, exotic)?,
-                    None => None,
-                } {
-                    Some(prototype) => Value::Object(prototype),
-                    None => {
-                        let name = self
-                            .exotic_intrinsic_prototype_name(exotic)
-                            .expect("an exotic value has an intrinsic prototype");
-                        Value::Object(self.ensure_builtin_prototype(name)?)
-                    }
-                },
+                | Value::Iterator(_)) => {
+                    let link = self.exotic_prototype_link(module, exotic)?;
+                    self.prototype_value_for_link(module, link)
+                }
                 _ => return Ok(false),
             };
             if next == *needle
@@ -9591,6 +9514,7 @@ impl InterpreterCore {
                     .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
                 if object.contains_own_runtime_property(key)
                     || self.prototype_getter_at(id, key).is_some()
+                    || self.canonical_prototype_virtual_property(id, key).is_some()
                 {
                     return Ok(true);
                 }
@@ -11039,7 +10963,16 @@ impl InterpreterCore {
             Value::Promise(_)
             | Value::Generator(_)
             | Value::AsyncGeneratorObject(_)
-            | Value::Iterator(_) => return self.exotic_conversion_method(module, value, key),
+            | Value::Iterator(_) => {
+                let backing = self.exotic_property_base(Some(module), value)?;
+                return self.iterator_protocol_property_at_depth(
+                    Some(module),
+                    backing,
+                    key,
+                    receiver,
+                    depth,
+                );
+            }
             Value::Undefined | Value::Null => {
                 return Err(InterpreterError::TypeError {
                     expected: "object-coercible value".to_string(),
@@ -11218,40 +11151,15 @@ impl InterpreterCore {
         Ok((!matches!(value, Value::Undefined)).then_some(value))
     }
 
-    /// [[Get]] of a conversion method on a promise, generator, async
-    /// generator or iterator value: its own properties, then Promise.prototype
-    /// (for a promise) or Object.prototype.
+    /// Conversion methods use ordinary [[Get]] with the original carrier as
+    /// receiver, including explicit null prototypes and observable accessors.
     pub(super) fn exotic_conversion_method(
         &mut self,
         module: &Ir3Module,
         value: &Value,
         key: &RuntimePropertyKey,
     ) -> Result<Value, InterpreterError> {
-        if Self::has_exotic_backing_object(value)
-            && let Some((own, _)) = self.exotic_own_property_get(module, value, key)?
-        {
-            return Ok(own);
-        }
-        if let Some(prototype) = self.exotic_prototype_override(module, value)? {
-            return self.proxy_aware_get_runtime_property(
-                Some(module),
-                prototype,
-                key,
-                value.clone(),
-                0,
-            );
-        }
-        // The intrinsic prototype is materialized for the read: it holds the
-        // built-in members, such as an array or Map iterator's `next`, which
-        // Object.prototype does not (the Set methods call `keys().next`
-        // through [[Get]], bd-9vouw.161).
-        let prototype = self
-            .exotic_intrinsic_prototype_name(value)
-            .unwrap_or("Object");
-        self.ensure_builtin_prototype(prototype)?;
-        Ok(self
-            .primitive_prototype_get(module, prototype, key, value.clone())?
-            .0)
+        self.iterator_protocol_value_property(Some(module), value.clone(), key)
     }
 
     pub(super) fn require_object_coercible(value: Value) -> Result<Value, InterpreterError> {

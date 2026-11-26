@@ -592,7 +592,19 @@ impl InterpreterCore {
                         }
                         *handle
                     }
-                    (Some(Value::Iterator(handle)), None) => *handle,
+                    (Some(Value::Iterator(handle)), None) => {
+                        let method_kind = &*builtin.module_specifier;
+                        if matches!(
+                            method_kind,
+                            ARRAY_ITERATOR_PROTOTYPE
+                                | MAP_ITERATOR_PROTOTYPE
+                                | SET_ITERATOR_PROTOTYPE
+                        ) && self.iterator_intrinsic_prototype_name(*handle) != method_kind
+                        {
+                            return Err(self.throw_js_error("TypeError", incompatible(method_kind)));
+                        }
+                        *handle
+                    }
                     (_, Some(bound)) => {
                         let method_kind = self.iterator_intrinsic_prototype_name(bound);
                         return Err(self.throw_js_error("TypeError", incompatible(method_kind)));
@@ -600,7 +612,7 @@ impl InterpreterCore {
                     (_, None) => {
                         return Err(self.throw_js_error(
                             "TypeError",
-                            incompatible(ARRAY_ITERATOR_PROTOTYPE),
+                            incompatible(&builtin.module_specifier),
                         ));
                     }
                 };
@@ -14326,9 +14338,9 @@ impl InterpreterCore {
                         }
                         _ => None,
                     };
-                    // A function, generator object or iterator whose own
-                    // properties lack the key continues its [[Get]] on its
-                    // intrinsic prototype (after the match).
+                    // An unmaterialized callable continues its [[Get]] on
+                    // its intrinsic prototype after the match. Exotic
+                    // carriers use their complete ordinary chain directly.
                     // A callable proxy's [[Get]] is its trap's (or its
                     // target's) answer, never continued here.
                     let inherited_base = if function_backing.is_none()
@@ -14338,9 +14350,6 @@ impl InterpreterCore {
                                     | BuiltinFunctionKind::FunctionPrototype))
                     {
                         Self::function_intrinsic_prototype_name(&obj_val)
-                            .or(self
-                                .exotic_intrinsic_prototype_name(&obj_val)
-                                .filter(|name| *name != "Promise"))
                             .map(|prototype| (prototype, obj_val.clone()))
                     } else {
                         None
@@ -14349,7 +14358,13 @@ impl InterpreterCore {
                     // The prototype object a primitive base's property came
                     // from, for the stored-label join below.
                     let mut primitive_owner = None;
-                    let prop = if let Some(backing) = function_backing {
+                    let prop = if Self::has_exotic_backing_object(&obj_val) {
+                        self.iterator_protocol_value_property(
+                            Some(module),
+                            obj_val.clone(),
+                            &property_key,
+                        )?
+                    } else if let Some(backing) = function_backing {
                         self.run_pre_runtime_property_access_hook(module, backing, &property_key)?;
                         if authoritative_standard_backing.is_some() {
                             self.get_v(module, &obj_val, &property_key)?
@@ -14419,23 +14434,6 @@ impl InterpreterCore {
                                         Value::Object(oid),
                                         0,
                                     )?
-                                }
-                            }
-                            Value::Iterator(iterator_handle) => {
-                                match self.exotic_own_property_get(
-                                    module,
-                                    &Value::Iterator(iterator_handle),
-                                    &property_key,
-                                )? {
-                                    // IFC: the backing object owns the stored label.
-                                    Some((own, backing)) => {
-                                        primitive_owner = Some(backing);
-                                        own
-                                    }
-                                    None => self.iterator_runtime_property_value(
-                                        iterator_handle,
-                                        &property_key,
-                                    ),
                                 }
                             }
                             Value::Str(s) => {
@@ -14660,133 +14658,6 @@ impl InterpreterCore {
                                         .unwrap_or(Value::Undefined),
                                 }
                             }
-                            ref exotic @ (Value::Generator(_) | Value::AsyncGeneratorObject(_))
-                                if self.exotic_has_own_property(
-                                    module,
-                                    exotic,
-                                    &property_key,
-                                )? =>
-                            {
-                                match self.exotic_own_property_get(module, exotic, &property_key)? {
-                                    // IFC: the backing object owns the stored label.
-                                    Some((own, backing)) => {
-                                        primitive_owner = Some(backing);
-                                        own
-                                    }
-                                    None => Value::Undefined,
-                                }
-                            }
-                            Value::Generator(_) => match property_key {
-                                RuntimePropertyKey::String(ref key) => match key.as_str() {
-                                    Some("next") => {
-                                        Value::BuiltinFunction(BuiltinFunction::new_kind(
-                                            BuiltinFunctionKind::GeneratorNext,
-                                        ))
-                                    }
-                                    Some("return") => {
-                                        Value::BuiltinFunction(BuiltinFunction::new_kind(
-                                            BuiltinFunctionKind::GeneratorReturn,
-                                        ))
-                                    }
-                                    Some("throw") => {
-                                        Value::BuiltinFunction(BuiltinFunction::new_kind(
-                                            BuiltinFunctionKind::GeneratorThrow,
-                                        ))
-                                    }
-                                    _ => Value::Undefined,
-                                },
-                                RuntimePropertyKey::Symbol(symbol)
-                                    if symbol == WellKnownSymbol::Iterator.id() =>
-                                {
-                                    Value::BuiltinFunction(
-                                        BuiltinFunction::generator_iterator_self(),
-                                    )
-                                }
-                                _ => Value::Undefined,
-                            },
-                            Value::AsyncGeneratorObject(_) => match property_key {
-                                RuntimePropertyKey::String(ref key) => match key.as_str() {
-                                    Some("next") => {
-                                        Value::BuiltinFunction(BuiltinFunction::new_kind(
-                                            BuiltinFunctionKind::AsyncGeneratorNext,
-                                        ))
-                                    }
-                                    Some("return") => {
-                                        Value::BuiltinFunction(BuiltinFunction::new_kind(
-                                            BuiltinFunctionKind::AsyncGeneratorReturn,
-                                        ))
-                                    }
-                                    Some("throw") => {
-                                        Value::BuiltinFunction(BuiltinFunction::new_kind(
-                                            BuiltinFunctionKind::AsyncGeneratorThrow,
-                                        ))
-                                    }
-                                    _ => Value::Undefined,
-                                },
-                                RuntimePropertyKey::Symbol(symbol)
-                                    if symbol == WellKnownSymbol::AsyncIterator.id() =>
-                                {
-                                    Value::BuiltinFunction(BuiltinFunction::new_kind(
-                                        BuiltinFunctionKind::AsyncGeneratorIteratorSelf,
-                                    ))
-                                }
-                                _ => Value::Undefined,
-                            },
-                            // [[Get]] of a promise walks %Promise.prototype%
-                            // (members a program adds, `constructor`, then
-                            // Object.prototype), as for a primitive base.
-                            // @@toStringTag is "Promise" (ES2020 25.6.5.5).
-                            Value::Promise(promise) => {
-                                if let Some((own, backing)) = self.exotic_own_property_get(
-                                    module,
-                                    &Value::Promise(promise),
-                                    &property_key,
-                                )? {
-                                    // IFC: the backing object owns the stored label.
-                                    primitive_owner = Some(backing);
-                                    own
-                                } else if let Some(prototype) = self
-                                    .promise_prototype_override(module, &Value::Promise(promise))?
-                                {
-                                    // bd-9vouw.137: a subclass instance reads
-                                    // through its subclass prototype, which
-                                    // reaches %Promise.prototype%.
-                                    primitive_owner = Some(prototype);
-                                    let found = self.proxy_aware_get_runtime_property(
-                                        Some(module),
-                                        prototype,
-                                        &property_key,
-                                        Value::Promise(promise),
-                                        0,
-                                    )?;
-                                    if matches!(found, Value::Undefined)
-                                        && matches!(
-                                            &property_key,
-                                            RuntimePropertyKey::Symbol(symbol)
-                                                if *symbol == WellKnownSymbol::ToStringTag.id()
-                                        )
-                                    {
-                                        Value::str("Promise")
-                                    } else {
-                                        found
-                                    }
-                                } else if matches!(
-                                    &property_key,
-                                    RuntimePropertyKey::Symbol(symbol)
-                                        if *symbol == WellKnownSymbol::ToStringTag.id()
-                                ) {
-                                    Value::str("Promise")
-                                } else {
-                                    let (value, owner) = self.primitive_prototype_get(
-                                        module,
-                                        "Promise",
-                                        &property_key,
-                                        Value::Promise(promise),
-                                    )?;
-                                    primitive_owner = owner;
-                                    value
-                                }
-                            }
                             Value::Symbol(symbol) => match property_key.as_str() {
                                 Some("description") => self
                                     .symbol_description(symbol)
@@ -14824,30 +14695,13 @@ impl InterpreterCore {
                     // Function (`g.constructor` GeneratorFunction), and
                     // `valueOf`, `__proto__` and members a program adds
                     // (`Function.prototype.method = ...`) reach every
-                    // function. They read undefined. Generator objects and
-                    // iterators reach %GeneratorPrototype% /
-                    // %ArrayIteratorPrototype%, then Object.prototype, after
-                    // their own methods (`it.toString`, `it[Symbol.toStringTag]`).
+                    // function. They read undefined.
                     let prop = match inherited_base {
                         Some((prototype, base))
                             if matches!(prop, Value::Undefined) && primitive_owner.is_none() =>
                         {
                             if property_key.as_str() == Some("__proto__") && base.is_callable() {
                                 self.function_value_prototype(Some(module), &base)?
-                            } else if let Some(function_prototype) =
-                                self.exotic_prototype_override(module, &base)?
-                            {
-                                // bd-9vouw.120: a generator inherits from its
-                                // function's `prototype` (members a program
-                                // adds there, then %GeneratorPrototype%).
-                                primitive_owner = Some(function_prototype);
-                                self.proxy_aware_get_runtime_property(
-                                    Some(module),
-                                    function_prototype,
-                                    &property_key,
-                                    base,
-                                    0,
-                                )?
                             } else {
                                 // The kind prototypes exist once read, so
                                 // Function.prototype's members are behind them.
@@ -15973,6 +15827,7 @@ impl InterpreterCore {
                     self.ip += 1;
                 }
                 Ir3Instruction::InstanceOf { dst, lhs, rhs } => {
+                    self.clear_pending_hostcall_result_label();
                     let mut result_label = self.binary_operation_label(lhs, rhs)?;
                     let constructor = self.read_reg(rhs)?;
                     if let Some((_, prototype_label)) =
@@ -15988,11 +15843,16 @@ impl InterpreterCore {
                         result_label = self
                             .join_owned_label_with_temporary_budget(result_label, &handler_label)?;
                     }
+                    if let Some(observed) = self.take_pending_hostcall_result_label() {
+                        result_label =
+                            self.join_owned_label_with_temporary_budget(result_label, &observed)?;
+                    }
                     self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::InOp { dst, lhs, rhs } => {
-                    let result_label = self.binary_operation_label(lhs, rhs)?;
+                    self.clear_pending_hostcall_result_label();
+                    let mut result_label = self.binary_operation_label(lhs, rhs)?;
                     // ES2022 `#x in o`: a brand check, not a property lookup.
                     let result = match self.class_private_name_key(&self.read_reg(lhs)?) {
                         Some(name) => {
@@ -16001,6 +15861,10 @@ impl InterpreterCore {
                         }
                         None => self.eval_in_operator(module, lhs, rhs)?,
                     };
+                    if let Some(observed) = self.take_pending_hostcall_result_label() {
+                        result_label =
+                            self.join_owned_label_with_temporary_budget(result_label, &observed)?;
+                    }
                     self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
                 }

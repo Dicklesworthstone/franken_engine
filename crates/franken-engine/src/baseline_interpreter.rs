@@ -9704,6 +9704,9 @@ enum HostObjectSlots {
     /// Immutable identity of the callable represented by this property
     /// backing. It is not a guest property or a new invocation authority.
     CallableIdentity(CallableIdentitySlots),
+    /// Immutable identity of a promise, generator or iterator represented
+    /// by its property backing, including when used as a prototype.
+    ExoticIdentity(Value),
     FetchResponse(fetch::FetchResponseSlots),
     FetchHeaders(fetch::FetchHeadersSlots),
 }
@@ -9820,6 +9823,13 @@ impl HeapObject {
     fn callable_identity(&self) -> Option<&CallableIdentitySlots> {
         match self.host_slots.as_deref() {
             Some(HostObjectSlots::CallableIdentity(identity)) => Some(identity),
+            _ => None,
+        }
+    }
+
+    fn exotic_identity(&self) -> Option<&Value> {
+        match self.host_slots.as_deref() {
+            Some(HostObjectSlots::ExoticIdentity(value)) => Some(value),
             _ => None,
         }
     }
@@ -10414,6 +10424,19 @@ impl<'de> Deserialize<'de> for HeapObject {
                 "callable identity must retain valid callable provenance",
             ));
         }
+        if let Some(HostObjectSlots::ExoticIdentity(value)) = wire.host_slots.as_deref()
+            && !matches!(
+                value,
+                Value::Promise(_)
+                    | Value::Generator(_)
+                    | Value::AsyncGeneratorObject(_)
+                    | Value::Iterator(_)
+            )
+        {
+            return Err(D::Error::custom(
+                "exotic identity must retain a promise, generator, or iterator",
+            ));
+        }
         let has_parent = wire.derived_constructor_parent.is_some();
         let has_parent_label = wire.derived_constructor_parent_label.is_some();
         if has_parent != has_parent_label {
@@ -10720,6 +10743,9 @@ fn validate_heap_symbol_references(
             }
             HostObjectSlots::CallableIdentity(identity) => {
                 validate_symbol_value(state, &identity.value)?;
+            }
+            HostObjectSlots::ExoticIdentity(value) => {
+                validate_symbol_value(state, value)?;
             }
             HostObjectSlots::TextDecoder(_)
             | HostObjectSlots::IntlResolved(_)

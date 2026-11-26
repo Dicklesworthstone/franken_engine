@@ -13456,8 +13456,9 @@ impl InterpreterCore {
                         | HostObjectSlots::FsEntryKind(_)
                         | HostObjectSlots::TimerHandle(_)
                         // Recovering identity does not inspect captured
-                        // environments or add a new callable observation.
-                        | HostObjectSlots::CallableIdentity(_) => {}
+                        // environments or an exotic object's runtime state.
+                        | HostObjectSlots::CallableIdentity(_)
+                        | HostObjectSlots::ExoticIdentity(_) => {}
                     }
                 }
             }
@@ -13774,9 +13775,9 @@ impl InterpreterCore {
                 }
                 self.iterator_protocol_property(module, object_id, &key, Value::Object(object_id))
             }
-            Value::Iterator(iterator_handle) => Ok(key.as_str().map_or(Value::Undefined, |key| {
-                self.iterator_property_value(iterator_handle, key)
-            })),
+            exotic if Self::has_exotic_backing_object(&exotic) => {
+                self.iterator_protocol_value_property(module, exotic, &key)
+            }
             Value::Str(text) => Ok(key.as_str().map_or(Value::Undefined, |key| {
                 Self::string_property_value(&text, key)
             })),

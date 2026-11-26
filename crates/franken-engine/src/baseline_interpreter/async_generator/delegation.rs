@@ -498,7 +498,7 @@ mod tests {
                             .unwrap()
                             .unwrap()
                     } else {
-                        core.exotic_prototype_override(&module, &receiver)
+                        core.exotic_prototype_link(Some(&module), &receiver)
                             .unwrap()
                             .unwrap()
                     };

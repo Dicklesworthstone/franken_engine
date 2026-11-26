@@ -6523,84 +6523,88 @@ impl InterpreterCore {
 
     pub(super) fn buffer_write_integer(
         &mut self,
+        module: &Ir3Module,
         receiver: Value,
         args: RegRange,
         kind: BufferIntegerKind,
         little_endian: bool,
     ) -> Result<Value, InterpreterError> {
-        let (_, view) = self.buffer_receiver_view(receiver, "write integer")?;
-        let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-        if matches!(value, Value::BigInt(_)) {
-            return Err(InterpreterError::TypeError {
-                expected: "Buffer integer write value convertible to number".to_string(),
-                got: "bigint".to_string(),
-            });
-        }
-        let numeric = Self::coerce_to_float(&value).unwrap_or(f64::NAN);
-        if numeric.is_infinite() {
-            return Err(InterpreterError::RangeError {
-                message: "Buffer integer write value is outside the method range".to_string(),
-            });
-        }
-        // Node applies ToNumber followed by integer truncation before the
-        // method-specific range check. NaN (including undefined) becomes 0.
-        let number = Self::f64_as_integer(numeric);
-        let (encoded, width) = match kind {
-            BufferIntegerKind::UInt8 => {
-                let number = u8::try_from(number).map_err(|_| InterpreterError::RangeError {
-                    message: "Buffer writeUInt8 value must be between 0 and 255".to_string(),
-                })?;
-                ([number, 0, 0, 0], 1)
-            }
-            BufferIntegerKind::UInt16 => {
-                let number = u16::try_from(number).map_err(|_| InterpreterError::RangeError {
-                    message: "Buffer writeUInt16 value must be between 0 and 65535".to_string(),
-                })?;
-                let raw = if little_endian {
-                    number.to_le_bytes()
-                } else {
-                    number.to_be_bytes()
-                };
-                ([raw[0], raw[1], 0, 0], 2)
-            }
-            BufferIntegerKind::Int32 => {
-                let number = i32::try_from(number).map_err(|_| InterpreterError::RangeError {
-                    message: "Buffer writeInt32 value is outside the signed 32-bit range"
-                        .to_string(),
-                })?;
-                let raw = if little_endian {
-                    number.to_le_bytes()
-                } else {
-                    number.to_be_bytes()
-                };
-                (raw, 4)
-            }
-            BufferIntegerKind::UInt32 => {
-                let number = u32::try_from(number).map_err(|_| InterpreterError::RangeError {
-                    message: "Buffer writeUInt32 value is outside the unsigned 32-bit range"
-                        .to_string(),
-                })?;
-                let raw = if little_endian {
-                    number.to_le_bytes()
-                } else {
-                    number.to_be_bytes()
-                };
-                (raw, 4)
-            }
+        let (target_id, _) = self.buffer_receiver_view(receiver, "write integer")?;
+        self.buffer_write_numeric(
+            module,
+            target_id,
+            args,
+            BufferNumberFormat::Int {
+                width: kind.byte_width(),
+                signed: matches!(kind, BufferIntegerKind::Int32),
+            },
+            little_endian,
+        )
+    }
+
+    /// Shared numeric write path. Conversion may execute guest code, so keep
+    /// its observations scoped, reload the current view afterwards, and admit
+    /// the backing-store label before publishing any bytes.
+    fn buffer_write_numeric(
+        &mut self,
+        module: &Ir3Module,
+        target_id: ObjectId,
+        args: RegRange,
+        format: BufferNumberFormat,
+        little_endian: bool,
+    ) -> Result<Value, InterpreterError> {
+        // Node validates a variable byteLength before converting the value.
+        let width = match format {
+            BufferNumberFormat::Int { width, .. } => width,
+            BufferNumberFormat::Variable { .. } => self.buffer_byte_length_arg(args, 2)?,
+            BufferNumberFormat::Float32 => 4,
+            BufferNumberFormat::Float64 | BufferNumberFormat::BigInt64 { .. } => 8,
         };
-        let offset = self.buffer_integer_offset(args, 1)?;
-        let range = self.buffer_integer_range(&view, offset, width)?;
-        self.with_array_buffer_bytes_mut(view.buffer, |bytes| {
-            let slot = bytes
-                .get_mut(range)
-                .ok_or_else(|| InterpreterError::RangeError {
-                    message: "Buffer integer write exceeds backing storage".to_string(),
+        let argument_end =
+            args.start
+                .checked_add(args.count)
+                .ok_or(InterpreterError::RegisterOutOfBounds {
+                    register: args.start,
+                    max: self.config.max_registers,
                 })?;
-            slot.copy_from_slice(&encoded[..width]);
-            Ok(())
-        })??;
-        let next_offset = offset.saturating_add(width);
-        Ok(Value::Int(i64::try_from(next_offset).unwrap_or(i64::MAX)))
+        let saved = self.begin_property_observation(args.start..argument_end)?;
+        let outcome = (|| {
+            self.json_observe_label(self.binary_storage_label(target_id))?;
+            let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+            let mut bytes =
+                self.with_gc_nested_request(vec![Value::Object(target_id)], |core| {
+                    core.buffer_numeric_bytes(module, format, width, value)
+                })?;
+            if !little_endian {
+                bytes[..width].reverse();
+            }
+            // ToNumber can resize or detach the buffer. Its view metadata is
+            // refreshed by those operations; the pre-conversion copy is stale.
+            // An out-of-bounds view has length zero and uses Node's Buffer
+            // range error, not TypedArray's initial receiver validation.
+            let view = self.typed_array_view_for_object(target_id)?.ok_or_else(|| {
+                InterpreterError::InternalError {
+                    details: "validated Buffer lost its typed-array view".to_string(),
+                }
+            })?;
+            let offset = self.buffer_offset_arg(args, 1, &view, width)?;
+            let range = self.buffer_integer_range(&view, offset, width)?;
+            let label = self.json_parse_context_label()?;
+            self.join_binary_storage_label(target_id, &label)?;
+            self.with_array_buffer_bytes_mut(view.buffer, |storage| {
+                let slot = storage
+                    .get_mut(range)
+                    .ok_or_else(|| InterpreterError::RangeError {
+                        message: "Buffer write exceeds backing storage".to_string(),
+                    })?;
+                slot.copy_from_slice(&bytes[..width]);
+                Ok(())
+            })??;
+            Ok(Value::Int(
+                i64::try_from(offset.saturating_add(width)).unwrap_or(i64::MAX),
+            ))
+        })();
+        self.finish_property_read_observation(saved, outcome)
     }
 
     /// Node's `Buffer.prototype` numeric accessors that the dedicated kinds
@@ -6610,6 +6614,7 @@ impl InterpreterCore {
     /// byteLength)`) and returns the offset after the bytes it wrote.
     pub(super) fn buffer_numeric_method(
         &mut self,
+        module: &Ir3Module,
         receiver: Value,
         args: RegRange,
         name: &str,
@@ -6623,36 +6628,16 @@ impl InterpreterCore {
                 got: name.to_string(),
             });
         };
-        let (_, view) = self.buffer_receiver_view(receiver, name)?;
+        let (target_id, view) = self.buffer_receiver_view(receiver, name)?;
+        if write {
+            return self.buffer_write_numeric(module, target_id, args, format, little_endian);
+        }
         let width = match format {
             BufferNumberFormat::Int { width, .. } => width,
-            BufferNumberFormat::Variable { .. } => {
-                self.buffer_byte_length_arg(args, if write { 2 } else { 1 })?
-            }
+            BufferNumberFormat::Variable { .. } => self.buffer_byte_length_arg(args, 1)?,
             BufferNumberFormat::Float32 => 4,
             BufferNumberFormat::Float64 | BufferNumberFormat::BigInt64 { .. } => 8,
         };
-        if write {
-            let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-            let mut bytes = self.buffer_numeric_bytes(format, width, value)?;
-            if !little_endian {
-                bytes[..width].reverse();
-            }
-            let offset = self.buffer_offset_arg(args, 1, &view, width)?;
-            let range = self.buffer_integer_range(&view, offset, width)?;
-            self.with_array_buffer_bytes_mut(view.buffer, |storage| {
-                let slot = storage
-                    .get_mut(range)
-                    .ok_or_else(|| InterpreterError::RangeError {
-                        message: "Buffer write exceeds backing storage".to_string(),
-                    })?;
-                slot.copy_from_slice(&bytes[..width]);
-                Ok(())
-            })??;
-            return Ok(Value::Int(
-                i64::try_from(offset.saturating_add(width)).unwrap_or(i64::MAX),
-            ));
-        }
         let offset = self.buffer_offset_arg(args, 0, &view, width)?;
         let range = self.buffer_integer_range(&view, offset, width)?;
         let mut bytes = self.with_array_buffer_bytes(view.buffer, |storage| {
@@ -6715,19 +6700,14 @@ impl InterpreterCore {
     /// BigInt64 format a BigInt).
     pub(super) fn buffer_numeric_bytes(
         &mut self,
+        module: &Ir3Module,
         format: BufferNumberFormat,
         width: usize,
         value: Value,
     ) -> Result<[u8; 8], InterpreterError> {
         match format {
             BufferNumberFormat::Int { signed, .. } | BufferNumberFormat::Variable { signed } => {
-                if matches!(value, Value::BigInt(_)) {
-                    return Err(self.throw_js_error(
-                        "TypeError",
-                        "Cannot mix BigInt and other types, use explicit conversions".to_string(),
-                    ));
-                }
-                let number = Self::coerce_to_float(&value).unwrap_or(f64::NAN);
+                let number = self.conversion_to_number(Some(module), value, false)?;
                 let bits = (width * 8) as i32;
                 let (minimum, maximum) = if signed {
                     (-(2f64.powi(bits - 1)), 2f64.powi(bits - 1) - 1.0)
@@ -6761,10 +6741,12 @@ impl InterpreterCore {
                 Ok((integer as u64).to_le_bytes())
             }
             BufferNumberFormat::Float32 => {
-                Ok(u64::from((Self::typed_array_number(&value) as f32).to_bits()).to_le_bytes())
+                let number = self.conversion_to_number(Some(module), value, false)?;
+                Ok(u64::from((number as f32).to_bits()).to_le_bytes())
             }
             BufferNumberFormat::Float64 => {
-                Ok(Self::typed_array_number(&value).to_bits().to_le_bytes())
+                let number = self.conversion_to_number(Some(module), value, false)?;
+                Ok(number.to_bits().to_le_bytes())
             }
             BufferNumberFormat::BigInt64 { signed } => {
                 // Node mixes the value into BigInt arithmetic.

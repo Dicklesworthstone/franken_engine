@@ -4228,6 +4228,7 @@ impl InterpreterCore {
                 true,
             ),
             BuiltinFunctionKind::BufferWriteUInt8 => self.buffer_write_integer(
+                module,
                 receiver.unwrap_or(Value::Undefined),
                 args,
                 BufferIntegerKind::UInt8,
@@ -4246,12 +4247,14 @@ impl InterpreterCore {
                 false,
             ),
             BuiltinFunctionKind::BufferWriteUInt16Le => self.buffer_write_integer(
+                module,
                 receiver.unwrap_or(Value::Undefined),
                 args,
                 BufferIntegerKind::UInt16,
                 true,
             ),
             BuiltinFunctionKind::BufferWriteUInt16Be => self.buffer_write_integer(
+                module,
                 receiver.unwrap_or(Value::Undefined),
                 args,
                 BufferIntegerKind::UInt16,
@@ -4270,12 +4273,14 @@ impl InterpreterCore {
                 false,
             ),
             BuiltinFunctionKind::BufferWriteInt32Le => self.buffer_write_integer(
+                module,
                 receiver.unwrap_or(Value::Undefined),
                 args,
                 BufferIntegerKind::Int32,
                 true,
             ),
             BuiltinFunctionKind::BufferWriteInt32Be => self.buffer_write_integer(
+                module,
                 receiver.unwrap_or(Value::Undefined),
                 args,
                 BufferIntegerKind::Int32,
@@ -4294,12 +4299,14 @@ impl InterpreterCore {
                 false,
             ),
             BuiltinFunctionKind::BufferWriteUInt32Le => self.buffer_write_integer(
+                module,
                 receiver.unwrap_or(Value::Undefined),
                 args,
                 BufferIntegerKind::UInt32,
                 true,
             ),
             BuiltinFunctionKind::BufferWriteUInt32Be => self.buffer_write_integer(
+                module,
                 receiver.unwrap_or(Value::Undefined),
                 args,
                 BufferIntegerKind::UInt32,
@@ -4327,7 +4334,12 @@ impl InterpreterCore {
                     .as_deref()
                     .unwrap_or_default()
                     .to_string();
-                self.buffer_numeric_method(receiver.unwrap_or(Value::Undefined), args, &name)
+                self.buffer_numeric_method(
+                    module,
+                    receiver.unwrap_or(Value::Undefined),
+                    args,
+                    &name,
+                )
             }
             BuiltinFunctionKind::PromiseResolve => {
                 if let Some(handle_id) = builtin.bound_object {

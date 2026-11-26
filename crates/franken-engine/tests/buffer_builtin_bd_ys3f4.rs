@@ -977,3 +977,177 @@ fn buffer_to_string_codes_unknown_encodings_but_skips_empty_ranges() {
         "true\nERR_UNKNOWN_ENCODING\ntrue\nERR_UNKNOWN_ENCODING\ntrue\nERR_UNKNOWN_ENCODING\ntrue\nERR_UNKNOWN_ENCODING\n[]\n[]\n[]"
     );
 }
+
+#[test]
+fn numeric_writes_run_to_primitive_once_with_number_hint() {
+    for (write, read, width) in [
+        ("writeUInt8", "readUInt8", 1),
+        ("writeUint8", "readUint8", 1),
+        ("writeInt8", "readInt8", 1),
+        ("writeUInt16LE", "readUInt16LE", 2),
+        ("writeUInt16BE", "readUInt16BE", 2),
+        ("writeUint16LE", "readUint16LE", 2),
+        ("writeUint16BE", "readUint16BE", 2),
+        ("writeInt16LE", "readInt16LE", 2),
+        ("writeInt16BE", "readInt16BE", 2),
+        ("writeUInt32LE", "readUInt32LE", 4),
+        ("writeUInt32BE", "readUInt32BE", 4),
+        ("writeUint32LE", "readUint32LE", 4),
+        ("writeUint32BE", "readUint32BE", 4),
+        ("writeInt32LE", "readInt32LE", 4),
+        ("writeInt32BE", "readInt32BE", 4),
+        ("writeUIntLE", "readUIntLE", 6),
+        ("writeUIntBE", "readUIntBE", 6),
+        ("writeUintLE", "readUintLE", 6),
+        ("writeUintBE", "readUintBE", 6),
+        ("writeIntLE", "readIntLE", 6),
+        ("writeIntBE", "readIntBE", 6),
+        ("writeFloatLE", "readFloatLE", 4),
+        ("writeFloatBE", "readFloatBE", 4),
+        ("writeDoubleLE", "readDoubleLE", 8),
+        ("writeDoubleBE", "readDoubleBE", 8),
+    ] {
+        let source = format!(
+            r#"
+                const calls = [];
+                const value = {{
+                    [Symbol.toPrimitive](hint) {{ calls.push(hint); return "42"; }}
+                }};
+                const b = Buffer.alloc(8, 17);
+                console.log(b.{write}(value, 0, {width}));
+                console.log(b.{read}(0, {width}));
+                console.log(calls.join(','));
+            "#,
+        );
+        assert_eq!(
+            eval_console(&source),
+            format!("{width}\n42\nnumber"),
+            "{write}"
+        );
+    }
+}
+
+#[test]
+fn numeric_writes_observe_ordinary_conversion_and_preserve_number_special_values() {
+    let source = r#"
+        const calls = [];
+        const value = {
+            get [Symbol.toPrimitive]() { calls.push('exotic'); return undefined; },
+            valueOf() { calls.push(this === value ? 'valueOf' : 'wrong-this'); return {}; },
+            toString() { calls.push(this === value ? 'toString' : 'wrong-this'); return '\uFEFF42\u00A0'; }
+        };
+        const b = Buffer.alloc(8);
+        console.log(b.writeUInt8(value), b.readUInt8(0), calls.join(','));
+        console.log(b.writeDoubleLE({ valueOf() { return -0; } }), Object.is(b.readDoubleLE(0), -0));
+        console.log(b.writeFloatBE({ valueOf() { return NaN; } }), Number.isNaN(b.readFloatBE(0)));
+        console.log(b.writeUInt8(undefined), b.readUInt8(0));
+    "#;
+    assert_eq!(
+        eval_console(source),
+        "1 42 exotic,valueOf,toString\n8 true\n4 true\n1 0"
+    );
+}
+
+#[test]
+fn numeric_writes_reject_symbols_and_bigints_without_mutating_bytes() {
+    let source = r#"
+        const values = [
+            Symbol('value'),
+            1n,
+            Object(1n),
+            { valueOf() { return Symbol('primitive'); } }
+        ];
+        for (const method of ['writeUInt8', 'writeInt32LE', 'writeInt8', 'writeUIntLE', 'writeFloatLE', 'writeDoubleBE']) {
+            for (const value of values) {
+                const b = Buffer.alloc(8, 17);
+                try { b[method](value, 0, 3); console.log('missed-error'); }
+                catch (error) { console.log(error instanceof TypeError, b.toString('hex')); }
+            }
+        }
+    "#;
+    assert_eq!(
+        eval_console(source),
+        vec!["true 1111111111111111"; 24].join("\n")
+    );
+}
+
+#[test]
+fn numeric_write_validation_order_and_guest_exceptions_match_node() {
+    let source = r#"
+        for (const method of ['writeUInt8', 'writeInt32LE', 'writeInt8', 'writeUIntLE', 'writeFloatLE', 'writeDoubleBE']) {
+            const calls = [];
+            const b = Buffer.alloc(8, 17);
+            const value = { valueOf() { calls.push('value'); return 1; } };
+            const offset = { valueOf() { calls.push('offset'); return 0; } };
+            try { b[method](value, offset, 3); console.log('missed-offset-error'); }
+            catch (error) { console.log(error.code, calls.join(','), b.toString('hex')); }
+            const sentinel = {};
+            try { b[method]({ valueOf() { throw sentinel; } }, 0, 3); }
+            catch (error) { console.log(error === sentinel, b.toString('hex')); }
+        }
+        const calls = [];
+        const b = Buffer.alloc(8, 17);
+        const value = { valueOf() { calls.push('value'); return 1; } };
+        try { b.writeUIntLE(value, 0, 0); }
+        catch (error) { console.log(error.code, calls.length, b.toString('hex')); }
+    "#;
+    let mut expected = vec![
+        "ERR_INVALID_ARG_TYPE value 1111111111111111\ntrue 1111111111111111";
+        6
+    ];
+    expected.push("ERR_OUT_OF_RANGE 0 1111111111111111");
+    assert_eq!(eval_console(source), expected.join("\n"));
+}
+
+#[test]
+fn integer_write_range_checks_precede_fractional_truncation() {
+    let source = r#"
+        const cases = [
+            ['writeUInt8', 255.9],
+            ['writeUInt8', -0.1],
+            ['writeUInt16LE', 65535.9],
+            ['writeUInt16BE', -0.1],
+            ['writeUInt32LE', 4294967295.5],
+            ['writeUInt32BE', -0.1],
+            ['writeInt32LE', 2147483647.5],
+            ['writeInt32BE', -2147483648.5]
+        ];
+        for (const entry of cases) {
+            const b = Buffer.alloc(4, 17);
+            try { b[entry[0]](entry[1], 0); console.log('missed-error'); }
+            catch (error) { console.log(error.code, b.toString('hex')); }
+        }
+        const b = Buffer.alloc(4);
+        console.log(b.writeUInt8(1.9), b.readUInt8(0));
+        console.log(b.writeInt32BE(-1.9), b.readInt32BE(0));
+    "#;
+    let mut expected = vec!["ERR_OUT_OF_RANGE 11111111"; 8];
+    expected.extend(["1 1", "4 -1"]);
+    assert_eq!(eval_console(source), expected.join("\n"));
+}
+
+#[test]
+fn numeric_write_refreshes_the_buffer_after_value_conversion_detaches_it() {
+    let source = r#"
+        for (const method of ['writeUInt8', 'writeInt8', 'writeInt32LE', 'writeDoubleLE']) {
+            const b = Buffer.alloc(8, 17);
+            let transferred;
+            let calls = 0;
+            const value = {
+                valueOf() {
+                    calls++;
+                    transferred = b.buffer.transfer();
+                    return 1;
+                }
+            };
+            try { b[method](value, 0); console.log('missed-error'); }
+            catch (error) {
+                console.log(error.code, calls, Buffer.from(transferred).toString('hex'));
+            }
+        }
+    "#;
+    assert_eq!(
+        eval_console(source),
+        vec!["ERR_BUFFER_OUT_OF_BOUNDS 1 1111111111111111"; 4].join("\n")
+    );
+}

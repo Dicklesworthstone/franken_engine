@@ -1924,6 +1924,102 @@ pub(in crate::baseline_interpreter) mod active_builtin_regressions {
     }
 
     #[test]
+    fn buffer_numeric_conversion_preserves_ifc_and_restores_observation_state() {
+        for (value, throws) in [(42, false), (300, false), (42, true)] {
+            let mut core = test_core();
+            let buffer = core.alloc_fresh_buffer_object(4, None, 0).unwrap();
+            let backing = core
+                .typed_array_view_for_object(buffer)
+                .unwrap()
+                .unwrap()
+                .buffer;
+            let alias = core.alloc_buffer_view_object(backing, 0, 4).unwrap();
+            core.with_array_buffer_bytes_mut(backing, |bytes| bytes.fill(17))
+                .unwrap();
+            let input = core
+                .alloc_object_with_properties(&[("valueOf", Value::Function(0))])
+                .unwrap();
+            core.set_own_runtime_property_label(
+                input,
+                &RuntimePropertyKey::String(JsString::from("valueOf")),
+                &Label::Secret,
+            )
+            .unwrap();
+            let mut module = halted_test_module();
+            module.instructions = vec![
+                Ir3Instruction::LoadInt { dst: 0, value },
+                if throws {
+                    Ir3Instruction::Throw { value: 0 }
+                } else {
+                    Ir3Instruction::Return { value: 0 }
+                },
+            ];
+            module.function_table = vec![crate::ir_contract::Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 1,
+                name: Some("buffer_number_value".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }];
+            core.write_reg(0, Value::Object(input)).unwrap();
+            core.write_reg(1, Value::Int(0)).unwrap();
+            core.write_reg(2, Value::Object(buffer)).unwrap();
+            core.sync_estimated_memory_bytes().unwrap();
+            let frame = (core.register_base, core.register_width, core.call_stack.len());
+
+            let outcome = core.buffer_write_integer(
+                &module,
+                Value::Object(buffer),
+                RegRange { start: 0, count: 2 },
+                BufferIntegerKind::UInt8,
+                true,
+            );
+            let successful = !throws && value == 42;
+            if successful {
+                assert_eq!(outcome.unwrap(), Value::Int(1));
+                assert_eq!(core.pending_hostcall_result_label, Some(Label::Secret));
+            } else {
+                assert!(matches!(
+                    outcome,
+                    Err(InterpreterError::UncaughtException { .. })
+                ));
+                assert_eq!(core.pending_exception_label, Label::Secret);
+                if throws {
+                    assert_eq!(core.pending_exception, Some(Value::Int(42)));
+                }
+            }
+            let expected_label = if successful {
+                Label::Secret
+            } else {
+                Label::Public
+            };
+            assert_eq!(core.binary_storage_label(buffer), expected_label);
+            assert_eq!(core.binary_storage_label(alias), expected_label);
+            assert_eq!(
+                core.with_array_buffer_bytes(backing, |bytes| bytes.to_vec())
+                    .unwrap(),
+                if successful {
+                    vec![42, 17, 17, 17]
+                } else {
+                    vec![17; 4]
+                }
+            );
+            assert_eq!(
+                (core.register_base, core.register_width, core.call_stack.len()),
+                frame
+            );
+            assert_eq!(core.read_reg(0).unwrap(), Value::Object(input));
+            assert!(core.active_inline_callback_context_label.is_none());
+            assert_eq!(core.json_parse_temporary_bytes, 0);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
     fn binary_backing_labels_survive_aliases_and_copy_destinations() {
         let mut core = test_core();
         let source = core

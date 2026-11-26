@@ -118,6 +118,7 @@ jobs:
             crates/franken-engine/src/baseline_interpreter/core_init_and_state.rs \
             crates/franken-engine/src/baseline_interpreter/core_objects_and_descriptors.rs \
             crates/franken-engine/src/baseline_interpreter/core_dispatch_and_arrays.rs \
+            crates/franken-engine/src/baseline_interpreter/core_event_loop_and_builtins.rs \
             crates/franken-engine/src/baseline_interpreter/core_compact_and_promises.rs \
             crates/franken-engine/src/baseline_interpreter/core_streams_and_ifc.rs \
             crates/franken-engine/src/baseline_interpreter/package_resolution.rs \
@@ -134,6 +135,7 @@ jobs:
             crates/franken-engine/tests/builtin_prototype_own_methods.rs \
             crates/franken-engine/tests/arguments_object_bd_9vouw_25.rs \
             crates/franken-engine/tests/array_iterator_live.rs \
+            crates/franken-engine/tests/buffer_builtin_bd_ys3f4.rs \
             crates/franken-engine/tests/builtin_brands_bd_9vouw_150.rs \
             crates/franken-engine/tests/script_global_declarations.rs \
             crates/franken-engine/tests/ir_contract_integration.rs \
@@ -180,7 +182,16 @@ jobs:
             --test array_conversion_hooks_bd_9vouw_481 \
             --test array_callback_accessors_bd_9vouw_182 \
             --test array_iterator_live \
+            --test buffer_builtin_bd_ys3f4 \
             -- --nocapture --test-threads=1
+
+      - name: Verify Buffer numeric conversion provenance and rollback
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --no-default-features -p frankenengine-engine --lib \
+            buffer_numeric_conversion_ -- --nocapture --test-threads=1
 
       - name: Verify array iterator source reclamation and provenance
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}

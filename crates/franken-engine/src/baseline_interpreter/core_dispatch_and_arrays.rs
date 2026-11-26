@@ -1621,6 +1621,7 @@ impl InterpreterCore {
                 let separator = match self.builtin_arg(args, 0)? {
                     None | Some(Value::Undefined) => JsString::from(","),
                     Some(Value::Str(text)) => text,
+                    Some(Value::Symbol(_)) => return Err(Self::symbol_to_string_error()),
                     Some(value) => {
                         self.observe_date_value_label(&value)?;
                         JsString::from(self.value_to_string(&value))
@@ -1633,49 +1634,7 @@ impl InterpreterCore {
                 )?))
             }
             BuiltinFunctionKind::ArrayToString => {
-                // ES2020 23.1.3.30: Array.prototype.toString invokes the
-                // receiver's `join` if callable (an own override wins), else
-                // the default "," join; arguments are ignored. A typed array
-                // inherits %TypedArray%.prototype.join, the same "," join
-                // (22.2.3.29). Any other receiver keeps the ordinary object tag.
-                let receiver = receiver.unwrap_or(Value::Undefined);
-                match receiver {
-                    Value::Object(arr_id) => {
-                        let own_join = self
-                            .heap
-                            .get(arr_id.0 as usize)
-                            .and_then(|object| object.properties.get("join"))
-                            .cloned();
-                        if let Some(
-                            callable @ (Value::Closure(_)
-                            | Value::Function(_)
-                            | Value::BuiltinFunction(_)),
-                        ) = own_join
-                        {
-                            return self.invoke_inline_method_call(
-                                Some(module),
-                                callable,
-                                Value::Object(arr_id),
-                                Vec::new(),
-                            );
-                        }
-                        if self.heap.get(arr_id.0 as usize).is_some_and(|object| {
-                            object.is_array
-                                || object
-                                    .brand()
-                                    .is_some_and(|tag| TypedArrayKind::from_type_name(tag).is_some())
-                        }) {
-                            Ok(Value::Str(self.array_join_observable(
-                                module,
-                                arr_id,
-                                &JsString::from(","),
-                            )?))
-                        } else {
-                            Ok(self.object_prototype_to_string_value(&Value::Object(arr_id)))
-                        }
-                    }
-                    other => Ok(self.object_prototype_to_string_value(&other)),
-                }
+                self.array_to_string(module, receiver.unwrap_or(Value::Undefined))
             }
             BuiltinFunctionKind::ArrayEntries => {
                 let receiver = receiver.unwrap_or(Value::Undefined);

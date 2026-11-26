@@ -63,7 +63,6 @@ impl InterpreterCore {
                 | K::ArrayLastIndexOf
                 | K::ArrayIncludes
                 | K::ArrayJoin
-                | K::ArrayToString
                 | K::ArrayReverse
                 | K::ArrayFill
                 | K::ArrayCopyWithin
@@ -740,22 +739,6 @@ impl InterpreterCore {
                 })();
                 out.release(self);
                 Value::Str(outcome?)
-            }
-            K::ArrayToString => {
-                let join =
-                    self.generic_get(m, o, &RuntimePropertyKey::String(JsString::from("join")))?;
-                if join.is_callable() {
-                    self.invoke_inline_method_call(
-                        m,
-                        join,
-                        self.generic_object_value(o),
-                        Vec::new(),
-                    )?
-                } else if self.generic_is_array(o)? {
-                    Value::str("[object Array]")
-                } else {
-                    self.object_prototype_to_string_value(&self.generic_object_value(o))
-                }
             }
             K::ArrayReverse => {
                 let len = self.generic_length(m, o)?;
@@ -2128,6 +2111,40 @@ impl InterpreterCore {
         Ok(match primitive {
             Value::Str(text) => text,
             other => JsString::from(self.value_to_string(&other)),
+        })
+    }
+
+    /// ES2020 22.1.3.30: ToObject, Get("join"), then Call with the
+    /// original object as receiver and no arguments. A non-callable join
+    /// selects the intrinsic Object.prototype.toString, including its
+    /// observable @@toStringTag lookup.
+    pub(super) fn array_to_string(
+        &mut self,
+        module: &Ir3Module,
+        receiver: Value,
+    ) -> Result<Value, InterpreterError> {
+        // Keep the boxed receiver and getter result alive across guest calls,
+        // as in the other generic array conversion algorithms.
+        self.gc_nested_request = None;
+        self.generic_species_scope(|core| {
+            let object = match receiver {
+                Value::Undefined | Value::Null => {
+                    return Err(InterpreterError::TypeError {
+                        expected: "object-coercible this for Array.prototype.toString".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                }
+                other if other.is_object_like() => other,
+                primitive => Value::Object(core.alloc_primitive_wrapper(primitive)?),
+            };
+            let key = RuntimePropertyKey::String(JsString::from("join"));
+            let join = core.get_v(module, &object, &key)?;
+            core.observe_scoped_callback_result()?;
+            if join.is_callable() {
+                core.call_conversion_method(module, join, &object, Vec::new())
+            } else {
+                core.object_prototype_to_string_with_getters(module, &object)
+            }
         })
     }
 

@@ -44,9 +44,13 @@ const EXPECTED: &[&str] = &[
 
 #[test]
 fn array_conversion_hooks_match_node() {
+    assert_console_output(PROGRAM, EXPECTED);
+}
+
+fn assert_console_output(program: &str, expected: &[&str]) {
     let root = persistent_scratch_dir::ScratchDir::new("bd_9vouw_481_hooks");
     let entry = root.path().join("array_conversion_hooks_bd_9vouw_481.js");
-    std::fs::write(&entry, PROGRAM).expect("write program");
+    std::fs::write(&entry, program).expect("write program");
     let report = root.path().join("report.json");
     let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
         .args([
@@ -75,5 +79,109 @@ fn array_conversion_hooks_match_node() {
         .iter()
         .filter_map(|entry| entry["message"].as_str())
         .collect();
-    assert_eq!(printed, EXPECTED);
+    assert_eq!(printed, expected);
+}
+
+#[test]
+fn array_to_string_observes_join_receiver_and_intrinsic_fallback() {
+    // ES2020 22.1.3.30. These expectations were also executed in a live
+    // JavaScript reference runtime; the assertion runs the shipped CLI.
+    let source = r#"const method = Array.prototype.toString;
+const array = [1, 2];
+array.join = null;
+console.log(method.call(array));
+const result = {};
+const order = [];
+Object.defineProperty(array, 'join', {configurable: true, get() {
+  order.push('get:' + (this === array));
+  return function() { order.push('call:' + (this === array) + ':' + arguments.length); return result; };
+}});
+console.log(method.call(array, 'ignored') === result, order.join('/'));
+const parent = Object.create(Array.prototype);
+Object.defineProperty(parent, 'join', {get() { return function() { return this[0] + 5; }; }});
+const inherited = Object.setPrototypeOf([7], parent);
+console.log(method.call(inherited));
+const tagged = [3];
+const tags = [];
+Object.defineProperty(tagged, 'join', {get() { tags.push('join'); return undefined; }});
+Object.defineProperty(tagged, Symbol.toStringTag, {get() { tags.push('tag'); return 'Tagged'; }});
+console.log(method.call(tagged), tags.join('/'));
+const nonStringTag = [4]; nonStringTag.join = false; nonStringTag[Symbol.toStringTag] = 123;
+console.log(method.call(nonStringTag));
+const trapOrder = [];
+const proxy = new Proxy({join: null}, {get(target, key, receiver) {
+  trapOrder.push((key === 'join' ? 'join' : key === Symbol.toStringTag ? 'tag' : 'other') + ':' + (receiver === proxy));
+  return key === Symbol.toStringTag ? 'ProxyTag' : Reflect.get(target, key, receiver);
+}});
+console.log(method.call(proxy), trapOrder.join('/'));
+const token = {};
+const throwing = [8];
+Object.defineProperty(throwing, 'join', {get() { throw token; }});
+let caught = false;
+try { method.call(throwing); } catch (error) { caught = error === token; }
+console.log(caught, [1, 2].toString(), new Uint8Array([3, 4]).toString());
+const tagThrow = {join: null};
+Object.defineProperty(tagThrow, Symbol.toStringTag, {get() {throw token;}});
+let tagCaught = false;
+try { method.call(tagThrow); } catch (error) {tagCaught = error === token;}
+console.log(tagCaught);
+const errors = [];
+for (const value of [null, undefined]) {
+  try { method.call(value); errors.push('miss'); } catch (error) {errors.push(error.name);}
+}
+const revoked = Proxy.revocable([], {}); revoked.revoke();
+try { method.call(revoked.proxy); errors.push('miss'); } catch (error) {errors.push(error.name);}
+try { [1, 2].join(Symbol('separator')); errors.push('miss'); } catch (error) {errors.push(error.name);}
+console.log(errors.join('/'));
+const receivers = [function f() {}, Promise.resolve(), (function* () {})(), [1].values()];
+const identities = [];
+for (const receiver of receivers) {
+  Object.defineProperty(receiver, 'join', {get() {
+    const same = this === receiver;
+    return function() {return same && this === receiver && arguments.length === 0;};
+  }});
+  identities.push(method.call(receiver));
+}
+console.log(identities.join('/'));
+let boxed;
+Object.defineProperty(Number.prototype, 'join', {configurable: true, get() {
+  boxed = this;
+  return function() { 'use strict'; return [typeof this, this === boxed, this.valueOf() === 7, arguments.length].join(':'); };
+}});
+try { console.log(method.call(7)); } finally {delete Number.prototype.join;}
+const original = Object.prototype.toString;
+try {
+  Object.prototype.toString = function() {return 'patched';};
+  console.log(method.call({join: 0}), Uint8Array.prototype.toString === method);
+} finally {Object.prototype.toString = original;}
+const callableTarget = {};
+let calls = '';
+const callableJoin = new Proxy(function() {return this === callableTarget;}, {
+  apply(target, receiver, args) {calls += String(receiver === callableTarget) + ':' + args.length; return Reflect.apply(target, receiver, args);}
+});
+callableTarget.join = callableJoin;
+console.log(method.call(callableTarget, 'ignored'), calls);
+console.log(method.call({join() {return '\ud800';}}).charCodeAt(0), method.call({join() {}}) === undefined);
+try { [].join(Symbol()); console.log('miss'); } catch(error) {console.log(error.name);}
+"#;
+    assert_console_output(
+        source,
+        &[
+            "[object Array]",
+            "true get:true/call:true:0",
+            "12",
+            "[object Tagged] join/tag",
+            "[object Array]",
+            "[object ProxyTag] join:true/tag:true",
+            "true 1,2 3,4",
+            "true",
+            "TypeError/TypeError/TypeError/TypeError",
+            "true/true/true/true",
+            "object:true:true:0",
+            "[object Object] true",
+            "true true:0",
+            "55296 true",
+            "TypeError",
+        ],
+    );
 }

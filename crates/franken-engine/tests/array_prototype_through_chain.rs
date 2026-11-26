@@ -598,3 +598,76 @@ fn huge_array_like_lengths_are_budgeted_not_fatal() {
         Ok("TypeError 9007199254740991".to_string())
     );
 }
+
+#[test]
+fn array_to_string_preserves_getter_labels_through_call_fallback_and_catch() {
+    let cases = [
+        (
+            "const selected = 'label-marker'; const object = {get join() {return selected ? function() {return 'public';} : null;}}; Array.prototype.toString.call(object);",
+            Value::Bool(true),
+            "public",
+        ),
+        (
+            "const tag = 'label-marker'; const object = {join:null, get [Symbol.toStringTag]() {return tag;}}; Array.prototype.toString.call(object);",
+            Value::str("Tagged"),
+            "[object Tagged]",
+        ),
+        (
+            "const selected = 'label-marker'; const object = {get join() {if (selected) throw 'public'; return null;}}; let caught = ''; try {Array.prototype.toString.call(object);} catch(error) {caught = error;} caught;",
+            Value::Bool(true),
+            "public",
+        ),
+    ];
+    for mut config in [
+        InterpreterConfig::quickjs_defaults(),
+        InterpreterConfig::v8_defaults(),
+    ] {
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]
+        .into_iter()
+        .collect();
+        for (source, input, expected) in &cases {
+            let input_register = config.max_registers - 1;
+            let mut module = lower_source(source).expect("array conversion label source lowers");
+            let pool_index = module
+                .constant_pool
+                .iter()
+                .position(|text| text == "label-marker")
+                .expect("unique labelled input literal") as u32;
+            let mut replacements = 0;
+            for instruction in &mut module.instructions {
+                if let Ir3Instruction::LoadStr {
+                    dst,
+                    pool_index: index,
+                } = instruction
+                    && *index == pool_index
+                {
+                    *instruction = Ir3Instruction::Move {
+                        dst: *dst,
+                        src: input_register,
+                    };
+                    replacements += 1;
+                }
+            }
+            assert_eq!(replacements, 1, "only the input literal is labelled");
+            for stress in [None, Some(1), Some(7)] {
+                let mut core = InterpreterCore::new(config.clone(), "array-conversion-label");
+                core.seed_register(input_register, input.clone()).unwrap();
+                core.set_register_label(input_register, Label::Secret)
+                    .unwrap();
+                core.set_gc_stress_interval(stress);
+                let execution = core.execute(&module).expect("array conversion label execution");
+                assert_eq!(execution.value, Value::str(*expected), "{source}");
+                assert_eq!(execution.completion_label, Label::Secret, "{source}");
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes(),
+                    "GC={stress:?}: {source}"
+                );
+            }
+        }
+    }
+}

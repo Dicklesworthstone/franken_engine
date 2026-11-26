@@ -12389,12 +12389,16 @@ impl InterpreterCore {
             .get(backing.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: backing.0 })?
             .properties
-            .exact_keys()
-            .into_iter()
-            .filter(|key| self.ordinary_own_string_key_is_enumerable(backing, key))
-            .collect::<Vec<_>>();
+            .exact_keys();
         let mut entries = Vec::with_capacity(keys.len());
         for key in keys {
+            // Snapshot only the keys. An earlier getter may delete this
+            // property or change its enumerability, including making a
+            // previously hidden key visible. Keep [[GetOwnProperty]] next
+            // to its [[Get]], as for ordinary objects and Proxy receivers.
+            if !self.ordinary_own_string_key_is_enumerable(backing, &key) {
+                continue;
+            }
             let property_key = RuntimePropertyKey::String(key.clone());
             let property_value = self.proxy_aware_get_runtime_property(
                 module,

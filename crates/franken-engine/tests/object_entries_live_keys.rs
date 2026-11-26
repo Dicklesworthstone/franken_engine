@@ -47,3 +47,91 @@ console.log(JSON.stringify(Object.values(traced)), reads.join(','));
         ]
     );
 }
+
+fn assert_for_property_carriers(body: &str, expected: &[&str]) {
+    for receiver in [
+        "({})",
+        "(function () {})",
+        "(function () {}).bind(null)",
+        "Promise.resolve(1)",
+        "(function* () { yield 1; })()",
+        "(async function* () { yield 1; })()",
+        "[1].values()",
+        "'a'[Symbol.iterator]()",
+        "new Proxy(function () {}, {})",
+    ] {
+        let source = format!("var value = {receiver};\n{body}");
+        let lines: Vec<String> = HybridRouter::default()
+            .eval(&source)
+            .unwrap_or_else(|error| panic!("receiver {receiver}: {error}"))
+            .console_output
+            .into_iter()
+            .map(|entry| entry.message)
+            .collect();
+        assert_eq!(lines, expected, "receiver {receiver}");
+    }
+}
+
+#[test]
+fn values_and_entries_observe_live_descriptors_on_every_property_carrier() {
+    for (method, expected) in [
+        ("values", "[\"first\",\"shown\",\"changed\"] true added"),
+        (
+            "entries",
+            "[[\"a\",\"first\"],[\"c\",\"shown\"],[\"e\",\"changed\"]] true added",
+        ),
+    ] {
+        let body = format!(
+            r#"
+var receivers = [];
+Object.defineProperty(value, 'a', {{
+    enumerable: true,
+    get: function () {{
+        receivers.push(this === value);
+        delete this.b;
+        Object.defineProperty(this, 'c', {{ enumerable: true }});
+        Object.defineProperty(this, 'd', {{ enumerable: false }});
+        this.e = 'changed';
+        this.late = 'added';
+        return 'first';
+    }}
+}});
+value.b = 'deleted';
+Object.defineProperty(value, 'c', {{ value: 'shown', configurable: true }});
+value.d = 'hidden';
+value.e = 'old';
+Object.defineProperty(value, Symbol('ignored'), {{
+    enumerable: true,
+    get: function () {{ throw 'must not read symbol'; }}
+}});
+var result = Object.{method}(value);
+console.log(JSON.stringify(result), receivers.join(','), value.late);
+"#
+        );
+        assert_for_property_carriers(&body, &[expected]);
+    }
+}
+
+#[test]
+fn values_and_entries_preserve_abrupt_getters_and_receiver_identity() {
+    for method in ["values", "entries"] {
+        let body = format!(
+            r#"
+var token = {{}};
+var reads = [];
+Object.defineProperty(value, 'a', {{
+    enumerable: true,
+    get: function () {{ reads.push('a:' + (this === value)); throw token; }}
+}});
+Object.defineProperty(value, 'b', {{
+    enumerable: true,
+    get: function () {{ reads.push('b'); return 2; }}
+}});
+var caught;
+try {{ Object.{method}(value); }} catch (error) {{ caught = error; }}
+console.log(caught === token, reads.join(','));
+"#
+        );
+        assert_for_property_carriers(&body, &["true a:true"]);
+    }
+}

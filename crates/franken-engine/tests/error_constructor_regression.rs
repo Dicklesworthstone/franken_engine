@@ -846,3 +846,256 @@ let threw; try { Error.captureStackTrace(1); threw = 'no'; } catch (err) { threw
         "MyError: x | true | Error | 0 | Custom: hi | F: m | true | TypeError | function | 2 | 10"
     );
 }
+
+#[test]
+fn error_to_string_observes_name_conversion_before_message_for_all_carriers() {
+    assert_native_error_output(
+        r#"
+        const carriers = [
+            {},
+            function ordinary() {},
+            (function bound() {}).bind(null),
+            Promise.resolve(0),
+            (function* () { yield 1; })(),
+            (async function* () { yield 1; })(),
+            [1][Symbol.iterator](),
+            "x"[Symbol.iterator](),
+            new Proxy(function callable() {}, {})
+        ];
+        for (const receiver of carriers) {
+            const trace = [];
+            const name = {
+                [Symbol.toPrimitive](hint) {
+                    trace.push("name:" + (this === name) + ":" + hint);
+                    const message = {
+                        toString() {
+                            trace.push("message:" + (this === message));
+                            return "changed";
+                        }
+                    };
+                    Object.defineProperty(receiver, "message", {
+                        configurable: true,
+                        get() {
+                            trace.push("get:message:" + (this === receiver));
+                            return message;
+                        }
+                    });
+                    return "Custom";
+                }
+            };
+            Object.defineProperty(receiver, "name", {
+                configurable: true,
+                get() {
+                    trace.push("get:name:" + (this === receiver));
+                    return name;
+                }
+            });
+            Object.defineProperty(receiver, "message", {
+                configurable: true,
+                get() { throw "message read before name conversion"; }
+            });
+            console.log(Error.prototype.toString.call(receiver) + "|" + trace.join(","));
+        }
+        "#,
+        &[
+            "Custom: changed|get:name:true,name:true:string,get:message:true,message:true";
+            9
+        ],
+    );
+}
+
+#[test]
+fn error_to_string_preserves_abrupt_getters_and_conversions() {
+    assert_native_error_output(
+        r#"
+        function check(stage) {
+            const trace = [];
+            const token = {};
+            const receiver = {
+                get name() {
+                    trace.push("name");
+                    if (stage === "name-getter") throw token;
+                    if (stage === "symbol-name") return Symbol("name");
+                    return {
+                        [Symbol.toPrimitive](hint) {
+                            trace.push("name:" + hint);
+                            if (stage === "name-conversion") throw token;
+                            return "";
+                        }
+                    };
+                },
+                get message() {
+                    trace.push("message");
+                    if (stage === "message-getter") throw token;
+                    if (stage === "symbol-message") return Symbol("message");
+                    return {
+                        [Symbol.toPrimitive](hint) {
+                            trace.push("message:" + hint);
+                            throw token;
+                        }
+                    };
+                }
+            };
+            try {
+                Error.prototype.toString.call(receiver);
+                console.log("did not throw");
+            } catch (error) {
+                console.log(trace.join(",") + "|" + (error === token ? "token" : error.name));
+            }
+        }
+        for (const stage of [
+            "name-getter", "name-conversion", "symbol-name",
+            "message-getter", "message-conversion", "symbol-message"
+        ]) check(stage);
+        "#,
+        &[
+            "name|token",
+            "name,name:string|token",
+            "name|TypeError",
+            "name,name:string,message|token",
+            "name,name:string,message,message:string|token",
+            "name,name:string,message|TypeError",
+        ],
+    );
+}
+
+#[test]
+fn error_to_string_preserves_exact_utf16_and_default_branches() {
+    assert_native_error_output(
+        r#"
+        const stringify = Error.prototype.toString;
+        const high = "\ud800";
+        const low = "\udc00";
+        const joined = stringify.call({ name: high, message: low });
+        console.log(joined.length + "|" + joined.charCodeAt(0) + "|" + joined.charCodeAt(3));
+        console.log([
+            joined === high + ": " + low,
+            stringify.call({ name: "", message: high }) === high,
+            stringify.call({ name: low, message: "" }) === low,
+            stringify.call({ message: high }) === "Error: " + high,
+            stringify.call({ name: high }) === high,
+            stringify.call({}) === "Error",
+            stringify.call({ name: "", message: "" }) === "",
+            stringify.call({ name: null, message: 0 }) === "null: 0",
+            stringify.call({
+                name: { toString() { return high; } },
+                message: { [Symbol.toPrimitive]() { return low; } }
+            }) === high + ": " + low
+        ].join("|"));
+        "#,
+        &[
+            "4|55296|56320",
+            "true|true|true|true|true|true|true|true|true",
+        ],
+    );
+}
+
+#[test]
+fn error_to_string_accepts_unmaterialized_objects_but_rejects_primitives() {
+    assert_native_error_output(
+        r#"
+        const stringify = Error.prototype.toString;
+        function named() {}
+        console.log([
+            stringify.call(named),
+            stringify.call(Math.max),
+            stringify.call(Promise.resolve()),
+            stringify.call((function* () {})()),
+            stringify.call((async function* () {})()),
+            stringify.call([][Symbol.iterator]()),
+            stringify.call(Object.create(null)),
+            stringify.call(Object(1))
+        ].join("|"));
+        const errors = [];
+        for (const value of [undefined, null, true, 1, NaN, "text", 1n, Symbol("x")]) {
+            try {
+                stringify.call(value);
+                errors.push("accepted");
+            } catch (error) {
+                errors.push(error.name);
+            }
+        }
+        console.log(errors.join("|"));
+        "#,
+        &[
+            "named|max|Error|Error|Error|Error|Error|Error",
+            "TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError",
+        ],
+    );
+}
+
+#[test]
+fn error_to_string_retains_property_labels_through_public_receiver_aliases() {
+    use frankenengine_engine::baseline_interpreter::{BuiltinFunction, BuiltinFunctionKind};
+
+    for inherited in [false, true] {
+        for property in ["name", "message"] {
+            for stress in [None, Some(1)] {
+                for mut core in error_cores() {
+                    core.set_gc_stress_interval(stress);
+                    let holder = core.alloc_object_with_prototype(None).unwrap();
+                    core.set_object_property(holder, "name".into(), Value::str("Visible"))
+                        .unwrap();
+                    core.set_object_property(holder, "message".into(), Value::str("text"))
+                        .unwrap();
+                    let receiver = if inherited {
+                        core.alloc_object_with_prototype(Some(holder)).unwrap()
+                    } else {
+                        holder
+                    };
+                    let stringify = Value::BuiltinFunction(BuiltinFunction {
+                        kind: BuiltinFunctionKind::ErrorPrototypeToString,
+                        module_specifier: Default::default(),
+                        iterator_handle: None,
+                        bound_object: None,
+                    });
+                    for (register, value) in [
+                        (0, Value::Object(receiver)),
+                        (1, Value::Object(holder)),
+                        (2, Value::str(property)),
+                        (3, Value::str("Classified")),
+                        (4, Value::Object(receiver)),
+                        (5, stringify),
+                    ] {
+                        core.seed_register(register, value).unwrap();
+                    }
+                    core.set_register_label(3, Label::Secret).unwrap();
+                    let mut module = lower_error_source("0;");
+                    module.instructions = vec![
+                        Ir3Instruction::SetProperty {
+                            obj: 1,
+                            key: 2,
+                            val: 3,
+                        },
+                        Ir3Instruction::Move { dst: 0, src: 4 },
+                        Ir3Instruction::CallMethod {
+                            receiver: 0,
+                            callee: 5,
+                            args: RegRange { start: 6, count: 0 },
+                            dst: 7,
+                        },
+                        Ir3Instruction::Return { value: 7 },
+                    ];
+                    let result = core.execute(&module).expect("labeled error string executes");
+                    let expected = if property == "name" {
+                        "Classified: text"
+                    } else {
+                        "Visible: Classified"
+                    };
+                    assert_eq!(result.value, Value::str(expected));
+                    assert_eq!(
+                        result.completion_label,
+                        Label::Secret,
+                        "inherited={inherited}, property={property}, GC stress={stress:?}"
+                    );
+                    assert_eq!(core.get_register_label(0).unwrap(), &Label::Public);
+                    assert_eq!(
+                        core.estimated_memory_bytes(),
+                        core.recompute_estimated_memory_bytes(),
+                        "inherited={inherited}, property={property}, GC stress={stress:?}"
+                    );
+                }
+            }
+        }
+    }
+}

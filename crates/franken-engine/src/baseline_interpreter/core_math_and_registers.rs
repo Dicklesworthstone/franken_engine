@@ -13205,45 +13205,65 @@ impl InterpreterCore {
         false
     }
 
-    /// ES2020 20.5.3.4 Error.prototype.toString.
+    /// ES2020 19.5.3.4 Error.prototype.toString.
     pub(super) fn error_prototype_to_string(
         &mut self,
         module: &Ir3Module,
         receiver: Value,
     ) -> Result<Value, InterpreterError> {
-        let Value::Object(object_id) = receiver else {
+        if !receiver.is_object_like() {
             return Err(InterpreterError::TypeError {
                 expected: "object receiver for Error.prototype.toString".to_string(),
                 got: receiver.type_name().to_string(),
             });
-        };
-        let name =
-            self.proxy_aware_get_property(Some(module), object_id, "name", receiver.clone(), 0)?;
-        let message =
-            self.proxy_aware_get_property(Some(module), object_id, "message", receiver.clone(), 0)?;
-        // Steps 4 and 6: ToString, so a Symbol name or message is a
-        // TypeError and a throwing conversion hook propagates.
-        let name = match name {
-            Value::Undefined => "Error".to_string(),
-            other => self
-                .scoped_conversion(|this| this.conversion_to_string(Some(module), other))?
-                .to_string(),
-        };
-        let message = match message {
-            Value::Undefined => String::new(),
-            other => self
-                .scoped_conversion(|this| this.conversion_to_string(Some(module), other))?
-                .to_string(),
-        };
-        let text = if name.is_empty() {
-            message
-        } else if message.is_empty() {
-            name
-        } else {
-            format!("{name}: {message}")
-        };
-        self.check_string_limit(text.len())?;
-        Ok(Value::str(text))
+        }
+        // Multiple getters and conversion hooks run while native locals
+        // hold the receiver and intermediate values. Defer collection until
+        // they return, as other multi-Get conversion algorithms do.
+        self.gc_nested_request = None;
+        let observation = self.begin_property_observation([])?;
+        let mut retained_bytes = 0;
+        let mut output = StringOutputBuffer::default();
+        let outcome = (|| {
+            self.json_charge_work()?;
+            let name = self.get_v(module, &receiver, &RuntimePropertyKey::from("name"))?;
+            self.observe_scoped_callback_result()?;
+            // ToString(name) must finish before Get(message): it may change
+            // that property or throw, in which case message is never read.
+            let name = match name {
+                Value::Undefined => JsString::from("Error"),
+                other => self.conversion_to_string(Some(module), other)?,
+            };
+            self.check_string_limit(name.len())?;
+            let bytes = Self::estimate_js_string_bytes(&name);
+            self.json_reserve_temporary(bytes)?;
+            retained_bytes = bytes;
+
+            let message = self.get_v(module, &receiver, &RuntimePropertyKey::from("message"))?;
+            self.observe_scoped_callback_result()?;
+            let message = match message {
+                Value::Undefined => JsString::from(""),
+                other => self.conversion_to_string(Some(module), other)?,
+            };
+            if name.is_empty() {
+                return Ok(Value::Str(message));
+            }
+            if message.is_empty() {
+                return Ok(Value::Str(name));
+            }
+            let bytes = Self::estimate_js_string_bytes(&message);
+            self.json_reserve_temporary(bytes)?;
+            retained_bytes = retained_bytes.saturating_add(bytes);
+            // Keep exact UTF-16 units, including lone surrogates, and admit
+            // the concatenation's allocation and work before publishing it.
+            output.push(self, &name)?;
+            output.push_text(self, ": ")?;
+            output.push(self, &message)?;
+            output.finish(self).map(Value::Str)
+        })();
+        output.release(self);
+        self.json_release_temporary(retained_bytes);
+        self.finish_property_read_observation(observation, outcome)
     }
 
     /// The builtin method `key` that the canonical prototype registered as

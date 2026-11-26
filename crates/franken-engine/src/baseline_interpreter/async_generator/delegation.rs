@@ -255,8 +255,12 @@ impl InterpreterCore {
                             .take_pending_hostcall_result_label()
                             .unwrap_or(Label::Public),
                     );
-                    let promise = self
-                        .create_rejected_promise(Self::value_to_js_value(&reason), label.clone())?;
+                    // AsyncFromSync rejects with the original thrown value.
+                    // Its promise boundary must preserve callable/iterator
+                    // identity, BigInt and exact UTF-16 just like an ordinary
+                    // Promise rejection, including the carrier's memory cost.
+                    let reason = self.promise_value(&reason)?;
+                    let promise = self.create_rejected_promise(reason, label.clone())?;
                     return self.suspend_async_delegate(
                         id,
                         resume_dst,
@@ -596,6 +600,69 @@ mod tests {
                 assert_eq!(rejection.value, Value::Int(17));
                 assert_eq!(rejection.label, Label::Secret);
                 assert!(core.pending_exception.is_none());
+                assert_accounting(&core);
+            }
+        }
+    }
+
+    #[test]
+    fn sync_delegate_rejection_keeps_carrier_identity_labels_and_accounting() {
+        use crate::promise_model::PromiseState;
+
+        for throughput in [false, true] {
+            for marker in [
+                "function () { return 17; }",
+                "123456789012345678901234567890n",
+                "'\\ud800x\\udfff'",
+            ] {
+                let source = format!(
+                    "const source = {{ marker: {marker}, \
+                     [Symbol.iterator]() {{ return this; }}, \
+                     next() {{ throw this.marker; }} }}; \
+                     async function* outer() {{ yield* source; }} const iterator = outer();"
+                );
+                let (mut core, module, _) = fixture(&source, throughput);
+                let holder = ObjectId(
+                    core.heap
+                        .iter()
+                        .position(|object| object.properties.contains_key("marker"))
+                        .expect("source object") as u32,
+                );
+                let marker = core.heap[holder.0 as usize]
+                    .properties
+                    .get("marker")
+                    .expect("marker property")
+                    .clone();
+                core.set_own_runtime_property_label(
+                    holder,
+                    &RuntimePropertyKey::from("marker"),
+                    &Label::Secret,
+                )
+                .unwrap();
+                let request = core
+                    .enqueue_async_generator_request(
+                        &module,
+                        0,
+                        GeneratorResumeKind::Next,
+                        Value::Undefined,
+                        Label::Internal,
+                    )
+                    .unwrap();
+                let Value::Promise(handle) = request else {
+                    panic!("async generator request promise");
+                };
+                core.write_reg(0, Value::Promise(handle)).unwrap();
+                core.drain_microtasks(Some(&module)).unwrap();
+
+                let record = core.promise_store.get(PromiseHandle(handle)).unwrap();
+                let PromiseState::Rejected(reason) = &record.state else {
+                    panic!("delegated next must reject: {:?}", record.state);
+                };
+                assert_eq!(core.js_value_to_value(reason), marker);
+                assert_eq!(record.label, Label::Secret);
+                assert_eq!(core.async_generators[0].phase, AsyncGeneratorPhase::Completed);
+                assert!(core.async_generators[0].requests.is_empty());
+                assert!(core.async_generator_runtime.continuations.is_empty());
                 assert_accounting(&core);
             }
         }

@@ -827,3 +827,122 @@ fn await_uses_the_selected_then_callable_even_if_the_getter_replaces_itself() {
         &["sync", "selected true", "result 7 false 1"],
     );
 }
+
+#[test]
+fn sync_delegate_next_rejections_preserve_runtime_value_identity() {
+    for (marker, kind) in [
+        ("123456789012345678901234567890n", "bigint"),
+        ("'\\ud800x\\udfff'", "string"),
+        ("function () { return 17; }", "function"),
+        ("(function () { return 17; }).bind(null)", "function"),
+        ("Math.max", "function"),
+        ("Promise.resolve(17)", "object"),
+        ("(function* () { yield 17; })()", "object"),
+        ("(async function* () { yield 17; })()", "object"),
+        ("[17].values()", "object"),
+        ("({ value: 17 })", "object"),
+        ("Symbol('marker')", "symbol"),
+    ] {
+        let source = format!(
+            r#"
+            const marker = {marker};
+            const source = {{
+                [Symbol.iterator]() {{ return this; }},
+                next() {{ throw marker; }}
+            }};
+            async function* outer() {{
+                try {{ yield* source; }}
+                catch (error) {{ console.log('caught', error === marker, typeof error); yield 23; }}
+                finally {{ console.log('finally'); }}
+            }}
+            const generator = outer();
+            generator.next().then(result => console.log('first', result.value, result.done));
+            generator.next().then(result => console.log('second', result.value, result.done));
+            console.log('sync');
+            "#
+        );
+        assert_output(
+            &source,
+            &[
+                "sync",
+                &format!("caught true {kind}"),
+                "finally",
+                "first 23 false",
+                "second undefined true",
+            ],
+        );
+    }
+}
+
+#[test]
+fn sync_delegate_protocol_abrupt_completions_preserve_thrown_identity() {
+    for (setup, resume, first) in [
+        ("source.next = function () { throw marker; };", "next", false),
+        (
+            "source.next = function () { return { get done() { throw marker; } }; };",
+            "next",
+            false,
+        ),
+        (
+            "source.next = function () { return { done: false, get value() { throw marker; } }; };",
+            "next",
+            false,
+        ),
+        (
+            "Object.defineProperty(source, 'next', { get() { throw marker; } });",
+            "next",
+            false,
+        ),
+        ("source.throw = function () { throw marker; };", "throw", true),
+        ("source.return = function () { throw marker; };", "return", true),
+        (
+            "Object.defineProperty(source, 'throw', { get() { throw marker; } });",
+            "throw",
+            true,
+        ),
+        (
+            "Object.defineProperty(source, 'return', { get() { throw marker; } });",
+            "return",
+            true,
+        ),
+    ] {
+        let first = if first {
+            "const first = await generator.next(); if (first.value !== 1 || first.done) throw 'bad first';"
+        } else {
+            ""
+        };
+        let source = format!(
+            r#"
+            const marker = (function () {{ return 17; }}).bind(null);
+            const source = {{
+                [Symbol.iterator]() {{ return this; }},
+                next() {{ return {{ value: 1, done: false }}; }}
+            }};
+            {setup}
+            async function* outer() {{
+                try {{ yield* source; }}
+                catch (error) {{ console.log('caught', error === marker, typeof error); return 23; }}
+                finally {{ console.log('finally'); }}
+            }}
+            async function check() {{
+                const generator = outer();
+                {first}
+                const result = await generator.{resume}('incoming');
+                console.log('recovered', result.value, result.done);
+                const after = await generator.next();
+                console.log('completed', after.value, after.done);
+            }}
+            check();
+            "#
+        );
+        assert_output(
+            &source,
+            &[
+                "caught true function",
+                "finally",
+                "recovered 23 true",
+                "completed undefined true",
+            ],
+        );
+    }
+}

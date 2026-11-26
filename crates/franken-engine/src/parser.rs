@@ -3780,6 +3780,52 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
     merge_logical_lines_with(text, true)
 }
 
+/// A line terminator is ordinary trivia between the parts of a static module
+/// declaration. In particular, a closed named export list can still acquire
+/// a FromClause, but a completed module request ends before the next statement.
+fn module_clause_continues(previous: &str, next: &str) -> bool {
+    if previous == "export" || previous == "import" {
+        return true;
+    }
+    let body = if starts_import_declaration(previous) {
+        let body = previous["import".len()..].trim_start();
+        if body.starts_with(['\'', '"']) {
+            return false;
+        }
+        body
+    } else if starts_export_declaration(previous) {
+        let body = previous["export".len()..].trim_start();
+        if body == "default" {
+            return true;
+        }
+        if let Some(list) = body.strip_prefix('{') {
+            let Some(close) = module_specifier_list_close(list) else {
+                return false;
+            };
+            return match list[close + 1..].trim() {
+                "" => starts_with_keyword(next, "from"),
+                "from" => next.starts_with(['\'', '"']),
+                _ => false,
+            };
+        }
+        if !body.starts_with('*') {
+            return false;
+        }
+        body
+    } else {
+        return false;
+    };
+    // Handles both the named/default import and namespace forms. A newline
+    // after `*` or a comma already continues in the general line scanner.
+    (starts_with_keyword(next, "from")
+        || starts_with_keyword(next, "as")
+        || next.starts_with(['\'', '"'])
+        || body
+            .strip_suffix("as")
+            .is_some_and(|head| head.trim_end().ends_with('*')))
+        && split_import_from(body).is_none()
+}
+
 /// [`merge_logical_lines`], skipping a `#!` first line only when `text` is
 /// the whole source: a block or function body starting with `#!` is not a
 /// hashbang comment but a SyntaxError (ES2022 12.5, bd-9vouw.402).
@@ -3874,6 +3920,11 @@ fn merge_logical_lines_with(text: &str, initial_hashbang: bool) -> Vec<LogicalLi
                 .as_ref()
                 .and_then(|segments| segments.last())
                 .map(|(_, _, previous)| *previous);
+            let module_continues_previous = result
+                .last()
+                .is_some_and(|line| !line.text.ends_with(';'))
+                && previous_last
+                    .is_some_and(|previous| module_clause_continues(previous, trimmed_line));
             let block_clause_continues_previous = previous_last.is_some_and(|previous| {
                 let previous = strip_leading_labels(previous).trim_end();
                 previous.ends_with('}')
@@ -3949,6 +4000,7 @@ fn merge_logical_lines_with(text: &str, initial_hashbang: bool) -> Vec<LogicalLi
                 || brace_continues_header
                 || body_continues_header
                 || clause_continues_statement
+                || module_continues_previous
                 || paren_continues_previous
                 || division_continues_previous
             {
@@ -4557,7 +4609,7 @@ fn parse_module_statement_segment(
     context: &mut ParseExecutionContext<'_>,
 ) -> ParseResult<Vec<Statement>> {
     if goal == ParseGoal::Module
-        && statement.starts_with("export ")
+        && starts_export_declaration(statement)
         && let Some(expanded) = parse_named_declaration_export(statement, span.clone(), context)?
     {
         return Ok(expanded);

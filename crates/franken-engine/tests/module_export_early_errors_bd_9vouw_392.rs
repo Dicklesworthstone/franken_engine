@@ -100,3 +100,30 @@ Promise.all(specs.map((s) => import(s).then((m) => "loaded:" + Object.keys(m).jo
         ["SyntaxError,SyntaxError,SyntaxError,SyntaxError,SyntaxError,loaded:a.c.ok",]
     );
 }
+
+#[test]
+fn split_module_clauses_link_and_execute_across_files() {
+    let root = persistent_scratch_dir::ScratchDir::new("multiline_module_clauses");
+    for (name, source) in [
+        (
+            "leaf.mjs",
+            "export\tconst answer = 42;\nexport\ndefault\n7;\n",
+        ),
+        (
+            "barrel.mjs",
+            "export {default as seven}\nfrom\n'./leaf.mjs';\nexport*as\nns\nfrom './leaf.mjs';",
+        ),
+        (
+            "main.mjs",
+            "function from() { console.log('boundary'); }\n\
+             import\n{seven, ns}\n// source below\nfrom\n'./barrel.mjs'\n\
+             from();\nexport {seven};\nfrom();\nconsole.log(seven, ns.answer);",
+        ),
+    ] {
+        std::fs::write(root.path().join(name), source).expect("module fixture");
+    }
+    assert_eq!(
+        run(root.path(), "main.mjs").expect("execute"),
+        ["boundary", "boundary", "7 42"]
+    );
+}

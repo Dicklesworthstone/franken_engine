@@ -148,6 +148,10 @@ try {
       "console.log(data.lone.charCodeAt(0), data['\\udfff'].charCodeAt(0), data['\\udfff'].charCodeAt(1));",
       "console.log(data.separators.charCodeAt(0), data.separators.charCodeAt(1));",
       "data.shared = 7; console.log(config.shared, ns.default.shared);",
+      "const load = () => import('./config.json', { with: { type: 'json' } });",
+      "const dynamic = await load(); console.log(dynamic === ns, dynamic.default.shared);",
+      "const lazyOnly = await import('./lazy-only.json', { with: { type: 'json' } });",
+      "console.log(lazyOnly.default.answer, Object.keys(lazyOnly).join(','));",
       "",
     ].join("\n"),
     "json-poison.js": "JSON.parse = () => { throw new Error('a JSON module must not call a replaced JSON.parse'); };\n",
@@ -156,6 +160,7 @@ try {
       "export * as values from './config.json' with { type: 'json' };",
       "",
     ].join("\n"),
+    "lazy-only.json": '{"answer":42}\n',
     "config.json": String.raw`{"__proto__":{"safe":true},"duplicate":1,"duplicate":2,"negativeZero":-0,"overflow":1e400,"rounded":9007199254740993,"lone":"\ud800","\udfff":"\u2028\u2029","separators":"` + "\u2028\u2029" + '"}\n',
   };
   for (const [name, source] of Object.entries(jsonSources)) {
@@ -164,7 +169,7 @@ try {
   const jsonEntry = join(project, "json-entry.js");
   const jsonOut = join(project, "json-dist");
   const jsonReport = JSON.parse(expectSuccess(build(jsonEntry, jsonOut), "typed JSON client build"));
-  assert.equal(jsonReport.build.modules.length, 4);
+  assert.equal(jsonReport.build.modules.length, 5);
   assert.deepEqual(
     JSON.parse(expectSuccess(build(jsonEntry, jsonOut), "repeat typed JSON build")).build,
     jsonReport.build,
@@ -183,6 +188,8 @@ try {
     "55296 8232 8233",
     "8232 8233",
     "7 7",
+    "true 7",
+    "42 default",
     "",
   ].join("\n");
   const nativeJson = expectSuccess(run(process.execPath, [jsonEntry]), "Node JSON module loader");
@@ -198,6 +205,8 @@ try {
     ["named-json.js", "import { duplicate } from './config.json' with { type: 'json' };", "FE-REACT-BUILD-EXPORT"],
     ["wrong-json-type.js", "import './json-poison.js' with { type: 'json' };", "FE-REACT-BUILD-ATTRIBUTES"],
     ["unknown-json-attribute.js", "import './config.json' with { type: 'json', integrity: 'unchecked' };", "FE-REACT-BUILD-ATTRIBUTES"],
+    ["malformed-lazy-json.js", "export const load = () => import('./invalid.json', { with: { type: 'json' } });", "FE-REACT-BUILD-JSON"],
+    ["computed-json-options.js", "export const load = () => import('./config.json', { with: { type: getType() } });", "FE-REACT-BUILD-DYNAMIC"],
     ["malformed-json.js", "import './invalid.json' with { type: 'json' };", "FE-REACT-BUILD-JSON"],
   ]) {
     writeFileSync(join(project, name), source);

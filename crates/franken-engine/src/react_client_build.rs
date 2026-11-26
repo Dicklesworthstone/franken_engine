@@ -179,8 +179,8 @@ type BuildResult<T> = Result<T, ReactClientBuildError>;
 struct SourceImport {
     specifier: String,
     span: std::ops::Range<usize>,
-    /// A declaration prefix for static imports; None edits only the literal
-    /// argument of import(), retaining comments and lazy execution.
+    /// A declaration prefix for static imports. For import(), the span covers
+    /// the literal, or the argument list when consuming a JSON attribute.
     declaration: Option<String>,
     attributes: ImportAttributes,
     /// JSON module namespaces expose only `default`. Namespace and star edges
@@ -373,8 +373,8 @@ pub fn build_react_client(config: &ReactClientBuildConfig) -> BuildResult<ReactC
                 // Keep physical line counts, then remap columns for unchanged code.
                 format!("{declaration}{literal};{}", "\n".repeat(newlines))
             } else {
-                // Preserve line continuations inside the literal, so neither
-                // comments nor restricted productions change their position.
+                // Keep the same line count even when a multi-line JSON options
+                // object becomes part of the mapped specifier replacement.
                 literal.insert_str(literal.len() - 1, &"\\\n".repeat(newlines));
                 dynamic_targets.insert(import.specifier, emitted_specifier);
                 dynamic_edits.push(SourceEdit {
@@ -931,26 +931,23 @@ fn bounded_dynamic_imports(
         else {
             continue;
         };
-        let [Expression::StringLiteral(specifier)] = arguments.as_slice() else {
-            continue;
-        };
         if !matches!(callee.as_ref(), Expression::Identifier(identifier) if identifier == "import")
+            || !matches!(arguments.first(), Some(Expression::StringLiteral(_)))
         {
             continue;
         }
-        let Some(specifier) = specifier
-            .as_str()
-            .filter(|specifier| expected.contains_key(*specifier))
-        else {
+        let request = bounded_import_request(arguments, name)?;
+        if !expected.contains_key(&request) {
             continue;
-        };
-        let literal = dynamic_import_literal_span(text)?;
-        *observed.entry(specifier.to_string()).or_insert(0usize) += 1;
+        }
+        let (specifier, attributes) = request.clone();
+        *observed.entry(request).or_insert(0usize) += 1;
+        let span = dynamic_import_argument_span(text, !attributes.is_empty())?;
         imports.push(SourceImport {
-            specifier: specifier.to_string(),
-            span: range.start + literal.start..range.start + literal.end,
+            specifier,
+            span: range.start + span.start..range.start + span.end,
             declaration: None,
-            attributes: ImportAttributes::default(),
+            attributes,
             json_exports_valid: true,
         });
     }
@@ -960,10 +957,71 @@ fn bounded_dynamic_imports(
     Ok(imports)
 }
 
+/// Only erase options that consist entirely of literal data properties.
+/// Computed keys, spread, accessors, and value expressions can run guest code.
+fn bounded_import_request(
+    arguments: &[Expression],
+    name: &str,
+) -> BuildResult<(String, ImportAttributes)> {
+    fn literal_property<'a>(expression: &'a Expression, key: &str) -> Option<&'a Expression> {
+        let Expression::ObjectLiteral(properties) = expression else {
+            return None;
+        };
+        let [property] = properties.as_slice() else {
+            return None;
+        };
+        if property.computed
+            || property.shorthand
+            || property.kind != crate::ast::ObjectPropertyKind::Data
+        {
+            return None;
+        }
+        let property_key = match &property.key {
+            Expression::Identifier(name) => name.as_str(),
+            Expression::StringLiteral(name) => name.as_str()?,
+            _ => return None,
+        };
+        (property_key == key).then_some(&property.value)
+    }
+
+    let invalid = || {
+        ReactClientBuildError::new(
+            "FE-REACT-BUILD-DYNAMIC",
+            format!("{name}: import() requires a string literal with optional literal JSON import attributes"),
+        )
+    };
+    let [Expression::StringLiteral(specifier), options @ ..] = arguments else {
+        return Err(invalid());
+    };
+    let specifier = specifier.as_str().ok_or_else(|| {
+        ReactClientBuildError::new(
+            "FE-REACT-BUILD-SPECIFIER",
+            format!("{name}: module specifier is not valid UTF-8"),
+        )
+    })?;
+    let attributes = match options {
+        [] => ImportAttributes::default(),
+        [options] => {
+            let Some(Expression::StringLiteral(kind)) = literal_property(options, "with")
+                .and_then(|attributes| literal_property(attributes, "type"))
+            else {
+                return Err(invalid());
+            };
+            let kind = kind.as_str().ok_or_else(invalid)?;
+            ImportAttributes::new(BTreeMap::from([("type".to_string(), kind.to_string())]))
+                .map_err(|error| {
+                    ReactClientBuildError::new("FE-REACT-BUILD-ATTRIBUTES", format!("{name}: {error}"))
+                })?
+        }
+        _ => return Err(invalid()),
+    };
+    Ok((specifier.to_string(), attributes))
+}
+
 fn collect_bounded_imports(
     value: &serde_json::Value,
     name: &str,
-    imports: &mut BTreeMap<String, usize>,
+    imports: &mut BTreeMap<(String, ImportAttributes), usize>,
 ) -> BuildResult<()> {
     match value {
         serde_json::Value::Object(fields) => {
@@ -973,27 +1031,12 @@ fn collect_bounded_imports(
                     .and_then(serde_json::Value::as_str)
                     == Some("import")
             {
-                let arguments = call.get("arguments").and_then(serde_json::Value::as_array);
-                let literal = arguments
-                    .filter(|arguments| arguments.len() == 1)
-                    .and_then(|arguments| arguments[0].get("StringLiteral"));
-                let Some(literal) = literal else {
-                    return Err(ReactClientBuildError::new(
-                        "FE-REACT-BUILD-DYNAMIC",
-                        format!(
-                            "{name}: import() requires one string literal and no options in a closed-world ESM client build"
-                        ),
-                    ));
-                };
-                let specifier: crate::js_string::JsString =
-                    serde_json::from_value(literal.clone()).map_err(serialization_error)?;
-                let specifier = specifier.as_str().ok_or_else(|| {
-                    ReactClientBuildError::new(
-                        "FE-REACT-BUILD-SPECIFIER",
-                        format!("{name}: module specifier is not valid UTF-8"),
-                    )
-                })?;
-                *imports.entry(specifier.to_string()).or_insert(0) += 1;
+                let arguments = call.get("arguments").ok_or_else(invalid_span)?;
+                let arguments =
+                    Vec::<Expression>::deserialize(arguments).map_err(serialization_error)?;
+                *imports
+                    .entry(bounded_import_request(&arguments, name)?)
+                    .or_insert(0) += 1;
                 return Ok(());
             }
             if let Some(identifier) = fields.get("Identifier").and_then(serde_json::Value::as_str)
@@ -1026,10 +1069,12 @@ fn collect_bounded_imports(
     Ok(())
 }
 
-/// The AST has already proved this is import() with one string literal.
-/// Locate that literal inside the exact lexical call range, keeping its
-/// surrounding comments and redundant parentheses unchanged.
-fn dynamic_import_literal_span(source: &str) -> BuildResult<std::ops::Range<usize>> {
+/// For a typed JSON edge, consume the validated options as the output asset
+/// is JavaScript. For ordinary imports replace only the specifier literal.
+fn dynamic_import_argument_span(
+    source: &str,
+    consume_options: bool,
+) -> BuildResult<std::ops::Range<usize>> {
     fn skip_trivia(source: &str, cursor: &mut usize) -> BuildResult<()> {
         loop {
             let rest = source.get(*cursor..).ok_or_else(invalid_span)?;
@@ -1053,6 +1098,10 @@ fn dynamic_import_literal_span(source: &str) -> BuildResult<std::ops::Range<usiz
     skip_trivia(source, &mut cursor)?;
     if source.as_bytes().get(cursor) != Some(&b'(') {
         return Err(invalid_span());
+    }
+    if consume_options {
+        let call_body = source.strip_suffix(')').ok_or_else(invalid_span)?;
+        return Ok(cursor + 1..call_body.len());
     }
     loop {
         cursor += 1;
@@ -1079,8 +1128,8 @@ fn dynamic_import_literal_span(source: &str) -> BuildResult<std::ops::Range<usiz
 }
 
 /// Even a lexically plausible range cannot change another expression. Compare
-/// the full AST after only dynamic edits against the exact permitted literal
-/// substitutions, ignoring source positions that necessarily moved.
+/// the full AST after dynamic edits against the permitted specifier substitutions
+/// and consumption of validated JSON attributes, ignoring moved source positions.
 fn verify_dynamic_import_edits(
     source: &str,
     expected: &mut serde_json::Value,
@@ -1115,6 +1164,10 @@ fn normalize_dynamic_import_ast(value: &mut serde_json::Value, targets: &BTreeMa
                     .and_then(|specifier| targets.get(specifier))
             {
                 call["arguments"][0]["StringLiteral"] = serde_json::Value::String(target.clone());
+                // The resolved JSON asset is a default-only JavaScript module.
+                if let Some(arguments) = call["arguments"].as_array_mut() {
+                    arguments.truncate(1);
+                }
             }
             for child in fields.values_mut() {
                 normalize_dynamic_import_ast(child, targets);
@@ -1845,6 +1898,42 @@ export const describe = async () => `loaded:${(await import('./lazy.js')).value}
     }
 
     #[test]
+    fn client_build_captures_typed_lazy_json_as_one_shared_esm_asset() {
+        let (directory, mut config) = fixture(&[
+            (
+                "entry.js",
+                "import data from './data.json' with { type: 'json' };\nexport const load = () => import /* lazy */ (('./data.json'), {\n'with': { 'type': 'json' }\n});\nexport const same = async () => (await load()).default === data;",
+            ),
+            ("data.json", r#"{"answer":42}"#),
+        ]);
+        config.compile.generate_source_maps = true;
+        let build = build_react_client(&config).unwrap();
+        build.verify_integrity().unwrap();
+        assert_eq!(build.modules.len(), 2);
+        let entry = build
+            .modules
+            .iter()
+            .find(|module| module.asset_path == build.entry_asset)
+            .unwrap();
+        assert_eq!(entry.dependencies.len(), 2);
+        assert_eq!(entry.dependencies[0].target, entry.dependencies[1].target);
+        assert!(!entry.code.contains("'json'"));
+        assert!(entry.code.contains("import /* lazy */"));
+        let map: serde_json::Value =
+            serde_json::from_str(entry.source_map.as_ref().unwrap()).unwrap();
+        assert_eq!(
+            map["sourcesContent"][0],
+            fs::read_to_string(&config.entry).unwrap()
+        );
+        assert_eq!(build, build_react_client(&config).unwrap());
+        fs::write(directory.path().join("data.json"), r#"{"answer":43}"#).unwrap();
+        assert_ne!(
+            build.graph_hash,
+            build_react_client(&config).unwrap().graph_hash
+        );
+    }
+
+    #[test]
     fn client_build_checks_json_attributes_and_default_only_exports_on_every_edge() {
         let (_directory, mut config) = fixture(&[
             (
@@ -1893,7 +1982,31 @@ export const describe = async () => `loaded:${(await import('./lazy.js')).value}
                 "FE-REACT-BUILD-ATTRIBUTES",
             ),
             (
-                "export const load = () => import('./data.json', { with: { type: 'json' } });",
+                "export const load = () => import('./code.js', { with: { type: 'json' } });",
+                "FE-REACT-BUILD-ATTRIBUTES",
+            ),
+            (
+                "export const load = () => import('./data.json', { with: { type: 'css' } });",
+                "FE-REACT-BUILD-ATTRIBUTES",
+            ),
+            (
+                "export const load = () => import('./data.json', { with: { type: 'json', type: 'json' } });",
+                "FE-REACT-BUILD-DYNAMIC",
+            ),
+            (
+                "export const load = () => import('./data.json', { with: { type: 'json' }, extra: effect() });",
+                "FE-REACT-BUILD-DYNAMIC",
+            ),
+            (
+                "export const load = () => import('./data.json', { get with() { return {}; } });",
+                "FE-REACT-BUILD-DYNAMIC",
+            ),
+            (
+                "export const load = () => import('./data.json', { with: { [key()]: 'json' } });",
+                "FE-REACT-BUILD-DYNAMIC",
+            ),
+            (
+                "export const load = () => import('./data.json', { with: { type: value } });",
                 "FE-REACT-BUILD-DYNAMIC",
             ),
         ] {

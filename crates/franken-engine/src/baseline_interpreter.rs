@@ -10965,7 +10965,7 @@ impl RuntimeForOfInit {
     fn from_array(object_id: ObjectId) -> Self {
         Self {
             array: Some(RuntimeArrayIterator {
-                object_id,
+                receiver: Value::Object(object_id),
                 kind: RuntimeTypedArrayIteratorKind::Values,
             }),
             ..Self::from_values(Vec::new())
@@ -11062,7 +11062,10 @@ const PROTOTYPE_OWNER_MEMO_ENTRIES: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimeArrayIterator {
-    object_id: ObjectId,
+    /// CreateArrayIterator retains the result of ToObject, including callable
+    /// and exotic receivers. This is distinct from a custom iterator's
+    /// receiver: its return/throw methods never participate in IteratorClose.
+    receiver: Value,
     // Arrays and typed arrays expose the same keys/values/entries projections.
     kind: RuntimeTypedArrayIteratorKind,
 }

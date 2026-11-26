@@ -2175,6 +2175,16 @@ impl InterpreterCore {
                     match self.own_property_holder(module, callable, false)? {
                         Some(backing) => Some(backing),
                         None => {
+                            // Callable own metadata stays virtual until the
+                            // first property write. ArrayIterator.next must
+                            // still see its length without an eager backing
+                            // allocation or an inherited-property shortcut.
+                            if let (Some(module), Some(name)) = (module, key.as_str())
+                                && let Some(value) =
+                                    self.function_standard_own_value(module, callable, name)?
+                            {
+                                return Ok(value);
+                            }
                             let prototype = self.function_value_prototype(module, callable)?;
                             self.prototype_link_for_value(module, &prototype)?.flatten()
                         }
@@ -2571,26 +2581,32 @@ impl InterpreterCore {
                 return Ok(Some(value));
             }
             ForOfStep::Array { iterator, index } => {
-                let receiver = Value::Object(iterator.object_id);
+                let receiver = iterator.receiver;
                 // A typed array iterated by Array.prototype.values / keys /
                 // entries reads its view's length each step, and a view out
                 // of bounds is a TypeError (ES2024 23.1.5.1 step 2.b.ii), as
                 // `ta.values()` does above; it iterated as empty
                 // (bd-9vouw.360).
-                let typed_view = self
-                    .heap
-                    .get(iterator.object_id.0 as usize)
-                    .and_then(|object| object.typed_array.as_deref().cloned());
+                let typed_view = match &receiver {
+                    Value::Object(object_id) => self
+                        .heap
+                        .get(object_id.0 as usize)
+                        .and_then(|object| object.typed_array.as_deref().cloned()),
+                    _ => None,
+                };
                 let length = if let Some(view) = typed_view {
                     Self::reject_out_of_bounds_typed_array(&view, "next")?;
                     view.length
                 } else {
-                    let length = self.iterator_protocol_property(
+                    let length = self.iterator_protocol_value_property(
                         module,
-                        iterator.object_id,
-                        &RuntimePropertyKey::String(JsString::from("length")),
                         receiver.clone(),
+                        &RuntimePropertyKey::String(JsString::from("length")),
                     )?;
+                    // LengthOfArrayLike performs ToPrimitive(number) before
+                    // ToLength. A throwing or reentrant conversion does not
+                    // advance this invocation's captured index.
+                    let length = self.coerce_runtime_primitive(module, length, false)?;
                     if matches!(length, Value::BigInt(_) | Value::Symbol(_)) {
                         return Err(InterpreterError::TypeError {
                             expected: "number-compatible array-like length".to_string(),
@@ -2632,11 +2648,10 @@ impl InterpreterCore {
                     RuntimeTypedArrayIteratorKind::Keys => index_value,
                     RuntimeTypedArrayIteratorKind::Values
                     | RuntimeTypedArrayIteratorKind::Entries => {
-                        let element = self.iterator_protocol_property(
+                        let element = self.iterator_protocol_value_property(
                             module,
-                            iterator.object_id,
-                            &RuntimePropertyKey::String(JsString::from(index.to_string())),
                             receiver,
+                            &RuntimePropertyKey::String(JsString::from(index.to_string())),
                         )?;
                         if iterator.kind == RuntimeTypedArrayIteratorKind::Entries {
                             Value::Object(self.alloc_array_from_values(&[index_value, element])?)

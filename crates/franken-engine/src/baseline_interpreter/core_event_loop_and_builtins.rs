@@ -13588,15 +13588,20 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         // ToObject(this value) (ES2020 22.1.3.4, 22.1.3.14, 22.1.3.30 step
         // 1): an undefined or null receiver is a TypeError, not an empty
-        // iterator.
+        // iterator. Creation performs no length or indexed property reads.
         if matches!(receiver, Value::Undefined | Value::Null) {
             return Err(self.throw_js_error(
                 "TypeError",
                 format!("Array.prototype.{kind} called on null or undefined"),
             ));
         }
-        let array_id = match receiver {
-            Value::Object(object_id) => Some(object_id),
+        let receiver = if receiver.is_object_like() {
+            receiver
+        } else {
+            Value::Object(self.alloc_primitive_wrapper(receiver)?)
+        };
+        let array_id = match &receiver {
+            Value::Object(object_id) => Some(*object_id),
             _ => None,
         };
         let projection = match kind {
@@ -13616,18 +13621,11 @@ impl InterpreterCore {
                 "array_iterator:{kind}|{}",
                 array_id
                     .map(|id| id.0.to_string())
-                    .unwrap_or_else(|| "non_object".to_string())
+                    .unwrap_or_else(|| format!("{}|{}", receiver.type_name(), receiver))
             )
         });
         if self.iteration_traced(trace_index) {
-            let iterable_ref = array_id
-                .map(|object_id| self.iteration_ref_for_object(object_id))
-                .unwrap_or_else(|| {
-                    self.derive_iteration_engine_id(
-                        "array_iterator_receiver",
-                        "non_object".to_string(),
-                    )
-                });
+            let iterable_ref = self.iteration_ref_for_value(&receiver);
             self.record_iteration_event(trace_index, |record_id, step_index| {
                 make_get_iterator_event(
                     record_id,
@@ -13640,8 +13638,8 @@ impl InterpreterCore {
         let handle = self.alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
             values: Vec::new(),
             next_index: 0,
-            array: array_id.map(|object_id| RuntimeArrayIterator {
-                object_id,
+            array: Some(RuntimeArrayIterator {
+                receiver,
                 kind: projection,
             }),
             typed_array: None,

@@ -4720,10 +4720,10 @@ impl InterpreterCore {
                     .saturating_add(value_slots)
                     .saturating_add(values)
                     .saturating_add(
-                        state
-                            .array
-                            .as_ref()
-                            .map_or(0, |_| std::mem::size_of::<RuntimeArrayIterator>() as u64),
+                        state.array.as_ref().map_or(0, |array| {
+                            (std::mem::size_of::<RuntimeArrayIterator>() as u64)
+                                .saturating_add(Self::estimate_value_bytes(&array.receiver))
+                        }),
                     )
                     // A collection iterator and its `collection_iterators`
                     // registry entry.

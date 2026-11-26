@@ -730,7 +730,7 @@ impl GcMarker {
                 } = state;
                 values.iter().for_each(|value| self.value(value));
                 if let Some(array) = array {
-                    self.object(array.object_id);
+                    self.value(&array.receiver);
                 }
                 if let Some(collection) = collection {
                     self.object(collection.collection);

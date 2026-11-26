@@ -659,7 +659,9 @@ fn array_to_string_preserves_getter_labels_through_call_fallback_and_catch() {
                 core.set_register_label(input_register, Label::Secret)
                     .unwrap();
                 core.set_gc_stress_interval(stress);
-                let execution = core.execute(&module).expect("array conversion label execution");
+                let execution = core
+                    .execute(&module)
+                    .expect("array conversion label execution");
                 assert_eq!(execution.value, Value::str(*expected), "{source}");
                 assert_eq!(execution.completion_label, Label::Secret, "{source}");
                 assert_eq!(

@@ -10522,7 +10522,8 @@ impl InterpreterCore {
     }
 
     /// Whether the object or its prototype chain defines a guest `toString` /
-    /// `valueOf` method or any `@@toPrimitive` property (bd-9vouw.37).
+    /// `valueOf` method, an array's `join`, any `@@toPrimitive` property, or
+    /// a Proxy boundary that requires observable conversion (bd-9vouw.37).
     pub(super) fn object_has_user_conversion_hook(&self, object_id: ObjectId) -> bool {
         let to_primitive = WellKnownSymbol::ToPrimitive.id();
         // A Date converts through Date.prototype[@@toPrimitive]: the
@@ -10534,12 +10535,36 @@ impl InterpreterCore {
             .heap
             .get(object_id.0 as usize)
             .is_some_and(|object| object.brand() == Some("Date"));
+        let is_array = self
+            .heap
+            .get(object_id.0 as usize)
+            .is_some_and(|object| object.is_array);
+        // An explicit alternative prototype may omit Array.prototype's
+        // conversion methods. Only its canonical link proves direct joining.
+        if is_array
+            && let Some(prototype) = self
+                .heap
+                .get(object_id.0 as usize)
+                .and_then(|object| object.prototype)
+            && self.builtin_prototypes.get("Array") != Some(&prototype)
+        {
+            return true;
+        }
+        // Deleting either intrinsic changes the ordinary conversion:
+        // toString falls through to Object.prototype's method, while a
+        // missing join selects that same intrinsic fallback.
+        if is_array
+            && (self.canonical_virtual_name_deleted("Array", "join")
+                || self.canonical_virtual_name_deleted("Array", "toString"))
+        {
+            return true;
+        }
         let object_prototype = self.builtin_prototypes.get("Object").copied();
         let mut reaches_object_prototype = false;
         let mut to_primitive_seen = false;
         let mut current = Some(object_id);
-        // Bounded like the other prototype walks; a longer chain keeps the
-        // non-observable conversion.
+        // Bound the metadata walk. An incomplete proof must use observable
+        // conversion, which applies the ordinary property traversal limit.
         for _ in 0..128 {
             let Some(id) = current else {
                 break;
@@ -10547,6 +10572,12 @@ impl InterpreterCore {
             let Some(object) = self.heap.get(id.0 as usize) else {
                 break;
             };
+            // This is only a metadata proof for the non-observable path.
+            // Do not invoke getters or traps here: conversion performs each
+            // Get once. A Proxy link can supply or revoke any method.
+            if object.brand() == Some(PROXY_TYPE_TAG) {
+                return true;
+            }
             reaches_object_prototype |= Some(id) == object_prototype;
             // The intrinsic prototypes supply their conversion methods
             // virtually, so a stored `toString` or `valueOf` is the program's:
@@ -10554,8 +10585,12 @@ impl InterpreterCore {
             // number) and an accessor, which only the generic path reads.
             // `{ valueOf: null, toString: null } + ''` is a TypeError; the
             // engine's string form answered "[object Object]".
+            // Array.prototype.toString also performs Get("join"): an own
+            // or inherited override, including a non-callable value, must
+            // reach that algorithm instead of the direct array join.
             if object.properties.contains_key("toString")
                 || object.properties.contains_key("valueOf")
+                || (is_array && object.properties.contains_key("join"))
             {
                 return true;
             }
@@ -10591,7 +10626,7 @@ impl InterpreterCore {
         if current.is_none() && !reaches_object_prototype {
             return true;
         }
-        is_date && !to_primitive_seen
+        current.is_some() || (is_date && !to_primitive_seen)
     }
 
     /// Route an error raised while a reentrant instruction ran guest code: a

@@ -1251,7 +1251,8 @@ impl InterpreterCore {
             }
             return self.own_property_descriptor_value(object_id, key);
         };
-        let Some(trap) = self.proxy_trap_value(module, &handler, "getOwnPropertyDescriptor")? else {
+        let Some(trap) = self.proxy_trap_value(module, &handler, "getOwnPropertyDescriptor")?
+        else {
             return self.proxy_aware_own_property_descriptor(module, target, key, depth + 1);
         };
         let trap_target = self.proxy_trap_target(object_id, target);

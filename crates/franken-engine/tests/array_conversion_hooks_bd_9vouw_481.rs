@@ -185,3 +185,78 @@ try { [].join(Symbol()); console.log('miss'); } catch(error) {console.log(error.
         ],
     );
 }
+
+#[test]
+fn nested_array_conversions_observe_join_overrides_once() {
+    // Compare direct String conversion with the operator and nested paths.
+    // The guard must inspect metadata without executing a getter twice.
+    let source = r#"function arrayJoinModes(value) {
+  return String(value) + '|' + ('' + value) + '|' + `${value}` + '|' + String([value]) + '|' + [value].join(null);
+}
+const noncallable = [1, 2]; noncallable.join = null;
+console.log(arrayJoinModes(noncallable));
+const own = [3]; let ownGets = 0; let ownCalls = 0;
+Object.defineProperty(own, 'join', {get() {
+  ownGets++; const same = this === own;
+  return function() {ownCalls++; return same + ':' + (this === own) + ':' + arguments.length;};
+}});
+console.log(arrayJoinModes(own), ownGets, ownCalls);
+const inherited = [4]; let inheritedGets = 0; let inheritedCalls = 0;
+const parent = Object.create(Array.prototype);
+Object.defineProperty(parent, 'join', {get() {
+  inheritedGets++; const same = this === inherited;
+  return function() {inheritedCalls++; return same + ':' + (this === inherited) + ':' + arguments.length;};
+}});
+Object.setPrototypeOf(inherited, parent);
+console.log(arrayJoinModes(inherited), inheritedGets, inheritedCalls);
+const proxied = [5]; let proxyGets = 0; let proxyCalls = 0;
+const proxy = new Proxy(Array.prototype, {get(target, key, receiver) {
+  if (key === 'join') {
+    proxyGets++; const same = receiver === proxied;
+    return function() {proxyCalls++; return same + ':' + (this === proxied) + ':' + arguments.length;};
+  }
+  return Reflect.get(target, key, receiver);
+}});
+Object.setPrototypeOf(proxied, proxy);
+console.log(arrayJoinModes(proxied), proxyGets, proxyCalls);
+const token = {}; let throwingGets = 0; const throwing = [7];
+Object.defineProperty(throwing, 'join', {get() {throwingGets++; throw token;}});
+let caught = false;
+try {[throwing].join(null);} catch(error) {caught = error === token;}
+console.log(caught, throwingGets);
+const detached = [8]; Object.setPrototypeOf(detached, Object.prototype);
+console.log(arrayJoinModes(detached));
+const ordinaryParent = [9]; Object.setPrototypeOf(ordinaryParent, Object.create(Array.prototype));
+console.log(arrayJoinModes(ordinaryParent));
+const restored = [10]; Object.setPrototypeOf(restored, Array.prototype);
+console.log(arrayJoinModes(restored));
+"#;
+    assert_console_output(
+        source,
+        &[
+            "[object Array]|[object Array]|[object Array]|[object Array]|[object Array]",
+            "true:true:0|true:true:0|true:true:0|true:true:0|true:true:0 5 5",
+            "true:true:0|true:true:0|true:true:0|true:true:0|true:true:0 5 5",
+            "true:true:0|true:true:0|true:true:0|true:true:0|true:true:0 5 5",
+            "true 1",
+            "[object Array]|[object Array]|[object Array]|[object Array]|[object Array]",
+            "9|9|9|9|9",
+            "10|10|10|10|10",
+        ],
+    );
+}
+
+#[test]
+fn array_conversion_fallback_observes_deleted_intrinsics() {
+    // Run each deletion in a fresh realm: restoring a method stores an own
+    // property, which would independently disable the optimized path.
+    for method in ["join", "toString"] {
+        let source = format!(
+            "const join = Array.prototype.join; delete Array.prototype.{method}; const value = [6]; console.log(String(value), '' + value, `${{value}}`, String([value]), join.call([value], null));"
+        );
+        assert_console_output(
+            &source,
+            &["[object Array] [object Array] [object Array] [object Array] [object Array]"],
+        );
+    }
+}

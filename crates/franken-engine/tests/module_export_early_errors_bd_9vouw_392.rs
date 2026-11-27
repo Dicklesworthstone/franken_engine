@@ -127,3 +127,52 @@ fn split_module_clauses_link_and_execute_across_files() {
         ["boundary", "boundary", "7 42"]
     );
 }
+
+#[test]
+fn multiline_export_initializers_publish_the_completed_expression() {
+    let root = persistent_scratch_dir::ScratchDir::new("multiline_export_initializers");
+    std::fs::write(
+        root.path().join("values.mjs"),
+        r#"const api = { default: x => x + 1 };
+function tag(parts) { return parts[0]; }
+export const tagged = tag
+`continued`;
+export const half = 84
+/ 2;
+export const pick = ['a', 'b']
+[1];
+export let initialized = 1, unset
+(99);
+export default api.default
+(41);
+"#,
+    )
+    .expect("exporting module");
+    std::fs::write(
+        root.path().join("main.mjs"),
+        "import result, { tagged, half, pick, unset } from './values.mjs'\n\
+         (99);\nconsole.log(result, tagged, half, pick, typeof unset);",
+    )
+    .expect("importing module");
+    assert_eq!(
+        run(root.path(), "main.mjs").expect("execute"),
+        ["42 continued 42 b undefined"]
+    );
+}
+
+#[test]
+fn dynamic_import_and_import_meta_continue_as_expressions() {
+    use frankenengine_engine::ast::{Expression, Statement};
+    use frankenengine_engine::parser_api_stability::parse_module;
+
+    for source in ["import('./values.mjs')\n['then'];", "import.meta\n['url'];"] {
+        let tree = parse_module(source).expect(source);
+        let [Statement::Expression(statement)] = tree.body.as_slice() else {
+            panic!("expected one expression statement for {source}");
+        };
+        assert!(matches!(
+            statement.expression,
+            Expression::Member { computed: true, .. }
+        ));
+    }
+}

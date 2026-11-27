@@ -2576,39 +2576,61 @@ fn previous_line_ends_expression(text: &str) -> bool {
     if &code[word_start..] == "let" && ends_with_statement_position_let(code) {
         return true;
     }
-    if matches!(
-        &code[word_start..],
-        "return"
-            | "throw"
-            | "break"
-            | "continue"
-            | "yield"
-            | "await"
-            | "typeof"
-            | "void"
-            | "delete"
-            | "new"
-            | "in"
-            | "of"
-            | "instanceof"
-            | "else"
-            | "do"
-            | "case"
-            | "default"
-            | "async"
-            | "let"
-            | "var"
-            | "const"
-    ) {
+    // A keyword after a dot is a property name. Iterator methods such as
+    // `it.return` can take their arguments on the following line.
+    let property_name = code[..word_start].trim_end().ends_with('.');
+    if !property_name
+        && matches!(
+            &code[word_start..],
+            "return"
+                | "throw"
+                | "break"
+                | "continue"
+                | "yield"
+                | "await"
+                | "typeof"
+                | "void"
+                | "delete"
+                | "new"
+                | "in"
+                | "of"
+                | "instanceof"
+                | "else"
+                | "do"
+                | "case"
+                | "default"
+                | "async"
+                | "let"
+                | "var"
+                | "const"
+        )
+    {
         return false;
     }
-    !split_statement_segments(code)
-        .last()
-        .is_some_and(|(_, _, clause)| {
-            let clause = strip_leading_labels(clause).trim_start();
-            (starts_with_keyword(clause, "import") || starts_with_keyword(clause, "export"))
-                && !export_function_header_awaits_parameters(clause)
-        })
+    let segments = split_statement_segments(code);
+    let Some((_, _, clause)) = segments.last() else {
+        return false;
+    };
+    let clause = strip_leading_labels(clause).trim_start();
+    if starts_import_declaration(clause) {
+        return false;
+    }
+    if !starts_export_declaration(clause) {
+        return true;
+    }
+    // An export initializer follows the usual expression-continuation
+    // rules. A source in a FromClause also ends in a literal, but cannot
+    // take a call or an index. Nor can an uninitialized variable binding.
+    let body = clause["export".len()..].trim_start();
+    if starts_with_keyword(body, "default") {
+        return true;
+    }
+    if let Some(kind) = parse_variable_declaration_kind(body) {
+        return split_var_declarator_segments(&body[kind.as_str().len()..])
+            .last()
+            .is_some_and(|last| split_var_declarator_assignment(last).1.is_some());
+    }
+    export_function_header_awaits_parameters(clause)
 }
 
 /// `clause` after a leading `export` and an optional `default`.

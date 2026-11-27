@@ -88,6 +88,9 @@ const IMPORT_EXPORT_CONDITIONS: &[&str] = &["node", "import"];
 enum PackageLookupMode {
     CommonJs,
     PackageUrl,
+    /// Offline browser builds select import/browser conditions and may use
+    /// the conventional ESM `module` entry when no exports map exists.
+    BrowserEsm,
 }
 
 /// Package resolution can select a native provider as well as a source file.
@@ -119,7 +122,7 @@ impl ModuleResolutionTarget {
 }
 
 /// Largest package.json the resolver reads.
-const MAX_PACKAGE_MANIFEST_BYTES: u64 = 1 << 20;
+pub(crate) const MAX_PACKAGE_MANIFEST_BYTES: u64 = 1 << 20;
 
 /// A package.json `exports` value with object keys kept in document order.
 /// Condition precedence is the order the package author wrote, which a
@@ -207,12 +210,14 @@ impl<'de> Deserialize<'de> for PackageExports {
 
 /// The package.json fields CommonJS resolution reads. `exports: null` is
 /// absent, as in Node.
-#[derive(Debug, Default, Deserialize)]
-struct PackageManifest {
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct PackageManifest {
     #[serde(default)]
     name: Option<serde_json::Value>,
     #[serde(default)]
     main: Option<serde_json::Value>,
+    #[serde(default)]
+    module: Option<serde_json::Value>,
     #[serde(default)]
     exports: Option<PackageExports>,
     #[serde(default)]
@@ -222,6 +227,25 @@ struct PackageManifest {
 }
 
 impl PackageManifest {
+    /// Parse the same bounded, ordered metadata for execution and client
+    /// builds. The caller owns path confinement, capture, and byte accounting.
+    pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
+        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_PACKAGE_MANIFEST_BYTES {
+            return Err(format!(
+                "package.json exceeds {MAX_PACKAGE_MANIFEST_BYTES} bytes"
+            ));
+        }
+        let json = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes);
+        serde_json::from_slice(json).map_err(|error| error.to_string())
+    }
+
+    fn module(&self) -> Option<&str> {
+        self.module
+            .as_ref()
+            .and_then(serde_json::Value::as_str)
+            .filter(|entry| !entry.is_empty())
+    }
+
     fn main(&self) -> Option<&str> {
         self.main
             .as_ref()
@@ -292,8 +316,8 @@ fn read_package_manifest_file(
     // Node accepts one UTF-8 BOM at the start of package.json. Charge it to
     // the existing byte limit before stripping it; do not trim malformed JSON
     // or accept a second/interior BOM as whitespace.
-    let json = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes);
-    serde_json::from_slice(json).map_err(|error| format!("invalid {}: {error}", path.display()))
+    PackageManifest::from_bytes(&bytes)
+        .map_err(|error| format!("invalid {}: {error}", path.display()))
 }
 
 /// Split a bare specifier into its package name (`name` or `@scope/name`)
@@ -771,6 +795,293 @@ fn resolve_manifest_main(directory: &Path, manifest: &PackageManifest) -> Option
         .map(|extension| with_appended_extension(&main, extension))
         .chain(["index.js", "index.json", "index.node"].map(|index| main.join(index)))
         .find(|candidate| candidate.is_file())
+}
+
+/// Shared package-scope walk. A nearest manifest closes the scope even when
+/// it has no name or exports, and node_modules is always a boundary.
+fn package_scope<E>(
+    start: &Path,
+    root: &Path,
+    read_manifest: &mut impl FnMut(&Path) -> Result<Option<PackageManifest>, E>,
+) -> Result<Option<(PathBuf, PackageManifest)>, E> {
+    for directory in start.ancestors() {
+        if !directory.starts_with(root)
+            || directory
+                .file_name()
+                .is_some_and(|name| name == "node_modules")
+        {
+            break;
+        }
+        if let Some(manifest) = read_manifest(directory)? {
+            return Ok(Some((directory.to_path_buf(), manifest)));
+        }
+    }
+    Ok(None)
+}
+
+struct PackageLookup<'a> {
+    specifier: &'a str,
+    start: &'a Path,
+    root: &'a Path,
+    conditions: &'a [&'a str],
+    mode: PackageLookupMode,
+}
+
+/// Runtime and offline builds share package selection. Callers supply their
+/// own admitted metadata reader and legacy file probing; neither reader can
+/// be bypassed by exports, private aliases, or package self references.
+fn resolve_named_package_from<E>(
+    lookup: PackageLookup<'_>,
+    read_manifest: &mut impl FnMut(&Path) -> Result<Option<PackageManifest>, E>,
+    resolve_legacy: &mut impl FnMut(&Path, bool) -> Result<Option<PathBuf>, E>,
+    confine_browser_file: &impl Fn(&Path) -> Result<PathBuf, E>,
+    failed: &impl Fn(ModuleResolutionFailureReason) -> E,
+) -> Result<ModuleResolutionTarget, E> {
+    let PackageLookup {
+        specifier,
+        start,
+        root,
+        conditions,
+        mode,
+    } = lookup;
+    if let Some(native) = NativeBuiltinModule::from_specifier(specifier) {
+        return Ok(ModuleResolutionTarget::Native(native));
+    }
+    if specifier.starts_with("node:") || NODE_CORE_MODULE_NAMES.contains(&specifier) {
+        return Err(failed(ModuleResolutionFailureReason::Other(format!(
+            "`{specifier}` is a Node core module without a runtime module object"
+        ))));
+    }
+    let Some((name, subpath)) = split_package_specifier(specifier) else {
+        return Err(failed(ModuleResolutionFailureReason::MalformedSpecifier));
+    };
+    if let Some((scope, manifest)) = package_scope(start, root, read_manifest)?
+        && manifest.name.as_ref().and_then(serde_json::Value::as_str) == Some(name)
+        && let Some(exports) = manifest.exports.as_ref()
+    {
+        let target = resolve_package_exports(&scope, &format!(".{subpath}"), exports, conditions)
+            .map_err(|reason| {
+            failed(ModuleResolutionFailureReason::Other(format!(
+                "package `{name}` {reason}"
+            )))
+        })?;
+        return resolved_package_file(
+            target,
+            root,
+            mode,
+            false,
+            read_manifest,
+            confine_browser_file,
+            failed,
+        );
+    }
+    for directory in start.ancestors() {
+        if !directory.starts_with(root) {
+            break;
+        }
+        if directory
+            .file_name()
+            .is_some_and(|name| name == "node_modules")
+        {
+            continue;
+        }
+        let modules_dir = directory.join("node_modules");
+        if !modules_dir.is_dir() {
+            continue;
+        }
+        let package_dir = modules_dir.join(name);
+        if mode != PackageLookupMode::CommonJs && !package_dir.is_dir() {
+            continue;
+        }
+        let manifest = read_manifest(&package_dir)?;
+        if let Some(exports) = manifest
+            .as_ref()
+            .and_then(|manifest| manifest.exports.as_ref())
+        {
+            let target =
+                resolve_package_exports(&package_dir, &format!(".{subpath}"), exports, conditions)
+                    .map_err(|reason| {
+                        failed(ModuleResolutionFailureReason::Other(format!(
+                            "package `{name}` {reason}"
+                        )))
+                    })?;
+            return resolved_package_file(
+                target,
+                root,
+                mode,
+                false,
+                read_manifest,
+                confine_browser_file,
+                failed,
+            );
+        }
+        if mode != PackageLookupMode::CommonJs {
+            let module_entry = if mode == PackageLookupMode::BrowserEsm && subpath.is_empty() {
+                manifest.as_ref().and_then(PackageManifest::module)
+            } else {
+                None
+            };
+            let found = if let Some(module_entry) = module_entry {
+                // The bundler convention explicitly chooses an ESM entry,
+                // even when its package's Node main is CommonJS. A selected
+                // missing entry never falls through to the other format.
+                Some(
+                    checked_package_relative_target(
+                        &package_dir,
+                        module_entry.strip_prefix("./").unwrap_or(module_entry),
+                    )
+                    .map_err(|error| {
+                        failed(ModuleResolutionFailureReason::Other(error.to_string()))
+                    })?,
+                )
+            } else if subpath.is_empty() {
+                manifest
+                    .as_ref()
+                    .and_then(|manifest| resolve_manifest_main(&package_dir, manifest))
+                    .or_else(|| {
+                        ["index.js", "index.json", "index.node"]
+                            .map(|index| package_dir.join(index))
+                            .into_iter()
+                            .find(|candidate| candidate.is_file())
+                    })
+            } else {
+                let decoded = decode_package_url_path(&subpath[1..])
+                    .map_err(|reason| failed(ModuleResolutionFailureReason::Other(reason)))?;
+                Some(package_dir.join(format!("./{decoded}")))
+            };
+            let target =
+                found.ok_or_else(|| failed(ModuleResolutionFailureReason::ModuleNotFound))?;
+            return resolved_package_file(
+                target,
+                root,
+                mode,
+                module_entry.is_some(),
+                read_manifest,
+                confine_browser_file,
+                failed,
+            );
+        }
+        if let Some(found) = resolve_legacy(&modules_dir.join(specifier), specifier.ends_with('/'))?
+        {
+            return Ok(ModuleResolutionTarget::File(found));
+        }
+    }
+    Err(failed(ModuleResolutionFailureReason::ModuleNotFound))
+}
+
+fn resolved_package_file<E>(
+    mut target: PathBuf,
+    root: &Path,
+    mode: PackageLookupMode,
+    module_entry: bool,
+    read_manifest: &mut impl FnMut(&Path) -> Result<Option<PackageManifest>, E>,
+    confine_browser_file: &impl Fn(&Path) -> Result<PathBuf, E>,
+    failed: &impl Fn(ModuleResolutionFailureReason) -> E,
+) -> Result<ModuleResolutionTarget, E> {
+    if !target.is_file() {
+        return Err(failed(ModuleResolutionFailureReason::ModuleNotFound));
+    }
+    if mode == PackageLookupMode::BrowserEsm {
+        // Format belongs to the canonical target's nearest package scope,
+        // which may differ from the manifest that selected this export.
+        // Admit the target before consulting any of that scope's metadata.
+        target = confine_browser_file(&target)?;
+        let extension = target.extension().and_then(|extension| extension.to_str());
+        let declared_commonjs =
+            if !module_entry && matches!(extension, Some("js" | "jsx" | "ts" | "tsx")) {
+                let scope = package_scope(target.parent().unwrap_or(root), root, read_manifest)?;
+                scope
+                    .as_ref()
+                    .and_then(|(_, manifest)| manifest.module_type.as_ref())
+                    .and_then(serde_json::Value::as_str)
+                    == Some("commonjs")
+            } else {
+                false
+            };
+        if matches!(extension, Some("cjs" | "cts")) || declared_commonjs {
+            return Err(failed(ModuleResolutionFailureReason::Other(
+                "selected package target is CommonJS; client builds require an ESM entry or an explicit external provider".to_string(),
+            )));
+        }
+    }
+    Ok(ModuleResolutionTarget::File(target))
+}
+
+/// Resolve a browser package with canonical exports/imports semantics, using
+/// a bounded reader owned by the build's source capture. This cannot grant
+/// Node host modules, consult ambient search paths, or execute package code.
+pub(crate) fn resolve_browser_package<E>(
+    specifier: &str,
+    referrer: &Path,
+    root: &Path,
+    read_manifest: &mut impl FnMut(&Path) -> Result<Option<PackageManifest>, E>,
+    confine_file: &impl Fn(&Path) -> Result<PathBuf, E>,
+    failed: &impl Fn(ModuleResolutionFailureReason) -> E,
+) -> Result<PathBuf, E> {
+    let start = referrer
+        .parent()
+        .filter(|directory| directory.starts_with(root))
+        .ok_or_else(|| failed(ModuleResolutionFailureReason::MalformedSpecifier))?;
+    let conditions = ["browser", "import"];
+    fn resolve_named<E>(
+        specifier: &str,
+        start: &Path,
+        root: &Path,
+        read_manifest: &mut impl FnMut(&Path) -> Result<Option<PackageManifest>, E>,
+        confine_file: &impl Fn(&Path) -> Result<PathBuf, E>,
+        failed: &impl Fn(ModuleResolutionFailureReason) -> E,
+    ) -> Result<ModuleResolutionTarget, E> {
+        resolve_named_package_from(
+            PackageLookup {
+                specifier,
+                start,
+                root,
+                conditions: &["browser", "import"],
+                mode: PackageLookupMode::BrowserEsm,
+            },
+            read_manifest,
+            &mut |_, _| Ok(None),
+            confine_file,
+            failed,
+        )
+    }
+    let target = if specifier.starts_with('#') {
+        let (scope, manifest) = package_scope(start, root, read_manifest)?
+            .ok_or_else(|| failed(ModuleResolutionFailureReason::PackageImportNotDefined))?;
+        let imports = manifest
+            .imports
+            .as_ref()
+            .ok_or_else(|| failed(ModuleResolutionFailureReason::PackageImportNotDefined))?;
+        match resolve_package_imports_target(&scope, specifier, imports, &conditions)
+            .map_err(|reason| failed(ModuleResolutionFailureReason::Other(reason)))?
+        {
+            ExportsTargetResolution::Found(path) => resolved_package_file(
+                path,
+                root,
+                PackageLookupMode::BrowserEsm,
+                false,
+                read_manifest,
+                confine_file,
+                failed,
+            )?,
+            ExportsTargetResolution::Package(target) => {
+                resolve_named(&target, &scope, root, read_manifest, confine_file, failed)?
+            }
+            ExportsTargetResolution::Excluded | ExportsTargetResolution::NoMatch => {
+                return Err(failed(
+                    ModuleResolutionFailureReason::PackageImportNotDefined,
+                ));
+            }
+        }
+    } else {
+        resolve_named(specifier, start, root, read_manifest, confine_file, failed)?
+    };
+    match target {
+        ModuleResolutionTarget::File(path) => Ok(path),
+        ModuleResolutionTarget::Native(_) => Err(failed(ModuleResolutionFailureReason::Other(
+            "Node core modules require an explicit external provider in a client build".to_string(),
+        ))),
+    }
 }
 
 impl InterpreterCore {
@@ -1434,115 +1745,22 @@ impl InterpreterCore {
         conditions: &[&str],
         mode: PackageLookupMode,
     ) -> Result<ModuleResolutionTarget, InterpreterError> {
-        let failed = |reason| InterpreterError::ModuleResolutionFailed {
-            specifier: specifier.to_string(),
-            reason,
-        };
-        // PACKAGE_RESOLVE gives core modules precedence over self references
-        // and node_modules, including when a package imports alias selected
-        // the bare name. The loader, rather than package lookup, authorizes
-        // and instantiates the native provider. URL targets in an imports map
-        // were already rejected by PACKAGE_TARGET_RESOLVE.
-        if let Some(native) = NativeBuiltinModule::from_specifier(specifier) {
-            return Ok(ModuleResolutionTarget::Native(native));
-        }
-        if specifier.starts_with("node:") || NODE_CORE_MODULE_NAMES.contains(&specifier) {
-            return Err(failed(ModuleResolutionFailureReason::Other(format!(
-                "`{specifier}` is a Node core module without a runtime module object"
-            ))));
-        }
-        let Some((name, subpath)) = split_package_specifier(specifier) else {
-            return Err(failed(ModuleResolutionFailureReason::MalformedSpecifier));
-        };
-        // Self references precede node_modules and are limited to the nearest
-        // package scope. An unexported self subpath must not fall through to
-        // an installed package of the same name.
-        if let Some((scope, manifest)) = self.require_package_scope(specifier, start, root)?
-            && manifest.name.as_ref().and_then(serde_json::Value::as_str) == Some(name)
-            && let Some(exports) = manifest.exports.as_ref()
-        {
-            let target =
-                resolve_package_exports(&scope, &format!(".{subpath}"), exports, conditions)
-                    .map_err(|reason| {
-                        failed(ModuleResolutionFailureReason::Other(format!(
-                            "package `{name}` {reason}"
-                        )))
-                    })?;
-            return if target.is_file() {
-                Ok(ModuleResolutionTarget::File(target))
-            } else {
-                Err(failed(ModuleResolutionFailureReason::ModuleNotFound))
-            };
-        }
-        for dir in start.ancestors() {
-            if !dir.starts_with(root) {
-                break;
-            }
-            if dir.file_name().is_some_and(|name| name == "node_modules") {
-                continue;
-            }
-            let modules_dir = dir.join("node_modules");
-            if !modules_dir.is_dir() {
-                continue;
-            }
-            let package_dir = modules_dir.join(name);
-            if mode == PackageLookupMode::PackageUrl && !package_dir.is_dir() {
-                continue;
-            }
-            let manifest = self.read_contained_package_manifest(specifier, &package_dir)?;
-            if let Some(exports) = manifest
-                .as_ref()
-                .and_then(|manifest| manifest.exports.as_ref())
-            {
-                let target = resolve_package_exports(
-                    &package_dir,
-                    &format!(".{subpath}"),
-                    exports,
-                    conditions,
-                )
-                .map_err(|reason| {
-                    failed(ModuleResolutionFailureReason::Other(format!(
-                        "package `{name}` {reason}"
-                    )))
-                })?;
-                return if target.is_file() {
-                    Ok(ModuleResolutionTarget::File(target))
-                } else {
-                    Err(failed(ModuleResolutionFailureReason::ModuleNotFound))
-                };
-            }
-            if mode == PackageLookupMode::PackageUrl {
-                let found = if subpath.is_empty() {
-                    manifest
-                        .as_ref()
-                        .and_then(|manifest| resolve_manifest_main(&package_dir, manifest))
-                        .or_else(|| {
-                            ["index.js", "index.json", "index.node"]
-                                .map(|index| package_dir.join(index))
-                                .into_iter()
-                                .find(|candidate| candidate.is_file())
-                        })
-                } else {
-                    let decoded = decode_package_url_path(&subpath[1..])
-                        .map_err(|reason| failed(ModuleResolutionFailureReason::Other(reason)))?;
-                    // Prefixing './' also keeps a doubled slash in a package
-                    // subpath from becoming an absolute filesystem path.
-                    Some(package_dir.join(format!("./{decoded}")))
-                };
-                // The selected package owns the result even if its requested
-                // file is absent. Never substitute another installed version.
-                return found
-                    .filter(|candidate| candidate.is_file())
-                    .map(ModuleResolutionTarget::File)
-                    .ok_or_else(|| failed(ModuleResolutionFailureReason::ModuleNotFound));
-            }
-            if let Some(found) = self
-                .resolve_require_candidate(&modules_dir.join(specifier), specifier.ends_with('/'))?
-            {
-                return Ok(ModuleResolutionTarget::File(found));
-            }
-        }
-        Err(failed(ModuleResolutionFailureReason::ModuleNotFound))
+        resolve_named_package_from(
+            PackageLookup {
+                specifier,
+                start,
+                root,
+                conditions,
+                mode,
+            },
+            &mut |directory| self.read_contained_package_manifest(specifier, directory),
+            &mut |path, directory| self.resolve_require_candidate(path, directory),
+            &|path| Ok(path.to_path_buf()),
+            &|reason| InterpreterError::ModuleResolutionFailed {
+                specifier: specifier.to_string(),
+                reason,
+            },
+        )
     }
 
     /// The nearest package.json owns both self references and private imports.
@@ -1554,22 +1772,9 @@ impl InterpreterCore {
         start: &Path,
         root: &Path,
     ) -> Result<Option<(PathBuf, PackageManifest)>, InterpreterError> {
-        for directory in start.ancestors() {
-            if !directory.starts_with(root)
-                || directory
-                    .file_name()
-                    .is_some_and(|name| name == "node_modules")
-            {
-                break;
-            }
-            let Some(manifest) = self.read_contained_package_manifest(specifier, directory)? else {
-                continue;
-            };
-            // A manifest with no name/exports still closes the scope; never
-            // search an outer package just because this one cannot resolve X.
-            return Ok(Some((directory.to_path_buf(), manifest)));
-        }
-        Ok(None)
+        package_scope(start, root, &mut |directory| {
+            self.read_contained_package_manifest(specifier, directory)
+        })
     }
 
     /// Node's LOAD_AS_DIRECTORY step for a package.json `main`: the file it
@@ -1615,6 +1820,84 @@ mod tests {
             actual.canonicalize().expect("resolved path"),
             expected.canonicalize().expect("expected path")
         );
+    }
+
+    #[test]
+    fn client_module_preference_does_not_change_runtime_package_selection() {
+        let root = tempfile::tempdir().unwrap();
+        write_package_fixture(
+            root.path(),
+            "node_modules/dual/package.json",
+            r#"{"type":"commonjs","main":"./main.cjs","module":"./browser.mjs"}"#,
+        );
+        write_package_fixture(
+            root.path(),
+            "node_modules/dual/main.cjs",
+            "module.exports = 1;",
+        );
+        write_package_fixture(
+            root.path(),
+            "node_modules/dual/browser.mjs",
+            "export const value = 2;",
+        );
+        write_package_fixture(root.path(), "entry.mjs", "import 'dual';");
+        let core = package_test_core(root.path());
+        assert_package_path(
+            core.resolve_bare_import_specifier("dual"),
+            &root.path().join("node_modules/dual/main.cjs"),
+        );
+        assert_package_path(
+            core.resolve_bare_require_specifier("dual"),
+            &root.path().join("node_modules/dual/main.cjs"),
+        );
+        let browser = resolve_browser_package(
+            "dual",
+            &root.path().join("entry.mjs"),
+            root.path(),
+            &mut read_package_manifest,
+            &|path| path.canonicalize().map_err(|error| error.to_string()),
+            &|reason| reason.to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            browser.canonicalize().unwrap(),
+            root.path()
+                .join("node_modules/dual/browser.mjs")
+                .canonicalize()
+                .unwrap(),
+        );
+    }
+
+    #[test]
+    fn browser_packages_keep_private_import_scope_and_core_module_precedence() {
+        let root = tempfile::tempdir().unwrap();
+        write_package_fixture(
+            root.path(),
+            "package.json",
+            r##"{"imports":{"#private":"./secret.mjs"}}"##,
+        );
+        write_package_fixture(root.path(), "secret.mjs", "export const value = 1;");
+        write_package_fixture(root.path(), "nested/package.json", "{}");
+        write_package_fixture(root.path(), "nested/entry.mjs", "");
+        write_package_fixture(
+            root.path(),
+            "node_modules/fs/index.js",
+            "export const value = 2;",
+        );
+        for request in ["#private", "fs"] {
+            assert!(
+                resolve_browser_package(
+                    request,
+                    &root.path().join("nested/entry.mjs"),
+                    root.path(),
+                    &mut read_package_manifest,
+                    &|path| path.canonicalize().map_err(|error| error.to_string()),
+                    &|reason| reason.to_string(),
+                )
+                .is_err(),
+                "{request}: package scope or a core name must not fall through",
+            );
+        }
     }
 
     #[test]

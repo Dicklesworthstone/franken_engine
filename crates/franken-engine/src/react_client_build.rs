@@ -5,8 +5,11 @@
 //! await, and evaluation order. No guest code or external provider is executed
 //! while building. Literal dynamic imports retain lazy ESM execution and share
 //! the bounded graph with static imports. Local JSON dependencies with the
-//! explicit `type: "json"` attribute become default-only ESM assets. Computed
-//! imports, CommonJS, other attributes, and other non-code assets are refused.
+//! explicit `type: "json"` attribute become default-only ESM assets. Installed
+//! ESM packages use browser/import exports conditions and bounded package
+//! metadata; legacy packages may select their explicit ESM module entry.
+//! Computed imports, CommonJS, other attributes, and other non-code assets are
+//! refused.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
@@ -17,6 +20,10 @@ use std::path::{Component, Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{ExportKind, Expression, ImportClause, Statement};
+use crate::baseline_interpreter::{
+    MAX_PACKAGE_MANIFEST_BYTES, ModuleResolutionFailureReason, PackageManifest,
+    resolve_browser_package,
+};
 use crate::capability::RuntimeCapability;
 use crate::hash_tiers::ContentHash;
 use crate::import_attributes::ImportAttributes;
@@ -80,6 +87,13 @@ pub struct ReactClientModuleAsset {
     pub dependencies: Vec<ReactClientDependency>,
 }
 
+/// Captured package metadata participates in executable graph selection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReactClientPackageInput {
+    pub source_path: String,
+    pub source_hash: ContentHash,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReactClientBuild {
     pub schema_version: String,
@@ -88,6 +102,10 @@ pub struct ReactClientBuild {
     pub config_hash: ContentHash,
     pub graph_hash: ContentHash,
     pub modules: Vec<ReactClientModuleAsset>,
+    /// Ordered metadata inputs used by package selection, hashed as read.
+    /// Empty graphs retain the original v1 identity and serialized shape.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub package_inputs: Vec<ReactClientPackageInput>,
     /// The complete explicit provider configuration; no default CDN is chosen.
     pub import_map: BTreeMap<String, String>,
 }
@@ -108,6 +126,19 @@ impl ReactClientBuild {
                 .modules
                 .windows(2)
                 .any(|pair| pair[0].source_path >= pair[1].source_path)
+        {
+            return Err(malformed());
+        }
+        if self
+            .package_inputs
+            .windows(2)
+            .any(|pair| pair[0].source_path >= pair[1].source_path)
+            || self.package_inputs.iter().any(|input| {
+                let path = input.source_path.as_str();
+                path.contains('\\')
+                    || path.chars().any(char::is_control)
+                    || path.split('/').any(|part| matches!(part, "" | "." | ".."))
+            })
         {
             return Err(malformed());
         }
@@ -142,6 +173,7 @@ impl ReactClientBuild {
                 self.config_hash,
                 &self.import_map,
                 &self.modules,
+                &self.package_inputs,
             )?
         {
             return Err(malformed());
@@ -174,6 +206,132 @@ impl fmt::Display for ReactClientBuildError {
 impl std::error::Error for ReactClientBuildError {}
 
 type BuildResult<T> = Result<T, ReactClientBuildError>;
+
+#[derive(Default)]
+struct CapturedPackages {
+    /// Cache absent manifests too: one build never changes a package scope
+    /// after discovering it. Existing files are keyed by canonical paths.
+    paths: BTreeMap<PathBuf, Option<PathBuf>>,
+    manifests: BTreeMap<PathBuf, PackageManifest>,
+    inputs: BTreeMap<String, ReactClientPackageInput>,
+}
+
+impl CapturedPackages {
+    fn read_manifest(
+        &mut self,
+        directory: &Path,
+        root: &Path,
+        source_bytes: &mut usize,
+        max_source_bytes: usize,
+    ) -> BuildResult<Option<PackageManifest>> {
+        let path = directory.join("package.json");
+        if let Some(canonical) = self.paths.get(&path) {
+            return Ok(canonical
+                .as_ref()
+                .and_then(|canonical| self.manifests.get(canonical))
+                .cloned());
+        }
+        match path.symlink_metadata() {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                self.paths.insert(path, None);
+                return Ok(None);
+            }
+            Err(error) => {
+                return Err(ReactClientBuildError::new(
+                    "FE-REACT-BUILD-READ",
+                    format!("cannot inspect {}: {error}", path.display()),
+                ));
+            }
+            Ok(_) => {}
+        }
+        // Never read through an unchecked package.json symlink. Canonical
+        // source identity also prevents aliased packages charging it twice.
+        let canonical = confined_input_file(&path, root)?;
+        if !self.manifests.contains_key(&canonical) {
+            let remaining = max_source_bytes.saturating_sub(*source_bytes);
+            let source = read_bounded_source(
+                &canonical,
+                remaining.min(usize::try_from(MAX_PACKAGE_MANIFEST_BYTES).unwrap_or(usize::MAX)),
+            )?;
+            let manifest = PackageManifest::from_bytes(source.as_bytes()).map_err(|error| {
+                ReactClientBuildError::new(
+                    "FE-REACT-BUILD-PACKAGE",
+                    format!("invalid {}: {error}", canonical.display()),
+                )
+            })?;
+            *source_bytes += source.len();
+            let name = source_name(&canonical, root)?;
+            self.inputs.insert(
+                name.clone(),
+                ReactClientPackageInput {
+                    source_path: name,
+                    source_hash: ContentHash::compute(source.as_bytes()),
+                },
+            );
+            self.manifests.insert(canonical.clone(), manifest);
+        }
+        let manifest = self.manifests.get(&canonical).cloned();
+        self.paths.insert(path, Some(canonical));
+        Ok(manifest)
+    }
+}
+
+fn resolve_client_source(
+    referrer: &Path,
+    specifier: &str,
+    root: &Path,
+    packages: &mut CapturedPackages,
+    source_bytes: &mut usize,
+    max_source_bytes: usize,
+) -> BuildResult<PathBuf> {
+    if specifier.starts_with("./") || specifier.starts_with("../") {
+        return resolve_local_source(referrer, specifier, root);
+    }
+    if specifier.is_empty()
+        || specifier.starts_with(['.', '/'])
+        || specifier.contains([':', '\\', '?'])
+        || specifier.chars().any(char::is_control)
+        || specifier
+            .strip_prefix('#')
+            .unwrap_or(specifier)
+            .contains('#')
+    {
+        return Err(ReactClientBuildError::new(
+            "FE-REACT-BUILD-SPECIFIER",
+            format!("unsupported package specifier '{specifier}'"),
+        ));
+    }
+    let target = resolve_browser_package(
+        specifier,
+        referrer,
+        root,
+        &mut |directory| packages.read_manifest(directory, root, source_bytes, max_source_bytes),
+        &|path| confined_file(path, root),
+        &|reason| match reason {
+            ModuleResolutionFailureReason::ModuleNotFound => ReactClientBuildError::new(
+                "FE-REACT-BUILD-EXTERNAL",
+                format!(
+                    "cannot resolve installed ESM package '{specifier}'; declare --external {specifier}=<HTTP(S)-module-URL> or install it inside the project root",
+                ),
+            ),
+            reason => ReactClientBuildError::new(
+                "FE-REACT-BUILD-PACKAGE",
+                format!("{specifier}: {reason}"),
+            ),
+        },
+    )?;
+    let path = confined_file(&target, root)?;
+    if path
+        .to_str()
+        .is_some_and(|name| name.ends_with(".d.ts") || name.ends_with(".d.mts"))
+    {
+        return Err(ReactClientBuildError::new(
+            "FE-REACT-BUILD-FORMAT",
+            "package entry selects a declaration file instead of runtime code",
+        ));
+    }
+    Ok(path)
+}
 
 #[derive(Debug)]
 struct SourceImport {
@@ -229,6 +387,7 @@ pub fn build_react_client(config: &ReactClientBuildConfig) -> BuildResult<ReactC
     let mut queued = BTreeSet::from([entry]);
     let mut modules = BTreeMap::new();
     let mut source_bytes = 0usize;
+    let mut packages = CapturedPackages::default();
     let mut output_bytes = 0usize;
     let mut resolver = DeterministicModuleResolver::new("/");
 
@@ -331,7 +490,14 @@ pub fn build_react_client(config: &ReactClientBuildConfig) -> BuildResult<ReactC
                     validate_client_import(ModuleSyntax::EsModule, &import, &name)?;
                     (url.clone(), specifier.to_string(), true)
                 } else {
-                    let dependency = resolve_local_source(&path, specifier, &root)?;
+                    let dependency = resolve_client_source(
+                        &path,
+                        specifier,
+                        &root,
+                        &mut packages,
+                        &mut source_bytes,
+                        config.max_source_bytes,
+                    )?;
                     let dependency_syntax = if source_language(&dependency)?.is_none() {
                         ModuleSyntax::Json
                     } else {
@@ -463,6 +629,28 @@ pub fn build_react_client(config: &ReactClientBuildConfig) -> BuildResult<ReactC
         )
         .map_err(|error| ReactClientBuildError::new("FE-REACT-BUILD-RESOLVE", error.to_string()))?;
 
+    let package_inputs: Vec<_> = packages.inputs.into_values().collect();
+    if !package_inputs.is_empty() {
+        // Account the new serialized metadata alongside code and maps. A
+        // complete pretty-printed field includes punctuation and indentation
+        // conservatively for both compact and pretty graph consumers, without
+        // changing the historical limit for builds with no package metadata.
+        output_bytes = output_bytes
+            .checked_add(
+                serde_json::to_vec_pretty(&BTreeMap::from([("package_inputs", &package_inputs)]))
+                    .map_err(serialization_error)?
+                    .len(),
+            )
+            .ok_or_else(|| {
+                ReactClientBuildError::new("FE-REACT-BUILD-LIMIT", "package metadata size overflow")
+            })?;
+        if output_bytes > config.max_output_bytes {
+            return Err(ReactClientBuildError::new(
+                "FE-REACT-BUILD-LIMIT",
+                "package metadata and generated output exceed the build budget",
+            ));
+        }
+    }
     let modules: Vec<_> = modules.into_values().collect();
     let entry_asset = asset_path(&entry_name);
     let config_identity = serde_json::to_vec(&(
@@ -476,10 +664,17 @@ pub fn build_react_client(config: &ReactClientBuildConfig) -> BuildResult<ReactC
     let config_hash = ContentHash::compute(&config_identity);
     let build = ReactClientBuild {
         schema_version: REACT_CLIENT_BUILD_SCHEMA_VERSION.to_string(),
-        graph_hash: graph_identity_hash(&entry_asset, config_hash, &config.externals, &modules)?,
+        graph_hash: graph_identity_hash(
+            &entry_asset,
+            config_hash,
+            &config.externals,
+            &modules,
+            &package_inputs,
+        )?,
         entry_asset,
         config_hash,
         modules,
+        package_inputs,
         import_map: config.externals.clone(),
     };
     build.verify_integrity()?;
@@ -491,16 +686,29 @@ fn graph_identity_hash(
     config_hash: ContentHash,
     externals: &BTreeMap<String, String>,
     modules: &[ReactClientModuleAsset],
+    package_inputs: &[ReactClientPackageInput],
 ) -> BuildResult<ContentHash> {
-    serde_json::to_vec(&(
-        REACT_CLIENT_BUILD_SCHEMA_VERSION,
-        entry,
-        config_hash,
-        externals,
-        modules,
-    ))
-    .map(|bytes| ContentHash::compute(&bytes))
-    .map_err(serialization_error)
+    let identity = if package_inputs.is_empty() {
+        serde_json::to_vec(&(
+            REACT_CLIENT_BUILD_SCHEMA_VERSION,
+            entry,
+            config_hash,
+            externals,
+            modules,
+        ))
+    } else {
+        serde_json::to_vec(&(
+            REACT_CLIENT_BUILD_SCHEMA_VERSION,
+            entry,
+            config_hash,
+            externals,
+            modules,
+            package_inputs,
+        ))
+    };
+    identity
+        .map(|bytes| ContentHash::compute(&bytes))
+        .map_err(serialization_error)
 }
 
 fn validate_externals(externals: &BTreeMap<String, String>) -> BuildResult<()> {
@@ -562,6 +770,12 @@ fn source_name(path: &Path, root: &Path) -> BuildResult<String> {
 }
 
 fn confined_file(path: &Path, root: &Path) -> BuildResult<PathBuf> {
+    let canonical = confined_input_file(path, root)?;
+    let _ = source_language(&canonical)?;
+    Ok(canonical)
+}
+
+fn confined_input_file(path: &Path, root: &Path) -> BuildResult<PathBuf> {
     let canonical = path.canonicalize().map_err(|error| {
         ReactClientBuildError::new(
             "FE-REACT-BUILD-MISSING",
@@ -577,7 +791,6 @@ fn confined_file(path: &Path, root: &Path) -> BuildResult<PathBuf> {
             "module source must be a regular file",
         ));
     }
-    let _ = source_language(&canonical)?;
     Ok(canonical)
 }
 
@@ -987,7 +1200,9 @@ fn bounded_import_request(
     let invalid = || {
         ReactClientBuildError::new(
             "FE-REACT-BUILD-DYNAMIC",
-            format!("{name}: import() requires a string literal with optional literal JSON import attributes"),
+            format!(
+                "{name}: import() requires a string literal with optional literal JSON import attributes"
+            ),
         )
     };
     let [Expression::StringLiteral(specifier), options @ ..] = arguments else {
@@ -1010,7 +1225,10 @@ fn bounded_import_request(
             let kind = kind.as_str().ok_or_else(invalid)?;
             ImportAttributes::new(BTreeMap::from([("type".to_string(), kind.to_string())]))
                 .map_err(|error| {
-                    ReactClientBuildError::new("FE-REACT-BUILD-ATTRIBUTES", format!("{name}: {error}"))
+                    ReactClientBuildError::new(
+                        "FE-REACT-BUILD-ATTRIBUTES",
+                        format!("{name}: {error}"),
+                    )
                 })?
         }
         _ => return Err(invalid()),
@@ -1459,6 +1677,512 @@ mod tests {
             ..ReactClientBuildConfig::default()
         };
         (directory, config)
+    }
+
+    #[test]
+    fn client_build_captures_installed_tsx_exports_private_imports_and_lazy_edges() {
+        let files = [
+            (
+                "app.tsx",
+                "import { Card } from '@ui/cards'; export { answer } from '@ui/cards/feature/answer'; export const load = () => import('@ui/cards/lazy'); export const app = <Card />;",
+            ),
+            (
+                "node_modules/@ui/cards/package.json",
+                r##"{"name":"@ui/cards","type":"module","imports":{"#label":"./src/label.ts"},"exports":{".":{"node":"./node.cjs","browser":"./src/card.tsx","import":"./wrong.mjs"},"./feature/*":"./src/*.ts","./lazy":"./src/lazy.mjs"}}"##,
+            ),
+            (
+                "node_modules/@ui/cards/src/card.tsx",
+                "import { label } from '#label'; export function Card() { return <span>{label}</span>; }",
+            ),
+            (
+                "node_modules/@ui/cards/src/label.ts",
+                "export const label: string = 'ready';",
+            ),
+            (
+                "node_modules/@ui/cards/src/answer.ts",
+                "export const answer: number = 42;",
+            ),
+            (
+                "node_modules/@ui/cards/src/lazy.mjs",
+                "export { answer } from '@ui/cards/feature/answer';",
+            ),
+            ("node_modules/@ui/cards/node.cjs", "module.exports = {};"),
+            (
+                "node_modules/@ui/cards/wrong.mjs",
+                "throw 'wrong condition';",
+            ),
+        ];
+        let (_directory, mut config) = fixture(&files);
+        config.compile.generate_source_maps = true;
+        config.externals.insert(
+            "react/jsx-runtime".into(),
+            "https://example.invalid/react-jsx.mjs".into(),
+        );
+        let build = build_react_client(&config).expect("installed ESM graph");
+        assert_eq!(
+            build
+                .modules
+                .iter()
+                .map(|module| module.source_path.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "app.tsx",
+                "node_modules/@ui/cards/src/answer.ts",
+                "node_modules/@ui/cards/src/card.tsx",
+                "node_modules/@ui/cards/src/label.ts",
+                "node_modules/@ui/cards/src/lazy.mjs",
+            ],
+        );
+        assert_eq!(build.package_inputs.len(), 1);
+        assert_eq!(
+            build.package_inputs[0].source_hash,
+            ContentHash::compute(files[1].1.as_bytes()),
+        );
+        assert!(
+            build
+                .modules
+                .iter()
+                .all(|module| module.source_map.is_some())
+        );
+        let entry = &build.modules[0];
+        assert!(entry.dependencies.iter().any(|dependency| {
+            dependency.specifier == "@ui/cards/lazy"
+                && dependency.target == asset_path("node_modules/@ui/cards/src/lazy.mjs")
+        }));
+        assert!(entry.code.contains("import("));
+        assert!(!entry.code.contains("<Card"));
+        build.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn client_build_uses_module_entries_legacy_main_and_exact_package_subpaths() {
+        let (_directory, config) = fixture(&[
+            (
+                "app.js",
+                "import { dual } from 'dual'; import { legacy } from 'legacy'; import { implicit } from 'implicit'; import { sub } from '@scope/sub/part.js'; export { dual, legacy, implicit, sub };",
+            ),
+            (
+                "node_modules/dual/package.json",
+                r#"{"type":"commonjs","main":"main.cjs","module":"esm/index.js"}"#,
+            ),
+            (
+                "node_modules/dual/esm/index.js",
+                "export { dual } from './value.js';",
+            ),
+            ("node_modules/dual/esm/value.js", "export const dual = 1;"),
+            (
+                "node_modules/dual/main.cjs",
+                "module.exports = { dual: 0 };",
+            ),
+            (
+                "node_modules/legacy/package.json",
+                r#"{"type":"module","main":"dist/main"}"#,
+            ),
+            (
+                "node_modules/legacy/dist/main.js",
+                "export const legacy = 2;",
+            ),
+            (
+                "node_modules/implicit/index.js",
+                "export const implicit = 3;",
+            ),
+            (
+                "node_modules/@scope/sub/package.json",
+                r#"{"type":"module"}"#,
+            ),
+            ("node_modules/@scope/sub/part.js", "export const sub = 4;"),
+        ]);
+        let build = build_react_client(&config).expect("legacy ESM distributions");
+        assert_eq!(build.modules.len(), 6);
+        assert_eq!(build.package_inputs.len(), 3);
+        assert!(
+            build
+                .modules
+                .iter()
+                .any(|module| { module.source_path == "node_modules/dual/esm/value.js" })
+        );
+        assert!(
+            !build
+                .modules
+                .iter()
+                .any(|module| module.source_path.ends_with(".cjs"))
+        );
+    }
+
+    #[test]
+    fn client_package_exports_use_the_canonical_targets_nearest_format_scope() {
+        for (outer_type, inner_type, accepted) in
+            [("commonjs", "module", true), ("module", "commonjs", false)]
+        {
+            let outer = format!("{{\"type\":\"{outer_type}\",\"exports\":\"./nested/index.js\"}}");
+            let inner = format!("{{\"type\":\"{inner_type}\"}}");
+            let (_directory, config) = fixture(&[
+                ("app.js", "export { value } from 'pkg';"),
+                ("node_modules/pkg/package.json", &outer),
+                ("node_modules/pkg/nested/package.json", &inner),
+                (
+                    "node_modules/pkg/nested/index.js",
+                    "export const value = 42;",
+                ),
+            ]);
+            let result = build_react_client(&config);
+            if accepted {
+                let build = result.expect("nearest scope declares ESM");
+                assert_eq!(build.package_inputs.len(), 2);
+                assert!(
+                    build.package_inputs.iter().any(|input| {
+                        input.source_path == "node_modules/pkg/nested/package.json"
+                    })
+                );
+                build.verify_integrity().unwrap();
+            } else {
+                assert!(result.unwrap_err().message.contains("CommonJS"));
+            }
+        }
+    }
+
+    #[test]
+    fn client_build_resolves_nearest_versions_self_references_and_package_aliases() {
+        let (_directory, config) = fixture(&[
+            (
+                "app.js",
+                "import { value } from 'wrapper'; import { other } from '#dep'; export { local } from 'app/local'; export { value, other };",
+            ),
+            (
+                "package.json",
+                r##"{"name":"app","type":"module","exports":{"./local":"./local.js"},"imports":{"#dep":"dep/other.mjs"}}"##,
+            ),
+            ("local.js", "export const local = 3;"),
+            (
+                "node_modules/wrapper/package.json",
+                r#"{"name":"wrapper","exports":"./index.mjs"}"#,
+            ),
+            (
+                "node_modules/wrapper/index.mjs",
+                "import { nested } from 'dep'; export const value = nested;",
+            ),
+            (
+                "node_modules/wrapper/node_modules/dep/package.json",
+                r#"{"exports":"./nested.mjs"}"#,
+            ),
+            (
+                "node_modules/wrapper/node_modules/dep/nested.mjs",
+                "export const nested = 1;",
+            ),
+            (
+                "node_modules/dep/package.json",
+                r#"{"exports":{".":"./root.mjs","./other.mjs":"./other.mjs"}}"#,
+            ),
+            ("node_modules/dep/other.mjs", "export const other = 2;"),
+            (
+                "node_modules/dep/root.mjs",
+                "throw 'wrong package version';",
+            ),
+        ]);
+        let build = build_react_client(&config).expect("scoped package graph");
+        assert_eq!(build.modules.len(), 5);
+        assert_eq!(build.package_inputs.len(), 4);
+        assert!(build.modules.iter().any(|module| {
+            module.source_path == "node_modules/wrapper/node_modules/dep/nested.mjs"
+        }));
+        assert!(
+            !build
+                .modules
+                .iter()
+                .any(|module| { module.source_path == "node_modules/dep/root.mjs" })
+        );
+    }
+
+    #[test]
+    fn client_package_selection_preserves_condition_order_and_exports_precedence() {
+        for (manifest, selected) in [
+            (
+                r#"{"module":"./module.mjs","exports":{"default":"./default.mjs","browser":"./browser.mjs"}}"#,
+                "default.mjs",
+            ),
+            (
+                r#"{"exports":{"browser":"./old.mjs","import":"./import.mjs","browser":"./browser.mjs"}}"#,
+                "browser.mjs",
+            ),
+            (
+                r#"{"exports":{"development":"./old.mjs","import":"./import.mjs","browser":"./browser.mjs"}}"#,
+                "import.mjs",
+            ),
+        ] {
+            let (_directory, config) = fixture(&[
+                ("app.js", "export { value } from 'pkg';"),
+                ("node_modules/pkg/package.json", manifest),
+                ("node_modules/pkg/default.mjs", "export const value = 1;"),
+                ("node_modules/pkg/browser.mjs", "export const value = 2;"),
+                ("node_modules/pkg/import.mjs", "export const value = 3;"),
+                ("node_modules/pkg/module.mjs", "export const value = 4;"),
+                ("node_modules/pkg/old.mjs", "export const value = 5;"),
+            ]);
+            let build = build_react_client(&config).unwrap();
+            assert_eq!(build.modules.len(), 2);
+            assert_eq!(
+                build.modules[1].source_path,
+                format!("node_modules/pkg/{selected}"),
+            );
+        }
+    }
+
+    #[test]
+    fn client_package_failures_never_fall_through_to_another_target_or_version() {
+        for (request, manifest, message) in [
+            (
+                "pkg/private",
+                r#"{"exports":{"./public":"./good.mjs"}}"#,
+                "does not export",
+            ),
+            (
+                "pkg/private",
+                r#"{"exports":{"./private":null,"./*":"./good.mjs"}}"#,
+                "does not export",
+            ),
+            (
+                "pkg",
+                r#"{"exports":{"browser":"./missing.mjs","default":"./good.mjs"}}"#,
+                "cannot resolve",
+            ),
+            (
+                "pkg",
+                r#"{"exports":["./missing.mjs","./good.mjs"]}"#,
+                "cannot resolve",
+            ),
+            (
+                "pkg",
+                r#"{"module":"./missing.mjs","main":"./good.mjs"}"#,
+                "cannot resolve",
+            ),
+            (
+                "pkg",
+                r#"{"exports":{"0":"./good.mjs","browser":"./good.mjs"}}"#,
+                "numeric property",
+            ),
+            (
+                "pkg",
+                r#"{"type":"commonjs","main":"./plain.js"}"#,
+                "CommonJS",
+            ),
+            ("pkg", r#"{"module":"./main.cjs"}"#, "CommonJS"),
+            ("pkg", r#"{"exports":"./types.d.ts"}"#, "declaration file"),
+            ("pkg", r#"{"exports":"./%2e%2e/outside.mjs"}"#, "invalid"),
+            ("pkg/x", r#"{"exports":{"./*":"./%2f*.mjs"}}"#, "invalid"),
+        ] {
+            let entry = format!("import '{request}';");
+            let (_directory, config) = fixture(&[
+                ("app.js", &entry),
+                ("node_modules/pkg/package.json", manifest),
+                ("node_modules/pkg/good.mjs", "export const good = true;"),
+                (
+                    "node_modules/pkg/private.js",
+                    "export const privateValue = true;",
+                ),
+                ("node_modules/pkg/plain.js", "this.changed = true;"),
+                ("node_modules/pkg/main.cjs", "module.exports = {};"),
+                (
+                    "node_modules/pkg/types.d.ts",
+                    "export declare const value: number;",
+                ),
+            ]);
+            let error = build_react_client(&config).expect_err("invalid selected package");
+            assert!(
+                error.message.contains(message),
+                "{request} {manifest}: {error}"
+            );
+        }
+        let (_directory, config) = fixture(&[
+            ("app.js", "import 'wrapper';"),
+            (
+                "node_modules/wrapper/package.json",
+                r#"{"exports":"./index.mjs"}"#,
+            ),
+            ("node_modules/wrapper/index.mjs", "import 'pkg';"),
+            (
+                "node_modules/wrapper/node_modules/pkg/package.json",
+                r#"{"exports":"./missing.mjs"}"#,
+            ),
+            (
+                "node_modules/pkg/package.json",
+                r#"{"exports":"./good.mjs"}"#,
+            ),
+            ("node_modules/pkg/good.mjs", "export const wrong = true;"),
+        ]);
+        assert!(
+            build_react_client(&config)
+                .unwrap_err()
+                .message
+                .contains("cannot resolve")
+        );
+    }
+
+    #[test]
+    fn client_package_manifests_bind_identity_and_share_all_build_budgets() {
+        let files = [
+            (
+                "app.js",
+                "import { value } from 'pkg'; export { value }; export const load = () => import('pkg');",
+            ),
+            (
+                "node_modules/pkg/package.json",
+                r#"{"type":"module","exports":"./index.js"}"#,
+            ),
+            ("node_modules/pkg/index.js", "export const value = 42;"),
+        ];
+        let (_first, config) = fixture(&files);
+        let (_second, mut relocated) = fixture(&files);
+        let build = build_react_client(&config).unwrap();
+        assert_eq!(build, build_react_client(&relocated).unwrap());
+        assert_eq!(build.package_inputs.len(), 1);
+        let bytes = files.iter().map(|(_, source)| source.len()).sum::<usize>();
+        relocated.max_source_bytes = bytes;
+        build_react_client(&relocated).expect("each manifest is charged once");
+        relocated.max_source_bytes = bytes - 1;
+        assert_eq!(
+            build_react_client(&relocated).unwrap_err().code,
+            "FE-REACT-BUILD-LIMIT"
+        );
+        relocated.max_source_bytes = config.max_source_bytes;
+        relocated.max_modules = 1;
+        assert_eq!(
+            build_react_client(&relocated).unwrap_err().code,
+            "FE-REACT-BUILD-LIMIT"
+        );
+        relocated.max_modules = config.max_modules;
+        relocated.max_output_bytes = build
+            .modules
+            .iter()
+            .map(|module| module.code.len() + module.source_map.as_ref().map_or(0, String::len))
+            .sum();
+        assert_eq!(
+            build_react_client(&relocated).unwrap_err().code,
+            "FE-REACT-BUILD-LIMIT"
+        );
+        relocated.max_output_bytes = config.max_output_bytes;
+        fs::write(
+            relocated.project_root.join("node_modules/pkg/package.json"),
+            r#"{"type":"module","exports":"./index.js","version":"2.0.0"}"#,
+        )
+        .unwrap();
+        let changed = build_react_client(&relocated).unwrap();
+        assert_eq!(build.modules, changed.modules);
+        assert_ne!(build.graph_hash, changed.graph_hash);
+        let mut tampered = build.clone();
+        tampered.package_inputs[0].source_hash = ContentHash::compute(b"changed manifest");
+        assert!(tampered.verify_integrity().is_err());
+        tampered = build.clone();
+        tampered.package_inputs.clear();
+        assert!(tampered.verify_integrity().is_err());
+        fs::write(
+            relocated.project_root.join("node_modules/pkg/package.json"),
+            format!(
+                "{{\"exports\":\"./index.js\",\"padding\":\"{}\"}}",
+                "x".repeat(MAX_PACKAGE_MANIFEST_BYTES as usize),
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            build_react_client(&relocated).unwrap_err().code,
+            "FE-REACT-BUILD-LIMIT"
+        );
+    }
+
+    #[test]
+    fn client_external_override_and_old_graph_identity_remain_unchanged() {
+        let (_directory, mut config) = fixture(&[
+            ("app.js", "export { value } from 'pkg';"),
+            (
+                "node_modules/pkg/package.json",
+                "invalid JSON must not be read",
+            ),
+        ]);
+        config
+            .externals
+            .insert("pkg".into(), "https://example.invalid/pkg.mjs".into());
+        let build = build_react_client(&config).expect("explicit provider wins");
+        assert_eq!(build.modules.len(), 1);
+        assert!(build.package_inputs.is_empty());
+        let old_identity = serde_json::to_vec(&(
+            REACT_CLIENT_BUILD_SCHEMA_VERSION,
+            &build.entry_asset,
+            build.config_hash,
+            &build.import_map,
+            &build.modules,
+        ))
+        .unwrap();
+        assert_eq!(build.graph_hash, ContentHash::compute(&old_identity));
+        let encoded = serde_json::to_value(&build).unwrap();
+        assert!(encoded.get("package_inputs").is_none());
+        let decoded: ReactClientBuild = serde_json::from_value(encoded).unwrap();
+        decoded.verify_integrity().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn client_package_manifests_and_targets_cannot_escape_through_symlinks() {
+        use std::os::unix::fs::symlink;
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(
+            outside.path().join("package.json"),
+            r#"{"exports":"./index.mjs"}"#,
+        )
+        .unwrap();
+        fs::write(outside.path().join("index.mjs"), "export const value = 99;").unwrap();
+        let (_directory, config) = fixture(&[
+            ("app.js", "import 'pkg';"),
+            ("node_modules/pkg/index.mjs", "export const value = 1;"),
+        ]);
+        symlink(
+            outside.path().join("package.json"),
+            config.project_root.join("node_modules/pkg/package.json"),
+        )
+        .unwrap();
+        assert_eq!(
+            build_react_client(&config).unwrap_err().code,
+            "FE-REACT-BUILD-ROOT"
+        );
+        let (_directory, config) = fixture(&[
+            ("app.js", "import 'pkg';"),
+            (
+                "node_modules/pkg/package.json",
+                r#"{"exports":"./linked.mjs"}"#,
+            ),
+        ]);
+        symlink(
+            outside.path().join("index.mjs"),
+            config.project_root.join("node_modules/pkg/linked.mjs"),
+        )
+        .unwrap();
+        assert_eq!(
+            build_react_client(&config).unwrap_err().code,
+            "FE-REACT-BUILD-ROOT"
+        );
+        let (_directory, config) = fixture(&[
+            ("app.js", "export { value } from 'pkg';"),
+            (
+                "metadata/pkg-manifest.json",
+                r#"{"type":"commonjs","exports":"./linked.js"}"#,
+            ),
+            ("node_modules/pkg/runtime.mjs", "export const value = 42;"),
+        ]);
+        symlink(
+            config.project_root.join("metadata/pkg-manifest.json"),
+            config.project_root.join("node_modules/pkg/package.json"),
+        )
+        .unwrap();
+        symlink(
+            config.project_root.join("node_modules/pkg/runtime.mjs"),
+            config.project_root.join("node_modules/pkg/linked.js"),
+        )
+        .unwrap();
+        let build = build_react_client(&config).expect("in-root canonical source and metadata");
+        assert_eq!(
+            build.package_inputs[0].source_path,
+            "metadata/pkg-manifest.json"
+        );
+        assert_eq!(build.modules[1].source_path, "node_modules/pkg/runtime.mjs");
+        build.verify_integrity().unwrap();
     }
 
     #[test]
@@ -2411,6 +3135,7 @@ export const describe = async () => `loaded:${(await import('./lazy.js')).value}
             tampered.config_hash,
             &tampered.import_map,
             &tampered.modules,
+            &tampered.package_inputs,
         )
         .unwrap();
         assert!(

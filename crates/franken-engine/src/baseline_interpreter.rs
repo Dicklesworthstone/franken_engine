@@ -106,7 +106,10 @@ pub use module_integrity::ModuleSourceIntegrity;
 mod number_locale;
 mod object_integrity;
 mod package_resolution;
-pub(crate) use package_resolution::is_node_core_module_specifier;
+pub(crate) use package_resolution::{
+    MAX_PACKAGE_MANIFEST_BYTES, PackageManifest, is_node_core_module_specifier,
+    resolve_browser_package,
+};
 pub mod packed_taint;
 mod primitive_conversion;
 #[cfg(test)]

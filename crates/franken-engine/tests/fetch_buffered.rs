@@ -1,23 +1,29 @@
 //! Buffered Fetch through the native parser, lowering, interpreter and recorded
 //! host-I/O bridge. Providers return deterministic HTTP bytes; no external
-//! server is needed. Streaming/redirect following and public Fetch constructors
-//! are outside this slice. Request header values currently require ASCII.
+//! server is needed. Redirects exercise the same provider and transcript with
+//! explicit IFC authorization for received Location data. Streaming and public
+//! Fetch constructors are outside this slice. Request header values require ASCII.
 
 #![forbid(unsafe_code)]
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use frankenengine_engine::ast::ParseGoal;
 use frankenengine_engine::baseline_interpreter::{
-    ExecutionResult, InterpreterConfig, InterpreterCore, InterpreterError, Value,
+    AllocKind, ExecutionResult, FunctionRef, HookAction, HookContext, InterpreterConfig,
+    InterpreterCore, InterpreterError, InterpreterHook, ObjectRef, PropertyKey, Value,
 };
 use frankenengine_engine::capability::RuntimeCapability;
-use frankenengine_engine::ifc_artifacts::Label;
+use frankenengine_engine::ifc_artifacts::{
+    FlowPolicy, FlowPolicyEnforcement, FlowRule, IfcSchemaVersion, Label,
+};
 use frankenengine_engine::ir_contract::{
     CapabilityTag, Ir0Module, Ir3Instruction, Ir3Module, RegRange,
 };
 use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
+use frankenengine_engine::signature_preimage::{SIGNATURE_SENTINEL, Signature};
 use frankenengine_extension_host::host_io::budget::HostIoBudgetError;
 use frankenengine_extension_host::host_io::{
     HostIoCapability, HostIoControl, HostIoError, HostIoOutcome, HostIoProvider, HostIoRecorder,
@@ -27,6 +33,7 @@ use frankenengine_extension_host::host_io::{
 #[derive(Clone, Debug)]
 enum Reply {
     Raw(Vec<u8>),
+    Sequence(Vec<Reply>),
     Transport,
     Denied,
     Budget,
@@ -50,8 +57,17 @@ impl RecordedNetwork {
     fn answer(&self, request: &HostIoRequest, granted: &[HostIoCapability]) -> HostIoOutcome {
         assert!(granted.contains(&request.required_capability()));
         assert!(matches!(request, HostIoRequest::NetworkRequest { .. }));
-        self.requests.lock().unwrap().push(request.clone());
-        match &self.reply {
+        let index = {
+            let mut requests = self.requests.lock().unwrap();
+            let index = requests.len();
+            requests.push(request.clone());
+            index
+        };
+        let reply = match &self.reply {
+            Reply::Sequence(replies) => replies.get(index).expect("unexpected extra provider call"),
+            reply => reply,
+        };
+        match reply {
             Reply::Raw(response) => Ok(HostIoResponse::NetworkRequest {
                 response: response.clone(),
             }),
@@ -65,6 +81,7 @@ impl RecordedNetwork {
                 reason: HostIoBudgetError::RequestsExhausted.code().into(),
             }),
             Reply::WrongKind => Ok(HostIoResponse::NetworkSend { bytes_sent: 0 }),
+            Reply::Sequence(_) => panic!("nested reply sequences are not supported"),
         }
     }
 
@@ -126,6 +143,30 @@ fn config() -> InterpreterConfig {
     config
 }
 
+// Received network data has an Internal source floor. These positive fixtures
+// explicitly authorize that flow at the next Public network sink; production
+// defaults and the strict-refusal test below retain their existing lattice.
+fn redirect_config() -> InterpreterConfig {
+    let mut config = config();
+    config.ifc_flow_policy = Some(FlowPolicy {
+        policy_id: "fetch-redirect-test".into(),
+        extension_id: "fetch-redirect-test".into(),
+        label_classes: [Label::Public, Label::Internal].into_iter().collect(),
+        clearance_classes: [Label::Public, Label::Internal].into_iter().collect(),
+        allowed_flows: vec![FlowRule {
+            source_label: Label::Internal,
+            sink_clearance: Label::Public,
+        }],
+        prohibited_flows: vec![],
+        declassification_routes: vec![],
+        enforcement_mode: FlowPolicyEnforcement::LatticeOpen,
+        epoch_id: 1,
+        schema_version: IfcSchemaVersion::CURRENT,
+        signature: Signature::from_bytes(SIGNATURE_SENTINEL),
+    });
+    config
+}
+
 fn response(status: u16, headers: &str, body: &[u8]) -> Reply {
     let text = if status == 404 { "Not Found" } else { "OK" };
     let mut bytes = format!(
@@ -183,8 +224,8 @@ fn one_recorded_request(run: &Run) {
                 .iter()
                 .filter(|decision| decision.capability.0 == "net:request")
                 .count(),
-            1,
-            "Fetch checks the existing request operation exactly once",
+            2,
+            "Fetch authorizes entry and rechecks concrete egress after argument conversion",
         );
     }
 }
@@ -852,5 +893,516 @@ fn legacy_network_request_keeps_incoming_message_shape_and_failure_behavior() {
         core.seed_register(255, Value::str("http://example.test/legacy"))
             .unwrap();
         assert_eq!(core.execute(&module).unwrap().value, Value::Undefined);
+    }
+}
+
+fn assert_recorded_hops(run: &Run, count: usize) {
+    assert_eq!(run.provider.count(), count);
+    assert_eq!(run.transcript.recorded_entries().len(), count);
+    if let Ok(result) = &run.result {
+        assert_eq!(
+            result
+                .hostcall_decisions
+                .iter()
+                .filter(|decision| decision.capability.0 == "net:request")
+                .count(),
+            count + 1,
+            "the entry gate and every concrete network egress are authorized",
+        );
+    }
+}
+
+fn request_parts(request: &HostIoRequest) -> (&str, &[u8]) {
+    let HostIoRequest::NetworkRequest { payload, .. } = request else {
+        panic!("network request");
+    };
+    let separator = payload
+        .windows(4)
+        .position(|bytes| bytes == b"\r\n\r\n")
+        .expect("HTTP request header terminator");
+    (
+        std::str::from_utf8(&payload[..separator]).unwrap(),
+        &payload[separator + 4..],
+    )
+}
+
+#[test]
+fn redirects_resolve_relative_locations_and_preserve_final_metadata_through_clone() {
+    let run = run_module(
+        &lower(
+            r#"
+            fetch('http://EXAMPLE.test:80/start/entry#removed').then(async response => {
+                const copy = response.clone();
+                console.log(response.status, response.url, response.redirected, response.type);
+                console.log(copy.url, copy.redirected);
+                console.log(await response.text(), await copy.text());
+            });
+            "#,
+        ),
+        Reply::Sequence(vec![
+            response(302, "Location: ../next?step=1#discarded\r\n", b"intermediate"),
+            response(307, "Location: ?step=2\r\n", b"intermediate"),
+            response(200, "", b"final"),
+        ]),
+        redirect_config(),
+    );
+    assert_eq!(
+        messages(&run),
+        [
+            "200 http://example.test/next?step=2 true basic",
+            "http://example.test/next?step=2 true",
+            "final final",
+        ],
+    );
+    assert_recorded_hops(&run, 3);
+    let requests = run.provider.requests.lock().unwrap();
+    assert!(
+        request_parts(&requests[0])
+            .0
+            .starts_with("GET /start/entry HTTP/1.1")
+    );
+    assert!(
+        request_parts(&requests[1])
+            .0
+            .starts_with("GET /next?step=1 HTTP/1.1")
+    );
+    assert!(
+        request_parts(&requests[2])
+            .0
+            .starts_with("GET /next?step=2 HTTP/1.1")
+    );
+}
+
+#[test]
+fn redirect_statuses_rewrite_only_required_methods_and_replay_preserved_binary_bodies() {
+    for (status, method, expected_method) in [
+        (301, "POST", "GET"),
+        (302, "POST", "GET"),
+        (303, "PUT", "GET"),
+        (301, "PUT", "PUT"),
+        (302, "PATCH", "PATCH"),
+        (307, "POST", "POST"),
+        (308, "PUT", "PUT"),
+        (303, "HEAD", "HEAD"),
+    ] {
+        let has_body = method != "HEAD";
+        let body = if has_body {
+            "new Uint8Array([0,255,13,10])"
+        } else {
+            "undefined"
+        };
+        let framing = if has_body { ",'Content-Length':'4'" } else { "" };
+        let source = format!(
+            "fetch('http://example.test/source', {{method:'{method}', body:{body}, \
+             headers:{{'Content-Type':'application/test','Content-Language':'en', \
+             'Content-Encoding':'identity','Content-Location':'/source','X-Keep':'yes'{framing}}}}}) \
+             .then(r => console.log(r.status, r.redirected));"
+        );
+        let run = run_module(
+            &lower(&source),
+            Reply::Sequence(vec![
+                response(status, "Location: /target\r\n", b""),
+                response(200, "", b""),
+            ]),
+            redirect_config(),
+        );
+        assert_eq!(messages(&run), ["200 true"], "{status} {method}");
+        assert_recorded_hops(&run, 2);
+        let requests = run.provider.requests.lock().unwrap();
+        let (head, sent_body) = request_parts(&requests[1]);
+        assert!(
+            head.starts_with(&format!("{expected_method} /target HTTP/1.1")),
+            "{status} {method}: {head}"
+        );
+        assert!(head.lines().any(|line| line == "x-keep: yes"));
+        let rewritten = expected_method != method;
+        let expected_body: &[u8] = if has_body && !rewritten {
+            &[0, 255, 13, 10]
+        } else {
+            &[]
+        };
+        assert_eq!(sent_body, expected_body, "{status} {method}");
+        for name in [
+            "content-type",
+            "content-language",
+            "content-encoding",
+            "content-location",
+        ] {
+            assert_eq!(
+                head.lines().any(|line| line.starts_with(&format!("{name}:"))),
+                !rewritten,
+                "{status} {method}: {name}"
+            );
+        }
+        if rewritten {
+            assert!(!head.lines().any(|line| line == "content-length: 4"));
+            assert!(!head.lines().any(|line| line.starts_with("transfer-encoding:")));
+        }
+    }
+}
+
+#[test]
+fn origin_changes_remove_credentials_without_restoring_them_on_a_return_redirect() {
+    let run = run_module(
+        &lower(
+            r#"
+            fetch('http://example.test/start', {
+                headers: {
+                    Authorization: 'Bearer private',
+                    'Proxy-Authorization': 'Basic private',
+                    Cookie: 'session=private',
+                    Cookie2: 'legacy=private',
+                    Host: 'example.test',
+                    'X-Keep': 'retained'
+                }
+            }).then(r => console.log(r.url, r.redirected));
+            "#,
+        ),
+        Reply::Sequence(vec![
+            response(307, "Location: http://EXAMPLE.test:80/same\r\n", b""),
+            response(307, "Location: https://other.test:8443/cross\r\n", b""),
+            response(307, "Location: http://example.test/back\r\n", b""),
+            response(200, "", b""),
+        ]),
+        redirect_config(),
+    );
+    assert_eq!(messages(&run), ["http://example.test/back true"]);
+    assert_recorded_hops(&run, 4);
+    let requests = run.provider.requests.lock().unwrap();
+    let (same_origin, _) = request_parts(&requests[1]);
+    assert!(same_origin.lines().any(|line| line == "authorization: Bearer private"));
+    assert!(same_origin.lines().any(|line| line == "cookie: session=private"));
+    for request in &requests[2..] {
+        let (head, _) = request_parts(request);
+        assert!(head.lines().any(|line| line == "x-keep: retained"));
+        for name in ["authorization", "proxy-authorization", "cookie", "cookie2"] {
+            assert!(!head.lines().any(|line| line.starts_with(&format!("{name}:"))));
+        }
+        assert_eq!(
+            head.lines()
+                .filter(|line| line.to_ascii_lowercase().starts_with("host:"))
+                .count(),
+            1,
+            "the new URL supplies the only Host field"
+        );
+    }
+    assert!(matches!(
+        &requests[2],
+        HostIoRequest::NetworkRequest { endpoint, use_tls: true, .. }
+            if endpoint == "other.test:8443"
+    ));
+}
+
+#[test]
+fn redirect_modes_keep_manual_responses_and_reject_error_even_without_location() {
+    for headers in ["", "Location: file:///private\r\n"] {
+        let manual = run_case(
+            "fetch('http://example.test/', {redirect:'manual'}).then(async r => \
+             console.log(r.status, r.redirected, r.type, await r.text()));",
+            response(302, headers, b"inspect"),
+        );
+        assert_eq!(messages(&manual), ["302 false basic inspect"]);
+        one_recorded_request(&manual);
+        let error = run_case(
+            "fetch('http://example.test/', {redirect:'error'}) \
+             .catch(e => console.log(e.name));",
+            response(302, headers, b"inspect"),
+        );
+        assert_eq!(messages(&error), ["TypeError"]);
+        one_recorded_request(&error);
+    }
+    let missing_location = run_case(
+        "fetch('http://example.test/').then(r => console.log(r.status, r.redirected));",
+        response(302, "", b""),
+    );
+    assert_eq!(messages(&missing_location), ["302 false"]);
+    one_recorded_request(&missing_location);
+    for redirect in ["'FOLLOW'", "'invalid'", "null", "Symbol('follow')"] {
+        let run = run_case(
+            &format!(
+                "fetch('http://example.test/', {{redirect:{redirect}}}) \
+                 .catch(e => console.log(e.name));"
+            ),
+            response(200, "", b""),
+        );
+        assert_eq!(messages(&run), ["TypeError"], "{redirect}");
+        assert_eq!(run.provider.count(), 0);
+        assert!(run.transcript.recorded_entries().is_empty());
+    }
+}
+
+#[test]
+fn redirect_dictionary_conversion_follows_method_and_preserves_throw_identity() {
+    let run = run_case(
+        r#"
+        let trace = '';
+        const failure = {marker:19};
+        fetch('http://example.test/', {
+            get body() { trace += 'b'; return undefined; },
+            get headers() { trace += 'h'; return {}; },
+            get method() {
+                trace += 'm';
+                return {toString() { trace += 'M'; return 'GET'; }};
+            },
+            get redirect() {
+                trace += 'r';
+                return {toString() { trace += 'R'; throw failure; }};
+            }
+        }).catch(error => console.log(trace, error === failure));
+        "#,
+        response(200, "", b""),
+    );
+    assert_eq!(messages(&run), ["bhmMrR true"]);
+    assert_eq!(run.provider.count(), 0);
+    assert!(run.transcript.recorded_entries().is_empty());
+}
+
+#[test]
+fn invalid_ambiguous_or_credentialed_redirects_reject_without_another_request() {
+    for headers in [
+        "Location: file:///private\r\n",
+        "Location: ftp://example.test/file\r\n",
+        "Location: http://user:password@example.test/private\r\n",
+        "Location: http://[invalid\r\n",
+        "Location: /one\r\nLocation: /two\r\n",
+    ] {
+        let run = run_module(
+            &lower(
+                "fetch('http://example.test/').catch(error => console.log(error.name));",
+            ),
+            response(302, headers, b""),
+            redirect_config(),
+        );
+        assert_eq!(messages(&run), ["TypeError"], "{headers}");
+        one_recorded_request(&run);
+    }
+}
+
+#[test]
+fn redirect_limit_allows_twenty_hops_and_rejects_the_next_one() {
+    let source = "fetch('http://example.test/loop') \
+        .then(r => console.log(r.status, r.redirected)) \
+        .catch(error => console.log(error.name));";
+    let mut replies = vec![response(302, "Location: /loop\r\n", b""); 20];
+    replies.push(response(200, "", b""));
+    let allowed = run_module(&lower(source), Reply::Sequence(replies), redirect_config());
+    assert_eq!(messages(&allowed), ["200 true"]);
+    assert_recorded_hops(&allowed, 21);
+
+    let refused = run_module(
+        &lower(source),
+        response(302, "Location: /loop\r\n", b""),
+        redirect_config(),
+    );
+    assert_eq!(messages(&refused), ["TypeError"]);
+    assert_recorded_hops(&refused, 21);
+}
+
+#[test]
+fn received_redirect_provenance_requires_explicit_egress_authorization_and_replays_denial() {
+    use frankenengine_engine::baseline_interpreter::IfcRuntimeFlowDecision;
+
+    let source = "try { fetch('http://example.test/start') \
+        .catch(() => console.log('caught promise')); } \
+        catch (error) { console.log('caught guest'); } console.log('continued');";
+    let run = run_case(source, response(302, "Location: /private-target\r\n", b""));
+    assert!(matches!(
+        &run.result,
+        Err(InterpreterError::CapabilityDenied { capability })
+            if capability == "net:request:confidentiality"
+    ));
+    assert!(run.core.console_output().is_empty());
+    assert_eq!(run.provider.count(), 1);
+    assert!(run.core.ifc_runtime_flow_audit().iter().any(|entry| {
+        entry.capability == "net:request"
+            && entry.source_label == Label::Internal
+            && entry.sink_clearance == Label::Public
+            && entry.decision == IfcRuntimeFlowDecision::Denied
+    }));
+    let entries = run.transcript.finish_execution().unwrap();
+    assert_eq!(entries.len(), 2, "response and exact refused redirect are recorded");
+    assert!(
+        matches!(
+            &entries[1].1,
+            Err(HostIoError::Denied { reason }) if reason == "FLOW_POLICY_BLOCKED"
+        ),
+        "{:?}",
+        entries[1]
+    );
+    assert!(
+        request_parts(&entries[1].0)
+            .0
+            .starts_with("GET /private-target HTTP/1.1")
+    );
+
+    let replay = Arc::new(InMemoryHostIoTranscript::replaying(entries.clone()));
+    replay.begin_execution().unwrap();
+    let provider = Arc::new(RecordedNetwork::new(Reply::Denied));
+    let mut core = InterpreterCore::new(config(), "fetch-redirect-denial-replay");
+    core.set_host_io(provider.clone(), Some(replay.clone()));
+    let result = core.execute(&lower(source));
+    assert!(matches!(
+        result,
+        Err(InterpreterError::CapabilityDenied { capability })
+            if capability == "net:request:confidentiality"
+    ));
+    assert!(core.console_output().is_empty());
+    assert_eq!(provider.count(), 0);
+    assert_eq!(replay.finish_execution().unwrap(), entries);
+}
+
+#[test]
+fn redirected_provider_security_and_quota_failures_remain_fatal() {
+    let source = "try { fetch('http://example.test/start') \
+        .catch(() => console.log('caught promise')); } \
+        catch (error) { console.log('caught guest'); } console.log('continued');";
+    for reply in [Reply::Denied, Reply::Budget, Reply::WrongKind] {
+        let run = run_module(
+            &lower(source),
+            Reply::Sequence(vec![
+                response(307, "Location: https://other.test/denied\r\n", b""),
+                reply.clone(),
+            ]),
+            redirect_config(),
+        );
+        match reply {
+            Reply::Denied => assert!(matches!(
+                &run.result,
+                Err(InterpreterError::CapabilityDenied { capability })
+                    if capability == "net:request"
+            )),
+            Reply::Budget | Reply::WrongKind => assert!(
+                matches!(&run.result, Err(InterpreterError::InternalError { .. })),
+                "{:?}",
+                run.result
+            ),
+            _ => unreachable!(),
+        }
+        assert!(run.core.console_output().is_empty());
+        assert_recorded_hops(&run, 2);
+    }
+
+    let transport = run_module(
+        &lower(
+            "fetch('http://example.test/start').catch(error => console.log(error.name));",
+        ),
+        Reply::Sequence(vec![
+            response(307, "Location: /unavailable\r\n", b""),
+            Reply::Transport,
+        ]),
+        redirect_config(),
+    );
+    assert_eq!(messages(&transport), ["TypeError"]);
+    assert_recorded_hops(&transport, 2);
+}
+
+#[test]
+fn redirected_responses_replay_every_hop_without_calling_a_live_provider() {
+    let source = "fetch('http://example.test/start').then(async r => \
+        console.log(r.url, r.redirected, await r.text()));";
+    let first = run_module(
+        &lower(source),
+        Reply::Sequence(vec![
+            response(302, "Location: /finish\r\n", b""),
+            response(200, "", b"recorded redirect body"),
+        ]),
+        redirect_config(),
+    );
+    assert_eq!(
+        messages(&first),
+        ["http://example.test/finish true recorded redirect body"]
+    );
+    assert_recorded_hops(&first, 2);
+    let entries = first.transcript.finish_execution().unwrap();
+    let replay = Arc::new(InMemoryHostIoTranscript::replaying(entries.clone()));
+    replay.begin_execution().unwrap();
+    let provider = Arc::new(RecordedNetwork::new(Reply::Denied));
+    let mut core = InterpreterCore::new(redirect_config(), "fetch-redirect-replay");
+    core.set_host_io(provider.clone(), Some(replay.clone()));
+    let result = core.execute(&lower(source)).unwrap();
+    assert_eq!(
+        result.console_output[0].message,
+        "http://example.test/finish true recorded redirect body"
+    );
+    assert_eq!(provider.count(), 0);
+    assert_eq!(replay.finish_execution().unwrap(), entries);
+}
+
+struct StopNetworkEgress {
+    calls: AtomicUsize,
+    stop_at: usize,
+}
+
+impl InterpreterHook for StopNetworkEgress {
+    fn instruction_hooks_enabled(&self) -> bool {
+        false
+    }
+
+    fn pre_property_access(
+        &self,
+        _ctx: &HookContext,
+        _target: &ObjectRef,
+        _key: &PropertyKey,
+    ) -> HookAction {
+        HookAction::Allow
+    }
+
+    fn pre_call(&self, _ctx: &HookContext, _callee: &FunctionRef, _args: &[Value]) -> HookAction {
+        HookAction::Allow
+    }
+
+    fn pre_allocation(&self, _ctx: &HookContext, _kind: AllocKind, _size_hint: usize) -> HookAction {
+        HookAction::Allow
+    }
+
+    fn pre_import(&self, _ctx: &HookContext, _specifier: &str) -> HookAction {
+        HookAction::Allow
+    }
+
+    fn pre_hostcall(&self, _ctx: &HookContext, capability: &str, _allowed: bool) -> HookAction {
+        if capability == "net:request"
+            && self.calls.fetch_add(1, Ordering::SeqCst) + 1 == self.stop_at
+        {
+            HookAction::Sandbox
+        } else {
+            HookAction::Allow
+        }
+    }
+}
+
+#[test]
+fn live_containment_rechecks_first_egress_after_conversion_and_every_redirect() {
+    for (stop_at, expected_requests) in [(2, 0), (3, 1)] {
+        let hook = Arc::new(StopNetworkEgress {
+            calls: AtomicUsize::new(0),
+            stop_at,
+        });
+        let provider = Arc::new(RecordedNetwork::new(response(
+            302,
+            "Location: /next\r\n",
+            b"",
+        )));
+        let transcript = Arc::new(InMemoryHostIoTranscript::recording());
+        transcript.begin_execution().unwrap();
+        let mut core = InterpreterCore::new(redirect_config(), "fetch-live-redirect-gate");
+        core.set_host_io(provider.clone(), Some(transcript.clone()));
+        core.set_hook(hook.clone());
+        let result = core.execute(&lower(
+            "try { fetch('http://example.test/start', {get redirect() { return 'follow'; }}) \
+             .catch(() => console.log('caught promise')); } \
+             catch (error) { console.log('caught guest'); } console.log('continued');",
+        ));
+        assert!(
+            matches!(
+                &result,
+                Err(InterpreterError::ContainmentActionRequested { action, reason: None })
+                    if action == "sandbox"
+            ),
+            "{result:?}"
+        );
+        assert!(core.console_output().is_empty());
+        assert_eq!(hook.calls.load(Ordering::SeqCst), stop_at);
+        assert_eq!(provider.count(), expected_requests);
+        assert_eq!(transcript.recorded_entries().len(), expected_requests);
     }
 }

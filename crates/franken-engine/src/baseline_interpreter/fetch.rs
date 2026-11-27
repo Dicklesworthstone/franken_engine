@@ -1,8 +1,11 @@
 //! Buffered Fetch over the existing authorized and journaled HTTP effect.
 //!
 //! Received Response metadata, read-only header lookup, and text/json/arrayBuffer
-//! and byte-view consumption. Streaming bodies, redirect following, and public
-//! Request/Response/Headers constructors are outside this implementation.
+//! and byte-view consumption. Redirects reuse the authorized, journaled request
+//! path for each hop. Received Location and status carry the network source label,
+//! so following requires the existing IFC policy to authorize the next sink.
+//! Streaming bodies and public Request/Response/Headers constructors remain
+//! outside this implementation.
 //! Request header values are restricted to ASCII because the shared native
 //! sender frames String headers as UTF-8; received headers preserve Latin-1.
 //! Fetch Standard: https://fetch.spec.whatwg.org/#body-mixin
@@ -18,6 +21,23 @@ pub(super) enum NetworkRequestOutcome {
     InvalidProviderResult,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FetchRedirectMode {
+    Follow,
+    Error,
+    Manual,
+}
+
+enum FetchResponseAction {
+    Response(Value),
+    Redirect {
+        status: u16,
+        url: Url,
+        // Transfer this URL's temporary allocation admission to the loop.
+        reserved_bytes: u64,
+    },
+}
+
 pub(super) const RESPONSE_METHODS: [&str; 5] = ["text", "json", "arrayBuffer", "bytes", "clone"];
 pub(super) const HEADERS_METHODS: [&str; 3] = ["get", "has", "getSetCookie"];
 
@@ -30,6 +50,8 @@ pub(super) struct FetchResponseSlots {
     // None is a null body. Some(empty) is an empty but consumable body.
     pub body: Option<Vec<u8>>,
     pub body_used: bool,
+    #[serde(default)]
+    pub redirected: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -464,7 +486,7 @@ impl InterpreterCore {
                     // Web IDL converts each dictionary member immediately
                     // after Get, in lexicographic order. Abrupt conversion must
                     // not run a later member's getter.
-                    core.fetch_reserve(&mut scratch, 4 * std::mem::size_of::<Value>() as u64)?;
+                    core.fetch_reserve(&mut scratch, 5 * std::mem::size_of::<Value>() as u64)?;
                     let body_value = core.fetch_property(module, &init, "body")?;
                     core.gc_pin_network_values([body_value.clone()]);
                     let body_value = core.normalize_fetch_body(module, body_value, &mut scratch)?;
@@ -479,6 +501,22 @@ impl InterpreterCore {
                         "GET".to_string()
                     } else {
                         core.fetch_string(module, method_value, &mut scratch)?
+                    };
+                    let redirect_value = core.fetch_property(module, &init, "redirect")?;
+                    core.gc_pin_network_values([redirect_value.clone()]);
+                    let redirect = if matches!(redirect_value, Value::Undefined) {
+                        FetchRedirectMode::Follow
+                    } else {
+                        match core.fetch_string(module, redirect_value, &mut scratch)?.as_str() {
+                            "follow" => FetchRedirectMode::Follow,
+                            "error" => FetchRedirectMode::Error,
+                            "manual" => FetchRedirectMode::Manual,
+                            _ => {
+                                return Err(fetch_type_error(
+                                    "a redirect mode of follow, error, or manual",
+                                ));
+                            }
+                        }
                     };
                     // Request construction follows argument conversion. URL
                     // normalization can percent-encode source bytes and
@@ -548,45 +586,7 @@ impl InterpreterCore {
                         headers.reserve_exact(1);
                         headers.push(("content-type".to_string(), content_type));
                     }
-                    let request_label = core.json_parse_context_label()?;
-                    core.evaluate_sink_flow_decision(
-                        "net:request",
-                        &request_label,
-                        &Label::Public,
-                    )?;
-                    let response_label =
-                        hostcall_result_contract("net:fetch").result_label(&request_label, None);
-                    let response_method = if method == "HEAD" { "HEAD" } else { "GET" };
-                    let url = url.to_string();
-                    core.fetch_reserve(
-                        &mut scratch,
-                        Self::estimate_string_bytes(&url).saturating_mul(2),
-                    )?;
-                    let raw = core.perform_net_request_bytes(url.clone(), method, headers, body)?;
-                    match raw {
-                        NetworkRequestOutcome::Response(bytes) => {
-                            core.fetch_reserve(&mut scratch, bytes.len() as u64)?;
-                            core.build_fetch_response(&bytes, response_method, url, &response_label)
-                        }
-                        NetworkRequestOutcome::Unavailable
-                        | NetworkRequestOutcome::TransportFailure => {
-                            Err(fetch_type_error("a successful network response"))
-                        }
-                        NetworkRequestOutcome::Denied => Err(InterpreterError::CapabilityDenied {
-                            capability: "net:request".to_string(),
-                        }),
-                        NetworkRequestOutcome::JournalFailure(details) => {
-                            Err(InterpreterError::InternalError {
-                                details: format!("Fetch host-effect journal failed: {details}"),
-                            })
-                        }
-                        NetworkRequestOutcome::InvalidProviderResult => {
-                            Err(InterpreterError::InternalError {
-                                details: "Fetch provider returned an incompatible response kind"
-                                    .to_string(),
-                            })
-                        }
-                    }
+                    core.perform_fetch_request(url, method, headers, body, redirect)
                 })();
                 let label = core.json_parse_context_label()?.join(&Label::Internal);
                 core.complete_fetch_promise(module, promise, request_result, label)
@@ -649,13 +649,181 @@ impl InterpreterCore {
         Ok(Value::Promise(promise.0))
     }
 
+    /// Keep each redirect inside the same live authority, IFC, resource and
+    /// effect-recording boundaries as an explicit request. No received bytes
+    /// become a Public URL merely because the transport supplied a redirect.
+    fn perform_fetch_request(
+        &mut self,
+        mut url: Url,
+        mut method: String,
+        mut headers: Vec<(String, String)>,
+        mut body: Option<Vec<u8>>,
+        redirect: FetchRedirectMode,
+    ) -> Result<Value, InterpreterError> {
+        let mut redirect_count = 0u8;
+        let mut url_reserved_bytes = 0;
+        let result = (|| {
+            loop {
+                let mut scratch = 0;
+                let hop = (|| {
+                    self.json_charge_work()?;
+                    // Argument conversion can execute guest code after the
+                    // outer dispatch gate. Recheck that decision at egress,
+                    // including the initial request.
+                    check_hostcall_capability_gate(self, "net:request", self.ip as u32)?;
+                    let request_bytes = Self::estimate_string_bytes(url.as_str())
+                        .saturating_add(Self::estimate_string_bytes(&method))
+                        .saturating_add(
+                            (headers.len() as u64)
+                                .saturating_mul(std::mem::size_of::<(String, String)>() as u64),
+                        )
+                        .saturating_add(Self::saturating_sum(headers.iter().map(
+                            |(name, value)| {
+                                Self::estimate_string_bytes(name)
+                                    .saturating_add(Self::estimate_string_bytes(value))
+                            },
+                        )))
+                        .saturating_add(body.as_ref().map_or(0, |bytes| bytes.len() as u64));
+                    self.fetch_reserve(&mut scratch, request_bytes)?;
+                    self.fetch_charge_bytes(
+                        usize::try_from(request_bytes).unwrap_or(usize::MAX),
+                    )?;
+                    let request_label = self.json_parse_context_label()?;
+                    if let Err(error) = self.evaluate_sink_flow_decision(
+                        "net:request",
+                        &request_label,
+                        &Label::Public,
+                    ) {
+                        if redirect_count != 0
+                            && (self.host_effect_journal.is_some()
+                                || self.host_io_recorder.is_some())
+                        {
+                            self.record_deferred_network_ifc_denial(
+                                url.as_str(),
+                                &method,
+                                &headers,
+                                body.as_deref(),
+                            )?;
+                        }
+                        return Err(error);
+                    }
+                    let response_label =
+                        hostcall_result_contract("net:fetch").result_label(&request_label, None);
+                    let outcome = self.perform_net_request_bytes(
+                        url.as_str().to_string(),
+                        method.clone(),
+                        headers.clone(),
+                        body.clone(),
+                    )?;
+                    self.json_observe_label(response_label.clone())?;
+                    let bytes = match outcome {
+                        NetworkRequestOutcome::Response(bytes) => bytes,
+                        NetworkRequestOutcome::Unavailable
+                        | NetworkRequestOutcome::TransportFailure => {
+                            return Err(fetch_type_error("a successful network response"));
+                        }
+                        NetworkRequestOutcome::Denied => {
+                            return Err(InterpreterError::CapabilityDenied {
+                                capability: "net:request".to_string(),
+                            });
+                        }
+                        NetworkRequestOutcome::JournalFailure(details) => {
+                            return Err(InterpreterError::InternalError {
+                                details: format!("Fetch host-effect journal failed: {details}"),
+                            });
+                        }
+                        NetworkRequestOutcome::InvalidProviderResult => {
+                            return Err(InterpreterError::InternalError {
+                                details: "Fetch provider returned an incompatible response kind"
+                                    .to_string(),
+                            });
+                        }
+                    };
+                    self.fetch_reserve(&mut scratch, bytes.len() as u64)?;
+                    match self.build_fetch_response(
+                        &bytes,
+                        &method,
+                        &url,
+                        redirect,
+                        redirect_count,
+                        &response_label,
+                    )? {
+                        FetchResponseAction::Response(value) => Ok(Some(value)),
+                        FetchResponseAction::Redirect {
+                            status,
+                            url: next_url,
+                            reserved_bytes,
+                        } => {
+                            // URL parsing has already normalized host casing,
+                            // IDNA and default ports. Compare without allocating
+                            // another owned origin while staging the next hop.
+                            let cross_origin = url.scheme() != next_url.scheme()
+                                || url.host_str() != next_url.host_str()
+                                || url.port_or_known_default()
+                                    != next_url.port_or_known_default();
+                            url = next_url;
+                            self.json_release_temporary(url_reserved_bytes);
+                            url_reserved_bytes = reserved_bytes;
+                            if cross_origin {
+                                headers.retain(|(name, _)| {
+                                    !matches!(
+                                        name.as_str(),
+                                        "authorization"
+                                            | "proxy-authorization"
+                                            | "cookie"
+                                            | "cookie2"
+                                            | "host"
+                                    )
+                                });
+                            }
+                            if (matches!(status, 301 | 302) && method == "POST")
+                                || (status == 303 && !matches!(method.as_str(), "GET" | "HEAD"))
+                            {
+                                self.fetch_reserve(
+                                    &mut scratch,
+                                    Self::estimate_string_bytes("GET"),
+                                )?;
+                                method = "GET".to_string();
+                                body = None;
+                                // This server surface accepts caller-supplied
+                                // framing fields; they must not outlive a body
+                                // any more than Fetch's body metadata does.
+                                headers.retain(|(name, _)| {
+                                    !matches!(
+                                        name.as_str(),
+                                        "content-encoding"
+                                            | "content-language"
+                                            | "content-location"
+                                            | "content-type"
+                                            | "content-length"
+                                            | "transfer-encoding"
+                                    )
+                                });
+                            }
+                            redirect_count += 1;
+                            Ok(None)
+                        }
+                    }
+                })();
+                self.json_release_temporary(scratch);
+                if let Some(value) = hop? {
+                    return Ok(value);
+                }
+            }
+        })();
+        self.json_release_temporary(url_reserved_bytes);
+        result
+    }
+
     fn build_fetch_response(
         &mut self,
         raw: &[u8],
         method: &str,
-        url: String,
+        url: &Url,
+        redirect: FetchRedirectMode,
+        redirect_count: u8,
         label: &Label,
-    ) -> Result<Value, InterpreterError> {
+    ) -> Result<FetchResponseAction, InterpreterError> {
         use frankenengine_extension_host::host_io::{
             SANDBOXED_HOST_IO_MAX_BYTES, parse_http_response,
         };
@@ -668,12 +836,71 @@ impl InterpreterCore {
             .map_err(|_| fetch_type_error("a complete, valid HTTP response"))?;
         // Latin-1 headers can expand to two UTF-8 bytes. Admit native staging
         // before copying. The payload uses the shared HTTP framing parser.
-        let scratch = (raw.len() as u64).saturating_mul(4).saturating_add(
+        let mut scratch = (raw.len() as u64).saturating_mul(4).saturating_add(
             (parsed.header_count() as u64)
                 .saturating_mul(std::mem::size_of::<(String, String)>() as u64),
         );
         self.json_reserve_temporary(scratch)?;
+        let mut retained_scratch = 0;
         let result = (|| {
+            self.fetch_charge_bytes(raw.len())?;
+            let status = parsed.status;
+            if matches!(status, 301 | 302 | 303 | 307 | 308) {
+                match redirect {
+                    FetchRedirectMode::Error => {
+                        return Err(fetch_type_error("a response without an HTTP redirect"));
+                    }
+                    // As in server Fetch, expose the actual response, including
+                    // Location and body, for callers handling redirects manually.
+                    FetchRedirectMode::Manual => {}
+                    FetchRedirectMode::Follow => {
+                        let mut locations = parsed
+                            .headers()
+                            .filter(|(name, _)| name.eq_ignore_ascii_case(b"location"));
+                        if let Some((_, location)) = locations.next() {
+                            if locations.next().is_some() {
+                                return Err(fetch_type_error("one unambiguous Location header"));
+                            }
+                            self.fetch_reserve(
+                                &mut scratch,
+                                (location.len() as u64)
+                                    .saturating_add(url.as_str().len() as u64)
+                                    .saturating_mul(8)
+                                    .saturating_add(1024),
+                            )?;
+                            let location: String =
+                                location.iter().map(|byte| char::from(*byte)).collect();
+                            let mut next_url = url
+                                .join(&location)
+                                .map_err(|_| fetch_type_error("a valid redirect Location URL"))?;
+                            if !matches!(next_url.scheme(), "http" | "https")
+                                || !next_url.username().is_empty()
+                                || next_url.password().is_some()
+                            {
+                                return Err(fetch_type_error(
+                                    "an HTTP or HTTPS redirect without embedded credentials",
+                                ));
+                            }
+                            if redirect_count == 20 {
+                                return Err(fetch_type_error("at most 20 HTTP redirects"));
+                            }
+                            // Removing a fragment truncates URL text but does
+                            // not shrink its backing String. Retain admission
+                            // for the pre-truncation allocation and its growth.
+                            let reserved_bytes =
+                                Self::estimate_string_bytes(next_url.as_str()).saturating_mul(2);
+                            next_url.set_fragment(None);
+                            self.fetch_reserve(&mut scratch, reserved_bytes)?;
+                            retained_scratch = reserved_bytes;
+                            return Ok(FetchResponseAction::Redirect {
+                                status,
+                                url: next_url,
+                                reserved_bytes,
+                            });
+                        }
+                    }
+                }
+            }
             let mut fields = Vec::with_capacity(parsed.header_count());
             for (name, value) in parsed.headers() {
                 self.fetch_charge_bytes(name.len().saturating_add(value.len()))?;
@@ -687,8 +914,6 @@ impl InterpreterCore {
                         .collect::<String>(),
                 ));
             }
-            self.fetch_charge_bytes(raw.len())?;
-            let status = parsed.status;
             let status_text = parsed
                 .status_text
                 .iter()
@@ -708,17 +933,19 @@ impl InterpreterCore {
                 FetchResponseSlots {
                     status,
                     status_text,
-                    url,
+                    url: url.as_str().to_string(),
                     headers: ObjectId(0),
                     body,
                     body_used: false,
+                    redirected: redirect_count != 0,
                 },
                 fields,
                 label,
             )
+            .map(|id| FetchResponseAction::Response(Value::Object(id)))
         })();
-        self.json_release_temporary(scratch);
-        result.map(Value::Object)
+        self.json_release_temporary(scratch.saturating_sub(retained_scratch));
+        result
     }
 
     fn alloc_fetch_response(
@@ -772,7 +999,7 @@ impl InterpreterCore {
             "ok" => Value::Bool((200..300).contains(&slots.status)),
             "headers" => Value::Object(slots.headers),
             "bodyUsed" => Value::Bool(slots.body_used),
-            "redirected" => Value::Bool(false),
+            "redirected" => Value::Bool(slots.redirected),
             "type" => Value::str("basic"),
             _ => return Err(fetch_type_error("a known Response getter")),
         })
@@ -1159,6 +1386,7 @@ mod tests {
                 headers: ObjectId(0),
                 body,
                 body_used: false,
+                redirected: false,
             },
             vec![("x-test".into(), "kept alive".into())],
             &Label::Public,

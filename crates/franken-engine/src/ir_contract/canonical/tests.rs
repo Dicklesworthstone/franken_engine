@@ -359,6 +359,101 @@ fn assert_module_matches_reference(module: &Ir3Module) {
 }
 
 #[test]
+fn nested_ir1_and_ir2_preserve_reference_bytes_and_hashes() {
+    use crate::ifc_artifacts::Label;
+    use crate::ir_contract::{
+        BindingKind, EffectBoundary, FlowAnnotation, Ir1Literal, Ir2Op, ResolvedBinding, ScopeId,
+        ScopeKind,
+    };
+
+    let scope = ScopeId { depth: 1, index: 0 };
+    let bindings = [("z", 7), ("a", 1)].map(|(name, binding_id)| ResolvedBinding {
+        name: name.into(),
+        binding_id,
+        scope,
+        kind: BindingKind::Let,
+    });
+    let hash = ContentHash::compute(b"nested-functions");
+    for arrow in [false, true] {
+        for local_bindings in [vec![], bindings.to_vec()] {
+            let closure = Ir1Op::CreateFunction {
+                name: arrow.then(|| "λ".to_owned()),
+                param_names: vec!["x".into()],
+                body_ops: vec![
+                    Ir1Op::LoadLiteral {
+                        value: Ir1Literal::String(JsString::from_code_units(&[0xd800])),
+                    },
+                    Ir1Op::Return,
+                ],
+                free_vars: vec!["outer".into()],
+                free_var_ids: vec![1],
+                runtime_global_loads: vec![],
+                child_captured_locals: vec![],
+                local_lexical_bindings: local_bindings.clone(),
+                is_generator: !arrow,
+                is_async: true,
+                is_arrow: arrow,
+                rest_param_index: None,
+                source_text: None,
+                sloppy: false,
+            };
+            let mut ir1 = Ir1Module::new(hash, "input.js");
+            ir1.scopes.push(ScopeNode {
+                scope_id: scope,
+                parent: None,
+                kind: ScopeKind::Function,
+                bindings: bindings.to_vec(),
+            });
+            ir1.ops = vec![
+                Ir1Op::DeclareFunction {
+                    name: "outer".into(),
+                    binding_id: 7,
+                    param_names: vec![],
+                    body_ops: vec![closure, Ir1Op::Return],
+                    free_vars: vec![],
+                    free_var_ids: vec![],
+                    runtime_global_loads: vec![],
+                    child_captured_locals: vec![],
+                    local_lexical_bindings: local_bindings,
+                    is_generator: false,
+                    is_async: false,
+                    rest_param_index: None,
+                    source_text: None,
+                    sloppy: true,
+                },
+                Ir1Op::Pop,
+            ];
+            let expected = encode_value(&ir1.canonical_value());
+            assert_eq!(ir1.canonical_bytes(), expected);
+            assert_eq!(ir1.content_hash(), ContentHash::compute(&expected));
+
+            let mut ir2 = Ir2Module::new(ir1.content_hash(), "input.js");
+            ir2.scopes = ir1.scopes;
+            ir2.ops = ir1
+                .ops
+                .into_iter()
+                .enumerate()
+                .map(|(i, inner)| Ir2Op {
+                    inner,
+                    effect: EffectBoundary::Pure,
+                    span: None,
+                    required_capability: (i == 0).then(|| CapabilityTag("test".into())),
+                    flow: (i == 1).then_some(FlowAnnotation {
+                        data_label: Label::Secret,
+                        sink_clearance: Label::Public,
+                        declassification_required: true,
+                    }),
+                })
+                .collect();
+            ir2.required_capabilities.push(CapabilityTag("test".into()));
+            let expected = encode_value(&ir2.canonical_value());
+            assert_eq!(ir2.canonical_bytes(), expected);
+            assert_eq!(ir2.content_hash(), ContentHash::compute(&expected));
+        }
+    }
+}
+
+#[test]
 fn optional_metadata_combinations_preserve_module_layout() {
     for flags in 0..16 {
         let mut module = Ir3Module::new(ContentHash::compute(b"source"), "módulo\0.js");

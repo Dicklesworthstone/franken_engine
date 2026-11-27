@@ -818,6 +818,17 @@ pub enum Ir1Op {
 
 impl Ir1Op {
     pub fn canonical_value(&self) -> CanonicalValue {
+        self.canonical_value_with_body(|ops| {
+            CanonicalValue::Array(ops.iter().map(Ir1Op::canonical_value).collect())
+        })
+    }
+
+    // Module serialization defers the body field to its streaming writer.
+    // The operation schema and its optional fields stay in one place.
+    fn canonical_value_with_body(
+        &self,
+        body: impl FnOnce(&[Ir1Op]) -> CanonicalValue,
+    ) -> CanonicalValue {
         match self {
             Self::LoadLiteral { value } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("load_literal")),
@@ -1044,12 +1055,7 @@ impl Ir1Op {
                                 .collect(),
                         ),
                     ),
-                    (
-                        "body_ops",
-                        CanonicalValue::Array(
-                            body_ops.iter().map(Ir1Op::canonical_value).collect(),
-                        ),
-                    ),
+                    ("body_ops", body(body_ops)),
                     (
                         "free_vars",
                         CanonicalValue::Array(
@@ -1102,12 +1108,7 @@ impl Ir1Op {
                                 .collect(),
                         ),
                     ),
-                    (
-                        "body_ops",
-                        CanonicalValue::Array(
-                            body_ops.iter().map(Ir1Op::canonical_value).collect(),
-                        ),
-                    ),
+                    ("body_ops", body(body_ops)),
                     (
                         "free_vars",
                         CanonicalValue::Array(
@@ -1345,7 +1346,7 @@ impl Ir1Module {
     }
 
     pub fn canonical_bytes(&self) -> Vec<u8> {
-        deterministic_serde::encode_value(&self.canonical_value())
+        canonical::ir1_bytes(self)
     }
 
     pub fn content_hash(&self) -> ContentHash {
@@ -1536,7 +1537,7 @@ impl Ir2Module {
     }
 
     pub fn canonical_bytes(&self) -> Vec<u8> {
-        deterministic_serde::encode_value(&self.canonical_value())
+        canonical::ir2_bytes(self)
     }
 
     pub fn content_hash(&self) -> ContentHash {

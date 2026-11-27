@@ -1,12 +1,14 @@
-//! Borrowed canonical IR3 encoding. The owned `canonical_value` representation
+//! Borrowed canonical IR1, IR2 and IR3 encoding. The owned `canonical_value` representation
 //! remains the reference for byte-for-byte differential tests.
 //!
 //! Bundle profiles in bd-9vouw.382 attributed 20.5% of a run to canonical IR
 //! hashing. Reusing pass hashes removed redundant hashes; this removes the
 //! remaining whole-module tree of owned maps, strings and arrays per hash.
 
-use super::{Ir3FunctionDesc, Ir3Instruction, Ir3Module, RegRange};
-use crate::deterministic_serde::CanonicalWriter;
+use super::{
+    Ir1Module, Ir1Op, Ir2Module, Ir3FunctionDesc, Ir3Instruction, Ir3Module, RegRange, ScopeNode,
+};
+use crate::deterministic_serde::{CanonicalValue, CanonicalWriter};
 use crate::hash_tiers::ContentHash;
 use crate::import_attributes::ImportAttributes;
 use crate::js_string::JsString;
@@ -460,6 +462,88 @@ fn function(writer: &mut CanonicalWriter, value: &Ir3FunctionDesc) {
             ),
         ],
     );
+}
+
+fn ir1_op(writer: &mut CanonicalWriter, op: &Ir1Op) {
+    // Function bodies are themselves op streams. Building a canonical value
+    // for even one outer factory can otherwise materialize an entire bundle.
+    let (Ir1Op::DeclareFunction { body_ops, .. } | Ir1Op::CreateFunction { body_ops, .. }) = op
+    else {
+        writer.value(&op.canonical_value());
+        return;
+    };
+    let CanonicalValue::Map(fields) = op.canonical_value_with_body(|_| CanonicalValue::Null) else {
+        unreachable!("canonical function operations are maps");
+    };
+    let count = writer.map_header(fields.len());
+    for (key, value) in fields.into_iter().take(count) {
+        writer.key(&key);
+        if key == "body_ops" {
+            write_array(writer, body_ops, ir1_op);
+        } else {
+            writer.value(&value);
+        }
+    }
+}
+
+fn write_array<T>(
+    writer: &mut CanonicalWriter,
+    items: &[T],
+    mut item: impl FnMut(&mut CanonicalWriter, &T),
+) {
+    let count = writer.array_header(items.len());
+    for value in &items[..count] {
+        item(writer, value);
+    }
+}
+
+fn scopes(writer: &mut CanonicalWriter, scopes: &[ScopeNode]) {
+    writer.key("scopes");
+    write_array(writer, scopes, |w, scope| w.value(&scope.canonical_value()));
+}
+
+pub(super) fn ir1_bytes(module: &Ir1Module) -> Vec<u8> {
+    let mut writer = CanonicalWriter::new();
+    writer.map_header(3);
+    writer.key("header");
+    writer.value(&module.header.canonical_value());
+    writer.key("ops");
+    write_array(&mut writer, &module.ops, ir1_op);
+    scopes(&mut writer, &module.scopes);
+    writer.finish()
+}
+
+pub(super) fn ir2_bytes(module: &Ir2Module) -> Vec<u8> {
+    let mut writer = CanonicalWriter::new();
+    writer.map_header(4);
+    writer.key("header");
+    writer.value(&module.header.canonical_value());
+    writer.key("ops");
+    write_array(&mut writer, &module.ops, |w, op| {
+        w.map_header(4);
+        w.key("effect");
+        w.string(op.effect.as_str());
+        w.key("flow");
+        if let Some(flow) = &op.flow {
+            w.value(&flow.canonical_value());
+        } else {
+            w.null();
+        }
+        w.key("inner");
+        ir1_op(w, &op.inner);
+        w.key("required_capability");
+        if let Some(capability) = &op.required_capability {
+            w.string(&capability.0);
+        } else {
+            w.null();
+        }
+    });
+    writer.key("required_capabilities");
+    write_array(&mut writer, &module.required_capabilities, |w, cap| {
+        w.string(&cap.0)
+    });
+    scopes(&mut writer, &module.scopes);
+    writer.finish()
 }
 
 pub(super) fn module_bytes(module: &Ir3Module) -> Vec<u8> {

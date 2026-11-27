@@ -260,6 +260,15 @@ pub struct ResolvedBinding {
 }
 
 impl ResolvedBinding {
+    fn canonical_order(&self, other: &Self) -> std::cmp::Ordering {
+        self.binding_id
+            .cmp(&other.binding_id)
+            .then_with(|| self.name.cmp(&other.name))
+            .then_with(|| self.scope.depth.cmp(&other.scope.depth))
+            .then_with(|| self.scope.index.cmp(&other.scope.index))
+            .then_with(|| self.kind.as_str().cmp(other.kind.as_str()))
+    }
+
     pub fn canonical_value(&self) -> CanonicalValue {
         CanonicalValue::map_from_entries([
             (
@@ -290,14 +299,7 @@ fn member_write_is_strict(strict: &bool) -> bool {
 
 fn canonical_resolved_binding_array(bindings: &[ResolvedBinding]) -> CanonicalValue {
     let mut bindings = bindings.to_vec();
-    bindings.sort_by(|left, right| {
-        left.binding_id
-            .cmp(&right.binding_id)
-            .then_with(|| left.name.cmp(&right.name))
-            .then_with(|| left.scope.depth.cmp(&right.scope.depth))
-            .then_with(|| left.scope.index.cmp(&right.scope.index))
-            .then_with(|| left.kind.as_str().cmp(right.kind.as_str()))
-    });
+    bindings.sort_by(ResolvedBinding::canonical_order);
     CanonicalValue::Array(
         bindings
             .iter()
@@ -347,25 +349,8 @@ pub struct ScopeNode {
 
 impl ScopeNode {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut bindings = self.bindings.clone();
-        bindings.sort_by(|left, right| {
-            left.binding_id
-                .cmp(&right.binding_id)
-                .then_with(|| left.name.cmp(&right.name))
-                .then_with(|| left.scope.depth.cmp(&right.scope.depth))
-                .then_with(|| left.scope.index.cmp(&right.scope.index))
-                .then_with(|| left.kind.as_str().cmp(right.kind.as_str()))
-        });
         CanonicalValue::map_from_entries([
-            (
-                "bindings",
-                CanonicalValue::Array(
-                    bindings
-                        .iter()
-                        .map(ResolvedBinding::canonical_value)
-                        .collect(),
-                ),
-            ),
+            ("bindings", canonical_resolved_binding_array(&self.bindings)),
             ("kind", CanonicalValue::str(self.kind.as_str())),
             (
                 "parent",
@@ -818,16 +803,18 @@ pub enum Ir1Op {
 
 impl Ir1Op {
     pub fn canonical_value(&self) -> CanonicalValue {
-        self.canonical_value_with_body(|ops| {
-            CanonicalValue::Array(ops.iter().map(Ir1Op::canonical_value).collect())
-        })
+        self.canonical_value_with_children(
+            |ops| CanonicalValue::Array(ops.iter().map(Ir1Op::canonical_value).collect()),
+            canonical_resolved_binding_array,
+        )
     }
 
-    // Module serialization defers the body field to its streaming writer.
+    // Module serialization streams nested bodies and lexical binding tables.
     // The operation schema and its optional fields stay in one place.
-    fn canonical_value_with_body(
+    fn canonical_value_with_children(
         &self,
         body: impl FnOnce(&[Ir1Op]) -> CanonicalValue,
+        bindings: impl FnOnce(&[ResolvedBinding]) -> CanonicalValue,
     ) -> CanonicalValue {
         match self {
             Self::LoadLiteral { value } => CanonicalValue::map_from_entries([
@@ -1071,7 +1058,7 @@ impl Ir1Op {
                 if !local_lexical_bindings.is_empty() {
                     entries.push((
                         "local_lexical_bindings",
-                        canonical_resolved_binding_array(local_lexical_bindings),
+                        bindings(local_lexical_bindings),
                     ));
                 }
                 CanonicalValue::map_from_entries(entries)
@@ -1124,7 +1111,7 @@ impl Ir1Op {
                 if !local_lexical_bindings.is_empty() {
                     entries.push((
                         "local_lexical_bindings",
-                        canonical_resolved_binding_array(local_lexical_bindings),
+                        bindings(local_lexical_bindings),
                     ));
                 }
                 // Only arrows carry the marker so arrow-free modules keep

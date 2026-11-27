@@ -454,6 +454,57 @@ fn nested_ir1_and_ir2_preserve_reference_bytes_and_hashes() {
 }
 
 #[test]
+fn scope_streaming_preserves_binding_ties_and_parent_scopes() {
+    use crate::ir_contract::{BindingKind, ScopeKind};
+
+    let root = ScopeId { depth: 0, index: 0 };
+    let child = ScopeId { depth: 1, index: 7 };
+    let first = ResolvedBinding {
+        binding_id: 3,
+        name: "a\0λ".into(),
+        scope: root,
+        kind: BindingKind::Const,
+    };
+    // Ascending in every tie breaker, including the canonical string for kind.
+    let ordered = vec![
+        first.clone(),
+        first.clone(),
+        ResolvedBinding {
+            kind: BindingKind::Let,
+            ..first.clone()
+        },
+        ResolvedBinding {
+            scope: ScopeId { index: 1, ..root },
+            ..first.clone()
+        },
+        ResolvedBinding {
+            scope: child,
+            ..first.clone()
+        },
+        ResolvedBinding {
+            name: "b".into(),
+            ..first.clone()
+        },
+        ResolvedBinding {
+            binding_id: 4,
+            ..first
+        },
+    ];
+    let mut ir = Ir1Module::new(ContentHash::compute(b"bindings"), "scopes.js");
+    ir.scopes.push(ScopeNode {
+        scope_id: child,
+        parent: Some(root),
+        kind: ScopeKind::Block,
+        bindings: ordered,
+    });
+    let expected = encode_value(&ir.canonical_value());
+    assert_eq!(ir.canonical_bytes(), expected);
+    ir.scopes[0].bindings.reverse();
+    assert_eq!(ir.canonical_bytes(), expected);
+    assert_eq!(ir.content_hash(), ContentHash::compute(&expected));
+}
+
+#[test]
 fn optional_metadata_combinations_preserve_module_layout() {
     for flags in 0..16 {
         let mut module = Ir3Module::new(ContentHash::compute(b"source"), "módulo\0.js");

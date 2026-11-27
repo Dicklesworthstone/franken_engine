@@ -6,7 +6,8 @@
 //! remaining whole-module tree of owned maps, strings and arrays per hash.
 
 use super::{
-    Ir1Module, Ir1Op, Ir2Module, Ir3FunctionDesc, Ir3Instruction, Ir3Module, RegRange, ScopeNode,
+    Ir1Module, Ir1Op, Ir2Module, Ir3FunctionDesc, Ir3Instruction, Ir3Module, RegRange,
+    ResolvedBinding, ScopeId, ScopeNode,
 };
 use crate::deterministic_serde::{CanonicalValue, CanonicalWriter};
 use crate::hash_tiers::ContentHash;
@@ -467,21 +468,32 @@ fn function(writer: &mut CanonicalWriter, value: &Ir3FunctionDesc) {
 fn ir1_op(writer: &mut CanonicalWriter, op: &Ir1Op) {
     // Function bodies are themselves op streams. Building a canonical value
     // for even one outer factory can otherwise materialize an entire bundle.
-    let (Ir1Op::DeclareFunction { body_ops, .. } | Ir1Op::CreateFunction { body_ops, .. }) = op
+    let (Ir1Op::DeclareFunction {
+        body_ops,
+        local_lexical_bindings,
+        ..
+    }
+    | Ir1Op::CreateFunction {
+        body_ops,
+        local_lexical_bindings,
+        ..
+    }) = op
     else {
         writer.value(&op.canonical_value());
         return;
     };
-    let CanonicalValue::Map(fields) = op.canonical_value_with_body(|_| CanonicalValue::Null) else {
+    let CanonicalValue::Map(fields) =
+        op.canonical_value_with_children(|_| CanonicalValue::Null, |_| CanonicalValue::Null)
+    else {
         unreachable!("canonical function operations are maps");
     };
     let count = writer.map_header(fields.len());
     for (key, value) in fields.into_iter().take(count) {
         writer.key(&key);
-        if key == "body_ops" {
-            write_array(writer, body_ops, ir1_op);
-        } else {
-            writer.value(&value);
+        match key.as_str() {
+            "body_ops" => write_array(writer, body_ops, ir1_op),
+            "local_lexical_bindings" => bindings(writer, local_lexical_bindings),
+            _ => writer.value(&value),
         }
     }
 }
@@ -497,9 +509,63 @@ fn write_array<T>(
     }
 }
 
+fn scope_id(writer: &mut CanonicalWriter, id: ScopeId) {
+    writer.map_header(2);
+    writer.key("depth");
+    writer.u64(u64::from(id.depth));
+    writer.key("index");
+    writer.u64(u64::from(id.index));
+}
+
+fn binding(writer: &mut CanonicalWriter, binding: &ResolvedBinding) {
+    writer.map_header(4);
+    writer.key("binding_id");
+    writer.u64(u64::from(binding.binding_id));
+    writer.key("kind");
+    writer.string(binding.kind.as_str());
+    writer.key("name");
+    writer.string(&binding.name);
+    writer.key("scope");
+    scope_id(writer, binding.scope);
+}
+
+fn bindings(writer: &mut CanonicalWriter, bindings: &[ResolvedBinding]) {
+    let count = writer.array_header(bindings.len());
+    if bindings
+        .iter()
+        .is_sorted_by(|a, b| a.canonical_order(b).is_le())
+    {
+        for entry in &bindings[..count] {
+            binding(writer, entry);
+        }
+    } else {
+        // Deserialized IR can arrive in arbitrary order. Sort references to
+        // the complete table before clamping, preserving canonical tie breaks.
+        let mut sorted: Vec<_> = bindings.iter().collect();
+        sorted.sort_unstable_by(|a, b| a.canonical_order(b));
+        for entry in sorted.into_iter().take(count) {
+            binding(writer, entry);
+        }
+    }
+}
+
 fn scopes(writer: &mut CanonicalWriter, scopes: &[ScopeNode]) {
     writer.key("scopes");
-    write_array(writer, scopes, |w, scope| w.value(&scope.canonical_value()));
+    write_array(writer, scopes, |w, scope| {
+        w.map_header(4);
+        w.key("bindings");
+        bindings(w, &scope.bindings);
+        w.key("kind");
+        w.string(scope.kind.as_str());
+        w.key("parent");
+        if let Some(parent) = scope.parent {
+            scope_id(w, parent);
+        } else {
+            w.null();
+        }
+        w.key("scope_id");
+        scope_id(w, scope.scope_id);
+    });
 }
 
 pub(super) fn ir1_bytes(module: &Ir1Module) -> Vec<u8> {

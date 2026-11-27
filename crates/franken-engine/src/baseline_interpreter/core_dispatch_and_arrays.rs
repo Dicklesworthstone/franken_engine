@@ -147,6 +147,7 @@ impl InterpreterCore {
             }
         }
         match builtin.kind {
+            BuiltinFunctionKind::WasmExport => self.dispatch_wasm_export(module, builtin, args),
             BuiltinFunctionKind::FunctionPrototype => Ok(Value::Undefined),
             BuiltinFunctionKind::NativeTimerPromisesGetter => {
                 let holder = builtin

@@ -131,7 +131,7 @@ impl ModuleDefinition {
     }
 }
 
-fn source_bytes(source: &str, max: usize) -> Result<Cow<'_, [u8]>, WasmNativeLoadError> {
+pub(crate) fn source_bytes(source: &str, max: usize) -> Result<Cow<'_, [u8]>, WasmNativeLoadError> {
     let Some(hex) = source.strip_prefix(BINARY_SOURCE_PREFIX) else {
         // Preserve the existing raw, UTF-8-compatible binary source contract.
         check_size(source.len(), max)?;

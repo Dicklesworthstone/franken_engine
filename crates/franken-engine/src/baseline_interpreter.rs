@@ -100,6 +100,7 @@ mod json_parse;
 mod json_stringify;
 mod legacy_regexp;
 mod module_integrity;
+mod wasm_modules;
 pub use module_integrity::ModuleSourceIntegrity;
 mod number_locale;
 mod object_integrity;
@@ -4373,6 +4374,9 @@ pub enum BuiltinFunctionKind {
     // Append only: these ordinals participate in deterministic state hashes.
     FetchResponseMethod,
     FetchHeadersMethod,
+    /// A function from an admitted, realm-owned numeric Wasm instance.
+    /// Append only: builtin ordinals participate in deterministic hashing.
+    WasmExport,
 }
 
 /// Annex B B.2.2.2-14: each String HTML method's tag and attribute name.
@@ -5862,6 +5866,7 @@ impl BuiltinFunction {
 
     fn display_name(&self) -> &'static str {
         match self.kind {
+            BuiltinFunctionKind::WasmExport => "wasm",
             BuiltinFunctionKind::Require => "require",
             BuiltinFunctionKind::ModuleCreateRequire => "createRequire",
             BuiltinFunctionKind::RequireResolve | BuiltinFunctionKind::ImportMetaResolve => {
@@ -6761,6 +6766,7 @@ impl BuiltinFunction {
             | K::ProxyRevoke
             | K::PrototypeGetter
             | K::FunctionPrototype
+            | K::WasmExport
             | K::NativeTimerPromisesGetter
             | K::ThrowTypeError => Some(0),
             _ => None,
@@ -11248,6 +11254,11 @@ struct GeneratedFunctionStore {
 #[derive(Debug, Clone, Default)]
 struct ModuleState {
     modules: BTreeMap<String, ModuleRuntimeRecord>,
+    /// Owned Wasm state is shared across module/callback snapshots, never
+    /// copied or rolled back after a trapped invocation.
+    wasm_modules: BTreeMap<String, Rc<wasm_modules::JsWasmModule>>,
+    retained_wasm_bytes: u64,
+    wasm_work_pool: Option<crate::wasm_runtime_lane::work_pool::WasmWorkPool>,
     /// Memory charged for retained module programs and their registry keys.
     /// The heap-resident namespace objects and exported values are accounted
     /// by their ordinary heap/register owners.
@@ -11267,6 +11278,9 @@ impl ModuleState {
     fn new() -> Self {
         Self {
             modules: BTreeMap::new(),
+            wasm_modules: BTreeMap::new(),
+            retained_wasm_bytes: 0,
+            wasm_work_pool: None,
             retained_program_bytes: 0,
             generated_function_stores: BTreeMap::new(),
             retained_generated_function_bytes: 0,

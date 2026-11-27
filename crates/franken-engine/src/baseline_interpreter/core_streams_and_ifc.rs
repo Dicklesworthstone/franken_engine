@@ -7398,7 +7398,10 @@ impl InterpreterCore {
             Kind::MapSet | Kind::MapDelete | Kind::MapClear => Some("Map"),
             Kind::SetAdd | Kind::SetDelete | Kind::SetClear => Some("Set"),
             Kind::WeakMapMethod
-                if matches!(builtin.module_specifier.0.as_deref(), Some("set" | "delete")) =>
+                if matches!(
+                    builtin.module_specifier.0.as_deref(),
+                    Some("set" | "delete")
+                ) =>
             {
                 Some("WeakMap")
             }
@@ -7536,7 +7539,8 @@ impl InterpreterCore {
                 | Kind::ArraySplice
                 | Kind::ArrayFill
                 | Kind::ArrayCopyWithin
-        ) || Self::builtin_collection_mutation_brand(builtin).is_some();
+        ) || Self::builtin_collection_mutation_brand(builtin)
+            .is_some();
         if mutates_ordinary_or_collection && let Value::Object(object_id) = receiver {
             self.join_object_mutation_label(*object_id, label)?;
         }
@@ -9704,6 +9708,9 @@ impl InterpreterCore {
         self.gc_remembered_set.clear();
         self.module_state.modules.clear();
         self.module_state.retained_program_bytes = 0;
+        self.module_state.wasm_modules.clear();
+        self.module_state.retained_wasm_bytes = 0;
+        self.module_state.wasm_work_pool = None;
         for entry in self.module_state.live_exports.drain(..) {
             self.closures.cold_cells.release_cell(&entry.cell);
         }
@@ -10892,11 +10899,15 @@ impl InterpreterCore {
         let released_bytes = self
             .module_state
             .retained_generated_function_bytes
+            .saturating_add(self.module_state.retained_wasm_bytes)
             .saturating_add(self.generated_function_realm_globals_memory_bytes())
             .saturating_add(self.realm_dynamic_globals_memory_bytes());
 
         self.module_state.generated_function_stores.clear();
         self.module_state.retained_generated_function_bytes = 0;
+        self.module_state.wasm_modules.clear();
+        self.module_state.retained_wasm_bytes = 0;
+        self.module_state.wasm_work_pool = None;
         self.generated_function_realm_globals = None;
         // Heap-backed realm values are recreated after the authoritative seed
         // reset. Keeping their binding cells here would retain stale ObjectIds.
@@ -11877,12 +11888,6 @@ impl InterpreterCore {
                     .to_string(),
             });
         }
-        if record.syntax == ModuleSyntax::Wasm {
-            return Err(InterpreterError::ModuleLoweringFailed {
-                specifier: specifier.to_string(),
-                error: "Wasm source requires a separately admitted runtime provider".to_string(),
-            });
-        }
         if let Some(missing) = record
             .required_capabilities
             .difference(&self.config.granted_capabilities)
@@ -12726,6 +12731,24 @@ impl InterpreterCore {
         let namespace_object = self.ensure_module_record(module, resolved)?;
         if let Some(record) = self.module_state.modules.get_mut(resolved) {
             record.resolved_source_hash = source_hash;
+        }
+
+        if syntax == ModuleSyntax::Wasm {
+            let outcome = self.load_wasm_module(
+                module,
+                resolved,
+                style,
+                attributes,
+                delivered.as_ref(),
+                import_bound,
+            );
+            if let Err(error) = &outcome {
+                self.fail_module_record(resolved, &error.to_string());
+                if matches!(error, InterpreterError::UncaughtException { .. }) {
+                    self.cache_pending_module_exception(resolved)?;
+                }
+            }
+            return outcome;
         }
 
         if is_json {

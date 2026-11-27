@@ -17,10 +17,17 @@
 //! VM. [`crate::module_resolver::DeterministicModuleResolver::load_wasm`] resolves
 //! capability-gated imports into [`WasmNativeModule`] for native execution.
 //! [`WasmNativeInstance`] rechecks the current policy before startup, calls and
-//! state inspection. This is an embedding API, not JavaScript import-expression
-//! evaluation or automatic ESM namespace binding. Host imports are unbound by
-//! default; [`WasmNativeModule::instantiate_with_imports`] explicitly links
-//! providers within the module's declared authority and current policy.
+//! state inspection. Host imports are unbound by default;
+//! [`WasmNativeModule::instantiate_with_imports`] explicitly links providers
+//! within the module's declared authority and current policy.
+//!
+//! The JavaScript interpreter also admits captured binary modules through an
+//! installed [`crate::module_resolver::ExecutionModuleResolver`]. Static and
+//! dynamic ESM imports expose numeric function callables backed by persistent
+//! instances, with current policy, IFC and shared execution/memory budgets.
+//! That bounded route has no host imports, tables, multiple results or exposed
+//! memory/global objects, and adds neither filesystem binary loading nor a
+//! global `WebAssembly` API.
 
 #[path = "wasm_runtime_lane/lane.rs"]
 mod lane;
@@ -31,6 +38,7 @@ pub mod numeric;
 
 #[path = "wasm_runtime_lane/imports.rs"]
 mod imports;
+pub(crate) use imports::source_bytes as wasm_source_bytes;
 pub use imports::{
     WasmNativeCall, WasmNativeCallStep, WasmNativeInstance, WasmNativeLoadError, WasmNativeModule,
 };

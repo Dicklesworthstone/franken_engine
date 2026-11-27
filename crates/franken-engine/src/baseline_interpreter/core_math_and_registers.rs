@@ -4722,12 +4722,10 @@ impl InterpreterCore {
                 MEMORY_ESTIMATE_ITERATOR_BASE_BYTES
                     .saturating_add(value_slots)
                     .saturating_add(values)
-                    .saturating_add(
-                        state.array.as_ref().map_or(0, |array| {
-                            (std::mem::size_of::<RuntimeArrayIterator>() as u64)
-                                .saturating_add(Self::estimate_value_bytes(&array.receiver))
-                        }),
-                    )
+                    .saturating_add(state.array.as_ref().map_or(0, |array| {
+                        (std::mem::size_of::<RuntimeArrayIterator>() as u64)
+                            .saturating_add(Self::estimate_value_bytes(&array.receiver))
+                    }))
                     // A collection iterator and its `collection_iterators`
                     // registry entry.
                     .saturating_add(state.collection.as_ref().map_or(0, |_| {
@@ -5916,6 +5914,7 @@ impl InterpreterCore {
             .saturating_add(self.writable_terminal_states_memory_bytes())
             .saturating_add(self.writable_in_flight_callback_bytes)
             .saturating_add(self.module_state.retained_program_bytes)
+            .saturating_add(self.module_state.retained_wasm_bytes)
             .saturating_add(self.module_state.retained_generated_function_bytes)
             .saturating_add(self.generated_code_observability_memory_bytes())
             .saturating_add(self.general_interpreter_events_memory_bytes())

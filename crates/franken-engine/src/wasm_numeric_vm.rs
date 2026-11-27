@@ -26,7 +26,8 @@ mod control;
 #[path = "wasm_numeric_vm/state.rs"]
 mod state;
 pub use state::{
-    WasmHostCaller, WasmHostError, WasmHostImports, WasmNumericInstance, WasmStateError,
+    OwnedWasmNumericInstance, WasmHostCaller, WasmHostError, WasmHostImports, WasmNumericInstance,
+    WasmStateError,
 };
 
 pub const WASM_NUMERIC_VM_COMPONENT: &str = "wasm_numeric_vm";
@@ -354,6 +355,56 @@ pub struct WasmNumericVm {
 }
 
 impl WasmNumericVm {
+    /// Peak logical activation reservation, including suspended vector
+    /// capacity. Embedders admit it before starting guest execution.
+    pub(crate) fn activation_memory_envelope(&self) -> u64 {
+        activation::memory_envelope(&self.limits)
+    }
+
+    /// Preflight the one run-length-encoded program allocation before parsing.
+    /// Most validated metadata is linear in source bytes; local declarations
+    /// can expand a few LEB bytes into thousands of retained type entries per
+    /// function. This scan uses borrowed readers and allocates no vectors.
+    pub(crate) fn expanded_local_bytes(
+        bytes: &[u8],
+        limits: &WasmNumericLimits,
+    ) -> Result<u64, WasmNumericVmError> {
+        let mut reader = ByteReader::new(bytes);
+        reader.read_bytes(8)?;
+        let mut total = 0u64;
+        while !reader.remaining().is_empty() {
+            let id = reader.read_u8()?;
+            let length = reader.read_u32_leb()? as usize;
+            let payload = reader.read_bytes(length)?;
+            if id != 10 {
+                continue;
+            }
+            let mut code = ByteReader::new(payload);
+            let functions = code.read_u32_leb()?;
+            for _ in 0..functions {
+                let length = code.read_u32_leb()? as usize;
+                let mut body = ByteReader::new(code.read_bytes(length)?);
+                let groups = body.read_u32_leb()?;
+                let mut locals = 0usize;
+                for _ in 0..groups {
+                    locals = locals.saturating_add(body.read_u32_leb()? as usize);
+                    read_value_type(body.read_u8()?)?;
+                    if locals > limits.max_locals_per_call {
+                        return Err(WasmNumericVmError::LocalLimitExceeded {
+                            actual: locals,
+                            max: limits.max_locals_per_call,
+                        });
+                    }
+                }
+                total = total.saturating_add(locals as u64);
+            }
+            code.ensure_finished()?;
+        }
+        // Vec growth can retain spare capacity. Small-vector minimum capacity
+        // and per-body headers are already covered by source-derived metadata.
+        Ok(total.saturating_mul(2 * std::mem::size_of::<WasmValueType>() as u64))
+    }
+
     pub fn parse(bytes: &[u8], limits: WasmNumericLimits) -> Result<Self, WasmNumericVmError> {
         if bytes.len() > limits.max_module_bytes {
             return Err(WasmNumericVmError::ModuleTooLarge {
@@ -424,6 +475,21 @@ impl WasmNumericVm {
         self.exports.keys().map(String::as_str)
     }
 
+    /// Immutable function/type identity for sharing JS alias callables and
+    /// their signatures without cloning a large type for every export alias.
+    pub(crate) fn export_identity(&self, name: &str) -> Result<(u32, u32), WasmNumericVmError> {
+        let export = self
+            .exports
+            .get(name)
+            .ok_or_else(|| WasmNumericVmError::UnknownExport {
+                name: name.to_string(),
+            })?;
+        Ok((
+            export.function_index,
+            self.function_type_index(export.function_index)?,
+        ))
+    }
+
     fn invoke(
         &self,
         function_index: u32,
@@ -444,8 +510,12 @@ impl WasmNumericVm {
     }
 
     fn function_signature(&self, function_index: u32) -> Result<&FunctionType, WasmNumericVmError> {
+        self.function_type(self.function_type_index(function_index)?)
+    }
+
+    fn function_type_index(&self, function_index: u32) -> Result<u32, WasmNumericVmError> {
         if function_index < self.imports.len() as u32 {
-            return self.function_type(self.imports[function_index as usize].type_index);
+            return Ok(self.imports[function_index as usize].type_index);
         }
         let local_index = function_index
             .checked_sub(self.imports.len() as u32)
@@ -455,7 +525,7 @@ impl WasmNumericVm {
             .functions
             .get(local_index)
             .ok_or(WasmNumericVmError::UnknownFunction { function_index })?;
-        self.function_type(body.type_index)
+        Ok(body.type_index)
     }
 }
 

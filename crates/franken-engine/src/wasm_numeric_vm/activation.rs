@@ -21,6 +21,34 @@ struct Activation<'vm> {
     controls: Vec<control::Frame>,
 }
 
+/// Conservative allocation envelope for a complete invocation, including
+/// spare Vec capacity retained after operand pops in suspended callers. The
+/// live-value limit alone bounds lengths, not those retained allocations.
+pub(super) fn memory_envelope(limits: &WasmNumericLimits) -> u64 {
+    let values = (limits.max_stack_values as u64)
+        .saturating_add(limits.max_locals_per_call as u64)
+        .saturating_mul(2)
+        .saturating_mul(std::mem::size_of::<WasmBoundaryValue>() as u64);
+    let controls = (limits.max_control_depth as u64)
+        .saturating_add(1)
+        .saturating_mul(2)
+        .saturating_mul(std::mem::size_of::<control::Frame>() as u64);
+    let frames = u64::from(limits.max_call_depth)
+        .saturating_add(1)
+        .saturating_mul(
+            values
+                .saturating_add(controls)
+                .saturating_add(2 * std::mem::size_of::<Activation<'_>>() as u64),
+        );
+    // Export arguments, call transfers and return/bulk stack rearrangement
+    // can coexist briefly with the owning vectors during a transition.
+    frames.saturating_add(
+        (limits.max_live_values as u64)
+            .saturating_mul(4)
+            .saturating_mul(std::mem::size_of::<WasmBoundaryValue>() as u64),
+    )
+}
+
 enum Transfer {
     Call {
         function: u32,

@@ -617,7 +617,57 @@ pub struct WasmNumericInstance<'a> {
     start_execution: Option<WasmNumericExecution>,
 }
 
+/// An instance that owns its immutable program through shared ownership.
+/// This uses the borrowed instance's executor and state semantics without a
+/// self-referential lifetime when retained in a JavaScript realm.
+#[derive(Debug)]
+pub struct OwnedWasmNumericInstance {
+    vm: Arc<WasmNumericVm>,
+    state: InstanceState,
+}
+
+impl OwnedWasmNumericInstance {
+    pub fn call_export(
+        &mut self,
+        name: &str,
+        arguments: &[WasmBoundaryValue],
+    ) -> Result<WasmNumericExecution, WasmNumericVmError> {
+        self.vm
+            .call_export_in_instance(name, arguments, &mut self.state)
+    }
+}
+
 impl WasmNumericVm {
+    /// Link explicit imports and execute startup once before publishing owned
+    /// state. Resource pools and cancellation are identical to borrowed calls.
+    pub fn instantiate_owned_with_imports(
+        self: Arc<Self>,
+        imports: WasmHostImports,
+    ) -> Result<OwnedWasmNumericInstance, WasmNumericVmError> {
+        let instance = self.instantiate_with_imports(imports)?;
+        let WasmNumericInstance { state, .. } = instance;
+        Ok(OwnedWasmNumericInstance { vm: self, state })
+    }
+
+    /// The first JS bridge admits compute-only function namespaces. Internal
+    /// memory and globals persist; reference tables, host imports and exposed
+    /// state objects need their own JS object/authority contract.
+    pub(crate) fn javascript_memory_envelope(&self) -> Result<u64, WasmNumericVmError> {
+        if !self.imports.is_empty() {
+            return Err(invalid(
+                "JavaScript wasm imports do not bind host functions",
+            ));
+        }
+        if !self.state.exports.is_empty() || self.state.tables.records() != 0 {
+            return Err(invalid(
+                "JavaScript wasm modules currently expose numeric functions only; tables and state exports are unsupported",
+            ));
+        }
+        Ok(self.state.memory.as_ref().map_or(0, |memory| {
+            u64::from(memory.maximum.min(self.limits.max_memory_pages)) * PAGE_BYTES
+        }))
+    }
+
     /// Initialize tables, globals and memory, then run the optional start
     /// function once before publishing the instance. A trap or resource refusal
     /// drops the unpublished state; no partially initialized instance escapes.

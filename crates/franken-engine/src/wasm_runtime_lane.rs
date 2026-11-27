@@ -25,9 +25,9 @@
 //! installed [`crate::module_resolver::ExecutionModuleResolver`]. Static and
 //! dynamic ESM imports expose numeric function callables backed by persistent
 //! instances, with current policy, IFC and shared execution/memory budgets.
-//! That bounded route has no host imports, tables, multiple results or exposed
-//! memory/global objects, and adds neither filesystem binary loading nor a
-//! global `WebAssembly` API.
+//! Multiple numeric results become ordinary JavaScript arrays. That bounded
+//! route has no host imports, tables or exposed memory/global objects, and
+//! adds neither filesystem binary loading nor a global `WebAssembly` API.
 
 #[path = "wasm_runtime_lane/lane.rs"]
 mod lane;

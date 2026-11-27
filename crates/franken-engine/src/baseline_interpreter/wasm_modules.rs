@@ -158,6 +158,61 @@ impl InterpreterCore {
             .saturating_add(before.saturating_sub(pool.remaining()));
     }
 
+    fn charge_wasm_boundary_work(&mut self, work: u64) -> Result<(), InterpreterError> {
+        let (pool, before) = self.prepare_wasm_work()?;
+        let debit = pool.charge(work);
+        self.finish_wasm_work(&pool, before);
+        debit.map_err(|_| InterpreterError::BudgetExhausted {
+            executed: self
+                .instructions_executed
+                .saturating_add(self.native_hole_reads.get()),
+            budget: self.config.instruction_budget,
+        })
+    }
+
+    fn wasm_numeric_result(value: WasmBoundaryValue) -> Value {
+        match value {
+            WasmBoundaryValue::I32(value) => Value::Int(i64::from(value)),
+            WasmBoundaryValue::I64(value) => Value::BigInt(Arc::from(value.to_string())),
+            WasmBoundaryValue::F32Bits(value) => {
+                Value::Float(Float64::new(f64::from(f32::from_bits(value))))
+            }
+            WasmBoundaryValue::F64Bits(value) => Value::Float(Float64::new(f64::from_bits(value))),
+        }
+    }
+
+    /// Exported Wasm functions return undefined, one primitive, or a fresh
+    /// ordinary Array for multiple results. Build directly from the native
+    /// result iterator: the invocation reservation already owns those values,
+    /// and each published array property uses ordinary heap admission.
+    fn wasm_export_result(
+        &mut self,
+        results: Vec<WasmBoundaryValue>,
+        label: &Label,
+    ) -> Result<Value, InterpreterError> {
+        let length = results.len();
+        let mut values = results.into_iter();
+        match length {
+            0 => Ok(Value::Undefined),
+            1 => Ok(Self::wasm_numeric_result(values.next().expect("one result"))),
+            _ => {
+                // Projection is native work too; a large result signature
+                // must not turn one JS call into unmetered array construction.
+                self.charge_wasm_boundary_work(length as u64)?;
+                let array = self.alloc_array_with_length(length as u64)?;
+                self.join_object_mutation_label(array, label)?;
+                for (index, value) in values.enumerate() {
+                    self.set_object_property(
+                        array,
+                        index.to_string(),
+                        Self::wasm_numeric_result(value),
+                    )?;
+                }
+                Ok(Value::Object(array))
+            }
+        }
+    }
+
     fn wasm_execution_error(&mut self, error: WasmNumericVmError) -> InterpreterError {
         match error {
             WasmNumericVmError::InstructionBudgetExceeded { .. }
@@ -310,16 +365,12 @@ impl InterpreterCore {
                     let signature = vm
                         .export_signature(name)
                         .map_err(|error| Self::wasm_load_error(resolved, error))?;
-                    if signature.results.len() > 1 {
+                    if signature.params.len() > MAX_LIVE_VALUES
+                        || signature.results.len() > MAX_LIVE_VALUES
+                    {
                         return Err(Self::wasm_load_error(
                             resolved,
-                            "multiple-result JS exports are not yet supported",
-                        ));
-                    }
-                    if signature.params.len() > MAX_LIVE_VALUES {
-                        return Err(Self::wasm_load_error(
-                            resolved,
-                            "export parameters exceed the activation budget",
+                            "export signature exceeds the activation budget",
                         ));
                     }
                     let signature = Arc::new(signature);
@@ -487,15 +538,7 @@ impl InterpreterCore {
                         let Value::BigInt(digits) = self.coerce_to_bigint(primitive)? else {
                             unreachable!("ToBigInt returns BigInt")
                         };
-                        let (pool, before) = self.prepare_wasm_work()?;
-                        let debit = pool.charge(digits.len() as u64);
-                        self.finish_wasm_work(&pool, before);
-                        debit.map_err(|_| InterpreterError::BudgetExhausted {
-                            executed: self
-                                .instructions_executed
-                                .saturating_add(self.native_hole_reads.get()),
-                            budget: self.config.instruction_budget,
-                        })?;
+                        self.charge_wasm_boundary_work(digits.len() as u64)?;
                         let text = bigint_ops::as_int_n(64, &digits).map_err(|error| {
                             self.throw_js_error("RangeError", error.message().to_string())
                         })?;
@@ -549,17 +592,7 @@ impl InterpreterCore {
                 .call_export(&export.name, &arguments);
             self.finish_wasm_work(&pool, before);
             let execution = result.map_err(|error| self.wasm_execution_error(error))?;
-            Ok(match execution.results.into_iter().next() {
-                None => Value::Undefined,
-                Some(WasmBoundaryValue::I32(value)) => Value::Int(i64::from(value)),
-                Some(WasmBoundaryValue::I64(value)) => Value::BigInt(Arc::from(value.to_string())),
-                Some(WasmBoundaryValue::F32Bits(value)) => {
-                    Value::Float(Float64::new(f64::from(f32::from_bits(value))))
-                }
-                Some(WasmBoundaryValue::F64Bits(value)) => {
-                    Value::Float(Float64::new(f64::from_bits(value)))
-                }
-            })
+            self.wasm_export_result(execution.results, &wasm.state_label.borrow())
         })();
         self.json_release_temporary(wasm.activation_bytes);
         outcome

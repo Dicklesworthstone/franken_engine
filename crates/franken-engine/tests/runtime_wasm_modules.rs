@@ -574,7 +574,7 @@ fn cancellation_is_observed_at_numeric_entry_and_is_not_a_guest_trap() {
 }
 
 #[test]
-fn host_imports_state_exports_and_multiple_results_are_explicitly_unsupported() {
+fn host_imports_and_state_exports_are_explicitly_unsupported() {
     let mut imported = b"\0asm\x01\0\0\0".to_vec();
     section(&mut imported, 1, &[1, 0x60, 0, 0]);
     section(
@@ -589,18 +589,8 @@ fn host_imports_state_exports_and_multiple_results_are_explicitly_unsupported() 
         7,
         &[1, 6, b'm', b'e', b'm', b'o', b'r', b'y', 2, 0],
     );
-    let multiple = binary(
-        &[("pair", &[], &[0x7f, 0x7f], &[0x41, 1, 0x41, 2, 0x0b])],
-        false,
-        None,
-        None,
-    );
     for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
-        for (bytes, reason) in [
-            (&imported, "host functions"),
-            (&memory, "state exports"),
-            (&multiple, "multiple-result"),
-        ] {
+        for (bytes, reason) in [(&imported, "host functions"), (&memory, "state exports")] {
             let (result, lines) = run(
                 lane,
                 "await import('./math.wasm'); console.log('unreachable');",
@@ -671,5 +661,170 @@ fn compressed_local_declarations_are_charged_before_expansion() {
             OrchestratorError::Interpreter(InterpreterError::MemoryBudgetExceeded { .. })
         ));
         assert!(lines.is_empty());
+    }
+}
+
+#[test]
+fn multiple_numeric_results_are_fresh_intrinsic_arrays_with_standard_descriptors() {
+    let types = [0x7f, 0x7e, 0x7d, 0x7c];
+    let bytes = binary(
+        &[
+            (
+                "values",
+                &types,
+                &types,
+                &[0x20, 0, 0x20, 1, 0x20, 2, 0x20, 3, 0x0b],
+            ),
+            ("nothing", &[], &[], &[0x0b]),
+            ("scalar", &[0x7f], &[0x7f], &[0x20, 0, 0x0b]),
+        ],
+        false,
+        None,
+        None,
+    );
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        assert_eq!(
+            successful_lines(
+                lane,
+                r#"
+import { values, nothing, scalar } from './math.wasm';
+const first = values(4294967295, 18446744073709551615n, -0, 3.5);
+console.log(Array.isArray(first), first instanceof Array, Object.getPrototypeOf(first) === Array.prototype, first.length);
+console.log(first[0], first[1] === -1n, Object.is(first[2], -0), first[3]);
+const second = values(1, 2n, 3, 4);
+second[0] = 100;
+console.log(first !== second, first[0], second[0], Object.keys(first).join(','));
+const element = Object.getOwnPropertyDescriptor(first, '0');
+const length = Object.getOwnPropertyDescriptor(first, 'length');
+console.log(element.writable, element.enumerable, element.configurable);
+console.log(length.writable, length.enumerable, length.configurable);
+console.log(nothing() === undefined, scalar(42));
+const IntrinsicArray = Array;
+globalThis.Array = function () { throw 'must not call a replacement constructor'; };
+const third = values(1, 2n, 3, 4);
+console.log(IntrinsicArray.isArray(third), Object.getPrototypeOf(third) === IntrinsicArray.prototype);
+"#,
+                &bytes,
+            ),
+            [
+                "true true true 4",
+                "-1 true true 3.5",
+                "true -1 100 0,1,2,3",
+                "true true true",
+                "true false false",
+                "true 42",
+                "true true",
+            ]
+        );
+    }
+}
+
+#[test]
+fn multiple_result_arrays_retain_persistent_state_labels_on_elements_and_structure() {
+    let bytes = binary(
+        &[
+            ("store", &[0x7f], &[], &[0x20, 0, 0x24, 0, 0x0b]),
+            ("pair", &[], &[0x7f, 0x7f], &[0x23, 0, 0x41, 0, 0x0b]),
+        ],
+        true,
+        None,
+        None,
+    );
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        for (expression, expected) in [
+            ("result[0]", "29"),
+            ("result[1]", "0"),
+            ("result.length", "2"),
+            ("Object.getOwnPropertyDescriptor(result, '0').value", "29"),
+        ] {
+            let source = format!(
+                "import {{ store, pair }} from './math.wasm'; store(process.env.PRIVATE_NUMBER); const result = pair(); {expression};"
+            );
+            let host = EnvironmentSnapshotHostIo::new(BTreeMap::from([(
+                "PRIVATE_NUMBER".into(),
+                "29".into(),
+            )]))
+            .unwrap();
+            let (result, _) = execute(
+                lane,
+                &source,
+                &bytes,
+                RunOptions {
+                    runtime: RuntimeConfig::default(),
+                    policy: Arc::new(AllowAllPolicy),
+                    vm_grant: true,
+                    host: Some(Arc::new(host)),
+                    cancellation: None,
+                },
+            );
+            let result = result.unwrap_or_else(|error| panic!("{lane:?}, {expression}: {error}"));
+            assert_eq!(result.execution_value, expected);
+            assert_eq!(
+                result.completion_label,
+                Label::Secret,
+                "{lane:?}, {expression}"
+            );
+        }
+    }
+}
+
+#[test]
+fn constructing_multiple_result_arrays_spends_the_shared_instruction_allowance() {
+    let mut scalar_code = vec![0x01; 1023];
+    scalar_code.extend([0x41, 1, 0x0b]);
+    let scalar = binary(
+        &[("work", &[], &[0x7f], &scalar_code)],
+        false,
+        None,
+        None,
+    );
+    let types = vec![0x7f; 1024];
+    let mut multiple_code = Vec::new();
+    for _ in 0..1024 {
+        multiple_code.extend([0x41, 1]);
+    }
+    multiple_code.push(0x0b);
+    let multiple = binary(
+        &[("work", &[], &types, &multiple_code)],
+        false,
+        None,
+        None,
+    );
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let mut runtime = RuntimeConfig::default();
+        runtime.execution.deterministic_budget = 2000;
+        runtime.execution.throughput_budget = 2000;
+        let source = "import { work } from './math.wasm'; console.log('before'); try { work(); console.log('after'); } catch (error) { console.log('caught budget'); }";
+        // Both functions execute the same number of VM instructions. The
+        // scalar control proves execution fits; publishing 1024 JS elements
+        // consumes additional work from the same allowance.
+        let (control, _) = run(
+            lane,
+            source,
+            &scalar,
+            runtime.clone(),
+            Arc::new(AllowAllPolicy),
+            true,
+        );
+        let lines: Vec<_> = control
+            .expect("scalar VM work fits the allowance")
+            .console_output
+            .into_iter()
+            .map(|line| line.message)
+            .collect();
+        assert_eq!(lines, ["before", "after"]);
+        let (result, lines) = run(
+            lane,
+            source,
+            &multiple,
+            runtime,
+            Arc::new(AllowAllPolicy),
+            true,
+        );
+        assert!(matches!(
+            result.unwrap_err().primary_error(),
+            OrchestratorError::Interpreter(InterpreterError::BudgetExhausted { .. })
+        ));
+        assert_eq!(lines, ["before"]);
     }
 }

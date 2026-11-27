@@ -1,4 +1,4 @@
-//! Fail-closed reconstruction of deterministic task queues.
+//! Fail-closed reconstruction of deterministic Promise stores and task queues.
 //!
 //! Serialized queue fields form one state machine; individually well-typed
 //! fields are not enough. Validate their relationships before exposing a
@@ -11,8 +11,54 @@ use serde::de::Error as _;
 use serde::{Deserialize, Deserializer};
 
 use super::{
-    MacrotaskLane, MacrotaskQueue, MacrotaskSource, MicrotaskQueue, MicrotaskSlots, WitnessLog,
+    MacrotaskLane, MacrotaskQueue, MacrotaskSource, MicrotaskQueue, MicrotaskSlots, PromiseHandle,
+    PromiseSlots, PromiseStore, WitnessLog,
 };
+
+impl<'de> Deserialize<'de> for PromiseStore {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename = "PromiseStore")]
+        struct Snapshot {
+            promises: PromiseSlots,
+            next_seq: u64,
+            witness: WitnessLog,
+            #[serde(default)]
+            pending_unhandled_rejections: Vec<PromiseHandle>,
+        }
+
+        let snapshot = Snapshot::deserialize(deserializer)?;
+        let allocated = u64::try_from(snapshot.promises.len()).map_err(D::Error::custom)?;
+        // GC and boundary cancellation leave vacant slots without reusing
+        // handles. Rollback removes only the last slot and rewinds next_seq.
+        if allocated > u64::from(u32::MAX) || snapshot.next_seq != allocated {
+            return Err(D::Error::custom(
+                "promise creation frontier differs from allocated slots",
+            ));
+        }
+        for index in 0..snapshot.promises.len() {
+            let Some(record) = snapshot.promises.record(index) else {
+                continue;
+            };
+            if u64::from(record.handle.0) != index as u64 || record.creation_seq != index as u64 {
+                return Err(D::Error::custom(
+                    "promise identity does not match its arena slot",
+                ));
+            }
+            if record.state.is_settled() && !record.reactions.is_empty() {
+                return Err(D::Error::custom(
+                    "settled promise retains pending reactions",
+                ));
+            }
+        }
+        Ok(Self {
+            promises: snapshot.promises,
+            next_seq: snapshot.next_seq,
+            witness: snapshot.witness,
+            pending_unhandled_rejections: snapshot.pending_unhandled_rejections,
+        })
+    }
+}
 
 impl<'de> Deserialize<'de> for MicrotaskQueue {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -118,12 +164,108 @@ impl<'de> Deserialize<'de> for MacrotaskQueue {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{EventLoop, Microtask, PromiseHandle};
+    use super::super::{EventLoop, Microtask, PromiseHandle, PromiseState, PromiseStore};
     use super::*;
     use crate::closure_model::ClosureHandle;
     use crate::ifc_artifacts::Label;
     use crate::object_model::JsValue;
     use serde_json::{Value, json};
+
+    fn promise_store() -> PromiseStore {
+        let mut store = PromiseStore::new();
+        let mut queue = MicrotaskQueue::new();
+        let source = store.create();
+        store
+            .then(source, None, None, Label::Secret, &mut queue)
+            .unwrap();
+        store
+    }
+
+    #[test]
+    fn promise_restore_preserves_sparse_handles_and_settlement_continuation() {
+        let mut original = promise_store();
+        let vacant = original.create();
+        original
+            .remove_pending_at_execution_boundary(vacant)
+            .unwrap();
+        let retained = original.create();
+        let snapshot = serde_json::to_value(&original).unwrap();
+        let mut restored: PromiseStore = serde_json::from_value(snapshot.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&restored).unwrap(), snapshot);
+        assert!(restored.get(vacant).is_err());
+        assert_eq!(restored.get(retained).unwrap().handle, retained);
+        let mut expected_jobs = MicrotaskQueue::new();
+        let mut restored_jobs = MicrotaskQueue::new();
+        for (store, queue) in [
+            (&mut original, &mut expected_jobs),
+            (&mut restored, &mut restored_jobs),
+        ] {
+            store
+                .fulfill(PromiseHandle(0), JsValue::Int(42), Label::Internal, queue)
+                .unwrap();
+            assert_eq!(store.create(), PromiseHandle(4));
+        }
+        let expected = Microtask::PromiseReaction {
+            handler: None,
+            argument: JsValue::Int(42),
+            result_promise: PromiseHandle(1),
+            label: Label::Secret,
+        };
+        assert_eq!(expected_jobs.dequeue(), Some(expected.clone()));
+        assert_eq!(restored_jobs.dequeue(), Some(expected));
+        assert_eq!(
+            serde_json::to_value(&restored).unwrap(),
+            serde_json::to_value(&original).unwrap()
+        );
+        assert_eq!(
+            restored.estimated_memory_bytes(),
+            restored.estimated_memory_bytes_by_walk()
+        );
+    }
+
+    #[test]
+    fn promise_restore_rejects_handle_aliases_and_creation_sequence_rewrites() {
+        let snapshot = serde_json::to_value(promise_store()).unwrap();
+        for (field, values) in [
+            ("handle", vec![0, 2, u64::from(u32::MAX)]),
+            ("creation_seq", vec![0, 2, u64::MAX]),
+        ] {
+            for value in values {
+                let mut invalid = snapshot.clone();
+                invalid["promises"][1][field] = json!(value);
+                assert!(
+                    serde_json::from_value::<PromiseStore>(invalid).is_err(),
+                    "accepted rewritten {field}={value} in promise slot 1"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn promise_restore_rejects_creation_frontier_rollback_and_overflow() {
+        let snapshot = serde_json::to_value(promise_store()).unwrap();
+        for next_seq in [0, 1, 3, u64::MAX] {
+            let mut invalid = snapshot.clone();
+            invalid["next_seq"] = json!(next_seq);
+            assert!(
+                serde_json::from_value::<PromiseStore>(invalid).is_err(),
+                "accepted inconsistent creation frontier {next_seq}"
+            );
+        }
+    }
+
+    #[test]
+    fn promise_restore_rejects_settled_records_with_undelivered_reactions() {
+        let snapshot = serde_json::to_value(promise_store()).unwrap();
+        for state in [
+            PromiseState::Fulfilled(JsValue::Int(1)),
+            PromiseState::Rejected(JsValue::Int(2)),
+        ] {
+            let mut invalid = snapshot.clone();
+            invalid["promises"][0]["state"] = serde_json::to_value(state).unwrap();
+            assert!(serde_json::from_value::<PromiseStore>(invalid).is_err());
+        }
+    }
 
     fn job(id: u32) -> Microtask {
         Microtask::PromiseReaction {

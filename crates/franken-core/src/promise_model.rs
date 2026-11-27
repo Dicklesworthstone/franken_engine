@@ -647,7 +647,7 @@ impl std::fmt::Display for PromiseError {
 
 /// Arena for all Promise records, providing creation, settlement, and reaction
 /// registration with full determinism guarantees.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PromiseStore {
     /// All promises, indexed by handle.
     promises: PromiseSlots,

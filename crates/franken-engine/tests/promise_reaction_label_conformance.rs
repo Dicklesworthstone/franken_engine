@@ -17,6 +17,55 @@ macro_rules! promise_label_conformance {
                 Await,
             }
 
+            #[test]
+            fn checkpoints_preserve_promise_identity_and_reject_inconsistent_state() {
+                let mut store = PromiseStore::new();
+                let mut queue = MicrotaskQueue::new();
+                let source = store.create();
+                let result = store
+                    .then(source, None, None, Label::Secret, &mut queue)
+                    .unwrap();
+                let snapshot = serde_json::to_value(&store).unwrap();
+                let mut restored: PromiseStore = serde_json::from_value(snapshot.clone()).unwrap();
+                restored
+                    .fulfill(source, JsValue::Int(42), Label::Internal, &mut queue)
+                    .unwrap();
+                assert_eq!(
+                    queue.dequeue(),
+                    Some(Microtask::PromiseReaction {
+                        handler: None,
+                        argument: JsValue::Int(42),
+                        result_promise: result,
+                        label: Label::Secret,
+                    })
+                );
+                assert_eq!(restored.create(), PromiseHandle(2));
+
+                for field in ["handle", "creation_seq"] {
+                    let mut invalid = snapshot.clone();
+                    invalid["promises"][1][field] = serde_json::json!(0);
+                    assert!(
+                        serde_json::from_value::<PromiseStore>(invalid).is_err(),
+                        "accepted aliased {field}"
+                    );
+                }
+                for frontier in [0, 1, 3, u64::MAX] {
+                    let mut invalid = snapshot.clone();
+                    invalid["next_seq"] = serde_json::json!(frontier);
+                    assert!(
+                        serde_json::from_value::<PromiseStore>(invalid).is_err(),
+                        "accepted inconsistent creation frontier {frontier}"
+                    );
+                }
+                let mut invalid = snapshot;
+                invalid["promises"][0]["state"] =
+                    serde_json::to_value(PromiseState::Fulfilled(JsValue::Int(1))).unwrap();
+                assert!(
+                    serde_json::from_value::<PromiseStore>(invalid).is_err(),
+                    "accepted settled source retaining pending reactions"
+                );
+            }
+
             fn labels() -> Vec<Label> {
                 let mut labels = Label::all_builtin().to_vec();
                 labels.extend([

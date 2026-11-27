@@ -698,21 +698,27 @@ impl InterpreterCore {
             }
             K::ArrayIncludes => {
                 let len = self.generic_length(m, o)?;
+                self.observe_scoped_callback_result()?;
                 let search = arg(self, 0)?;
                 if len == 0 {
                     return Ok(Some(Value::Bool(false)));
                 }
-                let mut k = self
+                let start = self
                     .generic_from_index(m, arg(self, 1)?, len, 0.0)?
                     .max(0.0) as u64;
+                self.observe_scoped_callback_result()?;
+                // Get on a proven ordinary hole returns undefined. Such a
+                // hole can match only an undefined search, which must visit it.
+                let mut indices =
+                    LiveArrayCursor::new(start, len, false, matches!(search, Value::Undefined));
                 let mut found = false;
-                while k < len {
+                while let Some(k) = indices.next(self, o)? {
                     let element = self.generic_get(m, o, &Self::generic_index_key(k))?;
+                    self.observe_scoped_callback_result()?;
                     if Self::generic_same_value_zero(&element, &search) {
                         found = true;
                         break;
                     }
-                    k += 1;
                 }
                 Value::Bool(found)
             }

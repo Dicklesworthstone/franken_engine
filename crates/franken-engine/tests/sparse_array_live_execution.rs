@@ -308,6 +308,54 @@ console.log(found === undefined && seen.join(',') === '0,1'
 );
 
 source_case!(
+    includes_seeks_live_properties_and_only_undefined_matches_a_hole,
+    r#"
+const n = __LENGTH__;
+const a = [];
+a.length = n;
+a[n - 1] = NaN;
+const proto = [];
+let calls = 0;
+Object.defineProperty(proto, '40000', {
+    get() { calls++; a[n - 2] = 11; return 4; }
+});
+Object.setPrototypeOf(a, proto);
+const search = Array.prototype.includes;
+const found = search.call(a, 11) && calls === 1;
+const skipped = !search.call(a, 4, 40001) && calls === 1;
+const like = {length: n};
+like[n - 2] = 8;
+console.log(found && skipped && search.call(a, NaN, -1)
+    && search.call(a, undefined) && !search.call(a, undefined, -1)
+    && search.call(like, 8) && !search.call(like, 8, -1));
+"#,
+    "true"
+);
+
+source_case!(
+    includes_uses_get_only_on_proxy_prototypes_and_respects_typed_array_brand,
+    r#"
+const a = [];
+a.length = __LENGTH__;
+const seen = [];
+Object.setPrototypeOf(a, new Proxy([], {
+    has() { throw new Error('unexpected HasProperty'); },
+    get(target, key, receiver) {
+        seen.push(key);
+        if (key === '2') return 9;
+        return undefined;
+    }
+}));
+const found = Array.prototype.includes.call(a, 9);
+let rejected = false;
+try { Uint8Array.prototype.includes.call(a, 9); }
+catch (error) { rejected = error instanceof TypeError; }
+console.log(found && seen.join(',') === '0,1,2' && rejected);
+"#,
+    "true"
+);
+
+source_case!(
     search_offset_coercion_occurs_before_live_index_selection,
     r#"
 const n = __LENGTH__;

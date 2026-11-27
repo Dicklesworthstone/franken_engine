@@ -46,6 +46,7 @@ fn sparse_true_arrays_reach_the_live_path_but_hole_visiting_methods_do_not() {
             K::ArrayReduceRight,
             K::ArrayIndexOf,
             K::ArrayLastIndexOf,
+            K::ArrayIncludes,
         ] {
             assert!(core.sparse_array_iteration_requires_generic(array, kind));
             // Exercise the existing true-Array dispatcher seam, not only the new
@@ -56,7 +57,6 @@ fn sparse_true_arrays_reach_the_live_path_but_hole_visiting_methods_do_not() {
             );
         }
         for kind in [
-            K::ArrayIncludes,
             K::ArrayFind,
             K::ArrayFindIndex,
             K::ArrayFindLast,

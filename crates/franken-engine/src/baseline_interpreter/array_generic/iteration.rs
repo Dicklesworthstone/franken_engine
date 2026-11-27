@@ -109,11 +109,11 @@ impl InterpreterCore {
                 | K::ArrayReduceRight
                 | K::ArrayIndexOf
                 | K::ArrayLastIndexOf
+                | K::ArrayIncludes
                 | K::ArraySliceMethod
                 | K::ArrayConcat
         ) {
-            // In particular, find-family methods and includes(undefined)
-            // observe holes; they must not inherit a skip-holes selection.
+            // Find-family callbacks must run even on holes.
             return false;
         }
         let Some(object) = self.heap.get(array.0 as usize) else {

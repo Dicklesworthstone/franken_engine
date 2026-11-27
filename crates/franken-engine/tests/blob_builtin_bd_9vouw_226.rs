@@ -58,6 +58,189 @@ fn blobs_hold_bytes_and_a_type() {
     );
 }
 
+/// BlobPart conversion follows the same observable ToString used by Node's
+/// Array.from mapper. Binary and Blob parts retain their branded byte path.
+#[test]
+fn blob_parts_observe_conversion_and_snapshot_each_yield() {
+    let source = r#"
+const log = [];
+const binary = new Uint8Array([65]);
+const existing = new Blob(['B']);
+binary.toString = function () { throw 'binary must not stringify'; };
+existing.toString = function () { throw 'blob must not stringify'; };
+function* parts() {
+  yield {
+    get toString() {
+      log.push('get');
+      return function () { log.push('toString'); binary[0] = 67; return 'é'; };
+    }
+  };
+  log.push('next');
+  yield binary;
+  yield existing;
+  yield {
+    toString() { log.push('fallback'); return {}; },
+    valueOf() { log.push('valueOf'); return 'v'; }
+  };
+  yield { [Symbol.toPrimitive](hint) { log.push(hint); return '\ud800'; } };
+}
+const blob = new Blob(parts());
+console.log(log.join(','));
+blob.text().then(text => console.log(JSON.stringify(text), blob.size));
+"#;
+    assert_eq!(
+        run(source),
+        ["get,toString,next,fallback,valueOf,string", "\"éCBv�\" 8"]
+    );
+}
+
+#[test]
+fn blob_part_conversion_closes_iterator_and_preserves_the_original_throw() {
+    let source = r#"
+for (const mode of [0, 1, 2]) {
+  const log = [];
+  const original = {};
+  let count = 0;
+  const parts = {
+    [Symbol.iterator]() { return this; },
+    next() {
+      log.push('next');
+      if (count++ > 0) return {done:true};
+      return {done:false, value:{
+        toString() { log.push('convert'); throw original; }
+      }};
+    },
+    get return() {
+      log.push('get-return');
+      if (mode === 0) throw 'return getter';
+      return function () {
+        log.push('return');
+        if (mode === 1) throw 'return call';
+        return 17;
+      };
+    }
+  };
+  try { new Blob(parts); console.log('missing throw'); }
+  catch (error) { console.log(error === original, log.join(',')); }
+}
+"#;
+    assert_eq!(
+        run(source),
+        [
+            "true next,convert,get-return",
+            "true next,convert,get-return,return",
+            "true next,convert,get-return,return",
+        ]
+    );
+}
+
+#[test]
+fn blob_step_failures_do_not_close_and_symbols_are_not_stringified() {
+    let source = r#"
+for (const stage of ['next', 'value']) {
+  const original = {};
+  let closed = 0;
+  const parts = {
+    [Symbol.iterator]() { return this; },
+    next() {
+      if (stage === 'next') throw original;
+      return {done:false, get value() { throw original; }};
+    },
+    return() { closed++; return {}; }
+  };
+  try { new Blob(parts); console.log('missing throw'); }
+  catch (error) { console.log(stage, error === original, closed); }
+}
+for (const attempt of [
+  () => new Blob([Symbol('part')]),
+  () => new Blob([], {type:Symbol('type')}),
+  () => new Blob(['abc']).slice(0, 1, Symbol('type')),
+  () => new Blob([{[Symbol.toPrimitive]() { return {}; }}])
+]) {
+  try { attempt(); console.log('symbol or object result accepted'); }
+  catch (error) { console.log(error.name); }
+}
+"#;
+    assert_eq!(
+        run(source),
+        [
+            "next true 0",
+            "value true 0",
+            "TypeError",
+            "TypeError",
+            "TypeError",
+            "TypeError",
+        ]
+    );
+}
+
+#[test]
+fn blob_mime_types_use_observable_string_conversion_and_keep_defaults() {
+    let source = r#"
+const log = [];
+const type = {
+  [Symbol.toPrimitive](hint) { log.push('type:' + hint); return 'TEXT/PLAIN'; }
+};
+const blob = new Blob(['abcd'], {type});
+const slice = blob.slice(
+  {valueOf() { log.push('start'); return 1; }},
+  {valueOf() { log.push('end'); return 3; }},
+  {toString() { log.push('slice:type'); return 'APPLICATION/X-TEST'; }}
+);
+console.log(blob.type, slice.type, slice.size, log.join(','));
+console.log(
+  JSON.stringify(new Blob([], {type:undefined}).type),
+  new Blob([], {type:{toString() { return undefined; }}}).type,
+  new Blob([], {type:null}).type,
+  JSON.stringify(new Blob([], {type:{toString() { return 'x/\ud800'; }}}).type)
+);
+const original = {};
+for (const attempt of [
+  () => new Blob([], {type:{toString() { throw original; }}}),
+  () => blob.slice(0, 1, {toString() { throw original; }})
+]) {
+  try { attempt(); console.log('missing type throw'); }
+  catch (error) { console.log(error === original); }
+}
+"#;
+    assert_eq!(
+        run(source),
+        [
+            "text/plain application/x-test 2 type:string,start,end,slice:type",
+            "\"\" undefined null \"\"",
+            "true",
+            "true",
+        ]
+    );
+}
+
+#[test]
+fn blob_string_hooks_can_reenter_construction_without_consuming_outer_bytes() {
+    let source = r#"
+const log = [];
+const blob = new Blob(['outer:', {
+  toString() {
+    const inner = new Blob(['é', new Uint8Array([65])], {
+      type: {toString() { log.push('inner:type'); return 'TEXT/PLAIN'; }}
+    });
+    log.push(inner.size + ':' + inner.type);
+    return inner.size;
+  }
+}, ':end'], {
+  type: {toString() { log.push('outer:type'); return 'APPLICATION/X-TEST'; }}
+});
+console.log(log.join(','));
+blob.text().then(text => console.log(text, blob.size, blob.type));
+"#;
+    assert_eq!(
+        run(source),
+        [
+            "inner:type,3:text/plain,outer:type",
+            "outer:3:end 11 application/x-test",
+        ]
+    );
+}
+
 /// New byte-read cases use independently checked Node 22.16.0 expectations,
 /// not a regenerated output from either native lane. The two lane names are
 /// internal native engine choices, not executions of upstream V8/QuickJS.
@@ -304,6 +487,68 @@ fn blob_and_collection_prototype_getters_preserve_secret_ifc_labels() {
             "__secret_type__",
             Value::str("text/plain"),
             Value::str("text/plain"),
+        ),
+        (
+            "blob_part_tostring_hook",
+            r#"
+                globalThis.__secretPart = '__secret_part__';
+                const b = new Blob([{ toString() { return globalThis.__secretPart; } }]);
+                b.size;
+            "#,
+            "__secret_part__",
+            Value::str("abc"),
+            Value::Int(3),
+        ),
+        (
+            "blob_part_to_primitive_hook",
+            r#"
+                globalThis.__secretPart = '__secret_part__';
+                const b = new Blob([{ [Symbol.toPrimitive]() { return globalThis.__secretPart; } }]);
+                b.size;
+            "#,
+            "__secret_part__",
+            Value::str("abc"),
+            Value::Int(3),
+        ),
+        (
+            "blob_type_tostring_hook",
+            r#"
+                globalThis.__secretType = '__secret_type__';
+                const b = new Blob(['hi'], { type: { toString() { return globalThis.__secretType; } } });
+                b.type;
+            "#,
+            "__secret_type__",
+            Value::str("TEXT/PLAIN"),
+            Value::str("text/plain"),
+        ),
+        (
+            "blob_slice_type_tostring_hook",
+            r#"
+                globalThis.__secretType = '__secret_type__';
+                const b = new Blob(['abc']);
+                b.slice(0, 1, { toString() { return globalThis.__secretType; } }).type;
+            "#,
+            "__secret_type__",
+            Value::str("TEXT/PLAIN"),
+            Value::str("text/plain"),
+        ),
+        (
+            "blob_slice_type_conversion_error_label",
+            r#"
+                globalThis.__secretType = '__secret_type__';
+                const b = new Blob(['abc']);
+                let caught = false;
+                try {
+                    b.slice(0, 1, { toString() {
+                        if (globalThis.__secretType) return Symbol('invalid');
+                        return 'text/plain';
+                    } });
+                } catch (error) { caught = error instanceof TypeError; }
+                caught;
+            "#,
+            "__secret_type__",
+            Value::Bool(true),
+            Value::Bool(true),
         ),
         (
             "blob_slice_valueof_hook",

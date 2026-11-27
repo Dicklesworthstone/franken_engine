@@ -114,6 +114,9 @@ jobs:
             crates/franken-engine/src/baseline_interpreter/core_math_and_registers.rs \
             crates/franken-engine/src/baseline_interpreter/collector.rs \
             crates/franken-engine/src/baseline_interpreter/array_generic.rs \
+            crates/franken-engine/src/baseline_interpreter/blob.rs \
+            crates/franken-engine/src/baseline_interpreter/fetch.rs \
+            crates/franken-engine/src/baseline_interpreter/builtin_function_lengths.rs \
             crates/franken-engine/src/baseline_interpreter/tests_builtins_and_modules.rs \
             crates/franken-engine/src/baseline_interpreter/core_init_and_state.rs \
             crates/franken-engine/src/baseline_interpreter/core_objects_and_descriptors.rs \
@@ -125,6 +128,8 @@ jobs:
             crates/franken-engine/src/baseline_interpreter/tests_core_suite.rs \
             crates/franken-engine/src/module_resolver.rs \
             crates/franken-engine/tests/crypto_builtin_bd_2z157.rs \
+            crates/franken-engine/tests/blob_builtin_bd_9vouw_226.rs \
+            crates/franken-engine/tests/fetch_buffered.rs \
             crates/franken-engine/tests/runtime_module_resolver_execution.rs \
             crates/franken-engine/tests/fs_callbacks.rs \
             crates/franken-extension-host/src/host_io.rs \
@@ -159,6 +164,33 @@ jobs:
         run: |
           set -euo pipefail
           cargo check --locked --no-default-features -p frankenengine-engine --lib
+
+      - name: Execute native Blob and buffered Fetch regressions
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --no-default-features -p frankenengine-engine --no-fail-fast \
+            --test blob_builtin_bd_9vouw_226 \
+            --test blob_borrowed_reads \
+            --test fetch_buffered \
+            -- --nocapture --test-threads=1
+
+      - name: Verify Blob conversion memory and provenance
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --no-default-features -p frankenengine-engine --lib \
+            baseline_interpreter::blob::tests:: -- --nocapture --test-threads=1
+
+      - name: Verify Fetch body memory and provenance
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --no-default-features -p frankenengine-engine --lib \
+            baseline_interpreter::fetch::tests:: -- --nocapture --test-threads=1
 
       - name: Execute builtin, global binding, and property lookup regressions
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}

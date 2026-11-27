@@ -85,32 +85,33 @@ impl InterpreterCore {
                 });
             }
         }
-        let content_type = match self.arg_or_undefined(args, 1)? {
-            Value::Undefined | Value::Null => String::new(),
+        // The unpublished bytes remain live while option getters and string
+        // conversion run guest code, including a reentrant Blob constructor.
+        let scratch = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        self.json_reserve_temporary(scratch)?;
+        let content_type = (|| match self.arg_or_undefined(args, 1)? {
+            Value::Undefined | Value::Null => Ok(String::new()),
             options if options.is_object_like() => {
                 let key = RuntimePropertyKey::String(JsString::from("type"));
-                match self.get_v(module, &options, &key) {
-                    Ok(Value::Undefined) => String::new(),
-                    Ok(value) => normalized_blob_type(&self.value_to_string(&value)),
-                    Err(error) => {
-                        if observed_label != Label::Public {
-                            self.join_into_pending_hostcall_result_label(Some(observed_label))?;
-                        }
-                        return Err(error);
-                    }
-                }
+                let value = self.get_v(module, &options, &key)?;
+                self.blob_content_type(Some(module), value, &mut observed_label)
             }
-            other => {
+            other => Err(InterpreterError::TypeError {
+                expected: "an options object for new Blob".to_string(),
+                got: other.type_name().to_string(),
+            }),
+        })();
+        self.json_release_temporary(scratch);
+        observed_label = observed_label.join(&self.json_parse_context_label()?);
+        let content_type = match content_type {
+            Ok(content_type) => content_type,
+            Err(error) => {
                 if observed_label != Label::Public {
                     self.join_into_pending_hostcall_result_label(Some(observed_label))?;
                 }
-                return Err(InterpreterError::TypeError {
-                    expected: "an options object for new Blob".to_string(),
-                    got: other.type_name().to_string(),
-                });
+                return Err(error);
             }
         };
-        observed_label = observed_label.join(&self.json_parse_context_label()?);
         let label = self
             .join_arg_range_with_object_mutation_label(args)?
             .join(&observed_label);
@@ -122,8 +123,48 @@ impl InterpreterCore {
         Ok(Value::Object(blob))
     }
 
+    /// BlobPart strings and MIME types use observable ToString, not the
+    /// diagnostic value formatter. Capture callback provenance before the
+    /// conversion scope unwinds, including when conversion throws.
+    fn blob_string_value(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: Value,
+        observed_label: &mut Label,
+    ) -> Result<JsString, InterpreterError> {
+        let outcome = self.scoped_conversion(|core| {
+            let outcome = core.conversion_to_string(module, value);
+            *observed_label = observed_label.join(&core.json_parse_context_label()?);
+            outcome
+        });
+        if outcome.is_err() && *observed_label != Label::Public {
+            self.join_into_pending_hostcall_result_label(Some(observed_label.clone()))?;
+            if self.pending_exception.is_some() {
+                self.join_pending_exception_label(observed_label)?;
+            }
+        }
+        outcome
+    }
+
+    fn blob_content_type(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: Value,
+        observed_label: &mut Label,
+    ) -> Result<String, InterpreterError> {
+        if matches!(value, Value::Undefined) {
+            return Ok(String::new());
+        }
+        let text = self.blob_string_value(module, value, observed_label)?;
+        // Admit a rope's projection and the normalized copy before either
+        // allocation. The constructor's accumulated bytes are already charged.
+        self.check_temporary_memory_budget((text.len() as u64).saturating_mul(2))?;
+        Ok(normalized_blob_type(text.as_utf8_projection()))
+    }
+
     fn append_blob_part(
         &mut self,
+        module: Option<&Ir3Module>,
         part: &Value,
         bytes: &mut Vec<u8>,
         observed_label: &mut Label,
@@ -156,7 +197,13 @@ impl InterpreterCore {
         }
         let text = match part {
             Value::Str(text) => text.clone(),
-            other => JsString::from(self.value_to_string(other)),
+            other => {
+                let scratch = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+                self.json_reserve_temporary(scratch)?;
+                let converted = self.blob_string_value(module, other.clone(), observed_label);
+                self.json_release_temporary(scratch);
+                converted?
+            }
         };
         // The canonical projection already applies USVString's replacement
         // of lone surrogates. Borrow it instead of allocating a second UTF-8
@@ -220,11 +267,19 @@ impl InterpreterCore {
                     return Err(error);
                 }
             };
-            if let Err(error) = self.append_blob_part(&value, bytes, observed_label) {
+            if let Err(error) = self.append_blob_part(Some(module), &value, bytes, observed_label) {
                 if *observed_label != Label::Public {
                     self.join_into_pending_hostcall_result_label(Some(observed_label.clone()))?;
+                    if self.pending_exception.is_some() {
+                        self.join_pending_exception_label(observed_label)?;
+                    }
                 }
-                return Err(error);
+                // Node converts each part in Array.from's mapper. Conversion
+                // failure closes the iterator, preserving the original throw.
+                // Drop unpublished bytes before return() can reenter the VM.
+                // The shared helper never runs cleanup after a host refusal.
+                *bytes = Vec::new();
+                return self.array_from_close_after_error(Some(module), iterator, error);
             }
         }
         Ok(())
@@ -384,10 +439,8 @@ impl InterpreterCore {
                     Some(value) => Self::clamp_relative_index(Self::value_as_integer(&value), len),
                     None => len,
                 };
-                let content_type = match self.arg_or_undefined(args, 2)? {
-                    Value::Undefined => String::new(),
-                    value => normalized_blob_type(&self.value_to_string(&value)),
-                };
+                let type_value = self.arg_or_undefined(args, 2)?;
+                let content_type = self.blob_content_type(Some(module), type_value, &mut label)?;
                 label = label.join(&self.json_parse_context_label()?);
                 // Reborrow only after argument conversion. Builtin callbacks
                 // do not arm nested GC while their Rust locals are live (see
@@ -608,16 +661,47 @@ mod tests {
         let baseline = core.estimated_memory_bytes();
         core.config.max_total_memory_bytes = baseline + expected.len() as u64;
         let mut bytes = Vec::new();
+        let mut observed_label = Label::Public;
         for text in parts {
-            core.append_blob_part(&Value::Str(text), &mut bytes)
+            core.append_blob_part(None, &Value::Str(text), &mut bytes, &mut observed_label)
                 .unwrap();
         }
         assert_eq!(bytes, expected.as_bytes());
         assert!(matches!(
-            core.append_blob_part(&Value::str("x"), &mut bytes),
+            core.append_blob_part(None, &Value::str("x"), &mut bytes, &mut observed_label),
             Err(InterpreterError::MemoryBudgetExceeded { .. })
         ));
         assert_eq!(bytes, expected.as_bytes());
+    }
+
+    #[test]
+    fn string_conversion_releases_only_its_own_scratch_on_error() {
+        let mut core = core();
+        let baseline = core.estimated_memory_bytes();
+        core.json_reserve_temporary(97).unwrap();
+        let outer = core.json_parse_temporary_bytes;
+        let mut bytes = vec![65; 128];
+        let mut observed_label = Label::Public;
+        let symbol = Value::Symbol(WellKnownSymbol::Iterator.id());
+        assert!(matches!(
+            core.append_blob_part(None, &symbol, &mut bytes, &mut observed_label),
+            Err(InterpreterError::TypeError { .. })
+        ));
+        assert_eq!(bytes, vec![65; 128]);
+        assert_eq!(core.json_parse_temporary_bytes, outer);
+        assert!(core.active_inline_callback_context_label.is_none());
+        core.config.max_total_memory_bytes = baseline + outer + 127;
+        assert!(matches!(
+            core.append_blob_part(None, &Value::Int(7), &mut bytes, &mut observed_label),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(bytes, vec![65; 128]);
+        assert_eq!(core.json_parse_temporary_bytes, outer);
+        core.json_release_temporary(outer);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]

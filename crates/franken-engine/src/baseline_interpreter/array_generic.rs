@@ -718,10 +718,20 @@ impl InterpreterCore {
             }
             K::ArrayJoin => {
                 let len = self.generic_length(m, o)?;
+                self.observe_scoped_callback_result()?;
                 let separator = match arg(self, 0)? {
                     Value::Undefined => JsString::from(","),
                     other => self.generic_to_js_string(m, other)?,
                 };
+                self.observe_scoped_callback_result()?;
+                // Reentrant join still reads length and coerces its separator.
+                // Its element walk shares the ordinary Array join's ancestor
+                // set, including when a getter switches between dispatch paths.
+                if len == 0 || self.array_join_stack.contains(&o.0) {
+                    return Ok(Some(Value::str("")));
+                }
+                self.json_reserve_temporary(MEMORY_ESTIMATE_MAP_ENTRY_BYTES)?;
+                self.array_join_stack.insert(o.0);
                 let mut out = StringOutputBuffer::default();
                 let outcome = (|| {
                     for k in 0..len {
@@ -730,14 +740,18 @@ impl InterpreterCore {
                             out.push(self, &separator)?;
                         }
                         let element = self.generic_get(m, o, &Self::generic_index_key(k))?;
+                        self.observe_scoped_callback_result()?;
                         if !element.is_nullish() {
                             let text = self.generic_to_js_string(m, element)?;
+                            self.observe_scoped_callback_result()?;
                             out.push(self, &text)?;
                         }
                     }
                     out.finish(self)
                 })();
                 out.release(self);
+                self.array_join_stack.remove(&o.0);
+                self.json_release_temporary(MEMORY_ESTIMATE_MAP_ENTRY_BYTES);
                 Value::Str(outcome?)
             }
             K::ArrayReverse => {

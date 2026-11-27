@@ -28,6 +28,25 @@ var hooked = [[{ toString: function () { return "H"; } }, 4], 5];
 t("hook", function () { return hooked.join(";"); });
 var selfHook = [7]; selfHook.push({ toString: function () { return "[" + selfHook.join() + "]"; } });
 t("self-hook", function () { return selfHook.join(); });
+var trace = "";
+var separator = { toString: function () { trace += "S"; return "|"; } };
+var borrowed = {
+    get length() { trace += "L"; return 2; },
+    0: "q",
+    get 1() {
+        trace += "G";
+        if (trace.length > 9) throw Error("cycle was not stopped");
+        return { toString: function () { return Array.prototype.join.call(borrowed, separator); } };
+    }
+};
+t("borrowed", function () { return Array.prototype.join.call(borrowed, separator); });
+console.log("order", trace);
+var mixed = ["m", { toString: function () { return mixed.join(separator); } }];
+t("mixed", function () { return mixed.join(":"); });
+var recovering = { 0: { toString: function () { throw Error("borrowed boom"); } }, length: 1 };
+t("borrowed-throws", function () { return Array.prototype.join.call(recovering); });
+recovering[0] = String.fromCharCode(55296);
+t("borrowed-retry-unit", function () { return Array.prototype.join.call(recovering).charCodeAt(0); });
 "#;
 
 const EXPECTED: &[&str] = &[
@@ -39,6 +58,11 @@ const EXPECTED: &[&str] = &[
     "after-throw 1,2,3",
     "hook H,4;5",
     "self-hook 7,[]",
+    "borrowed q|",
+    "order LSGLS",
+    "mixed m:",
+    "borrowed-throws threw Error: borrowed boom",
+    "borrowed-retry-unit 55296",
 ];
 
 #[test]

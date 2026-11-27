@@ -47,6 +47,7 @@ use crate::ast::{
     BlockStatement, ExportDeclaration, ExportKind, Expression, FunctionParam, ImportClause,
     MethodDefinition, MethodKind, ObjectPatternProperty, ObjectPropertyKind, ParseGoal, SourceSpan,
     Statement, UnaryOperator, VariableDeclarationKind, annex_b_function_var_copy,
+    statement_without_labels,
 };
 use crate::capability::{APPLY_HOSTCALL_TARGET_PREFIX, hostcall_result_contract};
 use crate::effect_set::{EffectKind, EffectSet};
@@ -1916,15 +1917,12 @@ fn lower_ir0_to_ir1_on_current_stack(
         source_hoisted_bindings
             .iter()
             .cloned()
-            .chain(
-                ir0.tree
-                    .body
-                    .iter()
-                    .filter_map(|statement| match statement {
-                        Statement::FunctionDeclaration(function) => function.name.clone(),
-                        _ => None,
-                    }),
-            )
+            .chain(ir0.tree.body.iter().filter_map(|statement| {
+                match statement_without_labels(statement) {
+                    Statement::FunctionDeclaration(function) => function.name.clone(),
+                    _ => None,
+                }
+            }))
             .collect::<BTreeSet<_>>()
     } else {
         BTreeSet::new()
@@ -3376,7 +3374,7 @@ fn reserve_root_scope_bindings(
     let mut declared = BTreeSet::new();
 
     for statement in statements {
-        match statement {
+        match statement_without_labels(statement) {
             Statement::Import(import) => {
                 for binding_name in import.clause.binding_names() {
                     reserve_binding_id(binding_lookup, binding_index, binding_name);
@@ -3673,7 +3671,7 @@ fn direct_block_lexical_kinds(statements: &[Statement]) -> Vec<(String, BindingK
 fn direct_lexical_binding_names(statements: &[Statement]) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
     for statement in statements {
-        match statement {
+        match statement_without_labels(statement) {
             Statement::VariableDeclaration(declaration)
                 if matches!(
                     declaration.kind,
@@ -6135,7 +6133,7 @@ fn lower_finalizer_body_isolated(
     let saved = binding_entry_snapshot(binding_lookup, &lexical_names);
     reserve_and_mark_source_scope_bindings(&finalizer.body, binding_lookup, binding_index);
     let inner_scope = nested_statement_scope(scope_id);
-    for inner in &finalizer.body {
+    for inner in hoisted_statement_order(&finalizer.body) {
         lower_statement_to_ir1_with_flow(
             inner,
             ops,
@@ -7730,7 +7728,7 @@ fn lower_statement_to_ir1_with_flow(
                 finally_label,
             });
             let try_scope = nested_statement_scope(scope_id);
-            for inner in &tc.block.body {
+            for inner in hoisted_statement_order(&tc.block.body) {
                 lower_statement_to_ir1_with_flow(
                     inner,
                     ops,
@@ -7908,7 +7906,7 @@ fn lower_statement_to_ir1_with_flow(
                         ops.push(Ir1Op::Pop);
                     }
                     let catch_scope = nested_statement_scope(scope_id);
-                    for inner in &handler.body.body {
+                    for inner in hoisted_statement_order(&handler.body.body) {
                         lower_statement_to_ir1_with_flow(
                             inner,
                             ops,
@@ -8413,7 +8411,10 @@ fn lower_statement_to_ir1_with_flow(
                 source_text: func.source_text.clone(),
                 sloppy: !func.strict,
             });
-            ops.push(Ir1Op::Pop);
+            // A declaration has empty completion. In particular, functions
+            // instantiated on block or switch entry must not overwrite the
+            // script's last expression value merely by being created.
+            ops.push(Ir1Op::Discard);
         }
         Statement::ClassDeclaration(cls) => {
             if let Some(source_name) = &cls.name {
@@ -9012,6 +9013,40 @@ fn lower_switch_to_ir1(
         .map(|_| alloc_label(label_counter))
         .collect();
     let mut default_label = None;
+    let switch_flow = ControlFlowTargets {
+        break_label: Some(end_label),
+        continue_label: control_flow.continue_label,
+    };
+    let switch_scope = nested_statement_scope(scope_id);
+
+    // ES2020 13.12.11 / 13.2.14: every clause shares one CaseBlock
+    // environment. Instantiate all its functions after the discriminant,
+    // before evaluating any case selector, even for clauses never entered.
+    // Annex B's separate var-copy statements remain at declaration position.
+    for declaration in switch_stmt
+        .cases
+        .iter()
+        .flat_map(|case| &case.consequent)
+        .filter(|statement| {
+            matches!(
+                statement_without_labels(statement),
+                Statement::FunctionDeclaration(_)
+            )
+        })
+    {
+        lower_statement_to_ir1_with_flow(
+            declaration,
+            ops,
+            bindings,
+            binding_lookup,
+            binding_index,
+            switch_scope,
+            label_counter,
+            span_table,
+            switch_flow,
+            label_ctx,
+        )?;
+    }
 
     for (case, case_label) in switch_stmt.cases.iter().zip(case_labels.iter().copied()) {
         if let Some(test) = &case.test {
@@ -9051,14 +9086,15 @@ fn lower_switch_to_ir1(
         label_id: default_label.unwrap_or(end_label),
     });
 
-    let switch_flow = ControlFlowTargets {
-        break_label: Some(end_label),
-        continue_label: control_flow.continue_label,
-    };
-    let switch_scope = nested_statement_scope(scope_id);
     for (case, case_label) in switch_stmt.cases.iter().zip(case_labels.iter().copied()) {
         ops.push(Ir1Op::Label { id: case_label });
         for body_stmt in &case.consequent {
+            if matches!(
+                statement_without_labels(body_stmt),
+                Statement::FunctionDeclaration(_)
+            ) {
+                continue;
+            }
             lower_statement_to_ir1_with_flow(
                 body_stmt,
                 ops,

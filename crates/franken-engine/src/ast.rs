@@ -51,6 +51,17 @@ pub fn annex_b_function_var_copy(expression: &Expression) -> Option<(&str, &str)
         .then_some((target.as_str(), name.as_str()))
 }
 
+/// Inspect the statement beneath a chain of labels without crossing a block.
+/// ES2020 B.3.2 includes labelled function declarations in the enclosing
+/// statement list's declaration collection. Keep the original statement for
+/// lowering: its labels still need duplicate-label and control-flow checks.
+pub(crate) fn statement_without_labels(mut statement: &Statement) -> &Statement {
+    while let Statement::Labeled(labeled) = statement {
+        statement = &labeled.body;
+    }
+    statement
+}
+
 /// Parse-goal marker for ES2020 sources.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ParseGoal {

@@ -51,7 +51,7 @@ use crate::ast::{
     CatchClause, ExportKind, Expression, ExpressionStatement, FunctionParam, MethodDefinition,
     ObjectProperty, ObjectPropertyKind, ReturnStatement, SourceSpan, Statement, SwitchCase,
     SyntaxTree, UnaryOperator, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
-    WithStatement,
+    WithStatement, statement_without_labels,
 };
 
 /// ToObject of the `with` expression; a TypeError for null and undefined.
@@ -1012,7 +1012,7 @@ fn scope_object(names: &BTreeSet<String>, span: SourceSpan) -> Expression {
 /// classes and functions.
 pub(super) fn lexical_names(statements: &[Statement], names: &mut BTreeSet<String>) {
     for statement in statements {
-        match statement {
+        match statement_without_labels(statement) {
             Statement::VariableDeclaration(declaration)
                 if declaration.kind != VariableDeclarationKind::Var =>
             {

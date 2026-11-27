@@ -25,7 +25,7 @@ use crate::ast::{
     ObjectPatternProperty, ObjectProperty, ObjectPropertyKind, ReturnStatement, SourceSpan,
     Statement, SwitchCase, SwitchStatement, SyntaxTree, ThrowStatement, TryCatchStatement,
     UnaryOperator, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
-    WhileStatement, WithStatement,
+    WhileStatement, WithStatement, statement_without_labels,
 };
 use crate::deterministic_serde::{self, CanonicalValue};
 use crate::import_attributes::{
@@ -3942,11 +3942,10 @@ fn merge_logical_lines_with(text: &str, initial_hashbang: bool) -> Vec<LogicalLi
                 .as_ref()
                 .and_then(|segments| segments.last())
                 .map(|(_, _, previous)| *previous);
-            let module_continues_previous = result
-                .last()
-                .is_some_and(|line| !line.text.ends_with(';'))
-                && previous_last
-                    .is_some_and(|previous| module_clause_continues(previous, trimmed_line));
+            let module_continues_previous =
+                result.last().is_some_and(|line| !line.text.ends_with(';'))
+                    && previous_last
+                        .is_some_and(|previous| module_clause_continues(previous, trimmed_line));
             let block_clause_continues_previous = previous_last.is_some_and(|previous| {
                 let previous = strip_leading_labels(previous).trim_end();
                 previous.ends_with('}')
@@ -7317,11 +7316,13 @@ fn parse_primary_expression(
         return Ok(Expression::NullLiteral);
     }
     if expression == "this" {
-        return Ok(if context.strict_mode && context.this_environment != ThisEnvironment::Script {
-            Expression::This
-        } else {
-            Expression::SloppyThis
-        });
+        return Ok(
+            if context.strict_mode && context.this_environment != ThisEnvironment::Script {
+                Expression::This
+            } else {
+                Expression::SloppyThis
+            },
+        );
     }
     if expression == "super" {
         return Err(invalid_syntax_error(
@@ -13958,8 +13959,9 @@ fn with_function_strict_mode<T>(
 /// would not be an early error: no let/const/class, block function, loop
 /// head or destructured catch binding named `f` in an enclosing block or at
 /// the top of the body (a plain catch parameter is allowed, B.3.5), and `f`
-/// is not a parameter or `arguments`. Generator and async declarations stay
-/// block-scoped.
+/// is not a parameter. Generator and async declarations stay block-scoped.
+/// The `arguments` name still gets its declaration-time copy: the synthetic
+/// var reuses its existing binding without resetting the arguments object.
 ///
 /// The rewrite puts `var f;` after the body's directive prologue and, after
 /// each such declaration, `ANNEX_B_FUNCTION_VAR_PREFIX + f = f`, which the
@@ -13969,12 +13971,11 @@ fn with_function_strict_mode<T>(
 /// copied, as in Node, where the spec makes the name ineligible; a script's
 /// function becomes a script var, not a global object property.
 fn apply_annex_b_block_functions(body: &mut Vec<Statement>, params: &[FunctionParam]) {
-    let mut excluded: BTreeSet<String> = params
+    let excluded: BTreeSet<String> = params
         .iter()
         .flat_map(|param| param.pattern.binding_names())
         .map(str::to_string)
         .collect();
-    excluded.insert("arguments".to_string());
     let mut scopes = vec![annex_b_lexical_names(body.iter(), false)];
     let mut hoisted: Vec<(String, SourceSpan)> = Vec::new();
     for statement in body.iter_mut() {
@@ -14020,7 +14021,7 @@ fn annex_b_lexical_names<'a>(
 ) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
     for statement in statements {
-        match statement {
+        match statement_without_labels(statement) {
             Statement::VariableDeclaration(declaration)
                 if declaration.kind != VariableDeclarationKind::Var =>
             {
@@ -14154,7 +14155,7 @@ fn annex_b_visit_scope(
         }
         let mut index = 0;
         while index < list.len() {
-            let eligible = match &list[index] {
+            let eligible = match statement_without_labels(&list[index]) {
                 Statement::FunctionDeclaration(FunctionDeclaration {
                     name: Some(name),
                     is_async: false,
@@ -14620,11 +14621,8 @@ fn block_lexical_redeclaration<'a>(
     // Each lexically declared name, and whether every declaration of it so
     // far is a plain function declaration.
     let mut lexical: BTreeMap<&str, bool> = BTreeMap::new();
-    for mut statement in statements.clone() {
-        while let Statement::Labeled(labeled) = statement {
-            statement = &labeled.body;
-        }
-        let declared: Vec<(&str, bool)> = match statement {
+    for statement in statements.clone() {
+        let declared: Vec<(&str, bool)> = match statement_without_labels(statement) {
             Statement::FunctionDeclaration(function) => function
                 .name
                 .as_deref()

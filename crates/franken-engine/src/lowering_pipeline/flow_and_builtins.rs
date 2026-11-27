@@ -13228,8 +13228,12 @@ pub(super) fn push_constant_optimized(
 /// instantiated before any of its statements run, so they lower first (in
 /// source order), then every other statement in source order (bd-9vouw.43).
 pub(super) fn hoisted_statement_order(body: &[Statement]) -> impl Iterator<Item = &Statement> {
-    let is_function_declaration =
-        |statement: &&Statement| matches!(statement, Statement::FunctionDeclaration(_));
+    let is_function_declaration = |statement: &&Statement| {
+        matches!(
+            statement_without_labels(statement),
+            Statement::FunctionDeclaration(_)
+        )
+    };
     body.iter().filter(is_function_declaration).chain(
         body.iter()
             .filter(move |statement| !is_function_declaration(statement)),
@@ -13248,7 +13252,7 @@ pub(super) fn hoisted_statement_order(body: &[Statement]) -> impl Iterator<Item 
 pub(super) fn module_statement_order(body: &[Statement]) -> std::vec::IntoIter<&Statement> {
     let function_names: BTreeSet<&str> = body
         .iter()
-        .filter_map(|statement| match statement {
+        .filter_map(|statement| match statement_without_labels(statement) {
             Statement::FunctionDeclaration(function) => function.name.as_deref(),
             _ => None,
         })
@@ -13273,7 +13277,7 @@ pub(super) fn module_statement_order(body: &[Statement]) -> std::vec::IntoIter<&
             _ => None,
         })
         .collect();
-    let rank = |statement: &Statement| match statement {
+    let rank = |statement: &Statement| match statement_without_labels(statement) {
         Statement::FunctionDeclaration(_) => 0u8,
         // `export default function () {}` (also a generator or async
         // function) is a hoistable declaration whose binding is *default*

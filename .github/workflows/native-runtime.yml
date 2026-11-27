@@ -35,6 +35,7 @@ on:
       - 'crates/franken-engine/src/baseline_interpreter/**'
       - 'crates/franken-engine/src/lowering_pipeline.rs'
       - 'crates/franken-engine/src/lowering_pipeline/**'
+      - 'crates/franken-engine/tests/annex_b_block_functions_bd_9vouw_242.rs'
       - 'crates/franken-engine/tests/buffer_value_bd_9vouw_104.rs'
       - 'crates/franken-engine/tests/diagnostics_channel.rs'
       - 'crates/franken-engine/tests/timers_module_objects.rs'
@@ -618,12 +619,12 @@ jobs:
           cargo test --locked -j1 -p frankenengine-engine --lib \
             baseline_interpreter::regexp_ -- --nocapture --test-threads=1 \
             2>&1 | tee native-buffer-regexp-tests.log
-      - name: Execute arguments object source regressions
+      - name: Execute arguments and block function source regressions
         if: always()
         run: |
           set -euo pipefail
-          cargo test --locked -j1 -p frankenengine-engine \
-            --test arguments_object_bd_9vouw_25 \
+          cargo test --locked -j1 -p frankenengine-engine --no-fail-fast \
+            --test arguments_object_bd_9vouw_25 --test annex_b_block_functions_bd_9vouw_242 \
             -- --nocapture --test-threads=1 2>&1 | tee native-buffer-arguments-source-tests.log
       - name: Execute mapped parameter accounting and ownership regressions
         if: always()

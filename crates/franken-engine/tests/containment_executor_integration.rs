@@ -545,6 +545,141 @@ fn sandbox_revokes_network_unless_both_policy_controls_allow_it() {
 }
 
 #[test]
+fn quarantine_interrupts_all_bound_provider_sockets_without_revoking_other_tenants() {
+    use frankenengine_extension_host::host_io::{
+        HostIoCapability, HostIoError, HostIoProvider, HostIoRequest, HostIoResponse,
+        SandboxedHostIo,
+    };
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    let root = tempfile::tempdir().unwrap();
+    let mut executor = setup_executor();
+    let mut requests = Vec::new();
+    for extension_id in ["ext-001", "ext-001", "ext-002"] {
+        let provider = SandboxedHostIo::with_root(root.path())
+            .unwrap()
+            .with_network_timeout(Duration::from_secs(10))
+            .unwrap();
+        let scope = provider.network_revocation();
+        executor.register_network_revocation(extension_id, scope.clone());
+        // Reattaching the provider must not replace another live provider.
+        executor.register_network_revocation(extension_id, scope.clone());
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let endpoint = listener.local_addr().unwrap().to_string();
+        let (done, result) = mpsc::sync_channel(1);
+        let worker_provider = provider.clone();
+        let worker_endpoint = endpoint.clone();
+        let worker = std::thread::spawn(move || {
+            let outcome = worker_provider.perform(
+                &HostIoRequest::NetworkRecv {
+                    endpoint: worker_endpoint,
+                    max_len: 1,
+                },
+                &[HostIoCapability::NetworkRecv],
+            );
+            done.send(outcome).unwrap();
+        });
+        let accept_deadline = Instant::now() + Duration::from_secs(2);
+        let peer = loop {
+            match listener.accept() {
+                Ok((peer, _)) => break peer,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(Instant::now() < accept_deadline, "provider did not connect");
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => panic!("accept failed: {error}"),
+            }
+        };
+        peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        requests.push((provider, scope, listener, endpoint, peer, result, worker));
+    }
+
+    let receipt = executor
+        .execute(ContainmentAction::Quarantine, "ext-001", &test_context())
+        .unwrap();
+    assert!(receipt.verify_integrity());
+
+    for (index, (provider, scope, listener, endpoint, mut peer, result, worker)) in
+        requests.into_iter().enumerate()
+    {
+        if index < 2 {
+            // Both original sockets are still held open and have no readable
+            // bytes. Completion before their ten-second deadline must come from
+            // the live quarantine signal, not peer closure or timeout.
+            assert!(scope.is_revoked());
+            assert!(matches!(
+                result.recv_timeout(Duration::from_secs(2)).unwrap(),
+                Err(HostIoError::Denied { .. })
+            ));
+            worker.join().unwrap();
+            assert_eq!(peer.read(&mut [0; 1]).unwrap(), 0);
+            assert!(matches!(
+                provider.perform(
+                    &HostIoRequest::NetworkSend {
+                        endpoint,
+                        payload: b"forbidden".to_vec(),
+                    },
+                    &[HostIoCapability::NetworkSend],
+                ),
+                Err(HostIoError::Denied { .. })
+            ));
+            assert_eq!(
+                listener.accept().unwrap_err().kind(),
+                std::io::ErrorKind::WouldBlock
+            );
+        } else {
+            assert!(!scope.is_revoked());
+            assert!(matches!(result.try_recv(), Err(mpsc::TryRecvError::Empty)));
+            peer.write_all(b"x").unwrap();
+            peer.shutdown(std::net::Shutdown::Write).unwrap();
+            assert_eq!(
+                result.recv_timeout(Duration::from_secs(2)).unwrap(),
+                Ok(HostIoResponse::NetworkRecv { bytes: vec![b'x'] })
+            );
+            worker.join().unwrap();
+        }
+    }
+}
+
+#[test]
+fn restored_quarantine_refuses_replacement_provider_before_connecting() {
+    use frankenengine_extension_host::host_io::{
+        HostIoCapability, HostIoError, HostIoProvider, HostIoRequest, SandboxedHostIo,
+    };
+    use std::net::TcpListener;
+
+    let mut executor = setup_executor();
+    executor
+        .execute(ContainmentAction::Quarantine, "ext-001", &test_context())
+        .unwrap();
+    let encoded = serde_json::to_string(&executor).unwrap();
+    let mut restored: ContainmentExecutor = serde_json::from_str(&encoded).unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let provider = SandboxedHostIo::with_root(root.path()).unwrap();
+    restored.register_network_revocation("ext-001", provider.network_revocation());
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    assert!(matches!(
+        provider.perform(
+            &HostIoRequest::NetworkSend {
+                endpoint: listener.local_addr().unwrap().to_string(),
+                payload: b"must not leave the host".to_vec(),
+            },
+            &[HostIoCapability::NetworkSend],
+        ),
+        Err(HostIoError::Denied { .. })
+    ));
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+}
+
+#[test]
 fn sandbox_applies_policy() {
     let mut executor = setup_executor();
     let ctx = test_context();

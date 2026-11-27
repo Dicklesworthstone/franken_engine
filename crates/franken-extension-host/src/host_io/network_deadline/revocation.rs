@@ -37,6 +37,28 @@ impl NetworkRevocation {
         self.revoked.load(Ordering::Acquire)
     }
 
+    /// Whether two handles govern the same authority scope.
+    ///
+    /// Clones share a scope; independently created handles never do, even when
+    /// both are revoked. Supervisors can use this identity to register each live
+    /// scope once without exposing a mutable signal or a reset operation.
+    #[must_use]
+    pub fn same_scope(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.revoked, &other.revoked)
+    }
+
+    /// Observe whether another strong handle owns this authority scope.
+    ///
+    /// This is an ownership snapshot, not a synchronization or authorization
+    /// primitive. A supervisor that exclusively owns a private registry entry
+    /// may discard its sole handle: this API exposes no weak handles that could
+    /// resurrect a discarded scope. Shared references to this same handle are
+    /// not counted; the caller must control the registry entry exclusively.
+    #[must_use]
+    pub fn has_other_handles(&self) -> bool {
+        Arc::strong_count(&self.revoked) > 1
+    }
+
     pub(super) fn check(&self) -> io::Result<()> {
         if self.is_revoked() {
             // Not Interrupted: std I/O and TLS may automatically retry it.
@@ -98,6 +120,10 @@ mod tests {
         let signal = NetworkRevocation::default();
         let clone = signal.clone();
         let independent = NetworkRevocation::default();
+        assert!(signal.same_scope(&clone));
+        assert!(!signal.same_scope(&independent));
+        assert!(signal.has_other_handles());
+        assert!(!independent.has_other_handles());
         assert!(!signal.is_revoked());
         for _ in 0..3 {
             clone.revoke();
@@ -112,6 +138,10 @@ mod tests {
             ));
             assert!(!independent.is_revoked());
         }
+        independent.revoke();
+        assert!(!signal.same_scope(&independent));
+        drop(clone);
+        assert!(!signal.has_other_handles());
     }
 
     #[test]

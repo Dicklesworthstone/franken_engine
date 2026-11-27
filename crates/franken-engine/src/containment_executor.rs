@@ -385,7 +385,8 @@ pub struct ContainmentExecutor {
     extensions: Vec<ExtensionRecord>,
     next_receipt_id: u64,
     #[serde(skip)]
-    network_revocations: BTreeMap<String, frankenengine_extension_host::host_io::NetworkRevocation>,
+    network_revocations:
+        BTreeMap<String, Vec<frankenengine_extension_host::host_io::NetworkRevocation>>,
 }
 
 impl ContainmentExecutor {
@@ -412,13 +413,50 @@ impl ContainmentExecutor {
     /// handle to `extension_id` so containment transitions (`Sandbox` with
     /// `allow_network == false`, `Suspend`, `Terminate`, `Quarantine`) revoke
     /// live sockets and DNS waits immediately (`[RC-C2]` / `g2vrp.9`).
+    ///
+    /// Every distinct live scope remains bound: attaching another provider must
+    /// not detach an earlier provider's sockets from containment. Repeated
+    /// registration of a clone is idempotent. An already-contained extension
+    /// immediately revokes newly attached scopes, including after restoring its
+    /// serialized state; registration never grants or restores network authority.
     pub fn register_network_revocation(
         &mut self,
         extension_id: impl Into<String>,
         revocation: frankenengine_extension_host::host_io::NetworkRevocation,
     ) {
-        self.network_revocations
-            .insert(extension_id.into(), revocation);
+        let extension_id = extension_id.into();
+        let network_contained = self
+            .extensions
+            .iter()
+            .find(|extension| extension.extension_id == extension_id)
+            .is_some_and(|extension| match extension.state {
+                ContainmentState::Running | ContainmentState::Challenged => false,
+                ContainmentState::Sandboxed => extension
+                    .sandbox_policy
+                    .as_ref()
+                    .is_none_or(|policy| !policy.is_allowed("network_egress")),
+                ContainmentState::Suspended
+                | ContainmentState::Terminated
+                | ContainmentState::Quarantined => true,
+            });
+        if network_contained {
+            revocation.revoke();
+            return;
+        }
+        if revocation.is_revoked() {
+            return;
+        }
+
+        let scopes = self.network_revocations.entry(extension_id).or_default();
+        // Externally revoked scopes cannot reacquire authority. A sole private
+        // registry handle also has no provider or socket left to supervise:
+        // there are no exposed weak handles, and this exclusive registry borrow
+        // prevents cloning the entry while inspecting its ownership. Concurrent
+        // external drops can only defer pruning until the next registration.
+        scopes.retain(|scope| !scope.is_revoked() && scope.has_other_handles());
+        if !scopes.iter().any(|scope| scope.same_scope(&revocation)) {
+            scopes.push(revocation);
+        }
     }
 
     /// Get the current containment state of an extension.
@@ -523,20 +561,26 @@ impl ContainmentExecutor {
         match action {
             ContainmentAction::Sandbox => {
                 if !context.sandbox_policy.is_allowed("network_egress")
-                    && let Some(revocation) = self.network_revocations.get(extension_id)
+                    && let Some(scopes) = self.network_revocations.remove(extension_id)
                 {
-                    revocation.revoke();
+                    for revocation in scopes {
+                        revocation.revoke();
+                    }
                 }
                 ext.sandbox_policy = Some(context.sandbox_policy.clone());
             }
             ContainmentAction::Suspend | ContainmentAction::Terminate => {
-                if let Some(revocation) = self.network_revocations.get(extension_id) {
-                    revocation.revoke();
+                if let Some(scopes) = self.network_revocations.remove(extension_id) {
+                    for revocation in scopes {
+                        revocation.revoke();
+                    }
                 }
             }
             ContainmentAction::Quarantine => {
-                if let Some(revocation) = self.network_revocations.get(extension_id) {
-                    revocation.revoke();
+                if let Some(scopes) = self.network_revocations.remove(extension_id) {
+                    for revocation in scopes {
+                        revocation.revoke();
+                    }
                 }
                 // Build a content-addressed forensic snapshot from actual
                 // extension state rather than a synthetic placeholder.
@@ -2796,5 +2840,182 @@ mod tests {
             revocation.is_revoked(),
             "Sandbox with allow_network=false must revoke bound NetworkRevocation"
         );
+    }
+
+    #[test]
+    fn containment_retains_every_distinct_live_network_scope_once() {
+        use frankenengine_extension_host::host_io::NetworkRevocation;
+
+        for action in [
+            ContainmentAction::Sandbox,
+            ContainmentAction::Suspend,
+            ContainmentAction::Terminate,
+            ContainmentAction::Quarantine,
+        ] {
+            let mut executor = setup_executor();
+            let first = NetworkRevocation::default();
+            let second = NetworkRevocation::default();
+            let other = NetworkRevocation::default();
+            for _ in 0..100 {
+                executor.register_network_revocation("ext-001", first.clone());
+                executor.register_network_revocation("ext-001", second.clone());
+            }
+            executor.register_network_revocation("ext-002", other.clone());
+            assert_eq!(executor.network_revocations["ext-001"].len(), 2);
+
+            executor
+                .execute(action, "ext-001", &test_context())
+                .unwrap();
+            assert!(first.is_revoked(), "{action}: first provider escaped");
+            assert!(second.is_revoked(), "{action}: second provider escaped");
+            assert!(
+                !other.is_revoked(),
+                "{action}: unrelated tenant was revoked"
+            );
+            assert!(!executor.network_revocations.contains_key("ext-001"));
+
+            let late = NetworkRevocation::default();
+            executor.register_network_revocation("ext-001", late.clone());
+            assert!(late.is_revoked(), "{action}: late provider escaped");
+            assert!(!executor.network_revocations.contains_key("ext-001"));
+        }
+    }
+
+    #[test]
+    fn provider_rotation_discards_irreversible_revoked_scopes() {
+        use frankenengine_extension_host::host_io::NetworkRevocation;
+
+        let mut executor = setup_executor();
+        let mut current = NetworkRevocation::default();
+        executor.register_network_revocation("ext-001", current.clone());
+        for _ in 0..100 {
+            current.revoke();
+            current = NetworkRevocation::default();
+            executor.register_network_revocation("ext-001", current.clone());
+            assert_eq!(executor.network_revocations["ext-001"].len(), 1);
+        }
+        executor
+            .execute(ContainmentAction::Suspend, "ext-001", &test_context())
+            .unwrap();
+        assert!(current.is_revoked());
+        assert!(!executor.network_revocations.contains_key("ext-001"));
+
+        executor.resume("ext-001", &test_context()).unwrap();
+        executor.register_network_revocation("ext-001", current.clone());
+        assert!(!executor.network_revocations.contains_key("ext-001"));
+        let resumed = NetworkRevocation::default();
+        executor.register_network_revocation("ext-001", resumed.clone());
+        assert!(!resumed.is_revoked());
+        assert!(current.is_revoked(), "resume cannot restore old authority");
+        executor
+            .execute(ContainmentAction::Suspend, "ext-001", &test_context())
+            .unwrap();
+        assert!(resumed.is_revoked());
+    }
+
+    #[test]
+    fn provider_rotation_discards_scopes_without_external_handles() {
+        use frankenengine_extension_host::host_io::NetworkRevocation;
+
+        let mut executor = setup_executor();
+        let survivor = NetworkRevocation::default();
+        executor.register_network_revocation("ext-001", survivor.clone());
+        for _ in 0..100 {
+            // The provider has gone away without explicitly revoking its scope.
+            // Transferring the last handle leaves only the private registry owner.
+            let abandoned = NetworkRevocation::default();
+            executor.register_network_revocation("ext-001", abandoned);
+            assert_eq!(executor.network_revocations["ext-001"].len(), 2);
+        }
+        let replacement = NetworkRevocation::default();
+        executor.register_network_revocation("ext-001", replacement.clone());
+        assert_eq!(executor.network_revocations["ext-001"].len(), 2);
+        assert!(!survivor.is_revoked());
+        assert!(!replacement.is_revoked());
+        executor
+            .execute(ContainmentAction::Quarantine, "ext-001", &test_context())
+            .unwrap();
+        assert!(survivor.is_revoked());
+        assert!(replacement.is_revoked());
+    }
+
+    #[test]
+    fn restored_containment_rejects_late_network_scopes() {
+        use frankenengine_extension_host::host_io::NetworkRevocation;
+
+        for action in [
+            ContainmentAction::Sandbox,
+            ContainmentAction::Suspend,
+            ContainmentAction::Terminate,
+            ContainmentAction::Quarantine,
+        ] {
+            let mut executor = setup_executor();
+            let context = test_context();
+            let receipt = executor.execute(action, "ext-001", &context).unwrap();
+            let encoded = serde_json::to_string(&executor).unwrap();
+            let mut restored: ContainmentExecutor = serde_json::from_str(&encoded).unwrap();
+            let late = NetworkRevocation::default();
+            restored.register_network_revocation("ext-001", late.clone());
+            assert!(
+                late.is_revoked(),
+                "{action}: restored state lost containment"
+            );
+            assert!(restored.network_revocations.is_empty());
+            assert_eq!(
+                restored.execute(action, "ext-001", &context).unwrap(),
+                receipt
+            );
+        }
+    }
+
+    #[test]
+    fn late_network_registration_obeys_both_sandbox_controls() {
+        use frankenengine_extension_host::host_io::NetworkRevocation;
+
+        for listed in [false, true] {
+            for flag in [false, true] {
+                let mut executor = setup_executor();
+                let context = ContainmentContext {
+                    sandbox_policy: SandboxPolicy {
+                        allowed_capabilities: if listed {
+                            vec!["network-egress".into()]
+                        } else {
+                            Vec::new()
+                        },
+                        allow_network: flag,
+                        ..SandboxPolicy::default()
+                    },
+                    ..test_context()
+                };
+                executor
+                    .execute(ContainmentAction::Sandbox, "ext-001", &context)
+                    .unwrap();
+                let scope = NetworkRevocation::default();
+                executor.register_network_revocation("ext-001", scope.clone());
+                assert_eq!(scope.is_revoked(), !(listed && flag), "{listed}/{flag}");
+            }
+        }
+    }
+
+    #[test]
+    fn registration_before_extension_and_during_challenge_stays_supervised() {
+        use frankenengine_extension_host::host_io::NetworkRevocation;
+
+        let mut executor = ContainmentExecutor::new();
+        let before_registration = NetworkRevocation::default();
+        executor.register_network_revocation("ext-001", before_registration.clone());
+        executor.register("ext-001");
+        executor
+            .execute(ContainmentAction::Challenge, "ext-001", &test_context())
+            .unwrap();
+        let challenged = NetworkRevocation::default();
+        executor.register_network_revocation("ext-001", challenged.clone());
+        assert!(!before_registration.is_revoked());
+        assert!(!challenged.is_revoked());
+        executor
+            .execute(ContainmentAction::Quarantine, "ext-001", &test_context())
+            .unwrap();
+        assert!(before_registration.is_revoked());
+        assert!(challenged.is_revoked());
     }
 }

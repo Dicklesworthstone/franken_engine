@@ -582,92 +582,102 @@ fn encode_into(buf: &mut Vec<u8>, value: &CanonicalValue) {
 }
 
 fn encode_into_impl(buf: &mut Vec<u8>, value: &CanonicalValue) {
-    enum EncodeWork<'a> {
-        Value(&'a CanonicalValue),
-        MapKey(&'a str),
+    // A continuation per open container. Wide IR modules can contain millions
+    // of siblings; queueing them all duplicates the module's working set.
+    enum Children<'a> {
+        Array(std::slice::Iter<'a, CanonicalValue>),
+        #[cfg(not(feature = "_h4_profile"))]
+        Map(std::iter::Take<std::collections::btree_map::Iter<'a, String, CanonicalValue>>),
     }
 
-    let mut stack = vec![EncodeWork::Value(value)];
-    while let Some(work) = stack.pop() {
-        match work {
-            EncodeWork::MapKey(key) => {
-                let key_bytes = key.as_bytes();
-                let key_clamped = key_bytes.len().min(u32::MAX as usize);
-                buf.extend_from_slice(&(key_clamped as u32).to_be_bytes());
-                buf.extend_from_slice(&key_bytes[..key_clamped]);
+    let mut stack = Vec::new();
+    let mut current = value;
+    loop {
+        match current {
+            CanonicalValue::U64(v) => {
+                buf.push(TAG_U64);
+                buf.extend_from_slice(&v.to_be_bytes());
             }
-            EncodeWork::Value(current) => match current {
-                CanonicalValue::U64(v) => {
-                    buf.push(TAG_U64);
-                    buf.extend_from_slice(&v.to_be_bytes());
-                }
-                CanonicalValue::I64(v) => {
-                    buf.push(TAG_I64);
-                    buf.extend_from_slice(&v.to_be_bytes());
-                }
-                CanonicalValue::Bool(v) => {
-                    buf.push(TAG_BOOL);
-                    buf.push(if *v { 0x01 } else { 0x00 });
-                }
-                CanonicalValue::Bytes(v) => {
-                    buf.push(TAG_BYTES);
-                    #[cfg(feature = "_h4_profile")]
-                    _h4_phase_write_field_bytes(buf, v);
-                    #[cfg(not(feature = "_h4_profile"))]
-                    {
-                        // Clamp length to u32::MAX and only write that many bytes so
-                        // the encoded length prefix matches the data that follows,
-                        // preventing decode-cursor misalignment on roundtrip.
-                        let clamped = v.len().min(u32::MAX as usize);
-                        buf.extend_from_slice(&(clamped as u32).to_be_bytes());
-                        buf.extend_from_slice(&v[..clamped]);
-                    }
-                }
-                CanonicalValue::String(v) => {
-                    buf.push(TAG_STRING);
-                    #[cfg(feature = "_h4_profile")]
-                    _h4_phase_write_field_bytes(buf, v.as_bytes());
-                    #[cfg(not(feature = "_h4_profile"))]
-                    {
-                        let bytes = v.as_bytes();
-                        let clamped = bytes.len().min(u32::MAX as usize);
-                        buf.extend_from_slice(&(clamped as u32).to_be_bytes());
-                        buf.extend_from_slice(&bytes[..clamped]);
-                    }
-                }
-                CanonicalValue::Array(items) => {
-                    buf.push(TAG_ARRAY);
-                    let clamped = items.len().min(u32::MAX as usize);
+            CanonicalValue::I64(v) => {
+                buf.push(TAG_I64);
+                buf.extend_from_slice(&v.to_be_bytes());
+            }
+            CanonicalValue::Bool(v) => {
+                buf.push(TAG_BOOL);
+                buf.push(if *v { 0x01 } else { 0x00 });
+            }
+            CanonicalValue::Bytes(v) => {
+                buf.push(TAG_BYTES);
+                #[cfg(feature = "_h4_profile")]
+                _h4_phase_write_field_bytes(buf, v);
+                #[cfg(not(feature = "_h4_profile"))]
+                {
+                    // Clamp length to u32::MAX and only write that many bytes so
+                    // the encoded length prefix matches the data that follows,
+                    // preventing decode-cursor misalignment on roundtrip.
+                    let clamped = v.len().min(u32::MAX as usize);
                     buf.extend_from_slice(&(clamped as u32).to_be_bytes());
-                    for item in items[..clamped].iter().rev() {
-                        stack.push(EncodeWork::Value(item));
-                    }
+                    buf.extend_from_slice(&v[..clamped]);
                 }
-                CanonicalValue::Map(entries) => {
-                    #[cfg(feature = "_h4_profile")]
-                    _h4_phase_encode_map_entries(buf, entries);
-                    #[cfg(not(feature = "_h4_profile"))]
-                    {
-                        buf.push(TAG_MAP);
-                        // BTreeMap guarantees lexicographic ordering.
-                        let clamped = entries.len().min(u32::MAX as usize);
-                        buf.extend_from_slice(&(clamped as u32).to_be_bytes());
-                        let pairs: Vec<(&String, &CanonicalValue)> =
-                            entries.iter().take(clamped).collect();
-                        for (key, val) in pairs.into_iter().rev() {
-                            stack.push(EncodeWork::Value(val));
-                            stack.push(EncodeWork::MapKey(key.as_str()));
-                        }
-                    }
+            }
+            CanonicalValue::String(v) => {
+                buf.push(TAG_STRING);
+                #[cfg(feature = "_h4_profile")]
+                _h4_phase_write_field_bytes(buf, v.as_bytes());
+                #[cfg(not(feature = "_h4_profile"))]
+                {
+                    let bytes = v.as_bytes();
+                    let clamped = bytes.len().min(u32::MAX as usize);
+                    buf.extend_from_slice(&(clamped as u32).to_be_bytes());
+                    buf.extend_from_slice(&bytes[..clamped]);
                 }
-                CanonicalValue::Null => {
-                    buf.push(TAG_NULL);
+            }
+            CanonicalValue::Array(items) => {
+                buf.push(TAG_ARRAY);
+                let clamped = items.len().min(u32::MAX as usize);
+                buf.extend_from_slice(&(clamped as u32).to_be_bytes());
+                stack.push(Children::Array(items[..clamped].iter()));
+            }
+            CanonicalValue::Map(entries) => {
+                #[cfg(feature = "_h4_profile")]
+                _h4_phase_encode_map_entries(buf, entries);
+                #[cfg(not(feature = "_h4_profile"))]
+                {
+                    buf.push(TAG_MAP);
+                    // BTreeMap guarantees lexicographic ordering.
+                    let clamped = entries.len().min(u32::MAX as usize);
+                    buf.extend_from_slice(&(clamped as u32).to_be_bytes());
+                    stack.push(Children::Map(entries.iter().take(clamped)));
                 }
-                CanonicalValue::Float(v) => {
-                    buf.push(TAG_F64);
-                    buf.extend_from_slice(&v.to_bits().to_be_bytes());
-                }
-            },
+            }
+            CanonicalValue::Null => {
+                buf.push(TAG_NULL);
+            }
+            CanonicalValue::Float(v) => {
+                buf.push(TAG_F64);
+                buf.extend_from_slice(&v.to_bits().to_be_bytes());
+            }
+        }
+        loop {
+            let Some(children) = stack.last_mut() else {
+                return;
+            };
+            let next = match children {
+                Children::Array(items) => items.next(),
+                #[cfg(not(feature = "_h4_profile"))]
+                Children::Map(entries) => entries.next().map(|(key, value)| {
+                    let bytes = key.as_bytes();
+                    let len = bytes.len().min(u32::MAX as usize);
+                    buf.extend_from_slice(&(len as u32).to_be_bytes());
+                    buf.extend_from_slice(&bytes[..len]);
+                    value
+                }),
+            };
+            if let Some(child) = next {
+                current = child;
+                break;
+            }
+            stack.pop();
         }
     }
 }
@@ -1191,6 +1201,21 @@ mod tests {
         encode_value_into(&mut buf, &v);
         assert_eq!(buf, encode_value(&v));
         assert_eq!(decode_value(&buf).expect("decode deep nesting"), v);
+    }
+
+    #[test]
+    fn wide_containers_resume_at_the_next_sibling() {
+        let rows = (0..8192)
+            .map(|index| {
+                CanonicalValue::map_from_entries([
+                    ("z", CanonicalValue::U64(index)),
+                    ("a", CanonicalValue::Array(vec![])),
+                    ("m", CanonicalValue::Map(BTreeMap::new())),
+                ])
+            })
+            .collect();
+        let table = CanonicalValue::Array(rows);
+        assert_eq!(decode_value(&encode_value(&table)).unwrap(), table);
     }
 
     #[test]

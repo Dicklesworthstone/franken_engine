@@ -17413,22 +17413,19 @@ impl InterpreterCore {
                     self.ip += 1;
                 }
                 Ir3Instruction::PushScope => {
-                    // bd-9vouw.31: an empty frame changes only structural
-                    // bytes.
-                    let previous_scope_bytes = self.scope_chain_structural_bytes();
+                    // A fresh frame has no binding keys or cells. Adding its
+                    // slot cannot change ownership of any other frame's map.
                     #[cfg(debug_assertions)]
                     let walked_scope_before = self.scope_chain_memory_bytes();
                     self.scope_chain.push(self.config.max_scope_depth)?;
                     #[cfg(debug_assertions)]
-                    self.debug_assert_scope_swap_delta(
-                        walked_scope_before,
-                        previous_scope_bytes,
-                        0,
+                    debug_assert_eq!(
+                        self.scope_chain_memory_bytes(),
+                        walked_scope_before.saturating_add(MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES),
                     );
-                    if let Err(err) = self.apply_memory_component_delta(
-                        previous_scope_bytes,
-                        self.scope_chain_structural_bytes(),
-                    ) {
+                    if let Err(err) =
+                        self.apply_memory_component_delta(0, MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES)
+                    {
                         self.scope_chain.pop();
                         return Err(err);
                     }
@@ -17441,26 +17438,36 @@ impl InterpreterCore {
                     self.ip += 1;
                 }
                 Ir3Instruction::PopScope => {
-                    // bd-9vouw.31: structural bytes plus the popped frame's
-                    // own cells, which nothing else reaches unless captured
-                    // (cold).
-                    let previous_scope_bytes = self.scope_chain_structural_bytes();
+                    // An empty frame only releases its slot even when a
+                    // closure or caller shares its empty map. A populated
+                    // frame needs the full map/cell ownership calculation.
+                    let populated = self
+                        .scope_chain
+                        .frames
+                        .last()
+                        .is_some_and(|frame| !frame.bindings.is_empty());
+                    let structural_before = populated.then(|| self.scope_chain_structural_bytes());
                     #[cfg(debug_assertions)]
                     let walked_scope_before = self.scope_chain_memory_bytes();
                     let popped = self.scope_chain.pop();
                     if let Some(frame) = &popped {
-                        let released_cell_bytes =
-                            self.released_frame_cell_payload_bytes(std::slice::from_ref(frame));
+                        let (before, after) = if let Some(structural) = structural_before {
+                            let released =
+                                self.released_frame_cell_payload_bytes(std::slice::from_ref(frame));
+                            (
+                                structural.saturating_add(released),
+                                self.scope_chain_structural_bytes(),
+                            )
+                        } else {
+                            (MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES, 0)
+                        };
                         #[cfg(debug_assertions)]
-                        self.debug_assert_scope_swap_delta(
-                            walked_scope_before,
-                            previous_scope_bytes,
-                            released_cell_bytes,
+                        debug_assert_eq!(
+                            i128::from(self.scope_chain_memory_bytes())
+                                - i128::from(walked_scope_before),
+                            i128::from(after) - i128::from(before),
                         );
-                        self.apply_memory_component_delta(
-                            previous_scope_bytes.saturating_add(released_cell_bytes),
-                            self.scope_chain_structural_bytes(),
-                        )?;
+                        self.apply_memory_component_delta(before, after)?;
                     }
                     debug_assert!(popped.is_some() || self.scope_chain.depth() == 1);
                     self.ip += 1;

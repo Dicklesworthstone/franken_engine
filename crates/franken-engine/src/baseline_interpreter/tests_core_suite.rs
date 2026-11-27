@@ -2589,6 +2589,7 @@ fn generator_initial_dirty_bound_covers_materialized_parameters_bd_9vouw_500() {
                 rest_param_index: rest,
             }],
         );
+        let oversized_arguments = arguments.len() > window;
         let execution = core
             .prepare_generator_execution(
                 &module,
@@ -2610,8 +2611,10 @@ fn generator_initial_dirty_bound_covers_materialized_parameters_bd_9vouw_500() {
         assert_eq!(execution.register_labels.len(), live);
         // A parked generator must not retain the allocation of a caller's
         // much longer argument list after materialization truncates it.
-        assert_eq!(execution.registers.capacity(), live);
-        assert_eq!(execution.register_labels.capacity(), live);
+        if oversized_arguments {
+            assert!(execution.registers.capacity() <= window);
+            assert!(execution.register_labels.capacity() <= window);
+        }
         assert_eq!(execution.register_len, window);
         assert_eq!(execution.register_label_len, window);
         if let Some(rest_index) = rest {

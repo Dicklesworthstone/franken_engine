@@ -3715,6 +3715,44 @@ fn closure_captures_correctly_at_deep_scope_chain() {
 }
 
 #[test]
+fn empty_scope_instructions_charge_one_slot_and_roll_back_at_the_limit() {
+    let push = test_module(vec![Ir3Instruction::PushScope, Ir3Instruction::Halt]);
+    let pop = test_module(vec![Ir3Instruction::PopScope, Ir3Instruction::Halt]);
+    let mut core = quickjs_test_core();
+    core.write_reg_with_label(0, Value::Int(17), Label::Secret)
+        .expect("outer value fits");
+    let initial = core.estimated_memory_bytes();
+    let with_frame = initial + MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES;
+
+    core.config.max_total_memory_bytes = with_frame - 1;
+    assert!(matches!(
+        core.run_loop_labeled_with_compact_tier1(&push, None),
+        Err(InterpreterError::MemoryBudgetExceeded { requested_bytes, .. })
+            if requested_bytes == with_frame
+    ));
+    assert_eq!(core.scope_chain.depth(), 1);
+    assert_eq!(core.estimated_memory_bytes(), initial);
+    assert_eq!(core.recompute_estimated_memory_bytes(), initial);
+
+    core.config.max_total_memory_bytes = with_frame;
+    for (module, depth, expected_bytes) in [(&push, 2, with_frame), (&pop, 1, initial)] {
+        core.ip = 0;
+        assert!(matches!(
+            core.run_loop_labeled_with_compact_tier1(module, None),
+            Err(InterpreterError::Halted)
+        ));
+        assert_eq!(core.scope_chain.depth(), depth);
+        assert_eq!(core.estimated_memory_bytes(), expected_bytes);
+        assert_eq!(core.recompute_estimated_memory_bytes(), expected_bytes);
+        assert_eq!(core.read_reg(0).expect("outer value"), Value::Int(17));
+        assert_eq!(
+            core.get_register_label(0).expect("outer label"),
+            &Label::Secret
+        );
+    }
+}
+
+#[test]
 fn push_scope_instruction_respects_max_scope_depth() {
     let mut config = test_quickjs_config();
     config.max_scope_depth = 2;

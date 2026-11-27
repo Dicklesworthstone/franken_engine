@@ -2085,6 +2085,7 @@ impl SandboxedHostIo {
     ///
     /// # Errors
     /// `EBADF` for unknown/write-only fds; the per-operation byte cap applies.
+    /// Invalid positional spans return `EINVAL` before allocating or reading.
     pub fn read_fd(
         &self,
         fd: u64,
@@ -2110,6 +2111,9 @@ impl SandboxedHostIo {
                 ),
             });
         }
+        if let Some(position) = position {
+            fd_write::validate_position_span(position, length)?;
+        }
         self.with_fd_entry(fd, control, |entry| {
             if !entry.readable {
                 return Err(HostIoError::Fs {
@@ -2117,18 +2121,29 @@ impl SandboxedHostIo {
                     detail: format!("fd {fd} ({}) is not open for reading", entry.guest_path),
                 });
             }
-            let capacity = usize::try_from(length).unwrap_or(usize::MAX);
-            let mut buffer = vec![0u8; capacity];
+            let capacity = usize::try_from(length).map_err(|_| HostIoError::Io {
+                detail: "file read length is not representable".to_string(),
+            })?;
+            let mut buffer = Vec::new();
             let mut filled = 0usize;
-            while filled < buffer.len() {
+            while filled < capacity {
                 control.check_host()?;
-                let end = filled + (buffer.len() - filled).min(control::FILE_IO_CHUNK_BYTES);
+                let end = filled + (capacity - filled).min(control::FILE_IO_CHUNK_BYTES);
+                // Only reserve the next bounded chunk. A short file must not
+                // allocate the entire guest-supplied maximum read length.
+                buffer
+                    .try_reserve(end - buffer.len())
+                    .map_err(|_| HostIoError::Io {
+                        detail: "file read allocation failed".to_string(),
+                    })?;
+                buffer.resize(end, 0);
                 let read = if let Some(base) = position {
                     // Positional reads are pread-shaped: the fd cursor stays
                     // where sequential reads left it, matching Node.
                     #[cfg(unix)]
                     {
-                        let offset = base.saturating_add(filled as u64);
+                        // The entire span was validated before allocation.
+                        let offset = base + filled as u64;
                         std::os::unix::fs::FileExt::read_at(
                             &entry.file,
                             &mut buffer[filled..end],
@@ -2142,8 +2157,14 @@ impl SandboxedHostIo {
                     }
                 } else {
                     std::io::Read::read(&mut entry.file, &mut buffer[filled..end])
-                }
-                .map_err(|err| Self::fs_error("read", &entry.guest_path.clone(), err))?;
+                };
+                let read = match read {
+                    Ok(read) => read,
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(error) => {
+                        return Err(Self::fs_error("read", &entry.guest_path, error));
+                    }
+                };
                 if read == 0 {
                     break;
                 }
@@ -2388,6 +2409,43 @@ impl SandboxedHostIo {
             })
     }
 
+    /// Node permits exactly -1 as the current-position sentinel for reads.
+    /// All other supplied offsets use the strict shared descriptor parser;
+    /// duplicate sentinel fields must not bypass its ambiguity rejection.
+    fn fs_read_position_argument(arguments: &[String]) -> Result<Option<u64>, HostIoError> {
+        let mut positions = arguments
+            .iter()
+            .filter_map(|argument| argument.strip_prefix("position="));
+        if positions.next() == Some("-1") && positions.next().is_none() {
+            Ok(None)
+        } else {
+            fd_write::position_argument(arguments)
+        }
+    }
+
+    /// Guest overloads have already been normalized into a typed request.
+    /// A missing, malformed or duplicate length is not a zero-byte read.
+    fn fs_read_length_argument(arguments: &[String]) -> Result<u64, HostIoError> {
+        let invalid = || HostIoError::Fs {
+            code: "EINVAL".to_string(),
+            detail: "file read requires one nonnegative integer length".to_string(),
+        };
+        let mut length = None;
+        for argument in arguments {
+            let Some(value) = argument.strip_prefix("length=") else {
+                continue;
+            };
+            if length.is_some()
+                || value.is_empty()
+                || !value.bytes().all(|byte| byte.is_ascii_digit())
+            {
+                return Err(invalid());
+            }
+            length = Some(value.parse::<u64>().map_err(|_| invalid())?);
+        }
+        length.ok_or_else(invalid)
+    }
+
     fn fs_argument<'a>(arguments: &'a [String], name: &str) -> Option<&'a str> {
         arguments.iter().find_map(|argument| {
             argument
@@ -2457,11 +2515,8 @@ impl SandboxedHostIo {
             }
             FsOperation::ReadFd => {
                 let fd = Self::fs_fd_argument(arguments)?;
-                let length = Self::fs_argument(arguments, "length")
-                    .and_then(|value| value.parse::<u64>().ok())
-                    .unwrap_or(0);
-                let position = Self::fs_argument(arguments, "position")
-                    .and_then(|value| value.parse::<u64>().ok());
+                let length = Self::fs_read_length_argument(arguments)?;
+                let position = Self::fs_read_position_argument(arguments)?;
                 FsMetaResult::Bytes(self.read_fd_controlled(fd, length, position, control)?)
             }
             FsOperation::Fsync => {

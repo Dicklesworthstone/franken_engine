@@ -1,4 +1,4 @@
-//! Positioned descriptor writes preserve the shared cursor and retained authority.
+//! Descriptor offset validation and writes preserve the shared cursor and authority.
 //!
 //! The typed host request carries an optional canonical `position=` argument.
 //! Absence retains the historical sequential shape; malformed or duplicate
@@ -13,7 +13,7 @@ use super::{HostIoError, SandboxedHostIo};
 fn invalid_position() -> HostIoError {
     HostIoError::Fs {
         code: "EINVAL".to_string(),
-        detail: "file write position is invalid or outside the supported offset range".to_string(),
+        detail: "file position is invalid or outside the supported offset range".to_string(),
     }
 }
 
@@ -36,6 +36,16 @@ pub(super) fn position_argument(arguments: &[String]) -> Result<Option<u64>, Hos
         position = Some(value);
     }
     Ok(position)
+}
+
+/// Read and write offsets use the same signed OS range. Admit the complete
+/// span before allocating a buffer or performing the first descriptor effect.
+pub(super) fn validate_position_span(position: u64, length: u64) -> Result<(), HostIoError> {
+    position
+        .checked_add(length)
+        .filter(|end| *end <= i64::MAX as u64)
+        .map(|_| ())
+        .ok_or_else(invalid_position)
 }
 
 impl SandboxedHostIo {
@@ -83,10 +93,7 @@ impl SandboxedHostIo {
         if let Some(position) = position {
             // A signed offset is what the OS consumes. Validate the complete
             // span before the first write so a retry cannot wrap or fall back.
-            position
-                .checked_add(length)
-                .filter(|end| *end <= i64::MAX as u64)
-                .ok_or_else(invalid_position)?;
+            validate_position_span(position, length)?;
         }
         self.with_fd_entry(fd, control, |entry| {
             if !entry.writable {

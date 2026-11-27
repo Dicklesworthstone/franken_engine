@@ -9674,7 +9674,7 @@ impl InterpreterCore {
         } else {
             None
         };
-        let (arguments, argument_labels) = self.materialize_generator_arguments(
+        let (mut registers, mut register_labels) = self.materialize_generator_arguments(
             &func,
             invocation.arguments,
             invocation.argument_labels,
@@ -9702,21 +9702,11 @@ impl InterpreterCore {
         scope_chain.push(self.config.max_scope_depth)?;
 
         let max_registers = self.config.max_registers as usize;
-        let mut registers = vec![Value::Undefined; max_registers];
-        let mut register_labels = vec![Label::Public; max_registers];
-        // Only materialized parameters are written below. Starting at the
-        // physical window's end would make every later park scan that whole
-        // cleared tail even when the generator only uses a few registers.
-        let register_dirty_end = arguments.len().min(max_registers);
-        for (index, (value, label)) in arguments
-            .into_iter()
-            .zip(argument_labels)
-            .enumerate()
-            .take(max_registers)
-        {
-            registers[index] = value;
-            register_labels[index] = label;
-        }
+        // The parked activation owns only its materialized parameters. Install
+        // supplies the cleared tail when this generator first runs.
+        registers.truncate(max_registers);
+        register_labels.truncate(max_registers);
+        let register_dirty_end = registers.len();
 
         // A generator method's body reads `super` through its [[HomeObject]]
         // (LoadSuper takes the home object's prototype when the read runs).
@@ -10313,6 +10303,7 @@ impl InterpreterCore {
             execution.register_len,
             Value::Undefined,
         );
+        let label_prefix_len = execution.register_labels.len();
         refill_cleared_file(
             &mut register_labels,
             execution.register_labels,
@@ -10322,7 +10313,11 @@ impl InterpreterCore {
         self.registers.value = registers;
         self.registers_value_bytes
             .set(execution.registers_value_bytes);
-        self.install_register_labels(register_labels, execution.register_labels_bytes);
+        self.install_register_labels(
+            register_labels,
+            execution.register_labels_bytes,
+            label_prefix_len,
+        );
         self.register_dirty_end = execution.register_dirty_end;
         self.generator_delegation = execution.delegation;
         self.active_inline_callback_context_label = execution.active_inline_callback_context_label;

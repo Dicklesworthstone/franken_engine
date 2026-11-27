@@ -2146,6 +2146,8 @@ fn module_execution_restore_keeps_the_parked_dirty_end_bd_9vouw_500() {
     // clears only what is dirty.
     assert!(core.registers.len() >= max_registers);
     assert_eq!(core.register_dirty_end, 4);
+    assert!(!core.all_register_labels_public);
+    assert_eq!(core.get_register_label(3).unwrap(), &Label::Secret);
     assert_eq!(core.read_reg(3).expect("caller register"), Value::Int(7));
     assert_eq!(core.read_reg(5).expect("caller register"), Value::Undefined);
 
@@ -2157,6 +2159,7 @@ fn module_execution_restore_keeps_the_parked_dirty_end_bd_9vouw_500() {
     assert_eq!(core.register_dirty_end, 10);
     core.restore_module_execution(snapshot, false);
     assert_eq!(core.register_dirty_end, 4);
+    assert!(!core.all_register_labels_public);
     assert_eq!(core.read_reg(9).expect("rolled back"), Value::Undefined);
     assert_eq!(
         core.estimated_memory_bytes(),
@@ -2558,6 +2561,14 @@ fn generator_initial_dirty_bound_covers_materialized_parameters_bd_9vouw_500() {
         (
             1,
             None,
+            vec![Value::Int(7); 2048],
+            vec![Label::Public; 2048],
+            1,
+            1,
+        ),
+        (
+            1,
+            None,
             vec![Value::Int(7), Value::Int(8)],
             vec![Label::Public, Label::Secret],
             1,
@@ -2597,6 +2608,10 @@ fn generator_initial_dirty_bound_covers_materialized_parameters_bd_9vouw_500() {
         assert_eq!(execution.register_dirty_end, dirty_end);
         assert_eq!(execution.registers.len(), live);
         assert_eq!(execution.register_labels.len(), live);
+        // A parked generator must not retain the allocation of a caller's
+        // much longer argument list after materialization truncates it.
+        assert_eq!(execution.registers.capacity(), live);
+        assert_eq!(execution.register_labels.capacity(), live);
         assert_eq!(execution.register_len, window);
         assert_eq!(execution.register_label_len, window);
         if let Some(rest_index) = rest {
@@ -2605,6 +2620,14 @@ fn generator_initial_dirty_bound_covers_materialized_parameters_bd_9vouw_500() {
                 Value::Object(_)
             ));
         }
+        let all_public = execution
+            .register_labels
+            .iter()
+            .all(|label| matches!(label, Label::Public));
+        core.install_generator_execution(execution);
+        assert_eq!(core.all_register_labels_public, all_public);
+        assert_eq!(core.register_labels.len(), window);
+        assert_eq!(core.register_dirty_end, dirty_end);
     }
 }
 

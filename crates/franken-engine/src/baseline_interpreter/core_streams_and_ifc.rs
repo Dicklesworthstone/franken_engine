@@ -10260,6 +10260,7 @@ impl InterpreterCore {
         self.install_register_labels(
             snapshot.register_labels,
             Some(snapshot.register_label_bytes),
+            snapshot.register_dirty_end,
         );
         // No one writes the files while they are parked (bd-9vouw.499).
         self.register_dirty_end = snapshot.register_dirty_end;
@@ -10322,7 +10323,7 @@ impl InterpreterCore {
             r.clear();
             r.resize(max_regs, Value::Undefined);
         });
-        self.install_register_labels(vec![Label::Public; max_regs], Some(0));
+        self.install_register_labels(vec![Label::Public; max_regs], Some(0), 0);
         self.call_stack.clear(&mut self.closures.cold_cells);
         self.ip = 0;
         self.register_base = 0;

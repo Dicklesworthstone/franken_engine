@@ -11553,14 +11553,12 @@ impl GeneratorExecutionSnapshot {
             &self.register_labels,
             self.register_dirty_end,
         );
-        if live < self.registers.len() {
-            self.registers.truncate(live);
-            self.registers.shrink_to_fit();
-        }
-        if live < self.register_labels.len() {
-            self.register_labels.truncate(live);
-            self.register_labels.shrink_to_fit();
-        }
+        // Materializing fewer parameters than the caller supplied may already
+        // have shortened these vectors while retaining a large allocation.
+        self.registers.truncate(live);
+        self.registers.shrink_to_fit();
+        self.register_labels.truncate(live);
+        self.register_labels.shrink_to_fit();
     }
 }
 

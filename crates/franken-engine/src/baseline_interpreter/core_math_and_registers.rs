@@ -5044,10 +5044,18 @@ impl InterpreterCore {
 
     /// Install a whole label file whose [`Self::register_labels_memory_bytes`]
     /// is `bytes` when the caller knows it (a Public file is 0, a restored
-    /// snapshot carries its own), else `None`.
-    pub(super) fn install_register_labels(&mut self, labels: Vec<Label>, bytes: Option<u64>) {
+    /// snapshot carries its own), else `None`. Every label from `public_tail`
+    /// onwards is known Public (fresh padding or the snapshot's cleared tail).
+    pub(super) fn install_register_labels(
+        &mut self,
+        labels: Vec<Label>,
+        bytes: Option<u64>,
+        public_tail: usize,
+    ) {
         self.note_registers_written_to(labels.len());
-        self.all_register_labels_public = labels.iter().all(|label| matches!(label, Label::Public));
+        let (prefix, cleared) = labels.split_at(public_tail.min(labels.len()));
+        debug_assert!(cleared.iter().all(|label| matches!(label, Label::Public)));
+        self.all_register_labels_public = prefix.iter().all(|label| matches!(label, Label::Public));
         self.register_labels = labels;
         self.register_labels_bytes.set(bytes);
     }

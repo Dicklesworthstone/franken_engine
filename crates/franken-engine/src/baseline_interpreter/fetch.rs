@@ -1,7 +1,7 @@
 //! Buffered Fetch over the existing authorized and journaled HTTP effect.
 //!
 //! Received Response metadata, read-only header lookup, and text/json/arrayBuffer
-//! consumption. Streaming bodies, redirect following, and public
+//! and byte-view consumption. Streaming bodies, redirect following, and public
 //! Request/Response/Headers constructors are outside this implementation.
 //! Request header values are restricted to ASCII because the shared native
 //! sender frames String headers as UTF-8; received headers preserve Latin-1.
@@ -18,7 +18,7 @@ pub(super) enum NetworkRequestOutcome {
     InvalidProviderResult,
 }
 
-pub(super) const RESPONSE_METHODS: [&str; 4] = ["text", "json", "arrayBuffer", "clone"];
+pub(super) const RESPONSE_METHODS: [&str; 5] = ["text", "json", "arrayBuffer", "bytes", "clone"];
 pub(super) const HEADERS_METHODS: [&str; 3] = ["get", "has", "getSetCookie"];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -903,13 +903,27 @@ impl InterpreterCore {
             for _ in 0..bytes.len().div_ceil(64) {
                 self.json_charge_work()?;
             }
-            if method == "arrayBuffer" {
-                let buffer = self.alloc_array_buffer_object(bytes.len())?;
-                self.with_array_buffer_bytes_mut(buffer, |backing| {
-                    backing.copy_from_slice(&bytes)
-                })?;
+            if matches!(method, "arrayBuffer" | "bytes") {
+                let buffer = if method == "bytes" {
+                    self.alloc_uint8_array_from_bytes(&bytes)?
+                } else {
+                    let buffer = self.alloc_array_buffer_object(bytes.len())?;
+                    self.with_array_buffer_bytes_mut(buffer, |backing| {
+                        backing.copy_from_slice(&bytes)
+                    })?;
+                    buffer
+                };
                 self.join_object_mutation_label(buffer, label)?;
                 self.join_binary_storage_label(buffer, label)?;
+                // A byte view also exposes its backing ArrayBuffer. Preserve
+                // provenance on both objects, including an empty result.
+                let backing = self.heap[buffer.0 as usize]
+                    .typed_array
+                    .as_deref()
+                    .map(|view| view.buffer);
+                if let Some(backing) = backing {
+                    self.join_object_mutation_label(backing, label)?;
+                }
                 return Ok(Value::Object(buffer));
             }
             // The existing native module-data parser removes one leading BOM.
@@ -1223,8 +1237,79 @@ mod tests {
     }
 
     #[test]
+    fn byte_body_views_keep_exact_storage_provenance_and_independent_backings() {
+        for body in [Vec::new(), vec![0, 255, 239, 187, 191, 128]] {
+            let mut core = core();
+            let original = response(&mut core, Some(body.clone()));
+            let copy = core.clone_fetch_response(original, &Label::Public).unwrap();
+            let Value::Object(view) = core
+                .consume_fetch_body(original, "bytes", &Label::Secret)
+                .unwrap()
+            else {
+                panic!("Uint8Array result");
+            };
+            let backing = core.heap[view.0 as usize]
+                .typed_array
+                .as_deref()
+                .unwrap()
+                .clone();
+            assert_eq!(backing.kind, TypedArrayKind::Uint8);
+            assert_eq!(backing.byte_offset, 0);
+            assert_eq!(backing.byte_length, body.len());
+            assert_eq!(
+                core.text_codec_input_bytes(&Value::Object(view)).unwrap(),
+                body
+            );
+            assert_eq!(core.object_mutation_labels.get(&view), Some(&Label::Secret));
+            assert_eq!(
+                core.object_mutation_labels.get(&backing.buffer),
+                Some(&Label::Secret)
+            );
+            assert_eq!(core.binary_storage_label_ref(view), Some(&Label::Secret));
+            core.with_array_buffer_bytes_mut(backing.buffer, |bytes| bytes.fill(7))
+                .unwrap();
+            assert_eq!(
+                core.heap[copy.0 as usize]
+                    .fetch_response_slots()
+                    .unwrap()
+                    .body
+                    .as_ref()
+                    .unwrap(),
+                &body
+            );
+            assert!(matches!(
+                core.consume_fetch_body(original, "bytes", &Label::Public),
+                Err(InterpreterError::TypeError { .. })
+            ));
+            assert_balanced(&core);
+        }
+    }
+
+    #[test]
+    fn byte_body_admission_precedes_disturbance_and_preserves_outer_scratch() {
+        let mut core = core();
+        let id = response(&mut core, Some(vec![42; 4096]));
+        core.json_reserve_temporary(97).unwrap();
+        let baseline = core.estimated_memory_bytes();
+        let objects = core.heap.len();
+        core.config.max_total_memory_bytes = baseline + 4095;
+        assert!(matches!(
+            core.consume_fetch_body(id, "bytes", &Label::Public),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.heap.len(), objects);
+        assert_eq!(
+            core.fetch_response_getter(id, "bodyUsed").unwrap(),
+            Value::Bool(false)
+        );
+        assert_eq!(core.json_parse_temporary_bytes, 97);
+        core.json_release_temporary(97);
+        assert_balanced(&core);
+    }
+
+    #[test]
     fn native_body_methods_publish_private_promise_settlement_labels() {
-        for method in ["text", "json", "arrayBuffer"] {
+        for method in ["text", "json", "arrayBuffer", "bytes"] {
             let mut core = core();
             let id = response(&mut core, Some(br#"{"answer":42}"#.to_vec()));
             core.seed_register(11, Value::Object(id)).unwrap();

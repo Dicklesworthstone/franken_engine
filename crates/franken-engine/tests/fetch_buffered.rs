@@ -254,6 +254,69 @@ fn binary_body_is_exact_while_text_strips_one_bom_and_replaces_invalid_utf8() {
 }
 
 #[test]
+fn byte_body_method_returns_an_independent_exact_uint8_array() {
+    let run = run_case(
+        r#"
+        fetch('http://example.test/bytes').then(async response => {
+            const copy = response.clone();
+            const read = response.bytes;
+            console.log(read.name, read.length, response.bodyUsed);
+            const pending = read.call(response);
+            console.log(pending instanceof Promise, response.bodyUsed, copy.bodyUsed);
+            const bytes = await pending;
+            console.log(bytes instanceof Uint8Array, bytes.byteOffset, bytes.byteLength);
+            console.log(Array.from(bytes).join(','));
+            bytes.fill(7);
+            console.log(Array.from(new Uint8Array(await copy.arrayBuffer())).join(','));
+            try { await response.bytes(); } catch (error) { console.log(error.name); }
+            try { response.clone(); } catch (error) { console.log(error.name); }
+            const invalid = read.call({});
+            console.log(invalid instanceof Promise);
+            try { await invalid; } catch (error) { console.log(error.name); }
+        });
+    "#,
+        response(200, "", &[0, 255, 239, 187, 191, 128]),
+    );
+    assert_eq!(
+        messages(&run),
+        [
+            "bytes 0 false",
+            "true true false",
+            "true 0 6",
+            "0,255,239,187,191,128",
+            "0,255,239,187,191,128",
+            "TypeError",
+            "TypeError",
+            "true",
+            "TypeError",
+        ]
+    );
+    one_recorded_request(&run);
+}
+
+#[test]
+fn byte_body_method_distinguishes_null_and_empty_bodies() {
+    for (status, init, expected) in [
+        (204, "{}", vec!["0 false", "0 false"]),
+        (200, "{method:'HEAD'}", vec!["0 false", "0 false"]),
+        (200, "{}", vec!["0 true", "TypeError true"]),
+    ] {
+        let source = format!(
+            r#"
+            fetch('http://example.test/empty', {init}).then(async response => {{
+                console.log((await response.bytes()).byteLength, response.bodyUsed);
+                try {{ console.log((await response.bytes()).byteLength, response.bodyUsed); }}
+                catch (error) {{ console.log(error.name, response.bodyUsed); }}
+            }});
+        "#
+        );
+        let run = run_case(&source, response(status, "", b""));
+        assert_eq!(messages(&run), expected);
+        one_recorded_request(&run);
+    }
+}
+
+#[test]
 fn json_decodes_one_bom_and_rejects_syntax_without_swallowing_body_used() {
     for (body, expected) in [
         (b"\xef\xbb\xbf{\"answer\":42}".as_slice(), "42 true"),

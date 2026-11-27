@@ -359,6 +359,7 @@ pub(super) const BUILTIN_FUNCTION_LENGTHS: &[(&str, &str, u8)] = &[
     ("RegExp.prototype", "test", 1),
     ("RegExp.prototype", "toString", 0),
     ("Response.prototype", "arrayBuffer", 0),
+    ("Response.prototype", "bytes", 0),
     ("Response.prototype", "clone", 0),
     ("Response.prototype", "json", 0),
     ("Response.prototype", "text", 0),

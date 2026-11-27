@@ -1,6 +1,7 @@
 use super::*;
 
 const CONSOLE_MODULE_KEY: &str = "\0franken-engine/native-console";
+const READABLE_STREAM_BRAND_KEY: &str = "\0franken-engine/readable-stream-brand";
 
 impl InterpreterCore {
     pub(super) fn allocate_readable_with_state(
@@ -9267,6 +9268,13 @@ impl InterpreterCore {
                                 &mut queued,
                             );
                         }
+                        HostObjectSlots::FetchHeadersIterator(iterator) => {
+                            Self::queue_object_id_from_value(
+                                &Value::Object(iterator.headers),
+                                &mut frontier,
+                                &mut queued,
+                            );
+                        }
                         HostObjectSlots::TimersPromisesInterval(interval) => {
                             Self::queue_object_id_from_value(
                                 &interval.value,
@@ -15396,6 +15404,34 @@ impl InterpreterCore {
         }))
     }
 
+    /// Consult only the already-loaded, private stream factory carrier.
+    /// Public constructors, prototypes and tags cannot replace this predicate.
+    pub(super) fn cached_readable_stream_brand_predicate(
+        &mut self,
+    ) -> Result<Option<Value>, InterpreterError> {
+        let Some(carrier) = self
+            .builtin_prototypes
+            .get("\0franken-engine/native-stream/web")
+            .copied()
+        else {
+            return Ok(None);
+        };
+        let key = RuntimePropertyKey::String(JsString::from(READABLE_STREAM_BRAND_KEY));
+        let predicate = self
+            .heap
+            .get(carrier.0 as usize)
+            .and_then(|object| object.own_runtime_property_value(&key))
+            .filter(Value::is_callable)
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: "cached stream factory lost its private brand predicate".to_string(),
+            })?;
+        // The factory can have been initialized under classified control.
+        // Preserve the cached reference label without invoking a public Get.
+        let label = self.own_stored_runtime_property_label(carrier, &key);
+        self.json_observe_label(label)?;
+        Ok(Some(predicate))
+    }
+
     /// Execute the existing engine-owned factories as retained CommonJS
     /// modules. Their closures keep their defining module across captured
     /// package boundaries; aliases and submodules share the parent instance.
@@ -15555,6 +15591,45 @@ impl InterpreterCore {
                 self.run_pre_allocation_hook(module, AllocKind::Object, 0)?;
                 let carrier = self.alloc_object_with_prototype(None)?;
                 self.json_store_parsed_property(carrier, JsString::from("exports"), value.clone())?;
+                if matches!(factory, NativeBuiltinModule::StreamWeb) {
+                    let Value::Object(exports) = &value else {
+                        return Err(InterpreterError::InternalError {
+                            details: "native stream factory exported a non-object".to_string(),
+                        });
+                    };
+                    let key = RuntimePropertyKey::String(JsString::from(READABLE_STREAM_BRAND_KEY));
+                    let predicate = match self
+                        .heap
+                        .get(exports.0 as usize)
+                        .and_then(|object| object.own_runtime_property_descriptor(&key))
+                    {
+                        Some(BaselineSymbolProperty::Data(predicate))
+                            if predicate.is_callable() =>
+                        {
+                            predicate
+                        }
+                        _ => {
+                            return Err(InterpreterError::InternalError {
+                                details:
+                                    "native stream factory omitted its private brand predicate"
+                                        .to_string(),
+                            });
+                        }
+                    };
+                    // Retain the authenticated closure before removing its
+                    // temporary factory export. The carrier is never public.
+                    self.json_store_parsed_property(
+                        carrier,
+                        JsString::from(READABLE_STREAM_BRAND_KEY),
+                        predicate,
+                    )?;
+                    if !self.remove_object_property(*exports, READABLE_STREAM_BRAND_KEY)? {
+                        return Err(InterpreterError::InternalError {
+                            details: "native stream brand predicate could not be hidden"
+                                .to_string(),
+                        });
+                    }
+                }
                 // These submodules retain their original objects even when
                 // a package replaces the parent's property before the first
                 // submodule load. Capture only during factory initialization;

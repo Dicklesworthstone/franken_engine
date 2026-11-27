@@ -1,16 +1,19 @@
 //! Buffered Fetch over the existing authorized and journaled HTTP effect.
 //!
-//! Received Response metadata, read-only header lookup, and text/json/arrayBuffer
-//! and byte-view consumption. Redirects reuse the authorized, journaled request
+//! Public buffered Response and Headers objects share authenticated native slots
+//! with network responses. Redirects reuse the authorized, journaled request
 //! path for each hop. Received Location and status carry the network source label,
 //! so following requires the existing IFC policy to authorize the next sink.
-//! Streaming bodies and public Request/Response/Headers constructors remain
-//! outside this implementation.
+//! Request objects and streaming bodies are not yet supported.
 //! Request header values are restricted to ASCII because the shared native
 //! sender frames String headers as UTF-8; received headers preserve Latin-1.
 //! Fetch Standard: https://fetch.spec.whatwg.org/#body-mixin
 
 use super::*;
+
+mod objects;
+
+pub(super) use objects::FetchHeadersIteratorSlots;
 
 pub(super) enum NetworkRequestOutcome {
     Response(Vec<u8>),
@@ -39,7 +42,18 @@ enum FetchResponseAction {
 }
 
 pub(super) const RESPONSE_METHODS: [&str; 5] = ["text", "json", "arrayBuffer", "bytes", "clone"];
-pub(super) const HEADERS_METHODS: [&str; 3] = ["get", "has", "getSetCookie"];
+pub(super) const HEADERS_METHODS: [&str; 10] = [
+    "get",
+    "has",
+    "getSetCookie",
+    "append",
+    "set",
+    "delete",
+    "entries",
+    "keys",
+    "values",
+    "forEach",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct FetchResponseSlots {
@@ -52,6 +66,8 @@ pub(super) struct FetchResponseSlots {
     pub body_used: bool,
     #[serde(default)]
     pub redirected: bool,
+    #[serde(default = "default_fetch_response_type")]
+    pub response_type: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -59,6 +75,16 @@ pub(super) struct FetchHeadersSlots {
     // Retain every pair, including duplicate singleton fields and Set-Cookie.
     // Fetch lookup combines fields; Node IncomingMessage filtering does not.
     pub fields: Vec<(String, String)>,
+    #[serde(default = "default_fetch_headers_immutable")]
+    pub immutable: bool,
+}
+
+fn default_fetch_response_type() -> String {
+    "basic".to_string()
+}
+
+fn default_fetch_headers_immutable() -> bool {
+    true
 }
 
 impl BuiltinFunction {
@@ -152,7 +178,15 @@ impl InterpreterCore {
                 key.clone(),
                 Value::BuiltinFunction(method),
             )?;
-            self.set_own_property_attributes(prototype, &key, NON_ENUMERABLE_DATA_ATTRIBUTES)?;
+            self.set_own_property_attributes(
+                prototype,
+                &key,
+                PropertyAttributes {
+                    writable: true,
+                    enumerable: true,
+                    configurable: true,
+                },
+            )?;
         }
         Ok(())
     }
@@ -192,21 +226,6 @@ impl InterpreterCore {
         Ok(projection.to_string())
     }
 
-    fn fetch_byte_string(
-        &mut self,
-        module: Option<&Ir3Module>,
-        value: Value,
-        scratch: &mut u64,
-    ) -> Result<String, InterpreterError> {
-        let value = self.fetch_string(module, value, scratch)?;
-        if !value.is_ascii() {
-            return Err(fetch_type_error(
-                "an ASCII request header value (Latin-1 wire values are not supported)",
-            ));
-        }
-        Ok(value)
-    }
-
     fn fetch_property(
         &mut self,
         module: Option<&Ir3Module>,
@@ -235,102 +254,10 @@ impl InterpreterCore {
         if matches!(input, Value::Undefined) {
             return Ok(Vec::new());
         }
-        self.json_observe_reachable_value(&input)?;
-        let Value::Object(id) = input else {
-            return Err(fetch_type_error("a header record or pair array"));
-        };
-        if self
-            .heap
-            .get(id.0 as usize)
-            .and_then(HeapObject::fetch_headers_slots)
-            .is_some()
-        {
-            let bytes = Self::estimate_host_object_slots_bytes(
-                self.heap[id.0 as usize]
-                    .host_slots
-                    .as_deref()
-                    .expect("header slots"),
-            );
-            self.fetch_reserve(scratch, bytes)?;
-            self.fetch_charge_bytes(usize::try_from(bytes).unwrap_or(usize::MAX))?;
-            let fields = &self.heap[id.0 as usize]
-                .fetch_headers_slots()
-                .expect("header slots")
-                .fields;
-            if fields.iter().any(|(_, value)| !value.is_ascii()) {
-                return Err(fetch_type_error(
-                    "ASCII request header values (Latin-1 wire values are not supported)",
-                ));
-            }
-            return Ok(fields.clone());
-        }
-        let is_array = self
-            .heap
-            .get(id.0 as usize)
-            .is_some_and(|object| object.is_array);
-        let keys = if is_array {
-            Vec::new()
-        } else {
-            self.proxy_own_enumerable_string_keys(module, id)?
-        };
-        let count = if is_array {
-            self.array_like_length(id)?
-        } else {
-            keys.len()
-        };
-        let key_bytes = keys.iter().fold(0u64, |bytes, key| {
-            bytes.saturating_add(Self::estimate_js_string_bytes(key))
-        });
-        self.fetch_reserve(scratch, key_bytes)?;
-        self.fetch_reserve(
-            scratch,
-            (count as u64).saturating_mul(std::mem::size_of::<(String, String)>() as u64),
-        )?;
-        let mut headers = Vec::with_capacity(count);
-        for index in 0..count {
-            self.json_charge_work()?;
-            let (name, value) = if is_array {
-                let pair = self
-                    .array_index_get(module, id, index)?
-                    .unwrap_or(Value::Undefined);
-                self.join_element_stored_label(id, index as u64)?;
-                let Value::Object(pair_id) = pair else {
-                    return Err(fetch_type_error("a two-item header pair"));
-                };
-                self.fetch_reserve(scratch, 3 * std::mem::size_of::<Value>() as u64)?;
-                self.gc_pin_network_values([Value::Object(pair_id)]);
-                if self.array_like_length(pair_id)? != 2 {
-                    return Err(fetch_type_error("a two-item header pair"));
-                }
-                let name = self
-                    .array_index_get(module, pair_id, 0)?
-                    .unwrap_or(Value::Undefined);
-                self.join_element_stored_label(pair_id, 0)?;
-                self.gc_pin_network_values([name.clone()]);
-                let name = self.fetch_byte_string(module, name, scratch)?;
-                let value = self
-                    .array_index_get(module, pair_id, 1)?
-                    .unwrap_or(Value::Undefined);
-                self.join_element_stored_label(pair_id, 1)?;
-                self.gc_pin_network_values([value.clone()]);
-                (name, value)
-            } else {
-                let key = keys[index].clone();
-                let module = module.ok_or_else(|| InterpreterError::InternalError {
-                    details: "Fetch header access requires its executing module".to_string(),
-                })?;
-                let name =
-                    self.fetch_byte_string(Some(module), Value::Str(key.clone()), scratch)?;
-                let value =
-                    self.get_v(module, &Value::Object(id), &RuntimePropertyKey::String(key))?;
-                self.fetch_reserve(scratch, std::mem::size_of::<Value>() as u64)?;
-                self.gc_pin_network_values([value.clone()]);
-                (name, value)
-            };
-            let value = self.fetch_byte_string(module, value, scratch)?;
-            headers.push((name, value));
-        }
-        Ok(headers)
+        let module = module.ok_or_else(|| InterpreterError::InternalError {
+            details: "Fetch header conversion requires its executing module".to_string(),
+        })?;
+        self.fetch_convert_headers_init(module, input, scratch)
     }
 
     fn normalize_fetch_body(
@@ -340,6 +267,12 @@ impl InterpreterCore {
         scratch: &mut u64,
     ) -> Result<Value, InterpreterError> {
         if matches!(input, Value::Undefined | Value::Null) {
+            return Ok(input);
+        }
+        if self.is_authenticated_readable_stream_body(module, &input)? {
+            // BodyInit conversion must keep stream identity through the whole
+            // init dictionary. Extraction below rejects this unsupported body
+            // only after later getters have had their required effects.
             return Ok(input);
         }
         if let Value::Object(id) = &input {
@@ -373,6 +306,11 @@ impl InterpreterCore {
             return Ok((None, None));
         }
         self.json_observe_reachable_value(&input)?;
+        if self.is_authenticated_readable_stream_body(module, &input)? {
+            return Err(fetch_type_error(
+                "a buffered Fetch body (ReadableStream bodies are not supported)",
+            ));
+        }
         if let Value::Object(id) = &input {
             if let Some(state) = self.url_search_params.get(id) {
                 // Fetch 5.2, extract step 10: serialize the native list, without
@@ -507,7 +445,10 @@ impl InterpreterCore {
                     let redirect = if matches!(redirect_value, Value::Undefined) {
                         FetchRedirectMode::Follow
                     } else {
-                        match core.fetch_string(module, redirect_value, &mut scratch)?.as_str() {
+                        match core
+                            .fetch_string(module, redirect_value, &mut scratch)?
+                            .as_str()
+                        {
                             "follow" => FetchRedirectMode::Follow,
                             "error" => FetchRedirectMode::Error,
                             "manual" => FetchRedirectMode::Manual,
@@ -551,19 +492,11 @@ impl InterpreterCore {
                             break;
                         }
                     }
-                    for (name, value) in &mut headers {
-                        core.fetch_charge_bytes(name.len().saturating_add(value.len()))?;
-                        if !http_token(name) {
-                            return Err(fetch_type_error("a valid HTTP header name"));
-                        }
-                        if value.bytes().any(|byte| matches!(byte, 0 | b'\r' | b'\n')) {
-                            return Err(fetch_type_error(
-                                "an HTTP header value without NUL or line breaks",
-                            ));
-                        }
-                        name.make_ascii_lowercase();
-                        core.fetch_reserve(&mut scratch, Self::estimate_string_bytes(value))?;
-                        *value = value.trim_matches([' ', '\t']).to_string();
+                    headers = core.fetch_fill_header_fields(headers, &mut scratch)?;
+                    if headers.iter().any(|(_, value)| !value.is_ascii()) {
+                        return Err(fetch_type_error(
+                            "ASCII request header values (Latin-1 wire values are not supported)",
+                        ));
                     }
                     let (body, content_type) =
                         core.fetch_request_body(module, body_value, &mut scratch)?;
@@ -674,8 +607,11 @@ impl InterpreterCore {
                     let request_bytes = Self::estimate_string_bytes(url.as_str())
                         .saturating_add(Self::estimate_string_bytes(&method))
                         .saturating_add(
-                            (headers.len() as u64)
-                                .saturating_mul(std::mem::size_of::<(String, String)>() as u64),
+                            (headers.len() as u64).saturating_mul(std::mem::size_of::<(
+                                String,
+                                String,
+                            )>()
+                                as u64),
                         )
                         .saturating_add(Self::saturating_sum(headers.iter().map(
                             |(name, value)| {
@@ -685,9 +621,7 @@ impl InterpreterCore {
                         )))
                         .saturating_add(body.as_ref().map_or(0, |bytes| bytes.len() as u64));
                     self.fetch_reserve(&mut scratch, request_bytes)?;
-                    self.fetch_charge_bytes(
-                        usize::try_from(request_bytes).unwrap_or(usize::MAX),
-                    )?;
+                    self.fetch_charge_bytes(usize::try_from(request_bytes).unwrap_or(usize::MAX))?;
                     let request_label = self.json_parse_context_label()?;
                     if let Err(error) = self.evaluate_sink_flow_decision(
                         "net:request",
@@ -759,8 +693,7 @@ impl InterpreterCore {
                             // another owned origin while staging the next hop.
                             let cross_origin = url.scheme() != next_url.scheme()
                                 || url.host_str() != next_url.host_str()
-                                || url.port_or_known_default()
-                                    != next_url.port_or_known_default();
+                                || url.port_or_known_default() != next_url.port_or_known_default();
                             url = next_url;
                             self.json_release_temporary(url_reserved_bytes);
                             url_reserved_bytes = reserved_bytes;
@@ -938,8 +871,10 @@ impl InterpreterCore {
                     body,
                     body_used: false,
                     redirected: redirect_count != 0,
+                    response_type: default_fetch_response_type(),
                 },
                 fields,
+                true,
                 label,
             )
             .map(|id| FetchResponseAction::Response(Value::Object(id)))
@@ -952,13 +887,14 @@ impl InterpreterCore {
         &mut self,
         mut slots: FetchResponseSlots,
         fields: Vec<(String, String)>,
+        immutable: bool,
         label: &Label,
     ) -> Result<ObjectId, InterpreterError> {
         let headers_prototype = self.ensure_builtin_prototype("Headers")?;
         let headers = self.alloc_object_with_prototype(Some(headers_prototype))?;
         self.set_host_slots(
             headers,
-            HostObjectSlots::FetchHeaders(FetchHeadersSlots { fields }),
+            HostObjectSlots::FetchHeaders(FetchHeadersSlots { fields, immutable }),
         )?;
         self.join_object_mutation_label(headers, label)?;
         let pins = self.gc_pin_network_values([Value::Object(headers)]);
@@ -1000,7 +936,12 @@ impl InterpreterCore {
             "headers" => Value::Object(slots.headers),
             "bodyUsed" => Value::Bool(slots.body_used),
             "redirected" => Value::Bool(slots.redirected),
-            "type" => Value::str("basic"),
+            "type" => {
+                self.check_temporary_memory_budget(Self::estimate_string_bytes(
+                    &slots.response_type,
+                ))?;
+                Value::str(slots.response_type.as_str())
+            }
             _ => return Err(fetch_type_error("a known Response getter")),
         })
     }
@@ -1228,7 +1169,11 @@ impl InterpreterCore {
                 .expect("header slots")
                 .fields
                 .clone();
-            self.alloc_fetch_response(slots, fields, label)
+            let immutable = self.heap[headers.0 as usize]
+                .fetch_headers_slots()
+                .expect("header slots")
+                .immutable;
+            self.alloc_fetch_response(slots, fields, immutable, label)
         })();
         self.json_release_temporary(scratch);
         result
@@ -1354,6 +1299,7 @@ impl InterpreterCore {
                 core.check_string_limit(output.encode_utf16().count())?;
                 Ok(Value::str(output))
             })();
+            let result = core.finish_fetch_object_result(result);
             core.json_release_temporary(scratch);
             result
         })
@@ -1387,8 +1333,10 @@ mod tests {
                 body,
                 body_used: false,
                 redirected: false,
+                response_type: default_fetch_response_type(),
             },
             vec![("x-test".into(), "kept alive".into())],
+            true,
             &Label::Public,
         )
         .unwrap()
@@ -1664,6 +1612,7 @@ mod tests {
         core.set_host_slots(
             headers,
             HostObjectSlots::FetchHeaders(FetchHeadersSlots {
+                immutable: true,
                 fields: (0..1024)
                     .map(|index| (format!("x-{index}"), "value".into()))
                     .collect(),

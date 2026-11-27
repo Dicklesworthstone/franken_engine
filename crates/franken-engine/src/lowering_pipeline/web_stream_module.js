@@ -1493,5 +1493,11 @@
     WritableStream: WritableStream, WritableStreamDefaultWriter: WritableStreamDefaultWriter,
     WritableStreamDefaultController: WritableStreamDefaultController,
     TransformStream: TransformStream, TransformStreamDefaultController: TransformStreamDefaultController,
-    CountQueuingStrategy: CountQueuingStrategy, ByteLengthQueuingStrategy: ByteLengthQueuingStrategy };
+    CountQueuingStrategy: CountQueuingStrategy, ByteLengthQueuingStrategy: ByteLengthQueuingStrategy,
+    // Captured and removed by the native loader before exports are exposed.
+    // The closure tests the factory's private stream state, independently of
+    // mutable prototypes, constructor bindings and Symbol.toStringTag.
+    '\u0000franken-engine/readable-stream-brand': function (value) {
+      return apply(weakGet, streams, [value]) !== undefined;
+    } };
 })()

@@ -6568,8 +6568,8 @@ impl InterpreterCore {
         let outcome = (|| {
             self.json_observe_label(self.binary_storage_label(target_id))?;
             let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-            let mut bytes =
-                self.with_gc_nested_request(vec![Value::Object(target_id)], |core| {
+            let mut bytes = self
+                .with_gc_nested_request(vec![Value::Object(target_id)], |core| {
                     core.buffer_numeric_bytes(module, format, width, value)
                 })?;
             if !little_endian {
@@ -6579,11 +6579,11 @@ impl InterpreterCore {
             // refreshed by those operations; the pre-conversion copy is stale.
             // An out-of-bounds view has length zero and uses Node's Buffer
             // range error, not TypedArray's initial receiver validation.
-            let view = self.typed_array_view_for_object(target_id)?.ok_or_else(|| {
-                InterpreterError::InternalError {
+            let view = self
+                .typed_array_view_for_object(target_id)?
+                .ok_or_else(|| InterpreterError::InternalError {
                     details: "validated Buffer lost its typed-array view".to_string(),
-                }
-            })?;
+                })?;
             let offset = self.buffer_offset_arg(args, 1, &view, width)?;
             let range = self.buffer_integer_range(&view, offset, width)?;
             let label = self.json_parse_context_label()?;
@@ -11100,8 +11100,7 @@ impl InterpreterCore {
             && match method {
                 "@@replace" => !extra.is_object_like() || extra.is_callable(),
                 "@@split" => {
-                    !extra.is_object_like()
-                        && !matches!(extra, Value::Symbol(_) | Value::BigInt(_))
+                    !extra.is_object_like() && !matches!(extra, Value::Symbol(_) | Value::BigInt(_))
                 }
                 _ => true,
             }
@@ -13389,6 +13388,9 @@ impl InterpreterCore {
                         }
                         HostObjectSlots::FetchResponse(response) => {
                             visit_child(response.headers);
+                        }
+                        HostObjectSlots::FetchHeadersIterator(iterator) => {
+                            visit_child(iterator.headers);
                         }
                         HostObjectSlots::TimersPromisesInterval(interval) => {
                             if let Value::Object(value_id) = interval.value {

@@ -588,7 +588,7 @@ impl InterpreterCore {
         Ok((selected, retained))
     }
 
-    fn json_stringify_document(
+    pub(super) fn json_stringify_document(
         &mut self,
         module: Option<&Ir3Module>,
         input: Value,

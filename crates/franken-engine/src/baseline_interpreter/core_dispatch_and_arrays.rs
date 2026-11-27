@@ -4686,7 +4686,19 @@ impl InterpreterCore {
                 self.dispatch_fetch_response_method(module, builtin, args, receiver, receiver_register)
             }
             BuiltinFunctionKind::FetchHeadersMethod => {
-                self.dispatch_fetch_headers_method(module, builtin, args, receiver, receiver_register)
+                self.dispatch_public_fetch_headers_method(
+                    module,
+                    builtin,
+                    args,
+                    receiver,
+                    receiver_register,
+                )
+            }
+            BuiltinFunctionKind::FetchResponseStatic => {
+                self.dispatch_fetch_response_static(module, builtin, args)
+            }
+            BuiltinFunctionKind::FetchHeadersIteratorNext => {
+                self.dispatch_fetch_headers_iterator_next(args, receiver, receiver_register)
             }
             // thisSymbolValue (ES2020 19.4.3.4): a wrapper object arrives here
             // already unwrapped (`this_primitive_receiver`).
@@ -16282,6 +16294,8 @@ impl InterpreterCore {
                                 self.construct_event_target_family(module, name, args)?
                             }
                             Some("Blob") => self.construct_blob(module, args)?,
+                            Some("Headers") => self.construct_fetch_headers(module, args)?,
+                            Some("Response") => self.construct_fetch_response(module, args)?,
                             Some("SharedArrayBuffer") => self.dispatch_builtin_hostcall(
                                 "builtin:SharedArrayBuffer",
                                 args,

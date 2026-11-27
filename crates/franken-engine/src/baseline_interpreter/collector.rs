@@ -1809,6 +1809,9 @@ impl InterpreterCore {
                     HostObjectSlots::FetchResponse(response) => {
                         marker.object(response.headers);
                     }
+                    HostObjectSlots::FetchHeadersIterator(iterator) => {
+                        marker.object(iterator.headers);
+                    }
                     HostObjectSlots::TimersPromisesInterval(interval) => {
                         marker.value(&interval.value);
                     }
@@ -2672,7 +2675,6 @@ mod tests {
         .collect();
         InterpreterCore::new(config, "gc-carriers")
     }
-
 
     #[test]
     fn native_array_iterator_releases_source_only_after_exhaustion() {

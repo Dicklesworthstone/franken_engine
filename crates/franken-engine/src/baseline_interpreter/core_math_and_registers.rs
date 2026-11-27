@@ -4551,7 +4551,11 @@ impl InterpreterCore {
                 (std::mem::size_of::<fetch::FetchResponseSlots>() as u64)
                     .saturating_add(Self::estimate_string_bytes(&response.status_text))
                     .saturating_add(Self::estimate_string_bytes(&response.url))
+                    .saturating_add(Self::estimate_string_bytes(&response.response_type))
                     .saturating_add(response.body.as_ref().map_or(0, |bytes| bytes.len() as u64))
+            }
+            HostObjectSlots::FetchHeadersIterator(_) => {
+                std::mem::size_of::<fetch::FetchHeadersIteratorSlots>() as u64
             }
             HostObjectSlots::FetchHeaders(headers) => headers.fields.iter().fold(
                 (std::mem::size_of::<fetch::FetchHeadersSlots>() as u64).saturating_add(
@@ -8360,12 +8364,15 @@ impl InterpreterCore {
     pub(super) fn builtin_constructor_observes_callback_labels(builtin: &BuiltinFunction) -> bool {
         builtin.kind.observes_host_effect_selection()
             || (builtin.kind == BuiltinFunctionKind::StandardConstructor
-                && Self::standard_constructor_name(builtin).ok() == Some("DataView"))
+                && matches!(
+                    Self::standard_constructor_name(builtin).ok(),
+                    Some("DataView" | "Headers" | "Response")
+                ))
     }
 
     /// Native effect factories retain constructor/new.target provenance;
-    /// DataView also retains argument conversion observations across its
-    /// prototype read and final dispatch. Both Reflect.construct and a
+    /// DataView and buffered Fetch constructors retain conversion observations
+    /// across prototype reads and final dispatch. Both Reflect.construct and a
     /// derived class's super() path use this boundary.
     pub(super) fn construct_builtin_with_new_target_and_labels(
         &mut self,
@@ -8376,13 +8383,16 @@ impl InterpreterCore {
         callee_label: &Label,
         new_target_label: &Label,
     ) -> Result<Value, InterpreterError> {
-        let is_data_view = builtin.kind == BuiltinFunctionKind::StandardConstructor
-            && Self::standard_constructor_name(builtin).ok() == Some("DataView");
+        let observes_arguments = builtin.kind == BuiltinFunctionKind::StandardConstructor
+            && matches!(
+                Self::standard_constructor_name(builtin).ok(),
+                Some("DataView" | "Headers" | "Response")
+            );
         if !Self::builtin_constructor_observes_callback_labels(builtin) {
             return self.construct_builtin_with_new_target(module, builtin, args, new_target);
         }
         self.clear_pending_hostcall_result_label();
-        let observation = if is_data_view {
+        let observation = if observes_arguments {
             let end = args.start.checked_add(args.count).ok_or(
                 InterpreterError::RegisterOutOfBounds {
                     register: args.start,
@@ -8515,6 +8525,8 @@ impl InterpreterCore {
                     self.construct_event_target_family(module, name, args)?
                 }
                 Some("Blob") => self.construct_blob(module, args)?,
+                Some("Headers") => self.construct_fetch_headers(module, args)?,
+                Some("Response") => self.construct_fetch_response(module, args)?,
                 Some("SharedArrayBuffer") => {
                     self.dispatch_builtin_hostcall("builtin:SharedArrayBuffer", args, Some(module))?
                 }
@@ -10289,6 +10301,7 @@ impl InterpreterCore {
                 Some(self.ensure_builtin_prototype(ASYNC_ITERATOR_PROTOTYPE)?)
             }
             ARRAY_ITERATOR_PROTOTYPE
+            | "Headers Iterator"
             | MAP_ITERATOR_PROTOTYPE
             | SET_ITERATOR_PROTOTYPE
             | GENERATOR_PROTOTYPE
@@ -10525,6 +10538,7 @@ impl InterpreterCore {
         self.install_iteration_prototype_members(canonical, prototype)?;
         self.install_intl_prototype_members(canonical, prototype)?;
         self.install_fetch_prototype_members(canonical, prototype)?;
+        self.install_public_fetch_prototype_members(canonical, prototype)?;
         if canonical == "Array" {
             self.install_array_unscopables(prototype)?;
         }
@@ -12595,7 +12609,9 @@ impl InterpreterCore {
         if matches!(value, Value::Undefined) {
             return Ok(None);
         }
-        let attributes = if key == "stackTraceLimit" {
+        let attributes = if key == "stackTraceLimit"
+            || (name == "Response" && matches!(key, "error" | "json" | "redirect"))
+        {
             PropertyAttributes {
                 writable: true,
                 enumerable: true,
@@ -12700,6 +12716,8 @@ impl InterpreterCore {
                 | "AbortSignal"
                 | "DOMException"
                 | "Blob"
+                | "Headers"
+                | "Response"
                 | "Iterator"
                 | TYPED_ARRAY_INTRINSIC => 0,
                 "RegExp" | "AggregateError" | "Proxy" => 2,
@@ -12707,6 +12725,14 @@ impl InterpreterCore {
                 name if TypedArrayKind::from_type_name(name).is_some() => 3,
                 _ => 1,
             }),
+            "error" | "json" | "redirect" if name == "Response" => {
+                Value::BuiltinFunction(BuiltinFunction {
+                    kind: BuiltinFunctionKind::FetchResponseStatic,
+                    module_specifier: BuiltinModuleSpecifier::from_nonempty(key),
+                    iterator_handle: None,
+                    bound_object: None,
+                })
+            }
             "poolSize" if name == "Buffer" => Value::Int(8192),
             "from" if name == "Iterator" => iterator_helpers::helper_method("Iterator.from"),
             key if name == "AbortSignal" && Self::abort_signal_static(key).is_some() => {
@@ -12856,7 +12882,9 @@ impl InterpreterCore {
                 "TypeError",
                 "Constructor Iterator requires 'new'".to_string(),
             )),
-            name if event_target::EVENT_TARGET_FAMILY.contains(&name) || name == "Blob" => {
+            name if event_target::EVENT_TARGET_FAMILY.contains(&name)
+                || matches!(name, "Blob" | "Headers" | "Response") =>
+            {
                 Err(InterpreterError::TypeError {
                     expected: format!("new {name}(...)"),
                     got: format!("Class constructor {name} cannot be invoked without 'new'"),

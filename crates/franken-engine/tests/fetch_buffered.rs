@@ -940,7 +940,11 @@ fn redirects_resolve_relative_locations_and_preserve_final_metadata_through_clon
             "#,
         ),
         Reply::Sequence(vec![
-            response(302, "Location: ../next?step=1#discarded\r\n", b"intermediate"),
+            response(
+                302,
+                "Location: ../next?step=1#discarded\r\n",
+                b"intermediate",
+            ),
             response(307, "Location: ?step=2\r\n", b"intermediate"),
             response(200, "", b"final"),
         ]),
@@ -991,7 +995,11 @@ fn redirect_statuses_rewrite_only_required_methods_and_replay_preserved_binary_b
         } else {
             "undefined"
         };
-        let framing = if has_body { ",'Content-Length':'4'" } else { "" };
+        let framing = if has_body {
+            ",'Content-Length':'4'"
+        } else {
+            ""
+        };
         let source = format!(
             "fetch('http://example.test/source', {{method:'{method}', body:{body}, \
              headers:{{'Content-Type':'application/test','Content-Language':'en', \
@@ -1029,14 +1037,19 @@ fn redirect_statuses_rewrite_only_required_methods_and_replay_preserved_binary_b
             "content-location",
         ] {
             assert_eq!(
-                head.lines().any(|line| line.starts_with(&format!("{name}:"))),
+                head.lines()
+                    .any(|line| line.starts_with(&format!("{name}:"))),
                 !rewritten,
                 "{status} {method}: {name}"
             );
         }
         if rewritten {
             assert!(!head.lines().any(|line| line == "content-length: 4"));
-            assert!(!head.lines().any(|line| line.starts_with("transfer-encoding:")));
+            assert!(
+                !head
+                    .lines()
+                    .any(|line| line.starts_with("transfer-encoding:"))
+            );
         }
     }
 }
@@ -1070,13 +1083,25 @@ fn origin_changes_remove_credentials_without_restoring_them_on_a_return_redirect
     assert_recorded_hops(&run, 4);
     let requests = run.provider.requests.lock().unwrap();
     let (same_origin, _) = request_parts(&requests[1]);
-    assert!(same_origin.lines().any(|line| line == "authorization: Bearer private"));
-    assert!(same_origin.lines().any(|line| line == "cookie: session=private"));
+    assert!(
+        same_origin
+            .lines()
+            .any(|line| line == "authorization: Bearer private")
+    );
+    assert!(
+        same_origin
+            .lines()
+            .any(|line| line == "cookie: session=private")
+    );
     for request in &requests[2..] {
         let (head, _) = request_parts(request);
         assert!(head.lines().any(|line| line == "x-keep: retained"));
         for name in ["authorization", "proxy-authorization", "cookie", "cookie2"] {
-            assert!(!head.lines().any(|line| line.starts_with(&format!("{name}:"))));
+            assert!(
+                !head
+                    .lines()
+                    .any(|line| line.starts_with(&format!("{name}:")))
+            );
         }
         assert_eq!(
             head.lines()
@@ -1167,9 +1192,7 @@ fn invalid_ambiguous_or_credentialed_redirects_reject_without_another_request() 
         "Location: /one\r\nLocation: /two\r\n",
     ] {
         let run = run_module(
-            &lower(
-                "fetch('http://example.test/').catch(error => console.log(error.name));",
-            ),
+            &lower("fetch('http://example.test/').catch(error => console.log(error.name));"),
             response(302, headers, b""),
             redirect_config(),
         );
@@ -1220,7 +1243,11 @@ fn received_redirect_provenance_requires_explicit_egress_authorization_and_repla
             && entry.decision == IfcRuntimeFlowDecision::Denied
     }));
     let entries = run.transcript.finish_execution().unwrap();
-    assert_eq!(entries.len(), 2, "response and exact refused redirect are recorded");
+    assert_eq!(
+        entries.len(),
+        2,
+        "response and exact refused redirect are recorded"
+    );
     assert!(
         matches!(
             &entries[1].1,
@@ -1283,9 +1310,7 @@ fn redirected_provider_security_and_quota_failures_remain_fatal() {
     }
 
     let transport = run_module(
-        &lower(
-            "fetch('http://example.test/start').catch(error => console.log(error.name));",
-        ),
+        &lower("fetch('http://example.test/start').catch(error => console.log(error.name));"),
         Reply::Sequence(vec![
             response(307, "Location: /unavailable\r\n", b""),
             Reply::Transport,
@@ -1351,7 +1376,12 @@ impl InterpreterHook for StopNetworkEgress {
         HookAction::Allow
     }
 
-    fn pre_allocation(&self, _ctx: &HookContext, _kind: AllocKind, _size_hint: usize) -> HookAction {
+    fn pre_allocation(
+        &self,
+        _ctx: &HookContext,
+        _kind: AllocKind,
+        _size_hint: usize,
+    ) -> HookAction {
         HookAction::Allow
     }
 
@@ -1405,4 +1435,192 @@ fn live_containment_rechecks_first_egress_after_conversion_and_every_redirect() 
         assert_eq!(provider.count(), expected_requests);
         assert_eq!(transcript.recorded_entries().len(), expected_requests);
     }
+}
+
+fn serve_http_responses(
+    listener: std::net::TcpListener,
+    replies: Vec<Reply>,
+) -> std::thread::JoinHandle<Vec<Vec<u8>>> {
+    use std::io::{Read, Write};
+    use std::time::{Duration, Instant};
+
+    std::thread::spawn(move || {
+        listener.set_nonblocking(true).unwrap();
+        let mut requests = Vec::new();
+        for reply in replies {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let mut peer = loop {
+                match listener.accept() {
+                    Ok((peer, _)) => break peer,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(
+                            Instant::now() < deadline,
+                            "expected Fetch hop did not connect"
+                        );
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
+                    Err(error) => panic!("HTTP test accept failed: {error}"),
+                }
+            };
+            peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            peer.set_write_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0; 1024];
+            loop {
+                let length = peer.read(&mut chunk).unwrap();
+                assert_ne!(length, 0, "client closed before a complete request");
+                request.extend_from_slice(&chunk[..length]);
+                assert!(
+                    request.len() <= 64 * 1024,
+                    "test request must remain bounded"
+                );
+                if let Some(end) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+                    let body_len = String::from_utf8_lossy(&request[..end])
+                        .lines()
+                        .filter_map(|line| line.split_once(':'))
+                        .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                        .map_or(0, |(_, value)| value.trim().parse::<usize>().unwrap());
+                    if request.len() >= end + 4 + body_len {
+                        break;
+                    }
+                }
+            }
+            let Reply::Raw(bytes) = reply else {
+                panic!("real server requires a raw HTTP response");
+            };
+            peer.write_all(&bytes).unwrap();
+            drop(peer);
+            requests.push(request);
+        }
+        requests
+    })
+}
+
+#[test]
+fn real_redirect_crosses_authorized_sockets_strips_credentials_and_replays_offline() {
+    use frankenengine_extension_host::host_io::{
+        NetworkDestinationAllowlist, NetworkEgressPolicy, SandboxedHostIo,
+    };
+    use std::net::TcpListener;
+    use std::time::Duration;
+
+    let first = TcpListener::bind("127.0.0.1:0").unwrap();
+    let second = TcpListener::bind("127.0.0.1:0").unwrap();
+    let first_address = first.local_addr().unwrap();
+    let second_address = second.local_addr().unwrap();
+    let destination = format!("http://{second_address}/done");
+    let first_server = serve_http_responses(
+        first,
+        vec![response(307, &format!("Location: {destination}\r\n"), b"")],
+    );
+    let second_server = serve_http_responses(second, vec![response(200, "", b"served")]);
+    let root = tempfile::tempdir().unwrap();
+    let provider = Arc::new(
+        SandboxedHostIo::with_root(root.path())
+            .unwrap()
+            .with_egress_policy(NetworkEgressPolicy::Allowlist(
+                NetworkDestinationAllowlist::new([first_address, second_address]).unwrap(),
+            ))
+            .with_network_timeout(Duration::from_secs(2))
+            .unwrap(),
+    );
+    let source = format!(
+        "fetch('http://{first_address}/start', {{method:'POST', body:'payload',\
+         headers:{{Authorization:'Bearer test', Cookie:'session=test', 'X-Keep':'yes'}}}})\
+         .then(async r => console.log(r.status, r.url, r.redirected, await r.text()));"
+    );
+    let module = lower(&source);
+    let transcript = Arc::new(InMemoryHostIoTranscript::recording());
+    transcript.begin_execution().unwrap();
+    let mut core = InterpreterCore::new(redirect_config(), "fetch-real-redirect");
+    core.set_host_io(provider.clone(), Some(transcript.clone()));
+    let result = core.execute(&module);
+    let first_requests = first_server.join().unwrap();
+    let second_requests = second_server.join().unwrap();
+    let result = result.unwrap();
+    assert_eq!(
+        result.console_output[0].message,
+        format!("200 {destination} true served")
+    );
+    assert_eq!(first_requests.len(), 1);
+    assert_eq!(second_requests.len(), 1);
+    let first_wire = String::from_utf8_lossy(&first_requests[0]).to_ascii_lowercase();
+    let second_wire = String::from_utf8_lossy(&second_requests[0]).to_ascii_lowercase();
+    assert!(first_wire.contains("authorization: bearer test\r\n"));
+    assert!(first_wire.contains("cookie: session=test\r\n"));
+    assert!(!second_wire.contains("authorization:"));
+    assert!(!second_wire.contains("cookie:"));
+    assert!(second_wire.starts_with("post /done http/1.1\r\n"));
+    assert!(second_wire.contains("x-keep: yes\r\n"));
+    assert!(second_wire.ends_with("\r\n\r\npayload"));
+    let entries = transcript.finish_execution().unwrap();
+    assert_eq!(entries.len(), 2);
+
+    // Both listeners are gone and the actual provider is permanently revoked.
+    // A successful replay therefore cannot depend on live network execution.
+    provider.network_revocation().revoke();
+    let replay = Arc::new(InMemoryHostIoTranscript::replaying(entries.clone()));
+    replay.begin_execution().unwrap();
+    let mut replay_core = InterpreterCore::new(redirect_config(), "fetch-real-redirect-replay");
+    replay_core.set_host_io(provider, Some(replay.clone()));
+    let replayed = replay_core.execute(&module).unwrap();
+    assert_eq!(replayed.console_output, result.console_output);
+    assert_eq!(replay.finish_execution().unwrap(), entries);
+}
+
+#[test]
+fn real_redirect_rechecks_destination_allowlist_before_opening_the_next_socket() {
+    use frankenengine_extension_host::host_io::{
+        NetworkDestinationAllowlist, NetworkEgressPolicy, SandboxedHostIo,
+    };
+    use std::net::TcpListener;
+    use std::time::Duration;
+
+    let first = TcpListener::bind("127.0.0.1:0").unwrap();
+    let denied = TcpListener::bind("127.0.0.1:0").unwrap();
+    denied.set_nonblocking(true).unwrap();
+    let first_address = first.local_addr().unwrap();
+    let denied_address = denied.local_addr().unwrap();
+    let server = serve_http_responses(
+        first,
+        vec![response(
+            302,
+            &format!("Location: http://{denied_address}/private\r\n"),
+            b"",
+        )],
+    );
+    let root = tempfile::tempdir().unwrap();
+    let provider = Arc::new(
+        SandboxedHostIo::with_root(root.path())
+            .unwrap()
+            .with_egress_policy(NetworkEgressPolicy::Allowlist(
+                NetworkDestinationAllowlist::new([first_address]).unwrap(),
+            ))
+            .with_network_timeout(Duration::from_secs(2))
+            .unwrap(),
+    );
+    let transcript = Arc::new(InMemoryHostIoTranscript::recording());
+    transcript.begin_execution().unwrap();
+    let mut core = InterpreterCore::new(redirect_config(), "fetch-redirect-denied-destination");
+    core.set_host_io(provider, Some(transcript.clone()));
+    let result = core.execute(&lower(&format!(
+        "fetch('http://{first_address}/start').catch(() => console.log('caught'));\
+         console.log('continued');"
+    )));
+    assert_eq!(server.join().unwrap().len(), 1);
+    assert!(matches!(
+        result,
+        Err(InterpreterError::CapabilityDenied { capability }) if capability == "net:request"
+    ));
+    assert!(core.console_output().is_empty());
+    assert_eq!(
+        transcript.recorded_entries().len(),
+        2,
+        "record success and denied redirect"
+    );
+    assert!(matches!(
+        denied.accept(),
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
+    ));
 }

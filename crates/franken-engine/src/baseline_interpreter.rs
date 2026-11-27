@@ -1515,6 +1515,7 @@ fn canonical_builtin_prototype_name(name: &str) -> Option<&'static str> {
         "Blob" => Some("Blob"),
         "Response" => Some("Response"),
         "Headers" => Some("Headers"),
+        "Headers Iterator" => Some("Headers Iterator"),
         "NumberFormat" => Some("NumberFormat"),
         "DateTimeFormat" => Some("DateTimeFormat"),
         "Collator" => Some("Collator"),
@@ -4381,6 +4382,9 @@ pub enum BuiltinFunctionKind {
     /// A function from an admitted, realm-owned numeric Wasm instance.
     /// Append only: builtin ordinals participate in deterministic hashing.
     WasmExport,
+    // Append only: builtin ordinals participate in deterministic state hashes.
+    FetchResponseStatic,
+    FetchHeadersIteratorNext,
 }
 
 /// Annex B B.2.2.2-14: each String HTML method's tag and attribute name.
@@ -5981,6 +5985,13 @@ impl BuiltinFunction {
                 .copied()
                 .find(|name| self.module_specifier.0.as_deref() == Some(*name))
                 .unwrap_or(""),
+            BuiltinFunctionKind::FetchResponseStatic => match self.module_specifier.0.as_deref() {
+                Some("error") => "error",
+                Some("json") => "json",
+                Some("redirect") => "redirect",
+                _ => "",
+            },
+            BuiltinFunctionKind::FetchHeadersIteratorNext => "next",
             BuiltinFunctionKind::FetchHeadersMethod => fetch::HEADERS_METHODS
                 .iter()
                 .copied()
@@ -6641,6 +6652,8 @@ impl BuiltinFunction {
             K::BlobMethod => "Blob.prototype",
             K::FetchResponseMethod => "Response.prototype",
             K::FetchHeadersMethod => "Headers.prototype",
+            K::FetchResponseStatic => "Response",
+            K::FetchHeadersIteratorNext => "Headers Iterator",
             K::SharedArrayBufferMethod => "SharedArrayBuffer.prototype",
             K::ArrayBufferMethod => "ArrayBuffer.prototype",
             K::AtomicsMethod => "Atomics",
@@ -6987,7 +7000,7 @@ impl DynamicFunctionKind {
 /// Every name has a canonical builtin prototype (`ensure_builtin_prototype`),
 /// which is also the prototype engine-created instances use, so `instanceof`,
 /// `x.constructor === X` and `class E extends X` agree with the instances.
-pub(crate) const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 50] = [
+pub(crate) const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 52] = [
     "Object",
     "Array",
     "Number",
@@ -7054,6 +7067,9 @@ pub(crate) const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 50] = [
     "DOMException",
     // WHATWG File API Blob (bd-9vouw.226): a Node global since v18.
     "Blob",
+    // Buffered Fetch objects share the native response and header slots.
+    "Headers",
+    "Response",
     // ES2020 24.2 (bd-9vouw.244).
     "SharedArrayBuffer",
     // ES2025 Iterator (bd-9vouw.179): abstract; its prototype is
@@ -9719,6 +9735,7 @@ enum HostObjectSlots {
     ExoticIdentity(Value),
     FetchResponse(fetch::FetchResponseSlots),
     FetchHeaders(fetch::FetchHeadersSlots),
+    FetchHeadersIterator(fetch::FetchHeadersIteratorSlots),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -10764,7 +10781,8 @@ fn validate_heap_symbol_references(
             | HostObjectSlots::EventTarget(_)
             | HostObjectSlots::AbortController(_)
             | HostObjectSlots::FetchResponse(_)
-            | HostObjectSlots::FetchHeaders(_) => {}
+            | HostObjectSlots::FetchHeaders(_)
+            | HostObjectSlots::FetchHeadersIterator(_) => {}
         }
     }
     for value in object.properties.all_data_values() {
@@ -11039,7 +11057,7 @@ impl RuntimeForOfInit {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 enum RuntimeTypedArrayIteratorKind {
     Entries,
     Keys,

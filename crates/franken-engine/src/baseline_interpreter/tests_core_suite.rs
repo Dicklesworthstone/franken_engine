@@ -480,7 +480,21 @@ fn compact_number_test_instruction(
         CompactTier1Opcode::Mul => Ir3Instruction::Mul { dst, lhs, rhs },
         CompactTier1Opcode::Div => Ir3Instruction::Div { dst, lhs, rhs },
         CompactTier1Opcode::Mod => Ir3Instruction::Mod { dst, lhs, rhs },
-        _ => unreachable!("numeric test selects only arithmetic opcodes"),
+        CompactTier1Opcode::Lt => Ir3Instruction::Lt { dst, lhs, rhs },
+        CompactTier1Opcode::Lte => Ir3Instruction::Lte { dst, lhs, rhs },
+        CompactTier1Opcode::Gt => Ir3Instruction::Gt { dst, lhs, rhs },
+        CompactTier1Opcode::Gte => Ir3Instruction::Gte { dst, lhs, rhs },
+        CompactTier1Opcode::Eq => Ir3Instruction::Eq { dst, lhs, rhs },
+        CompactTier1Opcode::StrictEq => Ir3Instruction::StrictEq { dst, lhs, rhs },
+        CompactTier1Opcode::NotEq => Ir3Instruction::NotEq { dst, lhs, rhs },
+        CompactTier1Opcode::StrictNotEq => Ir3Instruction::StrictNotEq { dst, lhs, rhs },
+        CompactTier1Opcode::BitAnd => Ir3Instruction::BitAnd { dst, lhs, rhs },
+        CompactTier1Opcode::BitOr => Ir3Instruction::BitOr { dst, lhs, rhs },
+        CompactTier1Opcode::BitXor => Ir3Instruction::BitXor { dst, lhs, rhs },
+        CompactTier1Opcode::Shl => Ir3Instruction::Shl { dst, lhs, rhs },
+        CompactTier1Opcode::Shr => Ir3Instruction::Shr { dst, lhs, rhs },
+        CompactTier1Opcode::Ushr => Ir3Instruction::Ushr { dst, lhs, rhs },
+        _ => unreachable!("numeric test selects only binary Number opcodes"),
     }
 }
 
@@ -561,6 +575,87 @@ fn compact_tier1_number_arithmetic_matches_tier_r_bits_and_aliases() {
                     compact_core.recompute_estimated_memory_bytes()
                 );
             }
+        }
+    }
+}
+
+#[test]
+fn compact_tier1_number_comparisons_and_bitwise_match_tier_r() {
+    use CompactTier1Opcode as Op;
+    use Value::{Bool, Int};
+
+    let float = |value| Value::Float(Float64::new(value));
+    let cases = [
+        (Op::Lt, float(f64::NAN), Int(0), Bool(false)),
+        (Op::Lte, float(-0.0), Int(0), Bool(true)),
+        (Op::Gt, float(f64::INFINITY), float(f64::MAX), Bool(true)),
+        (Op::Gte, float(-1.5), float(-1.5), Bool(true)),
+        (
+            Op::Eq,
+            Int(9_007_199_254_740_993),
+            float(9_007_199_254_740_992.0),
+            Bool(true),
+        ),
+        (Op::StrictEq, float(-0.0), float(0.0), Bool(true)),
+        (
+            Op::NotEq,
+            Int(9_007_199_254_740_993),
+            Int(9_007_199_254_740_992),
+            Bool(true),
+        ),
+        (
+            Op::StrictNotEq,
+            float(f64::NAN),
+            float(f64::NAN),
+            Bool(true),
+        ),
+        (Op::BitAnd, float(4_294_967_297.75), Int(-1), Int(1)),
+        (
+            Op::BitOr,
+            float(-3_000_000_000.25),
+            Int(0),
+            Int(1_294_967_296),
+        ),
+        (Op::BitXor, float(f64::INFINITY), Int(-1), Int(-1)),
+        (Op::Shl, float(3.8), float(33.2), Int(6)),
+        (Op::Shr, float(-7.99), Int(1), Int(-4)),
+        (Op::Ushr, float(-1.5), float(f64::NAN), Int(4_294_967_295)),
+    ];
+    for (opcode, left, right, expected) in cases {
+        for secret in [false, true] {
+            let dst = 1;
+            let module = test_module(vec![
+                compact_number_test_instruction(opcode, dst, 1, 2),
+                Ir3Instruction::Return { value: dst },
+            ]);
+            let plan = CompactTier1Program::compile(&module).expect("compact Number plan");
+            let run = |compact| {
+                let mut core = quickjs_test_core();
+                core.set_reg(1, left.clone());
+                core.set_reg(2, right.clone());
+                if secret {
+                    core.set_register_label(2, Label::Secret).unwrap();
+                }
+                let result = core
+                    .run_loop_labeled_with_compact_tier1(
+                        &module,
+                        if compact { Some(&plan) } else { None },
+                    )
+                    .expect("Number operation executes");
+                (core, result)
+            };
+            let (compact, result) = run(true);
+            let (baseline, reference) = run(false);
+            assert_eq!(result.value, expected, "{opcode:?}");
+            assert_eq!(result.value, reference.value);
+            assert_eq!(result.label, if secret { Label::Secret } else { Label::Public });
+            assert_eq!(result.label, reference.label);
+            assert_eq!(compact.tier_i_specialized_instructions_executed, u64::from(!secret));
+            assert_eq!(compact.registers.value, baseline.registers.value);
+            assert_eq!(compact.register_labels, baseline.register_labels);
+            assert_eq!(compact.seed_epoch, baseline.seed_epoch);
+            assert_eq!(compact.instructions_executed, baseline.instructions_executed);
+            assert_eq!(compact.estimated_memory_bytes(), baseline.estimated_memory_bytes());
         }
     }
 }

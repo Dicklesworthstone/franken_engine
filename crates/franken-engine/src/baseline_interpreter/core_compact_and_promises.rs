@@ -6,6 +6,38 @@ enum RequireResolveSearchPaths {
     Relative(Value),
 }
 
+/// A copied Number operand, retaining exact integer bits until the operator
+/// selects its conversion (integer equality and ToInt32 need those bits).
+#[derive(Clone, Copy)]
+enum CompactNumber {
+    Int(i64),
+    Float(f64),
+}
+
+impl CompactNumber {
+    fn from_value(value: &Value) -> Option<Self> {
+        match value {
+            Value::Int(value) => Some(Self::Int(*value)),
+            Value::Float(value) => Some(Self::Float(value.inner())),
+            _ => None,
+        }
+    }
+
+    fn as_f64(self) -> f64 {
+        match self {
+            Self::Int(value) => value as f64,
+            Self::Float(value) => value,
+        }
+    }
+
+    fn to_int32(self) -> i32 {
+        match self {
+            Self::Int(value) => value as i32,
+            Self::Float(value) => InterpreterCore::js_to_int32(value),
+        }
+    }
+}
+
 impl InterpreterCore {
     #[inline]
     pub(super) fn execute_compact_tier1_instruction(
@@ -198,8 +230,11 @@ impl InterpreterCore {
             Op::Inc | Op::Dec => {
                 let delta: i64 = if instruction.opcode == Op::Inc { 1 } else { -1 };
                 let stepped = self
-                    .compact_public_int_operands(dst, lhs, lhs)
-                    .and_then(|(value, _, slot)| Some((value.checked_add(delta)?, slot)))
+                    .compact_public_number_operands(dst, lhs, lhs)
+                    .and_then(|(value, _, slot)| match value {
+                        CompactNumber::Int(value) => Some((value.checked_add(delta)?, slot)),
+                        CompactNumber::Float(_) => None,
+                    })
                     .filter(|(value, _)| (MIN_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(value));
                 if let Some((stepped, slot)) = stepped {
                     self.write_static_slot(slot, Value::Int(stepped));
@@ -340,18 +375,15 @@ impl InterpreterCore {
             .saturating_add(1);
     }
 
-    /// Return copied integer operands only when the entire label/write path is
-    /// statically equivalent to the generic Tier-R transaction. Any dynamic
-    /// value, non-Public input label, active labeled execution context,
-    /// destination growth, dynamic destination ownership, or over-budget base
-    /// state falls back before mutation to the canonical helpers.
+    /// Prove that both operands are Public Numbers and that a static
+    /// destination write preserves the usual budget, seed and IFC checks.
     #[inline(always)]
-    pub(super) fn compact_public_int_operands(
+    fn compact_public_number_operands(
         &self,
         dst: u32,
         lhs: u32,
         rhs: u32,
-    ) -> Option<(i64, i64, StaticWriteSlot)> {
+    ) -> Option<(CompactNumber, CompactNumber, StaticWriteSlot)> {
         if dst >= self.config.max_registers
             || lhs >= self.config.max_registers
             || rhs >= self.config.max_registers
@@ -361,12 +393,8 @@ impl InterpreterCore {
         let actual_dst = self.register_base.checked_add(dst as usize)?;
         let actual_lhs = self.register_base.checked_add(lhs as usize)?;
         let actual_rhs = self.register_base.checked_add(rhs as usize)?;
-        let (Value::Int(left), Value::Int(right)) = (
-            self.registers.get(actual_lhs)?,
-            self.registers.get(actual_rhs)?,
-        ) else {
-            return None;
-        };
+        let left = CompactNumber::from_value(self.registers.get(actual_lhs)?)?;
+        let right = CompactNumber::from_value(self.registers.get(actual_rhs)?)?;
         let labels_public = if self.all_register_labels_public {
             actual_lhs < self.register_labels.len() && actual_rhs < self.register_labels.len()
         } else {
@@ -378,7 +406,7 @@ impl InterpreterCore {
         {
             return None;
         }
-        Some((*left, *right, StaticWriteSlot(actual_dst)))
+        Some((left, right, StaticWriteSlot(actual_dst)))
     }
 
     /// Borrow Number operands and compute a primitive result only when the
@@ -400,47 +428,18 @@ impl InterpreterCore {
     ) -> Option<(Value, StaticWriteSlot)> {
         use CompactTier1Opcode as Op;
 
-        if dst >= self.config.max_registers
-            || lhs >= self.config.max_registers
-            || rhs >= self.config.max_registers
-        {
-            return None;
-        }
-        let actual_dst = self.register_base.checked_add(dst as usize)?;
-        let actual_lhs = self.register_base.checked_add(lhs as usize)?;
-        let actual_rhs = self.register_base.checked_add(rhs as usize)?;
-        let left = self.registers.get(actual_lhs)?;
-        let right = self.registers.get(actual_rhs)?;
-        let labels_public = if self.all_register_labels_public {
-            actual_lhs < self.register_labels.len() && actual_rhs < self.register_labels.len()
-        } else {
-            matches!(self.register_labels.get(actual_lhs), Some(Label::Public))
-                && matches!(self.register_labels.get(actual_rhs), Some(Label::Public))
-        };
-        if !matches!(left, Value::Int(_) | Value::Float(_))
-            || !matches!(right, Value::Int(_) | Value::Float(_))
-            || !labels_public
-            || !self.static_register_write_eligible(actual_dst, &Value::Undefined, &Label::Public)
-        {
-            return None;
-        }
-
-        let result = if let (Value::Int(left), Value::Int(right)) = (left, right) {
+        let (left, right, slot) = self.compact_public_number_operands(dst, lhs, rhs)?;
+        let result = if let (CompactNumber::Int(left), CompactNumber::Int(right)) = (left, right) {
             match opcode {
-                Op::Add => js_int_add(*left, *right),
-                Op::Sub => js_int_sub(*left, *right),
-                Op::Mul => js_int_mul(*left, *right),
-                Op::Div => js_number_to_value(*left as f64 / *right as f64),
-                Op::Mod => js_int_mod(*left, *right),
+                Op::Add => js_int_add(left, right),
+                Op::Sub => js_int_sub(left, right),
+                Op::Mul => js_int_mul(left, right),
+                Op::Div => js_number_to_value(left as f64 / right as f64),
+                Op::Mod => js_int_mod(left, right),
                 _ => unreachable!("compact Number arithmetic opcode is statically selected"),
             }
         } else {
-            let number = |value: &Value| match value {
-                Value::Int(value) => *value as f64,
-                Value::Float(value) => value.inner(),
-                _ => unreachable!("compact Number operands were checked before arithmetic"),
-            };
-            let (left, right) = (number(left), number(right));
+            let (left, right) = (left.as_f64(), right.as_f64());
             js_number_to_value(match opcode {
                 Op::Add => left + right,
                 Op::Sub => left - right,
@@ -456,7 +455,7 @@ impl InterpreterCore {
         if matches!(&result, Value::Float(value) if value.is_nan()) {
             return None;
         }
-        Some((result, StaticWriteSlot(actual_dst)))
+        Some((result, slot))
     }
 
     /// `Move dst, src` when the source value and label own no dynamic bytes
@@ -520,11 +519,11 @@ impl InterpreterCore {
         rhs: u32,
         operator: &str,
     ) -> Result<(), InterpreterError> {
-        if let Some((left, right, slot)) = self.compact_public_int_operands(dst, lhs, rhs) {
+        if let Some((left, right, slot)) = self.compact_public_number_operands(dst, lhs, rhs) {
             // Preserve the canonical interpreter's current numeric comparison
             // projection through f64, including its behavior above 2^53.
-            let left = left as f64;
-            let right = right as f64;
+            let left = left.as_f64();
+            let right = right.as_f64();
             let result = match operator {
                 "<" => left < right,
                 "<=" => left <= right,
@@ -552,8 +551,11 @@ impl InterpreterCore {
         strict: bool,
         negate: bool,
     ) -> Result<(), InterpreterError> {
-        if let Some((left, right, slot)) = self.compact_public_int_operands(dst, lhs, rhs) {
-            let matches = left == right;
+        if let Some((left, right, slot)) = self.compact_public_number_operands(dst, lhs, rhs) {
+            let matches = match (left, right) {
+                (CompactNumber::Int(a), CompactNumber::Int(b)) => a == b,
+                _ => left.as_f64() == right.as_f64(),
+            };
             self.write_static_slot(slot, Value::Bool(if negate { !matches } else { matches }));
             self.record_tier_i_specialization();
         } else {
@@ -573,9 +575,9 @@ impl InterpreterCore {
         rhs: u32,
         operator: &str,
     ) -> Result<(), InterpreterError> {
-        if let Some((left, right, slot)) = self.compact_public_int_operands(dst, lhs, rhs) {
-            let left = left as i32;
-            let right = right as i32;
+        if let Some((left, right, slot)) = self.compact_public_number_operands(dst, lhs, rhs) {
+            let left = left.to_int32();
+            let right = right.to_int32();
             let shift = (right as u32) & 31;
             let result = match operator {
                 "&" => (left & right) as i64,

@@ -100,6 +100,7 @@ mod json_parse;
 mod json_stringify;
 mod legacy_regexp;
 mod module_integrity;
+mod wasm_filesystem;
 mod wasm_modules;
 pub use module_integrity::ModuleSourceIntegrity;
 mod number_locale;

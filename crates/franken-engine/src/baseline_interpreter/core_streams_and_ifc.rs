@@ -12623,6 +12623,11 @@ impl InterpreterCore {
         let syntax = delivered.as_ref().map_or(
             if is_json {
                 ModuleSyntax::Json
+            } else if Path::new(resolved)
+                .extension()
+                .is_some_and(|extension| extension == "wasm")
+            {
+                ModuleSyntax::Wasm
             } else {
                 ModuleSyntax::EsModule
             },
@@ -12634,6 +12639,9 @@ impl InterpreterCore {
             Self::check_dynamic_import_attributes(resolved, syntax, attributes)?;
         } else {
             Self::check_module_import_attributes(resolved, style, syntax, attributes)?;
+        }
+        if syntax == ModuleSyntax::Wasm {
+            self.authorize_wasm_namespace(resolved, style)?;
         }
         let source_hash = delivered.as_ref().map(|source| source.content_hash);
         if let Some(record) = self.module_state.modules.get(resolved) {
@@ -15614,10 +15622,19 @@ impl InterpreterCore {
         self.iterator_protocol_property(Some(module), carrier, &key, Value::Object(carrier))
     }
 
-    /// Read a dependency once and charge its raw bytes before decoding or
-    /// syntax detection. Reading at most limit + 1 also bounds files that grow
-    /// after they were selected by the resolver.
     pub(super) fn read_module_source(&self, resolved: &str) -> Result<String, InterpreterError> {
+        let bytes = self.read_module_bytes(resolved)?;
+        String::from_utf8(bytes).map_err(|error| InterpreterError::ModuleReadFailed {
+            specifier: resolved.to_string(),
+            error: error.to_string(),
+        })
+    }
+
+    /// Read a dependency once and charge its exact bytes before text decoding
+    /// or binary validation. The same read-boundary hash covers JS, JSON and
+    /// Wasm replay inputs. At most limit + 1 bounds files that grow after
+    /// selection by the resolver.
+    pub(super) fn read_module_bytes(&self, resolved: &str) -> Result<Vec<u8>, InterpreterError> {
         let failed = |error: std::io::Error| InterpreterError::ModuleReadFailed {
             specifier: resolved.to_string(),
             error: error.to_string(),
@@ -15641,10 +15658,7 @@ impl InterpreterCore {
                 specifier: resolved.to_string(),
                 error,
             })?;
-        String::from_utf8(bytes).map_err(|error| InterpreterError::ModuleReadFailed {
-            specifier: resolved.to_string(),
-            error: error.to_string(),
-        })
+        Ok(bytes)
     }
 
     pub(super) fn observe_module_input(&self, path: &Path, bytes: &[u8]) -> Result<(), String> {

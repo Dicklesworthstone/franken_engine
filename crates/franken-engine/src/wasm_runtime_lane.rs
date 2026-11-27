@@ -22,12 +22,14 @@
 //! within the module's declared authority and current policy.
 //!
 //! The JavaScript interpreter also admits captured binary modules through an
-//! installed [`crate::module_resolver::ExecutionModuleResolver`]. Static and
-//! dynamic ESM imports expose numeric function callables backed by persistent
-//! instances, with current policy, IFC and shared execution/memory budgets.
-//! Multiple numeric results become ordinary JavaScript arrays. That bounded
-//! route has no host imports, tables or exposed memory/global objects, and
-//! adds neither filesystem binary loading nor a global `WebAssembly` API.
+//! installed [`crate::module_resolver::ExecutionModuleResolver`] or ordinary
+//! filesystem imports within the configured module root. Static and dynamic
+//! ESM imports expose numeric function callables backed by persistent instances,
+//! with current authority, IFC and shared execution/memory budgets. Filesystem
+//! replay records hash the exact binary input, and an installed resolver never
+//! falls back to filesystem delivery. Multiple numeric results become ordinary
+//! JavaScript arrays. This bounded route has no host imports, tables, exposed
+//! memory/global objects, raw Wasm entry point or global `WebAssembly` API.
 
 #[path = "wasm_runtime_lane/lane.rs"]
 mod lane;

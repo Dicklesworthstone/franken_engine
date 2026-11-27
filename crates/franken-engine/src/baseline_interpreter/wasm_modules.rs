@@ -1,9 +1,10 @@
-//! Numeric WebAssembly modules in the installed, closed-world JS resolver.
+//! Numeric WebAssembly modules from authorized resolver or filesystem imports.
 //!
 //! This route executes the native Rust VM, not the constant-body ABI adapter.
 //! One realm owns each instance and its conservative state label. No host
 //! functions, reference tables, or public memory/global objects are supplied.
 
+use super::wasm_filesystem::{JsWasmOrigin, JsWasmSource};
 use super::*;
 use crate::wasm_runtime_lane::memory_pool::WasmMemoryPool;
 use crate::wasm_runtime_lane::numeric::{
@@ -28,10 +29,8 @@ struct JsWasmExport {
 #[derive(Debug)]
 pub(super) struct JsWasmModule {
     realm_generation: u64,
-    request: ModuleRequest,
+    origin: JsWasmOrigin,
     canonical_specifier: String,
-    record_id: String,
-    content_hash: ContentHash,
     exports: BTreeMap<u32, Arc<JsWasmExport>>,
     bindings: Vec<(String, u32)>,
     activation_bytes: u64,
@@ -40,7 +39,10 @@ pub(super) struct JsWasmModule {
 }
 
 impl InterpreterCore {
-    fn wasm_load_error(specifier: &str, error: impl std::fmt::Display) -> InterpreterError {
+    pub(super) fn wasm_load_error(
+        specifier: &str,
+        error: impl std::fmt::Display,
+    ) -> InterpreterError {
         InterpreterError::ModuleLoweringFailed {
             specifier: specifier.to_string(),
             error: format!("numeric Wasm module refused: {error}"),
@@ -48,25 +50,21 @@ impl InterpreterCore {
     }
 
     /// A callable pins immutable code but never pins permission. Consult the
-    /// currently installed resolver and current grants, including after guest
-    /// ToPrimitive conversions that may revoke authority or replace a route.
+    /// current grants and the captured origin's authority, including after
+    /// guest ToPrimitive conversions that may revoke or replace that authority.
     fn authorize_wasm_module(&mut self, wasm: &JsWasmModule) -> Result<(), InterpreterError> {
         self.authorize_wasm_identity(
             wasm.realm_generation,
-            &wasm.request,
+            &wasm.origin,
             &wasm.canonical_specifier,
-            &wasm.record_id,
-            wasm.content_hash,
         )
     }
 
     fn authorize_wasm_identity(
         &mut self,
         realm_generation: u64,
-        request: &ModuleRequest,
+        origin: &JsWasmOrigin,
         canonical_specifier: &str,
-        record_id: &str,
-        content_hash: ContentHash,
     ) -> Result<(), InterpreterError> {
         if realm_generation != self.generated_function_realm_generation {
             return Err(Self::wasm_load_error(
@@ -74,16 +72,24 @@ impl InterpreterCore {
                 "stale realm handle",
             ));
         }
-        let ip = u32::try_from(self.ip).unwrap_or(u32::MAX);
-        check_hostcall_capability_gate(self, "module_load", ip)?;
-        check_hostcall_capability_gate(self, "vm_dispatch", ip)?;
-        for capability in [RuntimeCapability::ModuleLoad, RuntimeCapability::VmDispatch] {
-            if !self.config.granted_capabilities.contains(&capability) {
-                return Err(InterpreterError::CapabilityDenied {
-                    capability: capability.to_string(),
-                });
+        self.authorize_wasm_capabilities()?;
+        let (request, record_id, content_hash) = match origin {
+            JsWasmOrigin::Installed {
+                request,
+                record_id,
+                content_hash,
+            } => (request, record_id, *content_hash),
+            JsWasmOrigin::Filesystem {
+                canonical_root,
+                content_hash,
+            } => {
+                return self.authorize_filesystem_wasm(
+                    canonical_specifier,
+                    canonical_root,
+                    *content_hash,
+                );
             }
-        }
+        };
         let installed = self
             .module_resolver
             .as_ref()
@@ -104,7 +110,7 @@ impl InterpreterCore {
         self.check_temporary_memory_budget(Self::estimate_string_bytes(&current.record.source))?;
         if current.request_specifier != request.specifier
             || current.canonical_specifier != canonical_specifier
-            || current.record.id != record_id
+            || current.record.id != record_id.as_str()
             || current.record.syntax != ModuleSyntax::Wasm
             || current.content_hash != content_hash
             || current.record.canonical_hash() != content_hash
@@ -125,6 +131,22 @@ impl InterpreterCore {
             return Err(InterpreterError::CapabilityDenied {
                 capability: missing.to_string(),
             });
+        }
+        Ok(())
+    }
+
+    pub(super) fn authorize_wasm_namespace(
+        &mut self,
+        resolved: &str,
+        style: ImportStyle,
+    ) -> Result<(), InterpreterError> {
+        if style != ImportStyle::Import {
+            return Err(Self::wasm_load_error(resolved, "Wasm requires an ESM import"));
+        }
+        self.authorize_wasm_capabilities()?;
+        let key = format!("{}:{resolved}", self.generated_function_realm_generation);
+        if let Some(wasm) = self.module_state.wasm_modules.get(&key).cloned() {
+            self.authorize_wasm_module(&wasm)?;
         }
         Ok(())
     }
@@ -271,45 +293,19 @@ impl InterpreterCore {
                 "Wasm requires an ESM import",
             ));
         }
-        let source = delivered.ok_or_else(|| {
-            Self::wasm_load_error(resolved, "binary source requires an installed resolver")
-        })?;
-        if !crate::module_resolver::wasm_module_required_capabilities()
-            .is_subset(&source.record.required_capabilities)
-        {
-            return Err(Self::wasm_load_error(
-                resolved,
-                "module contract must require module_load and vm_dispatch",
-            ));
-        }
         let label = self.clone_active_execution_context_label()?;
         Self::check_import_flow_bound(resolved, &label, import_bound)?;
         self.set_module_flow_label_ceiling(resolved, &label)?;
-        let installed = self
-            .module_resolver
-            .as_ref()
-            .ok_or_else(|| Self::wasm_load_error(resolved, "no installed resolver"))?;
-        let request = ModuleRequest::new(&source.request_specifier, ImportStyle::Import)
-            .with_referrer(
-                self.current_module_specifier
-                    .as_deref()
-                    .unwrap_or_else(|| installed.resolver.entry_referrer()),
-            )
-            .with_compatibility_mode(CompatibilityMode::NodeCompat)
-            .with_import_attributes(attributes.clone());
+        let (origin, source) = self.prepare_wasm_source(resolved, attributes, delivered)?;
         let key = format!("{}:{resolved}", self.generated_function_realm_generation);
         // Source-derived validation/control maps have linear size. Include
         // decoding, immutable program, namespace metadata and instance records
         // conservatively before allocating any of them.
-        let mut retained = (source.record.source.len() as u64)
+        let mut retained = source
+            .byte_len()
             .saturating_mul(256)
-            .saturating_add(
-                (key.len() as u64
-                    + source.record.id.len() as u64
-                    + request.specifier.len() as u64
-                    + request.referrer.as_ref().map_or(0, |s| s.len() as u64))
-                .saturating_mul(8),
-            )
+            .saturating_add((key.len() as u64).saturating_mul(8))
+            .saturating_add(origin.retained_bytes())
             .saturating_add(Self::estimate_label_bytes(&label))
             .saturating_add(4096);
         let mut reserved = retained;
@@ -330,11 +326,14 @@ impl InterpreterCore {
                 max_instructions: self.config.instruction_budget,
                 ..WasmNumericLimits::default()
             };
-            let bytes = crate::wasm_runtime_lane::wasm_source_bytes(
-                &source.record.source,
-                limits.max_module_bytes,
-            )
-            .map_err(|error| Self::wasm_load_error(resolved, error))?;
+            let bytes = match &source {
+                JsWasmSource::Resolver(source) => crate::wasm_runtime_lane::wasm_source_bytes(
+                    source,
+                    limits.max_module_bytes,
+                )
+                .map_err(|error| Self::wasm_load_error(resolved, error))?,
+                JsWasmSource::Filesystem(bytes) => Cow::Borrowed(bytes.as_slice()),
+            };
             let local_bytes = WasmNumericVm::expanded_local_bytes(&bytes, &limits)
                 .map_err(|error| Self::wasm_load_error(resolved, error))?;
             self.json_reserve_temporary(local_bytes)?;
@@ -400,10 +399,8 @@ impl InterpreterCore {
             }
             self.authorize_wasm_identity(
                 self.generated_function_realm_generation,
-                &request,
+                &origin,
                 resolved,
-                &source.record.id,
-                source.content_hash,
             )?;
             let native = vm.instantiate_owned_with_imports(imports);
             self.finish_wasm_work(&pool, before);
@@ -419,10 +416,8 @@ impl InterpreterCore {
             };
             Ok(JsWasmModule {
                 realm_generation: self.generated_function_realm_generation,
-                request,
+                origin,
                 canonical_specifier: resolved.to_string(),
-                record_id: source.record.id.clone(),
-                content_hash: source.content_hash,
                 exports,
                 bindings,
                 activation_bytes,

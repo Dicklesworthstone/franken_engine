@@ -5457,7 +5457,10 @@ impl InterpreterCore {
             | BuiltinFunctionKind::ArrayPrototypeFind
             | BuiltinFunctionKind::ArrayPrototypeFindIndex
             | BuiltinFunctionKind::ArrayPrototypeReduce
-            | BuiltinFunctionKind::ArrayPrototypeReduceRight => {
+            | BuiltinFunctionKind::ArrayPrototypeReduceRight
+            | BuiltinFunctionKind::ArrayPrototypeIndexOf
+            | BuiltinFunctionKind::ArrayPrototypeLastIndexOf
+            | BuiltinFunctionKind::ArrayPrototypeIncludes => {
                 return self.dispatch_array_method(
                     module,
                     builtin.kind,
@@ -5750,6 +5753,9 @@ impl InterpreterCore {
                     | BuiltinFunctionKind::ArrayPrototypeFindIndex
                     | BuiltinFunctionKind::ArrayPrototypeReduce
                     | BuiltinFunctionKind::ArrayPrototypeReduceRight
+                    | BuiltinFunctionKind::ArrayPrototypeIndexOf
+                    | BuiltinFunctionKind::ArrayPrototypeLastIndexOf
+                    | BuiltinFunctionKind::ArrayPrototypeIncludes
                     | BuiltinFunctionKind::StringPrototypeIndexOf
                     | BuiltinFunctionKind::StringPrototypeLastIndexOf
                     | BuiltinFunctionKind::StringPrototypeIncludes

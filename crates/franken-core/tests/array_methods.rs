@@ -493,6 +493,206 @@ fn retained_join_output_is_charged_to_memory_budget() {
 }
 
 #[test]
+fn searches_distinguish_holes_nan_and_exact_value_identity() {
+    assert_output(
+        r#"
+        const values = [, undefined, NaN, -0, 1, '1', '\ud800', '\ufffd'];
+        console.log(values.indexOf(undefined), values.lastIndexOf(undefined), values.includes(undefined));
+        console.log([,].indexOf(undefined), [,].lastIndexOf(undefined), [,].includes(undefined));
+        console.log(values.indexOf(NaN), values.lastIndexOf(NaN), values.includes(NaN));
+        console.log(values.indexOf(0), values.lastIndexOf(0.0), values.includes(-0));
+        console.log(values.indexOf(1.0), values.indexOf('1'), values.indexOf(true));
+        console.log(values.indexOf('\ud800'), values.indexOf('\ufffd'), values.includes('\udc00'));
+        const object = {}, other = {}, symbol = Symbol('same');
+        const identities = [object, symbol, object];
+        console.log(identities.indexOf(object), identities.lastIndexOf(object), identities.includes(other));
+        console.log(identities.indexOf(symbol), identities.includes(Symbol('same')));
+    "#,
+        &[
+            "1 1 true",
+            "-1 -1 true",
+            "-1 -1 true",
+            "3 3 true",
+            "4 5 -1",
+            "6 7 false",
+            "0 2 false",
+            "1 false",
+        ],
+    );
+}
+
+#[test]
+fn search_positions_follow_integer_or_infinity_and_omitted_argument_rules() {
+    assert_output(
+        r#"
+        const values = ['a', 'b', 'a', 'b'];
+        console.log(values.indexOf('a', 1.9), values.indexOf('a', -2.9), values.indexOf('a', -99));
+        console.log(values.lastIndexOf('b'), values.lastIndexOf('b', undefined), values.lastIndexOf('b', NaN));
+        console.log(values.lastIndexOf('b', -1.9), values.lastIndexOf('b', -2.9), values.lastIndexOf('b', -99));
+        console.log(values.indexOf('a', Infinity), values.indexOf('a', -Infinity));
+        console.log(values.lastIndexOf('b', Infinity), values.lastIndexOf('b', -Infinity));
+        console.log(values.includes('a', Infinity), values.includes('a', -Infinity), values.includes('a', -1));
+        console.log(values.indexOf('a', '0x2'), values.lastIndexOf('b', '\uFEFF1\u00a0'));
+        let conversions = 0;
+        const position = {valueOf() { conversions++; throw 'must not run'; }};
+        console.log([].indexOf(1, position), [].lastIndexOf(1, position), [].includes(1, position), conversions);
+    "#,
+        &[
+            "2 2 0",
+            "3 -1 -1",
+            "3 1 -1",
+            "-1 0",
+            "3 -1",
+            "false true false",
+            "2 1",
+            "-1 -1 false 0",
+        ],
+    );
+}
+
+#[test]
+fn searches_snapshot_length_then_observe_conversion_and_live_inherited_elements() {
+    assert_output(
+        r#"
+        let order = '';
+        const values = {
+            get length() { order += 'L'; return {valueOf() {order += 'N'; return 3;}}; },
+            get 0() { order += '0'; this[1] = 'new'; return 'old'; },
+            get 2() { order += '2'; throw 'must stop before index 2'; },
+            indexOf: [].indexOf
+        };
+        const position = {valueOf() {order += 'F'; return 0;}};
+        console.log(values.indexOf('new', position), order);
+        const array = [1, 2, 3];
+        console.log(array.indexOf(3, {valueOf() {array.length = 0; array[1] = 3; return 0;}}), array.length);
+        const inherited = {length: 3, indexOf: [].indexOf, lastIndexOf: [].lastIndexOf, includes: [].includes};
+        inherited.__proto__ = {get 1() {order += 'I'; return 42;}};
+        console.log(inherited.indexOf(42), inherited.lastIndexOf(42), inherited.includes(42));
+        const backwards = {length: 4, lastIndexOf: [].lastIndexOf,
+            get 3() {order += '3'; this[1] = 7; return 9;},
+            get 2() {order += '2'; return 8;},
+            get 0() {throw 'must stop before index 0';}};
+        order = '';
+        console.log(backwards.lastIndexOf(7), order);
+    "#,
+        &["1 LNF0", "1 2", "1 1 true", "1 32"],
+    );
+}
+
+#[test]
+fn searches_are_borrowable_on_strings_and_functions_and_preserve_abrupt_completion() {
+    assert_output(
+        r#"
+        const indexOf = [].indexOf, lastIndexOf = [].lastIndexOf, includes = [].includes;
+        console.log(indexOf.call('a\ud83d\ude00a', '\ude00'), lastIndexOf.call('aba', 'a'));
+        console.log(includes.call('a\ud800', '\ud800'), includes.call(true, undefined));
+        function callable(a, b) {}
+        callable[0] = 'x'; callable[1] = 'y'; callable[2] = 'z';
+        console.log(indexOf.call(callable, 'y'), lastIndexOf.call(callable, 'z'), includes.call(callable, 'x'));
+        const token = {}, array = [1];
+        try { array.indexOf(1, {valueOf() {throw token;}}); } catch (error) {console.log(error === token);}
+        const getter = {length: 1, get 0() {throw token;}, includes};
+        try { getter.includes(1); } catch (error) {console.log(error === token);}
+        try { array.lastIndexOf(1, Symbol()); } catch (error) {console.log(error.name);}
+        try { indexOf.call(null, 1); } catch (error) {console.log(error.name);}
+        try { includes(1); } catch (error) {console.log(error.name);}
+        console.log(array.indexOf(1), array.includes(1));
+    "#,
+        &[
+            "2 2",
+            "true false",
+            "1 -1 true",
+            "true",
+            "true",
+            "TypeError",
+            "TypeError",
+            "TypeError",
+            "0 true",
+        ],
+    );
+}
+
+#[test]
+fn sparse_searches_cannot_escape_instruction_budget_through_guest_catch() {
+    for method in ["indexOf", "lastIndexOf", "includes"] {
+        let module = lower(&format!(
+            "const value = {{length: 9007199254740991, method: [].{method}}}; try {{ value.method(42); }} catch (error) {{ console.log('caught'); }}"
+        ));
+        for throughput in [false, true] {
+            let mut config = config(throughput);
+            config.instruction_budget = 1_000;
+            let error = InterpreterCore::new(config, "array-search-budget")
+                .execute(&module)
+                .unwrap_err();
+            assert!(
+                matches!(error, InterpreterError::BudgetExhausted { .. }),
+                "{method}: {error:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn searches_preserve_receiver_search_position_and_observed_element_labels() {
+    for throughput in [false, true] {
+        for method in ["indexOf", "lastIndexOf", "includes"] {
+            for labeled_register in [Some(0), Some(2), Some(3), None] {
+                let mut core = InterpreterCore::new(config(throughput), "array-search-labels");
+                core.execute(&lower("const values = [1, 2];")).unwrap();
+                let index = core
+                    .get_heap()
+                    .iter()
+                    .position(|object| object.is_array)
+                    .unwrap();
+                core.write_register(0, Value::Object(ObjectId(index as u32)));
+                core.write_register(1, Value::str(method));
+                core.write_register(2, Value::Int(2));
+                core.write_register(3, Value::Int(1));
+                let mut seed = serde_json::to_value(core.capture_execution_seed()).unwrap();
+                if let Some(register) = labeled_register {
+                    seed["register_labels"][register] =
+                        serde_json::to_value(Label::Secret).unwrap();
+                } else {
+                    seed["heap"][index]["property_labels"]["1"] =
+                        serde_json::to_value(Label::Secret).unwrap();
+                }
+                core.reset_execution_state_from_seed(
+                    &serde_json::from_value::<ExecutionSeed>(seed).unwrap(),
+                )
+                .unwrap();
+                // Unlike native_array_call, leave both argument registers intact.
+                let mut module = native_array_call(2);
+                module.instructions[0] = Op::GetProperty {
+                    dst: 5,
+                    obj: 0,
+                    key: 1,
+                };
+                module.instructions[1] = Op::CallMethod {
+                    dst: 4,
+                    callee: 5,
+                    receiver: 0,
+                    args: RegRange { start: 2, count: 2 },
+                };
+                let result = core.execute(&module).unwrap();
+                assert_eq!(
+                    result.value,
+                    if method == "includes" {
+                        Value::Bool(true)
+                    } else {
+                        Value::Int(1)
+                    }
+                );
+                assert_eq!(
+                    result.completion_label,
+                    Label::Secret,
+                    "{method}: register {labeled_register:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn callbacks_receive_live_values_indices_receiver_and_this_arg() {
     assert_output(
         r#"

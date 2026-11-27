@@ -2232,6 +2232,10 @@ pub enum BuiltinFunctionKind {
     GeneratorPrototypeReturn,
     GeneratorPrototypeThrow,
     IteratorPrototypeIterator,
+    // Append new intrinsic kinds: discriminants participate in replay hashes.
+    ArrayPrototypeIndexOf,
+    ArrayPrototypeLastIndexOf,
+    ArrayPrototypeIncludes,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -2290,6 +2294,9 @@ impl BuiltinFunction {
             BuiltinFunctionKind::ArrayPrototypeFindIndex => "findIndex",
             BuiltinFunctionKind::ArrayPrototypeReduce => "reduce",
             BuiltinFunctionKind::ArrayPrototypeReduceRight => "reduceRight",
+            BuiltinFunctionKind::ArrayPrototypeIndexOf => "indexOf",
+            BuiltinFunctionKind::ArrayPrototypeLastIndexOf => "lastIndexOf",
+            BuiltinFunctionKind::ArrayPrototypeIncludes => "includes",
             BuiltinFunctionKind::StringPrototypeIndexOf => "indexOf",
             BuiltinFunctionKind::StringPrototypeLastIndexOf => "lastIndexOf",
             BuiltinFunctionKind::StringPrototypeIncludes => "includes",

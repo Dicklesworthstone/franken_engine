@@ -36,6 +36,9 @@ impl InterpreterCore {
             "findIndex" => BuiltinFunctionKind::ArrayPrototypeFindIndex,
             "reduce" => BuiltinFunctionKind::ArrayPrototypeReduce,
             "reduceRight" => BuiltinFunctionKind::ArrayPrototypeReduceRight,
+            "indexOf" => BuiltinFunctionKind::ArrayPrototypeIndexOf,
+            "lastIndexOf" => BuiltinFunctionKind::ArrayPrototypeLastIndexOf,
+            "includes" => BuiltinFunctionKind::ArrayPrototypeIncludes,
             _ => return None,
         };
         Some(RuntimeProperty::Data(Value::BuiltinFunction(
@@ -190,6 +193,11 @@ impl InterpreterCore {
                 | BuiltinFunctionKind::ArrayPrototypeReduceRight => {
                     self.dispatch_array_callback(module, kind, receiver, args, length, &mut label)
                 }
+                BuiltinFunctionKind::ArrayPrototypeIndexOf
+                | BuiltinFunctionKind::ArrayPrototypeLastIndexOf
+                | BuiltinFunctionKind::ArrayPrototypeIncludes => {
+                    self.dispatch_array_search(module, kind, &receiver, args, length, &mut label)
+                }
                 _ => unreachable!("array method dispatcher accepts only array methods"),
             }
         })();
@@ -240,6 +248,96 @@ impl InterpreterCore {
             }
             Err(error) => Err(error),
         }
+    }
+
+    /// ES2020 Array.prototype searches snapshot LengthOfArrayLike
+    /// before converting fromIndex, then observe each visited property live.
+    /// includes uses Get and SameValueZero; indexOf/lastIndexOf first use
+    /// HasProperty and compare only present elements with strict equality.
+    fn dispatch_array_search(
+        &mut self,
+        module: &Ir3Module,
+        kind: BuiltinFunctionKind,
+        receiver: &Value,
+        args: RegRange,
+        length: u64,
+        label: &mut Label,
+    ) -> Result<Value, InterpreterError> {
+        let includes = kind == BuiltinFunctionKind::ArrayPrototypeIncludes;
+        let reverse = kind == BuiltinFunctionKind::ArrayPrototypeLastIndexOf;
+        let absent = if includes {
+            Value::Bool(false)
+        } else {
+            Value::Int(-1)
+        };
+        if length == 0 {
+            // Even a throwing fromIndex conversion is skipped for no elements.
+            return Ok(absent);
+        }
+        let (search, search_label) = self.promise_hostcall_argument(args, 0)?;
+        *label = label.join(&search_label);
+        let (position, position_label) = self.promise_hostcall_argument(args, 1)?;
+        *label = label.join(&position_label);
+        let retained_bytes = Self::estimate_timer_value_bytes(receiver)
+            .saturating_add(Self::estimate_timer_value_bytes(&search))
+            .saturating_add(Self::estimate_timer_value_bytes(&position))
+            .saturating_add(Self::estimate_label_bytes(label));
+        self.with_array_method_temporary(retained_bytes, |core| {
+            // An omitted lastIndexOf fromIndex means len - 1; an explicitly
+            // supplied undefined means ToIntegerOrInfinity(NaN), which is 0.
+            let position = if reverse && args.count < 2 {
+                (length - 1) as f64
+            } else {
+                let number = core.native_method_to_number(module, position, label)?;
+                if number.is_nan() { 0.0 } else { number.trunc() }
+            };
+            let start = if reverse {
+                let index = if position >= 0.0 {
+                    position.min((length - 1) as f64)
+                } else {
+                    length as f64 + position
+                };
+                if index < 0.0 {
+                    return Ok(absent);
+                }
+                index as u64
+            } else {
+                if position >= length as f64 {
+                    return Ok(absent);
+                }
+                if position < 0.0 {
+                    (length as f64 + position).max(0.0) as u64
+                } else {
+                    position as u64
+                }
+            };
+            let count = if reverse { start + 1 } else { length - start };
+            for offset in 0..count {
+                core.charge_array_method_step()?;
+                let index = if reverse {
+                    start - offset
+                } else {
+                    start + offset
+                };
+                let key = index.to_string();
+                if !includes && !core.has_array_method_property(module, receiver, &key, label)? {
+                    continue;
+                }
+                let value = core.read_array_method_property(module, receiver, &key, label)?;
+                let matches = Self::strict_eq_values(&value, &search)
+                    || (includes
+                        && matches!((&value, &search), (Value::Float(left), Value::Float(right))
+                            if left.inner().is_nan() && right.inner().is_nan()));
+                if matches {
+                    return Ok(if includes {
+                        Value::Bool(true)
+                    } else {
+                        Value::Int(index as i64)
+                    });
+                }
+            }
+            Ok(absent)
+        })
     }
 
     fn dispatch_array_callback(

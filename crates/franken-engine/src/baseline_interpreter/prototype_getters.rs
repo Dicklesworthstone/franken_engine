@@ -19,7 +19,7 @@ use super::*;
 /// are real own properties of the prototype, installed when it is created.
 /// The [`SPECIES_GETTER_KEY`] rows are the constructors' own
 /// `get [Symbol.species]` (bd-9vouw.278), installed on the constructor.
-pub(super) const PROTOTYPE_GETTERS: [(&str, &str, &str); 70] = [
+pub(super) const PROTOTYPE_GETTERS: [(&str, &str, &str); 85] = [
     // Annex B.2.2.1 (bd-9vouw.284): the one accessor here with a setter
     // ([`InterpreterCore::prototype_accessor_setter`]). Ordinary `o.__proto__`
     // reads and writes keep their direct path while they reach it.
@@ -93,6 +93,21 @@ pub(super) const PROTOTYPE_GETTERS: [(&str, &str, &str); 70] = [
     ("Response", "bodyUsed", "get bodyUsed"),
     ("Response", "redirected", "get redirected"),
     ("Response", "type", "get type"),
+    ("Request", "url", "get url"),
+    ("Request", "method", "get method"),
+    ("Request", "headers", "get headers"),
+    ("Request", "bodyUsed", "get bodyUsed"),
+    ("Request", "redirect", "get redirect"),
+    ("Request", "signal", "get signal"),
+    ("Request", "destination", "get destination"),
+    ("Request", "referrer", "get referrer"),
+    ("Request", "referrerPolicy", "get referrerPolicy"),
+    ("Request", "mode", "get mode"),
+    ("Request", "credentials", "get credentials"),
+    ("Request", "cache", "get cache"),
+    ("Request", "integrity", "get integrity"),
+    ("Request", "keepalive", "get keepalive"),
+    ("Request", "duplex", "get duplex"),
     // WHATWG Encoding (bd-3l74k, bd-9vouw.150).
     ("TextEncoder", "encoding", "get encoding"),
     ("TextDecoder", "encoding", "get encoding"),
@@ -399,6 +414,9 @@ impl InterpreterCore {
         if owner == "Response" {
             return self.fetch_response_getter(id, key);
         }
+        if owner == "Request" {
+            return self.fetch_request_getter(id, key);
+        }
         if owner == "TextEncoder" && key == "encoding" {
             return Ok(Value::str("utf-8"));
         }
@@ -530,6 +548,7 @@ impl InterpreterCore {
             }
             "Blob" => object.blob.is_some(),
             "Response" => object.fetch_response_slots().is_some(),
+            "Request" => object.fetch_request_slots().is_some(),
             "TextEncoder" => object.brand() == Some(text_codec::TEXT_ENCODER_TYPE),
             "TextDecoder" => {
                 object.brand() == Some(text_codec::TEXT_DECODER_TYPE)

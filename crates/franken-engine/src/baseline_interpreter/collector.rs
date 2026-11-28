@@ -1809,6 +1809,10 @@ impl InterpreterCore {
                     HostObjectSlots::FetchResponse(response) => {
                         marker.object(response.headers);
                     }
+                    HostObjectSlots::FetchRequest(request) => {
+                        marker.object(request.headers);
+                        marker.object(request.signal);
+                    }
                     HostObjectSlots::FetchHeadersIterator(iterator) => {
                         marker.object(iterator.headers);
                     }

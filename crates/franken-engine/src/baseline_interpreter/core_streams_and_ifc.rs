@@ -9268,6 +9268,15 @@ impl InterpreterCore {
                                 &mut queued,
                             );
                         }
+                        HostObjectSlots::FetchRequest(request) => {
+                            for id in [request.headers, request.signal] {
+                                Self::queue_object_id_from_value(
+                                    &Value::Object(id),
+                                    &mut frontier,
+                                    &mut queued,
+                                );
+                            }
+                        }
                         HostObjectSlots::FetchHeadersIterator(iterator) => {
                             Self::queue_object_id_from_value(
                                 &Value::Object(iterator.headers),

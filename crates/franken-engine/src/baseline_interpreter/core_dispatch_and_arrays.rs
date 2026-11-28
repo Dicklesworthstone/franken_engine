@@ -4685,6 +4685,9 @@ impl InterpreterCore {
             BuiltinFunctionKind::FetchResponseMethod => {
                 self.dispatch_fetch_response_method(module, builtin, args, receiver, receiver_register)
             }
+            BuiltinFunctionKind::FetchRequestMethod => {
+                self.dispatch_fetch_request_method(module, builtin, args, receiver, receiver_register)
+            }
             BuiltinFunctionKind::FetchHeadersMethod => {
                 self.dispatch_public_fetch_headers_method(
                     module,
@@ -16296,6 +16299,7 @@ impl InterpreterCore {
                             Some("Blob") => self.construct_blob(module, args)?,
                             Some("Headers") => self.construct_fetch_headers(module, args)?,
                             Some("Response") => self.construct_fetch_response(module, args)?,
+                            Some("Request") => self.construct_fetch_request(module, args)?,
                             Some("SharedArrayBuffer") => self.dispatch_builtin_hostcall(
                                 "builtin:SharedArrayBuffer",
                                 args,

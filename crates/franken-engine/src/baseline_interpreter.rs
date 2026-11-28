@@ -1514,6 +1514,7 @@ fn canonical_builtin_prototype_name(name: &str) -> Option<&'static str> {
         "DOMException" => Some("DOMException"),
         "Blob" => Some("Blob"),
         "Response" => Some("Response"),
+        "Request" => Some("Request"),
         "Headers" => Some("Headers"),
         "Headers Iterator" => Some("Headers Iterator"),
         "NumberFormat" => Some("NumberFormat"),
@@ -4385,6 +4386,8 @@ pub enum BuiltinFunctionKind {
     // Append only: builtin ordinals participate in deterministic state hashes.
     FetchResponseStatic,
     FetchHeadersIteratorNext,
+    // Append only: builtin ordinals participate in deterministic state hashes.
+    FetchRequestMethod,
 }
 
 /// Annex B B.2.2.2-14: each String HTML method's tag and attribute name.
@@ -5985,6 +5988,11 @@ impl BuiltinFunction {
                 .copied()
                 .find(|name| self.module_specifier.0.as_deref() == Some(*name))
                 .unwrap_or(""),
+            BuiltinFunctionKind::FetchRequestMethod => fetch::REQUEST_METHODS
+                .iter()
+                .copied()
+                .find(|name| self.module_specifier.0.as_deref() == Some(*name))
+                .unwrap_or(""),
             BuiltinFunctionKind::FetchResponseStatic => match self.module_specifier.0.as_deref() {
                 Some("error") => "error",
                 Some("json") => "json",
@@ -6651,6 +6659,7 @@ impl BuiltinFunction {
             | K::SymbolPrototypeToPrimitive => "Symbol.prototype",
             K::BlobMethod => "Blob.prototype",
             K::FetchResponseMethod => "Response.prototype",
+            K::FetchRequestMethod => "Request.prototype",
             K::FetchHeadersMethod => "Headers.prototype",
             K::FetchResponseStatic => "Response",
             K::FetchHeadersIteratorNext => "Headers Iterator",
@@ -7000,7 +7009,7 @@ impl DynamicFunctionKind {
 /// Every name has a canonical builtin prototype (`ensure_builtin_prototype`),
 /// which is also the prototype engine-created instances use, so `instanceof`,
 /// `x.constructor === X` and `class E extends X` agree with the instances.
-pub(crate) const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 52] = [
+pub(crate) const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 53] = [
     "Object",
     "Array",
     "Number",
@@ -7070,6 +7079,7 @@ pub(crate) const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 52] = [
     // Buffered Fetch objects share the native response and header slots.
     "Headers",
     "Response",
+    "Request",
     // ES2020 24.2 (bd-9vouw.244).
     "SharedArrayBuffer",
     // ES2025 Iterator (bd-9vouw.179): abstract; its prototype is
@@ -9736,6 +9746,7 @@ enum HostObjectSlots {
     FetchResponse(fetch::FetchResponseSlots),
     FetchHeaders(fetch::FetchHeadersSlots),
     FetchHeadersIterator(fetch::FetchHeadersIteratorSlots),
+    FetchRequest(fetch::FetchRequestSlots),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -10781,6 +10792,7 @@ fn validate_heap_symbol_references(
             | HostObjectSlots::EventTarget(_)
             | HostObjectSlots::AbortController(_)
             | HostObjectSlots::FetchResponse(_)
+            | HostObjectSlots::FetchRequest(_)
             | HostObjectSlots::FetchHeaders(_)
             | HostObjectSlots::FetchHeadersIterator(_) => {}
         }

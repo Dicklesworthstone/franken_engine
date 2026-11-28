@@ -141,7 +141,7 @@ impl InterpreterCore {
 
     /// Web IDL ByteString keeps Latin-1 without replacing lone surrogates.
     /// HTTP transmission retains its separate, narrower ASCII wire contract.
-    fn fetch_object_byte_string(
+    pub(in crate::baseline_interpreter) fn fetch_object_byte_string(
         &mut self,
         module: &Ir3Module,
         value: Value,
@@ -164,7 +164,7 @@ impl InterpreterCore {
         Ok(text.as_utf8_projection().to_string())
     }
 
-    fn fetch_stage_header_pair(
+    pub(in crate::baseline_interpreter) fn fetch_stage_header_pair(
         &mut self,
         fields: &mut Vec<(String, String)>,
         name: String,
@@ -987,19 +987,19 @@ impl InterpreterCore {
         owner: &str,
         prototype: ObjectId,
     ) -> Result<(), InterpreterError> {
-        if matches!(owner, "Headers" | "Response") {
-            let name = if owner == "Headers" {
-                "Headers"
-            } else {
-                "Response"
+        if matches!(owner, "Headers" | "Response" | "Request") {
+            let name = match owner {
+                "Headers" => "Headers",
+                "Request" => "Request",
+                _ => "Response",
             };
             self.install_prototype_constructor(
                 prototype,
                 Value::BuiltinFunction(BuiltinFunction::standard_constructor(name)),
             )?;
         }
-        if owner == "Response" {
-            for name in [
+        let getters: &[&str] = match owner {
+            "Response" => &[
                 "type",
                 "url",
                 "redirected",
@@ -1008,24 +1008,43 @@ impl InterpreterCore {
                 "statusText",
                 "headers",
                 "bodyUsed",
-            ] {
-                let key = RuntimePropertyKey::String(JsString::from(name));
-                self.define_accessor_property(
-                    prototype,
-                    key.clone(),
-                    Value::BuiltinFunction(BuiltinFunction::prototype_getter("Response", name)),
-                    AccessorKind::Get,
-                )?;
-                self.set_own_property_attributes(
-                    prototype,
-                    &key,
-                    PropertyAttributes {
-                        writable: false,
-                        enumerable: true,
-                        configurable: true,
-                    },
-                )?;
-            }
+            ],
+            "Request" => &[
+                "url",
+                "method",
+                "headers",
+                "bodyUsed",
+                "redirect",
+                "signal",
+                "destination",
+                "referrer",
+                "referrerPolicy",
+                "mode",
+                "credentials",
+                "cache",
+                "integrity",
+                "keepalive",
+                "duplex",
+            ],
+            _ => &[],
+        };
+        for &name in getters {
+            let key = RuntimePropertyKey::String(JsString::from(name));
+            self.define_accessor_property(
+                prototype,
+                key.clone(),
+                Value::BuiltinFunction(BuiltinFunction::prototype_getter(owner, name)),
+                AccessorKind::Get,
+            )?;
+            self.set_own_property_attributes(
+                prototype,
+                &key,
+                PropertyAttributes {
+                    writable: false,
+                    enumerable: true,
+                    configurable: true,
+                },
+            )?;
         }
         if owner == "Headers" {
             let key = RuntimePropertyKey::Symbol(WellKnownSymbol::Iterator.id());
@@ -1341,6 +1360,107 @@ mod tests {
             );
             assert_balanced(&core);
         }
+    }
+
+    #[test]
+    fn response_clone_preserves_later_header_mutation_provenance() {
+        let mut core = core();
+        let response = core
+            .alloc_fetch_response(
+                FetchResponseSlots {
+                    status: 200,
+                    status_text: String::new(),
+                    url: String::new(),
+                    headers: ObjectId(0),
+                    body: None,
+                    body_used: false,
+                    redirected: false,
+                    response_type: "default".to_string(),
+                },
+                vec![("x-private".to_string(), "classified header".to_string())],
+                false,
+                &Label::Public,
+            )
+            .unwrap();
+        let headers = core.heap[response.0 as usize]
+            .fetch_response_slots()
+            .unwrap()
+            .headers;
+        core.join_object_mutation_label(headers, &Label::Secret)
+            .unwrap();
+        core.take_pending_hostcall_result_label();
+        let copy = core
+            .dispatch_fetch_response_method(
+                &module(),
+                &BuiltinFunction::fetch_response_method("clone").unwrap(),
+                RegRange { start: 0, count: 0 },
+                Some(Value::Object(response)),
+                None,
+            )
+            .unwrap();
+        let Value::Object(copy) = copy else {
+            panic!("native Response clone")
+        };
+        let copied_headers = core.heap[copy.0 as usize]
+            .fetch_response_slots()
+            .unwrap()
+            .headers;
+        assert_ne!(headers, copied_headers);
+        assert_eq!(core.object_mutation_labels.get(&copy), Some(&Label::Secret));
+        assert_eq!(
+            core.object_mutation_labels.get(&copied_headers),
+            Some(&Label::Secret)
+        );
+        assert_eq!(
+            core.heap[copied_headers.0 as usize]
+                .fetch_headers_slots()
+                .unwrap()
+                .fields,
+            [("x-private".to_string(), "classified header".to_string())],
+        );
+        assert_balanced(&core);
+    }
+
+    #[test]
+    fn response_clone_refusal_preserves_private_body_state() {
+        let mut core = core();
+        let response = core
+            .alloc_fetch_response(
+                FetchResponseSlots {
+                    status: 200,
+                    status_text: String::new(),
+                    url: String::new(),
+                    headers: ObjectId(0),
+                    body: Some(Vec::new()),
+                    body_used: true,
+                    redirected: false,
+                    response_type: "default".to_string(),
+                },
+                Vec::new(),
+                false,
+                &Label::Secret,
+            )
+            .unwrap();
+        let result = core.dispatch_fetch_response_method(
+            &module(),
+            &BuiltinFunction::fetch_response_method("clone").unwrap(),
+            RegRange { start: 0, count: 0 },
+            Some(Value::Object(response)),
+            None,
+        );
+        assert!(
+            matches!(result, Err(InterpreterError::UncaughtException { .. })),
+            "{result:?}"
+        );
+        assert_eq!(core.pending_exception_label, Label::Secret);
+        assert_eq!(core.json_parse_context_label().unwrap(), Label::Public);
+        assert!(
+            core.heap[response.0 as usize]
+                .fetch_response_slots()
+                .unwrap()
+                .body_used
+        );
+        assert_balanced(&core);
     }
 
     #[test]

@@ -202,6 +202,65 @@ impl InterpreterCore {
         args: RegRange,
         receiver: Option<Value>,
     ) -> Result<Value, InterpreterError> {
+        let is_abort_operation = builtin.module_specifier.0.as_deref().is_some_and(|name| {
+            name.starts_with("AbortController.") || name.starts_with("AbortSignal.")
+        });
+        if !is_abort_operation {
+            return self.event_target_method_unscoped(module, builtin, args, receiver);
+        }
+        // Cancellation state and primitive reasons are observable data. Keep
+        // operand provenance active through native propagation and callbacks,
+        // including operations reached through borrowed or bound methods.
+        let inputs = self.join_arg_range_label(args)?;
+        let receiver = receiver.unwrap_or(Value::Undefined);
+        self.scoped_conversion(|core| {
+            let pins = core.gc_pin_network_values(
+                std::iter::once(receiver.clone())
+                    .chain(builtin.bound_object.map(|id| Value::Object(ObjectId(id)))),
+            );
+            let outcome = (|| {
+                core.json_observe_label(inputs)?;
+                core.json_observe_reachable_value(&receiver)?;
+                if let Some(signal) = builtin.bound_object {
+                    core.json_observe_reachable_value(&Value::Object(ObjectId(signal)))?;
+                }
+                for index in 0..args.count {
+                    let value = core.builtin_arg(args, index)?.unwrap_or(Value::Undefined);
+                    core.json_observe_reachable_value(&value)?;
+                }
+                let outcome =
+                    core.event_target_method_unscoped(module, builtin, args, Some(receiver));
+                if let Err(error) = &outcome
+                    && Self::js_catchable_error_name(error).is_none()
+                    && !matches!(error, InterpreterError::UncaughtException { .. })
+                {
+                    return outcome;
+                }
+                core.observe_scoped_callback_result()?;
+                match outcome {
+                    Err(error) if Self::js_catchable_error_name(&error).is_some() => {
+                        Err(core.scoped_native_error(&error)?)
+                    }
+                    Err(error @ InterpreterError::UncaughtException { .. }) => {
+                        let label = core.json_parse_context_label()?;
+                        core.join_pending_exception_label(&label)?;
+                        Err(error)
+                    }
+                    outcome => outcome,
+                }
+            })();
+            core.gc_unpin_network_values(pins);
+            outcome
+        })
+    }
+
+    fn event_target_method_unscoped(
+        &mut self,
+        module: &Ir3Module,
+        builtin: &BuiltinFunction,
+        args: RegRange,
+        receiver: Option<Value>,
+    ) -> Result<Value, InterpreterError> {
         let specifier = builtin
             .module_specifier
             .0
@@ -300,7 +359,7 @@ impl InterpreterCore {
                 let signal = self.abort_signal_receiver(&receiver, "throwIfAborted")?;
                 let slots = self.abort_signal_slots_cloned(signal)?;
                 if slots.aborted {
-                    let label = self.clone_active_execution_context_label()?;
+                    let label = self.json_parse_context_label()?;
                     return Err(self.throw_guest_value(slots.reason, label)?);
                 }
                 Ok(Value::Undefined)
@@ -333,7 +392,8 @@ impl InterpreterCore {
                     iterator_handle: None,
                     bound_object: Some(signal.0),
                 });
-                let label = self.clone_active_execution_context_label()?;
+                let label = self.json_parse_context_label()?;
+                self.join_object_mutation_label(signal, &label)?;
                 self.timer_schedule_from_values(
                     fire,
                     Some(Value::Int(delay)),
@@ -473,24 +533,32 @@ impl InterpreterCore {
     fn alloc_abort_signal(&mut self) -> Result<ObjectId, InterpreterError> {
         let prototype = self.ensure_builtin_prototype("AbortSignal")?;
         let signal = self.alloc_object_with_prototype(Some(prototype))?;
-        let listeners = self.alloc_array_from_values(&[])?;
-        let algorithms = self.alloc_array_from_values(&[])?;
-        let dependents = self.alloc_array_from_values(&[])?;
-        self.set_host_slots(
-            signal,
-            HostObjectSlots::AbortSignal(AbortSignalSlots {
-                listeners: Some(listeners),
-                aborted: false,
-                reason: Value::Undefined,
-                algorithms: Some(algorithms),
-                dependents: Some(dependents),
-                is_composite: false,
-                sources: None,
-            }),
-        )?;
-        self.set_object_property(signal, "onabort".to_string(), Value::Null)?;
-        self.hide_internal_slots(signal, &["onabort"])?;
-        Ok(signal)
+        let pins = self.gc_pin_network_values([Value::Object(signal)]);
+        let result = (|| {
+            let listeners = self.alloc_array_from_values(&[])?;
+            self.gc_pin_network_values([Value::Object(listeners)]);
+            let algorithms = self.alloc_array_from_values(&[])?;
+            self.gc_pin_network_values([Value::Object(algorithms)]);
+            let dependents = self.alloc_array_from_values(&[])?;
+            self.gc_pin_network_values([Value::Object(dependents)]);
+            self.set_host_slots(
+                signal,
+                HostObjectSlots::AbortSignal(AbortSignalSlots {
+                    listeners: Some(listeners),
+                    aborted: false,
+                    reason: Value::Undefined,
+                    algorithms: Some(algorithms),
+                    dependents: Some(dependents),
+                    is_composite: false,
+                    sources: None,
+                }),
+            )?;
+            self.set_object_property(signal, "onabort".to_string(), Value::Null)?;
+            self.hide_internal_slots(signal, &["onabort"])?;
+            Ok(signal)
+        })();
+        self.gc_unpin_network_values(pins);
+        result
     }
 
     /// A new Event (or CustomEvent) with `flags` = [bubbles, cancelable,
@@ -695,6 +763,12 @@ impl InterpreterCore {
         signal: ObjectId,
         reason: Value,
     ) -> Result<(), InterpreterError> {
+        // Primitive values carry their provenance in the operation context,
+        // not in Value itself. Preserve it on every source and dependent before
+        // publishing the reason and the observable aborted flag.
+        self.json_observe_reachable_value(&reason)?;
+        let label = self.json_parse_context_label()?;
+        self.join_object_mutation_label(signal, &label)?;
         // Admit the potentially allocating reason before publishing aborted.
         self.mutate_abort_signal_slots(signal, |slots| {
             slots.reason = reason;
@@ -759,45 +833,141 @@ impl InterpreterCore {
                 }
             }
         }
-        let result = self.alloc_abort_signal()?;
-        for source in &sources {
-            if self.abort_signal_is_aborted(*source) {
-                let reason = self.abort_signal_reason(*source);
-                self.signal_mark_aborted(result, reason)?;
-                return Ok(Value::Object(result));
+        self.create_dependent_abort_signal(sources)
+            .map(Value::Object)
+    }
+
+    /// Fetch owns a distinct dependent signal for each Request and clone.
+    /// Reuse the native dependency graph, so guest event handlers cannot
+    /// suppress cancellation by replacing methods or stopping event delivery.
+    pub(super) fn alloc_fetch_dependent_signal(
+        &mut self,
+        source: Option<ObjectId>,
+    ) -> Result<ObjectId, InterpreterError> {
+        let pins = self.gc_pin_network_values(source.into_iter().map(Value::Object));
+        let result = (|| {
+            if let Some(source) = source {
+                self.json_observe_reachable_value(&Value::Object(source))?;
             }
-        }
-        let mut roots = Vec::new();
-        let mut seen = std::collections::BTreeSet::new();
-        for source in sources {
-            let candidates = if self.abort_signal_is_composite(source) {
-                self.signal_source_objects(source)?
-            } else {
-                vec![source]
-            };
-            for root in candidates {
-                if seen.insert(root.0) {
-                    roots.push(root);
+            let signal = self.create_dependent_abort_signal(source.into_iter().collect())?;
+            let label = self.json_parse_context_label()?;
+            self.join_object_mutation_label(signal, &label)?;
+            Ok(signal)
+        })();
+        self.gc_unpin_network_values(pins);
+        result
+    }
+
+    fn create_dependent_abort_signal(
+        &mut self,
+        sources: Vec<ObjectId>,
+    ) -> Result<ObjectId, InterpreterError> {
+        let pins = self.gc_pin_network_values(sources.iter().copied().map(Value::Object));
+        let mut scratch = 0u64;
+        let outcome = (|| {
+            for source in &sources {
+                self.json_observe_reachable_value(&Value::Object(*source))?;
+            }
+            let result = self.alloc_abort_signal()?;
+            self.gc_pin_network_values([Value::Object(result)]);
+            for source in &sources {
+                if self.abort_signal_is_aborted(*source) {
+                    let reason = self.abort_signal_reason(*source);
+                    self.signal_mark_aborted(result, reason)?;
+                    return Ok(result);
                 }
             }
-        }
-        let root_values: Vec<Value> = roots
-            .iter()
-            .map(|root| Value::Int(i64::from(root.0)))
-            .collect();
-        let root_list = self.alloc_array_from_values(&root_values)?;
-        self.mutate_abort_signal_slots(result, |slots| {
-            slots.is_composite = true;
-            slots.sources = Some(root_list);
-        })?;
-        for root in roots {
-            self.event_array_push(
-                root,
-                EventArraySlot::SignalDependents,
-                Value::Object(result),
-            )?;
-        }
-        Ok(Value::Object(result))
+            let mut roots = Vec::new();
+            let mut seen = std::collections::BTreeSet::new();
+            for source in sources {
+                let candidates = if self.abort_signal_is_composite(source) {
+                    let length = self.heap[source.0 as usize]
+                        .abort_signal_slots()
+                        .and_then(|slots| slots.sources)
+                        .map_or(Ok(0), |list| self.array_like_length(list))?;
+                    let bytes = (length as u64).saturating_mul(
+                        (std::mem::size_of::<Value>() + std::mem::size_of::<ObjectId>()) as u64,
+                    );
+                    self.json_reserve_temporary(bytes)?;
+                    scratch = scratch.saturating_add(bytes);
+                    self.signal_source_objects(source)?
+                } else {
+                    let bytes = std::mem::size_of::<ObjectId>() as u64;
+                    self.json_reserve_temporary(bytes)?;
+                    scratch = scratch.saturating_add(bytes);
+                    vec![source]
+                };
+                for root in candidates {
+                    self.json_charge_work()?;
+                    if !seen.contains(&root.0) {
+                        // Account the native root/order set, weak values and
+                        // staged replacement IDs before they grow.
+                        let bytes = 128u64;
+                        self.json_reserve_temporary(bytes)?;
+                        scratch = scratch.saturating_add(bytes);
+                        seen.insert(root.0);
+                        roots.push(root);
+                    }
+                }
+            }
+            self.gc_pin_network_values(roots.iter().copied().map(Value::Object));
+            let root_values: Vec<Value> = roots
+                .iter()
+                .map(|root| Value::Int(i64::from(root.0)))
+                .collect();
+            let root_list = self.alloc_array_from_values(&root_values)?;
+            self.gc_pin_network_values([Value::Object(root_list)]);
+            self.mutate_abort_signal_slots(result, |slots| {
+                slots.is_composite = true;
+                slots.sources = Some(root_list);
+            })?;
+            let label = self.json_parse_context_label()?;
+            self.join_object_mutation_label(result, &label)?;
+            let mut replacements = Vec::with_capacity(roots.len());
+            for root in roots {
+                let length = self
+                    .event_array_slot_id(root, EventArraySlot::SignalDependents)
+                    .map_or(Ok(0), |list| self.array_like_length(list))?;
+                let bytes = (length as u64).saturating_add(1).saturating_mul(
+                    (std::mem::size_of::<Value>() + std::mem::size_of::<ObjectId>()) as u64,
+                );
+                self.json_reserve_temporary(bytes)?;
+                scratch = scratch.saturating_add(bytes);
+                let previous = self.event_array_objects(root, EventArraySlot::SignalDependents)?;
+                let mut values = Vec::new();
+                values
+                    .try_reserve_exact(length.saturating_add(1))
+                    .map_err(|_| {
+                        self.memory_budget_error(u64::MAX, self.heap_object_count_u32())
+                    })?;
+                values.extend(previous.into_iter().map(Value::Object));
+                values.push(Value::Object(result));
+                let list = self.alloc_array_from_values(&values)?;
+                self.gc_pin_network_values([Value::Object(list)]);
+                replacements.push((root, list));
+            }
+            // Publish only after every allocation, label write and budget
+            // check succeeds. Replacing fixed-size IDs changes no memory
+            // component and invokes no guest code; a refusal while staging a
+            // later root therefore leaves every original list untouched.
+            self.mutate_heap(|heap| {
+                for (root, list) in &replacements {
+                    let Some(HostObjectSlots::AbortSignal(slots)) =
+                        heap[root.0 as usize].host_slots.as_deref_mut()
+                    else {
+                        unreachable!("authenticated dependent signal source");
+                    };
+                    slots.dependents = Some(*list);
+                }
+            });
+            for (root, _) in replacements {
+                self.gc_write_barrier(root);
+            }
+            Ok(result)
+        })();
+        self.json_release_temporary(scratch);
+        self.gc_unpin_network_values(pins);
+        outcome
     }
 
     /// addEventListener(type, callback, options) (DOM 2.7.3).
@@ -1480,6 +1650,146 @@ mod abort_graph_tests {
             Value::Object(signal) => signal,
             other => panic!("expected signal object, got {other:?}"),
         }
+    }
+
+    fn abort_builtin(specifier: &str) -> BuiltinFunction {
+        BuiltinFunction {
+            kind: BuiltinFunctionKind::EventTargetMethod,
+            module_specifier: BuiltinModuleSpecifier::from_nonempty(specifier),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    #[test]
+    fn classified_primitive_abort_reason_labels_source_and_nested_dependents() {
+        let (mut core, module) = runtime();
+        let controller = core
+            .construct_event_target_family(
+                &module,
+                "AbortController",
+                RegRange { start: 0, count: 0 },
+            )
+            .unwrap();
+        let Value::Object(controller_id) = controller else {
+            panic!("native controller");
+        };
+        let source = core.heap[controller_id.0 as usize]
+            .abort_controller_signal()
+            .unwrap();
+        let dependent = any(&mut core, &module, &[source]);
+        let nested = any(&mut core, &module, &[dependent]);
+        core.seed_register(0, Value::str("classified primitive reason"))
+            .unwrap();
+        core.set_register_label(0, Label::Secret).unwrap();
+        core.event_target_method(
+            &module,
+            &abort_builtin("AbortController.abort"),
+            RegRange { start: 0, count: 1 },
+            Some(Value::Object(controller_id)),
+        )
+        .unwrap();
+        for signal in [source, dependent, nested] {
+            let slots = core.abort_signal_slots_cloned(signal).unwrap();
+            assert!(slots.aborted);
+            assert_eq!(slots.reason, Value::str("classified primitive reason"));
+            assert_eq!(
+                core.object_mutation_labels.get(&signal),
+                Some(&Label::Secret)
+            );
+        }
+        core.take_pending_hostcall_result_label();
+        assert_eq!(core.json_parse_context_label().unwrap(), Label::Public);
+        let error = core
+            .event_target_method(
+                &module,
+                &abort_builtin("AbortSignal.throwIfAborted"),
+                RegRange { start: 0, count: 0 },
+                Some(Value::Object(nested)),
+            )
+            .expect_err("the original classified reason is thrown");
+        assert!(matches!(error, InterpreterError::UncaughtException { .. }));
+        assert_eq!(
+            core.take_pending_exception_slot(),
+            Some((Value::str("classified primitive reason"), Label::Secret))
+        );
+    }
+
+    #[test]
+    fn already_aborted_dependent_creation_preserves_source_provenance() {
+        let (mut core, module) = runtime();
+        core.seed_register(0, Value::str("private abort reason"))
+            .unwrap();
+        core.set_register_label(0, Label::Secret).unwrap();
+        let source = core
+            .event_target_method(
+                &module,
+                &abort_builtin("AbortSignal.abort"),
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .unwrap();
+        let Value::Object(source) = source else {
+            panic!("native abort signal");
+        };
+        core.take_pending_hostcall_result_label();
+        let dependent = core
+            .scoped_conversion(|core| core.alloc_fetch_dependent_signal(Some(source)))
+            .unwrap();
+        assert!(core.abort_signal_is_aborted(dependent));
+        assert_eq!(
+            core.abort_signal_reason(dependent),
+            Value::str("private abort reason")
+        );
+        assert_eq!(
+            core.object_mutation_labels.get(&dependent),
+            Some(&Label::Secret)
+        );
+        assert!(
+            core.event_array_objects(source, EventArraySlot::SignalDependents)
+                .unwrap()
+                .is_empty(),
+            "an already-settled child needs no dependency registration"
+        );
+    }
+
+    #[test]
+    fn dependent_registration_refusal_never_publishes_only_some_source_edges() {
+        let (mut core, _) = runtime();
+        let first = core.alloc_abort_signal().unwrap();
+        let second = core.alloc_abort_signal().unwrap();
+        let original_first = core.event_array_slot_id(first, EventArraySlot::SignalDependents);
+        let original_second = core.event_array_slot_id(second, EventArraySlot::SignalDependents);
+        let before = core.heap.live_len();
+        // Four objects for the signal and its arrays, one weak-source array,
+        // and the first staged replacement fit. The second replacement fails.
+        core.config.max_heap_objects = u32::try_from(before + 6).unwrap();
+        core.scoped_conversion(|core| core.create_dependent_abort_signal(vec![first, second]))
+            .expect_err("second source-list allocation is refused");
+        assert_eq!(core.heap.live_len(), before + 6);
+        assert_eq!(
+            core.event_array_slot_id(first, EventArraySlot::SignalDependents),
+            original_first
+        );
+        assert_eq!(
+            core.event_array_slot_id(second, EventArraySlot::SignalDependents),
+            original_second
+        );
+        assert!(
+            core.event_array_objects(first, EventArraySlot::SignalDependents)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            core.event_array_objects(second, EventArraySlot::SignalDependents)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]

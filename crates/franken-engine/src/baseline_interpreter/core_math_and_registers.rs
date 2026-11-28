@@ -4557,6 +4557,12 @@ impl InterpreterCore {
             HostObjectSlots::FetchHeadersIterator(_) => {
                 std::mem::size_of::<fetch::FetchHeadersIteratorSlots>() as u64
             }
+            HostObjectSlots::FetchRequest(request) => {
+                (std::mem::size_of::<fetch::FetchRequestSlots>() as u64)
+                    .saturating_add(Self::estimate_string_bytes(&request.url))
+                    .saturating_add(Self::estimate_string_bytes(&request.method))
+                    .saturating_add(request.body.as_ref().map_or(0, |bytes| bytes.len() as u64))
+            }
             HostObjectSlots::FetchHeaders(headers) => headers.fields.iter().fold(
                 (std::mem::size_of::<fetch::FetchHeadersSlots>() as u64).saturating_add(
                     (headers.fields.len() as u64)
@@ -8366,7 +8372,7 @@ impl InterpreterCore {
             || (builtin.kind == BuiltinFunctionKind::StandardConstructor
                 && matches!(
                     Self::standard_constructor_name(builtin).ok(),
-                    Some("DataView" | "Headers" | "Response")
+                    Some("DataView" | "Headers" | "Response" | "Request")
                 ))
     }
 
@@ -8386,7 +8392,7 @@ impl InterpreterCore {
         let observes_arguments = builtin.kind == BuiltinFunctionKind::StandardConstructor
             && matches!(
                 Self::standard_constructor_name(builtin).ok(),
-                Some("DataView" | "Headers" | "Response")
+                Some("DataView" | "Headers" | "Response" | "Request")
             );
         if !Self::builtin_constructor_observes_callback_labels(builtin) {
             return self.construct_builtin_with_new_target(module, builtin, args, new_target);
@@ -8527,6 +8533,7 @@ impl InterpreterCore {
                 Some("Blob") => self.construct_blob(module, args)?,
                 Some("Headers") => self.construct_fetch_headers(module, args)?,
                 Some("Response") => self.construct_fetch_response(module, args)?,
+                Some("Request") => self.construct_fetch_request(module, args)?,
                 Some("SharedArrayBuffer") => {
                     self.dispatch_builtin_hostcall("builtin:SharedArrayBuffer", args, Some(module))?
                 }
@@ -10284,7 +10291,7 @@ impl InterpreterCore {
 
         let parent = match canonical {
             "BigInt" | "Number" | "String" | "Boolean" | "Symbol" | "Function" | "Response"
-            | "Headers" => Some(self.ensure_builtin_prototype("Object")?),
+            | "Headers" | "Request" => Some(self.ensure_builtin_prototype("Object")?),
             // ES2020 25.2.3, 25.7.3; ES2018 25.3.3: their [[Prototype]] is
             // %Function.prototype%.
             "GeneratorFunction" | "AsyncFunction" | "AsyncGeneratorFunction" => {
@@ -10382,6 +10389,7 @@ impl InterpreterCore {
                 | "Blob"
                 | "Response"
                 | "Headers"
+                | "Request"
         ) {
             let key = RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id());
             self.set_object_runtime_property(prototype, key.clone(), Value::str(canonical))?;
@@ -12883,7 +12891,7 @@ impl InterpreterCore {
                 "Constructor Iterator requires 'new'".to_string(),
             )),
             name if event_target::EVENT_TARGET_FAMILY.contains(&name)
-                || matches!(name, "Blob" | "Headers" | "Response") =>
+                || matches!(name, "Blob" | "Headers" | "Response" | "Request") =>
             {
                 Err(InterpreterError::TypeError {
                     expected: format!("new {name}(...)"),

@@ -13389,6 +13389,10 @@ impl InterpreterCore {
                         HostObjectSlots::FetchResponse(response) => {
                             visit_child(response.headers);
                         }
+                        HostObjectSlots::FetchRequest(request) => {
+                            visit_child(request.headers);
+                            visit_child(request.signal);
+                        }
                         HostObjectSlots::FetchHeadersIterator(iterator) => {
                             visit_child(iterator.headers);
                         }

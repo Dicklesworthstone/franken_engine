@@ -4,7 +4,8 @@
 //! with network responses. Redirects reuse the authorized, journaled request
 //! path for each hop. Received Location and status carry the network source label,
 //! so following requires the existing IFC policy to authorize the next sink.
-//! Request objects and streaming bodies are not yet supported.
+//! Native Request objects share the same buffered body and authorization path.
+//! Streaming bodies are not yet supported.
 //! Request header values are restricted to ASCII because the shared native
 //! sender frames String headers as UTF-8; received headers preserve Latin-1.
 //! Fetch Standard: https://fetch.spec.whatwg.org/#body-mixin
@@ -12,8 +13,10 @@
 use super::*;
 
 mod objects;
+mod request;
 
 pub(super) use objects::FetchHeadersIteratorSlots;
+pub(super) use request::{FetchRequestSlots, REQUEST_METHODS};
 
 pub(super) enum NetworkRequestOutcome {
     Response(Vec<u8>),
@@ -24,8 +27,8 @@ pub(super) enum NetworkRequestOutcome {
     InvalidProviderResult,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FetchRedirectMode {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) enum FetchRedirectMode {
     Follow,
     Error,
     Manual,
@@ -162,14 +165,15 @@ impl InterpreterCore {
     ) -> Result<(), InterpreterError> {
         let methods: &[&str] = match owner {
             "Response" => &RESPONSE_METHODS,
+            "Request" => &REQUEST_METHODS,
             "Headers" => &HEADERS_METHODS,
             _ => return Ok(()),
         };
         for name in methods {
-            let method = if owner == "Response" {
-                BuiltinFunction::fetch_response_method(name)
-            } else {
-                BuiltinFunction::fetch_headers_method(name)
+            let method = match owner {
+                "Response" => BuiltinFunction::fetch_response_method(name),
+                "Request" => BuiltinFunction::fetch_request_method(name),
+                _ => BuiltinFunction::fetch_headers_method(name),
             }
             .expect("closed Fetch method table");
             let key = RuntimePropertyKey::String(JsString::from(*name));
@@ -415,111 +419,14 @@ impl InterpreterCore {
             let mut scratch = 0;
             let completed = (|| {
                 let request_result = (|| {
+                    if args.count == 0 {
+                        return Err(fetch_type_error("the required Fetch input"));
+                    }
                     let input = core.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-                    let url_text = core.fetch_string(module, input, &mut scratch)?;
                     let init = core.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
-                    if !matches!(init, Value::Undefined | Value::Null) && !init.is_object_like() {
-                        return Err(fetch_type_error("a Fetch init dictionary"));
-                    }
-                    // Web IDL converts each dictionary member immediately
-                    // after Get, in lexicographic order. Abrupt conversion must
-                    // not run a later member's getter.
-                    core.fetch_reserve(&mut scratch, 5 * std::mem::size_of::<Value>() as u64)?;
-                    let body_value = core.fetch_property(module, &init, "body")?;
-                    core.gc_pin_network_values([body_value.clone()]);
-                    let body_value = core.normalize_fetch_body(module, body_value, &mut scratch)?;
-                    core.gc_pin_network_values([body_value.clone()]);
-                    let headers_value = core.fetch_property(module, &init, "headers")?;
-                    core.gc_pin_network_values([headers_value.clone()]);
-                    let mut headers =
-                        core.fetch_request_headers(module, headers_value, &mut scratch)?;
-                    let method_value = core.fetch_property(module, &init, "method")?;
-                    core.gc_pin_network_values([method_value.clone()]);
-                    let mut method = if matches!(method_value, Value::Undefined) {
-                        "GET".to_string()
-                    } else {
-                        core.fetch_string(module, method_value, &mut scratch)?
-                    };
-                    let redirect_value = core.fetch_property(module, &init, "redirect")?;
-                    core.gc_pin_network_values([redirect_value.clone()]);
-                    let redirect = if matches!(redirect_value, Value::Undefined) {
-                        FetchRedirectMode::Follow
-                    } else {
-                        match core
-                            .fetch_string(module, redirect_value, &mut scratch)?
-                            .as_str()
-                        {
-                            "follow" => FetchRedirectMode::Follow,
-                            "error" => FetchRedirectMode::Error,
-                            "manual" => FetchRedirectMode::Manual,
-                            _ => {
-                                return Err(fetch_type_error(
-                                    "a redirect mode of follow, error, or manual",
-                                ));
-                            }
-                        }
-                    };
-                    // Request construction follows argument conversion. URL
-                    // normalization can percent-encode source bytes and
-                    // IDNA-encode a host; admit staging before parsing.
-                    core.fetch_reserve(
-                        &mut scratch,
-                        (url_text.len() as u64)
-                            .saturating_mul(6)
-                            .saturating_add(1024),
-                    )?;
-                    let mut url = Url::parse(&url_text)
-                        .map_err(|_| fetch_type_error("an absolute HTTP or HTTPS URL"))?;
-                    if !matches!(url.scheme(), "http" | "https")
-                        || !url.username().is_empty()
-                        || url.password().is_some()
-                    {
-                        return Err(fetch_type_error(
-                            "an HTTP or HTTPS URL without embedded credentials",
-                        ));
-                    }
-                    url.set_fragment(None);
-                    if !http_token(&method)
-                        || ["CONNECT", "TRACE", "TRACK"]
-                            .iter()
-                            .any(|name| method.eq_ignore_ascii_case(name))
-                    {
-                        return Err(fetch_type_error("a permitted HTTP method"));
-                    }
-                    for canonical in ["DELETE", "GET", "HEAD", "OPTIONS", "POST", "PUT"] {
-                        if method.eq_ignore_ascii_case(canonical) {
-                            method = canonical.to_string();
-                            break;
-                        }
-                    }
-                    headers = core.fetch_fill_header_fields(headers, &mut scratch)?;
-                    if headers.iter().any(|(_, value)| !value.is_ascii()) {
-                        return Err(fetch_type_error(
-                            "ASCII request header values (Latin-1 wire values are not supported)",
-                        ));
-                    }
-                    let (body, content_type) =
-                        core.fetch_request_body(module, body_value, &mut scratch)?;
-                    if matches!(method.as_str(), "GET" | "HEAD") && body.is_some() {
-                        return Err(fetch_type_error("a GET or HEAD request without a body"));
-                    }
-                    if let Some(content_type) = content_type
-                        && !headers
-                            .iter()
-                            .any(|(name, _)| name.eq_ignore_ascii_case("content-type"))
-                    {
-                        core.fetch_reserve(
-                            &mut scratch,
-                            128u64.saturating_add(
-                                (headers.len() as u64)
-                                    .saturating_add(1)
-                                    .saturating_mul(std::mem::size_of::<(String, String)>() as u64),
-                            ),
-                        )?;
-                        headers.reserve_exact(1);
-                        headers.push(("content-type".to_string(), content_type));
-                    }
-                    core.perform_fetch_request(url, method, headers, body, redirect)
+                    let request = core.prepare_fetch_request(module, input, init, &mut scratch)?;
+                    core.gc_pin_network_values([Value::Object(request)]);
+                    core.send_fetch_request_object(request, &mut scratch)
                 })();
                 let label = core.json_parse_context_label()?.join(&Label::Internal);
                 core.complete_fetch_promise(module, promise, request_result, label)
@@ -538,6 +445,107 @@ impl InterpreterCore {
         };
         self.gc_exit_builtin();
         cleanup?;
+        outcome
+    }
+
+    /// Snapshot native Request state after all observable conversions. Guest
+    /// properties such as `url`, `headers` and `signal` cannot forge these
+    /// authenticated slots or hide the labels on their retained children.
+    fn send_fetch_request_object(
+        &mut self,
+        request: ObjectId,
+        scratch: &mut u64,
+    ) -> Result<Value, InterpreterError> {
+        self.json_observe_reachable_value(&Value::Object(request))?;
+        let slots = self.heap[request.0 as usize]
+            .fetch_request_slots()
+            .ok_or_else(|| fetch_type_error("a Request receiver"))?;
+        let signal = slots.signal;
+        self.check_fetch_abort_signal(signal)?;
+        let object = &self.heap[request.0 as usize];
+        let slots = object.fetch_request_slots().expect("authenticated Request");
+        if slots.body_used {
+            return Err(fetch_type_error("an unused Request body"));
+        }
+        let headers_id = slots.headers;
+        let bytes = Self::estimate_host_object_slots_bytes(
+            object.host_slots.as_deref().expect("Request slots"),
+        )
+        .saturating_add(Self::estimate_host_object_slots_bytes(
+            self.heap[headers_id.0 as usize]
+                .host_slots
+                .as_deref()
+                .ok_or_else(|| fetch_type_error("native Request headers"))?,
+        ))
+        .saturating_add((slots.url.len() as u64).saturating_mul(6))
+        .saturating_add(1024);
+        self.fetch_reserve(scratch, bytes)?;
+        self.fetch_charge_bytes(usize::try_from(bytes).unwrap_or(usize::MAX))?;
+        let slots = self.heap[request.0 as usize]
+            .fetch_request_slots()
+            .expect("authenticated Request");
+        let mut url = Url::parse(&slots.url)
+            .map_err(|_| fetch_type_error("an absolute HTTP or HTTPS URL"))?;
+        if !matches!(url.scheme(), "http" | "https")
+            || !url.username().is_empty()
+            || url.password().is_some()
+        {
+            return Err(fetch_type_error(
+                "an HTTP or HTTPS URL without embedded credentials",
+            ));
+        }
+        url.set_fragment(None);
+        let method = slots.method.clone();
+        let redirect = slots.redirect;
+        let headers = self.heap[headers_id.0 as usize]
+            .fetch_headers_slots()
+            .ok_or_else(|| fetch_type_error("native Request headers"))?;
+        if headers.fields.iter().any(|(_, value)| !value.is_ascii()) {
+            return Err(fetch_type_error(
+                "ASCII request header values (Latin-1 wire values are not supported)",
+            ));
+        }
+        let headers = headers.fields.clone();
+        let label = self.json_parse_context_label()?;
+        self.join_object_mutation_label(request, &label)?;
+        let mut body = None;
+        self.mutate_heap(|heap| {
+            if let Some(HostObjectSlots::FetchRequest(slots)) =
+                heap[request.0 as usize].host_slots.as_deref_mut()
+                && let Some(bytes) = slots.body.as_mut()
+            {
+                slots.body_used = true;
+                body = Some(std::mem::take(bytes));
+            }
+        });
+        self.apply_memory_component_delta(body.as_ref().map_or(0, |bytes| bytes.len() as u64), 0)?;
+        self.perform_fetch_request(url, method, headers, body, redirect, signal)
+    }
+
+    fn check_fetch_abort_signal(&mut self, signal: ObjectId) -> Result<(), InterpreterError> {
+        self.json_observe_reachable_value(&Value::Object(signal))?;
+        let slots = self
+            .heap
+            .get(signal.0 as usize)
+            .and_then(HeapObject::abort_signal_slots)
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: "Request lost its native AbortSignal".to_string(),
+            })?;
+        if !slots.aborted {
+            return Ok(());
+        }
+        let bytes = Self::estimate_execution_seed_value_bytes(&slots.reason);
+        self.json_reserve_temporary(bytes)?;
+        let outcome = (|| {
+            let reason = self.heap[signal.0 as usize]
+                .abort_signal_slots()
+                .expect("authenticated AbortSignal")
+                .reason
+                .clone();
+            let label = self.json_parse_context_label()?;
+            Err(self.throw_guest_value(reason, label)?)
+        })();
+        self.json_release_temporary(bytes);
         outcome
     }
 
@@ -592,6 +600,7 @@ impl InterpreterCore {
         mut headers: Vec<(String, String)>,
         mut body: Option<Vec<u8>>,
         redirect: FetchRedirectMode,
+        signal: ObjectId,
     ) -> Result<Value, InterpreterError> {
         let mut redirect_count = 0u8;
         let mut url_reserved_bytes = 0;
@@ -600,6 +609,7 @@ impl InterpreterCore {
                 let mut scratch = 0;
                 let hop = (|| {
                     self.json_charge_work()?;
+                    self.check_fetch_abort_signal(signal)?;
                     // Argument conversion can execute guest code after the
                     // outer dispatch gate. Recheck that decision at egress,
                     // including the initial request.
@@ -1002,21 +1012,28 @@ impl InterpreterCore {
         let mut resolution_committed = false;
         let outcome = self.scoped_conversion(|core| {
             core.json_observe_label(label.clone())?;
-            if method == "clone" {
-                let id = id.ok_or_else(|| fetch_type_error("a Response receiver"))?;
-                return core.clone_fetch_response(id, &label).map(Value::Object);
-            }
-            let promise = core.create_promise()?;
-            owned_promise = Some(promise);
-            let pins = core.gc_pin_network_values([Value::Promise(promise.0), receiver.clone()]);
-            let consumed = match id {
-                Some(id) => core.consume_fetch_body(id, method, &label),
-                None => Err(fetch_type_error("a Response receiver")),
-            };
-            let completed = core.complete_fetch_promise(Some(module), promise, consumed, label);
+            let pins = core.gc_pin_network_values([receiver.clone()]);
+            let result = (|| {
+                if method == "clone" {
+                    let id = id.ok_or_else(|| fetch_type_error("a Response receiver"))?;
+                    return core.clone_fetch_response(id, &label).map(Value::Object);
+                }
+                let promise = core.create_promise()?;
+                owned_promise = Some(promise);
+                core.gc_pin_network_values([Value::Promise(promise.0)]);
+                let consumed = match id {
+                    Some(id) => core.consume_fetch_body(id, method, &label),
+                    None => Err(fetch_type_error("a Response receiver")),
+                };
+                let completed = core.complete_fetch_promise(Some(module), promise, consumed, label);
+                resolution_committed = completed.is_ok();
+                completed
+            })();
+            // clone() fails synchronously. Seal the observed body state into
+            // its exception before the conversion scope restores its caller.
+            let result = core.finish_fetch_object_result(result);
             core.gc_unpin_network_values(pins);
-            resolution_committed = completed.is_ok();
-            completed
+            result
         });
         if outcome.is_err()
             && !resolution_committed
@@ -1033,14 +1050,16 @@ impl InterpreterCore {
         method: &str,
         label: &Label,
     ) -> Result<Value, InterpreterError> {
-        let slots = self.heap[id.0 as usize]
-            .fetch_response_slots()
-            .expect("validated response");
-        if slots.body_used {
-            return Err(fetch_type_error("an unused Response body"));
+        let (body, body_used) = match self.heap[id.0 as usize].host_slots.as_deref() {
+            Some(HostObjectSlots::FetchResponse(slots)) => (&slots.body, slots.body_used),
+            Some(HostObjectSlots::FetchRequest(slots)) => (&slots.body, slots.body_used),
+            _ => return Err(fetch_type_error("a Request or Response body")),
+        };
+        if body_used {
+            return Err(fetch_type_error("an unused Request or Response body"));
         }
-        let has_body = slots.body.is_some();
-        let length = slots.body.as_ref().map_or(0, Vec::len);
+        let has_body = body.is_some();
+        let length = body.as_ref().map_or(0, Vec::len);
         // Admission precedes disturbance. Move, do not clone, the retained
         // buffer into charged scratch for the duration of conversion.
         self.json_reserve_temporary(length as u64)?;
@@ -1059,11 +1078,17 @@ impl InterpreterCore {
                 self.join_object_mutation_label(id, label)?;
             }
             self.mutate_heap(|heap| {
-                if let Some(HostObjectSlots::FetchResponse(slots)) =
-                    heap[id.0 as usize].host_slots.as_deref_mut()
-                    && let Some(body) = slots.body.as_mut()
-                {
-                    slots.body_used = true;
+                let (body, used) = match heap[id.0 as usize].host_slots.as_deref_mut() {
+                    Some(HostObjectSlots::FetchResponse(slots)) => {
+                        (&mut slots.body, &mut slots.body_used)
+                    }
+                    Some(HostObjectSlots::FetchRequest(slots)) => {
+                        (&mut slots.body, &mut slots.body_used)
+                    }
+                    _ => unreachable!("validated native Fetch body"),
+                };
+                if let Some(body) = body.as_mut() {
+                    *used = true;
                     bytes = std::mem::take(body);
                 }
             });
@@ -1141,6 +1166,9 @@ impl InterpreterCore {
         id: ObjectId,
         label: &Label,
     ) -> Result<ObjectId, InterpreterError> {
+        // Headers can have been classified by a later mutation without
+        // changing the Response receiver's earlier label.
+        self.json_observe_reachable_value(&Value::Object(id))?;
         let object = &self.heap[id.0 as usize];
         let slots = object.fetch_response_slots().expect("validated response");
         if slots.body_used {
@@ -1173,7 +1201,9 @@ impl InterpreterCore {
                 .fetch_headers_slots()
                 .expect("header slots")
                 .immutable;
-            self.alloc_fetch_response(slots, fields, immutable, label)
+            let observed = self.json_parse_context_label()?;
+            let label = self.clone_dominant_label_with_temporary_budget(label, &observed, 0)?;
+            self.alloc_fetch_response(slots, fields, immutable, &label)
         })();
         self.json_release_temporary(scratch);
         result

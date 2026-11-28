@@ -21,10 +21,16 @@ fn run(source: &str, goal: ParseGoal, lane: LaneChoice) -> Vec<String> {
         source: source.into(),
         source_file: None,
         module_root: None,
-        capabilities: ["vm_dispatch", "heap_allocate", "builtin", "console"]
-            .into_iter()
-            .map(str::to_string)
-            .collect(),
+        capabilities: [
+            "vm_dispatch",
+            "heap_allocate",
+            "builtin",
+            "console",
+            "module_load",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
         version: "1.0.0".into(),
         metadata: BTreeMap::new(),
     };

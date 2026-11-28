@@ -1620,6 +1620,18 @@ fn module_source_with_runtime_sources(
     module: PureModule,
     retain_runtime_sources: bool,
 ) -> Result<Expression, LoweringPipelineError> {
+    if module == PureModule::WebStreams && !retain_runtime_sources {
+        // Every public and bridge-private load must share the retained
+        // factory. Its native publication captures the private stream brand
+        // before exports escape and checks module authority on each load.
+        // The authenticated factory itself retains source below, so this
+        // forwarding path cannot recursively initialize the same provider.
+        return Ok(Expression::Call {
+            callee: Box::new(Expression::Identifier("%NativeWebStreamsModule".into())),
+            arguments: Vec::new(),
+            span: None,
+        });
+    }
     let mut expression = if retain_runtime_sources {
         module_syntax_source(module).runtime_expression()?
     } else {
@@ -3531,11 +3543,18 @@ mod web_stream_tests {
         let names: BTreeSet<String> = WEB_STREAMS_GLOBALS.iter().map(|s| (*s).into()).collect();
         let mut source = parse_module_source(PureModule::WebStreams).expect("native parser");
         assert_eq!(super::tests::free_names(&mut source), names);
-        let mut protected = module_source(&names, PureModule::WebStreams).unwrap();
+        let mut protected =
+            module_source_with_runtime_sources(&names, PureModule::WebStreams, true).unwrap();
         assert_eq!(
             super::tests::free_names(&mut protected),
             BTreeSet::from(["globalThis".to_string()]),
         );
         assert_eq!(parse_module_source(PureModule::WebStreams).unwrap(), source);
+        let mut public = module_source(&names, PureModule::WebStreams).unwrap();
+        assert_eq!(
+            super::tests::free_names(&mut public),
+            BTreeSet::from(["%NativeWebStreamsModule".to_string()]),
+            "ordinary loads enter the authority-checked canonical provider"
+        );
     }
 }

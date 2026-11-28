@@ -48,6 +48,7 @@ fn execute_with_timer_authority(
         "heap_allocate",
         "builtin",
         "console",
+        "module_load",
         "fs_read",
         "fs_write",
     ]

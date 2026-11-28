@@ -2,11 +2,16 @@
 //! both supported profiles. Pure construction has no network capability grant.
 
 use frankenengine_engine::ast::ParseGoal;
-use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore};
+use frankenengine_engine::baseline_interpreter::{
+    AllocKind, FunctionRef, HookAction, HookContext, InterpreterConfig, InterpreterCore,
+    InterpreterError, InterpreterHook, ObjectRef, PropertyKey, Value,
+};
 use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::ir_contract::{Ir0Module, Ir3Module};
 use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn lower(source: &str) -> Ir3Module {
     let source = format!(
@@ -35,26 +40,35 @@ fn assert_script(source: &str) {
 }
 
 fn assert_script_with_network_gate(source: &str, network_gate: bool) {
+    let extra = if network_gate {
+        &[RuntimeCapability::NetworkEgress][..]
+    } else {
+        &[]
+    };
+    assert_script_with_capabilities(source, extra);
+}
+
+fn object_config(mut config: InterpreterConfig, extra: &[RuntimeCapability]) -> InterpreterConfig {
+    config.instruction_budget = 1_000_000;
+    config.granted_capabilities = [
+        RuntimeCapability::VmDispatch,
+        RuntimeCapability::HeapAllocate,
+        RuntimeCapability::Builtin,
+        RuntimeCapability::Console,
+    ]
+    .into_iter()
+    .chain(extra.iter().copied())
+    .collect();
+    config
+}
+
+fn assert_script_with_capabilities(source: &str, extra: &[RuntimeCapability]) {
     let module = lower(source);
-    for mut config in [
+    for config in [
         InterpreterConfig::quickjs_defaults(),
         InterpreterConfig::v8_defaults(),
     ] {
-        config.instruction_budget = 1_000_000;
-        config.granted_capabilities = [
-            RuntimeCapability::VmDispatch,
-            RuntimeCapability::HeapAllocate,
-            RuntimeCapability::Builtin,
-            RuntimeCapability::Console,
-        ]
-        .into_iter()
-        .collect();
-        if network_gate {
-            config
-                .granted_capabilities
-                .insert(RuntimeCapability::NetworkEgress);
-        }
-        let mut core = InterpreterCore::new(config, "fetch-objects");
+        let mut core = InterpreterCore::new(object_config(config, extra), "fetch-objects");
         let result = core
             .execute(&module)
             .expect("native Fetch objects execution");
@@ -481,10 +495,11 @@ fn response_factories_use_intrinsic_json_and_preserve_mutable_or_immutable_guard
 
 #[test]
 fn known_streams_reject_after_init_conversion_without_exposing_private_brand_or_using_prototypes() {
-    assert_script(
+    assert_script_with_capabilities(
         r#"
         (async () => {
             const web = require("node:stream/web");
+            check(web === require("stream/web"), "aliases share the canonical stream factory");
             check(Object.getOwnPropertyNames(web).every(name => name.charCodeAt(0) !== 0),
                   "engine-private stream predicate is not exported");
             const ReadableStream = web.ReadableStream;
@@ -511,7 +526,107 @@ fn known_streams_reject_after_init_conversion_without_exposing_private_brand_or_
             console.log("ok");
         })().catch(error => console.log("failed: " + error.name + ": " + error.message));
     "#,
+        &[RuntimeCapability::ModuleLoad],
     );
+}
+
+#[test]
+fn loading_streams_for_body_values_requires_explicit_module_authority() {
+    let module = lower(
+        "try { require('node:stream/web'); } catch (error) { console.log('caught'); } \
+         console.log('continued');",
+    );
+    for config in [
+        InterpreterConfig::quickjs_defaults(),
+        InterpreterConfig::v8_defaults(),
+    ] {
+        let mut core = InterpreterCore::new(object_config(config, &[]), "fetch-stream-authority");
+        let result = core.execute(&module);
+        assert!(
+            matches!(
+                &result,
+                Err(InterpreterError::CapabilityDenied { capability })
+                    if capability == "module_load"
+            ),
+            "{result:?}"
+        );
+        assert!(core.console_output().is_empty());
+    }
+}
+
+struct StopSecondWebModuleLoad(AtomicUsize);
+
+impl InterpreterHook for StopSecondWebModuleLoad {
+    fn instruction_hooks_enabled(&self) -> bool {
+        false
+    }
+
+    fn pre_property_access(
+        &self,
+        _ctx: &HookContext,
+        _target: &ObjectRef,
+        _key: &PropertyKey,
+    ) -> HookAction {
+        HookAction::Allow
+    }
+
+    fn pre_call(&self, _ctx: &HookContext, _callee: &FunctionRef, _args: &[Value]) -> HookAction {
+        HookAction::Allow
+    }
+
+    fn pre_allocation(
+        &self,
+        _ctx: &HookContext,
+        _kind: AllocKind,
+        _size_hint: usize,
+    ) -> HookAction {
+        HookAction::Allow
+    }
+
+    fn pre_import(&self, _ctx: &HookContext, _specifier: &str) -> HookAction {
+        HookAction::Allow
+    }
+
+    fn pre_hostcall(&self, _ctx: &HookContext, capability: &str, _allowed: bool) -> HookAction {
+        if capability == "builtin:NativeWebStreamsModule"
+            && self.0.fetch_add(1, Ordering::SeqCst) + 1 == 2
+        {
+            HookAction::Sandbox
+        } else {
+            HookAction::Allow
+        }
+    }
+}
+
+#[test]
+fn cached_stream_module_still_obeys_each_live_import_gate() {
+    let module = lower(
+        "require('node:stream/web'); \
+         try { require('stream/web'); } catch (error) { console.log('caught'); } \
+         console.log('continued');",
+    );
+    for config in [
+        InterpreterConfig::quickjs_defaults(),
+        InterpreterConfig::v8_defaults(),
+    ] {
+        let hook = Arc::new(StopSecondWebModuleLoad(AtomicUsize::new(0)));
+        let mut core = InterpreterCore::new(
+            object_config(config, &[RuntimeCapability::ModuleLoad]),
+            "fetch-stream-cached-authority",
+        );
+        core.set_hook(hook.clone());
+        let result = core.execute(&module);
+        assert!(
+            matches!(
+                &result,
+                Err(InterpreterError::ContainmentActionRequested { action, reason: None })
+                    if action == "sandbox"
+            ),
+            "{result:?}"
+        );
+        assert_eq!(hook.0.load(Ordering::SeqCst), 2);
+        assert!(core.console_output().is_empty());
+    }
 }
 
 #[test]

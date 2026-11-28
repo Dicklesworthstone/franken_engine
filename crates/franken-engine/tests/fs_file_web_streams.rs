@@ -26,7 +26,13 @@ fn run(source: &str, root: &Path, caps: &[&str], lane: LaneChoice) -> Result<Run
         ..OrchestratorConfig::default()
     });
     orchestrator.set_host_io(provider, Some(recorder));
-    let mut capabilities = vec!["vm_dispatch", "heap_allocate", "builtin", "console"];
+    let mut capabilities = vec![
+        "vm_dispatch",
+        "heap_allocate",
+        "builtin",
+        "console",
+        "module_load",
+    ];
     capabilities.extend_from_slice(caps);
     let package = ExtensionPackage {
         extension_id: "file-web-stream".into(),

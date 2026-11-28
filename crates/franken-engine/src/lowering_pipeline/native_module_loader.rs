@@ -11,7 +11,8 @@ use super::{LoweringPipelineError, NativeModuleSource};
 #[cfg(test)]
 use crate::ast::ParseGoal;
 use crate::ast::{
-    BindingPattern, Expression, SourceSpan, Statement, SyntaxTree, VariableDeclarationKind,
+    ArrowBody, BindingPattern, Expression, SourceSpan, Statement, SyntaxTree,
+    VariableDeclarationKind,
 };
 #[cfg(test)]
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
@@ -122,6 +123,20 @@ impl Walk for ModuleReferences<'_> {
 /// not stringify the expression: reserved names, spans and intrinsic identity
 /// must survive the transform. The source template is never guest-controlled.
 pub(super) fn deferred(initializer: Expression) -> Result<Expression, LoweringPipelineError> {
+    if matches!(&initializer, Expression::Call { callee, arguments, .. }
+        if matches!(callee.as_ref(), Expression::Identifier(name) if name == "%NativeWebStreamsModule")
+            && arguments.is_empty())
+    {
+        // This provider already owns the realm cache and authenticates every
+        // access. A second JavaScript cache would bypass its authority gate
+        // after the first require, including a later containment decision.
+        return Ok(Expression::ArrowFunction {
+            params: Vec::new(),
+            body: ArrowBody::Expression(Box::new(initializer)),
+            is_async: false,
+            source_text: None,
+        });
+    }
     let mut expression = LOADER_SOURCE.expression().map_err(|_| invalid())?;
     let mut replacement = InitializerReplacement(Some(initializer));
     replacement.expression(&mut expression)?;

@@ -33,6 +33,7 @@ fn run(source: &str, lane: LaneChoice) -> (tempfile::TempDir, Vec<String>) {
             "heap_allocate",
             "builtin",
             "console",
+            "module_load",
             "fs_read",
             "fs_write",
             "timer",

@@ -46,6 +46,30 @@ pub enum NetworkEgressPolicy {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetworkDestinationAllowlist(Arc<BTreeSet<SocketAddr>>);
 
+/// Preserve the authority decision through the socket layer's `io::Error`.
+/// A transport failure with similar text must never become a policy refusal.
+#[derive(Debug)]
+pub(super) enum NetworkPolicyDenial {
+    NonPublicDestination(IpAddr),
+    UnlistedDestination(SocketAddr),
+}
+
+impl std::fmt::Display for NetworkPolicyDenial {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NonPublicDestination(address) => write!(
+                formatter,
+                "SSRF egress policy blocked non-public destination {address}"
+            ),
+            Self::UnlistedDestination(address) => {
+                write!(formatter, "network allowlist blocked destination {address}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for NetworkPolicyDenial {}
+
 impl NetworkDestinationAllowlist {
     pub const MAX_DESTINATIONS: usize = 256;
 
@@ -188,16 +212,13 @@ impl NetworkEgressPolicy {
                 Self::PublicInternetOnly if Self::is_forbidden_public_egress_ip(addr.ip()) => {
                     return Err(io::Error::new(
                         io::ErrorKind::PermissionDenied,
-                        format!(
-                            "SSRF egress policy blocked non-public destination {}",
-                            addr.ip()
-                        ),
+                        NetworkPolicyDenial::NonPublicDestination(addr.ip()),
                     ));
                 }
                 Self::Allowlist(approved) if !approved.contains(addr) => {
                     return Err(io::Error::new(
                         io::ErrorKind::PermissionDenied,
-                        format!("network allowlist blocked destination {addr}"),
+                        NetworkPolicyDenial::UnlistedDestination(*addr),
                     ));
                 }
                 _ => {}
@@ -585,7 +606,7 @@ impl super::SandboxedHostIo {
         // Preserve the same diagnostic context while retaining local TLS
         // verifier refusals for the product's signed effect ledger.
         let fail =
-            |error: io::Error| Self::tls_io_error(&format!("pinned network {endpoint}"), error);
+            |error: io::Error| Self::network_io_error(&format!("pinned network {endpoint}"), error);
         if destinations.is_empty() || destinations.len() > 64 {
             return Err(HostIoError::SandboxViolation {
                 detail: "pinned network requires between 1 and 64 approved addresses".to_string(),
@@ -1651,6 +1672,78 @@ mod pinned_tests {
     }
 
     #[test]
+    fn network_policy_denials_remain_typed_for_direct_and_pinned_operations() {
+        use crate::host_io::HostIoProvider;
+
+        let root = tempfile::tempdir().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        for (policy_name, policy) in [
+            ("SSRF", NetworkEgressPolicy::PublicInternetOnly),
+            (
+                "allowlist",
+                NetworkEgressPolicy::Allowlist(NetworkDestinationAllowlist::new([]).unwrap()),
+            ),
+        ] {
+            let provider = SandboxedHostIo::with_root(root.path())
+                .unwrap()
+                .with_egress_policy(policy);
+            for request in [
+                HostIoRequest::NetworkSend {
+                    endpoint: address.to_string(),
+                    payload: b"must not be sent".to_vec(),
+                },
+                HostIoRequest::NetworkRecv {
+                    endpoint: address.to_string(),
+                    max_len: 1024,
+                },
+                HostIoRequest::NetworkRequest {
+                    endpoint: address.to_string(),
+                    payload: b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n".to_vec(),
+                    max_len: 1024,
+                    use_tls: false,
+                },
+                HostIoRequest::NetworkRequest {
+                    endpoint: address.to_string(),
+                    payload: b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n".to_vec(),
+                    max_len: 1024,
+                    use_tls: true,
+                },
+            ] {
+                let granted = [request.required_capability()];
+                for (entrypoint, outcome) in [
+                    ("direct", provider.perform(&request, &granted)),
+                    (
+                        "pinned",
+                        provider.perform_pinned_network_candidates(
+                            &request,
+                            &granted,
+                            &[address],
+                            Instant::now() + Duration::from_secs(1),
+                        ),
+                    ),
+                ] {
+                    assert!(
+                        matches!(
+                            &outcome,
+                            Err(HostIoError::Denied { reason })
+                                if reason.contains(policy_name)
+                                    && reason.contains("blocked")
+                        ),
+                        "{policy_name} {entrypoint} {request:?}: {outcome:?}"
+                    );
+                    assert_eq!(
+                        listener.accept().unwrap_err().kind(),
+                        io::ErrorKind::WouldBlock,
+                        "{policy_name} {entrypoint} must not open a socket"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn network_allowlist_rejects_every_unlisted_candidate_before_opening_a_socket() {
         use crate::host_io::HostIoProvider;
 
@@ -1674,9 +1767,9 @@ mod pinned_tests {
             .perform(&request, &[HostIoCapability::NetworkSend])
             .unwrap_err();
         assert!(
-            error
-                .to_string()
-                .contains("network allowlist blocked destination")
+            matches!(&error, HostIoError::Denied { reason }
+                if reason.contains("network allowlist blocked destination")),
+            "{error:?}"
         );
 
         // The pinned API models a hostname with a mixed DNS result. Validation
@@ -1705,9 +1798,9 @@ mod pinned_tests {
                 )
                 .unwrap_err();
             assert!(
-                error
-                    .to_string()
-                    .contains("network allowlist blocked destination")
+                matches!(&error, HostIoError::Denied { reason }
+                    if reason.contains("network allowlist blocked destination")),
+                "{error:?}"
             );
         }
         assert_eq!(

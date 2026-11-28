@@ -1609,10 +1609,15 @@ fn real_redirect_rechecks_destination_allowlist_before_opening_the_next_socket()
          console.log('continued');"
     )));
     assert_eq!(server.join().unwrap().len(), 1);
-    assert!(matches!(
-        result,
-        Err(InterpreterError::CapabilityDenied { capability }) if capability == "net:request"
-    ));
+    assert!(
+        matches!(
+            &result,
+            Err(InterpreterError::CapabilityDenied { capability }) if capability == "net:request"
+        ),
+        "destination policy must stop guest execution: {result:?}; transcript: {:?}; flows: {:?}",
+        transcript.recorded_entries(),
+        core.ifc_runtime_flow_audit()
+    );
     assert!(core.console_output().is_empty());
     assert_eq!(
         transcript.recorded_entries().len(),

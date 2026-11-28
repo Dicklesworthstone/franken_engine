@@ -28,7 +28,7 @@ pub use control::{HostIoControl, UnrestrictedHostIoControl};
 pub use http_response::{
     IncomingHttpHeaderValue, IncomingHttpHeaders, ParsedHttpResponse, parse_http_response,
 };
-use network_deadline::{DeadlineTcpStream, NetworkDeadline};
+use network_deadline::{DeadlineTcpStream, NetworkDeadline, NetworkPolicyDenial};
 pub use network_deadline::{NetworkDestinationAllowlist, NetworkEgressPolicy, NetworkRevocation};
 
 /// Capability a guest must hold for the host to perform a given I/O request.
@@ -3167,9 +3167,8 @@ impl SandboxedHostIo {
                 detail: "network endpoint contains a NUL byte".to_string(),
             });
         }
-        DeadlineTcpStream::connect_endpoint(endpoint, deadline).map_err(|err| HostIoError::Io {
-            detail: format!("resolve/connect {endpoint}: {err}"),
-        })
+        DeadlineTcpStream::connect_endpoint(endpoint, deadline)
+            .map_err(|error| Self::network_io_error(&format!("resolve/connect {endpoint}"), error))
     }
 
     fn network_send(
@@ -3376,21 +3375,31 @@ impl SandboxedHostIo {
         let stream = self.connect(endpoint, deadline)?;
         let mut tls = rustls::StreamOwned::new(conn, stream);
         tls.write_all(payload)
-            .map_err(|err| Self::tls_io_error(&format!("TLS send to {endpoint}"), err))?;
+            .map_err(|err| Self::network_io_error(&format!("TLS send to {endpoint}"), err))?;
         tls.flush()
-            .map_err(|err| Self::tls_io_error(&format!("TLS flush to {endpoint}"), err))?;
+            .map_err(|err| Self::network_io_error(&format!("TLS flush to {endpoint}"), err))?;
         // rustls reports a missing close_notify as UnexpectedEof. Never turn
         // that into success unless framing already completed the message (in
         // which case the reader returns before asking TLS for another byte).
-        let response = http_response::read_response(&mut tls, payload, cap)
-            .map_err(|err| Self::tls_io_error(&format!("TLS HTTP recv from {endpoint}"), err))?;
+        let response = http_response::read_response(&mut tls, payload, cap).map_err(|err| {
+            Self::network_io_error(&format!("TLS HTTP recv from {endpoint}"), err)
+        })?;
         tls.sock.check_active().map_err(|err| HostIoError::Io {
             detail: format!("TLS HTTP completion from {endpoint}: {err}"),
         })?;
         Ok(HostIoResponse::NetworkRequest { response })
     }
 
-    fn tls_io_error(context: &str, error: std::io::Error) -> HostIoError {
+    fn network_io_error(context: &str, error: std::io::Error) -> HostIoError {
+        let detail = format!("{context}: {error}");
+        if error
+            .get_ref()
+            .is_some_and(|source| source.is::<NetworkPolicyDenial>())
+        {
+            // Keep a concrete allowlist/SSRF decision fatal at the runtime
+            // boundary and typed in recorded effects, including pinned I/O.
+            return HostIoError::Denied { reason: detail };
+        }
         // rustls::Connection::complete_io retains its protocol error as the
         // inner value of io::Error. Downcast that value; neither the message nor
         // io::ErrorKind identifies a certificate-authentication failure.
@@ -3398,7 +3407,6 @@ impl SandboxedHostIo {
             .get_ref()
             .and_then(|source| source.downcast_ref::<rustls::Error>())
             .and_then(TlsTrustFailure::from_rustls);
-        let detail = format!("{context}: {error}");
         // run_controlled_network checks live revocation and supervisor control
         // after this result, preserving their precedence over TLS failures.
         match reason {

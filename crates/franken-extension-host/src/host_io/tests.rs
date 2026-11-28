@@ -2192,7 +2192,7 @@ fn tls_trust_classification_requires_local_verifier_evidence_bd_9vouw_65() {
             TlsTrustFailure::MissingCertificate,
         ),
     ] {
-        let mapped = SandboxedHostIo::tls_io_error(
+        let mapped = SandboxedHostIo::network_io_error(
             "TLS send to localhost:443",
             std::io::Error::new(std::io::ErrorKind::InvalidData, error),
         );
@@ -2220,8 +2220,31 @@ fn tls_trust_classification_requires_local_verifier_evidence_bd_9vouw_65() {
         std::io::Error::from(std::io::ErrorKind::TimedOut),
         std::io::Error::from(std::io::ErrorKind::ConnectionReset),
     ] {
-        let mapped = SandboxedHostIo::tls_io_error("TLS HTTP recv from localhost:443", error);
+        let mapped = SandboxedHostIo::network_io_error("TLS HTTP recv from localhost:443", error);
         assert!(matches!(mapped, HostIoError::Io { .. }), "{mapped:?}");
+    }
+}
+
+#[test]
+fn network_policy_classification_requires_typed_local_evidence() {
+    for kind in [
+        std::io::ErrorKind::PermissionDenied,
+        std::io::ErrorKind::ConnectionRefused,
+        std::io::ErrorKind::TimedOut,
+    ] {
+        for message in [
+            "network allowlist blocked destination 127.0.0.1:443",
+            "SSRF egress policy blocked non-public destination 127.0.0.1",
+        ] {
+            let mapped = SandboxedHostIo::network_io_error(
+                "transport fixture",
+                std::io::Error::new(kind, message),
+            );
+            assert!(
+                matches!(&mapped, HostIoError::Io { detail } if detail.contains(message)),
+                "message and error kind alone must not establish a policy decision: {mapped:?}"
+            );
+        }
     }
 }
 

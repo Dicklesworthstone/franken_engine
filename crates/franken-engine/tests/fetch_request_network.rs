@@ -18,19 +18,23 @@ use frankenengine_engine::ir_contract::{Ir0Module, Ir3Instruction, Ir3Module};
 use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 use frankenengine_extension_host::host_io::{
-    HostIoError, HostIoRecorder, InMemoryHostIoTranscript, NetworkDestinationAllowlist,
-    NetworkEgressPolicy, SandboxedHostIo,
+    HostIoError, HostIoRecorder, HostIoRequest, HostIoResponse, InMemoryHostIoTranscript,
+    NetworkDestinationAllowlist, NetworkEgressPolicy, SandboxedHostIo,
 };
 
 fn lower(source: &str) -> Ir3Module {
     let source = format!(
         "function check(value, message) {{ if (!value) throw new Error(message); }}\n{source}"
     );
+    lower_source(&source)
+}
+
+fn lower_source(source: &str) -> Ir3Module {
     let tree = CanonicalEs2020Parser
         .parse_with_options(
             ParserSource {
                 label: "fetch-request-network.js".into(),
-                text: source,
+                text: source.into(),
             },
             ParseGoal::Script,
             &ParserOptions::default(),
@@ -335,4 +339,213 @@ fn inherited_and_late_mutated_request_secrets_never_reach_an_allowed_socket() {
         );
         assert_no_connection(&listener);
     }
+}
+
+fn lower_with_classified_request_source(source: &str) -> Ir3Module {
+    // These refusal probes use Rust assertions. An unused JavaScript check()
+    // helper would introduce an unrelated, unsummarized Error-construction
+    // sink under the conservative network exception ceiling.
+    let mut module = lower_source(source);
+    if let Some(main) = module.function_table.first_mut() {
+        main.frame_size = main.frame_size.max(256);
+    }
+    let mut replacements = 0;
+    for instruction in &mut module.instructions {
+        if let Ir3Instruction::LoadStr { dst, pool_index } = *instruction
+            && module.constant_pool[pool_index as usize].as_str() == Some("__request_secret__")
+        {
+            *instruction = Ir3Instruction::Move { dst, src: 255 };
+            replacements += 1;
+        }
+    }
+    assert_eq!(replacements, 1);
+    module
+}
+
+// The init object is Public at the outer gate: its accessor closure is not
+// a data edge. Only invoking the getter introduces the classified binding.
+fn late_classified_request(address: SocketAddr) -> Ir3Module {
+    lower_with_classified_request_source(&format!(
+        r#"
+        const secret = '__request_secret__';
+        try {{
+            fetch('http://{address}/private?part=1#local', {{
+                method: 'POST', headers: {{'X-Public': 'kept'}},
+                get body() {{ return secret; }}
+            }}).catch(() => console.log('promise caught'));
+        }} catch (error) {{ console.log('guest caught'); }}
+        console.log('continued');
+        "#
+    ))
+}
+
+fn execute_classified_request(
+    module: &Ir3Module,
+    provider: Arc<SandboxedHostIo>,
+    transcript: Arc<InMemoryHostIoTranscript>,
+) -> (InterpreterCore, InterpreterError) {
+    let mut core = InterpreterCore::new(config(), "request-converted-ifc-denial");
+    core.set_host_io(provider, Some(transcript));
+    core.seed_register(255, Value::str("classified request data"))
+        .unwrap();
+    core.set_register_label(255, Label::Secret).unwrap();
+    let error = core
+        .execute(module)
+        .expect_err("classified request cannot cross the network boundary");
+    (core, error)
+}
+
+#[test]
+fn initial_request_getter_denial_records_exact_bytes_and_replays_offline() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (_root, provider) = provider(address);
+    let module = late_classified_request(address);
+    let transcript = recording();
+    let (core, error) = execute_classified_request(&module, provider.clone(), transcript.clone());
+    assert!(matches!(
+        error,
+        InterpreterError::CapabilityDenied { capability }
+            if capability == "net:request:confidentiality"
+    ));
+    assert!(core.console_output().is_empty());
+    assert!(core.ifc_runtime_flow_audit().iter().any(|entry| {
+        entry.capability == "net:request"
+            && entry.source_label == Label::Secret
+            && entry.sink_clearance == Label::Public
+            && entry.decision == IfcRuntimeFlowDecision::Denied
+    }));
+    assert_no_connection(&listener);
+    let entries = transcript.finish_execution().unwrap();
+    assert_eq!(
+        entries.len(),
+        1,
+        "the concrete initial refusal is replayable"
+    );
+    assert!(matches!(
+        &entries[0].1,
+        Err(HostIoError::Denied { reason }) if reason == "FLOW_POLICY_BLOCKED"
+    ));
+    let HostIoRequest::NetworkRequest {
+        endpoint,
+        payload,
+        use_tls,
+        ..
+    } = &entries[0].0
+    else {
+        panic!("converted denial must identify the concrete network request");
+    };
+    assert_eq!(endpoint, &address.to_string());
+    assert!(!*use_tls);
+    assert_eq!(
+        payload,
+        format!(
+            "POST /private?part=1 HTTP/1.1\r\nHost: {address}\r\n\
+             x-public: kept\r\ncontent-type: text/plain;charset=UTF-8\r\n\
+             Content-Length: 23\r\nConnection: close\r\n\r\nclassified request data"
+        )
+        .as_bytes()
+    );
+
+    // A refused real request remains replayable after the provider's network
+    // authority is revoked. Replaying it must consume its one refusal entry.
+    provider.network_revocation().revoke();
+    let replay = Arc::new(InMemoryHostIoTranscript::replaying(entries.clone()));
+    replay.begin_execution().unwrap();
+    let (core, error) = execute_classified_request(&module, provider, replay.clone());
+    assert!(matches!(
+        error,
+        InterpreterError::CapabilityDenied { capability }
+            if capability == "net:request:confidentiality"
+    ));
+    assert!(core.console_output().is_empty());
+    assert_eq!(replay.finish_execution().unwrap(), entries);
+    assert_no_connection(&listener);
+}
+
+#[test]
+fn initial_request_getter_denial_rejects_missing_or_changed_replay_evidence() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (_root, provider) = provider(address);
+    let module = late_classified_request(address);
+    let transcript = recording();
+    let (_, error) = execute_classified_request(&module, provider.clone(), transcript.clone());
+    assert!(matches!(
+        error,
+        InterpreterError::CapabilityDenied { capability }
+            if capability == "net:request:confidentiality"
+    ));
+    let entries = transcript.finish_execution().unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_no_connection(&listener);
+    provider.network_revocation().revoke();
+
+    let mut changed_request = entries.clone();
+    let HostIoRequest::NetworkRequest { payload, .. } = &mut changed_request[0].0 else {
+        panic!("recorded denial must contain the concrete request");
+    };
+    payload.push(b'!');
+    let mut changed_outcome = entries.clone();
+    changed_outcome[0].1 = Ok(HostIoResponse::NetworkRequest {
+        response: b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".to_vec(),
+    });
+    for (case, evidence, poisoned) in [
+        ("missing refusal", Vec::new(), true),
+        ("different request bytes", changed_request, true),
+        ("success replacing refusal", changed_outcome, false),
+    ] {
+        let replay = Arc::new(InMemoryHostIoTranscript::replaying(evidence));
+        replay.begin_execution().unwrap();
+        let (core, error) = execute_classified_request(&module, provider.clone(), replay.clone());
+        assert!(
+            matches!(
+                &error,
+                InterpreterError::InternalError { details }
+                    if details.contains("deferred network IFC transcript mismatch")
+            ),
+            "{case}: {error:?}"
+        );
+        assert!(core.console_output().is_empty(), "{case}");
+        // Request divergence poisons the recorder itself. A matching request
+        // with the wrong outcome is consumed, then refused by the interpreter.
+        assert_eq!(replay.finish_execution().is_err(), poisoned, "{case}");
+        assert_no_connection(&listener);
+    }
+}
+
+#[test]
+fn initial_argument_ifc_denial_does_not_invent_a_converted_request() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (_root, provider) = provider(address);
+    let module = lower_with_classified_request_source(&format!(
+        r#"
+        const secret = '__request_secret__';
+        try {{
+            fetch('http://{address}/private', {{
+                method: 'POST', body: secret,
+                get headers() {{ throw 'argument conversion ran'; }}
+            }}).catch(() => console.log('promise caught'));
+        }} catch (error) {{ console.log('guest caught'); }}
+        console.log('continued');
+        "#
+    ));
+    let transcript = recording();
+    let (core, error) = execute_classified_request(&module, provider, transcript.clone());
+    // The static HostCall's pre-dispatch check names net:fetch; a first-class
+    // call names the shared native net:request gate. Both must remain fatal
+    // before conversion and before any concrete request can be recorded.
+    assert!(
+        matches!(
+            &error,
+            InterpreterError::CapabilityDenied { capability }
+                if matches!(capability.as_str(),
+                    "net:fetch:confidentiality" | "net:request:confidentiality")
+        ),
+        "early argument refusal: {error:?}"
+    );
+    assert!(core.console_output().is_empty());
+    assert!(transcript.finish_execution().unwrap().is_empty());
+    assert_no_connection(&listener);
 }

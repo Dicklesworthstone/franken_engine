@@ -638,10 +638,10 @@ impl InterpreterCore {
                         &request_label,
                         &Label::Public,
                     ) {
-                        if redirect_count != 0
-                            && (self.host_effect_journal.is_some()
-                                || self.host_io_recorder.is_some())
-                        {
+                        // Conversion hooks can introduce private data after
+                        // the outer argument check, including on the first hop.
+                        // Bind every concrete refusal to the exact request.
+                        if self.host_effect_journal.is_some() || self.host_io_recorder.is_some() {
                             self.record_deferred_network_ifc_denial(
                                 url.as_str(),
                                 &method,
